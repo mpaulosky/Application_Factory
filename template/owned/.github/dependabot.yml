@@ -1,0 +1,85 @@
+# Dependabot version updates. Every label used below must exist in the repo:
+# Dependabot doesn't create them, and silently leaves them off the PR.
+# https://docs.github.com/code-security/dependabot/working-with-dependabot/dependabot-options-reference
+---
+
+version: 2
+updates:
+
+  # Maintain dependencies for GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "16:00"
+    open-pull-requests-limit: 10
+    # Wait a week before proposing a new release, so a compromised or broken
+    # one is usually caught upstream before it reaches a PR here.
+    cooldown:
+      default-days: 7
+    labels:
+      - "github-actions"
+      - "dependencies"
+    groups:
+      all-actions:
+        patterns:
+          - "*"
+
+  # Maintain dependencies for nuget
+  - package-ecosystem: "nuget"
+    directory: "/"
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "16:00"
+    open-pull-requests-limit: 10
+    # Wait a week before proposing a new release, so a compromised or broken
+    # one is usually caught upstream before it reaches a PR here.
+    cooldown:
+      default-days: 7
+    labels:
+      - "nuget"
+      - "dependencies"
+    ignore:
+      # A Radzen major changes components and themes, so it gets its own
+      # upgrade PR with a manual UI check instead of riding in the group.
+      - dependency-name: "Radzen.Blazor"
+        update-types: ["version-update:semver-major"]
+      # MessagePack is pinned only to force a patched transitive version.
+      # Aspire's StreamJsonRpc is built against 2.5.x, so stay on 2.x.
+      - dependency-name: "MessagePack"
+        update-types: ["version-update:semver-major"]
+    groups:
+      # Testcontainers modules only work with the matching core version,
+      # so they always move together. A dependency joins the first group
+      # that matches it, so this group stays ahead of all-nuget.
+      testcontainers:
+        patterns:
+          - "Testcontainers*"
+      all-nuget:
+        patterns:
+          - "*"
+
+  # Maintain DotNet Sdk
+  - package-ecosystem: "dotnet-sdk"
+    directory: "/"
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "16:00"
+    open-pull-requests-limit: 10
+    # Wait a week before proposing a new release, so a compromised or broken
+    # one is usually caught upstream before it reaches a PR here.
+    cooldown:
+      default-days: 7
+    labels:
+      - "dotnet-sdk"
+      - "dependencies"
+    groups:
+      dotnet-sdk:
+        patterns:
+          - "*"
