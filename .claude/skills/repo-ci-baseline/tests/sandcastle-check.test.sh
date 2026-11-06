@@ -5,7 +5,7 @@
 #
 # Applies the Template to a throwaway repo with no commits, so Sandcastle's files go in (apply.sh adds them to a repo with
 # a .sandcastle/ folder or none yet), installs the Seed package.json's packages, and runs its check:sandcastle script:
-# tsc --noEmit and the .sandcastle/**/*.test.mts tests. Nothing is installed in the skill itself.
+# tsc --noEmit and the .sandcastle/**/*.test.mts tests, plus tests/sandcastle/*.test.mts copied in beside them. Nothing is installed in the skill itself.
 #
 # The install is not frozen. A new repo starts with no lockfile and takes the newest versions the Seed's ranges allow,
 # so this is the check a new repo would meet; a range that lets in a release the code can't build with fails here first.
@@ -22,6 +22,11 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
 git init -q -b main "$work/repo"
 "$skill_dir/apply.sh" "$work/repo" > "$work/apply.log" 2>&1 || { cat "$work/apply.log" >&2; exit 1; }
 [[ -d "$work/repo/.sandcastle" ]] || { echo "sandcastle-check: Apply left no .sandcastle/ in the new repo" >&2; exit 1; }
+
+# Tests about the Template itself (its Seed prompts, Owned prompts and docs), which ran in dotfiles when the Template lived there.
+# They run inside the Applied repo, so they sit among its own tests, and read the Template through this variable.
+export REPO_CI_BASELINE_SKILL="$skill_dir"
+cp "$skill_dir"/tests/sandcastle/*.test.mts "$work/repo/.sandcastle/lib/"
 
 cd "$work/repo"
 pnpm install --no-frozen-lockfile
