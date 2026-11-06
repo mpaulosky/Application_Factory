@@ -117,6 +117,7 @@ shell_files=(
   "$skill_dir/tests/apply.test.sh" "$skill_dir/tests/reapply.test.sh"
   "$skill_dir/tests/seed-check.test.sh" "$skill_dir/tests/seed-dependabot.test.sh"
   "$skill_dir/tests/seed-dockerfile.test.sh" "$skill_dir/tests/doc-single-source.test.sh"
+  "$skill_dir/tests/sandcastle-check.test.sh"
   "$owned/scripts/gate.sh" "$owned/scripts/check-branch-name.sh" "$owned/scripts/tests/check-branch-name.test.sh"
   "$owned/scripts/check-pr-title.sh" "$owned/scripts/tests/check-pr-title.test.sh"
   "$owned/scripts/sync-copilot-review.sh" "$owned/scripts/tests/sync-copilot-review.test.sh"
