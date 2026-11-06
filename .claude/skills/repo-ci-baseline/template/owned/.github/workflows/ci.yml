@@ -1,0 +1,778 @@
+# yamllint disable rule:line-length
+---
+name: Build and Test Suite
+
+# NOTE: All test projects now use 'dotnet test' consistently.
+# This was updated to fix issues with direct executable execution that were
+# causing "No such file or directory" errors in CI.
+
+# Read-only by default: build and test jobs run pull-request code. Only the
+# report job, which runs no PR code, gets write access.
+permissions:
+  contents: read
+
+"on":
+  workflow_call:
+    inputs:
+      project_name:
+        description: "Solution name without .slnx"
+        required: false
+        type: string
+        default: ""
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "docs/**"
+
+  # No paths-ignore here: "Build Solution" and "Test Suite" below are
+  # required status checks on main's ruleset. A docs-only PR that this
+  # workflow never runs against would leave them permanently missing,
+  # blocking the PR from merging. The changes job skips the build and tests
+  # for such a PR instead; a skipped required check counts as passing.
+  # Drafts run CI too, so marking one ready adds nothing: a ready_for_review
+  # run only cancelled the one in progress on the same head, and the cancelled
+  # "Test Suite" reported as a failure.
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+  workflow_dispatch:
+    inputs:
+      project_name:
+        description: "Solution name without .slnx"
+        required: false
+        default: ""
+      reason:
+        description: "The reason for running the workflow"
+        required: true
+        default: "Manual test run"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SOLUTION_NAME: ${{ inputs.project_name || github.event.repository.name }}.slnx
+  NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  # Whether the PR changes anything the build or tests depend on. A PR that
+  # changes only Markdown and files under docs/ (such as a release blog PR),
+  # or a Dependabot GitHub Actions bump, skips the build, the test matrix and
+  # coverage. Everything else counts as
+  # code, including workflows and scripts, so an unexpected path runs the full
+  # suite. Pushes and manual runs always run it.
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+      skip_reason: ${{ steps.diff.outputs.skip_reason }}
+    steps:
+      - name: Checkout code
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Classify changed files
+        id: diff
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # detect_changes.py (tested in .github/scripts/tests) lists the
+          # changed files against the base and appends code=true|false.
+          # A Dependabot GitHub Actions bump skips them too (see the script).
+          python3 .github/scripts/detect_changes.py --base "$BASE_SHA" --output "$GITHUB_OUTPUT" \
+            --author "$AUTHOR" --head-ref "$HEAD_REF"
+
+  # Mirrors Detect Changes' result as the docs-only label, so docs PRs are
+  # easy to filter. Nothing reads the label: the diff decides what runs, and
+  # the label is reset on every push, so it can't be wrong for long. Dependabot
+  # and fork PRs can get a read-only token, so they're skipped, Dependabot's by
+  # actor and by author (they're never docs-only). Not a required check.
+  docs-label:
+    name: Docs-only label
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.actor != 'dependabot[bot]'
+      && github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Set or clear the docs-only label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          CODE: ${{ needs.changes.outputs.code }}
+        run: |
+          has_label=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq 'any(.[]; .name == "docs-only")')
+          if [ "$CODE" = "false" ] && [ "$has_label" != "true" ]; then
+            # GitHub creates the label if the repo lacks it, in a default color.
+            gh api -X POST "repos/${REPO}/issues/${PR_NUMBER}/labels" -f "labels[]=docs-only" > /dev/null
+            echo "Added docs-only." | tee -a "$GITHUB_STEP_SUMMARY"
+          elif [ "$CODE" != "false" ] && [ "$has_label" = "true" ]; then
+            gh api -X DELETE "repos/${REPO}/issues/${PR_NUMBER}/labels/docs-only" > /dev/null
+            echo "Removed docs-only: this PR changes code." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # The branch standard, checked on the PR's head branch. The pre-push hook
+  # checks it too, but a push can skip the hook (a Claude cloud session's
+  # claude/... branch, GitHub's web editor, a clone without core.hooksPath),
+  # so this is the gate: a required status check. Rename a refused branch on
+  # GitHub (Branches → rename, or the branches/<name>/rename API) and the PR
+  # follows it, then close and reopen the PR: a rename is no new commit, and a
+  # re-run reuses the old name, so only the reopened run checks the new one.
+  # Fork PRs are skipped, which a required check counts as passing.
+  branch-name:
+    name: Branch name
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the branch name
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: bash scripts/check-branch-name.sh --pr "$HEAD_REF"
+
+  # The "gh commands are told their repository" check, and Owned files left
+  # alone, judged by the base branch's copy of the checker, so a PR can't
+  # weaken its own check: scripts/gate.sh runs the checker too, but a push can
+  # skip the hook and an edited checker passes itself. The base's checker is
+  # written outside the checkout and run isolated (python3 -I) over the PR's
+  # tree, with no secrets and a read-only token. A PR that changes the checker
+  # is judged by the old one. The second step fails when a PR's Owned file
+  # differs from the base's, except in an Apply PR (chore/standardize-baseline,
+  # chore/reapply-baseline), whose job is to change them. Anyone who can push a
+  # branch can name theirs so: this stops a careless edit, not a deliberate one.
+  # Both steps read the base at github.event.pull_request.base.sha, the commit the
+  # merge ref was built from, not the base branch's moving tip: a re-run, or a job
+  # queued while an Apply PR lands, would otherwise fail on files the PR never touched.
+  # Neither step has anything to compare with in the first Apply, whose base has
+  # no checker. Not a required status check.
+  gh-repo:
+    name: GitHub commands told their repository
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Check the base branch's rules against this tree
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          if ! git show "${BASE_SHA}:.github/scripts/check_gh_repo.py" > "$tmp/check_gh_repo.py"; then
+            echo "${BASE_REF} has no .github/scripts/check_gh_repo.py: nothing to check against (the first Apply)."
+            exit 0
+          fi
+          python3 -I "$tmp/check_gh_repo.py" --repo "$GITHUB_WORKSPACE"
+
+      - name: Check the Owned files against the base branch's
+        if: >-
+          always()
+          && github.head_ref != 'chore/standardize-baseline'
+          && github.head_ref != 'chore/reapply-baseline'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          if ! git show "${BASE_SHA}:.github/scripts/check_gh_repo.py" > "$tmp/check_gh_repo.py"; then
+            echo "${BASE_REF} has no .github/scripts/check_gh_repo.py: no Owned files to compare (the first Apply)."
+            exit 0
+          fi
+          # The base's OWNED list: files, and folders (a trailing /).
+          python3 -I -c '
+          import importlib.util, sys
+          spec = importlib.util.spec_from_file_location("check_gh_repo", sys.argv[1])
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          print("\n".join(module.OWNED))
+          ' "$tmp/check_gh_repo.py" > "$tmp/owned.txt"
+          # Walk the base's tree, so a file the PR deleted or renamed is found too. An entry is
+          # "<mode> <type> <sha>", a tab, the path: a missing path, a changed mode (chmod -x, a
+          # symlink swap) or a changed blob all differ. A path is PR-controlled: escape \r and \n
+          # before it reaches the log, or the rest of a file name could start a workflow command.
+          status=0
+          report() {
+            local name=$1
+            name=${name//$'\r'/\\r}
+            name=${name//$'\n'/\\n}
+            echo "Owned file ${name} differs from ${BASE_REF}"
+            status=1
+          }
+          while IFS= read -r entry; do
+            while IFS= read -r -d '' base_entry; do
+              path=${base_entry#*$'\t'}
+              head_entry=$(git ls-tree -z HEAD -- "$path" | tr '\0' '\n')
+              if [ "${base_entry}" != "$head_entry" ]; then
+                report "$path"
+              fi
+            done < <(git ls-tree -r -z "$BASE_SHA" -- "$entry")
+            # A file the PR adds inside an Owned folder isn't in the base's tree, and the checker
+            # skips the folder: report it, or nothing reads it.
+            case $entry in
+              */)
+                while IFS= read -r -d '' head_entry; do
+                  path=${head_entry#*$'\t'}
+                  if ! git cat-file -e "${BASE_SHA}:${path}" 2>/dev/null; then
+                    report "$path"
+                  fi
+                done < <(git ls-tree -r -z HEAD -- "$entry")
+                ;;
+            esac
+          done < "$tmp/owned.txt"
+          exit "$status"
+
+  build:
+    name: Build Solution
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Cache NuGet packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.nuget/packages
+          key: >-
+            ${{ runner.os }}-nuget-${{
+            hashFiles('**/*.csproj', '**/Directory.Packages.props') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Discover solution file
+        run: |
+          mapfile -t matches < <(find . -maxdepth 1 -name '*.slnx')
+          count=${#matches[@]}
+          if [[ $count -eq 0 ]]; then
+            echo "::error::No *.slnx file found at the repository root."
+            exit 1
+          elif [[ $count -gt 1 ]]; then
+            echo "::error::Multiple *.slnx files found"
+            echo "::error::${matches[*]}"
+            exit 1
+          fi
+          echo "SOLUTION_FILE=${matches[0]}" >> "$GITHUB_ENV"
+          echo "Discovered solution: ${matches[0]}"
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      # Repo-specific setup (a Seed file the repo owns), such as tools the
+      # build runs. Optional: a repo without the script skips this.
+      - name: Prepare build
+        run: |
+          if [ -f .github/ci/prepare.sh ]; then
+            bash .github/ci/prepare.sh build
+          fi
+
+      - name: Build solution
+        run: >-
+          dotnet build "$SOLUTION_FILE" --configuration Release
+          --no-restore -warnaserror
+
+  # Unit tests for .github/scripts (the release blog generator).
+  # Deliberately not a required status check on main's ruleset.
+  python-tests:
+    name: Python tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        run: python -m pip install pytest
+
+      - name: Run pytest
+        run: python -m pytest .github/scripts/tests
+
+  # Tests for .github/hooks/pre-commit, .github/hooks/pre-push and scripts/gate.sh,
+  # with stubbed tools, and for scripts/check-branch-name.sh, check-pr-title.sh
+  # sync-copilot-review.sh and watch-pr.sh.
+  # Also not a required status check.
+  hook-tests:
+    name: Hook tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run pre-push hook tests
+        run: bash .github/hooks/tests/pre-push.test.sh
+
+      - name: Run pre-commit hook tests
+        run: bash .github/hooks/tests/pre-commit.test.sh
+
+      - name: Run branch-name script tests
+        run: bash scripts/tests/check-branch-name.test.sh
+
+      - name: Run PR-title script tests
+        run: bash scripts/tests/check-pr-title.test.sh
+
+      - name: Run Copilot review sync script tests
+        run: bash scripts/tests/sync-copilot-review.test.sh
+
+      - name: Run PR watcher script tests
+        run: bash scripts/tests/watch-pr.test.sh
+
+  # Tests for the inline script in .github/workflows/pr-automerge.yml, run
+  # against a fake GitHub client. Also not a required status check.
+  automerge-tests:
+    name: Auto-merge tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+
+      - name: Run pr-automerge tests
+        run: node --test .github/scripts/tests/pr-automerge.test.mjs
+
+  # Dependabot PRs run the full test suite: a dependency bump is exactly the
+  # change the tests must vet, and none of these jobs needs a secret.
+  discover-tests:
+    name: Discover Test Projects
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs:
+      - build
+    outputs:
+      matrix: ${{ steps.discover.outputs.matrix }}
+      has_tests: ${{ steps.discover.outputs.has_tests }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Discover test projects
+        id: discover
+        # discover_tests.py (tested in .github/scripts/tests) resolves
+        # IsTestProject for each project under tests/ and appends the matrix
+        # and has_tests. It fails when projects exist but none is a test
+        # project, since a skipped matrix would pass "Test Suite".
+        run: python3 .github/scripts/discover_tests.py --output "$GITHUB_OUTPUT"
+
+  # Each matrix job restores and builds its own test project. Measured on
+  # IssueTracker#144: sharing the build job's output (with --no-build) saved nothing,
+  # because packing and downloading it costs as much as the build, and one
+  # job running every project used 60% fewer runner-minutes but took about
+  # 1.5 minutes longer. So the matrix stays, with no build cache.
+  test:
+    if: ${{ needs.discover-tests.outputs.has_tests == 'true' }}
+    name: "Tests: ${{ matrix.test_name }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs:
+      - build
+      - discover-tests
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover-tests.outputs.matrix) }}
+
+    # Test secrets reach this job only, never the build or lint jobs, through
+    # the "Load test secrets" step below. Other per-repo variables go in
+    # .github/ci/prepare.sh, which can append them to $GITHUB_ENV.
+    env:
+      ASPIRE_ALLOW_UNSECURED_TRANSPORT: "true"
+      # Enable Playwright trace/video/screenshot capture for E2E jobs
+      PLAYWRIGHT_ARTIFACTS: >-
+        ${{ matrix.requires_playwright && 'true' || 'false' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Cache NuGet packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.nuget/packages
+          key: >-
+            ${{ runner.os }}-nuget-${{
+            hashFiles('**/*.csproj', '**/Directory.Packages.props') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      # The repo's optional TEST_ENV secret holds NAME=value lines, such as
+      # MongoDB__ConnectionString=...; load_test_env.py (tested in
+      # .github/scripts/tests) masks each value and exports it to the later
+      # steps. One fixed secret keeps repo values out of this Owned file.
+      # Unset, as on every Dependabot run, it exports nothing, and the
+      # fixtures that need a secret fall back to fake settings.
+      - name: Load test secrets
+        env:
+          TEST_ENV: ${{ secrets.TEST_ENV }}
+        run: python3 .github/scripts/load_test_env.py --output "$GITHUB_ENV"
+
+      # Repo-specific setup for this test project (a Seed file the repo
+      # owns), such as publishing a project or pulling images it needs.
+      - name: Prepare tests
+        env:
+          TEST_NAME: ${{ matrix.test_name }}
+        run: |
+          if [ -f .github/ci/prepare.sh ]; then
+            bash .github/ci/prepare.sh test "$TEST_NAME"
+          fi
+
+      - name: Build test project
+        if: ${{ matrix.build_before_test }}
+        env:
+          PROJECT_PATH: ${{ matrix.project_path }}
+        run: >-
+          dotnet build "$PROJECT_PATH" --configuration Release
+          --no-restore
+
+      - name: Install Playwright browsers
+        if: ${{ matrix.requires_playwright }}
+        # A hung install held IssueManager#260 for the job's 45 minutes;
+        # it normally takes a minute or two, so fail fast and rerun instead.
+        timeout-minutes: 10
+        env:
+          PROJECT_PATH: ${{ matrix.project_path }}
+        run: |
+          project_dir="$(dirname "$PROJECT_PATH")"
+          playwright_script=$(find "$project_dir/bin/Release" \
+            -type f -name "playwright.ps1" | head -n 1)
+          if [ -z "$playwright_script" ]; then
+            echo "::error::Unable to locate playwright.ps1 for $PROJECT_PATH"
+            exit 1
+          fi
+          pwsh "$playwright_script" install chromium --with-deps
+
+      - name: Run tests
+        id: run-tests
+        # Matrix values come from PR-controlled file names, so they reach the
+        # shell as quoted environment variables, never as interpolated text.
+        env:
+          PROJECT_PATH: ${{ matrix.project_path }}
+          TEST_ID: ${{ matrix.test_id }}
+          VERBOSITY: ${{ matrix.verbosity }}
+          NO_BUILD: ${{ matrix.no_build }}
+        run: |
+          mkdir -p test-results
+
+          no_build_arg=""
+          if [ "$NO_BUILD" = "true" ]; then
+            no_build_arg="--no-build"
+          fi
+
+          # global.json runs dotnet test on Microsoft Testing Platform, so the
+          # TRX report comes from xunit.v3 and the Cobertura coverage from
+          # Microsoft.Testing.Extensions.CodeCoverage, not VSTest's logger
+          # and collector.
+          dotnet test "$PROJECT_PATH" \
+            --configuration Release \
+            $no_build_arg \
+            --verbosity "$VERBOSITY" \
+            --results-directory "$GITHUB_WORKSPACE/test-results" \
+            --report-xunit-trx \
+            --report-xunit-trx-filename "${TEST_ID}.trx" \
+            --coverage \
+            --coverage-output-format cobertura \
+            --coverage-output "${TEST_ID}.cobertura.xml"
+          exit_code=$?
+          if [ $exit_code -ne 0 ]; then
+            echo "::error::Test project failed: $PROJECT_PATH"
+          fi
+          exit $exit_code
+
+      - name: Upload test results
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: test-results-${{ matrix.test_id }}
+          path: test-results
+
+      - name: Resolve test project directory
+        id: project-dir
+        if: ${{ always() && matrix.requires_playwright }}
+        env:
+          PROJECT_PATH: ${{ matrix.project_path }}
+        run: echo "dir=$(dirname "$PROJECT_PATH")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Playwright diagnostics
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ always() && matrix.requires_playwright }}
+        with:
+          name: playwright-artifacts-${{ matrix.test_id }}
+          path: ${{ steps.project-dir.outputs.dir }}/bin/Release/**/TestResults/playwright-artifacts/
+          if-no-files-found: ignore
+
+  coverage:
+    if: >-
+      ${{ always() && needs.discover-tests.outputs.has_tests == 'true' }}
+    name: Coverage Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs:
+      - build
+      - discover-tests
+      - test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Download coverage reports
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: coverage-reports
+
+      - name: Install ReportGenerator
+        run: dotnet tool install -g dotnet-reportgenerator-globaltool
+
+      - name: Generate coverage report
+        run: |
+          reportgenerator \
+            -reports:"coverage-reports/**/*.cobertura.xml" \
+            -targetdir:"./coverage-output" \
+            -reporttypes:"Html;Cobertura;JsonSummary" \
+            -filefilters:"-**/obj/**/*.cs;-**/*.generated.cs" \
+            -verbosity:verbose || echo "::warning::No coverage files found"
+
+      # This job only runs when test projects exist, so a missing or empty
+      # report is a failure too, not a reason to skip the gate.
+      - name: Check coverage threshold
+        run: |
+          summary_json="./coverage-output/Summary.json"
+          if [ ! -f "$summary_json" ]; then
+            echo "::error::Coverage report not available: $summary_json"
+            exit 1
+          fi
+          echo "=== Summary.json raw ==="
+          jq . "$summary_json" || true
+          coverable_expr='.summary.coverablelines // '
+          coverable_expr+='.summary.coverableLines // '
+          coverable_expr+='.coverablelines // .coverableLines // 0'
+          coverable_lines=$(jq -r "$coverable_expr" \
+            "$summary_json" 2>/dev/null || echo "0")
+          coverage_expr='.summary.linecoverage // .lineCoverage // 0'
+          coverage=$(jq -r "$coverage_expr" \
+            "$summary_json" 2>/dev/null || echo "0")
+          echo "Line Coverage: $coverage%"
+          if [ "$coverable_lines" = "0" ]; then
+            echo "::error::No coverable lines found in Summary.json"
+            exit 1
+          fi
+          # The threshold is the Owned .github/ci/coverage-threshold, a whole
+          # percentage the Template sets for every repo; 80 when the file is
+          # missing.
+          threshold=80
+          if [ -f .github/ci/coverage-threshold ]; then
+            threshold=$(tr -d '[:space:]' < .github/ci/coverage-threshold)
+          fi
+          if ! [[ "$threshold" =~ ^[0-9]+$ ]] || (( threshold > 100 )); then
+            echo "::error::.github/ci/coverage-threshold must hold a whole percentage, not '$threshold'"
+            exit 1
+          fi
+          if (( $(echo "$coverage < $threshold" | bc -l) )); then
+            echo "::error::Code coverage $coverage% is below the $threshold% threshold"
+            exit 1
+          fi
+          echo "::notice::Coverage gate passed: $coverage% >= $threshold%"
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: coverage-reports
+          path: coverage-output
+
+      - name: Publish to Codecov
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        if: always()
+        with:
+          files: ./coverage-output/Cobertura.xml
+          disable_search: true
+          fail_ci_if_error: false
+          verbose: true
+
+  report:
+    if: ${{ always() }}
+    # A required status check on main's ruleset: keep this name stable.
+    name: Test Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # publish-unit-test-result-action writes a check run and a PR comment.
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+      issues: read
+    needs:
+      - changes
+      - build
+      - discover-tests
+      - test
+      - coverage
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download all test results
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: all-test-results
+
+      # Dependabot and fork PR runs get a read-only token whatever the job
+      # asks for, so the check run and PR comment this writes can't be
+      # published there. The status step below still fails the job when a
+      # test did.
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@7622c5bf3d112a72ab4fa3951c2aa5723d8ab92d # v2.25.0
+        if: >-
+          ${{ always() && needs.discover-tests.outputs.has_tests == 'true' &&
+          github.actor != 'dependabot[bot]' &&
+          (github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository) }}
+        with:
+          files: |
+            all-test-results/**/*.trx
+            all-test-results/**/*-nunit.xml
+          check_name: Test Results Summary
+          compare_to_earlier_commit: true
+
+      - name: Generate job summary
+        if: always()
+        env:
+          # PR-controlled project paths: read from the environment, not
+          # interpolated into the script.
+          TEST_MATRIX: ${{ needs.discover-tests.outputs.matrix }}
+          CHANGES_STATUS: ${{ needs.changes.result }}
+          CODE_CHANGED: ${{ needs.changes.outputs.code }}
+          SKIP_REASON: ${{ needs.changes.outputs.skip_reason }}
+          BUILD_STATUS: ${{ needs.build.result }}
+          DISCOVER_STATUS: ${{ needs.discover-tests.result }}
+          TEST_STATUS: ${{ needs.test.result }}
+          COVERAGE_STATUS: ${{ needs.coverage.result }}
+        run: |
+          {
+            echo "## Test Execution Summary"
+            echo ""
+            echo "### Job Status"
+            if [ "$CHANGES_STATUS" = "success" ] && [ "$CODE_CHANGED" = "false" ]; then
+              if [ "$SKIP_REASON" = "actions-bump" ]; then
+                echo "- **Dependabot GitHub Actions bump:** the build, tests and coverage were skipped."
+              else
+                echo "- **Docs-only change:** the build, tests and coverage were skipped."
+              fi
+            fi
+            echo "- **Build:** ${BUILD_STATUS}"
+            echo "- **Discovered Tests:** ${DISCOVER_STATUS}"
+            echo "- **Test Matrix:** ${TEST_STATUS}"
+            echo "- **Coverage gate:** ${COVERAGE_STATUS}"
+            echo ""
+            echo "### Artifacts"
+            echo "- Test and coverage reports are in Actions artifacts"
+            echo "- Coverage report: \`coverage-reports\`"
+            echo ""
+            echo "### Discovered Test Projects"
+            printf '%s' "$TEST_MATRIX" \
+              | jq -r '(.include // [])[].project_path | "- " + .'
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # This job is the required status check that stands in for the
+          # dynamically named "Tests: …" matrix jobs and the coverage
+          # gate, so it must fail when any of them does. A skipped test
+          # matrix (no test projects, or a docs-only change) still passes, but
+          # only when the changes job itself succeeded: if it failed, the build
+          # was skipped for the wrong reason.
+          if [[ "$CHANGES_STATUS" != "success" \
+            || "$BUILD_STATUS" =~ ^(failure|cancelled)$ \
+            || "$DISCOVER_STATUS" =~ ^(failure|cancelled)$ \
+            || "$TEST_STATUS" =~ ^(failure|cancelled)$ \
+            || "$COVERAGE_STATUS" =~ ^(failure|cancelled)$ ]]; then
+            echo "❌ **Overall Status:** FAILED" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          else
+            echo "✅ **Overall Status:** PASSED" >> "$GITHUB_STEP_SUMMARY"
+          fi

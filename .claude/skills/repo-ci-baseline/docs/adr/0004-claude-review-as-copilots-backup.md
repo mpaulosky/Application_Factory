@@ -1,0 +1,541 @@
+# Claude reviews a PR when Copilot can't, and the merge gate accepts either review
+
+**Status:** accepted and implemented in `template/owned/.github/workflows/claude-review.yml` and `pr-automerge.yml` (#100).
+
+Every Baseline PR waits on a review of its head before PR Auto-Merge lands it.
+Copilot was the only reviewer, and when the account's Copilot code review budget is used up, GitHub drops every review request without a word (#97, #99).
+On 2026-10-07 that stranded a whole re-Apply round: nothing merged until the budget reset or a person merged past the gate.
+
+So Claude reviews as a backup: Claude Review runs Sonnet 5.5 at high effort in CI (Sonnet at medium effort until #117, then Opus 5.5 at high effort until it moved back to Sonnet; see below)
+and posts an ordinary review of the head, with inline threads, under `github-actions[bot]`.
+It runs only while a PR carries `review:claude`, which a person can add at any time. `land.sh` adds it when its own request for Copilot's review of the head
+didn't register, once the head's checks are green, and for at most 2 rounds per PR. `reapply.sh` only warns: a review of a head that then fails CI is money spent for nothing.
+PR Auto-Merge accepts a review of the head by either reviewer, holds on either's unresolved threads, and counts both reviewers' rounds toward one loop,
+exhausted after three dirty rounds in a row ([ADR 0002](0002-copilot-review-cap-and-hand-back-hold.md), amended by mpaulosky/dotfiles#375).
+The review body starts with `<!-- claude-review -->`: that marker, not the login alone, is how the gate tells Claude's review from anything else posted as `github-actions[bot]`.
+
+## Update (#318): a dropped request counts too
+
+The first version counted Claude's review only where Copilot's quota note was on the same commit, on the reasoning that silence can't be told from a Copilot review that is merely late.
+That left the commonest case stranded: once the budget is used up GitHub usually drops the request with no note, so a PR sat with no review until a person added `review:claude`
+and merged it by hand (dotfiles#325, #326).
+Now a head Copilot can't review is one with its note, or with no Copilot review and no pending Copilot request.
+This version guessed at a dropped request: PR Auto-Merge waited `COPILOT_GRACE_MS` (5 minutes) after the head's checks finished before it called in Claude for the second kind.
+The #360 update below replaces that grace (mpaulosky/dotfiles#360); the rest of this section stands.
+Claude's review counted for the head only, and an earlier commit's only with Copilot's note on it, as `landing.py` had it.
+Superseded by mpaulosky/dotfiles#375 (see the last update below): a Claude review counts as a round,
+and as cover for a clean merge of `main` above it, wherever Copilot can't review the PR now.
+A request the run can't read in full counts as pending, so the rule fails closed.
+A head with no check besides Claude's and the workflow's own gets no label from the run: with `review:claude` off, it logs a notice to review and merge it by hand (mpaulosky/dotfiles#331).
+That rests on GitHub keeping Copilot's request in `reviewRequests` until its review is submitted.
+Once Copilot really reviews the head, Copilot's review covers it and the label comes off (#271). The new path applies to every same-repo PR,
+so a repo whose ruleset never requests Copilot gets Claude's review too. The owner decided (mpaulosky/dotfiles#331) to accept that and not to check the ruleset:
+a check is an extra API read and failure mode, and without Copilot such a repo would otherwise never get a review at all. The label is still the gate,
+so the cost there is one Claude review per labelled PR. The other cost is a small window where a Copilot review that is merely very late arrives after Claude's;
+its threads still hold the merge, and the short window the #360 update leaves keeps it small.
+
+A bot's push of a clean merge H2 of `main` on top of a head H1 Claude reviewed gets a review of its own (mpaulosky/dotfiles#331).
+H2's own Claude Review run is skipped (the action refuses a bot), and under a dropped request H1 has no note, so a review of H1 would count for nothing at the gate.
+So the run for H1 that sees H2 at its check step reviews H2 itself, against `main`'s current tip, since H2 holds a newer `main` than the base that run's event carries.
+PR Auto-Merge does not re-trigger `review:claude` for H2. That covers only a run that sees H2 at its check step: when H1's run is past that step or has finished before the bot pushes,
+nothing starts a run for H2, and it waits for a person's push or label.
+
+## Update (#360): ask once, read back, fall back in 30 seconds
+
+The 5-minute grace of the #318 update guessed at a dropped request, and a dropped request brings no event: nothing runs when the grace runs out,
+so the label waited for the hourly sweep. `land.sh` only knew a request was dropped while its process kept running, so each `--once` run forgot the drop and asked again,
+and mpaulosky/dotfiles PR #359 sat held on "Copilot hasn't reviewed the head yet". The owner has no Copilot code review budget, so every request is dropped.
+This update replaces the grace (mpaulosky/dotfiles#360). PR Auto-Merge and `land.sh` (`land.py`, `landing.py`) use one rule:
+
+1. **Ask once per PR.** The first time a same-repo, non-draft PR into `main` is evaluated with a head that has no real Copilot review, no quota note,
+   no pending Copilot request and no record of an ask, the tool writes the record, requests Copilot's review and reads the request back.
+   Nothing asks Copilot for that PR again: not for a later head, and not after `update-branch`.
+2. **The record is a PR comment** holding `<!-- pr-automerge:copilot-asked -->`, written before the request so a crash between them can't make a second ask.
+   Two PR Auto-Merge runs can both post one, so the workflow's run reads the PR's comments again and a run whose record is listed after another's (oldest first, the order
+   every run reads) stands down (mpaulosky/dotfiles#369). GraphQL can lag behind the REST write, so a read that fails or doesn't show the run's own record is tried up to three times
+   (not after a rate limit or a bad token, which ends the run and makes no request) before the request is made anyway, with a warning (mpaulosky/dotfiles#374): a repeat request
+   is idempotent, and losing the ask would spend Claude's budget on a PR Copilot was never asked to review. `land.sh` doesn't re-read.
+   Only a comment by `github-actions` (the workflow's `GITHUB_TOKEN`) or by the repository owner (`land.sh`, through the owner's `gh` login) counts:
+   anyone can comment the marker, which would otherwise switch the fallback on, the same stance as the Dependabot rebase marker.
+   The record listed first decides. The request itself is made with the PAT (`RELEASE_PR_PAT`), which GitHub should treat as a person's.
+   A PR runs its base branch's workflows, so a repo's first re-Apply PR has the previous PR Auto-Merge, which never posts the record, and Claude Review would skip it for ever:
+   `reapply.sh` posts the ask record (a comment from the owner's login) when its Copilot request doesn't register, unless the PR already has one (mpaulosky/dotfiles#384).
+3. **Copilot can't review the head** when its quota note is on it, or when the record exists and has settled (30 seconds old, or written by this very run, which read the request back)
+   and the head has neither a real Copilot review nor a pending Copilot request. A request that threw counts as dropped at once.
+   A pending request always means keep waiting, and a request list the run can't read counts as pending.
+4. **Then** `review:claude` is added on the terms it already had: the head's required checks are green, the PR's review loop isn't exhausted (mpaulosky/dotfiles#375),
+   and no person took the label off. Claude's review of the head counts at the gate under the same test.
+5. **A later head** needs no new record. The record is old, so Copilot is gone the moment the new head has no pending request and no real review,
+   and the `review:claude` flow takes it, with the review loop, the thread holds and the stop-on-clean rule unchanged.
+   A request that does register (the ruleset's own request per push, or a budget that came back) is waited for, and a real Copilot review of the head still takes the label off (#270).
+6. **A record that can't be read** (the comments query failed, or more than 100 comments with no marker among the last 100) counts as asked but not settled:
+   the tool never asks, and never infers a drop. A PR like that waits for a person.
+
+The run reads its own request back for up to 30 seconds (`COPILOT_ASK_WAIT_MS`, polling every 5 seconds), so a dropped request gets `review:claude` in the same run.
+`land.sh --once` needs no memory between runs: the first run asks and records, and a later run finds the record, no pending request and 30 seconds, and adds the label.
+A run under 30 seconds after the record prints why it waits and acts on the next one.
+`land.py` warns about a request it read back as dropped but remembers nothing: it adds the label after the 30 seconds too, since PR Auto-Merge takes the label off an ask younger than that (mpaulosky/dotfiles#378).
+A head with no CI check keeps the notice to review and merge it by hand; the notice for a labelled head that Claude already reviewed went with the grace it measured.
+
+Accepted costs:
+
+- A push after the record exists can be evaluated before the ruleset's own request for it registers, so Copilot is briefly gone. That matters only when the head's required checks are already green,
+  and then costs one Claude review; a pending request still blocks the gate, and a real Copilot review still takes the label off.
+- Two PR Auto-Merge runs at once post two records but only one sends the request. Two requests remain possible when `land.sh` and the workflow ask at once (`land.sh` doesn't re-read),
+  when a rival's record isn't visible yet to the run that re-reads, or when a run's own record never shows in the re-reads and it requests anyway (mpaulosky/dotfiles#374).
+  GitHub ignores a repeat request, so the worst case is a second request, never a second review, and the record listed first decides. The loser of a race leaves a record behind.
+- `reapply.sh` still asks per head and writes no record, and Sandcastle's own re-request sweep and the ruleset's `review_on_push` are unchanged.
+  Turning `review_on_push` off where there is no budget is the owner's call, not made here.
+
+## Update (#375): one loop for both reviewers, merges of `main` are no rounds
+
+PR #371 stalled with its head never reviewed. Its three Claude "rounds" were one real commit and two merges of `main` that PR Auto-Merge's own update-branch made, and Claude Review
+had spent a paid review on each merge head. Once the rounds were used, `review:claude` came off and nothing put it back for the next real commit. This update (mpaulosky/dotfiles#375) changes:
+
+1. **A merge of `main` is never a round**, for either reviewer, and `claude-review.yml` starts no paid review for a clean merge of `main` into a commit **any** reviewer reviewed.
+   Its `reviewed.txt` lists every Claude review (a marked `github-actions[bot]` review), whatever the commit, besides Copilot's real reviews; a merge onto an unreviewed commit,
+   a merge that edits a file and a merge of another branch are still reviewed, and so is a head the owner asked for with the label. The skip needs the base's `pr-automerge.yml` to carry
+   `reviewLoopState`, the gate that counts Claude's review of an earlier commit; a base without it reviews. One gap is documented: the workflow skips on any Claude review, while the gate counts it
+   only where Copilot can't review, so with a Copilot request pending on the merge head the gate waits for Copilot's review of it, which arrives or is dropped and then covers.
+2. **Claude's review counts wherever Copilot can't review the PR now**: Copilot's quota note is on that commit or on the head, or the ask settled and no request is pending. It is no longer
+   limited to the head or a noted commit, because the head moves on and an earlier Claude review must keep counting as a round and as cover for the merge chain above it.
+3. **The loop counts dirty rounds in a row**, not reviewed commits, and `MAX_CLAUDE_ROUNDS` is the only count (`COPILOT_REVIEW_CAP` keeps its name and value for `github-settings.sh`).
+   While the loop isn't exhausted, every new non-merge head nobody reviewed gets Copilot's review or, where Copilot can't review, `review:claude`, **even if an earlier removal took the label off**
+   (a person's removal is still respected). At exhaustion the label comes off and the exhaustion comment (`pr-automerge:review-loop-exhausted`, ADR 0002) is posted before the merge.
+4. **Automation never adds the label while the exhaustion comment is the newest word.** The owner adding `review:claude` after it starts a new loop (the first add after the comment).
+   `land.sh` and `status.sh` apply the same rule from `landing.py`, show an exhausted loop as ready to merge with the count of threads left open,
+   and ask for no review while the comment is the newest word.
+
+## Update (#378): Claude reviews only where Copilot can't
+
+A PR never gets both reviewers' reviews. This update (mpaulosky/dotfiles#378) changes:
+
+1. **Claude never reviews while Copilot can review.** Copilot can't review the PR when its quota note is on the head, or it is gone (`copilotGone`: asked, the ask settled and no request pending,
+   and it has not really reviewed the head). Otherwise `review:claude` is ignored while Copilot can review: PR Auto-Merge takes it off at once, whoever added it, and logs why, and `claude-review.yml`
+   starts no paid review. There is no exception for the owner's add. The label's only job is to call Claude in where Copilot is out. PR Auto-Merge starts on the label's `labeled` event for this
+   (the job's `if:` lets in no other label), and `claude-review.yml` has a first step that applies the same rule to the same reads, `Skip while Copilot can review`, and skips when it can't tell
+   (a warning names the PR and says to push or add the label again once the API works).
+2. **A person's open threads still hold the merge at an exhausted loop.** Only threads opened by Copilot or Claude Review are documented in the exhaustion comment and stop holding.
+   The comment lists a person's thread too and says it holds the merge (ADR 0002).
+3. **An owner's add of `review:claude` on an exhausted PR starts a new loop**, with or without an exhaustion comment, when rule 1 lets the label stand: the first add by a login with write
+   access to the repository after the exhausting round restarts the loop, and a PR with no comment yet gets the old loop's comment first.
+4. **The exhaustion comment says when the head was not reviewed** (``The head `abc1234` was not reviewed.``). Nothing else about merging changes: the fix for a third dirty round still merges unreviewed.
+5. **No change** for a clean merge of `main` onto a Claude-reviewed commit while Copilot is available: the gate asks Copilot and waits. With rule 1 this case only arises through a past
+   Claude review, which is now rare.
+
+## Update (#384): the first re-Apply PR gets the record, and Copilot is the exact bot
+
+1. **`reapply.sh` posts the ask record** on the re-Apply PR when its Copilot request doesn't register (see point 2 above); a request that registers needs none, and a re-run posts none twice.
+   `land.sh` then adds `review:claude` as before, so the first PR of a repo gets Claude's review with no hand step.
+2. **Claude Review matches Copilot by its exact login.** Its "Skip while Copilot can review" step compares with `copilot-pull-request-reviewer[bot]` for reviews and quota notes
+   and with that or `Copilot` (the Bot as a requested reviewer) for requests, as PR Auto-Merge counts Copilot's reviews. A login that merely contains "copilot" no longer makes the step
+   answer "Copilot has reviewed the head" (which stalled the PR) or call in a paid review the merge gate doesn't count.
+
+## Considered Options
+
+- **Keep the grace and shorten it**: rejected (mpaulosky/dotfiles#360) because a dropped request still brings no event, so a shorter grace still waits for the sweep.
+- **A `copilot:asked` label as the record**: rejected because it needs a `labels.json` and settings change in every repo and carries no time for the 30 seconds.
+- **Remember the drop in `land.py`'s process**: rejected because `--once` runs forget it and ask again.
+- **Replace Copilot with Claude**: rejected because rounds the size of #82's come from working out the Baseline process; once work is back on one project, Copilot's budget covers it at no cost.
+- **Run both reviewers on every PR**: rejected for the same cost, and because two reviews of every head double the threads to answer.
+- **Let Claude post the review itself**: rejected so the model never holds a write token.
+  It reviews in a read-only job and answers in a JSON schema; a separate job posts.
+- **An advisory review in the local pre-push gate**: rejected as the backup because the merge gate needs a review recorded on the PR.
+  It may still come later as its own issue.
+- **Limit the dropped-request path to repos whose ruleset requests Copilot**: rejected (mpaulosky/dotfiles#331) because the ruleset check adds an API read and a failure mode,
+  and a repo without Copilot would otherwise never get a review.
+- **Count Copilot's and Claude's rounds separately**: rejected because switching reviewer would reset the loop.
+- **Let the owner's add of `review:claude` stand while Copilot can review** (mpaulosky/dotfiles#378): rejected because both reviewers would then review the PR,
+  and PR Auto-Merge took the label off only after Copilot had reviewed the head, by which time both might have. No exception: the owner who wants Claude on a PR
+  Copilot can still review reviews it by hand.
+
+## Consequences
+
+- A repo without `CLAUDE_CODE_OAUTH_TOKEN` skips Claude Review with a notice, so the workflow is Applied before every secret is added; `github-settings.sh` reports the missing secret as MANUAL.
+- A review posted with `GITHUB_TOKEN` starts no workflows, so PR Auto-Merge follows Claude Review's completion through `workflow_run`.
+- Claude Review runs on `pull_request`, so it reviews with the PR's own copy of the workflow: the PR that brings it in lands on the old gate, and the next round is the
+  first to land on Claude's review.
+- The marker proves a review came through `github-actions[bot]`, not that Claude wrote it.
+  Someone who can push workflow changes can still post a marked review of their own: a branch can add any workflow that
+  asks for `pull-requests: write`, and it gets the repo's secrets, `RELEASE_PR_PAT` (which can merge a PR outright) included.
+  The post job runs the base's script (below), so a push that changes only `.github/scripts`, without the workflow
+  permission, can't. The merge gate guards against merging before a review, not against someone who can push workflow changes.
+- A push without the workflow permission can still steer what Claude answers, and so what gets posted under the marker.
+  The review job checks out the PR's head and the prompt has Claude follow the repo's conventions (AGENTS.md, CLAUDE.md,
+  `docs/`), so a push that edits those files, or puts instructions in the diff, can steer Claude to answer with no findings,
+  which the base's script posts as an ordinary review of the head (Claude Review, IssueTracker#227). This is an accepted
+  limit: such a push can't change the code that checks or posts the answer, but the marker shows that a review of the head
+  was posted, not that the PR was reviewed in good faith.
+  A fork PR can't use it: its run gets no secrets and a read-only token, so it can't post, and PR Auto-Merge never merges a fork PR; the maintainer does.
+- A finding outside the diff can't be a thread, so it goes in the review body under a second marker, and PR Auto-Merge holds on it.
+  A finding on a changed file at a line the file doesn't have (past its end) is a wrong line number, not unchanged code,
+  so it goes on the file's nearest line in the diff as a thread, with a note (#122). When the file's length can't be read, it holds as before.
+  The post job warns instead of failing. A failing check couldn't hold the merge on its own: a later run with its jobs skipped (another label added) replaces it.
+  And it would leave the PR `UNSTABLE`, which PR Auto-Merge never merges. The review's marker holds below an exhausted review loop;
+  at exhaustion the finding is listed in the exhaustion comment instead (ADR 0002, mpaulosky/dotfiles#375).
+- Dependabot PRs are left out: their own auto-merge path is unchanged, and they get no secrets.
+- A Review step that fails, times out (its own 25 minutes, under the job's 31) or is refused at the usage limit doesn't fail the job either (#123):
+  `continue-on-error` lets a warning step say so, and the post job skips when there's nothing to post (an empty output would fail it as malformed).
+  The PR then has no Claude review of its head, so PR Auto-Merge waits for Copilot's or a rerun, instead of the PR going `UNSTABLE`.
+  The prompt also has Claude skip the files Copilot code review excludes (see the split-diff decision below).
+- dotfiles isn't a Baseline repo, so it carries a copy of the two files, and of PR Auto-Merge, which `test.sh` keeps identical to the Template's.
+
+## Model, effort and prompt (#117)
+
+Copilot made five findings on Articles#298's three reviewed commits. Four were real bugs that we fixed (#111, #113, #114), and one is a known limit, the marker that proves nothing.
+On the same commits, Claude Review as first shipped (Sonnet 5.5, medium effort) found nothing and approved all three.
+A PR that landed on Claude's review alone would have merged all of them.
+
+`bench/claude-review-bench.py` replays the Review step with `claude -p` against those commits and scores what it catches (`bench/claude-review-cases.json`).
+It also replays three ordinary merged PRs to read for noise. Required findings caught, out of 7 (a finding counts once for each commit that still has the bug):
+
+| Variant | Caught | Per commit |
+| --- | --- | --- |
+| Sonnet 5.5, medium, original prompt | 0 | ~20 s, ~$0.19 |
+| Sonnet 5.5, high | 1 | ~50 s, ~$0.25 |
+| Sonnet 5.5, max | 2 | ~16 min, ~$3 |
+| Sonnet 5.5, high, thorough prompt v2 (`bench/prompts/thorough-v2.txt`), with WebFetch | 2 | ~2 min, ~$0.47 |
+| Opus 5.5, high, thorough prompt v2 | 4 | ~4–7 min, ~$1.20 |
+| Opus 5.5, high, thorough prompt v3 (`thorough-v3.txt`, one sentence edited since) | 3 | ~4 min, ~$1.34 |
+| Opus 5.5, high, the workflow's prompt, reads scoped, pinned actions' source readable (#121, #117) | 4 | ~4–5 min, ~$1.68 |
+| Opus 5.5, high, one turn of reads, `--max-turns 3` (#153), Articles#298 4b90c96 only | 0 of 4 | ~3 min, ~$0.78 |
+| Opus 5.5, high, one turn of reads, split diff, `--max-turns 30` (#156) | 2 | ~3 min, ~$0.58–0.88 |
+| The same, the prompt asking for all 24 Reads | 2 | ~3 min, ~$0.56–0.62 |
+| The same, with context pieces (#117) | 2 | ~3 min, ~$1.36–1.43 |
+| The same, with context pieces and pinned actions' gatekeeping source (#117), what the workflow ran before the move to Sonnet; three runs | 2, 4, 4 | ~3 min, ~$1.39–1.70 |
+
+- **Opus at high effort (until the move to Sonnet, see [Moved to Sonnet](#moved-to-sonnet)), held to one turn of reads, on the split diff with context pieces, is what the
+  workflow ran** (see [One turn of reads](#one-turn-of-reads-153-154) and [Context pieces](#context-pieces-117)).
+  Everything below until [One turn of reads](#one-turn-of-reads-153-154) is how the model, effort and prompt were chosen, uncapped.
+
+- **Opus at high effort with the thorough prompt (v3, edited as below) was chosen, before the turn cap.**
+  - With v2 it caught findings 1, 3 and 4, in two runs. With v3 it caught 3 and 4, and missed finding 1 in that one run.
+    A point either way is within what one run varies by. It flagged the known marker limit once in the run without WebFetch, and on all three commits in the run with it.
+  - Its findings on the benchmark commits were on the right lines, each with a fix, and several were real problems Copilot didn't raise.
+  - On the three ordinary PRs, v2 made 2, 3 and 6 findings, where Copilot opened 3, 1 and 2 threads. None were nits,
+    but two of the six on Blazor-Server#148 cited lines past the end of an 80-line file, which would hold the merge as off-diff findings (#122).
+  - v3 differs from v2 only in where a finding goes: on a line the diff adds or shows, with a problem in unchanged code put on the changed line that depends on it,
+    because any other line holds the merge. On the ordinary PRs it made 2, 2 and 4 findings, all on real lines, and on Articles#298 every finding was on a changed line.
+    It flagged the known marker limit on all three commits.
+- After the benchmark, one sentence of v3 changed: it had asked Claude to read a pinned action's source or GitHub's documentation, which it had no way to do.
+  Now the runner's `_actions` (the source of the actions the review job pins) is an `--add-dir`, and the prompt points Claude at it;
+  for anything else it says what it's relying on. The benchmark copies the case head's pinned actions into the same layout.
+  In that run (`v4-scoped-actions`) Claude caught finding 5 for the first time, from the action's `checkHumanActor`, along with 3 and 4 and the marker limit;
+  it missed finding 1, which the v2 runs caught. The same run is the check that scoping reads (#121) cost nothing.
+- **The review job's `timeout-minutes` is 31** (30 until the Review notes step took a minute), and the Review step's 25. Opus took up to about 7 minutes on these diffs; a
+  step that times out now warns instead of failing the check (#123).
+  `review:claude` goes mostly on re-Apply PRs, which carry only the Owned files that changed: 2 to 8 files and under 800 lines in the #116 and #82 rounds,
+  the largest being Articles#298, the benchmark's own case.
+- **The prompt was the bigger change.**
+  - The original said an empty findings list was a good answer and to leave out anything Claude wasn't confident about, and Sonnet then read little beyond the diff.
+  - The thorough prompt asks for the files around the diff, untested paths (reruns, skipped jobs, other actors, odd input) and how GitHub itself behaves.
+  - It also asks that every line number be checked against the file. An earlier draft produced impossible line numbers, and an off-diff finding holds the merge.
+- **No WebFetch.**
+  - No run caught finding 5 with it, and Opus scored the same without it.
+  - It would also be one more way out for a prompt-injected diff. See [Keeping the token out of the review](#keeping-the-token-out-of-the-review-121) for the others.
+- **Finding 5 needed the pinned action's source**: Copilot's coding agent acts as `Copilot` with no `[bot]` suffix, so it passes the guard, and the action then refuses it.
+  Only an action this review job itself runs is on the runner, so a finding about another workflow's pinned action still rests on what Claude says it's relying on.
+  Copilot is still the first reviewer, and a Claude-only landing is still a weaker review than one by both.
+- **The benchmark is close to the workflow, not identical.** It runs the local `claude`, not the version the pinned action installs.
+  Results files record the version from `noise-v2-opus-high` on (2.1.293 there, 2.1.294 for the v3 and v4 runs); the earlier files predate that, and the CLI updated during these runs.
+- **Cost (Opus):** about $1.20 to $1.70 a review uncapped, instead of $0.19 for Sonnet at medium effort at API prices; about $0.40 to $1.70 under the turn cap with context pieces.
+  That is acceptable, because the backup only runs while a PR carries `review:claude`.
+  In CI, though, the review runs on a subscription token (`claude setup-token`), so it uses the plan's allowance for the model the workflow names (Opus until the move to
+  Sonnet), and the plan has to include that model in Claude Code.
+  A run refused at the usage limit posts nothing and warns, and the PR waits for Copilot's review or a rerun after the reset (#123).
+- Matching is by keyword, whole words, on the files a finding is about, and every saved run in `bench/results/` is scored with the current cases file
+  (`--rescore` rewrites a file's score after the cases change). Read the findings too: an early, looser matcher counted a finding about skipping `[bot]` actors as finding 5.
+- Each results file keeps the exact prompt and arguments it ran with, which is what reproduces its score; a prompt file may have changed since.
+- The workflow's header records the accepted marker limit, because the prompt asks for problems "a maintainer would want fixed or knowingly accepted",
+  and this ADR isn't in the Baseline repos: without it, every re-Apply PR that touches the workflow would get the same thread.
+- The benchmark runs Claude on the maintainer's machine against the cases' commits.
+  It takes the root `.claude/`, `.mcp.json`, `CLAUDE.md` and `CLAUDE.local.md` from the base, as the action does, loads no settings at all
+  (`--setting-sources ""`, for the runner's empty user level), starts no MCP servers and runs git with hooks off.
+  So no settings, hooks or servers run, the head's, the base's or the maintainer's own (#125); the base's hooks used to, against the head's scripts.
+  Nested `CLAUDE.md` files still come from the head, as the diff does. Only trusted commits become cases, and a results file is read before it's committed.
+- Rerun the benchmark before changing the model, effort, prompt or tools, and add a case whenever Copilot finds something Claude Review missed.
+
+### One turn of reads (#153, #154)
+
+The owner's limit is 3 turns a review: one turn of reads, then the answer. The prompt holds a review to it:
+it asks for every Read in one turn of parallel calls, because with `--json-schema` the answer takes a turn of its own,
+so a second turn of reads leaves none for the answer.
+
+- **`--max-turns` is the action's backstop, not the limit**, because two tools read the same number differently.
+  Claude Code stops after that many API round-trips, but claude-code-action compares it with the result's `num_turns`,
+  which counts messages (about one for each tool call, so each parallel Read is one), and rejects a result above it after it has run.
+  - #153 set `--max-turns 3`, and every review that followed the prompt was rejected ("reported a successful result after 6 turns, exceeding the configured maximum of 3").
+  - #154 set 7, which a review of 3 or 4 reads reports. That held for small diffs only: a review that reads more files reports more.
+  - With the diff split into pieces (below) a review reads more files by design: on Blazor-Server#190 it read 14 in its one turn and reported 16.
+    So the cap is now 30, and the prompt allows at most 24 Reads (about 26 reported). At 30, a review that ignored the prompt could make up to 30 round-trips,
+    so `--max-budget-usd 3` caps what one review can spend instead.
+- **Cost under the cap (Opus): about $0.40 to $1.70 a review with context pieces**, against about $1.70 uncapped; it was $0.30 to $1.10 before them.
+  On the bench: IssueTracker#197 $0.38, IssueManager#249 $0.77, Articles#298 $1.39 to $1.70.
+- **Recall under the cap (Opus): 2 of 7 on the split diff alone, and 2, 4 and 4 of 7 with context pieces, against 3 to 4 uncapped.**
+  - On the split diff alone (`bench/results/20261017T115004-capped-split-diff-recall-opus-high.json`, Claude Code 2.1.302),
+    each review made one turn of 5 Reads, well under the 24 the prompt allows, and caught findings 3 and 4 on 4b90c96 only.
+  - Asking for all 24 Reads in the prompt took it to 6 or 7 and changed nothing (`20261017T121258-full-budget-recall-opus-high.json`, 2 of 7):
+    the model decides what to read before it has read anything, so it names the diff and little else.
+  - So the workflow now chooses the reads (see [Context pieces](#context-pieces-117)). With them, each review reads 12 files in its one turn.
+    Context pieces alone caught finding 1 for the first time under the cap (`20261017T122943-context-pieces-recall-opus-high.json`, 2 of 7).
+    With the pinned actions' gatekeeping source as well, three runs caught 2, 4 and 4
+    (`20261017T124620-action-context-recall-opus-high.json`, `20261017T130127-…-run2-…`, `20261017T130132-…-run3-…`):
+    finding 5 in two of the three, from the action's `permissions.ts`, which no capped run had caught; 4 in all three; 3 in two; 1 in none.
+    The optional marker limit came up in every run.
+  - The run that scored 2 also found, from the action's source, that a person with only triage access can add `review:claude`
+    and the action then throws "Actor does not have write permissions", which at those commits left a failing check (#123's `continue-on-error` has since contained it).
+  - A single run varies by two findings either way, so compare setups on more than one run.
+  - So under the cap with context pieces, Opus recall is about where it was uncapped, at about the uncapped cost, within the owner's 3 turns.
+    A Claude-only landing is still a weaker review than one by both, and Copilot stays the first reviewer.
+
+#### The split diff
+
+Every review of the ~2,600-line re-Apply PRs of 2026-10-09 said the diff was cut off after about 1,030 lines, so the workflow files late in it went unreviewed.
+A Read of a file over 25,000 tokens returns only its first page, and the one turn of reads leaves no turn for the next.
+Those are the Read tool's limits in Claude Code 2.1.293 (what the action pin installs) and 2.1.295, read from the CLI's own code:
+25,000 tokens (counted by the API), 2,000 lines when no limit is given, and no whole-file Read over 256 KiB.
+
+- **The "Write the PR's diff" step also writes the diff in pieces** under `$RUNNER_TEMP/claude-review/diff/`, each under 40,000 bytes and 1,500 lines
+  (about 10,000 tokens of code), so one Read returns a whole piece.
+  - Each file's diff is packed whole into the current piece in read order: workflows, scripts, source, tests, docs, then deleted files, each kind in diff order.
+    Pieces are few and full, because each Read counts against `--max-turns`.
+  - A file's diff too big for a piece is split into parts between hunks. Each part repeats the file's header, and a part that starts inside a hunk
+    opens with `@@ -old +new @@ (continued)`, so line numbers still follow. A line over 10,000 bytes is cut into chunks at character boundaries.
+  - **Claude Review covers exactly the files Copilot code review covers**, because it stands in for Copilot when Copilot is unavailable:
+    a stand-in that reviewed more would hold PRs Copilot passes, and one that reviewed less would let through what Copilot catches.
+    The step copies [Copilot's documented exclusions](https://docs.github.com/en/copilot/reference/review-excluded-files) verbatim
+    (taken 2026-10-09; GitHub calls the named files "an example of some of the files", so this is the documented subset).
+    Excluded files go in no piece and are never read; INDEX lists them as excluded, and the prompt says to skip them.
+    Everything else is reviewed as git shows it, binaries included, as Copilot sees them.
+  - **A root copy identical to the Template's file isn't read twice** (mpaulosky/dotfiles#380). A repo that carries copies of the Template's Owned files
+    (dotfiles) changes the Template's file and its root copy to the same bytes, so every large Baseline PR showed its diff twice
+    and went past `MAX_READ_PIECES`, with pieces unread and the merge held for the owner (mpaulosky/dotfiles#377, #379).
+    The step leaves out a root copy of a changed Template file (`template/owned/<path>` is the copy of `<path>`) when both have the same
+    mode and blob at the head: it goes in no piece, counts against neither the read budget nor what holds the merge, and INDEX lists it as
+    "identical to `<Template path>`". An identical copy is read through the Template's file. The test is by content, never by name, so a copy that differs from the Template's file (a drifting copy),
+    or whose Template file isn't in the PR, is read like any file and the drift still reaches the review. The mapping is read off the Template's
+    layout, not from a list, and a repo with no `template/owned/` path in the diff is unchanged. A PR still too big after the copies are left out
+    gets the not-read finding as before.
+  - **What nobody reads can't merge on this review.** Copilot's review is advice and a person still merges; this one gates PR Auto-Merge.
+    Reviews of the re-Apply PRs (IssueTracker#248, atelier-store#136, Blazor-Server#192) showed what matching Copilot alone let through:
+    a PR changing only `.github/actions/*/dist/index.js` or a `vendor/*.min.js` merged on a review that read nothing,
+    and a PR's own `.gitattributes` (`*.cs -diff`) or a NUL byte in a script made its change show only as "Binary files differ".
+    So these hold the merge for a person, listed under `held` in INDEX and in the answer check's log:
+    - every excluded file a PR adds or changes. No such file counts as inert: a log can be what a symlink already points at,
+      a lockfile decides which dependency code the build installs and runs, `.gitignore` decides what gets committed
+      (dropping `.env` would let secrets be staged), and an SVG can script in more ways than a pattern lists.
+      Successive reviews kept finding a new way around a "data holds nothing" exemption (a rename, a coverage folder holding a build,
+      a symlink to a log), so the exemption is gone for additions and changes;
+    - deleting an excluded file, unless it's data nothing runs (`DATA_GLOBS`: logs, source maps, SVGs and named coverage reports
+      such as `lcov.info` or `cobertura*.xml`) outside `.github/`;
+    - unless deleted: a file git shows only as binary that isn't inert media (`MEDIA`: images, fonts, audio, video, PDFs),
+      a submodule bump (mode 160000: the diff shows only two commit IDs), a symlink (mode 120000: only its target shows,
+      and linking `scripts/build.sh` to an unread `.log` would make it run), and a Git LFS pointer (only the pointer shows)
+      that isn't media. A pointer is known when every line its hunks show is a pointer line and one is its `oid sha256:` line
+      or a first line naming any version git-lfs accepts, its older `hawser` and `git-media` aliases included;
+      a doc or fixture quoting a pointer is text. Lines are read as git-lfs reads them: Unicode whitespace trimmed,
+      a CR dropped, blank lines skipped, and an oid as any 64 letters or digits.
+
+    The diff takes attributes from the base (`--attr-source`), so a PR's own `.gitattributes` can't hide its text,
+    and `--no-textconv` keeps a diff driver from rewriting what the review sees.
+    The diff runs with `--no-renames`, so a rename shows as the old path's deletion and the new path's addition, each judged on its own path:
+    renaming a workflow to `x.log` shows its deletion, and renaming `dist/x.js` to `src/x.js` shows its content.
+    Two costs, accepted:
+    - A pure rename costs its content twice, so a PR that moves a big folder can pass the read budget and hold the merge for a person.
+    - GitHub's PR diff still detects renames, so a finding on a line of a renamed file outside GitHub's hunks, or on the old path,
+      can't be anchored. `post_claude_review.py` checks each finding against GitHub's own patches (`pulls/{n}/files`)
+      and puts one it can't anchor in the review body under the off-diff marker, which holds the merge.
+  - The prompt asks for at most 8 pieces and 300,000 bytes (about 80,000 tokens), leaving room for source files; the rest are listed as not read,
+    and the summary must name them. Each one adds a finding outside the diff, which holds the merge for a person; the log lists its files.
+    So does a listed piece Claude didn't read whole, judged from the Read results in the execution file.
+- **Pieces are named by number only (`001.diff`), and the prompt lists them by name, line count and kind.**
+  A PR's paths are its author's: none becomes a file name or reaches the prompt. The list reaches the prompt as a step output,
+  since Claude can't read an index before its one turn of reads. `diff/INDEX` maps each piece to its files' paths, as git prints them (quoted when unusual, one per line),
+  and Claude reads it in the same turn.
+- **The split is inline in the workflow**, like the answer check: it runs in the job that later hands Claude the token, so a PR's own script mustn't run there.
+  The Template's tests (`test_claude_review_split_diff.py`) and the benchmark run the heredoc as it is.
+- **On the bench** (`bench/results/20261009T084333-split-diff-packed-large-opus-high.json`, the `large` case, Blazor-Server#190):
+  Claude read INDEX, all five pieces, AGENTS.md and CLAUDE.md in one turn, then answered: 10 turns reported, ~3 min, $0.93, three findings,
+  and a summary that says every piece was read. An earlier run with one piece per file (`20261009T083504-split-diff-large-opus-high.json`)
+  read all eleven and made a finding on `pr-automerge.yml`, the last file in the diff, but reported 16 turns, which the action would have rejected at 7.
+  The benchmark now records each turn's tool calls and flags a run whose `num_turns` the action would reject.
+
+#### Context pieces (#117)
+
+Left to choose, a review read 5 to 7 files in its one turn and missed what lay outside the diff.
+So the "Write the PR's diff" step also writes context pieces under `$RUNNER_TEMP/claude-review/context/`: whole files, each line after its line number,
+packed into pieces under the same limits as the diff's, and listed in the prompt, which asks for all of them in the one turn.
+
+- **In this order:** the changed workflows, scripts and code; the gatekeeping source of each action a changed workflow pins
+  (its validation, permission, actor, trigger and token files, then its `action.yml`); the changed tests and docs;
+  unchanged workflows, scripts, tests and code a changed file names; then those that name a changed file (its stem as a whole word, so an import counts).
+  A name more than 8 files use is too common to follow, and config and data files aren't followed.
+- **Within a budget:** up to 10 pieces and 240,000 bytes, and with the diff no more than 480,000 bytes (about 130,000 tokens).
+  A changed file over 120,000 bytes or an unchanged one over 40,000 shows only in the diff. A file goes in whole or not at all.
+- **Optional reading:** an unread context piece holds nothing; only the diff's pieces do.
+- **Read safely:** repo files come from git at the head, never the checkout, and only regular text files Copilot reviews.
+  An action's files come from the runner's `_actions`, where it downloads the actions this job uses, and only regular files inside the action's folder,
+  so a symlink in either can't bring in anything else. The runner has only the actions the review job uses,
+  so a finding about another workflow's action still rests on what Claude says it's relying on.
+- **What it bought:** see the recall bullet above. The threads got better too: they cite the other files they depend on by line,
+  and make fewer guesses ("I'm assuming…"). On the ordinary PRs it made 2, 1 and 2 or 3 findings, against Copilot's 3, 1 and 2, none of them nits.
+
+## Keeping the token out of the review (#121)
+
+The Claude process holds `CLAUDE_CODE_OAUTH_TOKEN`, it reads untrusted PR content, and the review it writes is posted publicly.
+A prompt-injected diff (or text an agent copied into a PR) could ask Claude to read the token and quote it.
+Since Claude Review first shipped, `--allowedTools "Read,Glob,Grep"` granted those tools on every path, so nothing stopped it.
+
+- **No tool is granted outright.** Read, Glob and Grep are then allowed only in the working directory and the `--add-dir` directories:
+  the checkout, `$RUNNER_TEMP/claude-review` (the diff alone, not the rest of `RUNNER_TEMP`) and the runner's `_actions`.
+  Checked with Claude Code 2.1.293 (the version the pinned action installs) and 2.1.294 in `-p` mode with the workflow's flags:
+  reads, Greps and Globs of `/etc`, a sibling of the diff's directory and `/proc/self/environ`
+  are refused, and so are `/dev/fd/../environ` and a symlink in the checkout pointing at `/proc/self/environ` or `/etc/hostname`: Claude Code resolves the path before it checks.
+  With `--allowedTools "Glob,Grep"`, Grep searched outside the workspace and Glob listed `/etc`, which is why nothing is granted.
+- **`Read(//proc/**)` stays denied**, in case a later change grants a tool again.
+- **`Read(**/.git/**)` is denied.** In agent mode the pinned action sets the checkout's origin URL to
+  `https://x-access-token:<GITHUB_TOKEN>@github.com/...`, so `.git/config` holds the job's token inside the workspace, whatever
+  `persist-credentials` says (found by Claude Review on TicketManager#145, which read it there). Checked with Claude Code 2.1.293:
+  without the rule Read returned `.git/config`; with it, Read (directly, through `..` and through a symlink), Glob and Grep were all refused or empty.
+  The token is read-only and expires with the job. The redaction's GitHub pattern also covers today's `ghs_<digits>_<JWT>` form.
+- **`--setting-sources user`.** The action already replaces the PR's `.claude/` and `.mcp.json` with the base's;
+  this also keeps the base's project settings from granting `Read` again. The runner's user level has no settings.
+- **An answer that quotes a secret is withheld, exactly.** A step in the review job, inline in `claude-review.yml`, reads
+  Claude's answer from the action's execution file and drops it when it holds 16 characters in a row of the secret part of
+  `CLAUDE_CODE_OAUTH_TOKEN` or the job's `GITHUB_TOKEN`, passed to it as masked secrets. That catches a near-miss quote GitHub's
+  masking would let through, and never fires on a sample token from the PR. The secret part is a token's body after its public
+  prefix, or a JWT's signature: the first round checked the whole stored value, and failed every review in the #132 re-Apply
+  round, most likely on a part every review quotes: a stored value can hold more than the token, and a JWT's header is the same
+  in every job's token. It compares letters and digits only, across the answer's strings as Claude wrote them, so a secret
+  quoted in pieces split by backticks or newlines is caught too, and so is one in look-alike characters (fullwidth,
+  mathematical). It compares the answer after NFKC and after NFKD: NFKC alone let through a mark after each letter,
+  composing each pair into a non-ASCII letter that was stripped (Claude Review, IssueTracker#227), and NFKD alone let
+  through pieces joined by accented letters, keeping the base letter between them (Claude Review, dotfiles #137). Pieces
+  split by letters or digits aren't caught, an accepted limit.
+- **Only the schema's fields are passed on.** The check drops every key but the summary and each finding's path, line and
+  body, and the schema sets `additionalProperties: false`, so an extra field, never posted but printed by the post job's log,
+  is gone (Claude Review, IssueManager#274). An answer of the wrong shape, judged as `parse_findings` judges it, becomes a fixed
+  placeholder holding none of it, so nothing the check didn't compare reaches the log, and `post_claude_review.py` still
+  rejects it rather than posting "No findings". The check prints why as an error, since the post job's message can't
+  name it; the reason is fixed text with at most a finding's index (Claude Review, IssueTracker#227). Each finding's `line` must be 0 to 1000000, so no single line
+  carries a token as one big number, and is checked, read as a character code, with the strings.
+- **Accepted limits of the check.** It catches a quote of 16 characters in a row, after NFKC or NFKD and with everything but ASCII
+  letters and digits taken out. A quote changed any other way still gets through, and each of these was raised in review
+  and accepted rather than closed, since closing one leaves the next:
+  - pieces split by letters or digits, or by characters NFKC and NFKD map to them (fullwidth, ligatures, circled or
+    superscript: Claude Review, dotfiles #137), including pieces in separate fields or findings, where the text between
+    them is the other fields' (Copilot, Blazor-Server#176);
+  - look-alikes NFKC doesn't map, such as Cyrillic or Greek letters, which are taken out and leave gaps (Claude Review,
+    atelier-store#130), and a reversed quote;
+  - a swap-cased quote, since the comparison doesn't fold case, and base64, hex or ROT13 of the token (Claude Review,
+    TicketManager#147 and dotfiles #136);
+  - a quote mixing Unicode tricks, since each window must match in one form: accented letters at some joins and combining
+    marks at others, or a mark after each letter with accented letters between pieces (Claude Review, dotfiles #137);
+  - character codes written as digits in the summary or a body, or packed several to a `line`.
+
+  The check is a backstop. Claude's read restrictions above, which keep it from reading the token at all, are the defence;
+  a gap here matters only if those fail. The workflow's comment lists these limits too, since this ADR isn't in the Baseline repos.
+- **No answer in the execution file fails the review job.** The check step runs only when Claude answered, so an empty or
+  unreadable execution file is its own error, not a quoted secret, and the post job doesn't run.
+- **No review in a debug run.** At the pinned action, debug logging turns `show_full_output` on, and the runner logs step outputs,
+  so a debug rerun would publish Claude's answer before the check above. The Review step is skipped when `runner.debug` is set,
+  with a warning to rerun without it, and sets `ACTIONS_STEP_DEBUG` to `false` for the action.
+- **The check is inline in the workflow, not in `.github/scripts`.** It holds `CLAUDE_CODE_OAUTH_TOKEN`, and a token without
+  the workflow permission (an app's, or a coding agent's that a prompt injection could steer) can push a change to a PR's
+  scripts but not to its workflows. #133 ran the PR's copy of the script and called write access the boundary; Claude Review
+  on Blazor-Server#176 showed that boundary is the workflow permission, and on atelier-store#130 that an older PR's script
+  lacked the option the merged workflow called. `pull_request` runs the workflow from the PR's merge commit, so the check is
+  always the workflow's own. The post job runs the base's `post_claude_review.py`, taken from the merge commit's first parent,
+  since it holds a token that can post a review under the marker: a changed script in the PR could otherwise post a marked
+  review Claude never wrote, which PR Auto-Merge would accept (Claude Review on #134). The first parent is the base the
+  workflow was merged against; the event's `base.sha` can be older. A PR that changes the script is posted by the base's
+  copy until it merges, so a PR that changes the script's interface together with the workflow's call fails its own post
+  job: land such a change in two steps, the script accepting both first. A base with no script yet warns and posts nothing.
+- **A quoted secret can't skip the post job.** A withheld answer, by that check or by GitHub withholding a job output that holds a
+  masked secret, reaches the post job as empty findings. The post job is gated on a `reviewed` flag that can't hold a secret,
+  not on the findings, so it still runs, and `post_claude_review.py` fails on empty findings with an error to rotate the token.
+- **Credential-shaped text is redacted and warns.** The same step replaces anything shaped like an Anthropic key or OAuth token,
+  a GitHub token or a JWT, in the formats they're issued in, before the answer becomes the job output the post job's log prints.
+  The post step redacts again, notes the count in the review, and warns.
+  It first failed the step instead, so a person would look. On the first re-Apply round that carried it, the PR Auto-Merge hold
+  that failure caused fired on atelier-store#130 and IssueManager#274 for a snake_case name and for this script's own test
+  fixtures, and a re-run posts a duplicate review: matches that reach this point are public text far more often than leaks,
+  and the exact check above already covers the real secrets. The tests build their sample tokens at runtime.
+- The pinned action runs on the Claude Agent SDK `^0.3.293` and passes `--allowedTools`, `--disallowedTools` and `--add-dir` through (its `parse-sdk-options.ts`).
+- Someone who can push workflow changes to a branch is out of scope here, as for the marker: they can change the workflow
+  itself. Someone who can push only other files reaches neither `CLAUDE_CODE_OAUTH_TOKEN` nor the post job's script,
+  though they can steer Claude's verdict (the marker limit above).
+
+## Moved to Sonnet
+
+The owner moved every Claude model the Baseline runs from Opus 5.5 to Sonnet 5.5, still at high effort where it was: Claude Review,
+the pre-push reviewers ([ADR 0008](0008-review-before-the-push.md)), the Sandcastle roles in the Seed `repo-config.mts`, and the `Co-Authored-By` line `reapply.sh` writes.
+The benchmark above ran Opus (its only Sonnet run was at medium effort and caught none of Copilot's findings, #117), so its recall figures describe the Opus workflow.
+The owner accepted that: the review now happens locally before the push, which is why GitHub's review no longer carries the whole load.
+The Seed is written once, so a repo that already has a `repo-config.mts` keeps its models until it changes them.
+
+## Claude Review after the local review
+
+With the review before the push ([ADR 0008](0008-review-before-the-push.md)), Claude Review is a backstop for what a local review can't check.
+The prompt asks for findings only on bugs in code that runs, security weaknesses, tests and GitHub's own behaviour, and has Claude list
+docs, comments and conventions under "Advisory" in its summary, since a finding holds the merge and these shouldn't.
+The local review's reviewers are asked at least what Claude Review is, plus those, so `review-bar.md`'s second paragraph is the wider version of Claude Review's.
+
+It reads the PR description's `## Review notes` as accepted findings, between the markers on lines of their own, indented between nonce lines like the resolved threads.
+
+- **Who counts.** Only a PR whose head is this repository's own branch and whose author is the repository's `OWNER`, the bar the resolved-threads step sets for a reply.
+  A `MEMBER` or `COLLABORATOR` may have read access only, so a same-repo PR from one proves no write access, and a note could silence a finding on code they didn't push.
+  A deleted fork's head repository is empty and never matches. Sandcastle opens its PRs with the owner's token, so its descriptions count as the owner's, as its resolved threads do.
+- **What a note can't do.** The prompt says a note never covers a security weakness.
+  That is an instruction the model follows, not a rule the workflow enforces. The ledger's notes only count accepted security findings, so a legitimate note never needs that cover.
+  An accepted Critical finding that isn't a security finding, on merge-gate code too, is listed in the notes and honoured like any other;
+  an accepted security finding is only counted there.
+- **Accepted limits.** A PR opened with the owner's token, Sandcastle's included, counts as the owner's, so a prompt-injected agent can write notes that silence findings.
+  A note is free text that can name a problem before anyone raises it, and nothing checks it against the local ledger. A section that an HTML comment or `<details>` hides
+  on the rendered page still counts. What the step honoured or ignored goes to the job log.
+- **When it is read.** The description, its author's association and the head repository are read from the API as the step runs.
+  The event's payload is a snapshot: editing a description starts no run, and a re-run reuses the payload, so notes added after the last push would be missed and removed ones kept.
+  The workflow still has no `edited` trigger, which would spend a Claude review on every description edit. A failed read leaves the notes out ("could not be read") and warns.
+- **Markers.** A marker counts only on a line of its own, indented three spaces at most, outside a fenced code block (CommonMark's rules, applied so a
+  doubt hides markers rather than shows them), so a description can show them in a fence or quote them in prose.
+  Outside fences, one start and one end, start first, make a section; anything else is reported as markers nobody can bound, not as no notes.
+- **Cost.** The step has its own minute; the job's limit rose from 30 to 31 minutes to keep the 2 minutes the other steps' comment leaves for what has no limit of its own.
+
+The benchmark above scored the old prompt, which asked for convention findings too, and it has not been rerun on this one: the local review now carries those, and a rerun is for the owner to ask for.
+Not done: reviewing only what a push changed since the last review. The diff step packs the whole diff into pieces with its own exclusion and holding
+rules, and a delta would need the same rules applied to a second diff, so it is left for its own change.
+
+## How the review reads (#299)
+
+The owner found Copilot's reviews easier to read than Claude's one dense paragraph, so the prompt asks for the same shape: a summary in short Markdown sections
+(Overview, a Changes table of file and what changed, Advisory, Not reviewed) and findings whose body starts with a bold title, then what goes wrong and the fix.
+The model's answer is still the schema's `summary` string and each finding's `body` string, so the schema and the checks that hold a merge don't change.
+The posting script changes only in how it handles suggestions, below, and in indenting an off-diff finding's body under its bullet so its paragraphs stay with it.
+
+A finding may carry a GitHub `suggestion` block, which a reader applies to the commented line with one click, only when the fix replaces that one line.
+That is the one place this review's text can change the PR's branch, so the script enforces the rule. The prompt does **not** ask for suggestions yet: the post job runs the
+base's `post_claude_review.py`, taken from the merge commit's first parent, while the prompt comes from the PR's own workflow, so a prompt that asked for them would reach a PR
+(this one's, and a repo's first re-Apply) before the script that vets them. This change lands the script, its tests and the redaction first, as the two-step rule above says;
+a later change adds the instruction to the prompt once the script is on every base. The script vets any suggestion the model writes unasked all the same:
+
+- A comment keeps a suggestion only when it holds exactly one block, whose info string is exactly `suggestion` and whose content is one non-empty line
+  with no redaction marker, no control, zero-width or bidirectional character, a visible character, and nothing that would close the block (an empty suggestion deletes the line)
+  (`vet_suggestions`). A suggestion with several lines, the `suggestion:-1+1` form, several blocks, a fence that isn't on its own lines, or a closing fence that isn't exactly the
+  opener's marker and length at column 0 (only spaces or tabs may follow it) is turned into a plain text fence.
+- A comment Claude cited at a line that isn't in the file goes on the nearest diff line, and a finding outside the diff goes in the review body: the first would replace the
+  wrong line and the second can't be applied, so both lose their suggestions (`defuse_suggestions`).
+- A suggestion changes only the PR's own branch, and only when a person clicks it. It is still text the model wrote from a PR it read, so a diff that steers the model
+  can steer the suggestion, which the reader has to read before applying: an accepted limit, the same as for the review text.
+
+This changes the prompt's formatting instructions and the script's handling of suggestions, so the benchmark's recall figures were not rerun for it.
+
+The regexes that run on the model's text also had to stay linear, because that text can be steered by a diff. The suggestion fence pattern starts a match only at the start of a run of
+fence characters. `CREDENTIAL` is unchanged, since a rewrite that started its JWT forms later in a run would miss a JWT glued to the end of another token, but it was quadratic on a long run
+of token characters: the first segment's characters include e, y and J, so a start at every `eyJ` rescanned the run each time, about 0.5 s at 60,000 characters and minutes at 200,000.
+So both the posting script and the workflow's answer check (`redact_credentials`, mirrored, with a test that they redact alike) first replace any token, dots included, that holds a run of more
+than 128 token characters and one of the strings every `CREDENTIAL` alternative starts with (`eyJ`, `gh[pousr]_`, `sk-ant-`, `github_pat_`), which leaves nothing of a long JWT's payload or
+signature. What `CREDENTIAL` then scans has no long run holding a start, so its cost is linear. A long token without one is left alone: it can't match `CREDENTIAL`, and legitimate review
+text has them (a generated test's file name quoted in a finding, a long identifier, a digest), where replacing them dropped the file reference and raised a false warning (#301).
+A JWT glued straight onto a `ghp_` or `sk-ant-` token is redacted as it always was: the token's pattern takes the JWT's first segment too, and the rest is no longer a JWT.
+A finding's `path` gets only `CREDENTIAL` (`redact_path`), not the long-run rule: a long generated file name that holds a credential start without being one is no credential,
+and a path that no longer matched the diff would move its finding into the review body, where it holds the merge. A path past 1,024 characters is no real path and gets the full rule.

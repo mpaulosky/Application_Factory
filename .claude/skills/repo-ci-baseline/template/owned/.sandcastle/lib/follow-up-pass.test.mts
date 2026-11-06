@@ -1,0 +1,3222 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import type { Sandbox, SandboxRunOptions } from "@ai-hero/sandcastle";
+import { createCheckedSandbox } from "./build.mts";
+import {
+  BUILDING_LABEL,
+  FOLLOW_UP_MARKER,
+  FOLLOW_UP_PASS_CAP,
+  FOLLOW_UP_REPLY_MARKER,
+  GATE_COMMENT_LINES,
+  GATE_FIXER_ATTEMPTS,
+  GIVE_UP_MARKER,
+  SESSION_REPLY_MARKER,
+  WORKTREE_TAMPERED_MARKER,
+} from "./config.mts";
+import { textBlock } from "./checkpoint.mts";
+import { StalledStepError, TamperedWorktreeError, UncountedStopError } from "./errors.mts";
+import type { CheckState, HandOffTarget, PassTarget } from "./follow-up.mts";
+import { gitSandboxFake } from "./git-sandbox-fake.mts";
+import {
+  followUpPassPhase,
+  giveUpComment,
+  handOffIssue,
+  isGateCovered,
+  parseVerdicts,
+  passOutcomeEntry,
+  passSummaryComment,
+  planRedCi,
+  type PassHost,
+  type PassOutcome,
+  type PassReport,
+  replyBody,
+  runPass,
+  threadActions,
+  threadsForRole,
+  type PromptThread,
+  type RedCiPlan,
+  type ThreadAction,
+  type ThreadVerdict,
+} from "./follow-up-pass.mts";
+import type { HeadCheck, ReviewThread, SandcastleIssue } from "./github.mts";
+import type { IsOwner } from "./queue.mts";
+import { IntakeStopReport, intakeStopExitCode, intakeStopReport, OutcomeReport, runEnding, STALL_STOP_REASON, type HumanThreadEntry } from "./report.mts";
+import { SANDBOX_PROBE } from "./diagnostics.mts";
+import { RunLimits } from "./limits.mts";
+import type { SecretMatch } from "./scan.mts";
+import { GATE_COMMAND, GATE_SCRIPT } from "./repo-config.mts";
+import { limitSandboxExec } from "./step-limit.mts";
+
+// These tests name the Template's gate command, whatever this repo's
+// GATE_COMMAND is: the fake sandbox reports the configured one as the default.
+const asDefaultGate = (command: string) => (command === `${GATE_COMMAND} 2>&1` ? "scripts/gate.sh 2>&1" : command);
+
+const ISSUE_NUMBER = 50;
+const PR_NUMBER = 7;
+const BRANCH = "feature/50-fix-widget";
+const BASE = "d".repeat(40);
+const HEAD = "c".repeat(40);
+// The commit the follow-up role makes in sandboxFake, unless a test says otherwise.
+const ROLE_COMMIT = "a".repeat(40);
+const HOST_LOGIN = "sandcastle-bot";
+
+// A match host.leaksSecret can return: a line, so a test can check the log
+// and the hand-back name its path and line number without naming the secret.
+const sampleSecretMatch: SecretMatch = {
+  location: { commit: "e".repeat(40), field: "line", path: "src/example.ts", line: 3 },
+  kind: { type: "pattern", shape: "sk-ant-" },
+};
+
+const issue: SandcastleIssue = { number: ISSUE_NUMBER, title: "Fix the widget", body: "", labels: ["Sandcastle"], comments: [] };
+
+function passTarget(overrides: Partial<Extract<PassTarget, { issueNumber: number }>> = {}): PassTarget {
+  return {
+    number: PR_NUMBER,
+    id: "PR_7",
+    headRefName: BRANCH,
+    headRefOid: HEAD,
+    issueNumber: ISSUE_NUMBER,
+    reasons: ["1 unresolved bot thread(s)"],
+    conflicted: false,
+    ...overrides,
+  };
+}
+
+// A red check (completed, not green) with an Actions run behind it; tests
+// override just the fields their scenario needs. A check's runId is what a
+// pass can re-run or forward (see runlessCheck for one with none).
+function redCheck(overrides: Partial<HeadCheck> = {}): HeadCheck {
+  return { name: "Template tests", completed: true, green: false, completedAt: "2026-10-10T09:00:00Z", runId: 1001, ...overrides };
+}
+
+// A red check with no Actions run behind it, such as code scanning's own
+// "CodeQL" result (lib/github.mts's HeadCheck): nothing a pass can re-run or
+// read a failed-job log from.
+function runlessCheck(overrides: Partial<HeadCheck> = {}): HeadCheck {
+  return redCheck({ name: "CodeQL", runId: undefined, ...overrides });
+}
+
+function botThread(overrides: Partial<ReviewThread> = {}): ReviewThread {
+  return {
+    id: "RT_bot",
+    resolved: false,
+    outdated: false,
+    path: "src/Domain/Result.cs",
+    line: 10,
+    comments: [
+      {
+        author: "copilot-pull-request-reviewer",
+        byBot: true,
+        body: "Consider returning a Result<T> here.",
+        url: "https://github.com/o/r/pull/7#discussion_r1",
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function ownerThread(overrides: Partial<ReviewThread> = {}): ReviewThread {
+  return {
+    id: "RT_owner",
+    resolved: false,
+    outdated: false,
+    path: "src/Domain/Result.cs",
+    line: 20,
+    comments: [{ author: "owner", byBot: false, body: "Why not use pattern matching here?", url: "https://github.com/o/r/pull/7#discussion_r2" }],
+    ...overrides,
+  };
+}
+
+function strangerThread(overrides: Partial<ReviewThread> = {}): ReviewThread {
+  return {
+    id: "RT_stranger",
+    resolved: false,
+    outdated: false,
+    path: "src/Domain/Result.cs",
+    line: 30,
+    comments: [{ author: "stranger", byBot: false, body: "I think this is wrong.", url: "https://github.com/o/r/pull/7#discussion_r3" }],
+    ...overrides,
+  };
+}
+
+const isOwner: IsOwner = (login) => (login === null ? false : login === "owner");
+
+// ---------------------------------------------------------------------------
+// threadsForRole
+// ---------------------------------------------------------------------------
+
+describe("threadsForRole", () => {
+  it("sorts a bot thread's first comment into forRole, tagged \"bot\"", () => {
+    const { forRole, leftForHuman, unknown } = threadsForRole([botThread()], isOwner, HOST_LOGIN);
+
+    assert.deepEqual(forRole, [
+      {
+        threadId: "RT_bot",
+        from: "bot",
+        path: "src/Domain/Result.cs",
+        line: 10,
+        outdated: false,
+        comments: [{ author: "copilot-pull-request-reviewer", body: "Consider returning a Result<T> here." }],
+      },
+    ]);
+    assert.deepEqual(leftForHuman, []);
+    assert.deepEqual(unknown, []);
+  });
+
+  it("sorts a thread the repository owner opened into forRole, tagged \"owner\"", () => {
+    const { forRole } = threadsForRole([ownerThread()], isOwner, HOST_LOGIN);
+
+    assert.deepEqual(forRole, [
+      {
+        threadId: "RT_owner",
+        from: "owner",
+        path: "src/Domain/Result.cs",
+        line: 20,
+        outdated: false,
+        comments: [{ author: "owner", body: "Why not use pattern matching here?" }],
+      },
+    ]);
+  });
+
+  it("drops an owner thread whose last comment already carries the host's reply marker", () => {
+    const answered = ownerThread({
+      comments: [
+        ...ownerThread().comments,
+        { author: "sandcastle-bot", byBot: false, body: `${FOLLOW_UP_REPLY_MARKER}\nFixed in abc1234.`, url: "https://github.com/o/r/pull/7#discussion_r4" },
+      ],
+    });
+
+    const { forRole, leftForHuman, unknown } = threadsForRole([answered], isOwner, HOST_LOGIN);
+
+    assert.deepEqual(forRole, []);
+    assert.deepEqual(leftForHuman, []);
+    assert.deepEqual(unknown, []);
+  });
+
+  it("drops an owner thread the host answered, when the host is signed in as the owner", () => {
+    const answered = ownerThread({
+      comments: [...ownerThread().comments, { author: "owner", byBot: false, body: `${FOLLOW_UP_REPLY_MARKER}\nNoted.`, url: "https://github.com/o/r/pull/7#discussion_r4" }],
+    });
+
+    const { forRole } = threadsForRole([answered], isOwner, "owner");
+
+    assert.deepEqual(forRole, []);
+  });
+
+  it("keeps an owner thread for the role when a stranger quotes the host's reply marker in it", () => {
+    const spoofed = ownerThread({
+      comments: [...ownerThread().comments, { author: "stranger", byBot: false, body: `${FOLLOW_UP_REPLY_MARKER}\nNoted.`, url: "https://github.com/o/r/pull/7#discussion_r4" }],
+    });
+
+    const { forRole } = threadsForRole([spoofed], isOwner, HOST_LOGIN);
+
+    assert.deepEqual(forRole.map((thread) => thread.threadId), ["RT_owner"]);
+  });
+
+  it("still drops an owner thread the host answered when a stranger or a bot replies after the host", () => {
+    const answered = ownerThread({
+      comments: [
+        ...ownerThread().comments,
+        { author: HOST_LOGIN, byBot: false, body: `${FOLLOW_UP_REPLY_MARKER}\nNoted.`, url: "https://github.com/o/r/pull/7#discussion_r4" },
+        { author: "stranger", byBot: false, body: "+1", url: "https://github.com/o/r/pull/7#discussion_r5" },
+        { author: "some-bot", byBot: true, body: "Beep.", url: "https://github.com/o/r/pull/7#discussion_r6" },
+      ],
+    });
+
+    const { forRole } = threadsForRole([answered], isOwner, HOST_LOGIN);
+
+    assert.deepEqual(forRole, []);
+  });
+
+  it("gives an owner thread back to the role once the owner replies to the host", () => {
+    const repliedTo = ownerThread({
+      comments: [
+        ...ownerThread().comments,
+        { author: HOST_LOGIN, byBot: false, body: `${FOLLOW_UP_REPLY_MARKER}\nNoted.`, url: "https://github.com/o/r/pull/7#discussion_r4" },
+        { author: "owner", byBot: false, body: "Please do it anyway.", url: "https://github.com/o/r/pull/7#discussion_r5" },
+      ],
+    });
+
+    const { forRole } = threadsForRole([repliedTo], isOwner, HOST_LOGIN);
+
+    assert.deepEqual(forRole.map((thread) => thread.threadId), ["RT_owner"]);
+  });
+
+  it("drops a bot thread the host already answered, leaving it to a person rather than answering or resolving it again", () => {
+    const answered = botThread({
+      comments: [...botThread().comments, { author: HOST_LOGIN, byBot: false, body: `${FOLLOW_UP_REPLY_MARKER}\nFixed.`, url: "https://github.com/o/r/pull/7#discussion_r4" }],
+    });
+
+    const { forRole, leftForHuman, unknown } = threadsForRole([answered], isOwner, HOST_LOGIN);
+
+    assert.deepEqual(forRole, []);
+    assert.deepEqual(leftForHuman, []);
+    assert.deepEqual(unknown, []);
+  });
+
+  it("gives a bot thread back to the role when the bot comments again after the host's reply", () => {
+    const followedUp = botThread({
+      comments: [
+        ...botThread().comments,
+        { author: HOST_LOGIN, byBot: false, body: `${FOLLOW_UP_REPLY_MARKER}\nFixed.`, url: "https://github.com/o/r/pull/7#discussion_r4" },
+        { author: "copilot-pull-request-reviewer", byBot: true, body: "Still not fixed.", url: "https://github.com/o/r/pull/7#discussion_r5" },
+      ],
+    });
+
+    const { forRole } = threadsForRole([followedUp], isOwner, HOST_LOGIN);
+
+    assert.deepEqual(forRole.map((thread) => thread.threadId), ["RT_bot"]);
+  });
+
+  it("drops a resolved thread outright, whoever opened it", () => {
+    const { forRole, leftForHuman, unknown } = threadsForRole([botThread({ resolved: true })], isOwner, HOST_LOGIN);
+
+    assert.deepEqual(forRole, []);
+    assert.deepEqual(leftForHuman, []);
+    assert.deepEqual(unknown, []);
+  });
+
+  it("sends a stranger's thread to leftForHuman and never to the role", () => {
+    const { forRole, leftForHuman } = threadsForRole([strangerThread()], isOwner, HOST_LOGIN);
+
+    assert.deepEqual(forRole, []);
+    assert.deepEqual(leftForHuman, [strangerThread()]);
+  });
+
+  it("treats a thread with no author as left for a person too", () => {
+    const noAuthor = strangerThread({ comments: [{ author: null, byBot: false, body: "???", url: "https://github.com/o/r/pull/7#discussion_r5" }] });
+
+    const { forRole, leftForHuman } = threadsForRole([noAuthor], isOwner, HOST_LOGIN);
+
+    assert.deepEqual(forRole, []);
+    assert.deepEqual(leftForHuman, [noAuthor]);
+  });
+
+  it("sends a thread to unknown, not leftForHuman, when it can't tell whether the author is the owner", () => {
+    const uncertain = ownerThread({ comments: [{ author: "maybe-owner", byBot: false, body: "Hmm.", url: "https://github.com/o/r/pull/7#discussion_r6" }] });
+    const unsure: IsOwner = () => undefined;
+
+    const { forRole, leftForHuman, unknown } = threadsForRole([uncertain], unsure, HOST_LOGIN);
+
+    assert.deepEqual(forRole, []);
+    assert.deepEqual(leftForHuman, []);
+    assert.deepEqual(unknown, [uncertain]);
+  });
+
+  it("drops a stranger's reply inside a kept bot thread, keeping only the bot's and the owner's comments", () => {
+    const mixed = botThread({
+      comments: [...botThread().comments, { author: "stranger", byBot: false, body: "I disagree.", url: "https://github.com/o/r/pull/7#discussion_r7" }],
+    });
+
+    const { forRole } = threadsForRole([mixed], isOwner, HOST_LOGIN);
+
+    assert.deepEqual(forRole[0]!.comments, [{ author: "copilot-pull-request-reviewer", body: "Consider returning a Result<T> here." }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseVerdicts
+// ---------------------------------------------------------------------------
+
+describe("parseVerdicts", () => {
+  it("parses a well-formed array of verdicts", () => {
+    const text = JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Returned a Result<T>.", commit: "a".repeat(7) }]);
+
+    const { verdicts, rejected } = parseVerdicts(text);
+
+    assert.deepEqual(verdicts, [{ threadId: "RT_bot", verdict: "fixed", reason: "Returned a Result<T>.", commit: "a".repeat(7) }]);
+    assert.deepEqual(rejected, []);
+  });
+
+  it("throws when the file isn't a JSON array at all", () => {
+    assert.throws(() => parseVerdicts(JSON.stringify({ threadId: "RT_bot" })), /array/i);
+  });
+
+  it("throws on text that isn't JSON", () => {
+    assert.throws(() => parseVerdicts("not json"), /JSON|token|array/i);
+  });
+
+  it("rejects one malformed entry without losing the rest", () => {
+    const good = { threadId: "RT_bot", verdict: "fixed", reason: "Returned a Result<T>." };
+    const bad = { threadId: "RT_owner", verdict: "not-a-real-verdict", reason: "???" };
+    const text = JSON.stringify([good, bad]);
+
+    const { verdicts, rejected } = parseVerdicts(text);
+
+    assert.deepEqual(verdicts, [good]);
+    assert.deepEqual(rejected, [bad]);
+  });
+
+  it("gives an empty array when the role found nothing to say", () => {
+    const { verdicts, rejected } = parseVerdicts("[]");
+
+    assert.deepEqual(verdicts, []);
+    assert.deepEqual(rejected, []);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// threadActions
+// ---------------------------------------------------------------------------
+
+const forRoleBot: PromptThread = {
+  threadId: "RT_bot",
+  from: "bot",
+  path: "src/Domain/Result.cs",
+  line: 10,
+  outdated: false,
+  comments: [{ author: "copilot-pull-request-reviewer", body: "Consider returning a Result<T> here." }],
+};
+
+const forRoleOwner: PromptThread = {
+  threadId: "RT_owner",
+  from: "owner",
+  path: "src/Domain/Result.cs",
+  line: 20,
+  outdated: false,
+  comments: [{ author: "owner", body: "Why not use pattern matching here?" }],
+};
+
+describe("threadActions", () => {
+  it("resolves a fixed bot thread ADDRESSED", () => {
+    const verdict: ThreadVerdict = { threadId: "RT_bot", verdict: "fixed", reason: "Returned a Result<T>.", commit: "a".repeat(7) };
+
+    const { actions, ignored } = threadActions([verdict], [forRoleBot]);
+
+    assert.deepEqual(actions, [{ thread: forRoleBot, verdict, resolve: "ADDRESSED" }]);
+    assert.deepEqual(ignored, []);
+  });
+
+  it("resolves an outdated bot thread ADDRESSED too", () => {
+    const verdict: ThreadVerdict = { threadId: "RT_bot", verdict: "outdated", reason: "Already handled elsewhere." };
+
+    const { actions } = threadActions([verdict], [forRoleBot]);
+
+    assert.equal(actions[0]!.resolve, "ADDRESSED");
+  });
+
+  it("resolves a declined bot thread WONT_FIX by default", () => {
+    const verdict: ThreadVerdict = { threadId: "RT_bot", verdict: "declined", reason: "Out of scope for this issue." };
+
+    const { actions } = threadActions([verdict], [forRoleBot]);
+
+    assert.equal(actions[0]!.resolve, "WONT_FIX");
+  });
+
+  it("resolves a declined bot thread INVALID when the verdict says the suggestion is factually wrong", () => {
+    const verdict: ThreadVerdict = { threadId: "RT_bot", verdict: "declined", reason: "The code already does this.", invalid: true };
+
+    const { actions } = threadActions([verdict], [forRoleBot]);
+
+    assert.equal(actions[0]!.resolve, "INVALID");
+  });
+
+  it("never resolves an owner thread, whatever the verdict", () => {
+    const verdict: ThreadVerdict = { threadId: "RT_owner", verdict: "fixed", reason: "Done." };
+
+    const { actions } = threadActions([verdict], [forRoleOwner]);
+
+    assert.equal(actions[0]!.resolve, undefined);
+  });
+
+  it("ignores a verdict for a thread id the role was never given", () => {
+    const verdict: ThreadVerdict = { threadId: "RT_made_up", verdict: "fixed", reason: "Done." };
+
+    const { actions, ignored } = threadActions([verdict], [forRoleBot]);
+
+    assert.deepEqual(actions, []);
+    assert.deepEqual(ignored, ["RT_made_up"]);
+  });
+
+  it("ignores a second verdict for a thread that already has one", () => {
+    const first: ThreadVerdict = { threadId: "RT_bot", verdict: "fixed", reason: "Done.", commit: "a".repeat(7) };
+    const second: ThreadVerdict = { threadId: "RT_bot", verdict: "declined", reason: "Changed my mind." };
+
+    const { actions, ignored } = threadActions([first, second], [forRoleBot]);
+
+    assert.equal(actions.length, 1);
+    assert.equal(actions[0]!.verdict, first);
+    assert.deepEqual(ignored, ["RT_bot"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// replyBody, passSummaryComment, giveUpComment
+// ---------------------------------------------------------------------------
+
+const publicError = (text: string) => text.replaceAll("@", "@​").replaceAll(/#(\d+)/g, "#​$1");
+
+describe("replyBody", () => {
+  it("carries the host's reply marker and the reason through publicError", () => {
+    const action: ThreadAction = {
+      thread: forRoleBot,
+      verdict: { threadId: "RT_bot", verdict: "fixed", reason: "Fixes @everyone's #123 concern.", commit: "a".repeat(7) },
+      resolve: "ADDRESSED",
+    };
+
+    const body = replyBody(action, publicError);
+
+    assert.match(body, new RegExp(FOLLOW_UP_REPLY_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.ok(!body.includes("@everyone"), "expected the mention to be broken by publicError");
+    assert.ok(!body.includes("#123"), "expected the cross-reference to be broken by publicError");
+  });
+
+  it("names the commit when the verdict gives one", () => {
+    const action: ThreadAction = {
+      thread: forRoleBot,
+      verdict: { threadId: "RT_bot", verdict: "fixed", reason: "Returned a Result<T>.", commit: "abc1234" },
+      resolve: "ADDRESSED",
+    };
+
+    assert.match(replyBody(action, publicError), /abc1234/);
+  });
+
+  it("never resolves, and says so, for an owner thread", () => {
+    const action: ThreadAction = { thread: forRoleOwner, verdict: { threadId: "RT_owner", verdict: "declined", reason: "Disagree." }, resolve: undefined };
+
+    const body = replyBody(action, publicError);
+
+    assert.match(body, /Left open for the repository owner/);
+    assert.doesNotMatch(body, /Resolved as/);
+  });
+});
+
+describe("passSummaryComment", () => {
+  const report: PassReport = {
+    pass: 1,
+    pushed: "a".repeat(40),
+    merged: "clean",
+    actions: [{ thread: forRoleBot, verdict: { threadId: "RT_bot", verdict: "fixed", reason: "Done.", commit: "a".repeat(7) }, resolve: "ADDRESSED" }],
+    ignored: ["RT_made_up"],
+    unverified: [],
+    failedWrites: [],
+    leftForHuman: 1,
+  };
+
+  it("carries the follow-up marker and names the pass number against the cap", () => {
+    const comment = passSummaryComment(report, publicError);
+
+    assert.match(comment, new RegExp(FOLLOW_UP_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(comment, new RegExp(`pass 1 of ${FOLLOW_UP_PASS_CAP}`, "i"));
+  });
+
+  it("names each thread action's resolution", () => {
+    const comment = passSummaryComment(report, publicError);
+
+    assert.match(comment, /ADDRESSED/);
+  });
+
+  it("says a thread was left open for the owner when it was only replied to", () => {
+    const ownerReport: PassReport = { ...report, actions: [{ thread: forRoleOwner, verdict: { threadId: "RT_owner", verdict: "fixed", reason: "Done." }, resolve: undefined }] };
+
+    assert.match(passSummaryComment(ownerReport, publicError), /left open for the owner/i);
+  });
+
+  it("sends each reason and ignored id through publicError, as a reply's reason is", () => {
+    const hideSecret = (text: string) => text.replaceAll("sk-ant-secret", "[redacted]");
+    const leaky: PassReport = {
+      ...report,
+      actions: [{ thread: forRoleBot, verdict: { threadId: "RT_bot", verdict: "declined", reason: "Echoed sk-ant-secret." }, resolve: "WONT_FIX" }],
+      ignored: ["RT_sk-ant-secret"],
+    };
+
+    const comment = passSummaryComment(leaky, hideSecret);
+
+    assert.doesNotMatch(comment, /sk-ant-secret/);
+    assert.match(comment, /Echoed \[redacted\]/);
+  });
+
+  it("leaves no live comment opener, mention or reference from the role's text, through plainText", () => {
+    const hostile: PassReport = {
+      ...report,
+      actions: [{ thread: forRoleBot, verdict: { threadId: "RT_bot", verdict: "declined", reason: "<!-- sandcastle:follow-up --> @everyone see #123" }, resolve: "WONT_FIX" }],
+      ignored: ["<!-- sandcastle:follow-up -->@everyone"],
+    };
+
+    const comment = passSummaryComment(hostile, (text) => text);
+
+    assert.equal(comment.split("<!--").length - 1, 1, "only the host's own marker opens a comment");
+    assert.doesNotMatch(comment, /(^|[^\w`])@everyone\b/);
+    assert.doesNotMatch(comment, /(^|\s)#123\b/);
+  });
+
+  it("cuts a long reason without splitting a character in two", () => {
+    const long: PassReport = {
+      ...report,
+      actions: [{ thread: forRoleBot, verdict: { threadId: "RT_bot", verdict: "declined", reason: `${"x".repeat(299)}😀 and more` }, resolve: "WONT_FIX" }],
+    };
+
+    const comment = passSummaryComment(long, publicError);
+
+    assert.doesNotMatch(comment, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  });
+
+  it("lists the threads whose \"fixed\" verdict named no commit the pass added", () => {
+    assert.match(passSummaryComment({ ...report, unverified: ["RT_bot"] }, publicError), /no commit this pass added[^\n]*RT_bot/);
+  });
+
+  it("says the gate was red on the PR's head when the pass fixed it", () => {
+    const comment = passSummaryComment({ ...report, redCi: { fix: true, rerun: [], forward: [] } }, publicError);
+
+    assert.ok(comment.includes(`\`${GATE_COMMAND}\` was red on the PR's head`));
+  });
+
+  it("names the checks whose failed-job logs went to the follow-up role", () => {
+    const comment = passSummaryComment({ ...report, redCi: { fix: false, rerun: [], forward: ["Analyze (csharp)"] } }, publicError);
+
+    assert.match(comment, /failed-job logs[^\n]*Analyze \(csharp\)/);
+  });
+
+  it("says nothing about red CI when no check was red", () => {
+    const comment = passSummaryComment({ ...report, redCi: { fix: false, rerun: [], forward: [] } }, publicError);
+
+    assert.equal(comment, passSummaryComment(report, publicError));
+  });
+});
+
+describe("giveUpComment", () => {
+  it("quotes the gate's tail in a fence", () => {
+    const comment = giveUpComment("the gate is still red after 2 gate-fixer attempts", "Line 1\nLine 2\nFAIL");
+
+    assert.match(comment, /the gate is still red/);
+    assert.match(comment, /FAIL/);
+    assert.match(comment, /```/);
+  });
+
+  it("names how to re-queue the PR", () => {
+    assert.match(giveUpComment("a conflict couldn't be resolved", undefined), /sandcastle:needs-human/);
+  });
+
+  // The PR comment is posted under the owner's token, so scripts/watch-pr.sh skips it only by this first line.
+  it("opens with GIVE_UP_MARKER on a line of its own, so the PR watcher skips it", () => {
+    const comment = giveUpComment("a conflict couldn't be resolved", "FAIL");
+
+    assert.equal(comment.split("\n")[0], GIVE_UP_MARKER);
+  });
+
+  it("keeps GIVE_UP_MARKER when the comment is cut to GitHub's limit", () => {
+    const comment = giveUpComment("the gate is red", "x".repeat(400_000));
+
+    assert.ok(comment.startsWith(`${GIVE_UP_MARKER}\n`));
+  });
+
+  describe("with the first red run", () => {
+    const lines = (name: string, count: number) => Array.from({ length: count }, (_, i) => `${name} ${i + 1}`).join("\n");
+
+    it("quotes it in a fence of its own, before the last run, each cut to GATE_COMMENT_LINES lines", () => {
+      const comment = giveUpComment("the gate is red", lines("last", GATE_COMMENT_LINES + 1), lines("first", GATE_COMMENT_LINES + 1));
+
+      assert.ok(comment.includes(`first ${GATE_COMMENT_LINES + 1}\n`), comment);
+      assert.ok(comment.includes("first 2\n"), comment);
+      assert.ok(!comment.includes("first 1\n"), comment);
+      assert.ok(comment.includes("last 2\n"), comment);
+      assert.ok(!comment.includes("last 1\n"), comment);
+      assert.ok(comment.indexOf("first 2\n") < comment.indexOf("last 2\n"), comment);
+      assert.match(comment, new RegExp(`The end of the first red gate run \\(at most ${GATE_COMMENT_LINES} lines and 20000 characters\\), before a gate-fixer ran:`));
+      assert.match(comment, new RegExp(`The last ${GATE_COMMENT_LINES} lines of the last gate output:`));
+    });
+
+    it("keeps the last run when the first run's lines are very long", () => {
+      const comment = giveUpComment("the gate is red", "the last run's end", `${"x".repeat(200_000)}\nthe first run's end`);
+
+      assert.ok(comment.includes("the last run's end"), comment.slice(0, 200));
+      assert.ok(comment.includes("the first run's end"), comment.slice(0, 200));
+      assert.ok(comment.includes("To have Sandcastle pick the PR up again"), "the re-queue instruction is cut off");
+    });
+
+    it("quotes the last 20,000 characters of the first run: n - 1 and n whole, n + 1 loses its first character", () => {
+      const quoted = (count: number) => giveUpComment("the gate is red", "last", `${"a"}${"b".repeat(count - 1)}`);
+
+      assert.ok(quoted(20_000 - 1).includes(`a${"b".repeat(20_000 - 2)}\n`));
+      assert.ok(quoted(20_000).includes(`a${"b".repeat(20_000 - 1)}\n`));
+      const cut = quoted(20_000 + 1);
+      assert.ok(cut.includes(`\n${"b".repeat(20_000)}\n`), "the cut text starts with the first run's second character");
+      assert.ok(!cut.includes("a" + "b".repeat(20_000)), "the first run's first character is cut");
+    });
+
+    it("doesn't start the first run halfway through a surrogate pair when it cuts it", () => {
+      const comment = giveUpComment("the gate is red", "last", `${"😀"}${"b".repeat(20_000 - 1)}`);
+
+      assert.ok(!/\n[\uDC00-\uDFFF]/.test(comment));
+    });
+
+    it("keeps the last run's failure message, both closing fences and the re-queue instructions when the two runs together are over the limit", () => {
+      const last = `${"y".repeat(50_000)}\nthe last run's failure message`;
+      const first = `${"x".repeat(30_000)}\nthe first run's end`;
+      const comment = giveUpComment("the gate is red", last, first);
+
+      assert.ok(comment.length <= 65_000, `the comment is ${comment.length} characters`);
+      assert.ok(comment.includes("the first run's end\n```"), "the first run's end and its fence");
+      assert.ok(comment.includes("\nthe last run's failure message\n```\n"), "the last run's failure message and its closing fence");
+      assert.ok(comment.endsWith("That also starts its count of follow-up passes again."), comment.slice(-200));
+    });
+
+    it("keeps the re-queue instructions when the last run alone is over the limit", () => {
+      const comment = giveUpComment("the gate is red", `${"y".repeat(400_000)}\nthe failure message`);
+
+      assert.ok(comment.length <= 65_000, `the comment is ${comment.length} characters`);
+      assert.ok(comment.includes("\nthe failure message\n```\n"));
+      assert.ok(comment.endsWith("That also starts its count of follow-up passes again."), comment.slice(-200));
+    });
+
+    it("says the last run was cut at the front when it was, and keeps the line count's wording when it was not", () => {
+      assert.match(giveUpComment("the gate is red", `${"y".repeat(400_000)}\nend`), /cut at the front to fit the comment/);
+      assert.doesNotMatch(giveUpComment("the gate is red", "short"), /cut at the front/);
+    });
+
+    // The comment's length with a last run of `n` characters, uncut: the length is linear in n until the loop cuts.
+    const lengthWith = (n: number) => giveUpComment("the gate is red", "y".repeat(n)).length;
+    const requeueEnd = "That also starts its count of follow-up passes again.";
+
+    it("leaves a comment of exactly COMMENT_LIMIT characters whole, and cuts one a character longer", () => {
+      const fixed = lengthWith(1) - 1;
+      const exact = 65_000 - fixed;
+      for (const n of [exact - 1, exact]) {
+        const comment = giveUpComment("the gate is red", "y".repeat(n));
+        assert.equal(comment.length, fixed + n);
+        assert.match(comment, /The last \d+ lines of the output/, `${n} characters`);
+        assert.doesNotMatch(comment, /cut at the front/, `${n} characters`);
+      }
+      const over = giveUpComment("the gate is red", "y".repeat(exact + 1));
+      assert.ok(over.length <= 65_000, `${over.length}`);
+      assert.match(over, /cut at the front to fit the comment/);
+      assert.ok(over.endsWith(requeueEnd));
+    });
+
+    it("never starts the cut last run halfway through an emoji, whatever the parity of the cut", () => {
+      // The cut keeps the end of the run, so its parity depends on the run's end: the failure line's length runs through all four.
+      for (const pad of ["", "a", "ab", "abc"]) {
+        const comment = giveUpComment("the gate is red", `${"😀".repeat(60_000)}\nthe failure message${pad}`);
+
+        assert.ok(comment.length <= 65_000, `${comment.length} with pad "${pad}"`);
+        assert.doesNotMatch(comment, /```text\n[\uDC00-\uDFFF]/, `pad "${pad}"`);
+        assert.ok(comment.includes("\nthe failure message" + pad + "\n```\n"), `pad "${pad}"`);
+      }
+    });
+
+    it("shortens the last run's fence when the cut removes the long backtick run from it", () => {
+      const comment = giveUpComment("the gate is red", `${"`".repeat(30)}\n${"y".repeat(70_000)}\nthe failure message`);
+
+      assert.ok(comment.length <= 65_000);
+      assert.ok(!comment.includes("`".repeat(31)), "a fence for the removed run");
+      assert.ok(comment.endsWith(requeueEnd));
+    });
+
+    it("cuts a reason longer than 2,000 characters to 2,000 and an ellipsis, and leaves one of 2,000 or fewer whole", () => {
+      const reasonIn = (reason: string) => giveUpComment(reason, undefined).split("\n")[1]!;
+      for (const n of [1_999, 2_000]) assert.ok(reasonIn("r".repeat(n)).includes(`${"r".repeat(n)}. It's labelled`), `${n} characters`);
+      const cut = reasonIn("r".repeat(2_001));
+      assert.ok(cut.includes(`${"r".repeat(2_000)}…. It's labelled`), "2,001 characters");
+      // A surrogate pair straddling the cut is dropped whole, not split.
+      const astral = reasonIn(`${"r".repeat(1_999)}😀😀`);
+      assert.doesNotMatch(astral, /[\uD800-\uDBFF]…/);
+      assert.doesNotMatch(astral, /[\uDC00-\uDFFF]/);
+    });
+
+    it("keeps as much as fits of a last run made of one long run of backticks, whose fence grows with it", () => {
+      const comment = giveUpComment("the gate is red", "`".repeat(100_000));
+
+      assert.ok(comment.length <= 65_000, `${comment.length}`);
+      assert.ok(comment.length > 60_000, `the last run was dropped or cut far short: ${comment.length}`);
+      assert.ok(comment.endsWith(requeueEnd));
+    });
+
+    it("keeps the last run and the re-queue instructions when the reason is far longer than the comment", () => {
+      const comment = giveUpComment("r".repeat(100_000), "the last run\nthe failure message");
+
+      assert.ok(comment.length <= 65_000);
+      assert.ok(comment.includes("\nthe failure message\n```\n"));
+      assert.ok(comment.endsWith(requeueEnd));
+    });
+
+    it("keeps a first run of 20,000 backticks whole, with the last run and the re-queue instructions, since even its fence fits the limit", () => {
+      const comment = giveUpComment("the gate is red", "the last run\nthe failure message", "`".repeat(20_000));
+
+      assert.ok(comment.length <= 65_000, `${comment.length}`);
+      assert.doesNotMatch(comment, /cut at the front/, "the last run is not cut");
+      assert.ok(comment.includes("`".repeat(20_000)), "the first run is whole");
+      assert.ok(comment.includes("\nthe failure message\n```\n"));
+      assert.ok(comment.endsWith(requeueEnd));
+    });
+
+    it("doesn't say it quotes the last lines of a first run it also cut by characters", () => {
+      const comment = giveUpComment("the gate is red", "last", `${"x".repeat(200_000)}\nthe first run's end`);
+
+      assert.doesNotMatch(comment, /The last \d+ lines of the first red gate run/);
+      assert.match(comment, /20000 characters/);
+    });
+
+    it("fences both runs exactly as checkpoint.mts's textBlock does, whatever backtick runs they hold", () => {
+      for (const ticks of ["", "``", "```", "`````"]) {
+        const first = `first ${ticks} run`;
+        const last = `last ${ticks} run`;
+        const comment = giveUpComment("the gate is red", last, first);
+
+        assert.ok(comment.includes(textBlock(first)), `the first run, with "${ticks}" in it:\n${comment}`);
+        assert.ok(comment.includes(textBlock(last)), `the last run, with "${ticks}" in it:\n${comment}`);
+      }
+    });
+
+    it("fences the first run longer than any backtick run in it", () => {
+      const comment = giveUpComment("the gate is red", "last", "before\n````\nafter");
+
+      assert.ok(comment.includes("`````text\nbefore\n````\nafter\n`````"), comment);
+    });
+
+    it("quotes a first run alone when there is no last run", () => {
+      const comment = giveUpComment("the gate is red", undefined, "first run");
+
+      assert.ok(comment.includes("first run"), comment);
+    });
+
+    it("says nothing of a first run when it is blank", () => {
+      const comment = giveUpComment("the gate is red", "last run", "  \n");
+
+      assert.doesNotMatch(comment, /first red gate run/);
+      assert.match(comment, new RegExp(`The last ${GATE_COMMENT_LINES} lines of the output:`));
+    });
+  });
+
+  it("keeps the text it had before the marker, after the marker line", () => {
+    const comment = giveUpComment("a conflict couldn't be resolved", undefined);
+
+    assert.match(comment.split("\n").slice(1).join("\n"), /^Sandcastle stopped its follow-up passes on this PR: a conflict/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isGateCovered / planRedCi
+// ---------------------------------------------------------------------------
+
+// The gate-covered names these tests pass in, as the host's gateCovered
+// would hold them (lib/repo-config.mts#GATE_COVERED_CHECKS). The functions
+// take the set, so these tests don't depend on any repo's value.
+const covered: ReadonlySet<string> = new Set(["Template tests"]);
+
+// Acceptance criterion: "The decision between fix, re-run and CodeQL is unit
+// tested with stubbed check data."
+describe("isGateCovered", () => {
+  it("treats a name in the covered set as a job scripts/gate.sh reproduces", () => {
+    assert.equal(isGateCovered("Template tests", covered), true);
+  });
+
+  it("takes the covered names from its argument, not from any one repo's value", () => {
+    assert.equal(isGateCovered("Build Solution", new Set(["Build Solution"])), true);
+    assert.equal(isGateCovered("Template tests", new Set(["Build Solution"])), false);
+    assert.equal(isGateCovered("Template tests", new Set()), false);
+  });
+
+  // Blazor-Server's jobs, which the covered set here hasn't got, and the checks
+  // that gate.sh doesn't run.
+  for (const name of [
+    "Build Solution",
+    "Tests: Domain.Tests.Unit",
+    "Test Suite",
+    "markdownlint",
+    "yamllint",
+    "Review with Claude",
+    "Check for a merge from main",
+    "Merge same-repo PRs when ready",
+    "Analyze (actions)",
+  ]) {
+    it(`treats "${name}" as a check scripts/gate.sh doesn't reproduce`, () => {
+      assert.equal(isGateCovered(name, covered), false);
+    });
+  }
+});
+
+describe("planRedCi", () => {
+  it("fixes a build the gate reproduces, regardless of which checks are red", () => {
+    const plan: RedCiPlan = planRedCi(false, [redCheck({ name: "Template tests" })], covered);
+
+    assert.deepEqual(plan, { fix: true, rerun: [], forward: [] });
+  });
+
+  it("fixes even when the only red check is one the gate doesn't cover, since the gate itself is red", () => {
+    const plan: RedCiPlan = planRedCi(false, [redCheck({ name: "Analyze (csharp)" })], covered);
+
+    assert.deepEqual(plan, { fix: true, rerun: [], forward: [] });
+  });
+
+  it("re-runs a gate-covered check once the gate is green", () => {
+    const plan: RedCiPlan = planRedCi(true, [redCheck({ name: "Template tests" })], covered);
+
+    assert.deepEqual(plan, { fix: false, rerun: ["Template tests"], forward: [] });
+  });
+
+  it("forwards a check the gate doesn't cover once the gate is green", () => {
+    const plan: RedCiPlan = planRedCi(true, [redCheck({ name: "Analyze (csharp)" })], covered);
+
+    assert.deepEqual(plan, { fix: false, rerun: [], forward: ["Analyze (csharp)"] });
+  });
+
+  it("sorts red checks of both kinds into rerun and forward once the gate is green", () => {
+    const plan: RedCiPlan = planRedCi(true, [redCheck({ name: "Template tests" }), redCheck({ name: "Analyze (csharp)" })], covered);
+
+    assert.deepEqual(plan, { fix: false, rerun: ["Template tests"], forward: ["Analyze (csharp)"] });
+  });
+
+  it("re-runs and forwards by the covered set it's given, not by any one repo's value", () => {
+    const plan: RedCiPlan = planRedCi(true, [redCheck({ name: "Template tests" }), redCheck({ name: "Build Solution" })], new Set(["Build Solution"]));
+
+    assert.deepEqual(plan, { fix: false, rerun: ["Build Solution"], forward: ["Template tests"] });
+  });
+
+  it("does nothing when the gate is green and no check is red", () => {
+    const plan: RedCiPlan = planRedCi(true, [], covered);
+
+    assert.deepEqual(plan, { fix: false, rerun: [], forward: [] });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runPass
+// ---------------------------------------------------------------------------
+
+function sandboxFake(
+  options: {
+    gateExitCodes?: number[];
+    // The branch's gate script differs from main's (lib/checkpoint.mts#gateScriptChange).
+    gateScriptChanged?: boolean;
+    followUpJson?: string;
+    mergeConflictFiles?: string[];
+    roleFailing?: string[];
+    roleFailWith?: Record<string, Error>;
+    roleUnfinished?: string[];
+    // The role finishes a conflicted merge with `git merge --abort` rather
+    // than a merge commit, so its commit doesn't contain main.
+    abandonsMerge?: boolean;
+    // The role's commit shares no history with the PR's head.
+    rewritesHistory?: boolean;
+    // Something commits while scripts/gate.sh runs.
+    gateCommits?: boolean;
+    // These roles leave the worktree's head exactly as they found it: a
+    // follow-up run that declines every thread and fixes nothing from a
+    // forwarded log commits nothing, unlike every other test's role,
+    // which always commits to simulate a change.
+    roleNoCommit?: string[];
+    // `git rev-parse HEAD` fails with exit 128, as it did in a sandbox whose gate was killed, once this many gate runs have printed.
+    sandboxDiesAfterGates?: number;
+    // `git rev-parse HEAD` throws this once that many gate runs have printed, as an exec that stalls or Docker failing does.
+    probeThrowsAfterGates?: { gates: number; error: Error };
+    // What gate run `run` (counted from 1) prints, in place of "gate output, exit N".
+    gateOutput?: (run: number) => string;
+  } = {},
+) {
+  const execCalls: string[] = [];
+  const runs: SandboxRunOptions[] = [];
+  const steps: string[] = [];
+  let headNumber = 0;
+  const nextHead = () => (++headNumber).toString(16).padStart(40, "0");
+  // Each commit's history, itself included, so `git merge-base --is-ancestor`
+  // and `git rev-parse --verify` answer as they would in a real repository.
+  const history = new Map<string, Set<string>>([
+    [HEAD, new Set([HEAD])],
+    [BASE, new Set([BASE])],
+  ]);
+  let head = HEAD;
+  let mergeConflicted = false;
+  const commit = (sha: string, options: { from?: Set<string>; withMain?: boolean } = {}) => {
+    history.set(sha, new Set([...(options.from ?? history.get(head)!), ...(options.withMain ? history.get(BASE)! : []), sha]));
+    head = sha;
+  };
+  const gateExitCodes = [...(options.gateExitCodes ?? [0])];
+  let gateRuns = 0;
+
+  const sandbox = {
+    worktreePath: "/worktree",
+    exec: async (rawCommand: string) => {
+      const command = asDefaultGate(rawCommand);
+      execCalls.push(command);
+      // Every exec call lands here too, alongside role runs, so a test can
+      // compare an exec's position against a role's in one timeline instead
+      // of mixing this array with execCalls, which only ever grows.
+      steps.push(command);
+      if (command === SANDBOX_PROBE) return { stdout: "disk 10% used\n", stderr: "", exitCode: 0 };
+      if (command.startsWith("rm -f")) return { stdout: "", stderr: "", exitCode: 0 };
+      if (command.startsWith("git reset --hard")) return { stdout: "", stderr: "", exitCode: 0 };
+      if (command === "git rev-parse HEAD") {
+        if (options.probeThrowsAfterGates !== undefined && gateRuns >= options.probeThrowsAfterGates.gates) throw options.probeThrowsAfterGates.error;
+        if (options.sandboxDiesAfterGates !== undefined && gateRuns >= options.sandboxDiesAfterGates) {
+          return { stdout: "fatal: not a git repository\n", stderr: "", exitCode: 128 };
+        }
+        return { stdout: `${head}\n`, stderr: "", exitCode: 0 };
+      }
+      const verify = /^git rev-parse --verify --quiet '([0-9a-f]+)\^\{commit\}'$/.exec(command);
+      if (verify !== null) {
+        const found = [...history.keys()].find((sha) => sha.startsWith(verify[1]!));
+        return found === undefined ? { stdout: "", stderr: "", exitCode: 1 } : { stdout: `${found}\n`, stderr: "", exitCode: 0 };
+      }
+      const ancestry = /^git merge-base --is-ancestor '([^']+)' '([^']+)'$/.exec(command);
+      if (ancestry !== null) {
+        return { stdout: "", stderr: "", exitCode: history.get(ancestry[2]!)?.has(ancestry[1]!) === true ? 0 : 1 };
+      }
+      if (command === "git merge --abort") {
+        mergeConflicted = false;
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+      if (command.startsWith("git merge ")) {
+        if ((options.mergeConflictFiles?.length ?? 0) > 0) {
+          mergeConflicted = true;
+          return { stdout: "CONFLICT", stderr: "", exitCode: 1 };
+        }
+        commit(nextHead(), { withMain: true });
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+      if (command.includes("diff --name-only --diff-filter=U")) {
+        return { stdout: (options.mergeConflictFiles ?? []).join("\n"), stderr: "", exitCode: 0 };
+      }
+      if (command.startsWith("cat") && command.includes("follow-up.json")) {
+        return options.followUpJson === undefined ? { stdout: "", stderr: "", exitCode: 1 } : { stdout: options.followUpJson, stderr: "", exitCode: 0 };
+      }
+      if (command.startsWith("git status")) return { stdout: "", stderr: "", exitCode: 0 };
+      if (command.startsWith("git --no-replace-objects")) {
+        // The gate guard (lib/checkpoint.mts#gateScriptChange): the gate script is a file at base,
+        // and differs from it only when the test says so.
+        if (command.includes(" merge-base ")) return { stdout: `${"e".repeat(40)}\n`, stderr: "", exitCode: 0 };
+        if (command.includes(" diff ")) return { stdout: options.gateScriptChanged ? `${GATE_SCRIPT}\0` : "", stderr: "", exitCode: 0 };
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+      const exitCode = gateExitCodes.shift();
+      if (exitCode === undefined) throw new Error("the gate ran more often than the test expected");
+      if (options.gateCommits) commit(nextHead());
+      gateRuns++;
+      return { stdout: options.gateOutput?.(gateRuns) ?? `gate output, exit ${exitCode}\n`, stderr: "", exitCode };
+    },
+    run: async (opts: SandboxRunOptions) => {
+      const role = opts.name!;
+      runs.push(opts);
+      steps.push(role);
+      if (options.roleFailing?.includes(role)) throw options.roleFailWith?.[role] ?? new Error(`${role} failed`);
+      if (!options.roleNoCommit?.includes(role)) {
+        commit(role === "follow-up" ? ROLE_COMMIT : nextHead(), {
+          from: options.rewritesHistory ? new Set() : undefined,
+          withMain: mergeConflicted && !options.abandonsMerge,
+        });
+      }
+      mergeConflicted = false;
+      return {
+        iterations: [],
+        commits: [{ sha: head }],
+        completionSignal: options.roleUnfinished?.includes(role) ? undefined : "<promise>COMPLETE</promise>",
+      };
+    },
+    close: async () => ({}),
+  } as unknown as Sandbox;
+
+  return { sandbox, execCalls, runs, steps, headOf: () => head };
+}
+
+function passHostFake(
+  options: {
+    threads?: ReviewThread[];
+    headRefOid?: string;
+    containsBase?: boolean;
+    passCount?: number;
+    markBuildingResult?: boolean;
+    // What claiming a hand-off PR's building label answers.
+    markPullRequestBuildingResult?: boolean;
+    // Claiming the issue a hand-off branch names, or releasing the issue's or the PR's claim, fails.
+    markBuildingThrows?: boolean;
+    markPullRequestBuildingThrows?: boolean;
+    // Recording the head the pass pushed as approved fails.
+    recordApprovedHeadThrows?: boolean;
+    unmarkBuildingThrows?: boolean;
+    unmarkPullRequestBuildingThrows?: boolean;
+    sandbox?: ReturnType<typeof sandboxFake>;
+    pushError?: Error;
+    leaksSecret?: SecretMatch;
+    worktreeProblems?: string[];
+    isOwnerFn?: IsOwner;
+    hostLogin?: string;
+    // What GitHub says once the issue is claimed, when it changed meanwhile.
+    threadsAfterClaim?: ReviewThread[];
+    passCountAfterClaim?: number;
+    // The branch's head on GitHub after a failed push; by default someone
+    // else pushed meanwhile.
+    remoteHead?: string;
+    // A fresh read of the PR's current checks (host.checks); defaults to no
+    // red checks.
+    checks?: HeadCheck[];
+    // The head host.checks says its checks were read from; defaults to the
+    // PR's head, so a test must say when it's read a race.
+    checksHeadRefOid?: string;
+    // The state of the re-run checks host.rerunFailedChecks reports once it
+    // settles; defaults to still red, so a test must say when the re-run
+    // fixed it.
+    rerunResult?: CheckState[];
+    // host.failedCheckLog's answer.
+    failedCheckLog?: string;
+    // host.gateCovered; defaults to the set the isGateCovered tests use.
+    gateCovered?: ReadonlySet<string>;
+  } = {},
+) {
+  const calls = {
+    fetchBranch: [] as string[],
+    markBuilding: [] as number[],
+    unmarkBuilding: [] as number[],
+    // Every release, in the order it was made.
+    releases: [] as string[],
+    markPullRequestBuilding: [] as number[],
+    unmarkPullRequestBuilding: [] as number[],
+    createSandbox: [] as string[],
+    push: [] as { branch: string; commit: string }[],
+    replyToThread: [] as { threadId: string; body: string }[],
+    resolveThread: [] as string[],
+    commentOnPullRequest: [] as { pr: number; body: string }[],
+    recordApprovedHead: [] as { pr: number; head: string }[],
+    handBack: [] as { pr: number; reason: string; body: string }[],
+    recordHumanThread: [] as HumanThreadEntry[],
+    checks: [] as number[],
+    rerunFailedChecks: [] as { pr: number; checkNames: string[]; expectedHead: string }[],
+    failedCheckLog: [] as { pr: number; checkNames: string[]; expectedHead: string }[],
+    log: [] as string[],
+  };
+  const sandbox = options.sandbox ?? sandboxFake();
+  const claimed = () => calls.markBuilding.length + calls.markPullRequestBuilding.length > 0;
+  const passHost: PassHost = {
+    gateCovered: options.gateCovered ?? covered,
+    fetchBranch: (branch) => void calls.fetchBranch.push(branch),
+    reviewThreads: () => ({
+      headRefOid: options.headRefOid ?? HEAD,
+      threads: (claimed() ? options.threadsAfterClaim : undefined) ?? options.threads ?? [],
+    }),
+    isOwner: options.isOwnerFn ?? isOwner,
+    hostLogin: () => options.hostLogin ?? HOST_LOGIN,
+    passCount: () => (claimed() ? options.passCountAfterClaim : undefined) ?? options.passCount ?? 0,
+    contains: () => options.containsBase ?? true,
+    markBuilding: (issueNumber) => {
+      calls.markBuilding.push(issueNumber);
+      if (options.markBuildingThrows) throw new Error("gh issue view failed");
+      return options.markBuildingResult ?? true;
+    },
+    unmarkBuilding: (issueNumber) => {
+      calls.unmarkBuilding.push(issueNumber);
+      calls.releases.push(`#${issueNumber}`);
+      if (options.unmarkBuildingThrows) throw new Error("gh issue edit failed");
+    },
+    markPullRequestBuilding: (pr) => {
+      calls.markPullRequestBuilding.push(pr);
+      if (options.markPullRequestBuildingThrows) throw new Error("gh pr edit failed");
+      return options.markPullRequestBuildingResult ?? true;
+    },
+    unmarkPullRequestBuilding: (pr) => {
+      calls.unmarkPullRequestBuilding.push(pr);
+      calls.releases.push(`PR #${pr}`);
+      if (options.unmarkPullRequestBuildingThrows) throw new Error("gh pr edit failed");
+    },
+    createSandbox: async (branch) => {
+      calls.createSandbox.push(branch);
+      return sandbox.sandbox;
+    },
+    worktreeProblems: () => options.worktreeProblems ?? [],
+    leaksSecret: () => options.leaksSecret,
+    push: async (branch, commit) => {
+      calls.push.push({ branch, commit });
+      if (options.pushError) throw options.pushError;
+    },
+    remoteHead: () => options.remoteHead ?? "f".repeat(40),
+    checks: (pr) => {
+      calls.checks.push(pr);
+      return { headRefOid: options.checksHeadRefOid ?? options.headRefOid ?? HEAD, checks: options.checks ?? [] };
+    },
+    rerunFailedChecks: (pr, checkNames, expectedHead) => {
+      calls.rerunFailedChecks.push({ pr, checkNames: [...checkNames], expectedHead });
+      return options.rerunResult ?? [...checkNames].map((name) => redCheck({ name }));
+    },
+    failedCheckLog: (pr, checkNames, expectedHead, limit) => {
+      calls.failedCheckLog.push({ pr, checkNames: [...checkNames], expectedHead });
+      const text = options.failedCheckLog ?? "";
+      // Mirrors the live host's per-run truncation (lib/github.mts#failedCheckLogs)
+      // for this stub's single simulated run, keeping the end, where the
+      // error is.
+      if (limit === undefined || text.length <= limit) return text;
+      return text.slice(-limit);
+    },
+    replyToThread: (threadId, body) => void calls.replyToThread.push({ threadId, body }),
+    resolveThread: (threadId) => void calls.resolveThread.push(threadId),
+    commentOnPullRequest: (pr, body) => void calls.commentOnPullRequest.push({ pr, body }),
+    recordApprovedHead: (pr, head) => {
+      calls.recordApprovedHead.push({ pr, head });
+      if (options.recordApprovedHeadThrows) throw new Error("gh pr comment failed");
+    },
+    handBack: (pr, reason, body) => void calls.handBack.push({ pr, reason, body }),
+    recordHumanThread: (entry) => void calls.recordHumanThread.push(entry),
+    publicError: (text) => String(text),
+    limits: new RunLimits(),
+    log: (line) => void calls.log.push(line),
+  };
+  return { passHost, calls, sandbox };
+}
+
+describe("runPass", () => {
+  it("rejects without creating a sandbox when claiming the issue fails, since the pass would run unclaimed", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, markBuildingThrows: true });
+
+    await assert.rejects(runPass(passTarget(), issue, BASE, passHost), /gh issue view failed/);
+
+    assert.deepEqual(calls.createSandbox, []);
+    assert.deepEqual(calls.releases, []);
+  });
+
+  // Acceptance criterion: "A settled PR with an open Copilot thread gets one
+  // pass: a fix commit, a reply on the thread, the thread resolved, and a
+  // pass-summary comment."
+  it("fixes a bot thread, pushes the gated commit, replies, resolves the thread and posts the pass summary, in that order", async () => {
+    const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Returned a Result<T>.", commit: "a".repeat(7) }]) });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "passed");
+    assert.deepEqual(sandbox.steps.filter((step) => step === "follow-up"), ["follow-up"]);
+    assert.equal(calls.push.length, 1);
+    assert.equal(calls.replyToThread.length, 1);
+    assert.equal(calls.replyToThread[0]!.threadId, "RT_bot");
+    assert.deepEqual(calls.resolveThread, ["RT_bot"]);
+    assert.equal(calls.commentOnPullRequest.length, 1);
+    assert.match(calls.commentOnPullRequest[0]!.body, new RegExp(FOLLOW_UP_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  });
+
+  // Acceptance criterion: "An owner thread is replied to but never resolved
+  // (tested with stubbed verdicts)."
+  for (const verdict of ["fixed", "declined", "outdated"] as const) {
+    it(`replies to an owner thread given a "${verdict}" verdict, but never resolves it`, async () => {
+      const commit = verdict === "fixed" ? { commit: ROLE_COMMIT.slice(0, 7) } : {};
+      const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_owner", verdict, reason: "Noted.", ...commit }]) });
+      const { passHost, calls } = passHostFake({ threads: [ownerThread(), botThread()], containsBase: true, sandbox });
+
+      await runPass(passTarget(), issue, BASE, passHost);
+
+      assert.equal(calls.replyToThread.length, 1);
+      assert.equal(calls.replyToThread[0]!.threadId, "RT_owner");
+      assert.deepEqual(calls.resolveThread, []);
+    });
+  }
+
+  it("excludes an owner thread from the role once the host has already replied and is waiting on the owner", async () => {
+    const answered = ownerThread({
+      comments: [...ownerThread().comments, { author: "sandcastle-bot", byBot: false, body: `${FOLLOW_UP_REPLY_MARKER}\nNoted.`, url: "https://github.com/o/r/pull/7#discussion_r4" }],
+    });
+    const sandbox = sandboxFake({ followUpJson: "[]" });
+    const { passHost } = passHostFake({ threads: [answered, botThread()], containsBase: true, sandbox });
+
+    await runPass(passTarget(), issue, BASE, passHost);
+
+    const roleRun = sandbox.runs.find((run) => run.name === "follow-up");
+    assert.ok(roleRun !== undefined, "the bot thread starts a pass");
+    assert.ok(!String(roleRun?.promptArgs?.THREADS_JSON ?? "").includes("RT_owner"));
+  });
+
+  // Acceptance criterion: "A thread opened by someone other than the owner
+  // or a bot never reaches the follow-up role (tested)."
+  it("never gives a stranger's thread to the follow-up role, and records it for a person instead", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]" });
+    const { passHost, calls } = passHostFake({ threads: [strangerThread(), botThread()], containsBase: true, sandbox });
+
+    await runPass(passTarget(), issue, BASE, passHost);
+
+    const roleRun = sandbox.runs.find((run) => run.name === "follow-up");
+    assert.ok(roleRun !== undefined, "the bot thread starts a pass");
+    assert.ok(!String(roleRun?.promptArgs?.THREADS_JSON ?? "").includes("RT_stranger"));
+    // Recorded on each read of the PR, before and after the claim; the live
+    // host lists each thread once (livePassHost.recordHumanThread).
+    assert.deepEqual(new Set(calls.recordHumanThread.map((entry) => JSON.stringify(entry))), new Set([JSON.stringify({ pr: PR_NUMBER, author: "stranger", url: strangerThread().comments[0]!.url })]));
+  });
+
+  it("creates no sandbox when a thread's author can't be confirmed as the repository owner", async () => {
+    const uncertain = ownerThread({ comments: [{ author: "maybe-owner", byBot: false, body: "Hmm.", url: "https://github.com/o/r/pull/7#discussion_r6" }] });
+    const { passHost, calls } = passHostFake({ threads: [uncertain], containsBase: true, isOwnerFn: () => undefined });
+
+    await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.deepEqual(calls.createSandbox, []);
+  });
+
+  // Acceptance criterion: "Verdicts for unknown thread ids are ignored
+  // (tested)."
+  for (const verdict of [
+    { threadId: "RT_made_up", verdict: "fixed", reason: "Done." },
+    { threadId: "RT_made_up", verdict: "declined", reason: "Out of scope." },
+  ]) {
+    it(`ignores a "${verdict.verdict}" verdict for an unknown thread id: no reply, no resolve, and it's listed as ignored in the summary`, async () => {
+      const sandbox = sandboxFake({ followUpJson: JSON.stringify([verdict]) });
+      const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+      await runPass(passTarget(), issue, BASE, passHost);
+
+      assert.deepEqual(calls.replyToThread, []);
+      assert.deepEqual(calls.resolveThread, []);
+      assert.match(calls.commentOnPullRequest[0]!.body, /Ignored verdicts[^\n]*RT_made_up/);
+      assert.doesNotMatch(calls.commentOnPullRequest[0]!.body, /no commit this pass added/);
+    });
+  }
+
+  it("doesn't let a thread's second verdict win when its first, a \"fixed\" one, names no commit the pass added", async () => {
+    const verdicts = [
+      { threadId: "RT_bot", verdict: "fixed", reason: "Done.", commit: "b".repeat(7) },
+      { threadId: "RT_bot", verdict: "declined", reason: "Out of scope." },
+    ];
+    const sandbox = sandboxFake({ followUpJson: JSON.stringify(verdicts) });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.deepEqual(calls.replyToThread, []);
+    assert.deepEqual(calls.resolveThread, []);
+  });
+
+  it("tells the role no merge is needed, without claiming the branch contains main, when the PR is only behind", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]" });
+    const { passHost } = passHostFake({ threads: [botThread()], containsBase: false, sandbox });
+
+    await runPass(passTarget(), issue, BASE, passHost);
+
+    const merge = String(sandbox.runs[0]?.promptArgs?.MERGE ?? "");
+    assert.match(merge, /No merge with main is needed/);
+    assert.doesNotMatch(merge, /contains main/);
+  });
+
+  // Acceptance criterion: "A `DIRTY` PR gets `main` merged in (no rebase or
+  // force-push) and is pushed once the gate is green."
+  it("merges main before running the role when the PR needs it, never rebasing or force-pushing", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]" });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: false, sandbox });
+
+    await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+
+    const resetIndex = sandbox.steps.findIndex((step) => step.startsWith("git reset --hard"));
+    const mergeIndex = sandbox.steps.findIndex((step) => step.startsWith("git merge"));
+    const roleIndex = sandbox.steps.indexOf("follow-up");
+    assert.ok(resetIndex !== -1 && mergeIndex !== -1 && resetIndex < mergeIndex, "expected the merge to come after the reset");
+    assert.ok(mergeIndex < roleIndex, "expected the merge to come before the follow-up role");
+    assert.ok(!sandbox.execCalls.some((call) => call.includes("rebase")), "runPass must never rebase");
+    assert.ok(!sandbox.execCalls.some((call) => /--force/.test(call)), "runPass must never force anything");
+    assert.equal(calls.push.length, 1);
+  });
+
+  it("gives up and quotes the gate's tail when the gate stays red after the gate-fixer's attempts", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]", gateExitCodes: [1, 1, 1] });
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
+
+    const outcome = await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+
+    assert.deepEqual(calls.push, []);
+    assert.equal(outcome.kind, "gave-up");
+    assert.equal(calls.handBack.length, 1);
+    assert.match(calls.handBack[0]!.body, /gate output, exit 1/);
+  });
+
+  // Acceptance criteria of mpaulosky/dotfiles#421 (R8): the follow-up pass gets the build's dead-sandbox handling.
+  it("runs no gate-fixer, and says the sandbox is down, when git stops answering after the first red gate", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]", gateExitCodes: [1, 1, 1], sandboxDiesAfterGates: 1 });
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
+
+    const outcome = await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+
+    assert.ok(!sandbox.runs.some((run) => run.name === "gate-fixer"), sandbox.steps.join(", "));
+    assert.deepEqual(calls.push, []);
+    assert.equal(outcome.kind, "gave-up");
+    assert.match(calls.handBack[0]!.body, /The sandbox no longer answers `git rev-parse HEAD`, so no gate-fixer was run\./);
+    // None ran, so the reason says so rather than claiming the most there could be.
+    assert.match(calls.handBack[0]!.reason, /after 0 gate-fixer attempts\b/);
+    assert.doesNotMatch(calls.handBack[0]!.reason, new RegExp(`after ${GATE_FIXER_ATTEMPTS} gate-fixer attempts`));
+  });
+
+  it("rethrows a stall of the sandbox probe instead of handing the PR back", async () => {
+    const stop = new UncountedStopError("git rev-parse HEAD ran over its limit");
+    const sandbox = sandboxFake({ followUpJson: "[]", gateExitCodes: [1, 1, 1], probeThrowsAfterGates: { gates: 1, error: stop } });
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
+
+    await assert.rejects(() => runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost), (error: unknown) => error === stop);
+
+    assert.deepEqual(calls.handBack, []);
+    assert.ok(!sandbox.runs.some((run) => run.name === "gate-fixer"));
+    assert.deepEqual(calls.commentOnPullRequest, []);
+  });
+
+  it("hands the PR back, without the probe's secret and without pointing to the run log, when the probe throws an ordinary error", async () => {
+    const secret = "ghp_" + "a".repeat(36);
+    const sandbox = sandboxFake({ followUpJson: "[]", gateExitCodes: [1, 1, 1], probeThrowsAfterGates: { gates: 1, error: new Error(`docker exec failed with token ${secret}`) } });
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
+    // As the real host's publicError does: a text holding the secret is withheld whole.
+    passHost.publicError = (text) => (String(text).includes(secret) ? "(withheld)" : String(text));
+
+    const outcome = await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    const body = calls.handBack[0]!.body;
+    assert.match(body, /The sandbox can't run a command \(\(withheld\)\)/);
+    assert.ok(!body.includes(secret), body);
+    assert.doesNotMatch(body, /run log/);
+  });
+
+  it("logs neither the first red run's secret nor the failed gate-fixer's, as the build's checkpoint doesn't", async () => {
+    const secret = "ghp_" + "b".repeat(36);
+    const sandbox = sandboxFake({
+      followUpJson: "[]",
+      gateExitCodes: [1],
+      gateOutput: () => `FAIL with token ${secret}\n`,
+      roleFailing: ["gate-fixer"],
+      roleFailWith: { "gate-fixer": new Error(`gate-fixer crashed with ${secret}`) },
+    });
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
+    // As the real host's publicError does: a text holding the secret is withheld whole.
+    passHost.publicError = (text) => (String(text).includes(secret) ? "(withheld)" : String(text));
+
+    // gateExitCodes holds one red run, so the checkpoint's second gate run throws ("the gate ran more often than the test expected"). That
+    // error ends the checkpoint, which makes it log the first red run's output; runPass's outcome isn't what this test is about.
+    await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost).catch(() => undefined);
+
+    const logged = calls.log.join("\n");
+    assert.ok(sandbox.runs.some((run) => run.name === "gate-fixer"), "the gate-fixer never ran");
+    assert.match(logged, /the first red gate run's output, before this stopped the checkpoint/);
+    assert.match(logged, new RegExp(`gate-fixer attempt 1/${GATE_FIXER_ATTEMPTS} failed: .*\\(withheld\\)`));
+    assert.ok(!logged.includes(secret), logged);
+  });
+
+  it("quotes the first red gate run in the stop detail, before the last run that shows the dead sandbox", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]", gateExitCodes: [1, 1, 1], sandboxDiesAfterGates: 2, gateOutput: (run) => `run ${run} failed\n` });
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
+
+    await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+
+    const body = calls.handBack[0]!.body;
+    assert.ok(body.includes("run 1 failed"), body);
+    assert.ok(body.includes("run 2 failed"), body);
+    assert.ok(body.indexOf("run 1 failed") < body.indexOf("run 2 failed"), body);
+  });
+
+  // The hand-back used to tail the two runs as one text, so a last run of GATE_COMMENT_LINES lines or more cut the first run out.
+  it("keeps the first red gate run in the hand-back when the last run's output fills the comment's line limit", async () => {
+    const lines = (name: string, count: number) => Array.from({ length: count }, (_, i) => `${name} line ${i + 1}`).join("\n");
+    const sandbox = sandboxFake({
+      followUpJson: "[]",
+      gateExitCodes: [1, 1, 1],
+      sandboxDiesAfterGates: 2,
+      gateOutput: (run) => `${lines(run === 1 ? "first" : "last", GATE_COMMENT_LINES + 20)}\n`,
+    });
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
+
+    await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+
+    const body = calls.handBack[0]!.body;
+    assert.ok(body.includes(`first line ${GATE_COMMENT_LINES + 20}`), body);
+    assert.ok(body.includes(`first line 21\n`), body);
+    assert.ok(!body.includes("first line 20\n"), body);
+    assert.ok(body.includes(`last line ${GATE_COMMENT_LINES + 20}`), body);
+    assert.ok(!body.includes("last line 1\n"), body);
+    assert.ok(body.indexOf("first line 21") < body.indexOf("last line 30"), body);
+  });
+
+  it("scrubs the first and the last gate run on their own, so a secret in the last run doesn't withhold the first", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]", gateExitCodes: [1, 1, 1], sandboxDiesAfterGates: 2, gateOutput: (run) => (run === 1 ? "run 1 failed\n" : "run 2 SECRET\n") });
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
+    passHost.publicError = (text) => (String(text).includes("SECRET") ? "(withheld)" : String(text));
+
+    await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+
+    const body = calls.handBack[0]!.body;
+    assert.ok(body.includes("run 1 failed"), body);
+    assert.ok(!body.includes("SECRET"), body);
+    assert.ok(body.includes("(withheld)"), body);
+  });
+
+  it("names the gate-fixer attempts that ran in the stop reason, not the most there could be", async () => {
+    assert.ok(GATE_FIXER_ATTEMPTS > 1, "this test needs a case where fewer attempts ran than the most");
+    const sandbox = sandboxFake({ followUpJson: "[]", gateExitCodes: [1, 1, 1], sandboxDiesAfterGates: 2, gateOutput: (run) => `run ${run} failed\n` });
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
+
+    await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+
+    assert.equal(sandbox.runs.filter((run) => run.name === "gate-fixer").length, 1);
+    const reason = calls.handBack[0]!.reason;
+    assert.match(reason, /after 1 gate-fixer attempt\b/);
+    assert.doesNotMatch(reason, new RegExp(`after ${GATE_FIXER_ATTEMPTS} gate-fixer attempts`));
+  });
+
+  it("names every attempt in the stop reason when the gate stays red through all of them", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]", gateExitCodes: [1, 1, 1] });
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
+
+    await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+
+    assert.match(calls.handBack[0]!.reason, new RegExp(`after ${GATE_FIXER_ATTEMPTS} gate-fixer attempts`));
+  });
+
+  it("gives up without running the gate when the branch has changed the gate script", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]", gateExitCodes: [0], gateScriptChanged: true });
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
+
+    const outcome = await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+
+    assert.deepEqual(calls.push, []);
+    assert.equal(outcome.kind, "gave-up");
+    assert.match(calls.handBack[0]!.body, /which is the gate itself/);
+  });
+
+  // Acceptance criterion: "A fourth pass isn't started. The PR gets
+  // `sandcastle:needs-human` instead."
+  it("hands the PR back instead of starting a fourth pass", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], passCount: FOLLOW_UP_PASS_CAP });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.deepEqual(calls.createSandbox, []);
+    assert.equal(calls.handBack.length, 1);
+    assert.match(calls.handBack[0]!.reason, new RegExp(String(FOLLOW_UP_PASS_CAP)));
+  });
+
+  it("runs a third pass and says so in its summary, one under the cap", async () => {
+    const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Done.", commit: "a".repeat(7) }]) });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox, passCount: FOLLOW_UP_PASS_CAP - 1 });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "passed");
+    assert.match(calls.commentOnPullRequest[0]!.body, new RegExp(`pass ${FOLLOW_UP_PASS_CAP} of ${FOLLOW_UP_PASS_CAP}`, "i"));
+  });
+
+  it("skips a PR whose head moved since the sweep read it, without creating a sandbox", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], headRefOid: "f".repeat(40) });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "skipped");
+    assert.deepEqual(calls.createSandbox, []);
+  });
+
+  // Acceptance criteria: "`planPass` starts a pass for a settled PR whose
+  // only open threads are the owner's, and hands those threads to the
+  // follow-up role" and "A test pins that such a PR gets a pass rather than a
+  // skip".
+  it("gives a pass to a settled PR whose only open thread is the owner's, handing that thread to the follow-up role", async () => {
+    const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_owner", verdict: "declined", reason: "Pattern matching reads worse here." }]) });
+    const { passHost, calls } = passHostFake({ threads: [ownerThread()], containsBase: true, sandbox });
+
+    const outcome = await runPass(passTarget({ reasons: ["1 unresolved owner thread(s)"] }), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "passed");
+    assert.deepEqual(calls.markBuilding, [ISSUE_NUMBER]);
+    const roleRun = sandbox.runs.find((run) => run.name === "follow-up");
+    assert.ok(roleRun !== undefined, "the owner's thread starts the follow-up role");
+    const handed = String(roleRun?.promptArgs?.THREADS_JSON ?? "");
+    assert.ok(handed.includes("RT_owner"), handed);
+    assert.match(handed, /"from":\s*"owner"/);
+    assert.deepEqual(
+      calls.replyToThread.map((reply) => reply.threadId),
+      ["RT_owner"],
+    );
+    assert.deepEqual(calls.resolveThread, []);
+    assert.equal(calls.commentOnPullRequest.length, 1);
+  });
+
+  // Acceptance criterion: "A test pins that a PR with no open thread, no merge
+  // to make and no red check still gets no pass".
+  for (const containsBase of [true, false]) {
+    it(`skips a PR with no open thread, no merge to make and no red check, without claiming its issue (main ${containsBase ? "merged in" : "not merged in, but no conflict"})`, async () => {
+      const { passHost, calls } = passHostFake({ threads: [], checks: [], containsBase });
+
+      const outcome = await runPass(passTarget({ reasons: ["CI is red"] }), issue, BASE, passHost);
+
+      assert.equal(outcome.kind, "skipped");
+      assert.match(outcome.kind === "skipped" ? outcome.reason : "", /nothing a follow-up pass handles/);
+      assert.deepEqual(calls.markBuilding, []);
+      assert.deepEqual(calls.createSandbox, []);
+    });
+  }
+
+  it("doesn't run the follow-up role when GitHub's conflict merges in cleanly here and no thread is left for it, but still gates and pushes the merge", async () => {
+    const sandbox = sandboxFake();
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
+
+    const outcome = await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+
+    assert.deepEqual(sandbox.runs, []);
+    assert.deepEqual(outcome, { kind: "passed", pushed: sandbox.headOf() });
+    assert.deepEqual(calls.push, [{ branch: BRANCH, commit: sandbox.headOf() }]);
+    assert.match(calls.commentOnPullRequest[0]!.body, /Merged `main` into the branch\./);
+  });
+
+  it("doesn't merge main into a PR that's only behind it, and so skips one that's otherwise only red on CI", async () => {
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: false });
+
+    const outcome = await runPass(passTarget({ reasons: ["check build is red"] }), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "skipped");
+    assert.deepEqual(calls.createSandbox, []);
+  });
+
+  it("answers a bot thread on a PR that's only behind main without merging main in", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]" });
+    const { passHost } = passHostFake({ threads: [botThread()], containsBase: false, sandbox });
+
+    await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.ok(!sandbox.execCalls.some((call) => call.startsWith("git merge ")), sandbox.execCalls.join("\n"));
+  });
+
+  it("leaves a bot thread the host answered alone on the next pass, whether its resolve failed or the owner unresolved it", async () => {
+    const answered = botThread({
+      comments: [...botThread().comments, { author: HOST_LOGIN, byBot: false, body: `${FOLLOW_UP_REPLY_MARKER}\n**Declined.** Resolved as won't fix.`, url: "https://github.com/o/r/pull/7#discussion_r4" }],
+    });
+    const { passHost, calls } = passHostFake({ threads: [answered], containsBase: true });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "skipped");
+    assert.deepEqual(calls.resolveThread, []);
+    assert.deepEqual(calls.replyToThread, []);
+    assert.deepEqual(calls.createSandbox, []);
+  });
+
+  it("doesn't hand the PR back from the read before the claim, even at the cap", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], passCount: FOLLOW_UP_PASS_CAP, markBuildingResult: false });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "skipped");
+    assert.deepEqual(calls.handBack, []);
+  });
+
+  it("hands the PR back when its sandbox can't be created, rather than failing the same way every round", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true });
+    passHost.createSandbox = async () => {
+      throw new Error("the worktree no longer points at this repository");
+    };
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.match(calls.handBack[0]!.reason, /creating the sandbox failed/);
+    assert.match(calls.handBack[0]!.body, /no longer points at this repository/);
+    assert.deepEqual(calls.unmarkBuilding, [ISSUE_NUMBER]);
+  });
+
+  it("says so on the PR, and hands it back, when the sandbox was left in place for a tampered worktree", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true });
+    passHost.createSandbox = async () => {
+      throw new TamperedWorktreeError("setting the identity failed; left /work/tree in place", "/work/tree");
+    };
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.ok(calls.commentOnPullRequest.some((c) => /no longer points at this repository/.test(c.body)));
+    assert.equal(calls.handBack.length, 1);
+  });
+
+  it("opens the tampered-worktree PR comment with WORKTREE_TAMPERED_MARKER, so the PR watcher skips it", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true });
+    passHost.createSandbox = async () => {
+      throw new TamperedWorktreeError("setting the identity failed; left /work/tree in place", "/work/tree");
+    };
+
+    await runPass(passTarget(), issue, BASE, passHost);
+
+    const comment = calls.commentOnPullRequest.find((c) => /no longer points at this repository/.test(c.body));
+    assert.ok(comment, "the tampered-worktree comment was posted");
+    assert.equal(comment.body.split("\n")[0], WORKTREE_TAMPERED_MARKER);
+    assert.match(comment.body.split("\n").slice(1).join("\n"), /^Sandcastle stopped: the worktree for /);
+  });
+
+  it("skips a PR that needs no merge and has no thread for the role, without creating a sandbox", async () => {
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: true });
+
+    const outcome = await runPass(passTarget({ reasons: [] }), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "skipped");
+    assert.deepEqual(calls.createSandbox, []);
+  });
+
+  it("claims the building label before creating a sandbox, and releases it even when the pass throws", async () => {
+    const sandbox = sandboxFake({ roleFailing: ["follow-up"] });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    await runPass(passTarget(), issue, BASE, passHost).catch(() => undefined);
+
+    assert.deepEqual(calls.markBuilding, [ISSUE_NUMBER]);
+    assert.deepEqual(calls.unmarkBuilding, [ISSUE_NUMBER]);
+  });
+
+  it("creates no sandbox when another run already claimed the issue's building label", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, markBuildingResult: false });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "skipped");
+    assert.deepEqual(calls.createSandbox, []);
+  });
+
+  // The sandbox's state after a role fails (mpaulosky/dotfiles#428), as a build logs it: the pass's roles run in a sandbox of their own that a crash can break too.
+  const probed = (steps: string[]) => steps.includes(SANDBOX_PROBE);
+
+  it("probes the sandbox, and logs under the reason, when the follow-up role fails", async () => {
+    const sandbox = sandboxFake({ roleFailing: ["follow-up"] });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.ok(probed(sandbox.steps), sandbox.steps.join("\n"));
+    assert.ok(calls.log.some((line) => /sandbox state \(the follow-up run failed\):\n    \| disk 10% used/.test(line)), calls.log.join("\n"));
+  });
+
+  it("probes the sandbox when the gate-fixer fails", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]", gateExitCodes: [1, 1, 1], roleFailing: ["gate-fixer"] });
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
+
+    await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost).catch(() => undefined);
+
+    assert.ok(probed(sandbox.steps), sandbox.steps.join("\n"));
+    assert.ok(calls.log.some((line) => /sandbox state \(the gate-fixer failed\):\n    \| disk 10% used/.test(line)), calls.log.join("\n"));
+  });
+
+  it("runs no probe for a usage-limit or time-budget stop of the follow-up role or the gate-fixer", async () => {
+    for (const role of ["follow-up", "gate-fixer"]) {
+      const stop = new UncountedStopError("usage limit reached");
+      const sandbox = sandboxFake({ followUpJson: "[]", gateExitCodes: [1], roleFailing: [role], roleFailWith: { [role]: stop } });
+      const { passHost } = passHostFake({ threads: role === "follow-up" ? [botThread()] : [], containsBase: role === "follow-up", sandbox });
+
+      await runPass(passTarget(role === "follow-up" ? {} : { conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost).catch(() => undefined);
+
+      assert.ok(!probed(sandbox.steps), `${role}: ${sandbox.steps.join("\n")}`);
+    }
+  });
+
+  it("rethrows an UncountedStopError from the follow-up role instead of giving up", async () => {
+    const stop = new UncountedStopError("usage limit reached");
+    const sandbox = sandboxFake({ roleFailing: ["follow-up"], roleFailWith: { "follow-up": stop } });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    await assert.rejects(() => runPass(passTarget(), issue, BASE, passHost), (error: unknown) => error instanceof UncountedStopError);
+
+    assert.deepEqual(calls.handBack, []);
+    assert.deepEqual(calls.commentOnPullRequest, []);
+  });
+
+  it("still posts replies and the pass summary when nothing needed pushing", async () => {
+    const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "declined", reason: "Out of scope." }]) });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "passed");
+    assert.equal(calls.replyToThread.length, 1);
+    assert.equal(calls.commentOnPullRequest.length, 1);
+  });
+
+  it("neither replies nor comments when the push fails because someone else pushed meanwhile", async () => {
+    const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Done.", commit: "a".repeat(7) }]) });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox, pushError: new Error("! [rejected] (non-fast-forward)") });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "push-failed");
+    assert.deepEqual(calls.replyToThread, []);
+    assert.deepEqual(calls.commentOnPullRequest, []);
+    assert.deepEqual(calls.handBack, []);
+  });
+
+  it("hands the PR back when the push fails and the PR's head hasn't moved, so another round would fail the same way", async () => {
+    const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Done.", commit: "a".repeat(7) }]) });
+    const { passHost, calls } = passHostFake({
+      threads: [botThread()],
+      containsBase: true,
+      sandbox,
+      pushError: new Error("! [remote rejected] (protected branch hook declined)"),
+      remoteHead: HEAD,
+    });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.equal(calls.handBack.length, 1);
+    assert.match(calls.handBack[0]!.body, /protected branch hook declined/);
+    assert.deepEqual(calls.replyToThread, []);
+  });
+
+  it("answers the threads and posts the summary when a push that reported an error landed anyway", async () => {
+    const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Done.", commit: "a".repeat(7) }]) });
+    const { passHost, calls } = passHostFake({
+      threads: [botThread()],
+      containsBase: true,
+      sandbox,
+      pushError: new Error("HTTP 502"),
+      remoteHead: ROLE_COMMIT,
+    });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.deepEqual(outcome, { kind: "passed", pushed: ROLE_COMMIT });
+    assert.deepEqual(calls.resolveThread, ["RT_bot"]);
+    assert.equal(calls.commentOnPullRequest.length, 1);
+  });
+
+  it("decides from what GitHub says once the issue is claimed: a thread another run answered meanwhile isn't passed on", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], threadsAfterClaim: [botThread({ resolved: true })], containsBase: true });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "skipped");
+    assert.deepEqual(calls.createSandbox, []);
+    assert.deepEqual(calls.unmarkBuilding, [ISSUE_NUMBER]);
+  });
+
+  it("hands the PR back, with no sandbox, when another run took it to the cap before this one claimed it", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], passCount: FOLLOW_UP_PASS_CAP - 1, passCountAfterClaim: FOLLOW_UP_PASS_CAP });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.deepEqual(calls.createSandbox, []);
+  });
+
+  it("pushes nothing when HEAD moved while the gate ran", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]", gateExitCodes: [0, 0, 0], gateCommits: true });
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
+
+    const outcome = await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.deepEqual(calls.push, []);
+    assert.match(calls.handBack[0]!.reason, /HEAD moved while it ran/);
+    assert.match(calls.handBack[0]!.body, /moved while it ran/);
+  });
+
+  // A "fixed" verdict is only believed for a commit the pass added.
+  for (const [scenario, commit] of [
+    ["names a commit the branch doesn't hold", "b".repeat(7)],
+    ["names a commit already on the PR before the pass", HEAD.slice(0, 7)],
+    ["names no commit at all", undefined],
+  ] as const) {
+    it(`neither replies to nor resolves a thread whose "fixed" verdict ${scenario}, and says so in the summary`, async () => {
+      const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Done.", commit }]) });
+      const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+      const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+      assert.equal(outcome.kind, "passed");
+      assert.deepEqual(calls.replyToThread, []);
+      assert.deepEqual(calls.resolveThread, []);
+      assert.match(calls.commentOnPullRequest[0]!.body, /no commit this pass added[^\n]*RT_bot/);
+    });
+  }
+
+  for (const [scenario, commit] of [
+    ["one of main's commits the merge brought in", BASE],
+    ["the merge commit the host made itself", "1".padStart(40, "0")],
+  ] as const) {
+    it(`leaves a bot thread open when its "fixed" verdict names ${scenario}`, async () => {
+      const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Done.", commit }]) });
+      const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: false, sandbox });
+
+      const outcome = await runPass(passTarget({ conflicted: true }), issue, BASE, passHost);
+
+      assert.equal(outcome.kind, "passed");
+      assert.deepEqual(calls.resolveThread, []);
+      assert.match(calls.commentOnPullRequest[0]!.body, /no commit this pass added[^\n]*RT_bot/);
+    });
+  }
+
+  it("gives up without pushing when a commit holds a secret", async () => {
+    const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Done.", commit: "a".repeat(7) }]) });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox, leaksSecret: sampleSecretMatch });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.deepEqual(calls.push, []);
+    assert.equal(calls.handBack.length, 1);
+  });
+
+  it("logs the match's location, and adds it to the hand-back's entry in the run report, without naming the secret itself or changing the PR comment", async () => {
+    const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Done.", commit: "a".repeat(7) }]) });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox, leaksSecret: sampleSecretMatch });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    const logged = calls.log.join("\n");
+    assert.match(logged, /src\/example\.ts/);
+    assert.match(logged, /\b3\b/);
+    assert.equal(calls.handBack.length, 1);
+    // The run report shows the hand-back's reason (lib/report.mts#handBackLines); the PR comment never does.
+    assert.match(calls.handBack[0]!.reason, /src\/example\.ts/);
+    assert.doesNotMatch(calls.handBack[0]!.body, /src\/example\.ts/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// followUpPassPhase
+// ---------------------------------------------------------------------------
+
+// AC: every PR a follow-up pass touched reaches the run report with its outcome.
+describe("passOutcomeEntry", () => {
+  it("names a passed pass's pushed commit, abbreviated", () => {
+    const outcome: PassOutcome = { kind: "passed", pushed: "a".repeat(40) };
+
+    assert.deepEqual(passOutcomeEntry(passTarget(), outcome), {
+      kind: "pr",
+      number: PR_NUMBER,
+      outcome: "follow-up pass",
+      detail: `pushed ${"a".repeat(7)}`,
+    });
+  });
+
+  it("says nothing needed pushing when a passed pass pushed nothing", () => {
+    const outcome: PassOutcome = { kind: "passed", pushed: undefined };
+
+    assert.deepEqual(passOutcomeEntry(passTarget(), outcome), {
+      kind: "pr",
+      number: PR_NUMBER,
+      outcome: "follow-up pass",
+      detail: "nothing needed pushing",
+    });
+  });
+
+  it("gives a neutral detail for a push-failed outcome, since the error isn't always a moved head", () => {
+    const outcome: PassOutcome = { kind: "push-failed", error: "non-fast-forward" };
+
+    assert.deepEqual(passOutcomeEntry(passTarget(), outcome), {
+      kind: "pr",
+      number: PR_NUMBER,
+      outcome: "follow-up pass",
+      detail: "its push failed; see the run log; swept again next round",
+    });
+  });
+
+  it("is undefined for a pass that gave up, since the hand-back already makes a row", () => {
+    const outcome: PassOutcome = { kind: "gave-up", reason: "it has had 2 follow-up passes already" };
+
+    assert.equal(passOutcomeEntry(passTarget(), outcome), undefined);
+  });
+
+  it("is undefined for a skipped pass, since nothing was touched", () => {
+    const outcome: PassOutcome = { kind: "skipped", reason: "its head moved since the sweep read it" };
+
+    assert.equal(passOutcomeEntry(passTarget(), outcome), undefined);
+  });
+});
+
+describe("followUpPassPhase", () => {
+  const otherIssue: SandcastleIssue = { number: 51, title: "Tidy up the widget", body: "", labels: ["Sandcastle"], comments: [] };
+  const targets = [passTarget(), passTarget({ number: 8, id: "PR_8", headRefName: "feature/51-tidy-widget", issueNumber: 51 })];
+
+  it("fetches every target's branch before running any pass", async () => {
+    const { passHost, calls } = passHostFake({ threads: [] });
+
+    await followUpPassPhase(targets, [issue, otherIssue], BASE, passHost);
+
+    assert.deepEqual(calls.fetchBranch, [BRANCH, "feature/51-tidy-widget"]);
+  });
+
+  it("returns one outcome per target", async () => {
+    const { passHost } = passHostFake({ threads: [], containsBase: true });
+
+    const outcomes = await followUpPassPhase(targets, [issue, otherIssue], BASE, passHost);
+
+    assert.equal(outcomes.length, targets.length);
+  });
+
+  it("rethrows the first UncountedStopError only after every pass has settled", async () => {
+    const stop = new UncountedStopError("usage limit reached");
+    const stoppingSandbox = sandboxFake({ roleFailing: ["follow-up"], roleFailWith: { "follow-up": stop } });
+    const slowSandbox = sandboxFake({ followUpJson: "[]" });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true });
+    // The second PR's sandbox comes a few ticks after the first PR's pass has
+    // already thrown, so the rethrow has to wait for it.
+    passHost.createSandbox = async (branch) => {
+      calls.createSandbox.push(branch);
+      if (branch === BRANCH) return stoppingSandbox.sandbox;
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      return slowSandbox.sandbox;
+    };
+
+    await assert.rejects(
+      () => followUpPassPhase(targets, [issue, otherIssue], BASE, passHost),
+      (error: unknown) => error instanceof UncountedStopError,
+    );
+
+    assert.deepEqual(calls.unmarkBuilding.toSorted(), [ISSUE_NUMBER, 51]);
+    assert.deepEqual(calls.commentOnPullRequest.map((comment) => comment.pr), [8]);
+  });
+
+  // Recorded before the rethrow, so a stop mid-round still shows up in the
+  // run report rather than being lost with the process exit.
+  it("records the stopped PR's outcome before rethrowing the UncountedStopError", async () => {
+    const stop = new UncountedStopError("usage limit reached");
+    const stoppingSandbox = sandboxFake({ roleFailing: ["follow-up"], roleFailWith: { "follow-up": stop } });
+    const { passHost } = passHostFake({ threads: [botThread()], containsBase: true, sandbox: stoppingSandbox });
+    const report = new OutcomeReport();
+
+    await assert.rejects(
+      () => followUpPassPhase([passTarget()], [issue], BASE, passHost, report),
+      (error: unknown) => error instanceof UncountedStopError,
+    );
+
+    assert.deepEqual(report.items(), [{ kind: "pr", number: PR_NUMBER, outcome: "stopped", detail: stop.message }]);
+  });
+
+  // A sandbox whose every command runs past its limit (the underlying exec answers 124 on a clock that jumps 11 minutes
+  // per call), so limitSandboxExec marks it stalled; closing it then fails, as a container with a live command can.
+  function stalledSandbox(): Sandbox {
+    const base = sandboxFake({ followUpJson: "[]" }).sandbox;
+    let clock = 0;
+    const underlying = {
+      worktreePath: base.worktreePath,
+      exec: async () => {
+        clock += 11 * 60_000;
+        return { stdout: "", stderr: "", exitCode: 124 };
+      },
+      run: base.run,
+      close: async () => {
+        throw new Error("docker: container still running");
+      },
+    } as unknown as Sandbox;
+    return limitSandboxExec(underlying, { log: () => {}, now: () => clock });
+  }
+
+  it("treats a stalled pass as that PR's failed pass: the phase resolves, the stall is recorded, the close failure is only logged and the label is released", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true });
+    passHost.createSandbox = async () => stalledSandbox();
+    const report = new OutcomeReport();
+    const stalls = new IntakeStopReport();
+
+    const outcomes = await followUpPassPhase([passTarget()], [issue], BASE, passHost, report, stalls, new Set());
+
+    assert.equal(outcomes[0]?.kind, "skipped");
+    assert.deepEqual(calls.unmarkBuilding, [ISSUE_NUMBER]);
+    assert.equal(report.items()[0]?.outcome, "stopped");
+    assert.equal(report.items()[0]?.number, PR_NUMBER);
+    assert.equal(stalls.items().length, 1);
+    assert.equal(stalls.items()[0]?.reason, STALL_STOP_REASON);
+    assert.equal(intakeStopExitCode(stalls.items()), 1);
+    // The step is named, in the stop and in the report row.
+    assert.match(stalls.items()[0]?.firstError ?? "", /ran over its \d+-minute limit/);
+    assert.equal(report.items()[0]?.detail, stalls.items()[0]?.firstError);
+    assert.equal(runEnding(undefined, stalls.items()).kind, "stalled");
+  });
+
+  it("treats a stall while the sandbox is created as that PR's failed pass, not a hand-back, so the run ends red", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true });
+    passHost.createSandbox = async () => {
+      throw new StalledStepError('the step "the sandbox check" ran over its 1-minute limit');
+    };
+    const report = new OutcomeReport();
+    const stalls = new IntakeStopReport();
+    const stalledPrs = new Set<number>();
+
+    const outcomes = await followUpPassPhase([passTarget()], [issue], BASE, passHost, report, stalls, stalledPrs);
+
+    assert.equal(outcomes[0]?.kind, "skipped");
+    assert.deepEqual(calls.handBack, []);
+    assert.deepEqual(calls.unmarkBuilding, [ISSUE_NUMBER]);
+    assert.equal(stalls.items().length, 1);
+    assert.equal(runEnding(undefined, stalls.items()).kind, "stalled");
+    assert.ok(stalledPrs.has(PR_NUMBER));
+  });
+
+  it("rethrows a usage stop raised while the sandbox is created, without handing the PR back", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true });
+    passHost.createSandbox = async () => {
+      throw new UncountedStopError("usage limit");
+    };
+
+    await assert.rejects(() => runPass(passTarget(), issue, BASE, passHost), UncountedStopError);
+    assert.deepEqual(calls.handBack, []);
+  });
+
+  it("keeps a finished pass's outcome when the close of its sandbox never answers, and logs the close", async (t) => {
+    const logged: string[] = [];
+    t.mock.method(console, "error", (line: string) => void logged.push(String(line)));
+    const sandbox = sandboxFake({ followUpJson: "[]" });
+    (sandbox.sandbox as unknown as { close: () => Promise<never> }).close = () => new Promise<never>(() => undefined);
+    const { passHost } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+    passHost.dockerCallMinutes = 0.001;
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "passed");
+    assert.ok(logged.some((line) => /closing the sandbox didn't finish within 0\.001 minutes/.test(line)), logged.join("\n"));
+  });
+
+  it("logs a stalled pass's hung close and surfaces the stall that ended the work", async (t) => {
+    t.mock.method(console, "error", () => undefined);
+    const { passHost } = passHostFake({ threads: [botThread()], containsBase: true });
+    passHost.dockerCallMinutes = 0.001;
+    passHost.createSandbox = async () => {
+      const stalled = stalledSandbox();
+      (stalled as unknown as { close: () => Promise<never> }).close = () => new Promise<never>(() => undefined);
+      return stalled;
+    };
+    const stalls = new IntakeStopReport();
+
+    await followUpPassPhase([passTarget()], [issue], BASE, passHost, new OutcomeReport(), stalls, new Set());
+
+    assert.equal(stalls.items().length, 1);
+    assert.equal(stalls.items()[0]?.reason, STALL_STOP_REASON);
+  });
+
+  it("records into the run-wide intakeStopReport by default, which is what ends the run red", async () => {
+    const { passHost } = passHostFake({ threads: [botThread()], containsBase: true });
+    passHost.createSandbox = async () => stalledSandbox();
+    const before = intakeStopReport.items().length;
+
+    await followUpPassPhase([passTarget()], [issue], BASE, passHost, new OutcomeReport(), undefined, new Set());
+
+    const added = intakeStopReport.items().slice(before);
+    assert.equal(added.length, 1);
+    assert.equal(added[0]?.reason, STALL_STOP_REASON);
+    assert.equal(runEnding(undefined, added).kind, "stalled");
+  });
+
+  it("skips a stalled PR through the run-wide default set too, which is what main.mts uses", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true });
+    passHost.createSandbox = async (branch) => {
+      calls.createSandbox.push(branch);
+      return stalledSandbox();
+    };
+    const stalls = new IntakeStopReport();
+    // A number no other test uses: the default set lasts as long as the test process.
+    const target = passTarget({ number: 9001, id: "PR_9001" });
+
+    await followUpPassPhase([target], [issue], BASE, passHost, new OutcomeReport(), stalls);
+    const second = await followUpPassPhase([target], [issue], BASE, passHost, new OutcomeReport(), stalls);
+
+    assert.equal(calls.createSandbox.length, 1);
+    assert.equal(second[0]?.kind, "skipped");
+  });
+
+  it("does not pass a PR again in the same run once its pass stalled, so a later round doesn't repeat the stall", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true });
+    passHost.createSandbox = async (branch) => {
+      calls.createSandbox.push(branch);
+      return stalledSandbox();
+    };
+    const stalls = new IntakeStopReport();
+    const stalledPrs = new Set<number>();
+
+    await followUpPassPhase([passTarget()], [issue], BASE, passHost, new OutcomeReport(), stalls, stalledPrs);
+    const second = await followUpPassPhase([passTarget()], [issue], BASE, passHost, new OutcomeReport(), stalls, stalledPrs);
+
+    assert.equal(calls.createSandbox.length, 1);
+    assert.equal(stalls.items().length, 1);
+    assert.equal(second[0]?.kind, "skipped");
+  });
+
+  it("lets the other PRs' passes finish when one stalls, so a PR that always stalls cannot starve the queue", async () => {
+    const okSandbox = sandboxFake({ followUpJson: "[]" });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true });
+    passHost.createSandbox = async (branch) => {
+      calls.createSandbox.push(branch);
+      return branch === BRANCH ? stalledSandbox() : okSandbox.sandbox;
+    };
+    const stalls = new IntakeStopReport();
+
+    const outcomes = await followUpPassPhase(targets, [issue, otherIssue], BASE, passHost, new OutcomeReport(), stalls, new Set());
+
+    assert.equal(outcomes[0]?.kind, "skipped");
+    assert.equal(outcomes[1]?.kind, "passed");
+    assert.equal(stalls.items().length, 1);
+  });
+
+  // Results are walked in target order, so each order of the two stops needs its own test.
+  for (const [title, stalledBranch] of [
+    ["a stall on an earlier target", BRANCH],
+    ["a stall on a later target", "feature/51-tidy-widget"],
+  ] as const) {
+    it(`still rethrows another pass's usage stop, and records the stall too, with ${title}`, async () => {
+      const usage = new UncountedStopError("usage limit reached");
+      const usageSandbox = sandboxFake({ roleFailing: ["follow-up"], roleFailWith: { "follow-up": usage } });
+      const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true });
+      passHost.createSandbox = async (branch) => {
+        calls.createSandbox.push(branch);
+        return branch === stalledBranch ? stalledSandbox() : usageSandbox.sandbox;
+      };
+      const report = new OutcomeReport();
+      const stalls = new IntakeStopReport();
+
+      await assert.rejects(
+        () => followUpPassPhase(targets, [issue, otherIssue], BASE, passHost, report, stalls, new Set()),
+        (error: unknown) => error === usage,
+      );
+
+      // Both stops really happened.
+      assert.deepEqual(
+        report.items().map(({ number, outcome }) => [number, outcome]).toSorted(),
+        [[PR_NUMBER, "stopped"], [8, "stopped"]].toSorted(),
+      );
+      assert.equal(stalls.items().length, 1);
+    });
+  }
+});
+
+// The pass's other give-ups and guards, each a hand-back with no push unless
+// it says otherwise.
+describe("runPass's other give-ups", () => {
+  const fixedVerdict = JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Done.", commit: "a".repeat(7) }]);
+
+  it("gives up when the follow-up role finishes without signalling completion", async () => {
+    const sandbox = sandboxFake({ followUpJson: fixedVerdict, roleUnfinished: ["follow-up"] });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], sandbox });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.deepEqual(calls.push, []);
+    assert.equal(calls.handBack.length, 1);
+  });
+
+  it("gives up when the follow-up role was given threads but wrote no follow-up.json", async () => {
+    const sandbox = sandboxFake();
+    const { passHost, calls } = passHostFake({ threads: [botThread()], sandbox });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.match(calls.handBack[0]!.reason, /follow-up\.json/);
+    assert.deepEqual(calls.replyToThread, []);
+  });
+
+  it("treats a missing follow-up.json as no verdicts when the role was given no threads", async () => {
+    const sandbox = sandboxFake({ mergeConflictFiles: ["src/A.cs"] });
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
+
+    const outcome = await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "passed");
+    assert.equal(calls.commentOnPullRequest.length, 1);
+  });
+
+  it("gives up when follow-up.json isn't a JSON array", async () => {
+    const sandbox = sandboxFake({ followUpJson: JSON.stringify({ threadId: "RT_bot" }) });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], sandbox });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.deepEqual(calls.push, []);
+  });
+
+  it("removes an earlier follow-up.json before the role runs", async () => {
+    const sandbox = sandboxFake({ followUpJson: fixedVerdict });
+    const { passHost } = passHostFake({ threads: [botThread()], sandbox });
+
+    await runPass(passTarget(), issue, BASE, passHost);
+
+    const removeIndex = sandbox.execCalls.findIndex((call) => call === "rm -f .sandcastle/follow-up.json");
+    const readIndex = sandbox.execCalls.findIndex((call) => call.startsWith("cat") && call.includes("follow-up.json"));
+    assert.ok(removeIndex !== -1 && removeIndex < readIndex, sandbox.execCalls.join("\n"));
+    assert.equal(sandbox.runs.length, 1, "the role runs once, between the removal and the read");
+  });
+
+  it("gives up without pushing when the gated commit doesn't contain the PR's head", async () => {
+    const sandbox = sandboxFake({ followUpJson: fixedVerdict, rewritesHistory: true });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.match(calls.handBack[0]!.reason, /rewritten/);
+    assert.deepEqual(calls.push, []);
+  });
+
+  it("tells the role which files conflicted when merging main conflicts", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]", mergeConflictFiles: ["src/A.cs", "src/B.cs"] });
+    const { passHost } = passHostFake({ threads: [], containsBase: false, sandbox });
+
+    await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+
+    const merge = String(sandbox.runs[0]?.promptArgs?.MERGE ?? "");
+    assert.match(merge, /src\/A\.cs, src\/B\.cs/);
+    assert.match(merge, /git commit --no-edit/);
+  });
+
+  it("pushes a conflicted merge once the role has resolved it and the gate passes", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]", mergeConflictFiles: ["src/A.cs"] });
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
+
+    const outcome = await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+
+    assert.deepEqual(outcome, { kind: "passed", pushed: ROLE_COMMIT });
+    assert.deepEqual(calls.push, [{ branch: BRANCH, commit: ROLE_COMMIT }]);
+    assert.match(calls.commentOnPullRequest[0]!.body, /resolved its conflicts/);
+  });
+
+  it("gives up without pushing when the role abandoned the merge with main", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]", mergeConflictFiles: ["src/A.cs"], abandonsMerge: true });
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
+
+    const outcome = await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.match(calls.handBack[0]!.reason, /abandoned/);
+    assert.deepEqual(calls.push, []);
+  });
+
+  it("gives up when GitHub refuses the push for a workflow file", async () => {
+    const rejection = new Error(
+      "git push failed:\n! [remote rejected] (refusing to allow a Personal Access Token to create or update workflow `.github/workflows/ci.yml` without `workflow` scope)",
+    );
+    const sandbox = sandboxFake({ followUpJson: fixedVerdict });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], sandbox, pushError: rejection });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.match(calls.handBack[0]!.reason, /workflow/);
+    assert.deepEqual(calls.replyToThread, []);
+  });
+
+  it("doesn't resolve a bot thread whose reply failed to post", async () => {
+    const sandbox = sandboxFake({ followUpJson: fixedVerdict });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], sandbox });
+    passHost.replyToThread = () => {
+      throw new Error("gh api graphql failed");
+    };
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "passed");
+    assert.deepEqual(calls.resolveThread, []);
+    assert.match(calls.commentOnPullRequest[0]!.body, /reply on thread RT_bot/);
+  });
+
+  it("skips the pass, with no sandbox, when the role's only threads are owner threads already answered and nothing needs merging", async () => {
+    const answered = ownerThread({
+      comments: [...ownerThread().comments, { author: "owner", byBot: false, body: `${FOLLOW_UP_REPLY_MARKER}\nNoted.`, url: "https://github.com/o/r/pull/7#discussion_r8" }],
+    });
+    const { passHost, calls } = passHostFake({ threads: [answered], containsBase: true, hostLogin: "owner" });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "skipped");
+    assert.deepEqual(calls.createSandbox, []);
+  });
+});
+
+describe("runPass's red CI handling", () => {
+  // Acceptance criterion: "A failed build that the gate reproduces is fixed
+  // by the gate-fixer and pushed."
+  it("fixes a build the gate reproduces, via the gate-fixer, and pushes the result", async () => {
+    const sandbox = sandboxFake({ gateExitCodes: [1, 0] });
+    const { passHost, calls } = passHostFake({
+      threads: [],
+      containsBase: true,
+      sandbox,
+      checks: [redCheck({ name: "Template tests" })],
+    });
+
+    const outcome = await runPass(passTarget({ reasons: ["check Template tests is red"] }), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "passed");
+    assert.ok(sandbox.runs.some((run) => run.name === "gate-fixer"), "the gate-fixer ran");
+    assert.equal(calls.push.length, 1);
+  });
+
+  // Acceptance criterion: "A failed test job that the gate doesn't
+  // reproduce is re-run once, not changed."
+  it("re-runs a gate-covered check once when the gate is green, without changing anything", async () => {
+    const sandbox = sandboxFake({ gateExitCodes: [0] });
+    const { passHost, calls } = passHostFake({
+      threads: [],
+      containsBase: true,
+      sandbox,
+      checks: [redCheck({ name: "Template tests" })],
+      rerunResult: [redCheck({ name: "Template tests", green: true })],
+    });
+
+    const outcome = await runPass(passTarget({ reasons: ["check Template tests is red"] }), issue, BASE, passHost);
+
+    assert.deepEqual(outcome, { kind: "passed", pushed: undefined });
+    assert.deepEqual(calls.rerunFailedChecks, [{ pr: PR_NUMBER, checkNames: ["Template tests"], expectedHead: HEAD }]);
+    assert.equal(sandbox.runs.length, 0, "no role ran: nothing in the branch needed changing");
+    assert.deepEqual(calls.push, []);
+  });
+
+  it("doesn't re-run a red check the host's gateCovered leaves out, but forwards its log", async () => {
+    const sandbox = sandboxFake({ gateExitCodes: [0, 0, 0], followUpJson: "[]" });
+    const { passHost, calls } = passHostFake({
+      threads: [],
+      containsBase: true,
+      sandbox,
+      gateCovered: new Set(),
+      checks: [redCheck({ name: "Template tests" })],
+      failedCheckLog: "the failed-job log",
+    });
+
+    await runPass(passTarget({ reasons: ["check Template tests is red"] }), issue, BASE, passHost);
+
+    assert.deepEqual(calls.rerunFailedChecks, []);
+    assert.deepEqual(calls.failedCheckLog.map((call) => call.checkNames), [["Template tests"]]);
+  });
+
+  // Acceptance criterion: "A second failure hands the PR back with
+  // `sandcastle:needs-human`."
+  it("gives up with sandcastle:needs-human when the re-run check fails again", async () => {
+    const sandbox = sandboxFake({ gateExitCodes: [0] });
+    const { passHost, calls } = passHostFake({
+      threads: [],
+      containsBase: true,
+      sandbox,
+      checks: [redCheck({ name: "Template tests" })],
+      rerunResult: [redCheck({ name: "Template tests" })],
+    });
+
+    const outcome = await runPass(passTarget({ reasons: ["check Template tests is red"] }), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.equal(calls.handBack.length, 1);
+    const handBack = calls.handBack[0]!;
+    assert.match(`${handBack.reason}\n${handBack.body}`, /Template tests/);
+    assert.deepEqual(calls.push, []);
+  });
+
+  // Acceptance criterion: "A failed CodeQL check passes its failed-job log
+  // to the follow-up role."
+  it("forwards a CodeQL check's failed-job log to the follow-up role", async () => {
+    const sandbox = sandboxFake({ gateExitCodes: [0, 0, 0], followUpJson: "[]" });
+    const { passHost, calls } = passHostFake({
+      threads: [],
+      containsBase: true,
+      sandbox,
+      checks: [redCheck({ name: "Analyze (csharp)" })],
+      failedCheckLog: "##[error] CS8600: converting null literal...",
+    });
+
+    const outcome = await runPass(passTarget({ reasons: ["check Analyze (csharp) is red"] }), issue, BASE, passHost);
+
+    assert.deepEqual(calls.failedCheckLog, [{ pr: PR_NUMBER, checkNames: ["Analyze (csharp)"], expectedHead: HEAD }]);
+    const roleRun = sandbox.runs.find((run) => run.name === "follow-up");
+    assert.ok(roleRun !== undefined, "the follow-up role ran to fix the CodeQL failure");
+    assert.match(String(roleRun?.promptArgs?.CODEQL_LOG ?? ""), /CS8600/);
+    assert.equal(outcome.kind, "passed");
+    assert.equal(calls.push.length, 1);
+  });
+
+  // From a follow-up review: a CodeQL failure the role can't act on (an
+  // autobuild or infrastructure error, say) leaves the role committing
+  // nothing. Reporting "passed" there would only let the next sweep find the
+  // same red check and run the role the same way again, every sweep until
+  // FOLLOW_UP_PASS_CAP. Giving up at once instead stops that repeat as soon
+  // as it's seen, rather than after two more of the same costly pass.
+  it("gives up at once when the role commits nothing for a forwarded log, instead of reporting passed", async () => {
+    const sandbox = sandboxFake({ gateExitCodes: [0, 0], followUpJson: "[]", roleNoCommit: ["follow-up"] });
+    const { passHost, calls } = passHostFake({
+      threads: [],
+      containsBase: true,
+      sandbox,
+      checks: [redCheck({ name: "Analyze (csharp)" })],
+      failedCheckLog: "##[error] CS8600: converting null literal...",
+    });
+
+    const outcome = await runPass(passTarget({ reasons: ["check Analyze (csharp) is red"] }), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.match(calls.handBack[0]!.reason, /Analyze \(csharp\)/);
+    assert.deepEqual(calls.push, []);
+    const roleRun = sandbox.runs.find((run) => run.name === "follow-up");
+    assert.ok(roleRun !== undefined, "the role still ran, and was given the log");
+  });
+
+  // From a follow-up review: a red check with no Actions run behind it (code
+  // scanning's own "CodeQL" result, not the "Analyze" job) has no log a pass
+  // could forward and nothing a pass could re-run, so sending it to the
+  // follow-up role would only start a run with nothing to fix from, every
+  // sweep, until a new commit. It's left out of redChecks entirely instead.
+  it("doesn't start a pass for a red check with no Actions run behind it", async () => {
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: true, checks: [runlessCheck()] });
+
+    const outcome = await runPass(passTarget({ reasons: ["check CodeQL is red"] }), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "skipped");
+    assert.deepEqual(calls.createSandbox, []);
+    assert.deepEqual(calls.failedCheckLog, []);
+  });
+});
+
+describe("runPass's red CI decisions", () => {
+  // From a follow-up review: host.checks's own read can race a push that
+  // lands between the sweep and this pass, which would otherwise decide
+  // redChecks from a commit other than the one it's about to gate and push.
+  it("skips the pass when its checks were read from a commit other than its head", async () => {
+    const { passHost, calls } = passHostFake({
+      threads: [],
+      containsBase: true,
+      checks: [redCheck({ name: "Template tests" })],
+      checksHeadRefOid: "f".repeat(40),
+    });
+
+    const outcome = await runPass(passTarget({ reasons: ["check Template tests is red"] }), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "skipped");
+    assert.deepEqual(calls.createSandbox, []);
+  });
+
+  it("leaves a PR alone while any of its checks is still running, red ones included", async () => {
+    const { passHost, calls } = passHostFake({
+      threads: [],
+      checks: [redCheck({ name: "Template tests" }), redCheck({ name: "Analyze (csharp)", completed: false, completedAt: null })],
+    });
+
+    const outcome = await runPass(passTarget({ reasons: ["check Template tests is red"] }), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "skipped");
+    assert.deepEqual(calls.markBuilding, []);
+    assert.deepEqual(calls.rerunFailedChecks, []);
+  });
+
+  // A Sandcastle run started by a PR event reports its own running
+  // check on the head it sweeps, which would otherwise hold every pass it
+  // claims.
+  it("re-runs a red check while only Sandcastle's own check is still running", async () => {
+    const { passHost, calls } = passHostFake({
+      threads: [],
+      checks: [redCheck({ name: "Template tests" }), redCheck({ name: "Sandcastle", workflow: "Sandcastle", runId: 2002, completed: false, completedAt: null })],
+    });
+
+    await runPass(passTarget({ reasons: ["check Template tests is red"] }), issue, BASE, passHost);
+
+    assert.deepEqual(calls.rerunFailedChecks.map((call) => call.checkNames), [["Template tests"]]);
+  });
+
+  // A red Sandcastle check is a hand-back's, with nothing in the PR for
+  // the follow-up role to fix from its job log.
+  it("doesn't start a pass for Sandcastle's own red check", async () => {
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: true, checks: [redCheck({ name: "Sandcastle", workflow: "Sandcastle", runId: 2002 })] });
+
+    const outcome = await runPass(passTarget({ reasons: [] }), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "skipped");
+    assert.deepEqual(calls.createSandbox, []);
+    assert.deepEqual(calls.rerunFailedChecks, []);
+    assert.deepEqual(calls.failedCheckLog, []);
+  });
+
+  // A check named Sandcastle from another workflow is a real red check, so
+  // its failed-job log still goes to the follow-up role.
+  it("forwards the failed-job log of a red check named Sandcastle that another workflow reported", async () => {
+    const sandbox = sandboxFake({ gateExitCodes: [0, 0, 0], followUpJson: "[]" });
+    const { passHost, calls } = passHostFake({
+      threads: [],
+      containsBase: true,
+      sandbox,
+      checks: [redCheck({ name: "Sandcastle", workflow: "CI", runId: 2002 })],
+      failedCheckLog: "##[error] something failed",
+    });
+
+    await runPass(passTarget({ reasons: ["check Sandcastle is red"] }), issue, BASE, passHost);
+
+    assert.deepEqual(calls.failedCheckLog, [{ pr: PR_NUMBER, checkNames: ["Sandcastle"], expectedHead: HEAD }]);
+  });
+
+  // From a follow-up review: `pull_request` CI checks out the head merged
+  // with main, so a PR that's merely behind main (not conflicted) has its
+  // checks run against a commit the bare head's gate never sees. Merging
+  // main in first, before the gate decides, makes the gate judge the same
+  // commit CI did.
+  it("merges main into the branch before gating red CI, when the PR is behind main but not conflicted", async () => {
+    const sandbox = sandboxFake({ gateExitCodes: [0] });
+    const { passHost, calls } = passHostFake({
+      threads: [],
+      containsBase: false,
+      sandbox,
+      checks: [redCheck({ name: "Template tests" })],
+    });
+
+    const outcome = await runPass(passTarget({ conflicted: false, reasons: ["check Template tests is red"] }), issue, BASE, passHost);
+
+    const mergeIndex = sandbox.steps.findIndex((step) => step.startsWith("git merge "));
+    const gateIndex = sandbox.steps.findIndex((step) => step === "scripts/gate.sh 2>&1");
+    assert.ok(mergeIndex !== -1, "the branch was merged with main");
+    assert.ok(gateIndex !== -1, "the gate ran");
+    assert.ok(mergeIndex < gateIndex, "the merge happened before the gate decided red CI");
+    assert.equal(outcome.kind, "passed");
+    assert.equal(calls.push.length, 1);
+  });
+
+  // From a follow-up review: GitHub's conflicted flag can be stale by the
+  // time this pass fetches main, so `mergeFirst`'s merge can conflict even
+  // though the PR isn't flagged as conflicted. Gating the half-merged tree
+  // that leaves behind would judge conflict markers, not the branch, so the
+  // pass must abort back to the bare head and gate that instead.
+  it("aborts a merge that conflicts despite GitHub's conflicted flag, and gates the bare head instead", async () => {
+    const sandbox = sandboxFake({ gateExitCodes: [0, 0], followUpJson: "[]", mergeConflictFiles: ["src/A.cs"] });
+    const { passHost, calls } = passHostFake({
+      threads: [],
+      containsBase: false,
+      sandbox,
+      checks: [redCheck({ name: "Template tests" })],
+    });
+
+    const outcome = await runPass(passTarget({ conflicted: false, reasons: ["check Template tests is red"] }), issue, BASE, passHost);
+
+    const firstMergeIndex = sandbox.steps.findIndex((step) => step.startsWith("git merge "));
+    const abortIndex = sandbox.steps.findIndex((step) => step === "git merge --abort");
+    const gateIndex = sandbox.steps.findIndex((step) => step === "scripts/gate.sh 2>&1");
+    assert.ok(firstMergeIndex !== -1 && abortIndex !== -1 && gateIndex !== -1, sandbox.steps.join("\n"));
+    assert.ok(firstMergeIndex < abortIndex, "the conflicted merge was aborted");
+    assert.ok(abortIndex < gateIndex, "the gate ran on the bare head, after the abort, not on the half-merged tree");
+    assert.equal(outcome.kind, "passed");
+    assert.equal(calls.push.length, 1);
+  });
+
+  // The counterpart to the above: being behind main, on its own, still
+  // isn't a reason to spend a counted pass. The sweep's update-branch
+  // handles that once the PR is settled (lib/follow-up.mts#decide); only a
+  // red check (or a bot thread) makes the merge worth doing here.
+  it("doesn't start a pass merely because the PR is behind main, with no red check or bot thread", async () => {
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: false, checks: [] });
+
+    const outcome = await runPass(passTarget({ conflicted: false }), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "skipped");
+    assert.deepEqual(calls.createSandbox, []);
+  });
+
+  it("doesn't re-run a flaky check when the pass pushes, since the push starts CI again", async () => {
+    const sandbox = sandboxFake({
+      gateExitCodes: [0, 0],
+      followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Done.", commit: ROLE_COMMIT }]),
+    });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], sandbox, checks: [redCheck({ name: "Template tests" })] });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.deepEqual(outcome, { kind: "passed", pushed: ROLE_COMMIT });
+    assert.deepEqual(calls.rerunFailedChecks, []);
+  });
+
+  it("says in the pass summary which checks it re-ran", async () => {
+    const sandbox = sandboxFake({ gateExitCodes: [0] });
+    const { passHost, calls } = passHostFake({
+      threads: [],
+      sandbox,
+      checks: [redCheck({ name: "Template tests" })],
+      rerunResult: [redCheck({ name: "Template tests", completed: false, completedAt: null })],
+    });
+
+    await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(calls.commentOnPullRequest.length, 1);
+    assert.match(calls.commentOnPullRequest[0]!.body, /Re-ran the failed jobs of Template tests once/);
+  });
+
+  it("gives up on a re-run check the answer leaves out, rather than taking it as green", async () => {
+    const sandbox = sandboxFake({ gateExitCodes: [0] });
+    const { passHost, calls } = passHostFake({ threads: [], sandbox, checks: [redCheck({ name: "Template tests" })], rerunResult: [] });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.match(calls.handBack[0]!.reason, /Template tests/);
+  });
+
+  it("gives the follow-up role only the end of a failed-job log too long for a prompt", async () => {
+    const sandbox = sandboxFake({ gateExitCodes: [0, 0] });
+    const { passHost } = passHostFake({
+      threads: [],
+      sandbox,
+      checks: [redCheck({ name: "Analyze (csharp)" })],
+      failedCheckLog: `${"x".repeat(200_000)}\n##[error] the real failure`,
+    });
+
+    await runPass(passTarget(), issue, BASE, passHost);
+
+    const log = String(sandbox.runs.find((run) => run.name === "follow-up")?.promptArgs?.CODEQL_LOG ?? "");
+    assert.ok(log.length < 100_000, `the log reached the role at ${log.length} characters`);
+    assert.match(log, /the real failure$/);
+  });
+
+  // From a follow-up review: reading the CodeQL log happens before the role
+  // or anything else runs, so a stop here loses nothing of this pass's own —
+  // but an uncaught throw would otherwise crash the pass instead of handing
+  // the PR back with a reason.
+  it("gives up when reading a forwarded check's failed-job log fails, rather than crashing", async () => {
+    const sandbox = sandboxFake({ gateExitCodes: [0] });
+    const { passHost, calls } = passHostFake({ threads: [], sandbox, checks: [redCheck({ name: "Analyze (csharp)" })] });
+    passHost.failedCheckLog = () => {
+      throw new Error("gh api rate limited");
+    };
+
+    const outcome = await runPass(passTarget({ reasons: ["check Analyze (csharp) is red"] }), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.match(calls.handBack[0]!.reason, /Analyze \(csharp\)/);
+    assert.equal(sandbox.runs.length, 0, "the role never ran: there was no log to give it");
+  });
+
+  // From a follow-up review: a give-up for a re-run check still red used to
+  // leave before the role's thread verdicts were replied to and resolved,
+  // throwing away work the role already did. The reply and resolution must
+  // land even though the pass ends in a hand-back.
+  it("answers the role's bot thread before giving up when a re-run check stays red", async () => {
+    const sandbox = sandboxFake({ gateExitCodes: [0, 0], followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "declined", reason: "Out of scope." }]), roleNoCommit: ["follow-up"] });
+    const { passHost, calls } = passHostFake({
+      threads: [botThread()],
+      sandbox,
+      checks: [redCheck({ name: "Template tests" })],
+      rerunResult: [redCheck({ name: "Template tests" })],
+    });
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.deepEqual(calls.push, []);
+    assert.equal(calls.replyToThread.length, 1);
+    assert.equal(calls.replyToThread[0]!.threadId, "RT_bot");
+    assert.deepEqual(calls.resolveThread, ["RT_bot"]);
+  });
+
+  // From a follow-up review: an error re-running the checks (the head moved,
+  // or a `gh` failure) must give up with a reason rather than crash the pass
+  // outright, and must still answer the role's threads first.
+  it("gives up, after answering threads, when re-running a still-red check fails", async () => {
+    const sandbox = sandboxFake({ gateExitCodes: [0, 0], followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "declined", reason: "Out of scope." }]), roleNoCommit: ["follow-up"] });
+    const { passHost, calls } = passHostFake({
+      threads: [botThread()],
+      sandbox,
+      checks: [redCheck({ name: "Template tests" })],
+    });
+    passHost.rerunFailedChecks = () => {
+      throw new Error("gh run rerun failed");
+    };
+
+    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.match(calls.handBack[0]!.reason, /Template tests/);
+    assert.equal(calls.replyToThread.length, 1);
+    assert.deepEqual(calls.resolveThread, ["RT_bot"]);
+  });
+});
+
+describe("followUpPassPhase's skips", () => {
+  it("neither fetches nor passes on a PR whose issue isn't in this round's queue", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()] });
+
+    const outcomes = await followUpPassPhase([passTarget({ issueNumber: 99, headRefName: "feature/99-gone" })], [issue], BASE, passHost);
+
+    assert.deepEqual(calls.fetchBranch, []);
+    assert.deepEqual(calls.createSandbox, []);
+    assert.equal(outcomes[0]!.kind, "skipped");
+  });
+
+  it("skips a PR whose branch fails to fetch, and still passes on the rest", async () => {
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: true });
+    passHost.fetchBranch = (branch) => {
+      calls.fetchBranch.push(branch);
+      if (branch === BRANCH) throw new Error("git fetch failed");
+    };
+    const other: SandcastleIssue = { number: 51, title: "Tidy up the widget", body: "", labels: ["Sandcastle"], comments: [] };
+
+    const outcomes = await followUpPassPhase(
+      [passTarget(), passTarget({ number: 8, id: "PR_8", headRefName: "feature/51-tidy-widget", issueNumber: 51 })],
+      [issue, other],
+      BASE,
+      passHost,
+    );
+
+    assert.deepEqual(outcomes.map((outcome) => outcome.kind), ["skipped", "skipped"]);
+    assert.match((outcomes[0] as { reason: string }).reason, /fetch/);
+    assert.match((outcomes[1] as { reason: string }).reason, /nothing a follow-up pass handles/);
+  });
+});
+
+describe("runPass's merge of main in a sandbox from createCheckedSandbox", () => {
+  const hostIdentity = () => ({ name: "Host Person", email: "host@example.com" });
+
+  // The pass's sandbox is made by the real createCheckedSandbox over a scratch
+  // git repository that has no committer identity until one is set.
+  function realSandboxPass(options: { conflicted: boolean; checks: HeadCheck[] }) {
+    const fake = gitSandboxFake();
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: false, checks: options.checks, headRefOid: fake.head });
+    passHost.createSandbox = (branch) => createCheckedSandbox(branch, fake.create, hostIdentity);
+    const target = passTarget({ headRefOid: fake.head, conflicted: options.conflicted, reasons: ["it is behind main"] });
+    return { fake, passHost, calls, target };
+  }
+
+  // Acceptance criterion: "A test pins that the follow-up pass's clean merge
+  // of main succeeds before any role has run." The merge comes before the
+  // gate, since the PR's red check was built on the head merged with main.
+  it("merges main in cleanly before any role has run, when a settled red check is why the PR needs the merge", async (t) => {
+    const { fake, passHost, calls, target } = realSandboxPass({ conflicted: false, checks: [redCheck()] });
+    t.after(() => fake.cleanup());
+
+    const outcome = await runPass(target, issue, fake.main, passHost);
+
+    assert.equal(outcome.kind, "passed", JSON.stringify(outcome));
+    assert.deepEqual(calls.handBack, []);
+    assert.equal(calls.push.length, 1);
+    assert.equal(fake.headIdentity(), "Host Person <host@example.com>|Host Person <host@example.com>");
+    assert.ok(fake.execs.some((command) => command.includes("sh -c 'git merge ")), fake.execs.join("\n"));
+  });
+
+  it("merges main in cleanly before any role has run, when GitHub reports the PR as conflicted but the merge is clean", async (t) => {
+    const { fake, passHost, calls, target } = realSandboxPass({ conflicted: true, checks: [] });
+    t.after(() => fake.cleanup());
+
+    const outcome = await runPass(target, issue, fake.main, passHost);
+
+    assert.equal(outcome.kind, "passed", JSON.stringify(outcome));
+    assert.deepEqual(calls.handBack, []);
+    assert.equal(calls.push.length, 1);
+    assert.equal(fake.headIdentity(), "Host Person <host@example.com>|Host Person <host@example.com>");
+  });
+
+  it("doesn't hand the PR back for \"merging main into the branch failed\"", async (t) => {
+    const { fake, passHost, calls, target } = realSandboxPass({ conflicted: false, checks: [redCheck()] });
+    t.after(() => fake.cleanup());
+
+    await runPass(target, issue, fake.main, passHost);
+
+    assert.ok(!calls.log.some((line) => /merging main into the branch failed/.test(line)), calls.log.join("\n"));
+    assert.ok(!calls.handBack.some((handBack) => /Committer identity unknown/.test(handBack.body)));
+  });
+});
+
+// A pull request the repository owner handed to Sandcastle with the sandcastle:follow-up label has no issue: the pass
+// claims the PR itself, and the prompt shows the PR's own title and description.
+const HAND_OFF_BRANCH = "chore/owner-pr";
+const handOffTarget = (overrides: Partial<Extract<PassTarget, { handOff: HandOffTarget }>> = {}): PassTarget =>
+  ({
+    number: PR_NUMBER,
+    id: "PR_7",
+    headRefName: HAND_OFF_BRANCH,
+    headRefOid: HEAD,
+    handOff: { title: "feat: Add widget search", body: "Adds search to the widget.\n\nSecond paragraph." },
+    reasons: ["1 unresolved bot thread(s)"],
+    conflicted: false,
+    ...overrides,
+  });
+
+describe("handOffIssue", () => {
+  it("refuses a target that wasn't handed off", () => {
+    assert.throws(() => handOffIssue(passTarget()), /was not handed off/);
+  });
+
+  it("takes the PR's number as the issue number and its title as the title", () => {
+    const view = handOffIssue(handOffTarget());
+
+    assert.equal(view.number, PR_NUMBER);
+    assert.equal(view.title, "feat: Add widget search");
+  });
+
+  it("opens the body with a note that this is not an issue but a pull request handed off, naming the PR's number", () => {
+    const view = handOffIssue(handOffTarget());
+
+    assert.match(view.body, /^\(This is not an issue\. The pull request was handed off to Sandcastle by the repository owner;/);
+    assert.match(view.body, new RegExp(`#${PR_NUMBER} is the pull request's number`));
+  });
+
+  it("follows the note with the PR's description unchanged", () => {
+    const view = handOffIssue(handOffTarget());
+
+    assert.ok(view.body.endsWith("\n\nAdds search to the widget.\n\nSecond paragraph."), view.body);
+  });
+
+  it("gives no labels and no comments, since a PR has no issue's queue labels or discussion", () => {
+    const view = handOffIssue(handOffTarget());
+
+    assert.deepEqual(view.labels, []);
+    assert.deepEqual(view.comments, []);
+  });
+
+  it("still carries the note for a PR with an empty description", () => {
+    const view = handOffIssue(handOffTarget({ handOff: { title: "chore: Tidy", body: "" } }));
+
+    assert.match(view.body, /^\(This is not an issue\./);
+  });
+});
+
+describe("runPass on a hand-off PR", () => {
+  const view = () => handOffIssue(handOffTarget());
+
+  it("claims sandcastle:building on the PR, never on an issue, and releases that claim after the pass", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]" });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    const outcome = await runPass(handOffTarget(), view(), BASE, passHost);
+
+    assert.equal(outcome.kind, "passed");
+    assert.deepEqual(calls.markPullRequestBuilding, [PR_NUMBER]);
+    assert.deepEqual(calls.unmarkPullRequestBuilding, [PR_NUMBER]);
+    assert.deepEqual(calls.markBuilding, []);
+    assert.deepEqual(calls.unmarkBuilding, []);
+  });
+
+  it("rejects without creating a sandbox when claiming the PR fails, since the pass would run unclaimed", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, markPullRequestBuildingThrows: true });
+
+    await assert.rejects(runPass(handOffTarget({ headRefName: "feature/60-owner-pr" }), view(), BASE, passHost), /gh pr edit failed/);
+
+    assert.deepEqual(calls.createSandbox, []);
+    assert.deepEqual(calls.markBuilding, []);
+    assert.deepEqual(calls.releases, []);
+  });
+
+  describe("recording the head it pushes", () => {
+    const fixes = () => sandboxFake({ followUpJson: "[]" });
+
+    it("records the commit a hand-off pass pushed as approved, once it is on the branch", async () => {
+      const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox: fixes() });
+
+      const outcome = await runPass(handOffTarget(), view(), BASE, passHost);
+
+      assert.equal(outcome.kind, "passed");
+      assert.equal(calls.push.length, 1);
+      assert.deepEqual(calls.recordApprovedHead, [{ pr: PR_NUMBER, head: calls.push[0]!.commit }]);
+    });
+
+    it("records nothing when the pass pushed nothing", async () => {
+      const sandbox = sandboxFake({ followUpJson: "[]", roleNoCommit: ["follow-up"] });
+      const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+      await runPass(handOffTarget(), view(), BASE, passHost);
+
+      assert.deepEqual(calls.push, []);
+      assert.deepEqual(calls.recordApprovedHead, []);
+    });
+
+    it("records nothing for a Sandcastle issue's PR, which no label approved", async () => {
+      const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox: fixes() });
+
+      await runPass(passTarget(), issue, BASE, passHost);
+
+      assert.equal(calls.push.length, 1);
+      assert.deepEqual(calls.recordApprovedHead, []);
+    });
+
+    it("still completes the pass, and says the record failed in the summary, when recording the head fails", async () => {
+      const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox: fixes(), recordApprovedHeadThrows: true });
+
+      const outcome = await runPass(handOffTarget(), view(), BASE, passHost);
+
+      assert.equal(outcome.kind, "passed");
+      assert.match(calls.commentOnPullRequest[0]!.body, /These GitHub writes failed:[^\n]*recording the pushed head as approved, so the owner has to remove and add sandcastle:follow-up again before the PR is followed up/);
+      assert.ok(calls.log.some((line) => line.includes("couldn't record")));
+    });
+
+    it("records a push that landed although it reported an error", async () => {
+      const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox: fixes(), pushError: new Error("500") });
+      // The branch now shows the pushed commit: remoteHead answers whatever was pushed.
+      passHost.remoteHead = () => calls.push[0]?.commit;
+
+      const outcome = await runPass(handOffTarget(), view(), BASE, passHost);
+
+      assert.equal(outcome.kind, "passed");
+      assert.deepEqual(calls.recordApprovedHead, [{ pr: PR_NUMBER, head: calls.push[0]!.commit }]);
+    });
+
+    it("records nothing when the push failed and the head moved", async () => {
+      const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox: fixes(), pushError: new Error("rejected") });
+
+      const outcome = await runPass(handOffTarget(), view(), BASE, passHost);
+
+      assert.equal(outcome.kind, "push-failed");
+      assert.deepEqual(calls.recordApprovedHead, []);
+    });
+  });
+
+  it("claims the PR and releases it even when the pass throws", async () => {
+    const sandbox = sandboxFake({ roleFailing: ["follow-up"] });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    await runPass(handOffTarget(), view(), BASE, passHost).catch(() => undefined);
+
+    assert.deepEqual(calls.markPullRequestBuilding, [PR_NUMBER]);
+    assert.deepEqual(calls.unmarkPullRequestBuilding, [PR_NUMBER]);
+    assert.deepEqual(calls.unmarkBuilding, []);
+  });
+
+  it("also claims the issue a hand-off PR's issue branch names, and releases both after the pass", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]" });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    const outcome = await runPass(handOffTarget({ headRefName: "feature/60-owner-pr" }), view(), BASE, passHost);
+
+    assert.equal(outcome.kind, "passed");
+    assert.deepEqual(calls.markPullRequestBuilding, [PR_NUMBER]);
+    assert.deepEqual(calls.markBuilding, [60]);
+    assert.deepEqual(calls.unmarkPullRequestBuilding, [PR_NUMBER]);
+    assert.deepEqual(calls.unmarkBuilding, [60]);
+  });
+
+  it("skips and gives the PR claim back when a build already holds the issue its branch names", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, markBuildingResult: false });
+
+    const outcome = await runPass(handOffTarget({ headRefName: "feature/60-owner-pr" }), view(), BASE, passHost);
+
+    assert.equal(outcome.kind, "skipped");
+    assert.equal(outcome.kind === "skipped" ? outcome.reason : "", "another run marked #60 " + BUILDING_LABEL);
+    assert.deepEqual(calls.createSandbox, []);
+    assert.deepEqual(calls.unmarkPullRequestBuilding, [PR_NUMBER]);
+    assert.deepEqual(calls.unmarkBuilding, []);
+  });
+
+  it("is still passed on, with only the PR claimed, when claiming the branch's issue fails", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]" });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox, markBuildingThrows: true });
+
+    const outcome = await runPass(handOffTarget({ headRefName: "feature/999-no-such-issue" }), view(), BASE, passHost);
+
+    assert.equal(outcome.kind, "passed");
+    assert.deepEqual(calls.markBuilding, [999]);
+    assert.deepEqual(calls.releases, [`PR #${PR_NUMBER}`]);
+  });
+
+  it("doesn't claim an issue whose number is the PR's own", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]" });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    const outcome = await runPass(handOffTarget({ headRefName: `feature/${PR_NUMBER}-the-same-number` }), view(), BASE, passHost);
+
+    assert.equal(outcome.kind, "passed");
+    assert.deepEqual(calls.markBuilding, []);
+  });
+
+  it("releases both claims, the issue's first, when the re-read finds nothing left to pass on", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], threadsAfterClaim: [], containsBase: true });
+
+    const outcome = await runPass(handOffTarget({ headRefName: "feature/60-owner-pr" }), view(), BASE, passHost);
+
+    assert.equal(outcome.kind, "skipped");
+    assert.deepEqual(calls.releases, ["#60", `PR #${PR_NUMBER}`]);
+  });
+
+  it("releases both claims, the issue's first, when the pass throws", async () => {
+    const sandbox = sandboxFake({ roleFailing: ["follow-up"] });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    await runPass(handOffTarget({ headRefName: "feature/60-owner-pr" }), view(), BASE, passHost).catch(() => undefined);
+
+    assert.deepEqual(calls.releases, ["#60", `PR #${PR_NUMBER}`]);
+  });
+
+  it("doesn't reject when releasing the PR's claim fails", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]" });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox, unmarkPullRequestBuildingThrows: true });
+
+    const outcome = await runPass(handOffTarget({ headRefName: "feature/60-owner-pr" }), view(), BASE, passHost);
+
+    assert.equal(outcome.kind, "passed");
+    assert.deepEqual(calls.releases, ["#60", `PR #${PR_NUMBER}`]);
+  });
+
+  it("still releases the PR's claim when releasing the issue's, which comes first, fails", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]" });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox, unmarkBuildingThrows: true });
+
+    const outcome = await runPass(handOffTarget({ headRefName: "feature/60-owner-pr" }), view(), BASE, passHost);
+
+    assert.equal(outcome.kind, "passed");
+    assert.deepEqual(calls.releases, ["#60", `PR #${PR_NUMBER}`]);
+  });
+
+  it("skips, naming the PR rather than an issue, when another run already marked the PR sandcastle:building", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, markPullRequestBuildingResult: false });
+
+    const outcome = await runPass(handOffTarget(), view(), BASE, passHost);
+
+    assert.equal(outcome.kind, "skipped");
+    assert.equal(outcome.kind === "skipped" ? outcome.reason : "", `another run marked PR #${PR_NUMBER} ${BUILDING_LABEL}`);
+    assert.deepEqual(calls.createSandbox, []);
+    assert.deepEqual(calls.markBuilding, []);
+  });
+
+  it("doesn't claim the PR when there's nothing a follow-up pass handles", async () => {
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: true });
+
+    const outcome = await runPass(handOffTarget({ reasons: [] }), view(), BASE, passHost);
+
+    assert.equal(outcome.kind, "skipped");
+    assert.deepEqual(calls.markPullRequestBuilding, []);
+    assert.deepEqual(calls.markBuilding, []);
+  });
+
+  it("hands the follow-up role the PR's number, title and description in the issue's prompt arguments", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]" });
+    const { passHost } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    await runPass(handOffTarget(), view(), BASE, passHost);
+
+    const roleRun = sandbox.runs.find((run) => run.name === "follow-up");
+    assert.ok(roleRun !== undefined, "the bot thread starts a pass");
+    const args = roleRun.promptArgs as Record<string, string>;
+    assert.equal(args.TASK_ID, String(PR_NUMBER));
+    assert.equal(args.PR_NUMBER, String(PR_NUMBER));
+    assert.equal(args.ISSUE_TITLE, "feat: Add widget search");
+    assert.equal(args.BRANCH, HAND_OFF_BRANCH);
+    assert.match(args.ISSUE_BODY ?? "", /This is not an issue/);
+    assert.match(args.ISSUE_BODY ?? "", /Adds search to the widget\./);
+    assert.equal(args.ISSUE_COMMENTS, "(no comments)");
+  });
+
+  it("gives up on the PR itself, with sandcastle:needs-human on the PR, once it has had the cap of passes", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, passCount: FOLLOW_UP_PASS_CAP });
+
+    const outcome = await runPass(handOffTarget(), view(), BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.deepEqual(calls.handBack.map((handBack) => handBack.pr), [PR_NUMBER]);
+    assert.deepEqual(calls.unmarkPullRequestBuilding, [PR_NUMBER]);
+  });
+});
+
+describe("followUpPassPhase with a hand-off PR", () => {
+  it("runs a hand-off target although the queue holds no issue for it, claiming the PR", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox: sandboxFake({ followUpJson: "[]" }) });
+
+    const outcomes = await followUpPassPhase([handOffTarget()], [], BASE, passHost);
+
+    assert.deepEqual(calls.fetchBranch, [HAND_OFF_BRANCH]);
+    assert.deepEqual(calls.markPullRequestBuilding, [PR_NUMBER]);
+    assert.deepEqual(calls.markBuilding, []);
+    assert.equal(outcomes[0]!.kind, "passed");
+  });
+
+  it("runs it with handOffIssue(target) as the issue, whatever the queue holds under the PR's number", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]" });
+    const { passHost } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+    const unrelated: SandcastleIssue = { number: PR_NUMBER, title: "An unrelated issue", body: "x", labels: ["Sandcastle"], comments: [] };
+
+    await followUpPassPhase([handOffTarget()], [unrelated], BASE, passHost);
+
+    const args = sandbox.runs.find((run) => run.name === "follow-up")?.promptArgs as Record<string, string> | undefined;
+    assert.equal(args?.ISSUE_TITLE, "feat: Add widget search");
+  });
+
+  it("still skips a target for an issue that is missing from the queue, beside a hand-off target", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox: sandboxFake({ followUpJson: "[]" }) });
+    const missing = passTarget({ number: 8, id: "PR_8", issueNumber: 99, headRefName: "feature/99-gone" });
+
+    const outcomes = await followUpPassPhase([missing, handOffTarget()], [], BASE, passHost);
+
+    assert.equal(outcomes[0]!.kind, "skipped");
+    assert.deepEqual(calls.fetchBranch, [HAND_OFF_BRANCH]);
+    assert.equal(outcomes[1]!.kind, "passed");
+  });
+
+  it("skips a hand-off target whose branch fails to fetch", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true });
+    passHost.fetchBranch = () => {
+      throw new Error("git fetch failed");
+    };
+
+    const outcomes = await followUpPassPhase([handOffTarget()], [], BASE, passHost);
+
+    assert.equal(outcomes[0]!.kind, "skipped");
+    assert.deepEqual(calls.markPullRequestBuilding, []);
+  });
+});
+
+// A Claude Code session posts under the owner's token, ending each reply with SESSION_REPLY_MARKER; its words are not
+// the owner's, so the role is never shown them, and a thread whose last word is one needs no second answer.
+describe("threadsForRole and a session's replies", () => {
+  const SESSION = "owner";
+  const sessionReply = (body = "Fixed in abc1234.") => ({
+    author: SESSION,
+    byBot: false,
+    body: `${body}\n\n${SESSION_REPLY_MARKER}`,
+    url: "https://github.com/o/r/pull/7#discussion_r9",
+  });
+
+  it("drops a bot thread whose last bot, host or owner comment is a session's reply", () => {
+    const answered = botThread({ comments: [...botThread().comments, sessionReply()] });
+
+    const { forRole, leftForHuman, unknown } = threadsForRole([answered], isOwner, SESSION);
+
+    assert.deepEqual(forRole, []);
+    assert.deepEqual(leftForHuman, []);
+    assert.deepEqual(unknown, []);
+  });
+
+  it("counts a session's reply under an owner's login that isn't the host's", () => {
+    const answered = botThread({ comments: [...botThread().comments, sessionReply()] });
+
+    const { forRole } = threadsForRole([answered], isOwner, "the-app[bot]");
+
+    assert.deepEqual(forRole, []);
+  });
+
+  it("drops an owner thread whose last owner or host comment is a session's reply", () => {
+    const answered = ownerThread({ comments: [...ownerThread().comments, sessionReply()] });
+
+    assert.deepEqual(threadsForRole([answered], isOwner, SESSION).forRole, []);
+  });
+
+  it("drops a thread a session opened itself", () => {
+    const opened = ownerThread({ comments: [sessionReply("Left for the owner.")] });
+
+    const sorted = threadsForRole([opened], isOwner, SESSION);
+
+    assert.deepEqual(sorted.forRole, []);
+    assert.deepEqual(sorted.leftForHuman, []);
+  });
+
+  it("shows the role a bot thread again once the bot comments after a session's reply, without the session's comment", () => {
+    const again = botThread({
+      comments: [
+        ...botThread().comments,
+        sessionReply("I'll leave this one."),
+        { author: "copilot-pull-request-reviewer", byBot: true, body: "Please reconsider.", url: "https://github.com/o/r/pull/7#discussion_r10" },
+      ],
+    });
+
+    const { forRole } = threadsForRole([again], isOwner, SESSION);
+
+    assert.equal(forRole.length, 1);
+    assert.deepEqual(
+      forRole[0]!.comments.map((comment) => comment.body),
+      ["Consider returning a Result<T> here.", "Please reconsider."],
+    );
+  });
+
+  it("drops a session's comment from an owner thread the owner wrote in again, keeping the owner's own words", () => {
+    const again = ownerThread({
+      comments: [...ownerThread().comments, sessionReply("Declined."), { author: "owner", byBot: false, body: "Still not convinced.", url: "" }],
+    });
+
+    const { forRole } = threadsForRole([again], isOwner, SESSION);
+
+    assert.equal(forRole.length, 1);
+    assert.deepEqual(
+      forRole[0]!.comments.map((comment) => comment.body),
+      ["Why not use pattern matching here?", "Still not convinced."],
+    );
+  });
+
+  it("doesn't look a bot's comment up as an owner when it can tell by the missing marker", () => {
+    const looked: (string | null)[] = [];
+    const spy: IsOwner = (login) => {
+      looked.push(login);
+      return isOwner(login);
+    };
+
+    threadsForRole([botThread()], spy, "the-app[bot]");
+
+    assert.deepEqual(looked, []);
+  });
+
+  it("keeps a session's reply under an owner login that isn't the host's out of what the role is shown", () => {
+    const later = { author: "copilot", byBot: true, body: "Still wrong.", url: "https://github.com/o/r/pull/7#discussion_r10" };
+    const thread = botThread({ comments: [...botThread().comments, sessionReply(), later] });
+
+    const { forRole } = threadsForRole([thread], isOwner, "the-app[bot]");
+
+    assert.equal(forRole.length, 1);
+    assert.ok(forRole[0]!.comments.every((comment) => !comment.body.includes(SESSION_REPLY_MARKER)));
+  });
+
+  it("still gives the role a thread when a stranger quotes the session marker, since only the owner's and the host's logins count", () => {
+    const spoofed = ownerThread({
+      comments: [...ownerThread().comments, { author: "stranger", byBot: false, body: `Noted.\n${SESSION_REPLY_MARKER}`, url: "" }],
+    });
+
+    const { forRole } = threadsForRole([spoofed], isOwner, SESSION);
+
+    assert.deepEqual(forRole.map((thread) => thread.threadId), ["RT_owner"]);
+  });
+});

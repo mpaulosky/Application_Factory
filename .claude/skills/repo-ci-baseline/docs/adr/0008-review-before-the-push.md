@@ -1,0 +1,35 @@
+# Every branch is reviewed on the developer's machine before it is pushed
+
+**Status:** accepted. Implemented in `template/owned/.claude/`, `template/owned/.sandcastle/lib/review-ledger.mts`, `template/owned/scripts/gate.sh`
+and `template/owned/docs/PROCESS.md` ([pre-push-review.md](../../references/pre-push-review.md)). The design and its first run are
+mpaulosky/auth0-management-app#82, mpaulosky/auth0-management-app#89 and mpaulosky/auth0-management-app#94.
+
+## Context
+
+Most of the review threads GitHub's reviewers opened on the Baseline repos' PRs were about behaviour a review before the push could have caught:
+auth0-management-app had 166 threads in three days, 160 of them from Claude Review. Each thread costs a push, a re-review and a hold on PR Auto-Merge.
+That repo moved the heavy review onto the developer's machine, before the push, and its GitHub reviews found far less.
+
+## Decisions
+
+- **The review runs before the push, and the gate enforces it.** `/pre-push-review` reviews the whole diff against `origin/main`; `scripts/gate.sh` refuses a
+  diff without a clean record. The record (a ledger under `.git/review/`, keyed by the branch's hunks) is a process aid, not a security boundary against the person.
+- **Findings are graded Critical, Warning or Advisory, and the review fixes all three.** Only bugs in code that runs, behaviour with no test, and security weaknesses
+  block, and only while one is left open for a person. Docs, comments and
+  conventions are fixed in the review or go to one follow-up issue, so a stale comment never blocks a push as hard as a bug.
+- **Only the person accepts a finding**, with `scripts/review.sh accept`. An acceptance never carries to a later review of different code.
+- **Reviewers are read-only and run at high effort.** The `pre-push-reviewer` agent has Read, Grep and Glob only, because the diff, issue and threads it reads
+  were written by people who may not have write access.
+- **It is Owned.** The skill, agent, ledger and gate step carry no per-repo values; the repo's name (`REPO_SLUG`) and its own files under Owned patterns
+  (`NOT_OWNED_BASELINE_PATHS`) are Seed values in `lib/repo-config.mts`. The ledger lives in `.sandcastle/lib/`, so Apply adds the review where it adds Sandcastle.
+- **Sandcastle's builds get the same rounds, run by the host.** After the reviewer role and a passing checkpoint 2, the host runs this skill's rounds with the skill's
+  own reviewers, verifies and triages their findings, has the backend role fix each fixable one behind a failing test, and records the ledger itself
+  (`lib/host-review.mts`). Every sandbox still sets `GATE_SKIP_REVIEW=1` and sees an empty folder over `.git/review`, since ledgers hold accepted security findings that are
+  never published: no agent gets a shell, a token or the ledger, and the host never runs the worktree's `scripts/review.sh`.
+  Open Critical or Warning findings (and any open security finding) hold the PR as a draft, with its body saying why, until a person accepts them and marks it ready; a review that didn't
+  finish holds it too, until the review is run again;
+  the host files the open Advisory findings in a follow-up issue,
+  and never writes a `## Review notes` section, since only a person's acceptances belong there.
+- **`.claude/settings.json` stays out of the Template.** The deny rules for `.git/review` and credential files are an adapting step instead.
+- **Claude Review (Copilot's backup, run while a PR carries `review:claude`) opens findings only for what a local review can't check, and reads the PR's Review notes**
+  ([ADR 0004](0004-claude-review-as-copilots-backup.md#claude-review-after-the-local-review)). Reviewing only what a push changed is not done yet; that is a separate change to `claude-review.yml`.
