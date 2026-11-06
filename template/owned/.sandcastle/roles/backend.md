@@ -40,10 +40,12 @@ Here are the last 10 commits:
 
 Explore the repo and fill your context window with relevant information that will allow you to complete the task.
 
-Read `CLAUDE.md` for how the repo is built and laid out, `docs/adr/` (where present) for recorded decisions, and `.sandcastle/CODING_STANDARDS.md` for the code standards
-(see the rules below).
+Read `CLAUDE.md` for how the repo is built and laid out, `docs/adr/` (where present) for recorded decisions, `.sandcastle/CODING_STANDARDS.md` where the repo has one for the code standards, and
+whatever else the rules below point to.
 
 Read the tester's commits on this branch first: their tests are the specification you implement.
+
+{{REPO_SKILLS}}
 
 # EXECUTION
 
