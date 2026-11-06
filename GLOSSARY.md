@@ -5,7 +5,7 @@ A personal system that creates new .NET application repositories on GitHub and k
 ## Language
 
 **Factory**:
-The Application Factory itself: the repo of skills, scripts and the rename pass that produces Applications from a Starter.
+The Application Factory itself: the source of truth for every Application. It holds the Template, the Fleet registry, the skills and scripts, and the rename pass that produces Applications from a Starter.
 _Avoid_: Generator, scaffolder, platform
 
 **Application**:
@@ -28,8 +28,12 @@ _Avoid_: Flavor, kind, archetype
 One folder under an Application's UI project holding everything a single use case needs, with no dependency on any other slice.
 _Avoid_: Module, feature folder, vertical
 
+**Template**:
+The Factory's source files for the Baseline, split into Owned files (overwritten on every Apply) and Seed files (written only if the Application has none).
+_Avoid_: Scaffold, skeleton, boilerplate
+
 **Baseline**:
-The shared set of CI, hooks, workflows and process files that every Application is expected to carry.
+The shared set of CI, hooks, workflows and process files that every Application carries, as produced by Applying the Template.
 _Avoid_: Standard, boilerplate
 
 **Starter**:
@@ -41,7 +45,7 @@ Copying the Baseline into an Application's repository.
 _Avoid_: Install, deploy, sync
 
 **Fleet**:
-The set of Applications the Factory manages.
+The set of Applications the Factory manages, listed in the Factory's registry.
 _Avoid_: Portfolio, estate
 
 **Drift**:

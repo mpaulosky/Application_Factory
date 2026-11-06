@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0005
 ---
 # The Factory calls repo-ci-baseline instead of absorbing it
 
