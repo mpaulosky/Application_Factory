@@ -74,3 +74,8 @@ jobs:
 
       - name: Run test.sh
         run: bash ".claude/skills/repo-ci-baseline/test.sh"
+
+      # Sandcastle's type-check and tests (.sandcastle/), on a throwaway repo the Template was Applied to. test.sh doesn't run
+      # it: it needs the network and takes the newest packages the Seed's ranges allow, as a new repo does.
+      - name: Check Sandcastle
+        run: bash ".claude/skills/repo-ci-baseline/tests/sandcastle-check.test.sh"
