@@ -8,12 +8,11 @@
 # (settings, the landing decision, status, land and rollout), the Claude Review
 # benchmark's tests, lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
-# Owned files carry no {{PLACEHOLDER}} and that the Owned scripts, and dotfiles' own
-# scripts and skills, tell every gh command its repository, checks dotfiles' copies of Owned files (its
-# .sandcastle/ and the hardening-review skill included) and the Seed Sandcastle files, and smoke-tests apply.sh and
-# reapply.sh against throwaway repos. dotfiles CI runs this on every change
+# Owned files carry no {{PLACEHOLDER}} and that the Owned scripts, and this repo's own
+# scripts and skills, tell every gh command its repository, checks the Seed Sandcastle files, and smoke-tests apply.sh and
+# reapply.sh against throwaway repos. The Application Factory's CI runs this on every change
 # under the skill, and it's the check to run before committing a Template
-# change.
+# change. A repo's copies of Owned files are checked by status.sh and apply.sh --dry-run, not here.
 set -euo pipefail
 # The step headers carry SECONDS: count from here, whatever SECONDS a caller exported (mpaulosky/dotfiles#417).
 SECONDS=0
@@ -115,7 +114,7 @@ step "shellcheck"
 shell_files=(
   "$skill_dir/apply.sh" "$skill_dir/reapply.sh" "$skill_dir/test.sh" "$skill_dir/github-settings.sh" "$skill_dir/status.sh"
   "$skill_dir/land.sh" "$skill_dir/rollout.sh"
-  "$skill_dir/tests/apply.test.sh" "$skill_dir/tests/reapply.test.sh" "$skill_dir/tests/dotfiles-gate.test.sh"
+  "$skill_dir/tests/apply.test.sh" "$skill_dir/tests/reapply.test.sh"
   "$skill_dir/tests/seed-check.test.sh" "$skill_dir/tests/seed-dependabot.test.sh"
   "$skill_dir/tests/seed-dockerfile.test.sh" "$skill_dir/tests/doc-single-source.test.sh"
   "$owned/scripts/gate.sh" "$owned/scripts/check-branch-name.sh" "$owned/scripts/tests/check-branch-name.test.sh"
@@ -214,11 +213,8 @@ step "gh commands in Owned scripts are told their repository"
 (cd "$skill_dir/tests/gh_repo" && "${pytest_cmd[@]}" -q -p no:cacheprovider .) || fail "gh_repo pytest"
 python3 -I "$owned/.github/scripts/check_gh_repo.py" "$owned/scripts" \
   || fail "export GH_REPO before an Owned script's first gh command, and give gh repo's subcommands their repository"
-# Every repo's gate runs the same check on the repo's own scripts and skills
-# (mpaulosky/dotfiles#321). dotfiles' gate runs this script, so this is where it
-# covers dotfiles' own, without a change to its scripts/gate.sh.
-python3 -I "$owned/.github/scripts/check_gh_repo.py" --repo "$(cd "$skill_dir/../../../.." && pwd)" \
-  || fail "tell every gh command in dotfiles' own scripts and skills its repository"
+# Every repo's gate runs the same check on the repo's own scripts and skills (mpaulosky/dotfiles#321), so the
+# Application Factory's gate will cover its own once it has any; this skill's scripts and docs are not "its own" in that sense.
 # The Seed files land in every Applied repo's scripts, .github/ci and skills, where
 # a repo's gate checks them with no Owned file to edit.
 python3 -I -B "$owned/.github/scripts/check_gh_repo.py" --repo "$seed" \
@@ -267,70 +263,14 @@ if git -C "$ignore_repo" check-ignore -q .sandcastle/.env.example; then
   fail ".sandcastle/.gitignore must not ignore .env.example"
 fi
 
-step "dotfiles' copies of Template files"
-# dotfiles isn't a Baseline repo, so it carries Claude Review, PR Auto-Merge,
-# PR Review Submitted, the Sandcastle workflow, the git hooks and Sandcastle's Owned files as copies of
-# the Template's files, which must not drift from them. Its scripts/gate.sh is
-# its own: it runs this script. Sandcastle's lib/repo-config.mts reads this list.
-dotfiles="$(cd "$skill_dir/../../../.." && pwd)"
-for file in .github/workflows/claude-review.yml .github/workflows/pr-automerge.yml .github/workflows/pr-review-submitted.yml \
-  .github/workflows/sandcastle.yml \
-  .github/scripts/post_claude_review.py \
-  .github/hooks/pre-commit .github/hooks/pre-push .github/hooks/post-checkout scripts/check-branch-name.sh \
-  scripts/review.sh scripts/watch-pr.sh .claude/agents/pre-push-reviewer.md .claude/skills/pre-push-review/SKILL.md \
-  .claude/skills/pre-push-review/lenses.md .claude/skills/pre-push-review/review-bar.md \
-  .claude/skills/hardening-review/SKILL.md .claude/skills/hardening-review/references/brief.md \
-  .claude/skills/hardening-review/references/mutations.md .claude/skills/hardening-review/references/state.md \
-  .claude/skills/hardening-review/references/triage.md .claude/skills/hardening-review/scripts/known_open.py \
-  .claude/skills/hardening-review/scripts/mutate.py \
-  .security/README.md \
-  .sandcastle/.env.example .sandcastle/.gitignore .sandcastle/.markdownlint-cli2.jsonc .sandcastle/check.sh .sandcastle/critique-prompt.md \
-  .sandcastle/intake-prompt.md .sandcastle/lib/agents.mts .sandcastle/lib/agents.test.mts .sandcastle/lib/branches.mts \
-  .sandcastle/lib/branches.test.mts .sandcastle/lib/build.mts .sandcastle/lib/build.test.mts .sandcastle/lib/building.mts \
-  .sandcastle/lib/building.test.mts .sandcastle/lib/checkpoint.mts .sandcastle/lib/checkpoint.test.mts .sandcastle/lib/config.mts \
-  .sandcastle/lib/config.test.mts .sandcastle/lib/critique.mts .sandcastle/lib/critique.test.mts .sandcastle/lib/diagnostics.mts .sandcastle/lib/diagnostics.test.mts .sandcastle/lib/errors.mts \
-  .sandcastle/lib/follow-up-pass.mts .sandcastle/lib/follow-up-pass.test.mts .sandcastle/lib/follow-up-run.mts .sandcastle/lib/follow-up-run.test.mts \
-  .sandcastle/lib/follow-up.mts \
-  .sandcastle/lib/follow-up.test.mts .sandcastle/lib/gate.mts .sandcastle/lib/gate.test.mts .sandcastle/lib/git-sandbox-fake.mts \
-  .sandcastle/lib/github.mts .sandcastle/lib/github.test.mts .sandcastle/lib/handback.mts .sandcastle/lib/handback.test.mts \
-  .sandcastle/lib/host-limit.mts .sandcastle/lib/host-limit.test.mts .sandcastle/lib/host-review-prompts.mts .sandcastle/lib/host-review-prompts.test.mts .sandcastle/lib/host-review.mts .sandcastle/lib/host-review.test.mts \
-  .sandcastle/lib/host-safety.mts .sandcastle/lib/host-safety.test.mts .sandcastle/lib/intake.mts .sandcastle/lib/intake.test.mts \
-  .sandcastle/lib/limits.mts .sandcastle/lib/limits.test.mts .sandcastle/lib/overlap.mts .sandcastle/lib/overlap.test.mts \
-  .sandcastle/lib/plain-text.mts .sandcastle/lib/plain-text.test.mts .sandcastle/lib/plan.mts .sandcastle/lib/plan.test.mts .sandcastle/lib/pre-push-review-skill.test.mts .sandcastle/lib/prompts.mts .sandcastle/lib/prompts.test.mts \
-  .sandcastle/lib/queue.mts .sandcastle/lib/queue.test.mts .sandcastle/lib/report.mts .sandcastle/lib/report.test.mts \
-  .sandcastle/lib/review-ledger.mts .sandcastle/lib/review-ledger.test.mts .sandcastle/lib/role-logs.mts .sandcastle/lib/role-logs.test.mts .sandcastle/lib/role-timeline.mts .sandcastle/lib/role-timeline.test.mts \
-  .sandcastle/lib/round.mts .sandcastle/lib/round.test.mts .sandcastle/lib/sandbox-env.mts .sandcastle/lib/sandbox-env.test.mts \
-  .sandcastle/lib/scan.mts .sandcastle/lib/scan.test.mts .sandcastle/lib/security-record.mts .sandcastle/lib/security-record.test.mts .sandcastle/lib/shell.mts .sandcastle/lib/shell.test.mts \
-  .sandcastle/lib/skills.mts .sandcastle/lib/skills.test.mts .sandcastle/lib/status.mts .sandcastle/lib/status.test.mts .sandcastle/lib/step-limit.mts .sandcastle/lib/step-limit.test.mts .sandcastle/lib/ui-role-fixture.mts .sandcastle/lib/ui-role-fixture.test.mts .sandcastle/lib/umbrella.mts .sandcastle/lib/umbrella.test.mts \
-  .sandcastle/lib/work.mts .sandcastle/lib/work.test.mts .sandcastle/main.mts \
-  .sandcastle/plan-prompt.md .sandcastle/review-prompt.md .sandcastle/roles/architect.md .sandcastle/roles/backend.md .sandcastle/roles/follow-up.md .sandcastle/roles/gate-fixer.md .sandcastle/roles/scribe.md .sandcastle/roles/tester.md .sandcastle/roles/ui.md \
-  .sandcastle/status.mts .sandcastle/status.test.mts .sandcastle/tsconfig.json; do
-  cmp -s "$owned/$file" "$dotfiles/$file" || fail "dotfiles' $file differs from the Template's; copy it over"
-  # The mode too: a hook that isn't executable doesn't run.
-  owned_x=no; dotfiles_x=no
-  [[ -x "$owned/$file" ]] && owned_x=yes
-  [[ -x "$dotfiles/$file" ]] && dotfiles_x=yes
-  [[ "$owned_x" == "$dotfiles_x" ]] || fail "dotfiles' $file is executable: $dotfiles_x, the Template's: $owned_x"
-done
-# Every Owned Sandcastle file, so a new one is checked before anyone lists it above.
-while IFS= read -r rel; do
-  cmp -s "$owned/.sandcastle/$rel" "$dotfiles/.sandcastle/$rel" \
-    || fail "dotfiles' .sandcastle/$rel differs from the Template's; copy it over"
-done < <(cd "$owned/.sandcastle" && find . -type f -printf '%P\n' | sort)
-# Likewise every file of the hardening-review skill.
-while IFS= read -r rel; do
-  cmp -s "$owned/.claude/skills/hardening-review/$rel" "$dotfiles/.claude/skills/hardening-review/$rel" \
-    || fail "dotfiles' .claude/skills/hardening-review/$rel differs from the Template's; copy it over"
-done < <(cd "$owned/.claude/skills/hardening-review" && find . -type f -printf '%P\n' | sort)
-
 step "The security record: its README is Owned, and the .gitignore keeps its entries out"
 # The review writes .security/NNNN-<slug>.md in the main checkout, one per security finding. The entries are local and never
 # published, so the Owned .gitignore ignores them (the README excepted, so it can be committed); the README is Owned, so Apply
 # keeps it current, and a re-Apply leaves the entries alone.
 [[ -f "$owned/.security/README.md" ]] || fail "the Template must carry .security/README.md as an Owned file"
 [[ ! -e "$seed/.security" ]] || fail "the Template's .security/README.md is Owned: the Seed must not carry a copy"
-[[ -f "$dotfiles/.security/README.md" ]] || fail "dotfiles must carry its own .security/README.md, a copy of the Template's"
-for ignore_file in "$owned/.gitignore" "$dotfiles/.gitignore"; do
+ignore_files=("$owned/.gitignore")
+for ignore_file in "${ignore_files[@]}"; do
   grep -qxF '.security/*' "$ignore_file" || fail "$ignore_file must ignore .security/*"
   grep -qxF '!.security/README.md' "$ignore_file" || fail "$ignore_file must keep .security/README.md"
   security_ignore="$md_tmp/security-ignore"
@@ -976,7 +916,6 @@ grep -qF -- '.claude/rules/sandcastle-hand-off.md' "$skill_dir/CONTEXT.md" \
 
 step "apply.sh smoke test"
 "$skill_dir/tests/apply.test.sh" || fail "apply.test.sh"
-"$skill_dir/tests/dotfiles-gate.test.sh" || fail "dotfiles-gate.test.sh"
 "$skill_dir/tests/seed-check.test.sh" || fail "seed-check.test.sh"
 "$skill_dir/tests/seed-dependabot.test.sh" || fail "seed-dependabot.test.sh"
 "$skill_dir/tests/seed-dockerfile.test.sh" || fail "seed-dockerfile.test.sh"
