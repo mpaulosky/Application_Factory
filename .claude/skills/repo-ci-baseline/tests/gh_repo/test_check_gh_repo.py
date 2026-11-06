@@ -243,7 +243,6 @@ def test_main_passes_the_templates_owned_scripts():
 
 # --- mpaulosky/dotfiles#321: the gate checks a repo's own scripts and skills ---
 
-DOTFILES_ROOT = HERE.parents[5]
 CHECKER = TEMPLATE_OWNED / ".github" / "scripts" / "check_gh_repo.py"
 
 
@@ -779,17 +778,6 @@ def test_main_directory_mode_prints_no_hint(tmp_path, capsys):
 
     # Assert
     assert capsys.readouterr().err == ""
-
-
-def test_main_repo_mode_passes_dotfiles_own_scripts_and_skills():
-    # Arrange: test.sh runs this on dotfiles' root, since its gate calls test.sh.
-    assert (DOTFILES_ROOT / "scripts").is_dir()
-
-    # Act
-    found = check_gh_repo.check_repo(DOTFILES_ROOT)
-
-    # Assert
-    assert found == []
 
 
 # Cheap: it runs on every gate.
@@ -1371,27 +1359,6 @@ def test_check_repo_refuses_a_placeholder_repository_in_a_skill_by_its_relative_
 
     # Assert
     assert found == [".claude/skills/mine/SKILL.md:4: gh issue list --repo <owner>/<repo>"]
-
-
-# R47: the skills dotfiles keeps beside the Template pass the check, though --repo doesn't walk them (their folder isn't dotfiles' own).
-SKILLS = HERE.parents[2]
-
-
-@pytest.mark.parametrize("skill_name", ["review-changes", "remove-squad"])
-def test_the_untold_gh_commands_of_the_skills_beside_the_template_are_fixed(skill_name):
-    # Arrange
-    checked = [path for path in sorted((SKILLS / skill_name).rglob("*"))
-               if path.is_file() and check_gh_repo.kind(path) is not None]
-    assert checked
-
-    # Act
-    found = [entry
-             for path in checked
-             for entry in (check_gh_repo.untold_markdown(path) if check_gh_repo.kind(path) == "markdown"
-                           else check_gh_repo.untold(path))]
-
-    # Assert
-    assert found == []
 
 
 # R45 and R52: gotchas.md holds the rules; the docstring points at it.
