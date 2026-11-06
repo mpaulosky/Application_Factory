@@ -1,0 +1,127 @@
+// ---------------------------------------------------------------------------
+// This repo's own Sandcastle values: each role's model and budget, the round
+// cap, the sandbox hooks, what's copied into the worktree, the host skills
+// mounted, the CI jobs scripts/gate.sh reproduces and the Template's root
+// copies. A Seed file: Apply writes it only into a repo that has none, so
+// each repo keeps its own. Every Owned module reads these names, so each one
+// must stay. It imports only types from lib/config.mts, which holds what
+// every Sandcastle repo shares and imports nothing from here.
+// ---------------------------------------------------------------------------
+
+import type { OptInRole, Role, RoleAgent } from "./config.mts";
+
+const sonnet = "claude-sonnet-5-5";
+
+// Every role's agent and budget, from the "Roles, models and budgets" table in
+// Blazor-Server's docs/plans/sandcastle-workflow.md. Every role runs Sonnet
+// (the owner moved them off Opus to cut cost; a role whose wrong answer costs a
+// whole round can be pointed back at an Opus model here). Structured-output
+// roles must stay at one iteration. A repo with Blazor components and pages
+// opts into the UI developer by uncommenting the `ui` entry at the end
+// (roles/ui.md and plan-prompt.md are Owned and already carry the role; the
+// repo names its UI files in a "UI developer" section of roles/shared-rules.md).
+export const ROLE_AGENTS = {
+  intake: { model: sonnet, effort: "medium", maxIterations: 1, timeoutMinutes: 15 },
+  planner: { model: sonnet, effort: "high", maxIterations: 1, timeoutMinutes: 15 },
+  critique: { model: sonnet, effort: "high", maxIterations: 1, timeoutMinutes: 15 },
+  architect: { model: sonnet, effort: "high", maxIterations: 1, timeoutMinutes: 15 },
+  tester: { model: sonnet, effort: "high", maxIterations: 3, timeoutMinutes: 45 },
+  backend: { model: sonnet, effort: "high", maxIterations: 10, timeoutMinutes: 45 },
+  scribe: { model: sonnet, effort: "medium", maxIterations: 1, timeoutMinutes: 15 },
+  reviewer: { model: sonnet, effort: "high", maxIterations: 1, timeoutMinutes: 15 },
+  "gate-fixer": { model: sonnet, effort: "high", maxIterations: 1, timeoutMinutes: 20 },
+  "follow-up": { model: sonnet, effort: "high", maxIterations: 1, timeoutMinutes: 30 },
+//   ui: { model: sonnet, effort: "high", maxIterations: 10, timeoutMinutes: 45 },
+} as const satisfies Record<Role, RoleAgent> & Partial<Record<OptInRole, RoleAgent>>;
+
+// Maximum number of plan→execute→merge cycles before stopping.
+// Raise this if your backlog is large; lower it for a quick smoke-test run.
+export const MAX_ITERATIONS = 10;
+
+// Hooks run inside the sandbox before the agent starts each iteration.
+// pnpm install ensures the sandbox always has fresh dependencies. The copied
+// node_modules records the host's pnpm store, so pnpm may rebuild it against
+// the sandbox's store; confirm-modules-purge=false lets it do that without a
+// TTY prompt.
+export const hooks = {
+  sandbox: {
+    onSandboxReady: [
+      { command: "pnpm install --frozen-lockfile --config.confirm-modules-purge=false" },
+    ],
+  },
+};
+
+// Copy node_modules from the host into the worktree before each sandbox
+// starts. Avoids a full pnpm install from scratch; the hook above handles
+// platform-specific binaries and any packages added since the last copy.
+export const copyToWorktree = ["node_modules"];
+
+// The host skills the role prompts tell the agent to use, from the host
+// user's ~/.claude/skills (lib/skills.mts mounts each one read-only). None by
+// default: name a skill here only when it isn't in the worktree and you also
+// list it in `roles/skills.md`, which the host passes to the tester, backend
+// and ui prompts as {{REPO_SKILLS}}; lib/skills.test.mts checks it.
+export const SANDBOX_SKILLS: readonly string[] = [];
+
+// The CI checks scripts/gate.sh reproduces, which a follow-up pass re-runs
+// once as flaky when the gate is green on the PR's head, rather than send
+// their log to the follow-up role (lib/follow-up-pass.mts#isGateCovered).
+// Name the ci.yml jobs whose work scripts/gate.sh repeats, the repo's test
+// jobs included. A rename of one of those jobs must change this too.
+export const GATE_COVERED_CHECKS: readonly string[] = ["Build Solution"];
+
+// The command the host runs in the sandbox as the gate: at each checkpoint, and
+// on a PR's head in a follow-up pass. The default is the Template's
+// scripts/gate.sh, which runs every test project. The sandbox has no Docker
+// daemon, so a repo whose tests start containers points this at a script that
+// leaves those out (such as .sandcastle/sandbox-gate.sh) and keeps its lints.
+export const GATE_COMMAND = "scripts/gate.sh";
+
+// How long the gate may run in the sandbox, in minutes, before the host kills it and counts the checkpoint
+// red (lib/step-limit.mts). Parallel builds share one host, so size it for the slowest gate under that load;
+// lib/config.test.mts adds it to the longest build when it checks BUILDING_LABEL_MAX_AGE_MS. A repo whose gate
+// takes a few minutes keeps the default.
+export const GATE_LIMIT_MINUTES = 10;
+
+// The committed file GATE_COMMAND runs. It is written in the worktree by the
+// agents whose work it judges, so a gate whose branch changes it fails without
+// running (lib/checkpoint.mts#gateScriptChange); a file that isn't committed at
+// the branch's base fails too. Name the script, not the interpreter or
+// arguments: `.sandcastle/sandbox-gate.sh` for `bash .sandcastle/sandbox-gate.sh`.
+export const GATE_SCRIPT = "scripts/gate.sh";
+
+// The paths whose files the gate and CI run: the scripts, the tests, the build
+// definition, and the workflows a `Sandcastle:local` build can change. An agent that edits one can make its own checks pass, so a PR
+// whose branch changes a file under them lists it in its body for the reviewer
+// (lib/build.mts#publish). Folders end in a slash. List every place the gate
+// reads its checks from, not only where its script sits.
+export const CHECK_PATHS: readonly string[] = [
+  ".sandcastle/",
+  "scripts/",
+  ".github/ci/",
+  ".github/workflows/",
+  ".github/scripts/check_gh_repo.py",
+  ".claude/skills/",
+  "package.json",
+];
+
+// This repository as OWNER/REPO, which the pre-push-review skill gives every gh
+// command as GH_REPO (`scripts/review.sh repo`): in a clone whose only remote is
+// a fork, gh's default repository is the fork. Apply fills it in. Keep both this and
+// NOT_OWNED_BASELINE_PATHS as a one-line `export const NAME` or `export let NAME`: Apply and
+// scripts/review.sh look for them that way.
+export const REPO_SLUG = "{{OWNER}}/{{REPO}}";
+
+// The files under an Owned Baseline pattern (see OWNED_PATHS in
+// lib/review-ledger.mts) that are this repository's own, not the Template's:
+// its own workflows, scripts and Sandcastle tests. A re-Apply that changes only
+// Owned files passes the local review's check, so a file listed here is
+// reviewed like any other.
+export const NOT_OWNED_BASELINE_PATHS: readonly string[] = [];
+
+// The Template's Owned folder and the Owned files the repo carries copies of
+// at the same path from its root, which lib/overlap.mts counts as one path
+// with their Template file. Only a repo that holds the Template itself lists
+// its root copies here; every other repo leaves both empty.
+export const TEMPLATE_OWNED_DIR = "";
+export const TEMPLATE_ROOT_COPIES: readonly string[] = [];

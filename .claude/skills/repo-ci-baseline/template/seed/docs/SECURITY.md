@@ -1,0 +1,42 @@
+# Security Policy
+
+## Supported Versions
+
+{{REPO}} releases from `main`, and only the latest release receives security fixes.
+A fix ships as a new release; earlier releases are not patched.
+
+## Reporting a Vulnerability
+
+**Please do not open a public issue for a security vulnerability.**
+
+Report it privately through
+[GitHub's private vulnerability reporting](https://github.com/{{OWNER}}/{{REPO}}/security/advisories/new).
+If that isn't available, email <matthew.paulosky@outlook.com> with the subject `[SECURITY] {{REPO}}`.
+
+Please include:
+
+1. A description of the vulnerability and its impact
+2. Steps to reproduce it
+3. The affected release or commit
+4. A suggested fix, if you have one
+
+## What to Expect
+
+- An acknowledgement within 7 days.
+- An assessment, and a plan for a fix if one is needed, once the report is confirmed.
+- Credit in the published advisory, unless you prefer to stay anonymous.
+
+Please keep the details private until a fix has been released.
+Fixed vulnerabilities are published in the repository's
+[security advisories](https://github.com/{{OWNER}}/{{REPO}}/security/advisories) and in the release notes.
+
+## Accepted security findings from the local review
+
+In a repository with the local review (`.sandcastle/lib/review-ledger.mts`), the pre-push review ([PROCESS.md](PROCESS.md)) never lists an accepted
+security finding in a public PR description: the notes only count them. The person who accepted one keeps its reason in the review's ledger under
+`.git/review` on their own machine, which is not shared, so they put the reason into a private report, as above, before pushing the branch.
+
+## Contributors
+
+- Never commit secrets, API keys or passwords; keep them in untracked local configuration and in repository or environment secrets for CI.
+- Keep dependencies current, act on Dependabot security alerts, and check for known vulnerabilities with the ecosystem's audit tool before a release.

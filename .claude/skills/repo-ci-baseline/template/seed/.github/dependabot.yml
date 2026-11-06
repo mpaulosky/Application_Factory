@@ -1,0 +1,124 @@
+# Dependabot version updates. Every label used below must exist in the repo:
+# Dependabot doesn't create them, and silently leaves them off the PR.
+# This file is Seed, so it belongs to the repo: add its other ecosystems and
+# its own ignores here, and drop an ecosystem the repo doesn't use. The npm
+# block covers pnpm too (it reads pnpm-lock.yaml) and suits a repo with a root
+# package.json, as every Sandcastle repo has. A repo with none, such as a plain
+# .NET repo, drops the block: Dependabot's npm updater would report
+# dependency_file_not_found every week.
+# https://docs.github.com/code-security/dependabot/working-with-dependabot/dependabot-options-reference
+---
+
+version: 2
+updates:
+
+  # Maintain dependencies for GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "16:00"
+    open-pull-requests-limit: 10
+    # Conventional commits, like the repo's own: "chore(deps): bump ...".
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    # Wait a week before proposing a new release, so a compromised or broken
+    # one is usually caught upstream before it reaches a PR here.
+    cooldown:
+      default-days: 7
+    # The Template pins claude-code-action to the version claude-review.yml's
+    # sandbox notes were checked against. It moves only through the Template,
+    # once they're checked again (mpaulosky/dotfiles#228).
+    ignore:
+      - dependency-name: "anthropics/claude-code-action"
+    labels:
+      - "github-actions"
+      - "dependencies"
+    groups:
+      all-actions:
+        patterns:
+          - "*"
+
+  # Maintain dependencies for nuget
+  - package-ecosystem: "nuget"
+    directory: "/"
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "16:00"
+    open-pull-requests-limit: 10
+    # Conventional commits, like the repo's own: "chore(deps): bump ...".
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    # Wait a week before proposing a new release, so a compromised or broken
+    # one is usually caught upstream before it reaches a PR here.
+    cooldown:
+      default-days: 7
+    labels:
+      - "nuget"
+      - "dependencies"
+    groups:
+      # Testcontainers modules only work with the matching core version,
+      # so they always move together. A dependency joins the first group
+      # that matches it, so this group stays ahead of all-nuget.
+      testcontainers:
+        patterns:
+          - "Testcontainers*"
+      all-nuget:
+        patterns:
+          - "*"
+
+  # Maintain DotNet Sdk
+  - package-ecosystem: "dotnet-sdk"
+    directory: "/"
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "16:00"
+    open-pull-requests-limit: 10
+    # Conventional commits, like the repo's own: "chore(deps): bump ...".
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    # Wait a week before proposing a new release, so a compromised or broken
+    # one is usually caught upstream before it reaches a PR here.
+    cooldown:
+      default-days: 7
+    labels:
+      - "dotnet-sdk"
+      - "dependencies"
+    groups:
+      dotnet-sdk:
+        patterns:
+          - "*"
+
+  # Maintain dependencies for npm (the root package.json and pnpm lockfile)
+  - package-ecosystem: "npm"
+    directory: "/"
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "16:00"
+    open-pull-requests-limit: 10
+    # Conventional commits, like the repo's own: "chore(deps): bump ...".
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    # Wait a week before proposing a new release, so a compromised or broken
+    # one is usually caught upstream before it reaches a PR here.
+    cooldown:
+      default-days: 7
+    labels:
+      - "dependencies"
+      - "npm"
+    groups:
+      all-npm:
+        patterns:
+          - "*"
