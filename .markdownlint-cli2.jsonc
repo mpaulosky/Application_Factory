@@ -1,0 +1,15 @@
+// markdownlint-cli2 config for the Factory's own Markdown (CLAUDE.md, README.md, GLOSSARY.md, docs/), used by the pre-commit
+// hook. The repo-ci-baseline skill lints its own files under the Template's config in test.sh; this one keeps the same rules
+// for everything else.
+{
+  "config": {
+    "default": true,
+    // Lines up to 200 characters; tables and code blocks can't wrap.
+    "MD013": { "line_length": 200, "tables": false, "code_blocks": false },
+    "MD010": { "code_blocks": false },
+    "MD025": { "front_matter_title": "" }
+  },
+  // The Template's Seed .sandcastle/ Markdown uses the Sandcastle config (inline tags, one heading per
+  // section); test.sh lints it under that config, as Apply writes it.
+  "ignores": ["**/node_modules/**", "**/.pytest_cache/**", ".claude/skills/repo-ci-baseline/template/seed/.sandcastle/**"]
+}
