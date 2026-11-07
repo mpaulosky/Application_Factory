@@ -13,6 +13,9 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   `test.sh` and `tests/` test all of it.
 - `.claude/skills/`: also the shared skills (`build-repair`, `dotnet-*`, `remove-squad`, `review-changes`), and `starting-points/`: the optional app-stack files
   (`.aspire/`, `.github/instructions/`, the `beast` agent, the `code-review` skill) that `docs/Instructions.md` Part C says to copy into an Application. ADR 0007.
+- `.claude/rules/sandcastle.md`: the rules for writing the Template's Sandcastle code (loaded when you edit `template/**/.sandcastle/**`). The tests about the Template itself
+  (`owned-paths`, `template`, `seed-config` and `template-prompts`) are in the skill's `tests/sandcastle/`; `tests/sandcastle-check.test.sh` copies them into a repo the Template was
+  Applied to and runs them there. They ran in `dotfiles` before the Template moved.
 - `docs/adr/`: the Factory's decisions. `docs/Instructions.md`: the steps for setting up a new Application or standardizing an existing one.
 - `.github/workflows/template-tests.yml`: the Factory's only workflow. It runs `test.sh` and the Sandcastle check on every PR.
 - `.github/hooks/` (`pre-commit`, `pre-push`, `post-checkout`) and `scripts/check-branch-name.sh`: copies of the Template's Owned files. Edit the Template's
