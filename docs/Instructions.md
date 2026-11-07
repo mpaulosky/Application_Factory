@@ -28,7 +28,9 @@ cd [ProjectName]
 
 Run the rename pass on a branch in a worktree. ADR 0004 says it covers the solution name (`[ProjectName].slnx`, so `{{SOLUTION}}`
 gets filled in), file headers, the Auth0 role-claim namespace, `UserSecretsId` (a new GUID, see Part D), and the README and `CLAUDE.md`
-text that describes the repo as the Starter. It isn't scripted yet, so do it by hand.
+text that describes the repo as the Starter. It also covers the Starter's `.sandcastle/lib/repo-config.mts`: Apply skips an existing Seed
+file, so set `REPO_SLUG` to `mpaulosky/[ProjectName]` and change the solution entry (`Blazor-Server.slnx`) to the new solution by hand,
+or local review's `gh` commands target the Starter. It isn't scripted yet, so do it by hand, and follow Part B3 before pushing.
 
 ```bash
 git worktree add -b chore/create-application ../[ProjectName]-worktrees/chore-create-application origin/main
@@ -58,7 +60,8 @@ dangling), a Baseline repo's `core.hooksPath` overrides them anyway, and in any 
 
 ### A4. Secrets, Settings and PR
 
-Add the repo's two required secrets. `github-settings.sh` only reports a missing one; it can't add it:
+Check the repo has its two required secrets (`gh secret list --repo mpaulosky/[ProjectName]`) and add any that is missing.
+`github-settings.sh` only reports a missing one; it can't add it:
 
 ```bash
 gh secret set RELEASE_PR_PAT --repo mpaulosky/[ProjectName]
@@ -147,16 +150,21 @@ the Starter yet), so take them from there.
 
 ## Part D: Configure Auth0 for Web Projects
 
-Give each Application its own `UserSecretsId`, so Applications don't share one local secret store. In the Web project's `Web.csproj`, set it
-to a new GUID (the rename pass does this for a new Application):
+Give each Application its own `UserSecretsId`, so Applications don't share one local secret store. Set the same new GUID in both
+`src/UI/UI.csproj` and `src/AppHost/AppHost.csproj`: the AppHost reads the Auth0 parameters from the UI's store and passes them to the UI as
+environment variables, so changing only one leaves Aspire runs on the old shared store. The rename pass does this for a new Application.
 
 ```xml
 <UserSecretsId>[new GUID, from `uuidgen`]</UserSecretsId>
 ```
 
-The ID alone configures nothing. On each developer machine, set the Application's Auth0 values in its own store, copying the keys and values
-from an existing Application (`dotnet user-secrets list --project [existing Web project]`):
+The ID alone configures nothing. On each developer machine, set the Application's Auth0 values in its own store, copying them from an existing
+Application (`dotnet user-secrets list --project src/UI`):
 
 ```bash
-dotnet user-secrets set "[key]" "[value]" --project [Web project]
+dotnet user-secrets set "Auth0:Domain" "[value]" --project src/UI
+dotnet user-secrets set "Auth0:ClientId" "[value]" --project src/UI
+dotnet user-secrets set "Auth0:ClientSecret" "[value]" --project src/UI
 ```
+
+The AppHost also reads `Auth0:RoleClaimType` from configuration; set it the same way if the existing Application has it.
