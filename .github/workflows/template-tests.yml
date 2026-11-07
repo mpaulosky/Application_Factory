@@ -13,6 +13,8 @@ name: Template tests
     paths:
       - ".claude/skills/repo-ci-baseline/**"
       - ".github/workflows/template-tests.yml"
+      - ".github/hooks/**"
+      - "scripts/**"
   workflow_dispatch:
 
 permissions:
@@ -72,8 +74,10 @@ jobs:
           tar -xzf "$archive" -C "$HOME/.local/bin" actionlint
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Run test.sh
-        run: bash ".claude/skills/repo-ci-baseline/test.sh"
+      # The same gate the pre-push hook runs: scripts/gate.sh's own test, the check that the Factory's copies of Template files
+      # match the Template's, then test.sh. A push from a clone without active hooks is still held to the copies.
+      - name: Run the gate
+        run: bash "scripts/gate.sh"
 
       # Sandcastle's type-check and tests (.sandcastle/), on a throwaway repo the Template was Applied to. test.sh doesn't run
       # it: it needs the network and takes the newest packages the Seed's ranges allow, as a new repo does.

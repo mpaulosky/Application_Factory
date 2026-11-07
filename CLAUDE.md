@@ -15,7 +15,8 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
 - `.github/workflows/template-tests.yml`: the Factory's only workflow. It runs `test.sh` and the Sandcastle check on every PR.
 - `.github/hooks/` (`pre-commit`, `pre-push`, `post-checkout`) and `scripts/check-branch-name.sh`: copies of the Template's Owned files. Edit the Template's
   file and copy it over; `scripts/gate.sh` fails when a copy drifts.
-- `scripts/gate.sh`: the Factory's own pre-push gate. It checks those copies, then runs `test.sh`. [ADR 0006](docs/adr/0006-the-factory-carries-the-git-hooks-and-a-gate.md).
+- `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too. It runs its own test (`scripts/tests/gate.test.sh`), checks those copies, then runs `test.sh`. [ADR
+  0006](docs/adr/0006-the-factory-carries-the-git-hooks-and-a-gate.md).
 - `~/.claude/skills/repo-ci-baseline` is a symlink to the skill here, so editing it changes what `apply.sh` copies everywhere.
 
 The Factory carries only the git hooks and a gate of its own (ADR 0006), not the Baseline: no `.sandcastle/`, local review, Claude Review, PR Auto-Merge, .NET workflows or `package.json`. Don't
@@ -24,13 +25,14 @@ add them without an ADR.
 ## Commands
 
 ```bash
-scripts/gate.sh                                               # the pre-push gate: the copies' drift check, then test.sh
+scripts/gate.sh                                               # the pre-push gate: its test, the copies' drift check, then test.sh
 .claude/skills/repo-ci-baseline/test.sh                       # all the Template's tests; needs actionlint, zizmor, yamllint, shellcheck, markdownlint-cli2, node, git
 .claude/skills/repo-ci-baseline/tests/sandcastle-check.test.sh # Sandcastle's type-check and tests on a throwaway Application; needs pnpm and the network
 .claude/skills/repo-ci-baseline/apply.sh --dry-run <repo>      # what Apply would write into an Application; writes nothing
 ```
 
-CI runs both test scripts. The pre-push hook runs `scripts/gate.sh` (which runs `test.sh`) on every push; the second is slower, so run it when you changed `template/**/.sandcastle/`
+CI runs `scripts/gate.sh` and the Sandcastle check, so a push from a clone without hooks is gated too. The pre-push hook runs `scripts/gate.sh` on every push; the second is slower, so run it when
+you changed `template/**/.sandcastle/`
 or the Seed `package.json`.
 
 ## Working on the Template

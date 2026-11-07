@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The Application Factory's pre-push gate, run by .github/hooks/pre-push (a copy of the Template's) and safe to run by hand.
-# The Factory isn't a .NET repo, so its gate is what its CI runs: first that its copies of Template files haven't drifted
+# The Factory isn't a .NET repo, so its gate is what its CI runs: first this script's own test, then that its copies of Template files haven't drifted
 # from the Template (ADR 0006), then the repo-ci-baseline skill's test.sh. This script is the Factory's own, not a copy of
 # the Template's scripts/gate.sh.
 set -euo pipefail
@@ -24,6 +24,12 @@ copies=(
   .github/hooks/post-checkout
   scripts/check-branch-name.sh
 )
+
+# The test runs this script against throwaway repos, with GATE_SKIP_SELF_TEST=1 so those runs don't test themselves again.
+if [[ "${GATE_SKIP_SELF_TEST:-}" != "1" ]]; then
+  echo -e "\n${CYAN}▶ scripts/tests/gate.test.sh${RESET}"
+  "$ROOT/scripts/tests/gate.test.sh"
+fi
 
 echo -e "\n${CYAN}▶ Copies of Template files${RESET}"
 drifted=()
