@@ -144,16 +144,15 @@ first.
 
 ## Part C: Optional App-Stack Starting Points
 
-These aren't part of the Baseline. Copy the ones that fit, and rewrite them for the project; they were written for
-IssueTracker. They still live in `mpaulosky/dotfiles` under `Support For New Projects/` (they haven't moved to the Factory or
-the Starter yet), so take them from there.
+These aren't part of the Baseline. Copy the ones that fit from `starting-points/` in the Factory, and rewrite them for the project; they were
+written for IssueTracker. They sit under `starting-points/` so GitHub doesn't read them as this repo's own `.github/`.
 
-- [ ] `.aspire/` for an Aspire app
-- [ ] `.github/instructions/blazor.instructions.md` for a Blazor UI
-- [ ] `.github/instructions/dotnet-project.instructions.md`
-- [ ] `.github/instructions/mongo-dba.instructions.md` for MongoDB
-- [ ] `.github/skills/code-review/` (a repo skill; see `.claude/skills/README.md` in the repo)
-- [ ] `.github/agents/beast.agent.md`
+- [ ] `starting-points/.aspire/` for an Aspire app
+- [ ] `starting-points/.github/instructions/blazor.instructions.md` for a Blazor UI
+- [ ] `starting-points/.github/instructions/dotnet-project.instructions.md`
+- [ ] `starting-points/.github/instructions/mongo-dba.instructions.md` for MongoDB
+- [ ] `starting-points/.github/skills/code-review/` (a repo skill; see `.claude/skills/README.md` in the Application)
+- [ ] `starting-points/.github/agents/beast.agent.md`
 
 ## Part D: Configure Auth0 for Web Projects
 
