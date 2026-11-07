@@ -15,7 +15,8 @@ const sandboxOf = (exec: (command: string) => Promise<Result>) =>
   ({ exec: (async (command: string) => ({ stderr: "", ...(await exec(command)) })) as unknown as Exec }) as Pick<Sandbox, "exec">;
 
 const hasTimeout = spawnSync("timeout", ["--version"]).status === 0;
-const hasPs = spawnSync("ps", ["-e"]).error === undefined;
+// The exact form the zombie test uses: a `ps` that exists but rejects it (not procps-ng) must skip the test, not fail it.
+const hasPs = spawnSync("ps", ["-eo", "ppid=,stat="]).status === 0;
 
 describe("logSandboxState", () => {
   it("logs the probe's output under the reason", async () => {
