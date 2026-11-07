@@ -18,7 +18,8 @@ These rules were `dotfiles`' when the Template lived there; the rule file there 
 ## Writing the code
 
 - **Edit the Template's file.** An Owned file reaches an Application by Apply, and `dotfiles` keeps copies of them: change the Template here, then say in the PR how it should
-  roll out. `tests/sandcastle-check.test.sh` and `test.sh` run the Owned tests against the Seed's values, so an Owned module that reads a value only one repo has fails here.
+  roll out. `tests/sandcastle-check.test.sh` runs the Owned tests against the Seed's values, so an Owned module that reads a value only one repo has fails there. `test.sh` doesn't run
+  them (it needs pnpm and the network), so run the Sandcastle check itself after a change to an Owned module.
 - **Per-repo values go in `lib/repo-config.mts`,** the Seed file each repo fills. `lib/config.mts` holds only what every
   Sandcastle repo shares and never imports it. An Owned test reads a per-repo value from `repo-config.mts`, or the code
   under test takes it as a parameter, and never pins one repo's value.
