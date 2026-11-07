@@ -13,19 +13,26 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   `test.sh` and `tests/` test all of it.
 - `docs/adr/`: the Factory's decisions. `docs/Instructions.md`: the steps for setting up a new Application or standardizing an existing one.
 - `.github/workflows/template-tests.yml`: the Factory's only workflow. It runs `test.sh` and the Sandcastle check on every PR.
+- `.github/hooks/` (`pre-commit`, `pre-push`, `post-checkout`) and `scripts/check-branch-name.sh`: copies of the Template's Owned files. Edit the Template's
+  file and copy it over; `scripts/gate.sh` fails when a copy drifts.
+- `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too. It runs its own test (`scripts/tests/gate.test.sh`), checks those copies, then runs `test.sh`. [ADR
+  0006](docs/adr/0006-the-factory-carries-the-git-hooks-and-a-gate.md).
 - `~/.claude/skills/repo-ci-baseline` is a symlink to the skill here, so editing it changes what `apply.sh` copies everywhere.
 
-The Factory doesn't carry the Baseline itself: no `.sandcastle/`, hooks, `scripts/gate.sh` or `package.json`. Don't add them without an ADR.
+The Factory carries only the git hooks and a gate of its own (ADR 0006), not the Baseline: no `.sandcastle/`, local review, Claude Review, PR Auto-Merge, .NET workflows or `package.json`. Don't
+add them without an ADR.
 
 ## Commands
 
 ```bash
+scripts/gate.sh                                               # the pre-push gate: its test, the copies' drift check, then test.sh
 .claude/skills/repo-ci-baseline/test.sh                       # all the Template's tests; needs actionlint, zizmor, yamllint, shellcheck, markdownlint-cli2, node, git
 .claude/skills/repo-ci-baseline/tests/sandcastle-check.test.sh # Sandcastle's type-check and tests on a throwaway Application; needs pnpm and the network
 .claude/skills/repo-ci-baseline/apply.sh --dry-run <repo>      # what Apply would write into an Application; writes nothing
 ```
 
-CI runs both test scripts. Run `test.sh` before every push; the second is slower, so run it when you changed `template/**/.sandcastle/`
+CI runs `scripts/gate.sh` and the Sandcastle check, so a push from a clone without hooks is gated too. The pre-push hook runs `scripts/gate.sh` on every push; the second is slower, so run it when
+you changed `template/**/.sandcastle/`
 or the Seed `package.json`.
 
 ## Working on the Template
@@ -39,6 +46,10 @@ or the Seed `package.json`.
 ## Git workflow
 
 Branches are `feature/{issue}-{slug}`, `fix/{issue}-{slug}`, `hotfix/{issue}-{slug}` or `chore/{slug}`. Commit subjects are
-`<type>(<scope>): <Summary>`, with the scope `baseline` for the Template. Work in a worktree, not on `main`.
+`<type>(<scope>): <Summary>`, with the scope `baseline` for the Template.
+
+Commit in a linked worktree under `../Application_Factory-worktrees/`: `pre-commit` refuses a commit in the primary checkout, and `pre-push` refuses a push
+to `main`, a bad branch name, a dirty tree or a branch behind `origin/main`. In each clone, turn the hooks on once with `git config core.hooksPath .github/hooks`.
+Start a branch with `git worktree add -b <branch> ../Application_Factory-worktrees/<folder> origin/main`, where `<folder>` is the branch with `/` as `-`.
 
 Markdown is linted with `.markdownlint-cli2.jsonc` (lines up to 200 characters).

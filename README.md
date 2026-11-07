@@ -34,7 +34,8 @@ is the reference. `reapply.sh --brings <prs> <repo>` re-Applies the Baseline to 
 
 ## Working on the Factory
 
-Edit the Template, not an Application's copy of an Owned file. Run the tests before pushing:
+Edit the Template, not an Application's copy of an Owned file. Turn the git hooks on once per clone with `git config core.hooksPath .github/hooks`, and commit in a worktree. The pre-push hook
+runs `scripts/gate.sh`; to run the tests by hand:
 
 ```bash
 .claude/skills/repo-ci-baseline/test.sh
