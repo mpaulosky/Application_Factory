@@ -1,6 +1,6 @@
 ---
 name: dotnet-add-testing
-description: "Scaffolding tests into an existing .NET solution: xUnit v3 test projects, tests/ layout, CPM test packages, coverlet coverage. Use when adding a unit or integration test project, or setting up code coverage."
+description: "Scaffolding tests into an existing .NET solution: xUnit v3 test projects, tests/ layout, CPM test packages, Microsoft Testing Platform coverage. Use when adding a unit or integration test project, or setting up code coverage."
 ---
 
 # .NET Add Testing
@@ -38,6 +38,10 @@ Suffixes:
 - `*.Integration.Tests`: real infrastructure (database, HTTP, file system)
 - `*.E2E.Tests`: through the full application stack
 
+Baseline Applications put `dotnet test` on Microsoft Testing Platform (MTP) in `global.json`, so every test project uses
+`xunit.v3.mtp-v2` and `Microsoft.Testing.Extensions.CodeCoverage`, not the VSTest pieces `xunit.runner.visualstudio` and
+`coverlet.collector` (the repo-ci-baseline skill's `references/adapt.md#test-runner`).
+
 ## Step 1: Create the test project
 
 ```bash
@@ -56,9 +60,8 @@ come from `Directory.Build.props` (Step 2); under CPM, versions come from
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
-    <PackageReference Include="xunit.v3" />
-    <PackageReference Include="xunit.runner.visualstudio" />
-    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
+    <PackageReference Include="xunit.v3.mtp-v2" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Core\Core.csproj" />
@@ -94,12 +97,14 @@ Import the root props (shared `Nullable`, `ImplicitUsings`, `LangVersion`) and o
 ```xml
 <!-- Directory.Packages.props -->
 <ItemGroup>
-  <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
-  <PackageVersion Include="xunit.v3" Version="3.2.2" />
-  <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
-  <PackageVersion Include="coverlet.collector" Version="8.0.0" />
+  <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+  <PackageVersion Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.12.0" />
+  <PackageVersion Include="xunit.v3.mtp-v2" Version="4.0.2" />
 </ItemGroup>
 ```
+
+These are the versions TicketManager and IssueManager pin; if the solution already pins any of them, keep its version. Under CPM with
+transitive pinning, a `Microsoft.Testing.*` pin below what `xunit.v3.mtp-v2` needs fails restore with NU1109 (`adapt.md#test-runner`).
 
 Only if the project needs them: `NSubstitute` `5.3.0` for test doubles, `FluentAssertions` `8.0.1` for assertions.
 
@@ -159,13 +164,12 @@ public class SampleServiceTests
 dotnet restore                              # regenerates CPM lock files
 dotnet build --no-restore
 dotnet test --no-build
-dotnet test --collect:"XPlat Code Coverage" # writes TestResults/*/coverage.cobertura.xml
+dotnet test --no-build --coverage --coverage-output-format cobertura --coverage-output unit.cobertura.xml
 ```
 
 Done when the build has zero errors, every new test project runs and passes,
-and a `coverage.cobertura.xml` exists for each. `coverlet.collector` needs no
-further configuration for this. For CI coverage thresholds or HTML reports, see
-[COVERAGE.md](COVERAGE.md).
+and a `*.cobertura.xml` file exists for each (under the project's `TestResults/` folder). Do not use `--collect`; it is VSTest's option and
+MTP rejects it. For the CI coverage gate or an HTML report, see [COVERAGE.md](COVERAGE.md).
 
 ## Integration test projects
 

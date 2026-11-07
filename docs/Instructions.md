@@ -151,7 +151,8 @@ written for IssueTracker. They sit under `starting-points/` so GitHub doesn't re
 - [ ] `starting-points/.github/instructions/blazor.instructions.md` for a Blazor UI
 - [ ] `starting-points/.github/instructions/dotnet-project.instructions.md`
 - [ ] `starting-points/.github/instructions/mongo-dba.instructions.md` for MongoDB
-- [ ] `starting-points/.github/skills/code-review/` (a repo skill; see `.claude/skills/README.md` in the Application)
+- [ ] `starting-points/.claude/skills/code-review/`, into the Application's `.claude/skills/code-review/` (that path, not `.github/skills/`: the local review, Sandcastle and
+      `scripts/sync-copilot-review.sh` read it there). Then run `scripts/sync-copilot-review.sh` to generate `.github/copilot-instructions.md`, and commit both.
 - [ ] `starting-points/.github/agents/beast.agent.md`
 
 ## Part D: Configure Auth0 for Web Projects

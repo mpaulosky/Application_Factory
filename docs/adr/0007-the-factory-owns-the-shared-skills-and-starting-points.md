@@ -4,7 +4,7 @@ status: accepted
 # The Factory owns the shared skills and the starting points
 
 The sibling skills (`build-repair`, `dotnet-add-testing`, `dotnet-inspect`, `dotnet-project-analysis`, `dotnet-tdd`, `dotnet-testing-strategy`, `dotnet-xunit`, `remove-squad`, `review-changes`)
-and the optional app-stack files (`.aspire/`, `.github/instructions/`, `.github/agents/beast.agent.md`, `.github/skills/code-review/`) lived in `dotfiles` under `Support For New Projects/` beside
+and the optional app-stack files (`.aspire/`, `.github/instructions/`, `.github/agents/beast.agent.md`, `.claude/skills/code-review/`) lived in `dotfiles` under `Support For New Projects/` beside
 the Template. ADR 0005 moved only `repo-ci-baseline`. The Factory now owns the rest too: the skills are in `.claude/skills/` and the starting points are in `starting-points/`, which keeps GitHub
 from treating the copied `.github/` files as this repo's own. They are copied without history. It builds on ADR 0005.
 

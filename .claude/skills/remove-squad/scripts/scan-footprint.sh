@@ -45,7 +45,7 @@ git grep -il "$term" -- . \
 section "Untracked or ignored files mentioning the framework (runtime state)"
 # --ignored with --others lists only the ignored files, so list the ordinary untracked ones separately.
 { git ls-files --others --exclude-standard -z 2>/dev/null; git ls-files --others --ignored --exclude-standard -z 2>/dev/null; } \
-  | xargs -0 -r grep -il "$term" 2>/dev/null | head -50 || true
+  | xargs -0 -r grep -il "$term" 2>/dev/null || true
 find . -path ./.git -prune -o -iname "*${term}*" -print 2>/dev/null \
   | while read -r f; do git ls-files --error-unmatch "$f" >/dev/null 2>&1 || echo "$f"; done
 
@@ -62,7 +62,12 @@ elif command -v gh >/dev/null 2>&1; then # gh-repo: ok
     echo "-- open issues/PRs carrying those labels --"
     while IFS= read -r l; do
       [ -n "$l" ] || continue
-      n="$(GH_REPO="${repo:?}" gh issue list --state open --label "$l" --json number --jq 'length' 2>/dev/null || echo '?')"
+      # The issues endpoint lists pull requests too, and is paginated; `gh issue list` leaves PRs out and stops at 30.
+      if pages="$(GH_REPO="${repo:?}" gh api -X GET "repos/${repo:?}/issues" -f state=open -f labels="$l" -f per_page=100 --paginate --jq 'length' 2>/dev/null)"; then
+        n="$(awk '{ s += $1 } END { print s + 0 }' <<<"$pages")"
+      else
+        n='?'
+      fi
       echo "$l: $n open"
     done <<<"$matching"
   else
