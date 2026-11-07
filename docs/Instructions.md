@@ -78,6 +78,13 @@ GitHub settings (merge settings, ruleset, required checks, labels, Actions and s
 
 Land the PR as Part B4 describes, and run the settings script again once it merges: required checks are added only once `main` reports them.
 
+### A5. Register in the Fleet
+
+Neither Apply nor `github-settings.sh` adds the Application to the Fleet registry, which `status.sh`, `rollout.sh` and `github-settings.sh --all`
+read. Open a Factory PR that adds `mpaulosky/[ProjectName]` as a line to `.claude/skills/repo-ci-baseline/github/repos.txt`, after the
+repos already there (the list is in rollout order). Do it once the Application's first Baseline PR has merged, so a Rollout finds a checkout
+of a repo that carries the Baseline.
+
 ## Part B: Standardize an Existing Repo
 
 One repo, one PR. If the repo still has squad installed (`.squad/` or `squad-*` workflows), run the `remove-squad`
