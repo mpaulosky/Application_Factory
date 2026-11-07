@@ -49,10 +49,11 @@ public class CounterTests : TestContext
 }
 ```
 
-Inherit the test class from bUnit's `TestContext` (or use
-`IClassFixture<TestContext>` if the class already has another base). Register
-stubbed services on `Services` in Arrange, the same way you would configure a DI
-container:
+Inherit the test class from bUnit's `TestContext`. If the class already has another base, create
+and dispose a fresh context in each test (`using var ctx = new TestContext();`) rather than sharing one through
+`IClassFixture<TestContext>`: once a render builds the service provider, later tests can't register services, and rendered
+components and service state would carry over between tests. Register stubbed services on `Services` in Arrange, the same
+way you would configure a DI container:
 
 ```csharp
 // Arrange

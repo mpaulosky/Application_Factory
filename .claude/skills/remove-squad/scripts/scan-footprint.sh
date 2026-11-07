@@ -43,7 +43,8 @@ git grep -il "$term" -- . \
   ':!.github/hooks/*' ':!.githooks/*' ':!scripts/*' ":!.${term}/*" 2>/dev/null || echo "(none)"
 
 section "Untracked or ignored files mentioning the framework (runtime state)"
-git ls-files --others --exclude-standard --ignored -z 2>/dev/null \
+# --ignored with --others lists only the ignored files, so list the ordinary untracked ones separately.
+{ git ls-files --others --exclude-standard -z 2>/dev/null; git ls-files --others --ignored --exclude-standard -z 2>/dev/null; } \
   | xargs -0 -r grep -il "$term" 2>/dev/null | head -50 || true
 find . -path ./.git -prune -o -iname "*${term}*" -print 2>/dev/null \
   | while read -r f; do git ls-files --error-unmatch "$f" >/dev/null 2>&1 || echo "$f"; done

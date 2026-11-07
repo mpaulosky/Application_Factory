@@ -66,6 +66,9 @@ come from `Directory.Build.props` (Step 2); under CPM, versions come from
 </Project>
 ```
 
+This assumes the root `Directory.Build.props` sets `TargetFramework`. If the solution sets it in each `.csproj` instead, add
+`<TargetFramework>` to this file too, matching the project it references.
+
 ## Step 2: Add `tests/Directory.Build.props`
 
 Import the root props (shared `Nullable`, `ImplicitUsings`, `LangVersion`) and override for tests:
@@ -77,6 +80,8 @@ Import the root props (shared `Nullable`, `ImplicitUsings`, `LangVersion`) and o
   <PropertyGroup>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <!-- xUnit v3 test projects are standalone executables; a root default of a class library can't run them -->
+    <OutputType>Exe</OutputType>
     <!-- Microsoft.Testing.Platform v2 runner (requires Microsoft.NET.Test.Sdk 17.13+/18.x) -->
     <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
@@ -100,10 +105,11 @@ Only if the project needs them: `NSubstitute` `5.3.0` for test doubles, `FluentA
 
 ## Step 4: Relax analyzers for tests
 
-In the root `.editorconfig`:
+In `tests/.editorconfig`, not the root one: the root `.editorconfig` is an Owned Baseline file, so the next Apply would remove these overrides
+(see the repo-ci-baseline skill's `references/adapt.md`). It covers only the files under `tests/`, so the section is `[*.cs]`:
 
 ```ini
-[tests/**.cs]
+[*.cs]
 # Underscores in test method names (Method_Condition_ExpectedResult)
 dotnet_diagnostic.CA1707.severity = none
 # Test parameters are validated by the framework
