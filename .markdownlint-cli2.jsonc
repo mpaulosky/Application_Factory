@@ -11,5 +11,12 @@
   },
   // The Template's Seed .sandcastle/ Markdown uses the Sandcastle config (inline tags, one heading per
   // section); test.sh lints it under that config, as Apply writes it.
-  "ignores": ["**/node_modules/**", "**/.pytest_cache/**", ".claude/skills/repo-ci-baseline/template/seed/.sandcastle/**"]
+  // The shared skills and the starting points (ADR 0007) keep the text they had in dotfiles, long lines included.
+  "ignores": [
+    "**/node_modules/**",
+    "**/.pytest_cache/**",
+    ".claude/skills/repo-ci-baseline/template/seed/.sandcastle/**",
+    ".claude/skills/{build-repair,dotnet-*,remove-squad,review-changes}/**",
+    "starting-points/**"
+  ]
 }

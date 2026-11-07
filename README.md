@@ -11,6 +11,8 @@ the Fleet registry, and the scripts that Apply the Baseline, find Drift and roll
 | --- | --- |
 | `.claude/skills/repo-ci-baseline/` | The skill: the Template (`template/owned/`, `template/seed/`), the scripts, the references and their tests |
 | `.claude/skills/repo-ci-baseline/github/repos.txt` | The Fleet registry: the Applications the Factory manages |
+| `.claude/skills/` | Also the shared skills: `build-repair`, `dotnet-*`, `remove-squad`, `review-changes` |
+| `starting-points/` | Optional app-stack files to copy into an Application: `.aspire/`, `.github/instructions/`, the `beast` agent, the `code-review` skill |
 | `docs/adr/` | The decisions behind the Factory |
 | `docs/Instructions.md` | Setting up a new Application, or standardizing an existing one |
 | `.github/workflows/template-tests.yml` | CI: runs the Template's tests on every PR |
