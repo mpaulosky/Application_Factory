@@ -57,7 +57,7 @@ Under `template/seed/`. Each one describes the repo, so it's the repo's once wri
 | `.sandcastle/Dockerfile` | The sandbox image: the gate's linters as `ARG`s with their SHA-256s, an optional .NET SDK (`INSTALL_DOTNET`, `DOTNET_CHANNEL`), optional Chromium libraries for Playwright (`INSTALL_PLAYWRIGHT_DEPS`, `PLAYWRIGHT_VERSION`), and `tini` as PID 1 (`ENTRYPOINT ["tini", "--", "sleep", "infinity"]`) |
 | `.sandcastle/check-paths.txt` | The files, besides the Template's own list, whose change makes the Owned `check.sh` run Sandcastle's check: those the repo's `.sandcastle/` tests read (`CLAUDE.md`, `.github/workflows`, the solution file and so on); one pathspec per line, and a line that matches no file is named on stderr on every run |
 | `package.json`, `pnpm-workspace.yaml` | Sandcastle's packages and scripts; a repo with its own Node tooling merges them |
-| `.github/ci/sandcastle-skills.txt` | The skills the Sandcastle workflow installs on the runner for the run (a pinned dotfiles commit and skill names, read as data); empty until filled ([The workflow](#the-workflow)) |
+| `.github/ci/sandcastle-skills.txt` | The skills the Sandcastle workflow installs on the runner for the run (a pinned Application Factory commit and skill names, read as data); empty until filled ([The workflow](#the-workflow)) |
 | `.sandcastle/lib/repo-config.mts` | `REPO_SLUG` and `NOT_OWNED_BASELINE_PATHS` for the local review ([pre-push-review.md](pre-push-review.md)), `ROLE_AGENTS` (each role's model, effort, iterations and timeout), `MAX_ITERATIONS`, the sandbox `hooks`, `copyToWorktree`, the host skills to mount (`SANDBOX_SKILLS`), the CI jobs `scripts/gate.sh` reproduces (`GATE_COVERED_CHECKS`, `Build Solution` in the Seed), the command the host runs as the gate in the sandbox (`GATE_COMMAND`, `scripts/gate.sh` in the Seed), how long the host lets that gate run before it kills it (`GATE_LIMIT_MINUTES`, 10 in the Seed), the committed file it runs, which a branch may not change (`GATE_SCRIPT`), the paths whose changed files a PR's body lists for the reviewer (`CHECK_PATHS`), and `TEMPLATE_OWNED_DIR` and `TEMPLATE_ROOT_COPIES`, empty except in dotfiles |
 
 `test.sh` keeps dotfiles' own text out of the Seed's `roles/shared-rules.md`, and checks that the Dockerfile's linter versions match the Owned `scripts/gate.sh` and its .NET channel matches `global.json`.
@@ -313,7 +313,8 @@ Apply writes it, and `.github/ci/sandcastle-skills.txt`, only into a repo that r
   producing the next one, so a long stretch after a `Bash` call is usually a command that ran long, such as a gate. The first stretch (`start`) includes the
   sandbox and agent starting, and the last one the closing message.
 - **`.github/ci/sandcastle-skills.txt` lists the skills the run mounts (Seed).** A hosted runner has no `~/.claude/skills`, which `lib/skills.mts` mounts
-  the `SANDBOX_SKILLS` from. The file is data: a `dotfiles-sha` line (the commit of mpaulosky/dotfiles' `main` to take them from, 40 lowercase hex digits, pinned like an action)
+  the `SANDBOX_SKILLS` from. The file is data: a `dotfiles-sha` line (the commit of mpaulosky/Application_Factory's `main` to take them from, its `.claude/skills/`;
+  the key keeps its old name so existing files stay valid; 40 lowercase hex digits, pinned like an action)
   and a `skill` line per skill name; the Seed has neither, and installs nothing.
   The Owned step "Install the skills" rejects any line that isn't blank, a `#` comment in column 0 or one of those two (and prints none of the file),
   fetches the commit before git holds the PAT and with no secret in its environment, refuses a commit that isn't in dotfiles' `main`,
@@ -332,7 +333,7 @@ Apply writes it, and `.github/ci/sandcastle-skills.txt`, only into a repo that r
   re-Applied until those land, or its re-Apply drops them. `rollout.sh` re-Applies every repo in `github/repos.txt` and can't leave one out
   (once TicketManager's re-Apply PR has merged, a run re-Applies all the others, auth0-management-app included), so until then don't run it:
   re-Apply each repo except auth0-management-app one at a time with `reapply.sh`, TicketManager first.
-- **A change to the skills list needs a person's review.** The skills become the agents' instructions. The step refuses a commit outside dotfiles' `main`
+- **A change to the skills list needs a person's review.** The skills become the agents' instructions. The step refuses a commit outside the Factory's `main`
   (GitHub serves a fork's commit by hash), but any older commit of `main` passes, so check the pin is the one meant.
 
 ## Migrating a repo

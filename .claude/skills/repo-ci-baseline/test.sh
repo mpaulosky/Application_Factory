@@ -357,9 +357,9 @@ run_secrets token key ""
 [[ $secrets_rc -eq 0 && $secrets_out == "enabled=true" ]] || fail "sandcastle.yml: a token and ANTHROPIC_API_KEY must give enabled=true (exit $secrets_rc, output '$secrets_out')"
 run_secrets token "" oauth
 [[ $secrets_rc -eq 0 && $secrets_out == "enabled=true" ]] || fail "sandcastle.yml: a token and CLAUDE_CODE_OAUTH_TOKEN must give enabled=true (exit $secrets_rc, output '$secrets_out')"
-# The skills step, run for real against a local repository standing in for dotfiles. The workspace holds the repo's list; HOME is empty.
+# The skills step, run for real against a local repository standing in for the Factory. The workspace holds the repo's list; HOME is empty.
 fixture="$md_tmp/skills-fixture"
-fixture_skills="Support For New Projects/.claude/skills"
+fixture_skills=".claude/skills"
 fixture_git() { git -C "$1" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@example.com "${@:2}"; }
 fixture_repo() { git init -q -b main "$1"; git -C "$1" config uploadpack.allowFilter true; git -C "$1" config uploadpack.allowAnySHA1InWant true; }
 fixture_repo "$fixture"
@@ -388,9 +388,10 @@ dirlink_sha="$(git -C "$fixture" rev-parse HEAD)"
 # A folder above the skills that is a symlink: the skill's own folder and the files in it are real.
 fixture2="$md_tmp/skills-fixture-ancestor"
 fixture_repo "$fixture2"
-mkdir -p "$fixture2/real/.claude/skills/alpha"
-echo alpha > "$fixture2/real/.claude/skills/alpha/SKILL.md"
-ln -s real "$fixture2/Support For New Projects"
+mkdir -p "$fixture2/real/skills/alpha"
+echo alpha > "$fixture2/real/skills/alpha/SKILL.md"
+mkdir -p "$fixture2/.claude"
+ln -s ../real/skills "$fixture2/.claude/skills"
 fixture_git "$fixture2" add -A
 fixture_git "$fixture2" commit -q -m ancestor
 ancestor_sha="$(git -C "$fixture2" rev-parse HEAD)"
@@ -402,7 +403,7 @@ run_skills() { # the list's text; sets skills_rc, skills_log, skills_home
   [[ $1 == "<none>" ]] || printf '%s' "$1" > "$ws/.github/ci/sandcastle-skills.txt"
   [[ -z ${skills_preexisting:-} ]] || mkdir -p "$md_tmp/skills-home/.claude/skills/$skills_preexisting"
   skills_home="$md_tmp/skills-home"; skills_rc=0; log="$md_tmp/skills.log"
-  (cd "$ws" && env -i PATH="${skills_path_prefix:-}$PATH" HOME="$skills_home" RUNNER_TEMP="$md_tmp/skills-runner" DOTFILES_URL="$skills_url" \
+  (cd "$ws" && env -i PATH="${skills_path_prefix:-}$PATH" HOME="$skills_home" RUNNER_TEMP="$md_tmp/skills-runner" FACTORY_URL="$skills_url" \
     GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 bash --noprofile --norc -e "$skills_script") &>"$log" || skills_rc=$?
   skills_log="$(<"$log")"
   # No line of the list is ever run as a command, whatever the outcome.
@@ -522,8 +523,8 @@ if grep -vF 'mpaulosky/dotfiles.git' "$owned/.github/workflows/sandcastle.yml" |
 fi
 
 # The skills step's claims stay limited to what it does, and its ancestor test names the branch, not a ref git could resolve to a tag.
-grep -qF 'refs/heads/main:refs/remotes/dotfiles/main' "$owned/.github/workflows/sandcastle.yml" \
-  || fail "the Owned sandcastle.yml must fetch dotfiles' main as refs/heads/main, never a bare main"
+grep -qF 'refs/heads/main:refs/remotes/factory/main' "$owned/.github/workflows/sandcastle.yml" \
+  || fail "the Owned sandcastle.yml must fetch the Factory's main as refs/heads/main, never a bare main"
 for file in "$owned/.github/workflows/sandcastle.yml" "$skill_dir/references/sandcastle.md"; do
   grep -qF "still run the repo's" "$file" \
     || fail "${file#"$skill_dir"/} must say the later steps still run the repo's own code from main, so the skills step's claim stays limited to that step"

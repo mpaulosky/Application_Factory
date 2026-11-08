@@ -27,9 +27,7 @@ KNOWN = {
     "template/owned/.claude/skills/pre-push-review/SKILL.md": 1,
     "template/owned/.github/scripts/check_gh_repo.py": 1,
     "template/owned/.github/workflows/claude-review.yml": 1,
-    "template/owned/.github/workflows/sandcastle.yml": 1,
     "template/owned/.sandcastle/lib/review-ledger.test.mts": 3,
-    "template/seed/.github/ci/sandcastle-skills.txt": 1,
 }
 
 passed = failed = 0
