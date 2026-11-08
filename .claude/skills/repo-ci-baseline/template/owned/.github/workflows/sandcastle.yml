@@ -126,12 +126,13 @@ jobs:
       # lib/skills.mts mounts the skills the roles name (SANDBOX_SKILLS) into
       # the sandbox from ~/.claude/skills, which a hosted runner doesn't have.
       # The repo lists them in .github/ci/sandcastle-skills.txt, a Seed data
-      # file: one dotfiles-sha line (the commit to take them from, 40 hex
-      # digits) and one skill line per skill name. This step is Owned and
+      # file: one dotfiles-sha line (the Application Factory commit to take them
+      # from, 40 hex digits; the key keeps its old name so existing files stay valid) and one skill line per skill name. This step is Owned and
       # reads that file as data only: it rejects any line that isn't blank, a
       # # comment in column 0 or one of those two shapes (LF line endings), fetches
-      # the pinned commit of the Template owner's public dotfiles repository,
-      # refuses a commit that isn't in that repository's main (GitHub serves a
+      # the pinned commit of the Application Factory (mpaulosky/Application_Factory,
+      # public), which keeps the skills in its .claude/skills,
+      # refuses a commit that isn't in the Factory's main (GitHub serves a
       # fork's commit by hash too), a skill that is missing and a symlink in a
       # listed skill or above it, and links only the listed skills into ~/.claude/skills.
       # This step runs no script of the repo's, so nothing its file says can
@@ -144,7 +145,7 @@ jobs:
       - name: Install the skills
         if: steps.secrets.outputs.enabled == 'true'
         env:
-          DOTFILES_URL: https://github.com/mpaulosky/dotfiles.git
+          FACTORY_URL: https://github.com/mpaulosky/Application_Factory.git
         run: |
           set -euo pipefail
           list=.github/ci/sandcastle-skills.txt
@@ -196,43 +197,43 @@ jobs:
             echo "::error file=$list::The file needs a dotfiles-sha line and at least one skill line, or neither."
             exit 1
           fi
-          base="Support For New Projects/.claude/skills"
-          dotfiles="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/dotfiles.XXXXXX")"
-          git init --quiet "$dotfiles"
+          base=".claude/skills"
+          factory="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/factory.XXXXXX")"
+          git init --quiet "$factory"
           paths=()
           for skill in "${skills[@]}"; do
             paths+=("$base/$skill")
           done
-          git -C "$dotfiles" sparse-checkout set "${paths[@]}"
-          git -C "$dotfiles" fetch --quiet --depth 1 --filter=blob:none "$DOTFILES_URL" "$sha"
-          git -C "$dotfiles" checkout --quiet FETCH_HEAD
-          # GitHub serves a fork's commit by its hash, so the pin must be in dotfiles' own main.
-          git -C "$dotfiles" fetch --quiet --no-tags --filter=tree:0 "$DOTFILES_URL" refs/heads/main:refs/remotes/dotfiles/main
-          if ! git -C "$dotfiles" merge-base --is-ancestor "$sha" refs/remotes/dotfiles/main; then
-            echo "::error file=$list::The dotfiles-sha commit isn't in the main branch of dotfiles."
+          git -C "$factory" sparse-checkout set "${paths[@]}"
+          git -C "$factory" fetch --quiet --depth 1 --filter=blob:none "$FACTORY_URL" "$sha"
+          git -C "$factory" checkout --quiet FETCH_HEAD
+          # GitHub serves a fork's commit by its hash, so the pin must be in the Factory's own main.
+          git -C "$factory" fetch --quiet --no-tags --filter=tree:0 "$FACTORY_URL" refs/heads/main:refs/remotes/factory/main
+          if ! git -C "$factory" merge-base --is-ancestor "$sha" refs/remotes/factory/main; then
+            echo "::error file=$list::The dotfiles-sha commit isn't in the main branch of the Factory."
             exit 1
           fi
           # The sandbox mount follows symlinks (lib/skills.mts mounts each skill's real path), so refuse one in
           # a listed skill, in the skill folder itself or in any folder above it. Others in the commit are not ours.
-          for folder in "$dotfiles/Support For New Projects" "$dotfiles/Support For New Projects/.claude" "$dotfiles/$base"; do
+          for folder in "$factory/.claude" "$factory/$base"; do
             if [ -L "$folder" ]; then
-              echo "::error::The dotfiles commit holds a symlink above the skills, which the sandbox mount would follow."
+              echo "::error::The Factory commit holds a symlink above the skills, which the sandbox mount would follow."
               exit 1
             fi
           done
           for skill in "${skills[@]}"; do
-            if [ -n "$(find "$dotfiles/$base/$skill" -type l -print -quit)" ]; then
+            if [ -n "$(find "$factory/$base/$skill" -type l -print -quit)" ]; then
               echo "::error::The $skill skill holds a symlink, which the sandbox mount would follow."
               exit 1
             fi
-            if [ ! -f "$dotfiles/$base/$skill/SKILL.md" ]; then
-              echo "::error::dotfiles $sha has no $skill skill."
+            if [ ! -f "$factory/$base/$skill/SKILL.md" ]; then
+              echo "::error::The Factory commit $sha has no $skill skill."
               exit 1
             fi
           done
           mkdir -p "$HOME/.claude/skills"
           for skill in "${skills[@]}"; do
-            ln -sT "$dotfiles/$base/$skill" "$HOME/.claude/skills/$skill"
+            ln -sT "$factory/$base/$skill" "$HOME/.claude/skills/$skill"
           done
 
       # The host's git fetches and pushes authenticate through gh's credential

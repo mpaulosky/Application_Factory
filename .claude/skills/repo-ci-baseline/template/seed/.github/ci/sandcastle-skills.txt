@@ -6,10 +6,10 @@
 # and runs no script of the repo's. Blank (or whitespace-only) lines and comments (a # in column 0)
 # are ignored, LF line endings only, and any other line is one of two kinds:
 #
-#   dotfiles-sha <40 lowercase hex digits>   the commit of mpaulosky/dotfiles' main to take them from, given once
-#   skill <name>                             a skill under "Support For New Projects/.claude/skills/" there, once each
+#   dotfiles-sha <40 lowercase hex digits>   the commit of the Application Factory's main (mpaulosky/Application_Factory) to take them from, given once
+#   skill <name>                             a skill under ".claude/skills/" there, once each
 #
-# Pin the commit like an action, so a push to dotfiles can't change what the
+# Pin the commit like an action, so a push to the Factory can't change what the
 # agents are told until the pin moves. The skills become the agents'
 # instructions, so have a person review every change to this file.
 #
