@@ -18,8 +18,8 @@ read-only. Prints nothing else, apart from one line when no PR is
 open; a repo that can't be read is reported on stderr and exits 1.
 
 Every listed repo requires checks and runs PR Auto-Merge, which merges a
-reviewed PR itself: a Baseline repo through Apply, and dotfiles (repos.txt
-scope repo-settings-only) through its copy and its hand-made main-rules.
+reviewed PR itself: a Baseline repo through Apply, and the Factory (repos.txt
+scope repo-settings-only) through its own workflow.
 """
 
 import argparse
@@ -394,8 +394,8 @@ def repo_flags(scope):
     """to_state()'s per-repo keywords for a repos.txt scope.
 
     A Baseline repo ("full") requires checks and runs PR Auto-Merge, and so
-    does repo-settings-only (dotfiles), with a copy of PR Auto-Merge and a
-    main-rules ruleset of its own.
+    does repo-settings-only (the Factory), with a PR
+    workflow of its own.
     """
     return {"checks_required": True, "merged_by_workflow": True}
 

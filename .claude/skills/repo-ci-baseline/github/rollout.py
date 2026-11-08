@@ -4,7 +4,7 @@
     rollout.sh --brings <prs> [--root dir] [--dry-run]
 
 The Baseline repos are github/repos.txt's, in its order, without the
-repo-settings-only ones (dotfiles); TicketManager goes first as the live check
+repo-settings-only ones (the Factory); TicketManager goes first as the live check
 of the Template change. Each run:
 
 1. runs reapply.sh on TicketManager;
@@ -108,7 +108,7 @@ def main(argv=None, listed=None, reapply=run_reapply, latest_pr=gh_latest_pr, ex
          out=sys.stdout, err=sys.stderr):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--brings", required=True,
-                        help="the dotfiles PRs this round brings in, as reapply.sh takes them: mpaulosky/dotfiles#80,#81")
+                        help="the Factory PRs this round brings in, as reapply.sh takes them: #80,#81 or mpaulosky/Application_Factory#80,#81")
     parser.add_argument("--root", default=os.path.expanduser("~/github"),
                         help="the directory holding each repo's checkout (default ~/github)")
     parser.add_argument("--dry-run", action="store_true", help="print the reapply.sh calls instead of making them")

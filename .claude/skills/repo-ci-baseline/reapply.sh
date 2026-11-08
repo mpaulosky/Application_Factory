@@ -5,9 +5,9 @@
 #   reapply.sh --brings <prs> <repo>
 #
 # <repo> is the repo's primary checkout (for example ~/github/TicketManager).
-# <prs> names the dotfiles PRs this round brings in, comma-separated; a bare
-# number or #number takes the repo named before it, mpaulosky/dotfiles by
-# default: --brings mpaulosky/dotfiles#80,#81
+# <prs> names the Factory PRs this round brings in, comma-separated; a bare
+# number or #number takes the repo named before it, mpaulosky/Application_Factory by
+# default: --brings #80,#81 (or mpaulosky/Application_Factory#80,#81)
 #
 # Steps, each stopping the run on failure:
 #   1. Fetch, then prepare the worktree ../<Repo>-worktrees/chore-reapply-baseline:
@@ -92,9 +92,9 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$target" && -n "$brings_arg" ]] || usage
 
-# ── The dotfiles PRs this round brings in ───────────────────────────────────
+# ── The Factory PRs this round brings in ───────────────────────────────────
 brings=()
-prefix="mpaulosky/dotfiles"
+prefix="mpaulosky/Application_Factory"
 IFS=',' read -ra items <<< "$brings_arg"
 for item in "${items[@]}"; do
   item="${item//[[:space:]]/}"

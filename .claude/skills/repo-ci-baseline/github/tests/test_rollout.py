@@ -16,7 +16,7 @@ LISTED = {
     "mpaulosky/IssueManager": "full",
     "mpaulosky/Articles": "full",
     "mpaulosky/SuggestionApp": "full",
-    "mpaulosky/dotfiles": "repo-settings-only",
+    "mpaulosky/Application_Factory": "repo-settings-only",
 }
 REST = ("mpaulosky/IssueTracker", "mpaulosky/Blazor-Server", "mpaulosky/IssueManager", "mpaulosky/Articles",
         "mpaulosky/SuggestionApp")
@@ -24,7 +24,7 @@ REST = ("mpaulosky/IssueTracker", "mpaulosky/Blazor-Server", "mpaulosky/IssueMan
 
 # ── The order ───────────────────────────────────────────────────────────────
 
-def test_order_is_ticketmanager_then_the_rest_in_the_skills_order_without_dotfiles():
+def test_order_is_ticketmanager_then_the_rest_in_the_skills_order_without_the_factory():
     assert rollout.rollout_order(LISTED) == ("mpaulosky/TicketManager", *REST)
 
 
@@ -176,9 +176,9 @@ def test_a_missing_checkout_stops_a_dry_run_too():
 def test_a_repo_settings_only_repo_needs_no_checkout():
     fake = Fake()
     code, _, err = run(["--brings", "#82", "--root", "/r", "--dry-run"], fake,
-                       exists=lambda path: path != "/r/dotfiles")
+                       exists=lambda path: path != "/r/Application_Factory")
     assert code == 0
-    assert "dotfiles" not in err
+    assert "Application_Factory" not in err
 
 
 def test_dry_run_runs_nothing_and_shows_the_plan_from_the_open_pr():

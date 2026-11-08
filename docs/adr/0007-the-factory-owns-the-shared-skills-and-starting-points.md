@@ -17,7 +17,7 @@ from treating the copied `.github/` files as this repo's own. They are copied wi
 ## Consequences
 
 - Edit these files here. The `dotfiles` copies are stale from now on and are deleted in a later change; the `~/.claude/skills` symlinks point here.
-- The Template's Owned `sandcastle.yml` still clones `mpaulosky/dotfiles` and reads skills from `Support For New Projects/.claude/skills/`, at the commit each Application pins in
-  `.github/ci/sandcastle-skills.txt`. Those pins stay valid while `dotfiles` keeps its history. Repointing the workflow at this repo changes an Owned file and every Application's pin, so it is a
-  Rollout, and it comes before the `dotfiles` copies are deleted.
+- **Update:** the Template's Owned `sandcastle.yml` now clones this repo and reads skills from `.claude/skills/`, at the Factory commit each Application pins in
+  `.github/ci/sandcastle-skills.txt` (the key is still called `dotfiles-sha`). The `dotfiles` copies of the skills and starting points were removed, `dotfiles` is archived, and `repos.txt`,
+  the settings check and the `--brings` PR-link default no longer name it. Nothing in the Factory depends on `dotfiles`; a guard test (`tests/no-dotfiles-dependency.test.sh`) keeps it that way.
 - The skills' Markdown predates the Factory's 200-character line limit, so `.markdownlint-cli2.jsonc` ignores them and the starting points rather than rewrap them.
