@@ -15,11 +15,13 @@ SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python3 -I - "$SKILL_DIR" <<'PY'
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 skill = Path(sys.argv[1])
-# `mpaulosky/dotfiles` not followed by `#` and a digit. A longer name ("mpaulosky/dotfiles-x") is also a mention.
-MENTION = re.compile(r"mpaulosky/dotfiles(?!#[0-9])")
+# `mpaulosky/dotfiles` not followed by `#` and a digit. A longer name ("mpaulosky/dotfiles-x") is also a mention. GitHub owner and
+# repository names are case-insensitive, so `MPaulosky/Dotfiles` is the same repo.
+MENTION = re.compile(r"mpaulosky/dotfiles(?!#[0-9])", re.IGNORECASE)
 
 KNOWN = {
     "template/owned/.claude/skills/pre-push-review/SKILL.md": 1,
@@ -43,6 +45,11 @@ def check(name, ok, detail=""):
         print(f"FAIL - {name}" + (f": {detail}" if detail else ""))
 
 
+def read(path):
+    # Undecodable bytes (a Windows-1252 character in a comment) must not hide a mention: keep them as surrogates, not skip the file.
+    return path.read_bytes().decode("utf-8", errors="surrogateescape")
+
+
 def count_in(text):
     return len(MENTION.findall(text))
 
@@ -56,7 +63,15 @@ check("a pull request reference with many digits does not count", count_in("mpau
 check("a '#' that is not followed by a digit counts", count_in("mpaulosky/dotfiles#") == 1 and count_in("mpaulosky/dotfiles#x") == 1)
 check("a longer repo name counts", count_in("mpaulosky/dotfiles-old") == 1)
 check("each mention on a line counts", count_in("mpaulosky/dotfiles and mpaulosky/dotfiles#1 and mpaulosky/dotfiles") == 2)
+check("a mixed-case clone URL counts", count_in("https://github.com/mpaulosky/Dotfiles.git") == 1 and count_in("MPaulosky/DOTFILES") == 1)
+check("a mixed-case issue reference does not count", count_in("MPaulosky/Dotfiles#58") == 0)
 check("another repo does not count", count_in("mpaulosky/Application_Factory and other/dotfiles") == 0)
+
+# A file with bytes that are not UTF-8 is still scanned: the function the walk uses reads it.
+with tempfile.TemporaryDirectory() as tmp:
+    bad = Path(tmp) / "x.sh"
+    bad.write_bytes(b"# \xa9 2022\ngit clone https://github.com/mpaulosky/dotfiles.git\n")
+    check("undecodable bytes do not hide a mention", count_in(read(bad)) == 1)
 
 # The Template.
 found = {}
@@ -65,10 +80,7 @@ for root in ("template/owned", "template/seed"):
     for path in sorted((skill / root).rglob("*")):
         if not path.is_file() or ".git" in path.relative_to(skill).parts:
             continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
+        text = read(path)
         files += 1
         n = count_in(text)
         if n:
