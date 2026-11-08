@@ -79,11 +79,11 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
    Done when it passes.
 3. After the Factory PR merges, re-Apply to each repo in its own PR; the overwritten Owned files are the change.
    Open it ready, not as a draft: the repo's own auto-merge lands it ([automerge.md](references/automerge.md#landing)).
-   - **Roll out:** `rollout.sh --brings #<n>,#<n>` runs `reapply.sh` on TicketManager and holds the rest until its re-Apply PR has merged.
+   - **Roll out:** `rollout.sh --brings '#<n>,#<n>'` runs `reapply.sh` on TicketManager and holds the rest until its re-Apply PR has merged.
      Land that PR, fix any finding Template first, then run `rollout.sh` again: once it has merged,
      it re-Applies the other repos in order, one pre-push gate at a time, reports a repo that fails and goes on.
      Start with `--dry-run`. It ends with the `land.sh` command for the PRs it left open.
-   - **One repo:** `reapply.sh --brings #<n>,#<n> <repo>` (what `rollout.sh` runs, and the way to retry a repo that failed)
+   - **One repo:** `reapply.sh --brings '#<n>,#<n>' <repo>` (what `rollout.sh` runs, and the way to retry a repo that failed)
      prepares the `chore/reapply-baseline` worktree, merges the remote branch and `main`, commits `apply.sh`'s output alone,
      pushes through the gate (which asks for a review when Apply writes the coverage threshold,
      the hand-off rules, an issue template, the reviewer agent, a Sandcastle prompt (intake, critique, plan, review or a role's), the local gate's check.sh or global.json),
