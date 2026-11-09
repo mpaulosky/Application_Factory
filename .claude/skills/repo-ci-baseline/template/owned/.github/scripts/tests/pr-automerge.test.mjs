@@ -1667,18 +1667,18 @@ test("reads a dropped request back for the whole window before calling in Claude
   assert.ok(order.filter((step) => step === "read-back").length >= 2, order.join(","));
 });
 
-test("adds review:claude at once when the request fails, without waiting out the window (mpaulosky/dotfiles#360)", async () => {
+test("adds review:claude only after the rest of the settle window when the request fails (mpaulosky/Application_Factory#23)", async () => {
   const started = Date.now();
   const { addedLabels, requests, logs } = await evaluate(readyPr(unreviewed), [], {
     copilotRequest: Object.assign(new Error("Resource not accessible by personal access token"), { status: 403 }),
-    askWaitMs: 4000,
-    askPollMs: 1000
+    askWaitMs: 300,
+    askPollMs: 100
   });
 
   assert.equal(requests.length, 1);
   assert.deepEqual(addedLabels, LABEL_FOR_CLAUDE);
   assert.ok(logs.some((line) => line.startsWith("warning: ") && line.includes("Resource not accessible")), logs.join("\n"));
-  assert.ok(Date.now() - started < 2000, `the run took ${Date.now() - started} ms`);
+  assert.ok(Date.now() - started >= 250, `the run took ${Date.now() - started} ms`);
 });
 
 test("makes no request and adds no label when the record comment can't be posted (mpaulosky/dotfiles#360)", async () => {

@@ -1689,7 +1689,8 @@ jobs:
                 return false;
               }
               // Names this run's record among any others on the PR.
-              const askId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+              const askStartedAt = Date.now();
+              const askId = `${askStartedAt}-${Math.random().toString(36).slice(2)}`;
               try {
                 await github.rest.issues.createComment({
                   owner,
@@ -1774,6 +1775,13 @@ jobs:
                   throw error;
                 }
                 core.warning(`Couldn't request Copilot's review of PR #${pullNumber}: ${error.message}`);
+                // Wait out what is left of COPILOT_ASK_SETTLE_MS (capped by
+                // COPILOT_ASK_WAIT_MS) before the caller adds review:claude:
+                // other workflows see only the record, which Claude Review
+                // skips and PR Auto-Merge strips while it is younger than that
+                // (mpaulosky/Application_Factory#23).
+                const remainingMs = askStartedAt + COPILOT_ASK_SETTLE_MS - Date.now();
+                await new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.min(COPILOT_ASK_WAIT_MS, remainingMs))));
                 core.info(`Copilot's review of PR #${pullNumber} wasn't requested, so Claude is called in.`);
                 return true;
               }
