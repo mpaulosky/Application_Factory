@@ -346,6 +346,8 @@ async function evaluate(pr, events = [], options = {}) {
     registersAfterReads = 0,
     // An error thrown by the comment that records the ask.
     askCommentError,
+    // How long the comment that records the ask takes to persist, in ms.
+    askCommentDelayMs = 0,
     // The read-back window and its poll interval, in ms (the workflow's
     // COPILOT_ASK_WAIT_MS and COPILOT_ASK_POLL_MS).
     askWaitMs = 0,
@@ -526,6 +528,9 @@ async function evaluate(pr, events = [], options = {}) {
           return { data: { id: 9000 + exhaustionPosts.length - 1 } };
         }
         order.push("record");
+        if (askCommentDelayMs) {
+          await new Promise((resolve) => setTimeout(resolve, askCommentDelayMs));
+        }
         if (askCommentError) {
           throw askCommentError;
         }
@@ -1679,6 +1684,19 @@ test("adds review:claude only after the rest of the settle window when the reque
   assert.deepEqual(addedLabels, LABEL_FOR_CLAUDE);
   assert.ok(logs.some((line) => line.startsWith("warning: ") && line.includes("Resource not accessible")), logs.join("\n"));
   assert.ok(Date.now() - started >= 250, `the run took ${Date.now() - started} ms`);
+});
+
+test("a slow record write doesn't shorten the wait when the request then fails (mpaulosky/Application_Factory#23)", async () => {
+  const started = Date.now();
+  const { addedLabels } = await evaluate(readyPr(unreviewed), [], {
+    copilotRequest: Object.assign(new Error("Resource not accessible by personal access token"), { status: 403 }),
+    askCommentDelayMs: 200,
+    askWaitMs: 300,
+    askPollMs: 100
+  });
+
+  assert.deepEqual(addedLabels, LABEL_FOR_CLAUDE);
+  assert.ok(Date.now() - started >= 450, `the run took ${Date.now() - started} ms`);
 });
 
 test("makes no request and adds no label when the record comment can't be posted (mpaulosky/dotfiles#360)", async () => {
