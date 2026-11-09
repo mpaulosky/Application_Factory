@@ -286,9 +286,9 @@ class Lander:
         self.say(f"{repo.split('/')[-1]}#{number} {final.lower()}")
         # A PR seen open that merges in a Baseline repo starts a release, and
         # with it a release-blog PR; a [skip-release] one (a blog PR) doesn't,
-        # and dotfiles (repo-settings-only) has no releases.
+        # and the Factory ("factory") and dotfiles (repo-settings-only) have none.
         if (final == "MERGED" and pr.seen is not None and "[skip-release]" not in pr.title
-                and self.scopes.get(repo, "full") != "repo-settings-only"):
+                and self.scopes.get(repo, "full") == "full"):
             self.blog_due[repo] = self.clock() + self.blog_wait
 
     def done(self):

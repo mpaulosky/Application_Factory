@@ -551,7 +551,7 @@ def check_secrets(gh, repo, std):
 
 
 def read_repo_list():
-    """{owner/repo: scope} from repos.txt; scope is "full" or "repo-settings-only"."""
+    """{owner/repo: scope} from repos.txt; scope is "full", "factory" (the Factory: every check of a full repo, but not a Baseline repo to roll out or release) or "repo-settings-only"."""
     repos = {}
     for line in (HERE / "repos.txt").read_text().splitlines():
         words = line.split("#")[0].split()

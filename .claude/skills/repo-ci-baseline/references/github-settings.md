@@ -60,8 +60,10 @@ Repo features unrelated to PRs (wiki, projects, discussions) aren't managed.
 
 - **`github/repos/<repo>.json`** may add `required_checks` or `labels` for one repo, never remove or loosen anything; any other key is an error.
   A repo's own required check (a Sandcastle check, say) goes there, and in its workflow.
-- **`repos.txt` scope.** `repo-settings-only` manages just the merge settings, and deletes the retired squad labels. The Factory carries it: it isn't a Baseline repo.
-  No ruleset, branch protection or workflow of a `repo-settings-only` repo is checked. (dotfiles used to carry it and was removed from `repos.txt` when it was archived.)
+- **`repos.txt` scope.** `full` (the default) is a Baseline repo: every check, and the rollout and release-blog targets. `factory` is the Factory: every check of a `full` repo
+  (secret scanning, the Actions token, pinned actions, the ruleset, labels, secrets), but it isn't a Baseline repo, so `rollout.sh` never Applies the Template to it and `land.sh`
+  waits for no release blog PR there. `repo-settings-only` manages just the merge settings and deletes the retired squad labels; no ruleset, branch protection or workflow of such a repo is checked.
+  (dotfiles used to carry it and was removed from `repos.txt` when it was archived.) The Factory used to carry `repo-settings-only`, which hid its drift from the checks.
 
 ## When to run it
 

@@ -22,5 +22,7 @@ The Template's PR Auto-Merge starts on completion of the workflows it names, one
 - The repo needs the `CLAUDE_CODE_OAUTH_TOKEN` secret for Claude Review to run; without it the review job skips, as in any Baseline repo.
 - The branch ruleset on `main` should require the "Template tests" check, or PR Auto-Merge counts a PR with no required check as ready. Set it by hand in the repo's rulesets:
   `github-settings.sh --fix` can't, because `repos.txt` gives the Factory the `repo-settings-only` scope, which returns before it inspects or changes rulesets.
+  Update: `repos.txt` now gives the Factory the `factory` scope, which runs every check of a Baseline repo (rulesets included) without making it a rollout or release target, so
+  `github-settings.sh --fix` can set the ruleset and the rest of the Factory's settings.
 - A change to one of these files starts in `template/owned/` and is copied over; the gate says so when a copy has drifted.
 - Not carried: Sandcastle, the local review (`/pre-push-review`, `scripts/review.sh`) and `scripts/watch-pr.sh`.

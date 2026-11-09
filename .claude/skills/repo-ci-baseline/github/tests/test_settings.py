@@ -595,6 +595,23 @@ def test_a_repo_settings_only_repo_gets_just_its_merge_settings(monkeypatch, tmp
         "only the retired label goes; nothing else outside the merge settings is touched"
 
 
+def test_a_factory_scope_repo_gets_every_check_of_a_full_repo(monkeypatch, tmp_path):
+    shutil.copytree(gs.HERE, tmp_path / "github", ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    (tmp_path / "github" / "repos.txt").write_text(f"{REPO} factory\n")
+    monkeypatch.setattr(gs, "HERE", tmp_path / "github")
+    fake = FakeGitHub(repo={**FakeGitHub().repo, "security_and_analysis": {
+        "secret_scanning": {"status": "disabled"}, "secret_scanning_push_protection": {"status": "disabled"}}})
+    fake.actions["sha_pinning_required"] = False
+    fake.workflow_permissions = {**fake.workflow_permissions, "can_approve_pull_request_reviews": False}
+
+    status, output = run(fake)
+
+    assert status == 1, output
+    for drift in ("secret_scanning", "pinned actions", "can_approve_pull_request_reviews"):
+        assert drift in output, output
+    assert "repo settings and retired labels only" not in output
+
+
 def test_a_per_repo_file_can_add_a_required_check(monkeypatch, tmp_path):
     shutil.copytree(gs.HERE, tmp_path / "github", ignore=shutil.ignore_patterns("tests", "__pycache__"))
     (tmp_path / "github" / "repos" / "app.json").write_text('{"required_checks": ["Sandcastle"]}')

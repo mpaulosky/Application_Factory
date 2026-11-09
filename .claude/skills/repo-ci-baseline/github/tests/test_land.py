@@ -656,6 +656,18 @@ def test_dotfiles_merging_expects_no_release_blog_pr(monkeypatch):
     assert code == 0 and "release-blog" not in out and out.splitlines()[-1].startswith("All 1")
 
 
+def test_the_factory_merging_expects_no_release_blog_pr(monkeypatch):
+    monkeypatch.setitem(SCOPES, "o/factory", "factory")
+    fake = Fake({"o/factory": [node(contexts=RUNNING)]})
+
+    def merge_seven():
+        fake.open["o/factory"] = []
+        fake.final[("o/factory", 7)] = "MERGED"
+
+    code, out = run_main(fake, ["o/factory#7"], [merge_seven], monkeypatch)
+    assert code == 0 and "release-blog" not in out and out.splitlines()[-1].startswith("All 1")
+
+
 def test_it_stops_at_the_time_limit(monkeypatch):
     fake = Fake({"o/app": [node(contexts=RUNNING, requested=["Copilot"])]})
     code, out = run_main(fake, ["o/app", "--timeout", "3", "--interval", "60"], [], monkeypatch)
