@@ -1,6 +1,7 @@
 ---
-name: Template tests
+name: repo-ci-baseline Template
 
+# The workflow is named as the Template's PR Auto-Merge lists it under workflow_run; the job below is the "Template tests" check.
 # Runs the repo-ci-baseline skill's test.sh on every change, so a broken Template
 # is caught here before apply.sh copies it into other repos.
 # This workflow belongs to the Application Factory; it isn't part of the Template.

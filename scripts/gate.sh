@@ -23,6 +23,10 @@ copies=(
   .github/hooks/pre-push
   .github/hooks/post-checkout
   scripts/check-branch-name.sh
+  .github/workflows/claude-review.yml
+  .github/workflows/pr-automerge.yml
+  .github/workflows/pr-review-submitted.yml
+  .github/scripts/post_claude_review.py
 )
 
 # The test runs this script against throwaway repos, with GATE_SKIP_SELF_TEST=1 so those runs don't test themselves again.
