@@ -15,19 +15,22 @@ The Factory carries the review's own pieces, not the rest of Sandcastle:
 | Carried | How |
 | --- | --- |
 | `scripts/review.sh` (the ledger's command) and the gate's "Local review" step in `scripts/gate.sh` | copy; the gate step as the Template's |
-| `.sandcastle/lib/review-ledger.mts`, `security-record.mts`, `errors.mts`, `host-limit.mts`, `plain-text.mts` and their tests | copies |
+| `.sandcastle/lib/review-ledger.mts`, `security-record.mts`, `errors.mts`, `host-limit.mts`, `plain-text.mts` and the three tests that stand alone (`review-ledger`, `security-record`, `plain-text`) | copies |
 | `.claude/skills/pre-push-review/` (`SKILL.md`, `lenses.md`, `review-bar.md`) and `.claude/agents/pre-push-reviewer.md` | copies |
 | `.sandcastle/lib/repo-config.mts` (`REPO_SLUG`, `NOT_OWNED_BASELINE_PATHS`) | the Factory's own, as an Application's is |
 | `package.json`, `pnpm-workspace.yaml` and the lockfile, for `tsx` and `zod` | the Factory's own, minimal |
-| `.security/` in `.gitignore` | the Factory's own line |
+| `.security/README.md` | copy |
+| `.gitignore` lines `.security/*` and `!.security/README.md` | the Factory's own; the ledger's test reads the checkout's `.gitignore` and requires both |
 
+`host-limit.test.mts` stays out: it spawns a child that imports `step-limit.mts`, which pulls in `status.mts` and more of the host pipeline, and the Template's Sandcastle check already runs
+it there.
 Still not carried: the rest of Sandcastle (the host pipeline, roles, prompts), `hardening-review`, and `scripts/watch-pr.sh`.
 
 ## Considered Options
 
-- **Carry the review's own pieces** (chosen): the mechanism the Fleet already trusts, byte for byte, with `scripts/gate.sh` catching drift. The ledger's import closure is five modules and
-  four test files, and its only
-  external packages are `tsx` and `zod`, so nothing else from Sandcastle is needed.
+- **Carry the review's own pieces** (chosen): the mechanism the Fleet already trusts, byte for byte, with `scripts/gate.sh` catching drift. The ledger's import closure is five modules, and
+  its three stand-alone tests need nothing beyond them and two `repo-config.mts` exports; its only external packages are `tsx` and `zod`,
+  so nothing else from Sandcastle is needed.
 - **A wrapper over the Template's files in place**, with no copies: it needs its own tool install and path handling (the ledger expects repo-relative paths), and that custom code would have
   no test.
 - **The skill only, run by hand** (`/review-changes`): nothing enforces it, so a hurried push skips it, which is the failure this ADR exists to stop.
@@ -45,8 +48,11 @@ reviewers run on Sonnet
 - The Factory gets a `package.json`, reversing CLAUDE.md's "no `package.json`" for this one reason. Its `dependabot.yml` gains an `npm` block (grouped as the `github-actions` one is, minor
   and patch only), so the
   review's dependencies are watched; this amends ADR 0009's "`github-actions` only". The `Template tests` workflow already installs pnpm for the Sandcastle check.
-- `scripts/gate.sh` copies the review's files as it copies the hooks, and `.sandcastle/lib/*.test.mts` run in CI. The implementing PRs say how: the Template's Owned originals are already
-  tested in the
-  Sandcastle check, so the copies in the Factory's root need their own run only to catch a copy that works differently from its original.
+- `scripts/gate.sh` copies the review's files as it copies the hooks, and the three copied tests run in CI. The Template's Owned originals are already tested in the Sandcastle check, so the
+  copies in
+  the Factory's root need their own run only to catch a copy that works differently from its original.
+- CI cannot prove a local review: `Template tests` runs `scripts/gate.sh` in a fresh checkout with no `.git/review/` ledger, so that workflow's gate step sets `GATE_SKIP_REVIEW=1` for its
+  own invocation
+  only. The `pre-push` hook still removes the variable, so a push never skips the review; CI keeps the gate's other checks, and the local review stays a local guarantee.
 - A finding in a Template file goes to the Template's file, not to an edit of its copy, as for every other copy.
 - Nothing is rolled out: no Owned Template file changes.
