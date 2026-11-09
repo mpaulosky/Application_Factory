@@ -19,7 +19,7 @@ open; a repo that can't be read is reported on stderr and exits 1.
 
 Every listed repo requires checks and runs PR Auto-Merge, which merges a
 reviewed PR itself: a Baseline repo through Apply, and the Factory (repos.txt
-scope repo-settings-only) through its copy (ADR 0008).
+scope factory) through its copy (ADR 0008).
 """
 
 import argparse
@@ -394,7 +394,7 @@ def repo_flags(scope):
     """to_state()'s per-repo keywords for a repos.txt scope.
 
     A Baseline repo ("full") requires checks and runs PR Auto-Merge, and so does
-    repo-settings-only (the Factory), with a copy of it.
+    the Factory ("factory") and repo-settings-only, with a copy of it.
     """
     return {"checks_required": True, "merged_by_workflow": True}
 

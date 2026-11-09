@@ -4,7 +4,7 @@
     rollout.sh --brings <prs> [--root dir] [--dry-run]
 
 The Baseline repos are github/repos.txt's, in its order, without the
-repo-settings-only ones (the Factory); TicketManager goes first as the live check
+ones of another scope (the Factory, "factory"); TicketManager goes first as the live check
 of the Template change. Each run:
 
 1. runs reapply.sh on TicketManager;
@@ -46,7 +46,7 @@ def short_name(repo):
 
 def rollout_order(listed):
     """The Baseline repos in repos.txt's order, TicketManager first."""
-    repos = [repo for repo, scope in listed.items() if scope != "repo-settings-only"]
+    repos = [repo for repo, scope in listed.items() if scope == "full"]
     if LEAD not in repos:
         raise ValueError(f"{LEAD} isn't a Baseline repo in repos.txt; it goes first as the live check")
     return tuple(sorted(repos, key=lambda repo: repo != LEAD))

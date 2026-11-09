@@ -16,7 +16,7 @@ LISTED = {
     "mpaulosky/IssueManager": "full",
     "mpaulosky/Articles": "full",
     "mpaulosky/SuggestionApp": "full",
-    "mpaulosky/Application_Factory": "repo-settings-only",
+    "mpaulosky/Application_Factory": "factory",
 }
 REST = ("mpaulosky/IssueTracker", "mpaulosky/Blazor-Server", "mpaulosky/IssueManager", "mpaulosky/Articles",
         "mpaulosky/SuggestionApp")
@@ -26,6 +26,11 @@ REST = ("mpaulosky/IssueTracker", "mpaulosky/Blazor-Server", "mpaulosky/IssueMan
 
 def test_order_is_ticketmanager_then_the_rest_in_the_skills_order_without_the_factory():
     assert rollout.rollout_order(LISTED) == ("mpaulosky/TicketManager", *REST)
+
+
+def test_order_leaves_out_every_scope_but_full():
+    listed = {"mpaulosky/TicketManager": "full", "mpaulosky/Application_Factory": "factory", "mpaulosky/old": "repo-settings-only"}
+    assert rollout.rollout_order(listed) == ("mpaulosky/TicketManager",)
 
 
 def test_order_puts_ticketmanager_first_wherever_it_is_listed():
