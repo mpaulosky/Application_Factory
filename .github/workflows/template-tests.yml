@@ -50,7 +50,7 @@ jobs:
           python-version: "3.12"
 
       # The Template's repos use pnpm, never npm, so markdownlint-cli2 comes from pnpm too.
-      # This repo has no package.json, so the version is given here: the one the Template's Seed package.json pins.
+      # The version is given here, the one package.json and the Template's Seed package.json pin.
       - name: Setup pnpm
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
@@ -77,7 +77,11 @@ jobs:
 
       # The same gate the pre-push hook runs: scripts/gate.sh's own test, the check that the Factory's copies of Template files
       # match the Template's, then test.sh. A push from a clone without active hooks is still held to the copies.
+      # The gate installs the review's packages (tsx, zod) itself. CI has no .git/review/ ledger, so it skips the local review check
+      # (ADR 0010); the pre-push hook removes the variable, so a push never skips the review.
       - name: Run the gate
+        env:
+          GATE_SKIP_REVIEW: "1"
         run: bash "scripts/gate.sh"
 
       # Sandcastle's type-check and tests (.sandcastle/), on a throwaway repo the Template was Applied to. test.sh doesn't run

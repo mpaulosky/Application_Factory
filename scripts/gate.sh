@@ -17,7 +17,7 @@ skill=".claude/skills/repo-ci-baseline"
 owned="$skill/template/owned"
 
 # The Factory carries these Owned files as copies, for its git hooks, review layer and issue and PR process. Edit the Template's file and copy it over.
-# Keep this list in step with ADR 0006, ADR 0008, ADR 0009 and CLAUDE.md.
+# Keep this list in step with ADR 0006, ADR 0008, ADR 0009, ADR 0010 and CLAUDE.md.
 copies=(
   .github/hooks/pre-commit
   .github/hooks/pre-push
@@ -36,12 +36,31 @@ copies=(
   .github/workflows/lint-markdown.yml
   .github/workflows/lint-yaml.yml
   .github/workflows/lint-actions.yml
+  scripts/review.sh
+  .sandcastle/lib/review-ledger.mts
+  .sandcastle/lib/security-record.mts
+  .sandcastle/lib/errors.mts
+  .sandcastle/lib/host-limit.mts
+  .sandcastle/lib/plain-text.mts
+  .sandcastle/lib/review-ledger.test.mts
+  .sandcastle/lib/security-record.test.mts
+  .sandcastle/lib/plain-text.test.mts
+  .claude/skills/pre-push-review/SKILL.md
+  .claude/skills/pre-push-review/lenses.md
+  .claude/skills/pre-push-review/review-bar.md
+  .claude/agents/pre-push-reviewer.md
+  .security/README.md
 )
 
 # The test runs this script against throwaway repos, with GATE_SKIP_SELF_TEST=1 so those runs don't test themselves again.
 if [[ "${GATE_SKIP_SELF_TEST:-}" != "1" ]]; then
   echo -e "\n${CYAN}▶ scripts/tests/gate.test.sh${RESET}"
   "$ROOT/scripts/tests/gate.test.sh"
+
+# The three copied tests that stand alone (ADR 0010); the Template's Sandcastle check runs the rest.
+  echo -e "\n${CYAN}▶ Local review tests${RESET}"
+  if [[ ! -x node_modules/.bin/tsx ]]; then pnpm install --frozen-lockfile >&2; fi
+  node_modules/.bin/tsx --test .sandcastle/lib/review-ledger.test.mts .sandcastle/lib/security-record.test.mts .sandcastle/lib/plain-text.test.mts
 fi
 
 echo -e "\n${CYAN}▶ Copies of Template files${RESET}"
@@ -65,6 +84,17 @@ echo -e "\n${CYAN}▶ markdownlint (whole repo, as Lint Markdown)${RESET}"
 markdownlint-cli2 '**/*.md' || { echo -e "${RED}❌ markdownlint${RESET}" >&2; exit 1; }
 echo -e "\n${CYAN}▶ yamllint (whole repo, as Lint YAML)${RESET}"
 yamllint -c .yamllint.yml . || { echo -e "${RED}❌ yamllint${RESET}" >&2; exit 1; }
+# This branch's diff must have passed the local review (/pre-push-review), as an Application's gate checks it (ADR 0010).
+# GATE_SKIP_REVIEW=1 is for gate runs started by hand and for CI, which has no .git/review/ ledger; the pre-push hook removes it.
+echo -e "\n${CYAN}▶ Local review (scripts/review.sh check)${RESET}"
+if [[ "${GATE_SKIP_REVIEW:-}" == "1" ]]; then
+  echo "Local review check skipped (GATE_SKIP_REVIEW=1)."
+elif ! BASE="$(git merge-base HEAD origin/main 2>/dev/null)"; then
+  echo "❌ No origin/main to diff against, so the review can't be checked: run git fetch origin main." >&2
+  exit 1
+else
+  scripts/review.sh check "$BASE"
+fi
 
 echo -e "\n${CYAN}▶ test.sh${RESET}"
 "$ROOT/$skill/test.sh"

@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 # The Factory reviews every branch before it is pushed
 
