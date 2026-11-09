@@ -3,7 +3,9 @@ status: accepted
 ---
 # Applications are created from the Blazor-Server Starter
 
-`mpaulosky/Blazor-Server` is a GitHub template repository, and `auth0-management-app` was generated from it and then renamed. A Creation uses `gh repo create --template mpaulosky/Blazor-Server` and then a scripted rename pass, instead of the Factory keeping its own scaffolding. The Starter's stack (Blazor Web App, Aspire, Tailwind, Auth0, Theme and Palette) is kept whole, so Auth0 is always on.
+`mpaulosky/Blazor-Server` is a GitHub template repository, and `auth0-management-app` was generated from it and then renamed. A Creation uses `gh repo create --template
+mpaulosky/Blazor-Server` and then a scripted rename pass, instead of the Factory keeping its own scaffolding. The Starter's stack (Blazor Web App, Aspire, Tailwind,
+Auth0, Theme and Palette) is kept whole, so Auth0 is always on.
 
 ## Considered Options
 
