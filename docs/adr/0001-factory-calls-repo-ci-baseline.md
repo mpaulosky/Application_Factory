@@ -3,7 +3,9 @@ status: superseded by ADR-0005
 ---
 # The Factory calls repo-ci-baseline instead of absorbing it
 
-`repo-ci-baseline` already owns the Baseline Template, `apply.sh`, `reapply.sh`, `rollout.sh`, `status.sh` and the Fleet registry (`repos.txt`). The Factory adds only the Request-driven Creation flow (create from the Starter, then rename), and invokes the baseline scripts for everything else. This avoids two copies of the hooks and workflows that could drift apart.
+`repo-ci-baseline` already owns the Baseline Template, `apply.sh`, `reapply.sh`, `rollout.sh`, `status.sh` and the Fleet registry (`repos.txt`). The Factory adds only the
+Request-driven Creation flow (create from the Starter, then rename), and invokes the baseline scripts for everything else. This avoids two copies of the hooks and
+workflows that could drift apart.
 
 ## Considered Options
 

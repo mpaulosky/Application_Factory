@@ -20,8 +20,10 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
 - `.github/workflows/template-tests.yml`: the Factory's own workflow (named `repo-ci-baseline Template`, job `Template tests`). It runs `test.sh` and the Sandcastle check on every PR.
 - `.github/hooks/` (`pre-commit`, `pre-push`, `post-checkout`), `scripts/check-branch-name.sh`, `.github/workflows/{claude-review,pr-automerge,pr-review-submitted}.yml` and
   `.github/scripts/post_claude_review.py`, and the issue and PR process (ADR 0009): `.github/ISSUE_TEMPLATE/*`, `.github/pull_request_template.md`, `.github/workflows/pr-title.yml` and
-  `scripts/check-pr-title.sh`: copies of the Template's Owned files. Edit the Template's file and copy it over; `scripts/gate.sh` fails when a copy drifts.
-- `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too. It runs its own test (`scripts/tests/gate.test.sh`), checks those copies, then runs `test.sh`. [ADR
+  `scripts/check-pr-title.sh`, and `.github/workflows/lint-{markdown,yaml,actions}.yml`: copies of the Template's Owned files. `.github/dependabot.yml`, `.yamllint.yml` and
+  `.markdownlint-cli2.jsonc` are the Factory's own (ADR 0009). Edit the Template's file and copy it over; `scripts/gate.sh` fails when a copy drifts.
+- `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too. It runs its own test (`scripts/tests/gate.test.sh`), checks those copies,
+  lints the whole repo's Markdown and YAML as the lint workflows do, then runs `test.sh`. [ADR
   0006](docs/adr/0006-the-factory-carries-the-git-hooks-and-a-gate.md).
 - `~/.claude/skills/repo-ci-baseline` is a symlink to the skill here, so editing it changes what `apply.sh` copies everywhere.
 
