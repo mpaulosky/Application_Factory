@@ -59,5 +59,12 @@ if ((${#drifted[@]})); then
 fi
 echo "${#copies[@]} copies match the Template."
 
+# What the Lint Markdown and Lint YAML workflows run over the whole repo, so a failure shows here and not first on GitHub (ADR 0009).
+# The pre-commit hook lints staged Markdown only; test.sh lints the Template's files only.
+echo -e "\n${CYAN}▶ markdownlint (whole repo, as Lint Markdown)${RESET}"
+markdownlint-cli2 '**/*.md' || { echo -e "${RED}❌ markdownlint${RESET}" >&2; exit 1; }
+echo -e "\n${CYAN}▶ yamllint (whole repo, as Lint YAML)${RESET}"
+yamllint -c .yamllint.yml . || { echo -e "${RED}❌ yamllint${RESET}" >&2; exit 1; }
+
 echo -e "\n${CYAN}▶ test.sh${RESET}"
 "$ROOT/$skill/test.sh"

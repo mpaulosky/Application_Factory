@@ -31,6 +31,8 @@ new_repo() {
     cp -p "$here/$f" "$repo/$skill/template/owned/$f"
     cp -p "$here/$f" "$repo/$f"
   done
+  cp -p "$here/.yamllint.yml" "$here/.markdownlint-cli2.jsonc" "$repo/"
+  cp -p "$here/$skill/template/owned/.markdownlint-cli2.jsonc" "$repo/$skill/template/owned/"
   cat > "$repo/$skill/test.sh" <<'STUB'
 #!/usr/bin/env bash
 touch "$(dirname "${BASH_SOURCE[0]}")/ran"
