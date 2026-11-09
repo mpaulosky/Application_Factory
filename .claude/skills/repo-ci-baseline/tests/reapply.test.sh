@@ -146,7 +146,7 @@ wt="$work/Widget-worktrees/chore-reapply-baseline"
 
 # ── A first run: a fresh worktree, the Apply commit, a new PR ───────────────
 reset_gh
-out="$("$reapply" --brings mpaulosky/dotfiles#80,#81 "$repo" 2>&1)" && rc=0 || rc=$?
+out="$("$reapply" --brings '#80,#81' "$repo" 2>&1)" && rc=0 || rc=$?
 check "first run: succeeds" '[[ $rc -eq 0 ]] || { echo "$out" >&2; false; }'
 check "first run: worktree on the branch" \
   '[[ "$(git -C "$wt" symbolic-ref --short HEAD)" == chore/reapply-baseline ]]'
@@ -162,7 +162,7 @@ check "first run: pushed to origin" \
 head="$(git -C "$wt" rev-parse --short=7 HEAD)"
 check "first run: PR opened ready, with the title" \
   'grep -q "^pr create .*--title chore: Re-apply the repo-ci-baseline Template" "$stub/gh.log" && ! grep -q -- "--draft" "$stub/gh.log"'
-check "first run: body names the dotfiles PRs" 'grep -q "mpaulosky/dotfiles#80 and mpaulosky/dotfiles#81" "$stub/body"'
+check "first run: body names the Factory PRs, the default prefix" 'grep -q "mpaulosky/Application_Factory#80 and mpaulosky/Application_Factory#81" "$stub/body"'
 check "first run: body names the local head" 'grep -q "\`$head\` Apply commit" "$stub/body"'
 check "first run: body has its sections and footer" \
   'grep -q "^## Why" "$stub/body" && grep -q "^## What changed" "$stub/body" && grep -q "^## Verification" "$stub/body" && [[ "$(tail -n1 "$stub/body")" == "🤖 Generated with [Claude Code](https://claude.com/claude-code)" ]]'
@@ -199,7 +199,7 @@ git_q -C "$hub" switch -q -c chore/reapply-baseline origin/chore/reapply-baselin
 git_q -C "$hub" merge -q --no-edit main   # gh pr update-branch
 git_q -C "$hub" push -q origin chore/reapply-baseline
 printf 'name: CI v2\n' > "$skill/template/owned/.github/workflows/ci.yml"
-out="$("$reapply" --brings mpaulosky/dotfiles#82 "$repo" 2>&1)" && rc=0 || rc=$?
+out="$("$reapply" --brings mpaulosky/Other#82 "$repo" 2>&1)" && rc=0 || rc=$?
 check "open PR: succeeds" '[[ $rc -eq 0 ]] || { echo "$out" >&2; false; }'
 check "open PR: worktree reused" 'grep -q "reusing" <<< "$out"'
 check "open PR: remote branch merged" \
@@ -212,7 +212,7 @@ check "open PR: push fast-forwarded the remote branch" \
 head="$(git -C "$wt" rev-parse --short=7 HEAD)"
 check "open PR: no second PR" '! grep -q "^pr create" "$stub/gh.log"'
 check "open PR: description gains the Apply line before the footer" \
-  '[[ "$(grep -n "\`$head\` Apply commit.*mpaulosky/dotfiles#82" "$stub/body" | cut -d: -f1)" -lt "$(grep -n "Generated with" "$stub/body" | cut -d: -f1)" ]]'
+  '[[ "$(grep -n "\`$head\` Apply commit.*mpaulosky/Other#82" "$stub/body" | cut -d: -f1)" -lt "$(grep -n "Generated with" "$stub/body" | cut -d: -f1)" ]]'
 check "open PR: earlier description kept" 'grep -q "pr #7 description" "$stub/body"'
 check "open PR: Copilot requested" 'grep -qx "pr edit 7 --add-reviewer @copilot" "$stub/gh.log"'
 

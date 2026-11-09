@@ -71,19 +71,19 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
 
 ## Change the Baseline
 
-1. Edit `template/` (and the part's reference) in a dotfiles worktree.
+1. Edit `template/` (and the part's reference) in a Factory worktree.
 2. Run `test.sh`: the hook suites, the auto-merge script tests, the release-script tests, the renderer oracle, the GitHub scripts' tests
    (settings, the landing decision, status, land, rollout), the Claude Review benchmark's tests, actionlint, zizmor, yamllint, shellcheck, markdownlint, the no-placeholders-in-Owned
    check, the check that the Owned scripts' `gh` commands are told their repository, the Sandcastle copy and Seed checks, and the `apply.sh` and `reapply.sh` tests.
-   dotfiles CI runs the same script.
+   the Factory's CI runs the same script.
    Done when it passes.
-3. After the dotfiles PR merges, re-Apply to each repo in its own PR; the overwritten Owned files are the change.
+3. After the Factory PR merges, re-Apply to each repo in its own PR; the overwritten Owned files are the change.
    Open it ready, not as a draft: the repo's own auto-merge lands it ([automerge.md](references/automerge.md#landing)).
-   - **Roll out:** `rollout.sh --brings mpaulosky/dotfiles#<n>,#<n>` runs `reapply.sh` on TicketManager and holds the rest until its re-Apply PR has merged.
+   - **Roll out:** `rollout.sh --brings '#<n>,#<n>'` runs `reapply.sh` on TicketManager and holds the rest until its re-Apply PR has merged.
      Land that PR, fix any finding Template first, then run `rollout.sh` again: once it has merged,
      it re-Applies the other repos in order, one pre-push gate at a time, reports a repo that fails and goes on.
      Start with `--dry-run`. It ends with the `land.sh` command for the PRs it left open.
-   - **One repo:** `reapply.sh --brings mpaulosky/dotfiles#<n>,#<n> <repo>` (what `rollout.sh` runs, and the way to retry a repo that failed)
+   - **One repo:** `reapply.sh --brings '#<n>,#<n>' <repo>` (what `rollout.sh` runs, and the way to retry a repo that failed)
      prepares the `chore/reapply-baseline` worktree, merges the remote branch and `main`, commits `apply.sh`'s output alone,
      pushes through the gate (which asks for a review when Apply writes the coverage threshold,
      the hand-off rules, an issue template, the reviewer agent, a Sandcastle prompt (intake, critique, plan, review or a role's), the local gate's check.sh or global.json),
