@@ -128,7 +128,8 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
   a rate limit or a bad token ends the retries, and a sweep's run) and stands down if another run's record is listed before its own (#369);
   a run that never finds its own record, or whose every re-read fails with an error that doesn't end a run, requests anyway with a warning (#374), since a repeat request is idempotent.
   Only a record by `github-actions` or the repository owner counts, and the first one listed decides. A comment that fails to post means no request, and a request that fails
-  counts as dropped at once. A record that can't be read (the comments query is the last 100 comments; more than that with no record among them) counts as asked but not settled:
+  counts as dropped once the rest of the 30-second settle window (capped by `COPILOT_ASK_WAIT_MS`) has passed, so every workflow agrees.
+  A record that can't be read (the comments query is the last 100 comments; more than that with no record among them) counts as asked but not settled:
   nothing asks, and nothing is called dropped. Copilot is never asked again for the PR: a later head with no pending request goes straight to the next bullet,
   because the record is long settled. A request that registers (the ruleset's own per push, or a budget that came back) is waited for, and a real Copilot review of the head
   takes the label off (#270). `land.sh` writes the same record (a comment as the owner) and makes the same request, so the two agree.

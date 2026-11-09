@@ -1690,6 +1690,7 @@ jobs:
               }
               // Names this run's record among any others on the PR.
               const askId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+              let askWrittenAt;
               try {
                 await github.rest.issues.createComment({
                   owner,
@@ -1707,6 +1708,9 @@ jobs:
                 core.warning(`Couldn't record the ask for Copilot's review of PR #${pullNumber}, so it wasn't made: ${error.message}`);
                 return false;
               }
+              // After the write returns, so a slow write can't shorten the wait:
+              // the record's own timestamp is no later than this.
+              askWrittenAt = Date.now();
               // Two runs can both have read "no record" and both posted one.
               // Read the comments again: only the run whose record is
               // listed first makes the request (mpaulosky/dotfiles#369). GraphQL
@@ -1774,6 +1778,13 @@ jobs:
                   throw error;
                 }
                 core.warning(`Couldn't request Copilot's review of PR #${pullNumber}: ${error.message}`);
+                // Wait out what is left of COPILOT_ASK_SETTLE_MS (capped by
+                // COPILOT_ASK_WAIT_MS) before the caller adds review:claude:
+                // other workflows see only the record, which Claude Review
+                // skips and PR Auto-Merge strips while it is younger than that
+                // (mpaulosky/Application_Factory#23).
+                const remainingMs = askWrittenAt + COPILOT_ASK_SETTLE_MS - Date.now();
+                await new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.min(COPILOT_ASK_WAIT_MS, remainingMs))));
                 core.info(`Copilot's review of PR #${pullNumber} wasn't requested, so Claude is called in.`);
                 return true;
               }
