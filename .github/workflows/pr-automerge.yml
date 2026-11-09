@@ -298,6 +298,15 @@ jobs:
             const CLAUDE_MARKER = "<!-- claude-review -->";
             // Copilot's review comments are authored by this Bot.
             const COPILOT_REVIEWER = "copilot-pull-request-reviewer";
+            // Whether a reviewer is the Copilot bot, by its exact login: the
+            // reviews API and GraphQL name it copilot-pull-request-reviewer,
+            // the requested-reviewer and timeline REST APIs name it Copilot.
+            // Only a Bot counts, so a user or team called copilot-x, or a
+            // user called Copilot, isn't taken for it.
+            const isCopilotBot = (login, type) => {
+              const name = (login ?? "").toLowerCase().replace(/\[bot\]$/, "");
+              return type === "Bot" && (name === "copilot" || name === COPILOT_REVIEWER);
+            };
             // At most this many unreplied threads are named in the notice.
             const UNREPLIED_NAMED = 3;
             // The second line of a Claude review with findings outside the
@@ -1346,7 +1355,7 @@ jobs:
               // the add (mpaulosky/dotfiles#381). A review Copilot submitted
               // is a round, which bounds the removal already.
               const copilotRequests = events
-                .filter((event) => event.event === "review_requested" && /copilot/i.test(event.requested_reviewer?.login ?? event.requested_team?.name ?? ""))
+                .filter((event) => event.event === "review_requested" && isCopilotBot(event.requested_reviewer?.login, event.requested_reviewer?.type))
                 .map((event) => Date.parse(event.created_at));
               const adds = claudeEvents
                 .filter((event) => event.event === "labeled")
@@ -1540,7 +1549,8 @@ jobs:
             // Fails closed: a request list that wasn't read, that holds more
             // than the page, or has a request with no reviewer counts as
             // pending, so Claude's review isn't taken for Copilot's. A Team's
-            // or Mannequin's request (no login comes back) isn't Copilot's.
+            // or Mannequin's request (no login comes back) isn't Copilot's, nor is a
+            // User's or Bot's with another login (copilot-x).
             function copilotPending(pr) {
               const requests = pr.reviewRequests;
               if (!requests || requests.totalCount > requests.nodes.length) {
@@ -1548,7 +1558,7 @@ jobs:
               }
               return requests.nodes.some((request) => {
                 const reviewer = request.requestedReviewer;
-                return !reviewer || /copilot/i.test(reviewer.login ?? "");
+                return !reviewer || isCopilotBot(reviewer.login, reviewer.__typename);
               });
             }
 
