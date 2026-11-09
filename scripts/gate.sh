@@ -33,6 +33,9 @@ copies=(
   .github/pull_request_template.md
   .github/workflows/pr-title.yml
   scripts/check-pr-title.sh
+  .github/workflows/lint-markdown.yml
+  .github/workflows/lint-yaml.yml
+  .github/workflows/lint-actions.yml
 )
 
 # The test runs this script against throwaway repos, with GATE_SKIP_SELF_TEST=1 so those runs don't test themselves again.

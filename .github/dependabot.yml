@@ -1,0 +1,39 @@
+# Dependabot version updates for the Factory (ADR 0009). Its own file, not the Template's Seed: the Factory has only GitHub Actions to update.
+# Both directories are listed so one PR bumps an action in a copied workflow and in its source under template/owned/ together,
+# or the gate's drift check would fail the copy. Every label below must exist in the repo.
+---
+
+version: 2
+updates:
+
+  - package-ecosystem: "github-actions"
+    directories:
+      - "/"
+      - "/.claude/skills/repo-ci-baseline/template/owned"
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "16:00"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    # Wait a week before proposing a new release, so a compromised or broken one is usually caught upstream first.
+    cooldown:
+      default-days: 7
+    # The Template pins claude-code-action to the version claude-review.yml's sandbox notes were checked against.
+    # It moves only through the Template, once they're checked again.
+    ignore:
+      - dependency-name: "anthropics/claude-code-action"
+    labels:
+      - "github-actions"
+      - "dependencies"
+    groups:
+      # Minor and patch only: a major bump arrives as its own PR to look at.
+      minor-and-patch-actions:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
