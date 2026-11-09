@@ -431,7 +431,7 @@ def ruleset_differences(live, want):
     return diffs
 
 
-def check_rulesets(gh, repo, std, workflows, default_branch, remove_legacy):
+def check_rulesets(gh, repo, std, workflows, default_branch, remove_legacy, scope="full"):
     try:
         summaries = gh.api("GET", f"repos/{repo}/rulesets?includes_parents=false")
     except ApiError as error:
@@ -468,7 +468,11 @@ def check_rulesets(gh, repo, std, workflows, default_branch, remove_legacy):
     if kept:
         findings.append(Finding("required checks", INFO,
                                 "kept outside the standard while a workflow still reports them: " + ", ".join(kept)))
-    if missing:
+    if missing and scope == "factory":
+        # The Factory carries no .NET workflows (ADR 0009), so some of the standard's checks can never be reported there.
+        findings.append(Finding("required checks", INFO,
+                                "no workflow on the default branch reports " + ", ".join(missing) + "; the factory scope does not require them"))
+    elif missing:
         findings.append(Finding("required checks", MANUAL,
                                 "no workflow on the default branch reports " + ", ".join(missing)
                                 + "; re-Apply the Template, then run --fix again to require them"))
@@ -574,7 +578,7 @@ def check(gh, repo, remove_legacy=False, scope="full"):
     workflows = read_workflows(gh, repo, branch)
     findings += check_security(gh, repo, info, std, workflows)
     findings += check_actions(gh, repo, std, workflows)
-    ruleset_findings, _ = check_rulesets(gh, repo, std, workflows, branch, remove_legacy)
+    ruleset_findings, _ = check_rulesets(gh, repo, std, workflows, branch, remove_legacy, scope)
     findings += ruleset_findings
     findings += check_review_cap(std, workflows)
     findings += check_labels(gh, repo, std, labels)
