@@ -3,8 +3,11 @@
 // client, so these tests cover exactly the code the workflow runs.
 // Usage: node --test .github/scripts/tests/pr-automerge.test.mjs
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { test } from "node:test";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { mock, test } from "node:test";
 
 const WORKFLOW = new URL("../../workflows/pr-automerge.yml", import.meta.url);
 const OWNER = "octo";
@@ -427,6 +430,8 @@ async function evaluate(pr, events = [], options = {}) {
   };
   const removedLabels = [];
   const addedLabels = [];
+  // When each label was added (the PAT's call).
+  const addedLabelAt = [];
   const listRequests = [];
   let graphqlRequests = 0;
   const pullRequests = Array.isArray(pr) ? [...pr] : [pr];
@@ -776,6 +781,7 @@ async function evaluate(pr, events = [], options = {}) {
         // A label added with GITHUB_TOKEN starts no workflow.
         addLabels: viaPat("issues.addLabels", async (params) => {
           addedLabels.push(params);
+          addedLabelAt.push(Date.now());
           if (addLabelError) {
             throw addLabelError;
           }
@@ -819,7 +825,7 @@ async function evaluate(pr, events = [], options = {}) {
   return {
     merges, updates, posted, logs, eventRequests, queries, patTokens, calls, graphqlRequests, rulesRequests, removedLabels,
     addedLabels, listRequests, runRequests, headRunRequests, asked, requests, order, exhaustionPosts, deletedComments,
-    permissionRequests, commentRequests
+    permissionRequests, commentRequests, askedAt, addedLabelAt
   };
 }
 
@@ -1686,17 +1692,102 @@ test("adds review:claude only after the rest of the settle window when the reque
   assert.ok(Date.now() - started >= 250, `the run took ${Date.now() - started} ms`);
 });
 
-test("a slow record write doesn't shorten the wait when the request then fails (mpaulosky/Application_Factory#23)", async () => {
-  const started = Date.now();
-  const { addedLabels } = await evaluate(readyPr(unreviewed), [], {
-    copilotRequest: Object.assign(new Error("Resource not accessible by personal access token"), { status: 403 }),
-    askCommentDelayMs: 200,
-    askWaitMs: 300,
-    askPollMs: 100
-  });
+// Claude Review's gate (the Python in claude-review.yml's "Skip while Copilot can
+// review" step), run against a stub `gh` that serves one PR whose only comment is
+// the ask record, written `ageSeconds` ago. Returns the step's can_review output.
+function claudeReviewGate(ageSeconds) {
+  const lines = readFileSync(new URL("../../workflows/claude-review.yml", import.meta.url), "utf8").split("\n");
+  const open = lines.findIndex((line) => line.includes("python3 -I - <<'PY'"));
+  assert.notEqual(open, -1, "claude-review.yml has no gate heredoc");
+  const close = lines.findIndex((line, index) => index > open && line.trim() === "PY");
+  const body = lines.slice(open + 1, close);
+  const indent = Math.min(...body.filter((line) => line.trim() !== "").map((line) => line.search(/\S/)));
+  const script = body.map((line) => line.slice(indent)).join("\n");
 
-  assert.deepEqual(addedLabels, LABEL_FOR_CLAUDE);
-  assert.ok(Date.now() - started >= 450, `the run took ${Date.now() - started} ms`);
+  const dir = mkdtempSync(join(tmpdir(), "claude-gate-"));
+  try {
+    const created = new Date(Date.now() - ageSeconds * 1000).toISOString();
+    const comment = JSON.stringify({ body: COPILOT_ASKED_MARKER, user: { login: "github-actions[bot]" }, created_at: created });
+    writeFileSync(join(dir, "gh"), [
+      "#!/bin/sh",
+      'case "$2" in',
+      '  */pulls/7) echo \'{"head":{"sha":"abc123"}}\' ;;',
+      "  */pulls/7/reviews) echo '[[]]' ;;",
+      '  */pulls/7/requested_reviewers) echo \'{"users":[]}\' ;;',
+      `  */issues/7/comments) echo '[[${comment}]]' ;;`,
+      "  *) echo \"unexpected $2\" >&2; exit 1 ;;",
+      "esac"
+    ].join("\n"));
+    chmodSync(join(dir, "gh"), 0o755);
+    const output = join(dir, "output");
+    writeFileSync(output, "");
+    const done = spawnSync("python3", ["-I", "-"], {
+      input: script,
+      encoding: "utf8",
+      env: { PATH: `${dir}:${process.env.PATH}`, REPOSITORY: `${OWNER}/demo`, PR_NUMBER: "7", HEAD_SHA: HEAD, GITHUB_OUTPUT: output }
+    });
+    assert.equal(done.status, 0, done.stderr);
+    return readFileSync(output, "utf8").trim();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// Runs a promise under mock timers, ticking one second at a time once the run is waiting.
+async function underClock(promise) {
+  let finished = false;
+  let failure;
+  let value;
+  promise.then((result) => { finished = true; value = result; }, (error) => { finished = true; failure = error; });
+  for (let seconds = 0; !finished && seconds < 300; seconds++) {
+    await new Promise((resolve) => setImmediate(resolve));
+    if (!finished) {
+      mock.timers.tick(1000);
+    }
+  }
+  assert.ok(finished, "the run never finished within 300 simulated seconds");
+  if (failure) {
+    throw failure;
+  }
+  return value;
+}
+
+test("a failed request after a slow record write holds review:claude until the persisted record has settled for every workflow (mpaulosky/Application_Factory#23)", async () => {
+  mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.parse("2026-01-02T00:00:00Z") });
+  let result;
+  let recordAgeAtLabel;
+  let freshRun;
+  try {
+    // The real 30-second settle window, and a record that takes 5 seconds to persist.
+    result = await underClock(evaluate(readyPr(unreviewed), [], {
+      copilotRequest: Object.assign(new Error("Resource not accessible by personal access token"), { status: 403 }),
+      askCommentDelayMs: 5000,
+      askWaitMs: 30 * 1000,
+      askPollMs: 5000
+    }));
+    assert.deepEqual(result.addedLabels, LABEL_FOR_CLAUDE);
+    assert.equal(result.askedAt.length, 1);
+
+    // The label lands only once the record workflows read is 30 seconds old.
+    recordAgeAtLabel = (result.addedLabelAt[0] - result.askedAt[0]) / 1000;
+    assert.ok(recordAgeAtLabel >= 30, `the record was ${recordAgeAtLabel} seconds old when review:claude was added`);
+
+    // A fresh PR Auto-Merge run (no copilotAskedHere flag) reads the persisted
+    // record at the moment the label was added, and keeps the label.
+    mock.timers.setTime(result.addedLabelAt[0]);
+    freshRun = await underClock(evaluate(
+      readyPr({ ...unreviewed, labels: labelled(CLAUDE_LABEL), comments: commentsOf(askedBy(ACTIONS, recordAgeAtLabel)) })
+    ));
+  } finally {
+    mock.timers.reset();
+  }
+  assert.deepEqual(freshRun.removedLabels, [], "PR Auto-Merge took review:claude off");
+  assert.deepEqual(freshRun.asked, [], "a fresh run asked again");
+
+  // Claude Review's gate reads the same record at the same age and lets Claude review.
+  assert.equal(claudeReviewGate(recordAgeAtLabel), "can_review=false");
+  // The same gate holds Claude back for a record 25 seconds old (what the old code allowed here).
+  assert.equal(claudeReviewGate(25), "can_review=true");
 });
 
 test("makes no request and adds no label when the record comment can't be posted (mpaulosky/dotfiles#360)", async () => {
