@@ -612,6 +612,23 @@ def test_a_factory_scope_repo_gets_every_check_of_a_full_repo(monkeypatch, tmp_p
     assert "repo settings and retired labels only" not in output
 
 
+def test_a_factory_scope_repo_reports_unreportable_required_checks_as_information(monkeypatch, tmp_path):
+    shutil.copytree(gs.HERE, tmp_path / "github", ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    (tmp_path / "github" / "repos.txt").write_text(f"{REPO} factory\n")
+    monkeypatch.setattr(gs, "HERE", tmp_path / "github")
+    fake = FakeGitHub(rulesets={}, workflows={".github/workflows/ci.yml": CI, ".github/workflows/pr-automerge.yml": AUTOMERGE})
+
+    status, output = run(fake, "--fix")
+
+    assert status == 0, output
+    assert "INFO        required checks: no workflow on the default branch reports PR title, actionlint" in output
+    assert "MANUAL" not in output
+    created = next(body for method, path, body in fake.writes if method == "POST" and path.endswith("/rulesets"))
+    [checks_rule] = [r for r in created["rules"] if r["type"] == "required_status_checks"]
+    assert [c["context"] for c in checks_rule["parameters"]["required_status_checks"]] == ["Build Solution", "Test Suite", "Branch name"], \
+        "only the checks a workflow reports are required; the information line adds none"
+
+
 def test_a_per_repo_file_can_add_a_required_check(monkeypatch, tmp_path):
     shutil.copytree(gs.HERE, tmp_path / "github", ignore=shutil.ignore_patterns("tests", "__pycache__"))
     (tmp_path / "github" / "repos" / "app.json").write_text('{"required_checks": ["Sandcastle"]}')
