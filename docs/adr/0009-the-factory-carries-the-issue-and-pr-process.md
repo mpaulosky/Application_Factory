@@ -14,10 +14,10 @@ a file of its own. It still carries no `.sandcastle/`, local review, .NET workfl
 | --- | --- |
 | Issue templates: `.github/ISSUE_TEMPLATE/{bug_report.md,feature_request.md,config.yml}`, and `.github/pull_request_template.md` | copies |
 | `pr-title.yml` with `scripts/check-pr-title.sh` | copies |
-| `lint-markdown.yml`, `lint-yaml.yml` with `.yamllint.yml`, `lint-actions.yml` (actionlint, zizmor, shellcheck) | copies |
+| `lint-markdown.yml`, `lint-yaml.yml`, `lint-actions.yml` (actionlint, zizmor, shellcheck) | copies |
 | `dependabot-auto-merge.yml` | copy |
 | `.github/dependabot.yml` | the Factory's own: the `github-actions` entry only, as the Template's other ecosystems (nuget, dotnet-sdk, npm) have nothing here to update |
-| `.markdownlint-cli2.jsonc` | stays the Factory's own; it already differs from the Template's (its ignore list) |
+| `.yamllint.yml`, `.markdownlint-cli2.jsonc` | the Factory's own, each starting from the Template's file and free to differ (the Markdown one already does, with its ignore list); the lint workflows read them, so an exclusion for a Template or Seed file goes here, never in a copy |
 
 Not carried: `docs/PROCESS.md` and `docs/CONTRIBUTING.md` (they describe an Application's flow and its .NET required checks; CLAUDE.md is the Factory's process document), `ci.yml`,
 `release.yml`,
@@ -43,9 +43,13 @@ Not carried: `docs/PROCESS.md` and `docs/CONTRIBUTING.md` (they describe an Appl
   keeps its `MANUAL` line
   for them; the `factory` scope should report checks no workflow produces as information, not as work to do (a small follow-up).
 - The lint workflows run over the whole repo, Template and Seed files included. If one of them fails on a Seed file (a YAML without a document start, say), the fix is an exclusion in the
-  Factory's own lint config,
-  never an edit that changes what an Application receives. Check this in the implementing PR before the checks are made required.
+  Factory's own `.yamllint.yml` or `.markdownlint-cli2.jsonc`, never an edit that changes what an Application receives. Check this in the implementing PR before the checks are made required.
 - `dependabot-auto-merge.yml` arms native auto-merge on Dependabot's PRs once their required checks pass, without Copilot's review: the Baseline's policy for Dependabot (see
   `references/automerge.md`), now also the Factory's.
   With pinned actions required, those PRs are how the Factory's SHA pins stay current.
+- A Dependabot bump of an action in a copied workflow would edit `.github/workflows/` and not its source in `template/owned/`, so the gate would fail the copy and block the merge. The Factory's
+  `dependabot.yml` therefore lists both directories, the repo root and `.claude/skills/repo-ci-baseline/template/owned`, in one `github-actions` group, so a single PR bumps the
+  Template's file and its copy
+  together and the gate stays green. That also bumps what the Fleet receives, by a Rollout; the same bump reaches each Application through its own Dependabot. Whether Dependabot groups across the two
+  directories as expected is not verified here: the implementing PR checks it, and if it does not, the fallback is that a maintainer mirrors the bump (edit the Template's file, copy it over) before merging.
 - Nothing is rolled out: no Owned Template file changes.
