@@ -20,7 +20,7 @@ The Factory carries the review's own pieces, not the rest of Sandcastle:
 | `.sandcastle/lib/repo-config.mts` (`REPO_SLUG`, `NOT_OWNED_BASELINE_PATHS`) | the Factory's own, as an Application's is |
 | `package.json`, `pnpm-workspace.yaml` and the lockfile, for `tsx` and `zod` | the Factory's own, minimal |
 | `.security/README.md` | copy |
-| `.gitignore` lines `.security/*` and `!.security/README.md` | the Factory's own; the ledger's test reads the checkout's `.gitignore` and requires both |
+| `.gitignore` lines `node_modules/`, `.security/*` and `!.security/README.md` | the Factory's own; `scripts/review.sh` installs `tsx` and `zod` into `node_modules/`, and an untracked one would make the worktree dirty, which `recordReview` and `pre-push` refuse; the ledger's test reads the checkout's `.gitignore` and requires the two `.security` lines |
 
 `host-limit.test.mts` stays out: it spawns a child that imports `step-limit.mts`, which pulls in `status.mts` and more of the host pipeline, and the Template's Sandcastle check already runs
 it there.
