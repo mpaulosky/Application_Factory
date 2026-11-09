@@ -2154,6 +2154,25 @@ test("fails closed when Copilot's pending request can't be seen: too many reques
   }
 });
 
+test("only the Copilot bot's exact identity is Copilot's pending request, not a copilot-x user, bot or team (mpaulosky/Application_Factory#22)", async () => {
+  const pendingBy = (requestedReviewer) => ({ totalCount: 1, nodes: [{ requestedReviewer }] });
+  const others = [
+    { __typename: "User", login: "copilot-x" },
+    { __typename: "User", login: "Copilot" },
+    { __typename: "Bot", login: "copilot-x" },
+    { __typename: "Bot", login: "my-copilot" },
+    { __typename: "Team", slug: "copilot-team" }
+  ];
+  for (const other of others) {
+    const called = await evaluate(readyPr({ ...unreviewed, reviewRequests: pendingBy(other), comments: commentsOf(askedBy(ACTIONS, 3600)) }));
+    assert.equal(called.addedLabels.length, 1, `${JSON.stringify(other)} isn't Copilot: Claude is called in`);
+  }
+  for (const login of ["copilot-pull-request-reviewer", "Copilot"]) {
+    const called = await evaluate(readyPr({ ...unreviewed, reviewRequests: pendingBy({ __typename: "Bot", login }), comments: commentsOf(askedBy(ACTIONS, 3600)) }));
+    assert.deepEqual(called.addedLabels, [], `${login} is Copilot: Claude isn't called in`);
+  }
+});
+
 test("asks for Copilot's pending requests with their total", async () => {
   const { queries } = await evaluate(readyPr());
 
@@ -4977,6 +4996,16 @@ test("a writer's restart still counts while a Copilot request is pending for the
 });
 
 const copilotRequestedAt = (at, reviewer = { login: "Copilot", type: "Bot" }) => ({ event: "review_requested", created_at: at, requested_reviewer: reviewer, actor: { login: "ruleset" } });
+
+test("a request for a copilot-x user or team does not save an add that PR Auto-Merge removed (mpaulosky/Application_Factory#22)", async () => {
+  for (const event of [
+    { event: "review_requested", created_at: "2026-01-02T00:30:03Z", requested_reviewer: { login: "copilot-x", type: "User" }, actor: { login: "ruleset" } },
+    { event: "review_requested", created_at: "2026-01-02T00:30:03Z", requested_team: { name: "copilot-team" }, actor: { login: "ruleset" } }
+  ]) {
+    const result = await evaluate(documentedLoop({ reviewRequests: COPILOT_PENDING }), [addedBy(OWNER), event, removedByActions("2026-01-02T00:30:05Z")]);
+    assert.equal(result.merges.length, 1, result.logs.join("\n"));
+  }
+});
 
 test("a writer's restart survives PR Auto-Merge's removal made for a Copilot request that came after the add (mpaulosky/dotfiles#381, criterion 1)", async () => {
   // d d d, the owner's add while Copilot can't review, then a request goes pending (a ruleset on a push) and PR Auto-Merge takes the label off.
