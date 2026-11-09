@@ -16,8 +16,8 @@ CYAN='\033[0;36m'; RED='\033[0;31m'; RESET='\033[0m'
 skill=".claude/skills/repo-ci-baseline"
 owned="$skill/template/owned"
 
-# The Factory carries these Owned files as copies, for its own git hooks. Edit the Template's file and copy it over.
-# Keep this list in step with ADR 0006 and CLAUDE.md.
+# The Factory carries these Owned files as copies, for its git hooks, review layer and issue and PR process. Edit the Template's file and copy it over.
+# Keep this list in step with ADR 0006, ADR 0008, ADR 0009 and CLAUDE.md.
 copies=(
   .github/hooks/pre-commit
   .github/hooks/pre-push
@@ -27,6 +27,12 @@ copies=(
   .github/workflows/pr-automerge.yml
   .github/workflows/pr-review-submitted.yml
   .github/scripts/post_claude_review.py
+  .github/ISSUE_TEMPLATE/bug_report.md
+  .github/ISSUE_TEMPLATE/feature_request.md
+  .github/ISSUE_TEMPLATE/config.yml
+  .github/pull_request_template.md
+  .github/workflows/pr-title.yml
+  scripts/check-pr-title.sh
 )
 
 # The test runs this script against throwaway repos, with GATE_SKIP_SELF_TEST=1 so those runs don't test themselves again.
