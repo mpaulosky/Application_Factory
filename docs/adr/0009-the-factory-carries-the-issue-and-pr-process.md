@@ -44,6 +44,10 @@ and its .NET required checks, and CLAUDE.md is the Factory's process document; t
 - Dependabot PRs go through the normal path: the ruleset asks Copilot to review the head, and PR Auto-Merge merges the PR once the head is reviewed, its threads are resolved and `Template tests`
   is green. Claude Review does not cover Dependabot's PRs (they get no Actions secrets), so when Copilot cannot review one, a person reviews and merges it. With about one `github-actions` PR a
   week that costs little.
+- PR Auto-Merge's review loop applies to a Dependabot PR like any other PR. After three consecutive review rounds that raised findings it stops waiting for a review of the head and for bot-opened
+  threads to be resolved (a thread a person opened still blocks), so such a PR can merge without a person looking at it. The Factory accepts that: three rounds of findings on a bump are rare at one PR
+  a week, and requiring manual handling after the limit would be a change to the Template's PR Auto-Merge that reaches every Application. A person can still hold any PR, Dependabot's included,
+  with the `sandcastle:needs-human` label.
 - The Factory's `dependabot.yml` keeps the Seed's weekly schedule, 7-day cooldown and its ignore of `anthropics/claude-code-action` (which moves only through the Template). Its group covers minor
   and patch updates only, so a major bump arrives as its own PR to look at, not as a line in a group.
 - A Dependabot bump of an action in a copied workflow would edit `.github/workflows/` and not its source in `template/owned/`, so the gate would fail the copy and block the merge. The
