@@ -17,6 +17,9 @@
     "**/.pytest_cache/**",
     ".claude/skills/repo-ci-baseline/template/seed/.sandcastle/**",
     ".claude/skills/{build-repair,dotnet-*,remove-squad,review-changes}/**",
-    "starting-points/**"
+    "starting-points/**",
+    // A form, not a document (ADR 0009): its sections are ## headings with no title, and a disable comment
+    // would land in every PR description and squash commit. The Template's config ignores it too.
+    ".github/pull_request_template.md"
   ]
 }

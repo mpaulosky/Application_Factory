@@ -19,14 +19,14 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
 - `docs/adr/`: the Factory's decisions. `docs/Instructions.md`: the steps for setting up a new Application or standardizing an existing one.
 - `.github/workflows/template-tests.yml`: the Factory's own workflow (named `repo-ci-baseline Template`, job `Template tests`). It runs `test.sh` and the Sandcastle check on every PR.
 - `.github/hooks/` (`pre-commit`, `pre-push`, `post-checkout`), `scripts/check-branch-name.sh`, `.github/workflows/{claude-review,pr-automerge,pr-review-submitted}.yml` and
-  `.github/scripts/post_claude_review.py`: copies of the Template's Owned files. Edit the Template's
-  file and copy it over; `scripts/gate.sh` fails when a copy drifts.
+  `.github/scripts/post_claude_review.py`, and the issue and PR process (ADR 0009): `.github/ISSUE_TEMPLATE/*`, `.github/pull_request_template.md`, `.github/workflows/pr-title.yml` and
+  `scripts/check-pr-title.sh`: copies of the Template's Owned files. Edit the Template's file and copy it over; `scripts/gate.sh` fails when a copy drifts.
 - `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too. It runs its own test (`scripts/tests/gate.test.sh`), checks those copies, then runs `test.sh`. [ADR
   0006](docs/adr/0006-the-factory-carries-the-git-hooks-and-a-gate.md).
 - `~/.claude/skills/repo-ci-baseline` is a symlink to the skill here, so editing it changes what `apply.sh` copies everywhere.
 
-The Factory carries the git hooks and a gate of its own (ADR 0006) and Claude Review with PR Auto-Merge (ADR 0008), not the rest of the Baseline: no `.sandcastle/`, local review, .NET workflows or
-`package.json`. Don't add them without an ADR.
+The Factory carries the git hooks and a gate of its own (ADR 0006), Claude Review with PR Auto-Merge (ADR 0008) and the issue and PR process (ADR 0009), not the rest of the Baseline:
+no `.sandcastle/`, local review, .NET workflows or `package.json`. Don't add them without an ADR.
 
 ## Commands
 
