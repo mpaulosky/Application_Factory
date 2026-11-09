@@ -17,10 +17,9 @@ with the permission of each login that added one; and the authors of its open th
 read-only. Prints nothing else, apart from one line when no PR is
 open; a repo that can't be read is reported on stderr and exits 1.
 
-Every listed repo is read as requiring checks and running PR Auto-Merge, which merges a
-reviewed PR itself. That is true of a Baseline repo (Apply gives it the workflow). The Factory (repos.txt
-scope repo-settings-only) is read the same way, but its only workflow, template-tests.yml, runs checks and
-never merges, so a reviewed Factory PR is merged by hand.
+Every listed repo requires checks and runs PR Auto-Merge, which merges a
+reviewed PR itself: a Baseline repo through Apply, and the Factory (repos.txt
+scope repo-settings-only) through its copy (ADR 0008).
 """
 
 import argparse
@@ -394,8 +393,8 @@ def to_thread(node):
 def repo_flags(scope):
     """to_state()'s per-repo keywords for a repos.txt scope.
 
-    A Baseline repo ("full") requires checks and runs PR Auto-Merge. repo-settings-only (the Factory)
-    is read the same way, though its only workflow (template-tests.yml) runs checks and never merges.
+    A Baseline repo ("full") requires checks and runs PR Auto-Merge, and so does
+    repo-settings-only (the Factory), with a copy of it.
     """
     return {"checks_required": True, "merged_by_workflow": True}
 

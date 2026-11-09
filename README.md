@@ -16,6 +16,7 @@ the Fleet registry, and the scripts that Apply the Baseline, find Drift and roll
 | `docs/adr/` | The decisions behind the Factory |
 | `docs/Instructions.md` | Setting up a new Application, or standardizing an existing one |
 | `.github/workflows/template-tests.yml` | CI: runs the Template's tests on every PR |
+| `.github/workflows/{claude-review,pr-automerge,pr-review-submitted}.yml` | Claude Review and PR Auto-Merge, copies of the Template's |
 
 ## Using it
 
