@@ -38,8 +38,9 @@ standard in the first place.
 The check guards the process, not against a hostile PR. Under `pull_request` the job runs the PR's own copy of the
 script and of `ci.yml`, so a PR can change either, as it can for `Build Solution`; such an edit shows in its review.
 
-The CI job also accepts the branches that only Actions create, which no hook sees:
-`docs/release-notes` (`release.yml`) and `docs/backfill-blog-posts` (`backfill-blog-posts.yml`). `dependabot/*` is allowed by the hook too, so a person can push a fix to a Dependabot PR.
+The CI job also accepts the branches that only Actions and Dependabot create, which no hook sees:
+`docs/release-notes` (`release.yml`), `docs/backfill-blog-posts` (`backfill-blog-posts.yml`) and any `dependabot/*`, whatever its characters, since CI quotes the name.
+The hook accepts a `dependabot/*` branch too, in shell-safe characters only (`A-Za-z0-9._@+-` per segment), so a person can push a fix to a Dependabot PR.
 Fork PRs skip the job, which a required check counts as passing.
 
 ## Worktree standard
@@ -132,7 +133,7 @@ checkout and from a subfolder of it (refused, before the lint), the opt-out, a l
 and `git commit` end to end, which runs the hook with `GIT_DIR` set.
 
 `scripts/tests/check-branch-name.test.sh` covers the script's `--pr` form, which the CI job uses: the Actions
-branches allowed only there, Dependabot's allowed everywhere, a `claude/...` branch refused, and other `docs/` names refused.
+branches and any `dependabot/*` allowed only there, a shell-safe `dependabot/*` allowed for a push too, a `claude/...` branch refused, and other `docs/` names refused.
 
 CI's hook-tests job runs this suite, `pre-commit.test.sh`, `check-branch-name.test.sh`, `check-pr-title.test.sh` and `sync-copilot-review.test.sh`.
 
