@@ -74,7 +74,6 @@ const EXEMPT_ON_REAPPLY_AUDITED: readonly string[] = [
   "docs/CODE_OF_CONDUCT.md",
   ".claude/skills/README.md",
   ".security/README.md",
-  "LICENSE",
   ".editorconfig",
   ".gitignore",
   ".markdownlint-cli2.jsonc",

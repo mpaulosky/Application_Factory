@@ -30,7 +30,9 @@ Run the rename pass on a branch in a worktree. ADR 0004 says it covers the solut
 gets filled in), file headers, the Auth0 role-claim namespace, `UserSecretsId` (a new GUID, see Part D), and the README and `CLAUDE.md`
 text that describes the repo as the Starter. It also covers the Starter's `.sandcastle/lib/repo-config.mts`: Apply skips an existing Seed
 file, so set `REPO_SLUG` to `mpaulosky/[ProjectName]` and change the solution entry (`Blazor-Server.slnx`) to the new solution by hand,
-or local review's `gh` commands target the Starter. It isn't scripted yet, so do it by hand, and follow Part B3 before pushing.
+or local review's `gh` commands target the Starter. It also sets the `LICENSE` year to the year the Application is created (`sed -i "s/^Copyright (c) [0-9]\{4\}/Copyright
+(c) $(date +%Y)/" LICENSE`): the Starter's own year is not the new project's, and Apply never changes an existing `LICENSE`. It isn't scripted yet, so do it by hand, and
+follow Part B3 before pushing.
 
 ```bash
 git worktree add -b chore/create-application ../[ProjectName]-worktrees/chore-create-application origin/main

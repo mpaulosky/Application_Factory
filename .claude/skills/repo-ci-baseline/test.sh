@@ -159,7 +159,8 @@ threshold="$(tr -d '[:space:]' < "$owned/.github/ci/coverage-threshold")"
 if [[ ! "$threshold" =~ ^[0-9]+$ ]] || (( 10#$threshold > 100 )); then
   fail "the Owned .github/ci/coverage-threshold must hold a whole percentage from 0 to 100 (ci.yml refuses anything else), not '$threshold'"
 fi
-grep -qxF 'Copyright (c) 2021 mpaulosky' "$owned/LICENSE" || fail "the Owned LICENSE must read 'Copyright (c) 2021 mpaulosky': the oldest year in use, the same in every repo"
+[[ ! -e "$owned/LICENSE" ]] || fail "LICENSE must be a Seed file, not Owned: Apply would overwrite an existing project's copyright year"
+grep -qxF 'Copyright (c) {{YEAR}} mpaulosky' "$seed/LICENSE" || fail "the Seed LICENSE must read 'Copyright (c) {{YEAR}} mpaulosky': Apply fills in the year it writes the file, and never changes an existing one"
 for template in bug_report.md feature_request.md; do
   grep -qxF 'assignees: mpaulosky' "$owned/.github/ISSUE_TEMPLATE/$template" \
     || fail "the Owned $template must carry 'assignees: mpaulosky': an Owned file has no {{OWNER}} to fill"

@@ -35,6 +35,7 @@ chmod +x "$skill/template/seed/.github/ci/prepare.sh"
 printf '{"compilerOptions": {}}\n' > "$skill/template/owned/.sandcastle/tsconfig.json"
 printf '# {{REPO}} architect for issue {{TASK_ID}}\n' > "$skill/template/seed/.sandcastle/roles/architect.md"
 printf '{"private": true}\n' > "$skill/template/seed/package.json"
+printf 'MIT License\n\nCopyright (c) {{YEAR}} acme\n' > "$skill/template/seed/LICENSE"
 # The local review: its script, agent and skill need the ledger in .sandcastle/lib/, so they are part of the
 # Sandcastle section; a neighbouring script and skill are not.
 printf '#!/usr/bin/env bash\n' > "$skill/template/owned/scripts/review.sh"
@@ -60,6 +61,8 @@ printf '# Hand a pull request off to Sandcastle\n' > "$skill/template/owned/.cla
 mkdir -p "$skill/template/owned/.security"
 printf '# The security record\n' > "$skill/template/owned/.security/README.md"
 apply="$skill/apply.sh"
+# A fixed year, so the LICENSE checks do not depend on the clock.
+export APPLY_YEAR=2031
 
 # Hooks off: a global init.templateDir can install hooks (such as a
 # post-checkout that sets core.hooksPath) into every throwaway repo.
@@ -79,6 +82,7 @@ check "empty repo: apply succeeds" '"$apply" "$repo" >/dev/null'
 check "empty repo: Owned file written" '[[ -f "$repo/.github/workflows/ci.yml" ]]'
 check "empty repo: placeholders filled" \
   'grep -qx "# Widget by acme, solution Widget" "$repo/docs/SECURITY.md"'
+check "empty repo: LICENSE gets the year of the Apply" '[[ "$(grep -m1 Copyright "$repo/LICENSE")" == "Copyright (c) 2031 acme" ]]'
 check "empty repo: Seed file keeps its execute bit" '[[ -x "$repo/.github/ci/prepare.sh" ]]'
 check "empty repo: hooksPath set" '[[ "$(git -C "$repo" config --local core.hooksPath)" == .github/hooks ]]'
 check "empty repo: caches not copied" '[[ ! -e "$repo/.github/scripts/__pycache__" ]]'
@@ -94,6 +98,7 @@ printf '{"default": false}\n' > "$repo/.markdownlint.json"
 mkdir -p "$repo/.claude/rules"
 printf 'Add user authentication\n' > "$repo/.copilot-commit-message-instructions.md"
 printf '# commit rules\n' > "$repo/.claude/rules/git-commit.md"
+printf 'MIT License\n\nCopyright (c) 2019 someone\n' > "$repo/LICENSE"
 commit_all "$repo" "init"
 
 check "guard: refuses main" '! "$apply" "$repo" >/dev/null 2>&1'
@@ -115,10 +120,13 @@ git_q -C "$repo" switch -q chore/standardize-baseline
 
 # ── A real Apply on a work branch ───────────────────────────────────────────
 out="$("$apply" "$repo")"
+check "LICENSE: an existing one keeps its year and holder" '[[ "$(grep -m1 Copyright "$repo/LICENSE")" == "Copyright (c) 2019 someone" ]]'
+check "LICENSE: an existing one is reported as skipped, not overwritten" 'grep -A3 "Seed files skipped" <<< "$out" | grep -q "^  LICENSE$"'
+check "LICENSE: a bad APPLY_YEAR is refused, by name" '[[ "$(APPLY_YEAR=20x1 "$apply" --dry-run "$repo" 2>&1)" == *"APPLY_YEAR must be a four-digit year"* ]]'
 check "apply: Owned drift overwritten" 'grep -qx "name: CI" "$repo/.github/workflows/ci.yml"'
 check "apply: drift reported" 'grep -A1 "were overwritten" <<< "$out" | grep -q ".github/workflows/ci.yml"'
 check "apply: existing Seed file kept" 'grep -qx "# our own security policy" "$repo/docs/SECURITY.md"'
-check "apply: kept Seed file reported" 'grep -A1 "Seed files skipped" <<< "$out" | grep -q "docs/SECURITY.md"'
+check "apply: kept Seed file reported" 'grep -A3 "Seed files skipped" <<< "$out" | grep -q "docs/SECURITY.md"'
 check "apply: leftover kept and reported" \
   '[[ -f "$repo/.github/workflows/sync-readme.yml" ]] && grep -q "sync-readme.yml" <<< "$out"'
 check "apply: .markdownlint.json conflict reported" 'grep -q ".markdownlint.json overrides" <<< "$out"'

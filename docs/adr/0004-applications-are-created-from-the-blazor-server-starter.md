@@ -15,5 +15,6 @@ Auth0, Theme and Palette) is kept whole, so Auth0 is always on.
 ## Consequences
 
 - Changes to the stack happen in `Blazor-Server`, not here, and reach only Applications created afterwards.
+- The rename pass sets the `LICENSE` year to the year of creation: the Starter's `LICENSE` is copied in, and Apply (where `LICENSE` is a Seed file, written only if missing) never changes an existing one.
 - The rename pass must cover the solution name, file headers, the Auth0 role-claim namespace, `UserSecretsId`, and the README and `CLAUDE.md` text that describes the repo as the Starter.
 - Only one Application type exists until a second Starter does.

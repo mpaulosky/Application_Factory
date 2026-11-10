@@ -12,7 +12,8 @@ Why it works this way is in [ADR 0001](docs/adr/0001-standardize-by-copying-a-te
 
 - **Owned files** (`template/owned/`) are overwritten on every Apply, mode included, except a `.sandcastle/check.sh` the repo uses as its sandbox gate, which Apply keeps and reports as a conflict.
   They carry no per-repo values.
-- **Seed files** (`template/seed/`) are written only where the repo has none, with `{{OWNER}}`, `{{REPO}}` and `{{SOLUTION}}` filled in.
+- **Seed files** (`template/seed/`) are written only where the repo has none, with `{{OWNER}}`, `{{REPO}}`, `{{SOLUTION}}` and `{{YEAR}}` (the year of the Apply) filled
+  in. `LICENSE` is a Seed file for that reason: a new project gets its creation year and an existing one keeps its own.
   Per-repo CI setup goes in the Seed `.github/ci/prepare.sh`, which `ci.yml` calls; per-repo gate checks go in the Seed `.github/ci/gate-checks.sh`, which `scripts/gate.sh` calls.
   The gate itself refuses a `gh` command in a repo's own scripts and skills that isn't told its repository (`check_gh_repo.py --repo`).
 

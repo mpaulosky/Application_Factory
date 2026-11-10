@@ -6,7 +6,7 @@
 # Owned files (template/owned) overwrite the repo's copy, mode included, except a repo's own sandbox gate named
 # .sandcastle/check.sh, which is kept and reported as a conflict. Seed files
 # (template/seed) are written only where the repo has none, with {{OWNER}},
-# {{REPO}} and {{SOLUTION}} filled in. Then core.hooksPath is pointed at
+# {{REPO}}, {{SOLUTION}} and {{YEAR}} (this year) filled in. Then core.hooksPath is pointed at
 # .github/hooks. Nothing is ever deleted. Sandcastle's files (.sandcastle/, its
 # workflow and the Seed skills list the workflow reads, the hand-off rules
 # .claude/rules/sandcastle-hand-off.md, and the package.json and
@@ -143,8 +143,14 @@ if [[ ${#slnx[@]} -eq 1 && "${slnx[0]}" =~ ^([A-Za-z0-9_.-]+)\.slnx$ ]]; then
   solution="${BASH_REMATCH[1]}"
 fi
 
+# {{YEAR}} is the year Apply writes the file: the LICENSE of a repo that has none, so a new project gets its creation year and
+# an existing one keeps the year it has (a Seed file is never overwritten). APPLY_YEAR is for tests.
+year="${APPLY_YEAR:-$(date +%Y)}"
+[[ "$year" =~ ^[0-9]{4}$ ]] || { echo "APPLY_YEAR must be a four-digit year, not '$year'" >&2; exit 1; }
+
 fill_placeholders() {
   local file="$1"
+  sed -i "s/{{YEAR}}/$year/g" "$file"
   [[ -n "$owner" ]] && sed -i "s/{{OWNER}}/$owner/g" "$file"
   [[ -n "$repo" ]] && sed -i "s/{{REPO}}/$repo/g" "$file"
   [[ -n "$solution" ]] && sed -i "s/{{SOLUTION}}/$solution/g" "$file"
