@@ -33,12 +33,12 @@
 // calls prepareRound and recordReview in-process, in the main checkout, never
 // the sandbox's scripts/review.sh; the module lives in .sandcastle/lib/ too.
 
-import { createHash } from "node:crypto";
-import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { plainText, visibleLetters } from "./plain-text.mts";
+import { plainText, RENDERED_LINK, stripControl, visibleLetters } from "./plain-text.mts";
 import { NOT_OWNED_BASELINE_PATHS, REPO_SLUG } from "./repo-config.mts";
 import { hostExecFileSync } from "./host-limit.mts";
 import { ledgerGitEnv, markAccepted, pinLedgerGit, readEntries, recordSecurity, renderSecurityList, type SecurityInput, type SecurityOutcome } from "./security-record.mts";
@@ -236,24 +236,33 @@ export const FINDING_PATH_SHAPE = /^[^\s<>`]+( [^\s<>`]+)*$/;
 // that the reviewer was wrong, read from the code; `accepted` needs the reason
 // a person accepted it; `open` waits for a person, or for the follow-up issue
 // when it's Advisory.
+// A finding's words are a reviewer agent's, who read hostile diff text: control and format characters are removed
+// (stripControl) before they are checked, so none reaches the gate's message, the report or a PR description.
+const words = () => z.string().transform(stripControl).pipe(z.string().trim().min(1));
+// A path keeps its whitespace, so the shape below still refuses a tab, a newline or a double space; only the control and format characters go.
+const withoutControl = (text: string) => text.replace(/[^\P{C}\s]/gu, "");
+
 const findingFields = z.object({
   id: z.string().regex(/^R[1-9]\d{0,5}$/, "ids are R1, R2, ... up to R999999, with no leading zero"),
-  lens: z.string().trim().min(1),
+  lens: words(),
   // A repository path: no markup or backtick, and no whitespace but single
   // spaces between its parts (the Template's own files sit under "Support For
   // New Projects/"), so it can't carry anything into the PR description that
   // plainText would have to undo: renderReport and the notes run it through
   // plainText, and a tab, newline or double space never gets that far.
-  path: z.string().trim().min(1).regex(FINDING_PATH_SHAPE, "a path has no whitespace but single spaces between its parts, and no <, > or backtick"),
+  path: z
+    .string()
+    .transform(withoutControl)
+    .pipe(z.string().trim().min(1).regex(FINDING_PATH_SHAPE, "a path has no whitespace but single spaces between its parts, and no <, > or backtick")),
   line: z.number().int().nonnegative(),
-  summary: z.string().trim().min(1),
+  summary: words(),
   status: z.enum(["fixed", "dismissed", "accepted", "open"]),
-  test: z.string().trim().min(1).nullable(),
-  reason: z.string().trim().min(1).nullable(),
+  test: words().nullable(),
+  reason: words().nullable(),
   // The reviewer's suggested fix, kept for the follow-up issue's Advisory
   // findings (renderAdvisories); the agent gives the person deciding an open
   // Critical or Warning finding its fix in the skill's step 9.
-  fix: z.string().trim().min(1).nullable().optional(),
+  fix: words().nullable().optional(),
 });
 
 function checkOutcome(finding: z.infer<typeof findingFields>, context: z.RefinementCtx): void {
@@ -276,7 +285,7 @@ function checkOutcome(finding: z.infer<typeof findingFields>, context: z.Refinem
 // finding: the person deciding it, or the follow-up issue, needs it. A security
 // weakness (isSecurity) is recorded fixed only with a test, which may name a
 // gate check: a reason alone leaves it open.
-const recordedFields = findingFields.extend({ severity: z.enum(SEVERITIES), security: z.boolean(), fix: z.string().trim().min(1).nullable() });
+const recordedFields = findingFields.extend({ severity: z.enum(SEVERITIES), security: z.boolean(), fix: words().nullable() });
 
 function checkRecorded(finding: z.infer<typeof recordedFields>, context: z.RefinementCtx): void {
   if (finding.status === "open" && finding.fix === null) {
@@ -484,10 +493,12 @@ export function reviewPatch(cwd: string, base: string, head: string = headCommit
   const text = patch.toString("latin1");
   const absent = (blob: string | undefined) => blob === undefined || /^0+$/.test(blob);
   const binary = (blob: string | undefined) => !absent(blob) && gitBytes(cwd, ["cat-file", "blob", blob as string]).subarray(0, 8000).includes(0);
-  for (const section of text.split(/^(?=diff --git )/m)) {
-    if (!/^Binary files .* differ$/m.test(section)) continue;
-    const [before, after] = /^index ([0-9a-f]+)\.\.([0-9a-f]+)/m.exec(section)?.slice(1) ?? [];
-    const file = /^diff --git (.*)$/m.exec(section)?.[1] ?? "a file";
+  // Git ends its lines with \n alone, and `^` under the m flag also matches after a lone \r, which a changed line may hold, so these
+  // anchors are \n and the ends of the section.
+  for (const section of text.split(/(?<=\n)(?=diff --git )/)) {
+    if (!/(?:^|\n)Binary files [^\n]* differ(?=\n|$)/.test(section)) continue;
+    const [before, after] = /(?:^|\n)index ([0-9a-f]+)\.\.([0-9a-f]+)/.exec(section)?.slice(1) ?? [];
+    const file = /(?:^|\n)diff --git ([^\n]*)(?=\n|$)/.exec(section)?.[1] ?? "a file";
     const start = absent(after) ? Buffer.alloc(0) : gitBytes(cwd, ["cat-file", "blob", after as string]).subarray(0, 4);
     if ([[0xff, 0xfe], [0xfe, 0xff], [0, 0, 0xfe, 0xff]].some((bom) => Buffer.from(bom).equals(start.subarray(0, bom.length)))) {
       // Rewriting a file main already holds this way would look like binary
@@ -789,29 +800,69 @@ function readEntryMap(cwd: string, key: string, findingId: string): string | und
   }
 }
 
+// How long a lock nobody can be named for (empty, or not "pid token") stands: its holder may be about to write its id.
+const STALE_LOCK_MS = 60_000;
+
+const textOf = (path: string): string | undefined => {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return undefined;
+  }
+};
+
+// Whether the lock at `lock` was left behind: it names a process that is gone, or it names none and is more than a minute old.
+// A lock that has vanished since is also free to take. A process we may not signal (EPERM) is running.
+function lockIsStale(lock: string, content: string | undefined): boolean {
+  if (content === undefined) return true;
+  const pid = /^([1-9]\d*) /.exec(content)?.[1];
+  if (pid !== undefined) {
+    try {
+      process.kill(Number(pid), 0);
+      return false;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ESRCH";
+    }
+  }
+  try {
+    return Date.now() - statSync(lock).mtimeMs > STALE_LOCK_MS;
+  } catch {
+    return true;
+  }
+}
+
 // Run `change` holding the review folder's lock, so two writers (a `record`
 // and an `accept`) can't interleave. One lock for every key, not one per key:
 // a record reads every review of the branch for the ids taken (takenIds), so a
 // record on another diff mustn't write between that read and its own write.
-// Fails at once, naming the lock, when another holds it.
+// The lock names its holder ("pid token"): one left by a process that was killed
+// is replaced, and the holder removes only the lock that still carries its token.
+// Fails at once, naming the lock, when a running command holds it.
 function withLock<T>(cwd: string, change: () => T): T {
   mkdirSync(ledgerDir(cwd), { recursive: true, mode: 0o700 });
   chmodSync(ledgerDir(cwd), 0o700);
   const lock = join(ledgerDir(cwd), ".lock");
-  let handle: number;
-  try {
-    handle = openSync(lock, "wx");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new Error(`another review command is writing a review; try again, or delete ${lock} if none is running`, { cause: error });
+  const mine = `${process.pid} ${randomBytes(8).toString("hex")}\n`;
+  let handle: number | undefined;
+  for (let attempt = 0; handle === undefined; attempt += 1) {
+    try {
+      handle = openSync(lock, "wx");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const seen = textOf(lock);
+      if (attempt > 0 || !lockIsStale(lock, seen)) {
+        throw new Error(`another review command is writing a review; try again, or delete ${lock} if none is running`, { cause: error });
+      }
+      // Removed only if it is still the lock seen to be stale; whoever takes the free name next wins the "wx".
+      if (seen === undefined || textOf(lock) === seen) rmSync(lock, { force: true });
     }
-    throw error;
   }
   try {
+    writeSync(handle, mine);
     return change();
   } finally {
     closeSync(handle);
-    rmSync(lock, { force: true });
+    if (textOf(lock) === mine) rmSync(lock, { force: true });
   }
 }
 
@@ -1120,20 +1171,25 @@ export function renderReviewNotes(ledger: Ledger): string {
   // description becomes public release notes: it's tracked privately instead
   // (docs/SECURITY.md), and only counted here.
   const security = accepted.filter(isSecurity);
-  const listed = accepted.filter((finding) => !security.includes(finding));
+  // The description is public and a reviewer agent that read hostile text wrote these words, so an accepted finding whose path, summary or
+  // reason holds a link or an image GitHub would render (RENDERED_LINK) is only counted too; its words stay in the ledger and the report.
+  const linked = accepted.filter((finding) => !security.includes(finding) && RENDERED_LINK.test(`${finding.path} ${finding.summary} ${finding.reason ?? ""}`));
+  const listed = accepted.filter((finding) => !security.includes(finding) && !linked.includes(finding));
   const standIn = ledger.reviewerAgent !== undefined && ledger.reviewerAgent !== "pre-push-reviewer";
   if (accepted.length === 0 && !standIn) return "";
   const privately =
     security.length === 0
       ? []
       : ["", `${security.length} accepted security finding(s) are left out here and reported privately, as docs/SECURITY.md describes.`];
+  const withheld =
+    linked.length === 0 ? [] : ["", `${linked.length} accepted finding(s) holding a link or an image are left out here; they are in the local review record.`];
   const section = (...body: string[]) => [REVIEW_NOTES_START, "## Review notes", ...body, REVIEW_NOTES_END, ""].join("\n");
   const reviewer = standIn ? ["", `Reviewed by ${plainText(ledger.reviewerAgent ?? "")}, not the read-only pre-push-reviewer.`] : [];
-  if (listed.length === 0) return section(...privately, ...reviewer);
+  if (listed.length === 0) return section(...privately, ...withheld, ...reviewer);
   const lines = listed.map(
     (finding) => `- ${plainText(`${finding.path}:${finding.line}`)}: ${plainText(finding.summary)} Accepted: ${plainText(finding.reason ?? "")}`,
   );
-  return section("", "The local review raised these and they were accepted, not changed:", "", ...lines, ...privately, ...reviewer);
+  return section("", "The local review raised these and they were accepted, not changed:", "", ...lines, ...privately, ...withheld, ...reviewer);
 }
 
 // Which lines of a Markdown text are inside a fenced code block (the fence

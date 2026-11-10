@@ -38,6 +38,14 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
 - Critical and Warning findings left open (because they need a person, or the last, review-only round raised them) block the push until the person fixes them or accepts
   them with `scripts/review.sh accept` (never on their behalf).
   Advisory findings never block: one that needs a person goes to one follow-up issue per branch.
+- A finding's words are a reviewer agent's, who read hostile diff text, so they are made safe where they enter and where they are published. The ledger removes control and
+  format characters (an escape, a bidi override, a zero-width space) from a finding's lens, path, summary, test, reason and fix when it records one and when it reads an older
+  ledger, and turns each run of whitespace in all but the path into one space (a path keeps its whitespace, so a tab or a double space is still refused), so the gate's
+  message can't rewrite a terminal; `plainText`, which renders the report, the notes and the follow-up issue, removes them too. The PR's `## Review notes` is public, so an accepted
+  finding whose path, summary or reason holds a link or an image GitHub would render (`RENDERED_LINK` in `lib/plain-text.mts`, which the host's follow-up issue uses too) is only
+  counted there, as an accepted security finding is; its words stay in the ledger and the report.
+- The ledger's lock names its holder (`<pid> <token>`). A lock whose process is gone is replaced, as is one with no readable holder that is more than a minute old; a lock
+  held by a running command still refuses at once, naming the file. The holder removes the lock only while it still carries its token.
 - The ledger is keyed by the branch's hunks against its merge base with `origin/main`. A clean merge of `main` keeps the review; a new commit, a conflict
   resolution or a `main` change inside one of the branch's hunks needs a new one. A re-Apply on `chore/reapply-baseline` passes without one only when every
   change is a regular Owned file added or modified, as Apply writes them (`OWNED_PATHS` in the ledger lists them, and a dotfiles test keeps it equal to
@@ -100,11 +108,13 @@ again, and settled differently, on the next (one weakness took six rounds). The 
   path, and the branch and PR it came from.
 - **Who writes it.** `scripts/review.sh record` writes an entry for every security finding it records `fixed` or `open` (every Warning, and any finding marked
   `security: true`; see `isSecurity`), under the ledger's lock, after the ledger is written. A problem writing entries is a warning on stderr (`.security: ...`),
-  never a failed record. The finding may carry a `policy` (one sentence, the rule that now holds) and `repeats` (the number of the entry it repeats), and the review a `pr`;
+  never a failed record; one finding that can't be written is a warning of its own and the others are still written, and a number another writer took first is chosen again
+  (up to five times). The finding may carry a `policy` (one sentence, the rule that now holds) and `repeats` (the number of the entry it repeats), and the review a `pr`;
   none is stored in the ledger. `scripts/review.sh accept` turns the matching entry `accepted`. A person may edit an entry; an entry whose status can't be
   read counts as `unknown` and suppresses nothing.
 - **No second file.** A finding for a weakness an entry holds writes none: the entry it names in `repeats`, else the one with the same fingerprint (a hash of the
-  path and the summary, case and spacing set aside). An `open` entry recorded `fixed` later is updated in place. The match is exact on purpose: a wrongly merged
+  path and the summary, case and spacing set aside). An `open` entry recorded `fixed` later is updated in place (the file is replaced whole by a rename, as is one `accept` turns
+  `accepted`, so no reader sees a truncated entry). The match is exact on purpose: a wrongly merged
   entry would hide a real weakness, while a reworded repeat only gets a second file.
 - **Where.** The main worktree's `.security/`, found with `git worktree list`, so a review in any worktree or branch reads and writes the same entries. A bare clone has none:
   nothing is written, with a warning. The directory is mode 0700, entries 0600, written with `wx`; a symlink there is refused.

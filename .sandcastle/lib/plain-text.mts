@@ -14,6 +14,20 @@ export function breakReferences(text: string): string {
     .replace(/\b(github)\.(com)\b/gi, "$1\u200B.$2");
 }
 
+// `text` with every control and format character removed (an escape, a bell, a bidi override, a zero-width space) and each
+// run of whitespace made one space. The text of a finding reaches a terminal (the gate's message, the report) and a PR
+// description, and a reviewer agent that read hostile diff text may have written an escape sequence or a bidi override into
+// it. A run that holds whitespace becomes a space, so words around a newline stay apart; one that doesn't is dropped.
+export function stripControl(text: string): string {
+  return text.replace(/[\p{C}\s]+/gu, (run) => (/\s/u.test(run) ? " " : ""));
+}
+
+// What GitHub renders as a link or an image, or fetches: an address with a scheme (`://`, `mailto:`), a www. address (GitHub links one anywhere after a space or
+// an underscore too, in a path as well as in prose), an inline, reference or image link (`](`, `][`, `![`), and a link reference definition (`]:`). Text that holds
+// one is not published to a public page: a reviewer that read untrusted text can be made to put one in a summary, a fix or a reason, and the host would publish it
+// under its own account. Over-reading only leaves more out.
+export const RENDERED_LINK = /:\/\/|mailto:|www\.|\]\(|\]\[|!\[|\]:/i;
+
 // Untrusted `text` as one line of plain Markdown for a GitHub comment or
 // description: intake's words to an issue's author, a follow-up reply, the
 // local review's report and Review notes. Nothing in it may restructure the
@@ -24,11 +38,12 @@ export function breakReferences(text: string): string {
 // < (no HTML tag, such as an unclosed <details>, or comment to hide them);
 // mentions and cross-references are broken (see breakReferences); and a
 // leading Markdown marker is escaped so it can't start a list, heading, quote
-// or ~~~ code fence.
+// or ~~~ code fence. Control and format characters are removed (stripControl).
+// It does not stop a link or an image: a caller that publishes the text to a
+// public page leaves out text that holds one (RENDERED_LINK).
 export function plainText(text: string): string {
   return breakReferences(
-    text
-      .replace(/\s+/g, " ")
+    stripControl(text)
       .trim()
       .replace(/[\\`]/g, "\\$&")
       .replace(/&/g, "&amp;")

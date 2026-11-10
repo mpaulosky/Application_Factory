@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { CAPITAL_LOOK_ALIKES, LOOK_ALIKES, plainText, TAG, visibleLetters } from "./plain-text.mts";
+import { CAPITAL_LOOK_ALIKES, LOOK_ALIKES, plainText, RENDERED_LINK, stripControl, TAG, visibleLetters } from "./plain-text.mts";
 
 describe("visibleLetters", () => {
   for (const [form, text] of [
@@ -303,5 +303,73 @@ describe("plainText", () => {
   it("escapes it after leading whitespace too, and leaves a tilde elsewhere in the line alone", () => {
     assert.equal(plainText("  ~~~x"), "\\~~~x");
     assert.equal(plainText("a ~~~x"), "a ~~~x");
+  });
+
+  // Finding text is written by a reviewer agent that read hostile diff text, then published in a PR description, an issue and the report.
+  for (const [form, character] of [
+    ["an escape", "\u001b"],
+    ["a bell", "\u0007"],
+    ["a NUL", "\u0000"],
+    ["a C1 control", "\u0085"],
+    ["a bidi override", "\u202e"],
+    ["a bidi isolate", "\u2066"],
+    ["a zero-width space", "\u200b"],
+    ["a delete", "\u007f"],
+  ] as const) {
+    it(`removes ${form}, which could rewrite a terminal or a rendered line`, () => {
+      assert.equal(plainText(`a${character}b`), "ab");
+    });
+  }
+
+  it("removes an escape sequence's escape and keeps the rest as text", () => {
+    assert.equal(plainText("x\u001b[2Jy"), "x[2Jy");
+  });
+
+  it("is empty for text of only control characters, and still folds whitespace to single spaces", () => {
+    assert.equal(plainText("\u001b\u202e"), "");
+    assert.equal(plainText("a \r\n\t b"), "a b");
+  });
+});
+
+// What the host's follow-up issue and the PR's Review notes leave out of a public page.
+describe("RENDERED_LINK", () => {
+  for (const [form, text] of [
+    ["a URL with a scheme", "see https://e.test/x"],
+    ["a scheme in capitals", "HTTP://E.TEST"],
+    ["any scheme", "ftp://e.test"],
+    ["a mailto address", "mailto:a@e.test"],
+    ["a www. address", "go to www.e.test"],
+    ["a www. address in a path", "docs/www.e.test"],
+    ["an inline link", "[a](b)"],
+    ["an image", "![a](b)"],
+    ["a reference link", "[a][b]"],
+    ["a link reference definition", "[a]: b"],
+    ["an image reference", "![a][b]"],
+  ] as const) {
+    it(`matches ${form}`, () => {
+      assert.match(text, RENDERED_LINK);
+    });
+  }
+
+  for (const [form, text] of [
+    ["an index in brackets", "items[0] and a[b]"],
+    ["a call", "calls trim(x) twice"],
+    ["a colon and slashes apart", "a: b // c"],
+    ["a placeholder", "[redacted]"],
+  ] as const) {
+    it(`doesn't match ${form}`, () => {
+      assert.doesNotMatch(text, RENDERED_LINK);
+    });
+  }
+});
+
+describe("stripControl", () => {
+  it("removes control and format characters and turns each run of whitespace into one space", () => {
+    assert.equal(stripControl("a\u001b[2J\nb\u202ec"), "a[2J bc");
+    assert.equal(stripControl(" a \u001b b "), " a b ");
+  });
+
+  it("leaves ordinary text, including an astral character and a combining mark, alone", () => {
+    assert.equal(stripControl("caf\u00e9 e\u0301 \u{1F600}"), "caf\u00e9 e\u0301 \u{1F600}");
   });
 });

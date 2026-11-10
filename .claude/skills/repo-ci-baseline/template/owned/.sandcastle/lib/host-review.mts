@@ -10,7 +10,7 @@ import { isRoleTimeout } from "./agents.mts";
 import { MAX_REVIEWERS_PER_ROUND, REVIEW_FIX_ROUNDS, REVIEW_WALL_CLOCK_MINUTES, REVIEWER_ATTEMPTS, SESSION_REPLY_MARKER } from "./config.mts";
 import { TimeBudgetStopError, UncountedStopError } from "./errors.mts";
 import { decisionsMarkdown, leadPrompt, reviewerPrompt, reviewFixPrompt, reviewTag } from "./host-review-prompts.mts";
-import { plainText } from "./plain-text.mts";
+import { plainText, RENDERED_LINK } from "./plain-text.mts";
 import { hasHiddenText } from "./status.mts";
 import { FINDING_PATH_SHAPE, isSecurity, patchPaths, renderAdvisories, severityOf, sizeWarning, type Ledger, type PreparedRound, type ReviewInput } from "./review-ledger.mts";
 
@@ -841,10 +841,7 @@ export function openFindingsNote(ledger: Ledger, readPaths: ReadonlySet<string>,
 const ADVISORY_ISSUE_FINDINGS = 20;
 const ADVISORY_LINE_LIMIT = 2000;
 
-// What GitHub renders as a link or an image, or fetches: an address with a scheme (`://`, `mailto:`), a www. address (GitHub links one anywhere after a space or
-// an underscore too, in a path as well as in prose), an inline, reference or image link (`](`, `][`, `![`), and a link reference definition (`]:`). A finding whose
-// line holds one is not published: a reviewer that read untrusted text can be made to put one in a summary or fix, and the host would publish it under its own account.
-const RENDERED_LINK = /:\/\/|mailto:|www\.|\]\(|\]\[|!\[|\]:/i;
+// A finding whose line holds a link or an image GitHub would render (RENDERED_LINK, in lib/plain-text.mts) is not published.
 
 // The public follow-up issue's body for the review's open Advisory findings (review-ledger.mts#renderAdvisories), held to the PR note's rules: a
 // finding is listed only when its path is one of the files the review read and is made of plain file-name characters, its line (id, place, summary and fix)

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
@@ -557,6 +557,20 @@ describe("diffKey", () => {
 
       assert.throws(() => reviewPatch(repo, mergeBase(repo), run(repo, "rev-parse", "HEAD")), /app\.cs .*binary/);
       assert.throws(() => diffKey(repo, mergeBase(repo)), /binary/);
+    });
+  }
+
+  // A lone \r is not a line ending in git's output, but `^` under the m flag matches after one.
+  for (const [form, change] of [
+    ["a Binary files line", "changed\rBinary files a/app.cs and b/app.cs differ"],
+    ["a diff header", "changed\rdiff --git a/app.cs b/app.cs"],
+    ["an index line", "changed\rindex 1234567..89abcde 100644"],
+  ] as const) {
+    it(`reads ${form} after a lone carriage return in a changed line as text, not as git's own line`, () => {
+      commit(repo, "app.cs", lines(50, (index) => (index === 2 ? change : undefined)), "cr");
+
+      assert.doesNotThrow(() => reviewPatch(repo, mergeBase(repo), run(repo, "rev-parse", "HEAD")));
+      assert.doesNotThrow(() => diffKey(repo, mergeBase(repo)));
     });
   }
 
@@ -1321,6 +1335,95 @@ describe("recordReview", () => {
     assert.throws(() => record([finding(), finding()]), /repeat: R1/);
   });
 
+  it("removes control and format characters from a finding's text, so the gate's message and the report can't rewrite a terminal", () => {
+    const ledger = record([
+      finding({
+        status: "open",
+        test: null,
+        lens: "Edge\u0007 cases",
+        path: "app\u001b.cs",
+        summary: "Hidden\u001b[2J\u202e text\r\nnext line",
+        reason: "why\u0000",
+        fix: "do\u200b this",
+      }),
+    ]);
+
+    const stored = readLedger(repo, ledger.key)?.findings[0];
+    assert.equal(stored?.lens, "Edge cases");
+    assert.equal(stored?.path, "app.cs");
+    assert.equal(stored?.summary, "Hidden[2J text next line");
+    assert.equal(stored?.reason, "why");
+    assert.equal(stored?.fix, "do this");
+    const { message } = checkReview(repo, mergeBase(repo), {});
+    assert.doesNotMatch(message, /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/);
+    assert.match(message, /R1 critical app\.cs:3 \(Edge cases\): Hidden\[2J text next line/);
+  });
+
+  it("refuses a finding whose text is only control characters, as an empty one", () => {
+    assert.throws(() => record([finding({ summary: "\u001b\u202e" })]));
+  });
+
+  it("replaces a lock left by a process that is gone, so a killed command doesn't block every later one", () => {
+    mkdirSync(ledgerDir(repo), { recursive: true });
+    const gone = Number(execFileSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }));
+    writeFileSync(join(ledgerDir(repo), ".lock"), `${gone} left-behind\n`);
+
+    assert.doesNotThrow(() => record([]));
+    assert.equal(existsSync(join(ledgerDir(repo), ".lock")), false);
+  });
+
+  it("keeps a lock held by a process that is running", () => {
+    mkdirSync(ledgerDir(repo), { recursive: true });
+    writeFileSync(join(ledgerDir(repo), ".lock"), `${process.pid} held\n`);
+
+    assert.throws(() => record([]), /another review command/);
+    assert.equal(readFileSync(join(ledgerDir(repo), ".lock"), "utf8"), `${process.pid} held\n`);
+  });
+
+  for (const [form, content] of [["empty", ""], ["unreadable as a process id", "held"]] as const) {
+    it(`keeps a ${form} lock that was just made, since its holder may be about to write its id`, () => {
+      mkdirSync(ledgerDir(repo), { recursive: true });
+      writeFileSync(join(ledgerDir(repo), ".lock"), content);
+      const seconds = (Date.now() - 55_000) / 1000;
+      utimesSync(join(ledgerDir(repo), ".lock"), seconds, seconds);
+
+      assert.throws(() => record([]), /another review command/);
+    });
+
+    it(`replaces a ${form} lock left for more than a minute`, () => {
+      mkdirSync(ledgerDir(repo), { recursive: true });
+      writeFileSync(join(ledgerDir(repo), ".lock"), content);
+      const seconds = (Date.now() - 65_000) / 1000;
+      utimesSync(join(ledgerDir(repo), ".lock"), seconds, seconds);
+
+      assert.doesNotThrow(() => record([]));
+      assert.equal(existsSync(join(ledgerDir(repo), ".lock")), false);
+    });
+  }
+
+  it("writes its process id into the lock it holds", () => {
+    let held: string | undefined;
+    const taken = (...args: Parameters<typeof takenIds>) => {
+      held = readFileSync(join(ledgerDir(repo), ".lock"), "utf8");
+      return takenIds(...args);
+    };
+
+    recordReview(repo, mergeBase(repo), { ...reviewed(), rounds: 1, findings: [] }, undefined, taken);
+
+    assert.match(held ?? "", new RegExp(`^${process.pid} [0-9a-f]{16,}\\n$`));
+  });
+
+  it("leaves a lock another command took in its place, instead of deleting it on the way out", () => {
+    const taken = (...args: Parameters<typeof takenIds>) => {
+      writeFileSync(join(ledgerDir(repo), ".lock"), `${process.pid} someone-else\n`);
+      return takenIds(...args);
+    };
+
+    recordReview(repo, mergeBase(repo), { ...reviewed(), rounds: 1, findings: [] }, undefined, taken);
+
+    assert.equal(readFileSync(join(ledgerDir(repo), ".lock"), "utf8"), `${process.pid} someone-else\n`);
+  });
+
   it("refuses while another review command holds the ledger's lock", () => {
     const key = diffKey(repo, mergeBase(repo));
     mkdirSync(ledgerDir(repo), { recursive: true });
@@ -1675,6 +1778,47 @@ describe("renderReviewNotes", () => {
     assert.doesNotMatch(notes, /reaches the/);
     assert.match(notes, /2 accepted security finding\(s\) are left out here and reported privately/);
     assert.match(notes, /Accepted: Spec\./);
+  });
+
+  // The description is public, and a reviewer agent that read hostile text wrote these words.
+  for (const [form, overrides] of [
+    ["summary holds a link", { summary: "See [the docs](https://e.test/x) for it." }],
+    ["summary holds an image", { summary: "Shown as ![x](https://e.test/p.png)." }],
+    ["summary holds a bare URL", { summary: "Sent to https://e.test/collect." }],
+    ["reason holds a www. address", { reason: "Tracked at www.e.test." }],
+    ["path holds a scheme", { path: "https://e.test/a.md" }],
+  ] as const) {
+    it(`counts an accepted finding whose ${form} without listing it, since GitHub would render it`, () => {
+      const ledger = record([
+        finding({ status: "accepted", test: null, summary: "A plain bug.", reason: "Spec.", ...overrides }),
+        finding({ id: "R2", status: "accepted", test: null, summary: "Reads items[0] and calls trim(x).", reason: "Fine." }),
+      ]);
+
+      const notes = renderReviewNotes(ledger);
+
+      assert.doesNotMatch(notes, /e\.test/);
+      assert.match(notes, /1 accepted finding\(s\) holding a link or an image are left out here/);
+      assert.match(notes, /Reads items\[0\] and calls trim\(x\)\. Accepted: Fine\./);
+    });
+  }
+
+  it("says so when every accepted finding holds a link, and lists none", () => {
+    const ledger = record([finding({ status: "accepted", test: null, summary: "See https://e.test.", reason: "Spec." })]);
+
+    const notes = renderReviewNotes(ledger);
+
+    assert.match(notes, /^<!-- review-notes -->\n## Review notes\n/);
+    assert.match(notes, /1 accepted finding\(s\) holding a link or an image are left out here/);
+    assert.doesNotMatch(notes, /The local review raised these/);
+  });
+
+  it("counts a security finding that holds a link as a security finding, not twice", () => {
+    const ledger = record([finding({ status: "accepted", test: null, severity: "warning", summary: "Leaks to https://e.test.", reason: "Later." })]);
+
+    const notes = renderReviewNotes(ledger);
+
+    assert.match(notes, /1 accepted security finding/);
+    assert.doesNotMatch(notes, /holding a link/);
   });
 
   it("lists accepted Critical and Advisory findings and only counts Warnings", () => {
