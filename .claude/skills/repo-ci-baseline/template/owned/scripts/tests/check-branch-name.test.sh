@@ -39,6 +39,23 @@ expect refused ""
 expect allowed dependabot/github_actions/main/minor-and-patch-actions-401d4b32a3
 expect allowed --pr dependabot/nuget/all-nuget-1a2b3c
 expect refused dependabot
+# Scoped npm packages and build-metadata versions: '@' and '+' are shell-safe, so the hook takes them.
+expect allowed dependabot/npm_and_yarn/@types/node-20.1.0
+expect allowed dependabot/nuget/Foo.Bar_1.2.3+build.5
+expect allowed dependabot/@scope/x
+expect allowed dependabot/a+b
+# The pattern is anchored at the start: dependabot/ inside another name is not a Dependabot branch.
+expect refused claude/dependabot/x
+expect refused xdependabot/a
+# The --pr form takes any dependabot/* name, as before the hook did: CI quotes it, and a PR must not fail on a character.
+expect allowed --pr dependabot/npm_and_yarn/types/node-20~1
+expect allowed --pr dependabot/
+# Shell-unsafe or malformed names stay refused for a push.
+expect refused dependabot/
+expect refused dependabot/a/
+expect refused dependabot//a
+expect refused Dependabot/x
+expect refused $'dependabot/a\nb'
 expect refused "dependabot/x;rm"
 # shellcheck disable=SC2016 # the \$( is the point: a literal name, not an expansion
 expect refused 'dependabot/$(x)'
