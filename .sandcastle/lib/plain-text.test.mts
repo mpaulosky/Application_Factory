@@ -372,4 +372,29 @@ describe("stripControl", () => {
   it("leaves ordinary text, including an astral character and a combining mark, alone", () => {
     assert.equal(stripControl("caf\u00e9 e\u0301 \u{1F600}"), "caf\u00e9 e\u0301 \u{1F600}");
   });
+
+  for (const [form, character] of [
+    ["a zero-width space", "\u200b"],
+    ["a soft hyphen", "\u00ad"],
+    ["a variation selector", "\ufe0f"],
+    ["a Unicode tag character", "\u{E0041}"],
+    ["a braille blank", "\u2800"],
+    ["a bidirectional override", "\u202e"],
+    ["a null", "\u0000"],
+    ["a next-line character", "\u0085"],
+  ] as const) {
+    it(`removes ${form}, so it can't hide inside a word`, () => {
+      assert.equal(stripControl(`a${character}b`), "ab");
+    });
+  }
+
+  for (const [form, character] of [["a tab", "\t"], ["a no-break space", "\u00a0"], ["a line separator", "\u2028"], ["an ideographic space", "\u3000"]] as const) {
+    it(`turns ${form} into a space`, () => {
+      assert.equal(stripControl(`a${character}${character}b`), "a b");
+    });
+  }
+
+  it("leaves the empty string alone", () => {
+    assert.equal(stripControl(""), "");
+  });
 });

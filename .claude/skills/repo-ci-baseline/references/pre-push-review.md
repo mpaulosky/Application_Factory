@@ -44,8 +44,14 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   message can't rewrite a terminal; `plainText`, which renders the report, the notes and the follow-up issue, removes them too. The PR's `## Review notes` is public, so an accepted
   finding whose path, summary or reason holds a link or an image GitHub would render (`RENDERED_LINK` in `lib/plain-text.mts`, which the host's follow-up issue uses too) is only
   counted there, as an accepted security finding is; its words stay in the ledger and the report.
-- The ledger's lock names its holder (`<pid> <token>`). A lock whose process is gone is replaced, as is one with no readable holder that is more than a minute old; a lock
-  held by a running command still refuses at once, naming the file. The holder removes the lock only while it still carries its token.
+- The review command prints no control or invisible character of the text it echoes (a parse error, a finding), keeping its newlines and tabs; the host's reviewer schema
+  applies the same stripping, so a finding of only invisible characters is refused as empty.
+- The ledger's lock names its holder (`<pid> <token>`). A lock whose process is gone is taken over, as is one with no readable holder that is more than a minute old; a lock
+  held by a running command still refuses at once, naming the file. A takeover renames the lock to a name of its own (one command wins), reads it there and deletes it only if it is
+  the text judged stale; a live lock made in between is put back and the command refuses. The holder removes the lock only while it still carries its token.
+- A ledger or a security entry is replaced whole (a temp file with a random name, renamed over it), and a new security entry is written to a temp file and hard-linked to its number,
+  so a reader never sees a half-written file and a symlink put at the name is replaced, not written through. A number another writer took is tried again, up to five times; a
+  finding whose entry can't be written is a warning, and the other findings are still written.
 - The ledger is keyed by the branch's hunks against its merge base with `origin/main`. A clean merge of `main` keeps the review; a new commit, a conflict
   resolution or a `main` change inside one of the branch's hunks needs a new one. A re-Apply on `chore/reapply-baseline` passes without one only when every
   change is a regular Owned file added or modified, as Apply writes them (`OWNED_PATHS` in the ledger lists them, and a dotfiles test keeps it equal to

@@ -271,6 +271,15 @@ describe("parseReviewerAnswer", () => {
     assert.throws(() => parseReviewerAnswer(block([finding({ severity: "blocker" })])), (error: unknown) => error instanceof ReviewerAnswerError && /severity/.test(error.message));
   });
 
+  for (const [what, overrides] of [
+    ["a summary of only a zero-width space", { summary: "\u200b" }],
+    ["a path of only a zero-width space", { path: "\u200b" }],
+  ] as const) {
+    it(`throws a ReviewerAnswerError for ${what}`, () => {
+      assert.throws(() => parseReviewerAnswer(block([finding(overrides)])), ReviewerAnswerError);
+    });
+  }
+
   it("is the same schema the reviewers' findings are checked against", () => {
     assert.equal(reviewerFindingSchema.safeParse(finding()).success, true);
     assert.equal(reviewerFindingSchema.safeParse(finding({ severity: undefined })).success, false);
@@ -2488,7 +2497,17 @@ describe("advisoryIssueBody", () => {
     });
   }
 
-  // terminalText folds U+0085 to a space, but plainText's \s does not match it, so the issue would carry the raw control: it counts as hidden here.
+  for (const [form, branch] of [["a www. address", "feature/www.e.test"], ["a URL", "feature/https://e.test"], ["an inline link", "feature/[a](b)"]] as const) {
+    it(`leaves out the whole body when the branch name holds ${form}, which a public page would link`, () => {
+      assert.equal(advisoryIssueBody({ ...ledgerOf([advisory()]), branch }, DOCS), "");
+    });
+  }
+
+  it("keeps a plain branch name in the body", () => {
+    assert.notEqual(advisoryIssueBody(ledgerOf([advisory()]), DOCS), "");
+  });
+
+  // terminalText folds U+0085 to a space. A ledger parsed by the schema holds none (stripControl), but one built by hand could, so it counts as hidden here.
   for (const field of ["summary", "fix"] as const) {
     it(`leaves out a finding whose ${field} holds a next-line character, which the issue's own folding would publish raw`, () => {
       const body = advisoryIssueBody(ledgerOf([advisory(), advisory({ id: "R6", [field]: "Two\u0085lines." })]), DOCS);

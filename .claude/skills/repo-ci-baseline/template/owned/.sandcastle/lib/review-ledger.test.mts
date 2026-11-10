@@ -6,7 +6,11 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  findingPath,
+  findingWords,
   isAncestor,
+  lockIsStale,
+  lockTestHooks,
   mergeTreeWorks,
   isReviewedCode,
   ledgerGitEnv,
@@ -3851,3 +3855,116 @@ describe("a branch that holds Template mirrors", () => {
   });
 });
 
+
+describe("lockIsStale", () => {
+  const gone = Number(execFileSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }));
+  for (const [form, content, ageMs, stale] of [
+    ["a running process, however old", `${process.pid} t\n`, 10 * 60_000, false],
+    ["a process that is gone", `${gone} t\n`, 0, true],
+    ["an id no process can have", `${"9".repeat(30)} t\n`, 0, true],
+    ["a zero id, which names no process, just made", "0 t\n", 0, false],
+    ["a zero id, left past the minute", "0 t\n", 60_001, true],
+    ["no id, at the minute", "held", 60_000, false],
+    ["no id, a millisecond past the minute", "held", 60_001, true],
+    ["empty, just under the minute", "", 59_999, false],
+    ["empty, past the minute", "", 60_001, true],
+    ["a negative id, which names no process, just made", "-1 t\n", 0, false],
+  ] as const) {
+    it(`judges ${form}`, () => {
+      assert.equal(lockIsStale(content, ageMs), stale);
+    });
+  }
+});
+
+describe("taking over a stale lock", () => {
+  const lockFile = () => join(ledgerDir(repo), ".lock");
+  const staleLock = () => {
+    mkdirSync(ledgerDir(repo), { recursive: true });
+    writeFileSync(lockFile(), "held");
+    const seconds = (Date.now() - 65_000) / 1000;
+    utimesSync(lockFile(), seconds, seconds);
+  };
+  afterEach(() => {
+    delete lockTestHooks.afterRead;
+    delete lockTestHooks.afterRename;
+  });
+
+  it("refuses, and puts a live lock back, when another command made one between the judging and the rename", () => {
+    staleLock();
+    lockTestHooks.afterRename = () => undefined;
+    lockTestHooks.afterRead = () => writeFileSync(lockFile(), `${process.pid} live\n`);
+
+    assert.throws(() => record([]), /another review command/);
+    assert.equal(readFileSync(lockFile(), "utf8"), `${process.pid} live\n`);
+    assert.deepEqual(readdirSync(ledgerDir(repo)).filter((name) => name.includes(".stale.")), []);
+  });
+
+  it("goes on when another command removed the stale lock first", () => {
+    staleLock();
+    lockTestHooks.afterRead = () => rmSync(lockFile());
+
+    assert.doesNotThrow(() => record([]));
+  });
+
+  it("refuses, and leaves nothing behind, when the name was taken again as the live lock was put back", () => {
+    staleLock();
+    lockTestHooks.afterRead = () => writeFileSync(lockFile(), `${process.pid} live\n`);
+    lockTestHooks.afterRename = () => writeFileSync(lockFile(), `${process.pid} newer\n`);
+
+    assert.throws(() => record([]), /another review command/);
+    assert.equal(readFileSync(lockFile(), "utf8"), `${process.pid} newer\n`);
+    assert.deepEqual(readdirSync(ledgerDir(repo)).filter((name) => name.includes(".stale.")), []);
+  });
+
+  it("refuses a lock that can't be read, rather than breaking it", () => {
+    mkdirSync(lockFile(), { recursive: true });
+
+    assert.throws(() => record([]), /another review command/);
+    assert.equal(statSync(lockFile()).isDirectory(), true);
+  });
+});
+
+describe("finding text read back from a stored ledger", () => {
+  it("strips control characters from a finding written by hand, as it does when recording", () => {
+    const ledger = record([finding({ status: "open", test: null })]);
+    const path = join(ledgerDir(repo), `${ledger.key}.json`);
+    rewriteFindings(path, (stored) => ({ ...stored, summary: "Bad\u001b[2J\u202e text", fix: "do\u200b this" }));
+
+    const { message } = checkReview(repo, mergeBase(repo), {});
+    assert.match(message, /Bad\[2J text/);
+    assert.doesNotMatch(message, /[\u001b\u202e\u200b]/);
+  });
+});
+
+describe("findingWords and findingPath", () => {
+  for (const [form, text] of [["a zero-width space", "\u200b"], ["a braille blank", "\u2800"], ["a soft hyphen and a tab", "\u00ad\t"], ["nothing", ""]] as const) {
+    it(`refuses words that are only ${form}`, () => {
+      assert.equal(findingWords().safeParse(text).success, false);
+    });
+    it(`refuses a path that is only ${form}`, () => {
+      assert.equal(findingPath().safeParse(text).success, false);
+    });
+  }
+
+  it("keeps a word's inner space and drops an invisible character", () => {
+    assert.equal(findingWords().parse(" a\u200b  b\n"), "a b");
+  });
+
+  it("drops an invisible character from a path, and keeps the path's own shape", () => {
+    assert.equal(findingPath().parse("src/a\u200b.cs"), "src/a.cs");
+  });
+});
+
+describe("the review command's printed text", () => {
+  it("prints no control character of the input a parse error echoes, and keeps the lines", () => {
+    const file = join(root, "bad.json");
+    writeFileSync(file, JSON.stringify({ ...reviewed(), rounds: 1, findings: [], "extra\u001b[2J\u202ekey": 1 }));
+
+    const result = cli(["record", file]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /extra\[2Jkey/);
+    assert.doesNotMatch(result.out + result.err, /[\u001b\u202e]/);
+    assert.ok(result.err.trimEnd().includes("\n"));
+  });
+});

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import {
+  replaceFile,
   fingerprint,
   markAccepted,
   pinLedgerGit,
@@ -54,6 +55,23 @@ const input = (overrides: Partial<SecurityInput> = {}): SecurityInput => ({
   fix: "Resolve the path and refuse one outside the folder.",
   ...overrides,
 });
+
+// Whether a directory without write permission refuses a file here (not so for root, or a file system that ignores modes).
+function canNotWriteInReadOnlyDir(): boolean {
+  const dir = mkdtempSync(join(tmpdir(), "ro-probe-"));
+  try {
+    chmodSync(dir, 0o500);
+    try {
+      writeFileSync(join(dir, "x"), "");
+      return false;
+    } catch {
+      return true;
+    }
+  } finally {
+    chmodSync(dir, 0o700);
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+}
 
 const context = { pr: 12, slug: "o/r" };
 const ledger = { branch: "feature/1-thing" };
@@ -518,7 +536,7 @@ describe("an entry that is updated", () => {
     assert.deepEqual(tmpFiles(), []);
   });
 
-  it("keeps the old text, and leaves no temp file, when the new text can't be written", { skip: process.getuid?.() === 0 }, () => {
+  it("keeps the old text, and leaves no temp file, when the new text can't be written", { skip: !canNotWriteInReadOnlyDir() }, () => {
     record([input({ status: "open", test: null })]);
     const file = entryFiles()[0] ?? "";
     const before = entryText(file);
@@ -622,5 +640,40 @@ describe("renderSecurityList", () => {
 
     assert.equal(renderSecurityList(entries).trim().split("\n").length, 1);
     assert.equal(renderSecurityList(entries).split("\t").length, 5);
+  });
+});
+
+describe("replaceFile", () => {
+  it("replaces a symlink at the path instead of writing through it, and a symlink at a guessable temp name can't redirect it", () => {
+    const target = join(root, "target.txt");
+    writeFileSync(target, "keep");
+    const file = join(root, "entry.md");
+    symlinkSync(target, file);
+    symlinkSync(target, `${file}.${process.pid}.tmp`);
+    symlinkSync(target, `${file}.tmp`);
+
+    replaceFile(file, "new");
+
+    assert.equal(readFileSync(target, "utf8"), "keep");
+    assert.equal(lstatSync(file).isSymbolicLink(), false);
+    assert.equal(readFileSync(file, "utf8"), "new");
+  });
+
+  it("throws, and leaves no temp file, when the directory is gone", () => {
+    assert.throws(() => replaceFile(join(root, "missing", "entry.md"), "x"));
+    assert.deepEqual(readdirSync(root).filter((name) => name.endsWith(".tmp")), []);
+  });
+});
+
+describe("renderSecurityList with a hand-edited path", () => {
+  it("shows a control, format or line-separator character as ?, so the row stays one line", () => {
+    mkdirSync(join(repo, SECURITY_DIR));
+    writeFileSync(join(repo, SECURITY_DIR, "0001-a.md"), "# 0001: A\n\n- Status: fixed\n- Lens: Security\n- Path: a.sh\n");
+    const entries = readEntries(repo).map((entry) => ({ ...entry, path: "a\u001b\u202e\u2028b" }));
+
+    const row = renderSecurityList(entries).trim();
+
+    assert.equal(row.split("\n").length, 1);
+    assert.equal(row.split("\t")[4], "a???b");
   });
 });

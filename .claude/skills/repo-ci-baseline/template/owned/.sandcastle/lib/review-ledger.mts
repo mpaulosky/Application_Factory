@@ -34,14 +34,14 @@
 // the sandbox's scripts/review.sh; the module lives in .sandcastle/lib/ too.
 
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { plainText, RENDERED_LINK, stripControl, visibleLetters } from "./plain-text.mts";
 import { NOT_OWNED_BASELINE_PATHS, REPO_SLUG } from "./repo-config.mts";
 import { hostExecFileSync } from "./host-limit.mts";
-import { ledgerGitEnv, markAccepted, pinLedgerGit, readEntries, recordSecurity, renderSecurityList, type SecurityInput, type SecurityOutcome } from "./security-record.mts";
+import { ledgerGitEnv, markAccepted, pinLedgerGit, readEntries, recordSecurity, renderSecurityList, replaceFile, type SecurityInput, type SecurityOutcome } from "./security-record.mts";
 
 // They live in security-record.mts, which runs git on the host the same way, and are re-exported for the callers of the ledger.
 export { ledgerGitEnv, pinLedgerGit };
@@ -231,38 +231,41 @@ export type Severity = (typeof SEVERITIES)[number];
 // refuse is asked for again with the reason, not found out when the review is recorded.
 export const FINDING_PATH_SHAPE = /^[^\s<>`]+( [^\s<>`]+)*$/;
 
+// A finding's words are a reviewer agent's, who read hostile diff text: control, format and invisible characters are removed
+// (stripControl) before they are checked, so none reaches the gate's message, the report or a PR description, and a text that was
+// only such characters is refused as empty. The host's reviewer schema (lib/host-review.mts) uses the same two, so a finding the
+// ledger would refuse is asked for again, not found out when the review is recorded.
+export const findingWords = () => z.string().transform(stripControl).pipe(z.string().trim().min(1));
+
+// A repository path: no markup or backtick, and no whitespace but single spaces between its parts (the Template's own files sit
+// under "Support For New Projects/"), so it can't carry anything into the PR description that plainText would have to undo:
+// renderReport and the notes run it through plainText, and a tab, newline or double space never gets that far. It keeps its
+// whitespace through the strip, so a tab or a double space is still refused rather than made a single space.
+const withoutControl = (text: string) => text.replace(/[\p{C}\p{Default_Ignorable_Code_Point}\u2800]/gu, (character) => (/\s/u.test(character) ? character : ""));
+export const findingPath = () =>
+  z
+    .string()
+    .transform(withoutControl)
+    .pipe(z.string().trim().min(1).regex(FINDING_PATH_SHAPE, "a path has no whitespace but single spaces between its parts, and no <, > or backtick"));
+
 // One finding. `fixed` needs the regression test that pins it, or the reason
 // it has none (a workflow or prose finding); `dismissed` needs the evidence
 // that the reviewer was wrong, read from the code; `accepted` needs the reason
 // a person accepted it; `open` waits for a person, or for the follow-up issue
 // when it's Advisory.
-// A finding's words are a reviewer agent's, who read hostile diff text: control and format characters are removed
-// (stripControl) before they are checked, so none reaches the gate's message, the report or a PR description.
-const words = () => z.string().transform(stripControl).pipe(z.string().trim().min(1));
-// A path keeps its whitespace, so the shape below still refuses a tab, a newline or a double space; only the control and format characters go.
-const withoutControl = (text: string) => text.replace(/[^\P{C}\s]/gu, "");
-
 const findingFields = z.object({
   id: z.string().regex(/^R[1-9]\d{0,5}$/, "ids are R1, R2, ... up to R999999, with no leading zero"),
-  lens: words(),
-  // A repository path: no markup or backtick, and no whitespace but single
-  // spaces between its parts (the Template's own files sit under "Support For
-  // New Projects/"), so it can't carry anything into the PR description that
-  // plainText would have to undo: renderReport and the notes run it through
-  // plainText, and a tab, newline or double space never gets that far.
-  path: z
-    .string()
-    .transform(withoutControl)
-    .pipe(z.string().trim().min(1).regex(FINDING_PATH_SHAPE, "a path has no whitespace but single spaces between its parts, and no <, > or backtick")),
+  lens: findingWords(),
+  path: findingPath(),
   line: z.number().int().nonnegative(),
-  summary: words(),
+  summary: findingWords(),
   status: z.enum(["fixed", "dismissed", "accepted", "open"]),
-  test: words().nullable(),
-  reason: words().nullable(),
+  test: findingWords().nullable(),
+  reason: findingWords().nullable(),
   // The reviewer's suggested fix, kept for the follow-up issue's Advisory
   // findings (renderAdvisories); the agent gives the person deciding an open
   // Critical or Warning finding its fix in the skill's step 9.
-  fix: words().nullable().optional(),
+  fix: findingWords().nullable().optional(),
 });
 
 function checkOutcome(finding: z.infer<typeof findingFields>, context: z.RefinementCtx): void {
@@ -285,7 +288,7 @@ function checkOutcome(finding: z.infer<typeof findingFields>, context: z.Refinem
 // finding: the person deciding it, or the follow-up issue, needs it. A security
 // weakness (isSecurity) is recorded fixed only with a test, which may name a
 // gate check: a reason alone leaves it open.
-const recordedFields = findingFields.extend({ severity: z.enum(SEVERITIES), security: z.boolean(), fix: words().nullable() });
+const recordedFields = findingFields.extend({ severity: z.enum(SEVERITIES), security: z.boolean(), fix: findingWords().nullable() });
 
 function checkRecorded(finding: z.infer<typeof recordedFields>, context: z.RefinementCtx): void {
   if (finding.status === "open" && finding.fix === null) {
@@ -765,11 +768,8 @@ export function readLedger(cwd: string, key: string): Ledger | undefined {
 // Write a ledger whole: to a file of its own, then renamed over the old one,
 // so a reader never sees half a ledger.
 function writeLedger(cwd: string, ledger: Ledger): void {
-  const path = ledgerPath(cwd, ledger.key);
-  const temporary = `${path}.${process.pid}.tmp`;
-  // Owner-only: a ledger can hold accepted security findings.
-  writeFileSync(temporary, `${JSON.stringify(ledger, null, 2)}\n`, { mode: 0o600 });
-  renameSync(temporary, path);
+  // Owner-only (a ledger can hold accepted security findings), through a temp file of an unpredictable name that is made exclusively.
+  replaceFile(ledgerPath(cwd, ledger.key), `${JSON.stringify(ledger, null, 2)}\n`);
 }
 
 // Which security entry each of a ledger's findings was recorded against, kept beside the ledger (`<key>.entries`, not
@@ -784,9 +784,7 @@ function writeEntryMap(cwd: string, key: string, entries: Record<string, string>
     rmSync(path, { force: true });
     return;
   }
-  const temporary = `${path}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(entries)}\n`, { mode: 0o600 });
-  renameSync(temporary, path);
+  replaceFile(path, `${JSON.stringify(entries)}\n`);
 }
 
 // The entry id `findingId` was recorded against, or undefined when unknown (an older record, or none written).
@@ -800,34 +798,35 @@ function readEntryMap(cwd: string, key: string, findingId: string): string | und
   }
 }
 
-// How long a lock nobody can be named for (empty, or not "pid token") stands: its holder may be about to write its id.
+// How long a lock that names no process stands (empty, or not "pid token"): its holder may be about to write its id.
 const STALE_LOCK_MS = 60_000;
 
-const textOf = (path: string): string | undefined => {
+// Whether a lock with this `content`, last written `ageMs` ago, was left behind. One that names a process is stale when that process
+// is gone: only EPERM (a process we may not signal) means it is running, and an id no process can have (too large for the platform)
+// is gone. One that names none is stale after STALE_LOCK_MS. A running process keeps its lock whatever its age: a pid proves nothing
+// about the holder (it may have been reused), so such a lock fails closed and the error names the file to delete.
+export function lockIsStale(content: string, ageMs: number): boolean {
+  const pid = /^([1-9]\d*) /.exec(content)?.[1];
+  if (pid === undefined) return ageMs > STALE_LOCK_MS;
+  try {
+    process.kill(Number(pid), 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "EPERM";
+  }
+}
+
+// Test seams, called between the steps of taking over a stale lock, so a test can make another command act there.
+export const lockTestHooks: { afterRead?: () => void; afterRename?: () => void } = {};
+
+// The text of the file at `path`, or undefined when there is none. Any other read error (a directory, no permission, no file
+// handles left) throws: a lock that can't be read is not one to break.
+function textOf(path: string): string | undefined {
   try {
     return readFileSync(path, "utf8");
-  } catch {
-    return undefined;
-  }
-};
-
-// Whether the lock at `lock` was left behind: it names a process that is gone, or it names none and is more than a minute old.
-// A lock that has vanished since is also free to take. A process we may not signal (EPERM) is running.
-function lockIsStale(lock: string, content: string | undefined): boolean {
-  if (content === undefined) return true;
-  const pid = /^([1-9]\d*) /.exec(content)?.[1];
-  if (pid !== undefined) {
-    try {
-      process.kill(Number(pid), 0);
-      return false;
-    } catch (error) {
-      return (error as NodeJS.ErrnoException).code === "ESRCH";
-    }
-  }
-  try {
-    return Date.now() - statSync(lock).mtimeMs > STALE_LOCK_MS;
-  } catch {
-    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
   }
 }
 
@@ -835,34 +834,87 @@ function lockIsStale(lock: string, content: string | undefined): boolean {
 // and an `accept`) can't interleave. One lock for every key, not one per key:
 // a record reads every review of the branch for the ids taken (takenIds), so a
 // record on another diff mustn't write between that read and its own write.
-// The lock names its holder ("pid token"): one left by a process that was killed
-// is replaced, and the holder removes only the lock that still carries its token.
-// Fails at once, naming the lock, when a running command holds it.
+// The lock names its holder ("pid token"). A lock left by a process that was killed is taken over: renamed to a name of our own
+// (one command wins the rename), read there, and removed only if it is the text judged stale; if it is not (a live lock was made in
+// between), it is put back and the command refuses. Nothing at the shared name is ever removed without being read first, so a live
+// lock is not deleted from under its holder, though a third command taking the name in the instant it is put back could still
+// share the lock: the takeover is best-effort, and a stale lock is rare. The holder removes the lock only while it still carries its
+// token. Fails at once, naming the lock, when a running command holds it.
 function withLock<T>(cwd: string, change: () => T): T {
   mkdirSync(ledgerDir(cwd), { recursive: true, mode: 0o700 });
   chmodSync(ledgerDir(cwd), 0o700);
   const lock = join(ledgerDir(cwd), ".lock");
-  const mine = `${process.pid} ${randomBytes(8).toString("hex")}\n`;
+  const token = randomBytes(8).toString("hex");
+  const mine = `${process.pid} ${token}\n`;
+  const refuse = (cause?: unknown) => new Error(`another review command is writing a review; try again, or delete ${lock} if none is running`, { cause });
   let handle: number | undefined;
   for (let attempt = 0; handle === undefined; attempt += 1) {
     try {
       handle = openSync(lock, "wx");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const seen = textOf(lock);
-      if (attempt > 0 || !lockIsStale(lock, seen)) {
-        throw new Error(`another review command is writing a review; try again, or delete ${lock} if none is running`, { cause: error });
+      if (attempt > 0) throw refuse(error);
+      let seen: string | undefined;
+      let ageMs = 0;
+      try {
+        seen = textOf(lock);
+        if (seen !== undefined) ageMs = Date.now() - statSync(lock).mtimeMs;
+      } catch {
+        throw refuse(error);
       }
-      // Removed only if it is still the lock seen to be stale; whoever takes the free name next wins the "wx".
-      if (seen === undefined || textOf(lock) === seen) rmSync(lock, { force: true });
+      // Gone since the open failed: the next open decides, and nothing is removed.
+      if (seen === undefined) continue;
+      if (!lockIsStale(seen, ageMs)) throw refuse(error);
+      lockTestHooks.afterRead?.();
+      const moved = `${lock}.stale.${token}`;
+      try {
+        renameSync(lock, moved);
+      } catch (renameError) {
+        // Another command took it over first: the next open decides.
+        if ((renameError as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw refuse(renameError);
+      }
+      lockTestHooks.afterRename?.();
+      let movedText: string | undefined;
+      try {
+        movedText = textOf(moved);
+      } catch {
+        movedText = undefined;
+      }
+      if (movedText === seen) {
+        rmSync(moved, { force: true });
+        continue;
+      }
+      // Not the lock judged stale: a live one was made in the meantime. Put it back if its name is free, and refuse.
+      try {
+        linkSync(moved, lock);
+      } catch {
+        // The name was taken again; the lock moved is released early, which nothing here can undo.
+      }
+      rmSync(moved, { force: true });
+      throw refuse();
     }
   }
+  const held = handle;
   try {
-    writeSync(handle, mine);
+    writeSync(held, mine);
+  } catch (error) {
+    // The lock is ours (just made with "wx") and empty: leaving it would refuse every command for a minute.
+    closeSync(held);
+    rmSync(lock, { force: true });
+    throw error;
+  }
+  try {
     return change();
   } finally {
-    closeSync(handle);
-    if (textOf(lock) === mine) rmSync(lock, { force: true });
+    closeSync(held);
+    let current: string | undefined;
+    try {
+      current = textOf(lock);
+    } catch {
+      current = undefined;
+    }
+    if (current === mine) rmSync(lock, { force: true });
   }
 }
 
@@ -1031,7 +1083,8 @@ export function recordReview(
 // the finding was recorded against is accepted too if it is open (a fixed one stays, with a warning), and `onSecurity` hears of it (or of why it
 // couldn't be): the acceptance itself stands either way.
 export function acceptFinding(cwd: string, base: string, id: string, reason: string, onSecurity?: (message: string) => void): Ledger {
-  if (reason.trim() === "") throw new Error("say why the finding is accepted");
+  const why = stripControl(reason).trim();
+  if (why === "") throw new Error("say why the finding is accepted");
   const key = diffKey(cwd, base);
   return withLock(cwd, () => {
     const ledger = readLedger(cwd, key);
@@ -1040,17 +1093,18 @@ export function acceptFinding(cwd: string, base: string, id: string, reason: str
     if (finding === undefined) throw new Error(`the review has no finding ${id}`);
     if (finding.status !== "open") throw new Error(`${id} is already ${finding.status}`);
     finding.status = "accepted";
-    finding.reason = reason.trim();
-    writeLedger(cwd, ledgerSchema.parse(ledger));
+    finding.reason = why;
+    const written = ledgerSchema.parse(ledger);
+    writeLedger(cwd, written);
     if (isSecurity(finding)) {
       try {
-        const entry = markAccepted(cwd, finding, reason.trim(), readEntryMap(cwd, key, id), onSecurity);
+        const entry = markAccepted(cwd, finding, why, readEntryMap(cwd, key, id), onSecurity);
         if (entry !== undefined) onSecurity?.(`marked ${entry} accepted`);
       } catch (error) {
         onSecurity?.(`couldn't mark the entry accepted: ${(error as Error).message ?? String(error)}`);
       }
     }
-    return ledger;
+    return written;
   });
 }
 
@@ -1158,12 +1212,13 @@ export const REVIEW_NOTES_END = "<!-- /review-notes -->";
 // person accepted, for people reading the PR. Security findings (see
 // isSecurity: graded Warning, a lens naming security, or unmarked) are only
 // counted, so the maintainer knows to wait for the
-// private report. Claude Review reads the notes' accepted non-security findings on an owner's same-repo PR, but
+// private report, and so is an accepted finding whose path, summary or reason holds a link or an image
+// GitHub would render (RENDERED_LINK): its words stay in the ledger and the report. Claude Review reads the notes' accepted non-security findings on an owner's same-repo PR, but
 // raises a security finding again (the notes only count it), and Copilot isn't known to read them, so
 // a thread one opens on an accepted finding gets the same "Left for the
 // owner." reply as every thread left for the owner (docs/PROCESS.md), which doesn't
 // say which thread a security finding is on; the reason stays in the ledger
-// and, for a finding that isn't a security one, in these notes. Empty when
+// and, for a finding that isn't a security one and holds no link, in these notes. Empty when
 // none was accepted and the reviewer was the pre-push-reviewer (or unrecorded).
 export function renderReviewNotes(ledger: Ledger): string {
   const accepted = ledger.findings.filter((finding) => finding.status === "accepted");
@@ -1385,13 +1440,18 @@ export function repoSlugProblem(slug: string): string | undefined {
   return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(slug) ? undefined : `REPO_SLUG in lib/repo-config.mts is ${JSON.stringify(slug)}, not OWNER/REPO.`;
 }
 
+// `text` without the control, format and invisible characters a terminal acts on, except newlines and tabs.
+const printable = (text: string) => text.replace(/[\p{C}\p{Default_Ignorable_Code_Point}\u2800\u2028\u2029]/gu, (character) => (character === "\n" || character === "\t" ? character : ""));
+
 // The command line. Returns the exit code: 0 only for a command that did
 // what it was asked, so the gate can't pass on a failure.
 export function main(args: readonly string[], cwd: string = process.cwd(), env: NodeJS.ProcessEnv = process.env, slug: string = REPO_SLUG): number {
   const [command, ...rest] = args;
-  const out = (text: string) => process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
+  // Text that may quote the agent's input (a parse error echoing a key, a finding) is printed without control characters, keeping the
+  // newlines and tabs the output is laid out with.
+  const out = (text: string) => process.stdout.write(printable(text.endsWith("\n") ? text : `${text}\n`));
   const fail = (text: string) => {
-    process.stderr.write(`${text}\n`);
+    process.stderr.write(`${printable(text)}\n`);
     return 1;
   };
   try {
@@ -1432,7 +1492,7 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
       case "record": {
         if (rest[0] === undefined) return fail(USAGE);
         const text = readFileSync(rest[0] === "-" ? 0 : rest[0], "utf8");
-        const note = (message: string) => process.stderr.write(`.security: ${message}\n`);
+        const note = (message: string) => process.stderr.write(`.security: ${printable(message)}\n`);
         const report = renderReport(
           recordReview(cwd, mergeBase(cwd), JSON.parse(text) as ReviewInput, undefined, undefined, {
             slug,

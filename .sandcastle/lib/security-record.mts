@@ -14,12 +14,12 @@
 // read-only folder there (protectedRecordMounts in host-safety.mts). Entry text is data: a reviewer is handed an entry's id,
 // lens, path and status only, never its words.
 //
-// The writers never throw for an environment problem (no main worktree, a symlinked directory, a directory git doesn't
+// recordSecurity never throws for an environment problem (no main worktree, a symlinked directory, a directory git doesn't
 // ignore, a write error): the ledger is what the gate checks, so a record that can't be written is a warning for the person,
-// not a failed review.
+// not a failed review. markAccepted, which `accept` calls, lets a write error through for its caller to report.
 import { hostExecFileSync } from "./host-limit.mts";
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { plainText } from "./plain-text.mts";
 import type { Ledger } from "./review-ledger.mts";
@@ -224,7 +224,7 @@ function entryText(id: string, finding: SecurityInput, branch: string, context: 
 
 // Replace the file at `path` with `text` whole: a temp file beside it, renamed over it, so a reader or a crash never sees a
 // truncated entry, and a symlink put at `path` is replaced, never written through. Throws on a write error, with no temp file left.
-function replaceFile(path: string, text: string): void {
+export function replaceFile(path: string, text: string): void {
   const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   try {
     writeFileSync(temp, text, { flag: "wx", mode: 0o600 });
@@ -241,8 +241,10 @@ const ENTRY_NUMBER_TRIES = 5;
 // A test seam: called with the number chosen, before the entry is made.
 export type RecordHooks = { afterNextId?: (id: string) => void };
 
-// Make a new entry, never over a file that is there ("wx", whatever it is): when another writer made the file with the number
-// first (EEXIST), choose the number again.
+// Make a new entry, never over a file that is there, and whole at its final name: the text is written to a temp file and hard-linked to the
+// name (a link fails with EEXIST rather than replacing), so a reader never sees it empty or half written. A name another writer made first
+// (EEXIST) means the number is taken: it is chosen again. The numbers are otherwise kept apart by the ledger lock every caller holds, and
+// by nextId counting any file that starts with a number, a hand-made one too. When the filesystem can't link, the entry is created in place.
 function createEntry(
   directory: string,
   finding: SecurityInput,
@@ -252,14 +254,24 @@ function createEntry(
 ): { id: string; file: string; path: string } {
   for (let attempt = 0; attempt < ENTRY_NUMBER_TRIES; attempt += 1) {
     const id = nextId(directory);
-    hooks.afterNextId?.(id);
     const file = `${id}-${slugOf(finding.summary)}.md`;
     const path = join(directory, file);
+    const text = entryText(id, finding, branch, context);
+    const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
     try {
-      writeFileSync(path, entryText(id, finding, branch, context), { flag: "wx", mode: 0o600 });
+      hooks.afterNextId?.(id);
+      writeFileSync(temp, text, { flag: "wx", mode: 0o600 });
+      try {
+        linkSync(temp, path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") throw error;
+        writeFileSync(path, text, { flag: "wx", mode: 0o600 });
+      }
       return { id, file, path };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    } finally {
+      rmSync(temp, { force: true });
     }
   }
   throw new Error(`every entry number it tried was taken by another writer (${ENTRY_NUMBER_TRIES} tries)`);
@@ -332,8 +344,6 @@ export function recordSecurity(
           else holder = named;
         }
         if (holder !== undefined) {
-          outcome.repeated.push({ finding: finding.id, entry: holder.id });
-          outcome.entries[finding.id] = holder.id;
           if (holder.status === "open" && finding.status === "fixed") {
             let text = withStatus(readFileSync(holder.path, "utf8"), "fixed");
             text = withSection(text, "Policy", policyOf(finding));
@@ -341,6 +351,8 @@ export function recordSecurity(
             replaceFile(holder.path, text);
             holder.status = "fixed";
           }
+          outcome.repeated.push({ finding: finding.id, entry: holder.id });
+          outcome.entries[finding.id] = holder.id;
           continue;
         }
         const made = createEntry(directory, finding, ledger.branch, context, hooks);
@@ -390,6 +402,6 @@ export function markAccepted(
 export function renderSecurityList(entries: readonly SecurityEntry[]): string {
   if (entries.length === 0) return "No security entries.";
   return entries
-    .map((entry) => [entry.id, entry.status, plainText(entry.lens), plainText(entry.findingPath), entry.path.replace(/[\t\r\n]/g, "?")].join("\t"))
+    .map((entry) => [entry.id, entry.status, plainText(entry.lens), plainText(entry.findingPath), entry.path.replace(/[\p{C}\u2028\u2029]/gu, "?")].join("\t"))
     .join("\n");
 }

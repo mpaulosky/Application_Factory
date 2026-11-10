@@ -14,12 +14,15 @@ export function breakReferences(text: string): string {
     .replace(/\b(github)\.(com)\b/gi, "$1\u200B.$2");
 }
 
-// `text` with every control and format character removed (an escape, a bell, a bidi override, a zero-width space) and each
+// `text` with every control, format, private-use and unassigned character, lone surrogate and default-ignorable character (an
+// escape, a bell, a bidi override, a zero-width space or joiner, a variation selector, a Hangul filler, U+2800) removed, and each
 // run of whitespace made one space. The text of a finding reaches a terminal (the gate's message, the report) and a PR
-// description, and a reviewer agent that read hostile diff text may have written an escape sequence or a bidi override into
-// it. A run that holds whitespace becomes a space, so words around a newline stay apart; one that doesn't is dropped.
+// description, and a reviewer agent that read hostile diff text may have written an escape sequence, a bidi override or an
+// invisible payload into it. A run that holds whitespace (JS `\s`, which includes U+FEFF and the line separators) becomes a space,
+// so words around a newline stay apart; one that doesn't is dropped, which joins the words around it. A joiner in an emoji
+// sequence or in Persian or Indic text goes too: the loss is accepted for words that are published or printed raw.
 export function stripControl(text: string): string {
-  return text.replace(/[\p{C}\s]+/gu, (run) => (/\s/u.test(run) ? " " : ""));
+  return text.replace(/[\p{C}\p{Default_Ignorable_Code_Point}\u2800\s]+/gu, (run) => (/\s/u.test(run) ? " " : ""));
 }
 
 // What GitHub renders as a link or an image, or fetches: an address with a scheme (`://`, `mailto:`), a www. address (GitHub links one anywhere after a space or
