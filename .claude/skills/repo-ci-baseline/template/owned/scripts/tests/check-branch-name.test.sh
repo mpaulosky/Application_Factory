@@ -35,8 +35,12 @@ expect refused --pr claude/project-thread-ot9sjt
 expect refused --pr patch-1
 expect refused ""
 
-# Branches Actions and Dependabot create are allowed only as a PR's head.
-for branch in docs/release-notes docs/backfill-blog-posts dependabot/nuget/all-nuget-1a2b3c; do
+# Dependabot's branches are allowed to push to, so a person can fix its PR.
+expect allowed dependabot/github_actions/main/minor-and-patch-actions-401d4b32a3
+expect allowed --pr dependabot/nuget/all-nuget-1a2b3c
+expect refused dependabot
+# Branches Actions create are allowed only as a PR's head.
+for branch in docs/release-notes docs/backfill-blog-posts; do
   expect allowed --pr "$branch"
   expect refused "$branch"
 done
