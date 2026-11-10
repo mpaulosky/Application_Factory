@@ -1444,8 +1444,22 @@ export function repoSlugProblem(slug: string): string | undefined {
   return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(slug) ? undefined : `REPO_SLUG in lib/repo-config.mts is ${JSON.stringify(slug)}, not OWNER/REPO.`;
 }
 
-// `text` without the control, format and invisible characters a terminal acts on, except newlines and tabs.
-const printable = (text: string) => text.replace(/[\p{C}\p{Default_Ignorable_Code_Point}\u2800\u2028\u2029]/gu, (character) => (character === "\n" || character === "\t" || character === "\u200b" ? character : ""));
+// `text` without the control, format and invisible characters a terminal acts on, except newlines, tabs and the zero-width space
+// breakReferences adds (after an @ before a letter or digit, after a # or GH- before a digit, and in github.com): a published `advisory`
+// or `notes` keeps those, and any other zero-width space, such as one in an echoed parse error, is removed.
+function printable(text: string): string {
+  return text.replace(/[\p{C}\p{Default_Ignorable_Code_Point}\u2800\u2028\u2029]/gu, (character, offset: number, whole: string) => {
+    if (character === "\n" || character === "\t") return character;
+    if (character !== "\u200b") return "";
+    const before = whole.slice(0, offset);
+    const after = whole.slice(offset + 1);
+    const breaksReference =
+      (before.endsWith("@") && /^[A-Za-z0-9]/.test(after)) ||
+      ((before.endsWith("#") || /\bGH-$/i.test(before)) && /^\d/.test(after)) ||
+      (/\bgithub$/i.test(before) && /^\.com\b/i.test(after));
+    return breaksReference ? character : "";
+  });
+}
 
 // The command line. Returns the exit code: 0 only for a command that did
 // what it was asked, so the gate can't pass on a failure.

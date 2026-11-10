@@ -694,12 +694,11 @@ describe("renderSecurityList", () => {
 });
 
 describe("replaceFile", () => {
-  it("replaces a symlink at the path instead of writing through it, and a symlink at a guessable temp name can't redirect it", () => {
+  it("replaces a symlink at the path instead of writing through it", () => {
     const target = join(root, "target.txt");
     writeFileSync(target, "keep");
     const file = join(root, "entry.md");
     symlinkSync(target, file);
-    symlinkSync(target, `${file}.${process.pid}.tmp`);
 
     replaceFile(file, "new");
 
@@ -708,7 +707,7 @@ describe("replaceFile", () => {
     assert.equal(readFileSync(file, "utf8"), "new");
   });
 
-  it("throws, and leaves no temp file, when the directory is gone", () => {
+  it("throws when the directory is gone", () => {
     assert.throws(() => replaceFile(join(root, "missing", "entry.md"), "x"));
   });
 

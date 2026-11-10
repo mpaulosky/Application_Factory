@@ -46,13 +46,14 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   finding whose path, summary or reason holds a link or an image GitHub would render (`RENDERED_LINK` in `lib/plain-text.mts`, which the host's follow-up issue uses too) is only
   counted there, as an accepted security finding is; its words stay in the ledger and the report.
 - The review command prints no control or invisible character of the text it echoes (a parse error, a `.security:` note), keeping its newlines, its tabs and the zero-width
-  space `plainText` adds after an `@`, a `#` and in `github.com` (so `advisory` and `notes` still print inert mentions); the host's reviewer schema
+  space `plainText` adds (after an `@`, a `#` or `GH-` before digits, and in `github.com`, so `advisory` and `notes` still print inert mentions) and removes any other; the host's reviewer schema
   applies the same stripping, so a finding of only invisible characters is refused as empty.
 - The ledger's lock names its holder (`<pid> <token>`). A lock whose process is gone is taken over, as is one with no readable holder that is more than a minute old; a lock
   held by a running command still refuses at once, naming the file. A takeover renames the lock to a name of its own (one command wins), judges it again there by its text and age and deletes it only if
   it is still stale; a live lock made in between is put back and the command refuses. The holder removes the lock only while it still carries its token.
-- A ledger or a security entry is replaced whole (a temp file with a random name, renamed over it), and a new security entry is written to a temp file and hard-linked to its number,
-  so a reader never sees a half-written file and a symlink put at the name is replaced, not written through. A number another writer took is tried again, up to five times; a
+- A ledger or a security entry is replaced whole (a temp file with a random name, renamed over it), and a new security entry is written to a temp file and hard-linked to its number
+  (on a file system that can't link, it is written in place instead), so a reader never sees a half-written file where links work and a symlink put at the name is replaced, not written through. A number
+  another writer took is tried again, up to five times; a
   finding whose entry can't be written is a warning, and the other findings are still written.
 - The ledger is keyed by the branch's hunks against its merge base with `origin/main`. A clean merge of `main` keeps the review; a new commit, a conflict
   resolution or a `main` change inside one of the branch's hunks needs a new one. A re-Apply on `chore/reapply-baseline` passes without one only when every
@@ -126,7 +127,8 @@ again, and settled differently, on the next (one weakness took six rounds). The 
   entry would hide a real weakness, while a reworded repeat only gets a second file.
 - **Where.** The main worktree's `.security/`, found with `git worktree list`, so a review in any worktree or branch reads and writes the same entries. A bare clone has none:
   nothing is written, with a warning. The directory is mode 0700, entries 0600, each written to a temp file with `wx` and then
-  hard-linked (new) or renamed (updated) to its name; a symlinked directory is refused, a symlink at an entry's name is replaced.
+  hard-linked (new) or renamed (updated) to its name; a symlinked directory is refused, a symlink at an entry's name is replaced. On a file system that can't hard-link, a new
+  entry is written in place with `wx` instead (a failed write removes what it left), so the whole-file guarantee holds only where links work.
 - **Git-ignored, never published.** The Owned `.gitignore` carries `.security/*` and `!.security/README.md`, and `record` writes nothing, with a warning to
   re-Apply, where `git check-ignore` says the directory isn't ignored. The README is Owned, so a re-Apply restores it, and it leaves every entry alone. (The
   ignore lines are in the Owned `.gitignore` too, so they reach every repo.) The follow-up issue, the PR's Review notes and the

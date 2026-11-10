@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
@@ -2981,6 +2981,23 @@ describe("the security record", () => {
       assert.match(firstEntry(), /The folder is a sandbox\./);
     });
 
+    it("accept prints its .security: note without an escape character, even when the error names a file with one", { skip: !canNotWriteInReadOnlyDir() }, () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      const dir = join(repo, ".security");
+      const [name] = entries();
+      renameSync(join(dir, name ?? ""), join(dir, "0001-a\u001b[2Jb.md"));
+      chmodSync(dir, 0o500);
+      let result: { code: number; out: string; err: string };
+      try {
+        result = cli(["accept", "R1", "Fine."]);
+      } finally {
+        chmodSync(dir, 0o700);
+      }
+
+      assert.match(result.err, /^\.security: couldn't mark the entry accepted: /m);
+      assert.doesNotMatch(result.err, /\u001b/);
+    });
+
     it("accept still finds the entry by the finding's text when no note of the entry was kept (an older record)", () => {
       recordHere([weakness({ status: "open", test: null })]);
       for (const name of readdirSync(ledgerDir(repo))) if (name.endsWith(".entries")) rmSync(join(ledgerDir(repo), name));
@@ -3873,6 +3890,34 @@ function canNotWriteInReadOnlyDir(): boolean {
   }
 }
 
+// Whether a file with mode 000 can't be read here (not so for root).
+function canNotReadMode0(): boolean {
+  const dir = mkdtempSync(join(tmpdir(), "ro-probe-"));
+  try {
+    const file = join(dir, "x");
+    writeFileSync(file, "");
+    chmodSync(file, 0o000);
+    try {
+      readFileSync(file);
+      return false;
+    } catch {
+      return true;
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+}
+
+// Whether this process may not signal pid 1 (EPERM), which is what the lockIsStale case for a live process we can't signal needs.
+function pid1RefusesSignal(): boolean {
+  try {
+    process.kill(1, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 describe("lockIsStale", () => {
   const gone = Number(execFileSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }));
   for (const [form, content, ageMs, stale] of [
@@ -3889,7 +3934,7 @@ describe("lockIsStale", () => {
     ["a negative id, left past the minute (the id must start the text)", "-1 t\n", 60_001, true],
     ["text before an id", "x 1 t\n", 60_001, true],
     ["an id with no space after it", `${process.pid}`, 60_001, true],
-    ["a process we may not signal (pid 1), however old", "1 t\n", 60_001, false],
+    ...(pid1RefusesSignal() ? ([["a process we may not signal (pid 1), however old", "1 t\n", 60_001, false]] as const) : []),
   ] as const) {
     it(`judges ${form}`, () => {
       assert.equal(lockIsStale(content, ageMs), stale);
@@ -3899,9 +3944,9 @@ describe("lockIsStale", () => {
 
 describe("taking over a stale lock", () => {
   const lockFile = () => join(ledgerDir(repo), ".lock");
-  const staleLock = () => {
+  const staleLock = (text = "held") => {
     mkdirSync(ledgerDir(repo), { recursive: true });
-    writeFileSync(lockFile(), "held");
+    writeFileSync(lockFile(), text);
     const seconds = (Date.now() - 65_000) / 1000;
     utimesSync(lockFile(), seconds, seconds);
   };
@@ -3922,7 +3967,7 @@ describe("taking over a stale lock", () => {
   });
 
   it("refuses, and keeps a fresh empty lock, when one replaced the stale empty lock before the rename (equal text proves nothing)", () => {
-    staleLock();
+    staleLock("");
     lockTestHooks.afterRead = () => {
       rmSync(lockFile());
       writeFileSync(lockFile(), "");
@@ -3931,6 +3976,19 @@ describe("taking over a stale lock", () => {
     assert.throws(() => record([]), /another review command/);
     assert.equal(existsSync(lockFile()), true);
     assert.equal(readFileSync(lockFile(), "utf8"), "");
+  });
+
+  it("refuses, and puts the lock back, when the lock it moved can't be read", { skip: !canNotReadMode0() }, () => {
+    staleLock();
+    lockTestHooks.afterRename = () => {
+      for (const name of readdirSync(ledgerDir(repo))) if (name.includes(".stale.")) chmodSync(join(ledgerDir(repo), name), 0o000);
+    };
+
+    assert.throws(() => record([]), /another review command/);
+
+    chmodSync(lockFile(), 0o600);
+    assert.equal(readFileSync(lockFile(), "utf8"), "held");
+    assert.deepEqual(readdirSync(ledgerDir(repo)).filter((name) => name.includes(".stale.")), []);
   });
 
   it("goes on when the lock vanished before it was read", () => {
@@ -4071,6 +4129,25 @@ describe("the review command's printed text", () => {
     assert.match(result.err, /extra\[2J\tkey/);
     assert.doesNotMatch(result.out + result.err, /[\u001b\u202e\u2028]/);
     assert.ok(result.err.trimEnd().includes("\n"));
+  });
+
+  it("removes a zero-width space of an echoed parse error, which breakReferences didn't add", () => {
+    const file = join(root, "bad2.json");
+    writeFileSync(file, JSON.stringify({ ...reviewed(), rounds: 1, findings: [], "a\u200b\u200bb@\u200bc": 1 }));
+
+    const result = cli(["record", file]);
+
+    assert.match(result.err, /"ab@\u200bc"/);
+    assert.doesNotMatch(result.err, /a\u200b|\u200b\u200b/);
+  });
+
+  it("keeps the zero-width space after GH- and in github.com too", () => {
+    record([finding({ severity: "advisory", status: "open", test: null, lens: "Docs match the code", summary: "See GH-7 and github.com.", fix: "Reword." })]);
+
+    const result = cli(["advisory"]);
+
+    assert.match(result.out, /GH-\u200b7/);
+    assert.match(result.out, /github\u200b\.com/);
   });
 
   it("keeps the zero-width space plainText puts after an @ and a # in the output that is published", () => {
