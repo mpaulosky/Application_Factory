@@ -374,7 +374,8 @@ async function evaluate(pr, events = [], options = {}) {
     readBackErrors = 0,
     readBackError = new Error("Server error on the read-back"),
     // When set, the reads after the request show the PR at this head (a push
-    // landed while the read-back ran).
+    // landed while the read-back ran), with its checks passing; the commit has
+    // to be in commits (graph()).
     readBackHeadRefOid,
     // Whether the rival's record is listed before this run's own, whatever its
     // createdAt: GitHub lists comments oldest first, and the first record
@@ -626,7 +627,9 @@ async function evaluate(pr, events = [], options = {}) {
       })
     }
   };
-  const seenAfterRequest = (pr) => (requested && readBackHeadRefOid ? { ...pr, headRefOid: readBackHeadRefOid } : pr);
+  const seenAfterRequest = (pr) => (requested && readBackHeadRefOid
+    ? { ...pr, headRefOid: readBackHeadRefOid, headRef: checksOn(readBackHeadRefOid, requiredCheck("Build Solution")) }
+    : pr);
   const github = {
     rest,
     graphql: async (query, variables = {}) => {
@@ -1703,7 +1706,8 @@ test("adds review:claude only after the rest of the settle window when the reque
 // request does, or Claude Review would skip a record younger than that and PR Auto-Merge would strip the label.
 for (const [name, options] of [
   ["the read-back errors", { readBackErrors: 1 }],
-  ["the head moved under the read-back", { readBackHeadRefOid: "moved" }]
+  // "moved" is an ordinary commit on top of the head, so the caller's merge checks accept it.
+  ["the head moved under the read-back", { readBackHeadRefOid: "moved", commits: graph({ moved: { parents: [HEAD], files: { app: "app3", lib: "lib0" } } }) }]
 ]) {
   test(`adds review:claude only once the record has settled when ${name} (mpaulosky/Application_Factory#40)`, async () => {
     mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.parse("2026-01-02T00:00:00Z") });
@@ -1717,6 +1721,9 @@ for (const [name, options] of [
     }
     assert.equal(result.requests.length, 1);
     assert.equal(result.askedAt.length, 1);
+    // Claude is called in (a moved head that failed the merge checks would add nothing, and the loop below would check nothing).
+    assert.deepEqual(result.addedLabels, LABEL_FOR_CLAUDE, result.logs.join("\n"));
+    assert.equal(result.addedLabelAt.length, 1);
     // askCopilotOnce held the run until the record was 30 seconds old.
     assert.ok(finishedAt - result.askedAt[0] >= 30 * 1000, `the run ended ${(finishedAt - result.askedAt[0]) / 1000} s after the record`);
     for (const labelAt of result.addedLabelAt) {
