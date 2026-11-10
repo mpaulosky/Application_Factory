@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Tests scripts/gate.sh against throwaway repos with a stub test.sh and a stub review.sh: matching copies run the stub and pass its exit
 # status on; a changed, missing or execute-bit-mismatched copy stops the gate before the stub runs; the local review check (ADR 0010)
-# skips only on GATE_SKIP_REVIEW=1, fails without an origin/main, and passes review.sh check's status on, ahead of test.sh.
+# skips only on GATE_SKIP_REVIEW=1, fails without an origin/main, and passes review.sh check's status on, ahead of test.sh. It also checks
+# that gate.sh names each copied stand-alone test, that repo-config.mts lists the Factory's own files under Owned patterns, and that
+# dependabot.yml watches the root package.json.
 #
 #   scripts/tests/gate.test.sh
 set -euo pipefail
@@ -57,12 +59,18 @@ STUB
   done
 }
 
-# with_origin <repo>: a base commit as origin/main and a commit of the branch's own on top, so the merge base isn't HEAD.
+# tcommit <repo> <message>: an empty commit that doesn't depend on the developer's global git config (signing, hooks).
+tcommit() { git -C "$1" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q --allow-empty -m "$2"; }
+
+# with_origin <repo>: a base commit, a commit of the branch's own on top of it, and an origin/main that has moved on from the base. The merge
+# base ($base) is then neither HEAD nor origin/main's tip, so a gate that passed either of those would fail the argument check.
 with_origin() {
-  git -C "$1" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m base
-  git -C "$1" update-ref refs/remotes/origin/main HEAD
-  git -C "$1" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m branch
-  base="$(git -C "$1" rev-parse origin/main)"
+  tcommit "$1" base
+  base="$(git -C "$1" rev-parse HEAD)"
+  tcommit "$1" branch
+  local moved
+  moved="$(git -C "$1" -c user.name=t -c user.email=t@example.com commit-tree -p "$base" -m moved "$base^{tree}")"
+  git -C "$1" update-ref refs/remotes/origin/main "$moved"
 }
 
 # run <repo>: the gate's exit status in $status, and whether the stub ran in $ran. GATE_SKIP_REVIEW is 1 unless $REVIEW_SKIP is set:
@@ -134,7 +142,7 @@ check "a failing review check fails the gate" "$([[ $status != 0 ]] && echo 0 ||
 check "a failing review check stops before test.sh" "$([[ $ran == no ]] && echo 0 || echo 1)"
 
 repo="$(new_repo review-no-origin)"; stub_review "$repo"
-git -C "$repo" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m base
+tcommit "$repo" base
 REVIEW_SKIP="" REVIEW_EXIT=0 run "$repo"
 check "no origin/main fails the gate" "$([[ $status == 1 ]] && echo 0 || echo 1)"
 check "no origin/main stops before test.sh" "$([[ $ran == no ]] && echo 0 || echo 1)"
@@ -144,12 +152,12 @@ check "no origin/main doesn't call review.sh" "$([[ ! -e $repo/review-args ]] &&
 # gate.sh runs the copied tests that stand alone (its self-test step): each copied *.test.mts is named there, or it is never run.
 for f in "${copies[@]}"; do
   [[ "$f" == *.test.mts ]] || continue
-  check "gate.sh runs $f" "$(grep -q "tsx --test .*$f" "$here/scripts/gate.sh" && echo 0 || echo 1)"
+  check "gate.sh runs $f" "$(grep -F 'tsx --test' "$here/scripts/gate.sh" | grep -Fq " $f" && echo 0 || echo 1)"
 done
 
 # The Factory's own files under an Owned pattern are listed in .sandcastle/lib/repo-config.mts, so a branch named chore/reapply-baseline that
 # changes only them still needs a review (the ledger treats a change to only Owned files as a re-Apply). Dropping one from the list shows here.
-for f in .github/workflows/template-tests.yml .gitignore .markdownlint-cli2.jsonc scripts/gate.sh scripts/tests/gate.test.sh; do
+for f in .github/workflows/template-tests.yml .gitignore .markdownlint-cli2.jsonc .yamllint.yml scripts/gate.sh scripts/tests/gate.test.sh; do
   check "repo-config.mts lists $f as the Factory's own" "$(grep -Fxq "  \"$f\"," "$here/.sandcastle/lib/repo-config.mts" && echo 0 || echo 1)"
 done
 

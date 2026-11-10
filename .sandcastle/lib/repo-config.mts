@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
 // The Factory's own values for the local review (ADR 0010). The Template's Seed
 // file of this name configures all of Sandcastle; the Factory carries no Sandcastle,
-// so this holds only the two names lib/review-ledger.mts imports. Keep each as a
-// one-line `export const NAME`: scripts/review.sh looks for them that way.
+// so this holds only the two names lib/review-ledger.mts imports. Start each declaration at the
+// beginning of a line as `export const NAME`: scripts/review.sh looks for them that way.
 // ---------------------------------------------------------------------------
 
 export const REPO_SLUG = "mpaulosky/Application_Factory";
@@ -15,6 +15,7 @@ export const NOT_OWNED_BASELINE_PATHS: readonly string[] = [
   ".github/workflows/template-tests.yml",
   ".gitignore",
   ".markdownlint-cli2.jsonc",
+  ".yamllint.yml",
   "scripts/gate.sh",
   "scripts/tests/gate.test.sh",
 ];

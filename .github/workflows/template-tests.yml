@@ -11,18 +11,6 @@ name: repo-ci-baseline Template
   pull_request:
   push:
     branches: [main]
-    paths:
-      - ".claude/skills/repo-ci-baseline/**"
-      - ".github/workflows/template-tests.yml"
-      - ".github/hooks/**"
-      - "scripts/**"
-      - ".sandcastle/**"
-      - ".claude/skills/pre-push-review/**"
-      - ".claude/agents/**"
-      - ".security/**"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
   workflow_dispatch:
 
 permissions:

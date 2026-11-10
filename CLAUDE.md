@@ -44,7 +44,7 @@ scripts/gate.sh                                               # the pre-push gat
 ```
 
 CI runs `scripts/gate.sh` and the Sandcastle check, so a push from a clone without hooks is gated too, except for the local review check:
-CI has no review ledger, so it sets `GATE_SKIP_REVIEW=1` (ADR 0010). The pre-push hook runs `scripts/gate.sh` on every push; the second is slower, so run it when
+CI has no review ledger, so it sets `GATE_SKIP_REVIEW=1` (ADR 0010). The pre-push hook runs `scripts/gate.sh` on every push; the Sandcastle check is slower, so run it when
 you changed `template/**/.sandcastle/`
 or the Seed `package.json`.
 
