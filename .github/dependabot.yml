@@ -1,5 +1,5 @@
-# Dependabot version updates for the Factory (ADR 0009). Its own file, not the Template's Seed: the Factory has only GitHub Actions to update.
-# Both directories are listed so one PR bumps an action in a copied workflow and in its source under template/owned/ together,
+# Dependabot version updates for the Factory (ADR 0009). Its own file, not the Template's Seed: the Factory has GitHub Actions and the local review's npm packages (ADR 0010) to update.
+# For GitHub Actions both directories are listed so one PR bumps an action in a copied workflow and in its source under template/owned/ together,
 # or the gate's drift check would fail the copy. Every label below must exist in the repo.
 ---
 
@@ -32,6 +32,32 @@ updates:
     groups:
       # Minor and patch only: a major bump arrives as its own PR to look at.
       minor-and-patch-actions:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "npm"
+    directory: "/"
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "16:00"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    # Wait a week before proposing a new release, so a compromised or broken one is usually caught upstream first.
+    cooldown:
+      default-days: 7
+    labels:
+      - "npm"
+      - "dependencies"
+    groups:
+      # Minor and patch only: a major bump arrives as its own PR to look at.
+      minor-and-patch-npm:
         patterns:
           - "*"
         update-types:

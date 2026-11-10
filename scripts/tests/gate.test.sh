@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Tests scripts/gate.sh's copy check against throwaway repos with a stub test.sh: matching copies run the stub and pass its exit
-# status on; a changed, missing or execute-bit-mismatched copy stops the gate before the stub runs.
+# Tests scripts/gate.sh against throwaway repos with a stub test.sh and a stub review.sh: matching copies run the stub and pass its exit
+# status on; a changed, missing or execute-bit-mismatched copy stops the gate before the stub runs; the local review check (ADR 0010)
+# skips only on GATE_SKIP_REVIEW=1, fails without an origin/main, and passes review.sh check's status on, ahead of test.sh.
 #
 #   scripts/tests/gate.test.sh
 set -euo pipefail
@@ -42,11 +43,36 @@ STUB
   echo "$repo"
 }
 
-# run <repo>: the gate's exit status in $status, and whether the stub ran in $ran.
+# stub_review <repo>: replaces scripts/review.sh, in the repo and in the Template's originals so the copy check still passes, with a stub that
+# records its arguments in <repo>/review-args and exits with $REVIEW_EXIT.
+stub_review() {
+  local repo="$1" f
+  for f in "$repo/scripts/review.sh" "$repo/$skill/template/owned/scripts/review.sh"; do
+    cat > "$f" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$(dirname "${BASH_SOURCE[0]}")/../review-args"
+exit "${REVIEW_EXIT:-0}"
+STUB
+    chmod +x "$f"
+  done
+}
+
+# with_origin <repo>: a base commit as origin/main and a commit of the branch's own on top, so the merge base isn't HEAD.
+with_origin() {
+  git -C "$1" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m base
+  git -C "$1" update-ref refs/remotes/origin/main HEAD
+  git -C "$1" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m branch
+  base="$(git -C "$1" rev-parse origin/main)"
+}
+
+# run <repo>: the gate's exit status in $status, and whether the stub ran in $ran. GATE_SKIP_REVIEW is 1 unless $REVIEW_SKIP is set:
+# to a value, which is passed as it is, or to nothing, which leaves GATE_SKIP_REVIEW unset.
 run() {
-  rm -f "$1/$skill/ran"
+  rm -f "$1/$skill/ran" "$1/review-args"
   status=0
-  (cd "$1" && GATE_SKIP_SELF_TEST=1 GATE_SKIP_REVIEW=1 STUB_EXIT="${STUB_EXIT:-0}" bash scripts/gate.sh >"$1/out" 2>&1) || status=$?
+  local skip=(GATE_SKIP_REVIEW=1)
+  if [[ -n "${REVIEW_SKIP+x}" ]]; then skip=(); [[ -z "$REVIEW_SKIP" ]] || skip=(GATE_SKIP_REVIEW="$REVIEW_SKIP"); fi
+  (cd "$1" && env -u GATE_SKIP_REVIEW "${skip[@]+"${skip[@]}"}" GATE_SKIP_SELF_TEST=1 STUB_EXIT="${STUB_EXIT:-0}" REVIEW_EXIT="${REVIEW_EXIT:-0}" bash scripts/gate.sh >"$1/out" 2>&1) || status=$?
   [[ -e "$1/$skill/ran" ]] && ran=yes || ran=no
 }
 
@@ -83,6 +109,49 @@ repo="$(new_repo execbit-original)"
 chmod -x "$repo/$skill/template/owned/.github/hooks/post-checkout"
 run "$repo"
 check "a copy executable where the original isn't fails the gate" "$([[ $status == 1 ]] && echo 0 || echo 1)"
+
+# The local review check (ADR 0010). The stub review.sh stands for scripts/review.sh; GATE_SKIP_REVIEW=1 skips it, anything else doesn't.
+repo="$(new_repo review-skipped)"; stub_review "$repo"; with_origin "$repo"
+REVIEW_EXIT=1 run "$repo"
+check "GATE_SKIP_REVIEW=1 skips the review check and passes" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
+check "GATE_SKIP_REVIEW=1 doesn't call review.sh" "$([[ ! -e $repo/review-args ]] && echo 0 || echo 1)"
+check "GATE_SKIP_REVIEW=1 says the check was skipped" "$(grep -q 'Local review check skipped' "$repo/out" && echo 0 || echo 1)"
+
+for skip in true 0 yes; do
+  repo="$(new_repo "review-skip-$skip")"; stub_review "$repo"; with_origin "$repo"
+  REVIEW_SKIP="$skip" REVIEW_EXIT=1 run "$repo"
+  check "GATE_SKIP_REVIEW=$skip doesn't skip the review check" "$([[ $status == 1 && -e $repo/review-args ]] && echo 0 || echo 1)"
+done
+
+repo="$(new_repo review-passes)"; stub_review "$repo"; with_origin "$repo"
+REVIEW_SKIP="" REVIEW_EXIT=0 run "$repo"
+check "a passing review check lets the gate run test.sh" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
+check "review.sh is called as check <merge base with origin/main>" "$([[ "$(cat "$repo/review-args")" == "check $base" ]] && echo 0 || echo 1)"
+
+repo="$(new_repo review-fails)"; stub_review "$repo"; with_origin "$repo"
+REVIEW_SKIP="" REVIEW_EXIT=1 run "$repo"
+check "a failing review check fails the gate" "$([[ $status != 0 ]] && echo 0 || echo 1)"
+check "a failing review check stops before test.sh" "$([[ $ran == no ]] && echo 0 || echo 1)"
+
+repo="$(new_repo review-no-origin)"; stub_review "$repo"
+git -C "$repo" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m base
+REVIEW_SKIP="" REVIEW_EXIT=0 run "$repo"
+check "no origin/main fails the gate" "$([[ $status == 1 ]] && echo 0 || echo 1)"
+check "no origin/main stops before test.sh" "$([[ $ran == no ]] && echo 0 || echo 1)"
+check "no origin/main says to fetch it" "$(grep -q 'git fetch origin main' "$repo/out" && echo 0 || echo 1)"
+check "no origin/main doesn't call review.sh" "$([[ ! -e $repo/review-args ]] && echo 0 || echo 1)"
+
+# gate.sh runs the copied tests that stand alone (its self-test step): each copied *.test.mts is named there, or it is never run.
+for f in "${copies[@]}"; do
+  [[ "$f" == *.test.mts ]] || continue
+  check "gate.sh runs $f" "$(grep -q "tsx --test .*$f" "$here/scripts/gate.sh" && echo 0 || echo 1)"
+done
+
+# The Factory's own files under an Owned pattern are listed in .sandcastle/lib/repo-config.mts, so a branch named chore/reapply-baseline that
+# changes only them still needs a review (the ledger treats a change to only Owned files as a re-Apply). Dropping one from the list shows here.
+for f in .github/workflows/template-tests.yml .gitignore .markdownlint-cli2.jsonc scripts/gate.sh scripts/tests/gate.test.sh; do
+  check "repo-config.mts lists $f as the Factory's own" "$(grep -Fxq "  \"$f\"," "$here/.sandcastle/lib/repo-config.mts" && echo 0 || echo 1)"
+done
 
 # The list in gate.sh is the one the docs name: every copy the test builds is checked, so a file dropped from the list shows here.
 for f in "${copies[@]}"; do
