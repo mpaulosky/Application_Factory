@@ -373,6 +373,10 @@ async function evaluate(pr, events = [], options = {}) {
     // The reads after the request that throw (the read-back), and what they throw.
     readBackErrors = 0,
     readBackError = new Error("Server error on the read-back"),
+    // When set, the reads after the request show the PR at this head (a push
+    // landed while the read-back ran), with its checks passing; the commit has
+    // to be in commits (graph()).
+    readBackHeadRefOid,
     // Whether the rival's record is listed before this run's own, whatever its
     // createdAt: GitHub lists comments oldest first, and the first record
     // listed is the one that decides. Unset, the rival is listed first when its
@@ -623,6 +627,9 @@ async function evaluate(pr, events = [], options = {}) {
       })
     }
   };
+  const seenAfterRequest = (pr) => (requested && readBackHeadRefOid
+    ? { ...pr, headRefOid: readBackHeadRefOid, headRef: checksOn(readBackHeadRefOid, requiredCheck("Build Solution")) }
+    : pr);
   const github = {
     rest,
     graphql: async (query, variables = {}) => {
@@ -655,9 +662,9 @@ async function evaluate(pr, events = [], options = {}) {
         if (snapshot instanceof Error) {
           throw snapshot;
         }
-        return { repository: { pullRequest: withRunsOwnWrites(snapshot) } };
+        return { repository: { pullRequest: withRunsOwnWrites(seenAfterRequest(snapshot)) } };
       }
-      return { repository: { pullRequest: withRunsOwnWrites(pullRequests[Math.min(graphqlRequests++, pullRequests.length - 1)]) } };
+      return { repository: { pullRequest: withRunsOwnWrites(seenAfterRequest(pullRequests[Math.min(graphqlRequests++, pullRequests.length - 1)])) } };
     },
     paginate: async (method, params) => {
       clientCall("token", methodNames.get(method) ?? "unknown paginate method");
@@ -1690,6 +1697,53 @@ test("adds review:claude only after the rest of the settle window when the reque
   assert.deepEqual(addedLabels, LABEL_FOR_CLAUDE);
   assert.ok(logs.some((line) => line.startsWith("warning: ") && line.includes("Resource not accessible")), logs.join("\n"));
   assert.ok(Date.now() - started >= 250, `the run took ${Date.now() - started} ms`);
+  // The cap: the wait is COPILOT_ASK_WAIT_MS, not the 30-second window, so a run without the cap would take 30 s.
+  assert.ok(Date.now() - started < 5000, `the run took ${Date.now() - started} ms`);
+});
+
+// The other two ways askCopilotOnce returns true without a registered request: the read-back errors, or the head moved
+// under it. Each leaves the record at least COPILOT_ASK_SETTLE_MS old before review:claude is added, as the failed
+// request does, or Claude Review would skip a record younger than that and PR Auto-Merge would strip the label.
+for (const [name, options] of [
+  ["the read-back errors", { readBackErrors: 1 }],
+  // "moved" is an ordinary commit on top of the head, so the caller's merge checks accept it.
+  ["the head moved under the read-back", { readBackHeadRefOid: "moved", commits: graph({ moved: { parents: [HEAD], files: { app: "app3", lib: "lib0" } } }) }]
+]) {
+  test(`adds review:claude only once the record has settled when ${name} (mpaulosky/Application_Factory#40)`, async () => {
+    mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.parse("2026-01-02T00:00:00Z") });
+    let result;
+    let finishedAt;
+    try {
+      result = await underClock(evaluate(readyPr(unreviewed), [], { askWaitMs: 30 * 1000, askPollMs: 5000, ...options }));
+      finishedAt = Date.now();
+    } finally {
+      mock.timers.reset();
+    }
+    assert.equal(result.requests.length, 1);
+    assert.equal(result.askedAt.length, 1);
+    // Claude is called in (a moved head that failed the merge checks would add nothing, and the loop below would check nothing).
+    assert.deepEqual(result.addedLabels, LABEL_FOR_CLAUDE, result.logs.join("\n"));
+    assert.equal(result.addedLabelAt.length, 1);
+    // askCopilotOnce held the run until the record was 30 seconds old.
+    assert.ok(finishedAt - result.askedAt[0] >= 30 * 1000, `the run ended ${(finishedAt - result.askedAt[0]) / 1000} s after the record`);
+    for (const labelAt of result.addedLabelAt) {
+      assert.ok(labelAt - result.askedAt[0] >= 30 * 1000, `review:claude was added ${(labelAt - result.askedAt[0]) / 1000} s after the record`);
+    }
+  });
+}
+
+test("a registered request needs no settle wait: the run ends as soon as the read-back sees it (mpaulosky/Application_Factory#40)", async () => {
+  mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.parse("2026-01-02T00:00:00Z") });
+  let result;
+  let finishedAt;
+  try {
+    result = await underClock(evaluate(readyPr(unreviewed), [], { copilotRequest: "registers", askWaitMs: 30 * 1000, askPollMs: 5000 }));
+    finishedAt = Date.now();
+  } finally {
+    mock.timers.reset();
+  }
+  assert.equal(result.requests.length, 1);
+  assert.ok(finishedAt - result.askedAt[0] < 30 * 1000, `the run ended ${(finishedAt - result.askedAt[0]) / 1000} s after the record`);
 });
 
 // Claude Review's gate (the Python in claude-review.yml's "Skip while Copilot can
