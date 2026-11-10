@@ -16,6 +16,13 @@ name: repo-ci-baseline Template
       - ".github/workflows/template-tests.yml"
       - ".github/hooks/**"
       - "scripts/**"
+      - ".sandcastle/**"
+      - ".claude/skills/pre-push-review/**"
+      - ".claude/agents/**"
+      - ".security/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
   workflow_dispatch:
 
 permissions:
@@ -75,8 +82,8 @@ jobs:
           tar -xzf "$archive" -C "$HOME/.local/bin" actionlint
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      # The same gate the pre-push hook runs: scripts/gate.sh's own test, the check that the Factory's copies of Template files
-      # match the Template's, then test.sh. A push from a clone without active hooks is still held to the copies.
+      # The same gate the pre-push hook runs: scripts/gate.sh's own test and the review's tests, the check that the Factory's copies of Template files
+      # match the Template's, the lint, then test.sh. A push from a clone without active hooks is still held to the copies.
       # The gate installs the review's packages (tsx, zod) itself. CI has no .git/review/ ledger, so it skips the local review check
       # (ADR 0010); the pre-push hook removes the variable, so a push never skips the review.
       - name: Run the gate

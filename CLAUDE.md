@@ -23,6 +23,8 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   `scripts/check-pr-title.sh`, and `.github/workflows/lint-{markdown,yaml,actions}.yml`, and the local review (ADR 0010): `scripts/review.sh`, five `.sandcastle/lib/` modules with three tests,
   `.claude/skills/pre-push-review/`, `.claude/agents/pre-push-reviewer.md` and `.security/README.md`: copies of the Template's Owned files. `.github/dependabot.yml`, `.yamllint.yml` and
   `.markdownlint-cli2.jsonc` are the Factory's own (ADR 0009). Edit the Template's file and copy it over; `scripts/gate.sh` fails when a copy drifts.
+  The review's own, non-copy files are `.sandcastle/lib/repo-config.mts` (`REPO_SLUG`, `NOT_OWNED_BASELINE_PATHS`), `package.json`, `pnpm-workspace.yaml`,
+  `pnpm-lock.yaml` and the `.gitignore` lines for `node_modules/` and `.security/`.
 - `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too. It runs its own test (`scripts/tests/gate.test.sh`) and the review's three tests, checks those copies,
   lints the whole repo's Markdown and YAML as the lint workflows do, requires a clean local review of the branch
   (`scripts/review.sh check`; CI and hand runs set `GATE_SKIP_REVIEW=1`), then runs `test.sh`. [ADR
@@ -35,13 +37,14 @@ The Factory carries the git hooks and a gate of its own (ADR 0006), Claude Revie
 ## Commands
 
 ```bash
-scripts/gate.sh                                               # the pre-push gate: its test, the copies' drift check, then test.sh
+scripts/gate.sh                                               # the pre-push gate: its test, the review's tests, the copies' drift check, lint, the local review check, then test.sh
 .claude/skills/repo-ci-baseline/test.sh                       # all the Template's tests; needs actionlint, zizmor, yamllint, shellcheck, markdownlint-cli2, node, git
 .claude/skills/repo-ci-baseline/tests/sandcastle-check.test.sh # Sandcastle's type-check and tests on a throwaway Application; needs pnpm and the network
 .claude/skills/repo-ci-baseline/apply.sh --dry-run <repo>      # what Apply would write into an Application; writes nothing
 ```
 
-CI runs `scripts/gate.sh` and the Sandcastle check, so a push from a clone without hooks is gated too. The pre-push hook runs `scripts/gate.sh` on every push; the second is slower, so run it when
+CI runs `scripts/gate.sh` and the Sandcastle check, so a push from a clone without hooks is gated too, except for the local review check:
+CI has no review ledger, so it sets `GATE_SKIP_REVIEW=1` (ADR 0010). The pre-push hook runs `scripts/gate.sh` on every push; the second is slower, so run it when
 you changed `template/**/.sandcastle/`
 or the Seed `package.json`.
 

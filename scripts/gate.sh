@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The Application Factory's pre-push gate, run by .github/hooks/pre-push (a copy of the Template's) and safe to run by hand.
-# The Factory isn't a .NET repo, so its gate is what its CI runs: first this script's own test, then that its copies of Template files haven't drifted
-# from the Template (ADR 0006), then the repo-ci-baseline skill's test.sh. This script is the Factory's own, not a copy of
-# the Template's scripts/gate.sh.
+# The Factory isn't a .NET repo, so its gate is what its CI runs: first this script's own test and the review's three stand-alone tests (they install
+# the packages with pnpm), then that its copies of Template files haven't drifted from the Template (ADR 0006), then the Markdown and YAML lint,
+# then that the branch passed the local review (scripts/review.sh check, ADR 0010; GATE_SKIP_REVIEW=1 skips it), then the repo-ci-baseline skill's
+# test.sh. This script is the Factory's own, not a copy of the Template's scripts/gate.sh.
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -57,7 +58,7 @@ if [[ "${GATE_SKIP_SELF_TEST:-}" != "1" ]]; then
   echo -e "\n${CYAN}▶ scripts/tests/gate.test.sh${RESET}"
   "$ROOT/scripts/tests/gate.test.sh"
 
-# The three copied tests that stand alone (ADR 0010); the Template's Sandcastle check runs the rest.
+  # The three copied tests that stand alone (ADR 0010); the Template's Sandcastle check runs the rest.
   echo -e "\n${CYAN}▶ Local review tests${RESET}"
   if [[ ! -x node_modules/.bin/tsx ]]; then pnpm install --frozen-lockfile >&2; fi
   node_modules/.bin/tsx --test .sandcastle/lib/review-ledger.test.mts .sandcastle/lib/security-record.test.mts .sandcastle/lib/plain-text.test.mts
