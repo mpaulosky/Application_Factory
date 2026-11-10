@@ -21,7 +21,7 @@ A pull request labelled before the repository began recording heads is not follo
 ## Which pull requests
 
 - Opened by the repository's owner (a session's counts), in the same repository (not a fork), into `main`, not a draft.
-- A branch name `scripts/check-branch-name.sh` accepts.
+- A branch name `scripts/check-branch-name.sh` accepts, except `dependabot/*`, which the hook allows for a person's fix and Sandcastle never follows.
 - Only a run on the default `Sandcastle` queue follows hand-offs: GitHub Actions always, a local run only with `SANDCASTLE_LABEL=Sandcastle`.
 - The repository runs Sandcastle in GitHub Actions with its `SANDCASTLE_GH_TOKEN` secret set to the account the runs use, since a workflow there
   records the head you label. Without that, nothing can be handed off.

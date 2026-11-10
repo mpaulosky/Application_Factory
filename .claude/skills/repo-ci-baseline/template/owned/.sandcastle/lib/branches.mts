@@ -42,7 +42,7 @@ export function isIssueBranch(branch: string, issueNumber: number): boolean {
 }
 
 // Whether a branch is one scripts/check-branch-name.sh accepts, without --pr: feature/, fix/ or hotfix/{n}-{slug}, or
-// chore/{slug}. The branch of a pull request the owner handed to Sandcastle (lib/follow-up.mts#sweepSubject) has to pass
+// chore/{slug}, but not the script's dependabot/* (the hook lets a person push a fix to Dependabot's branch; Sandcastle hands off none). The branch of a pull request the owner handed to Sandcastle (lib/follow-up.mts#sweepSubject) has to pass
 // it, because its name reaches a shell the way an issue branch's does ({{BRANCH}} in review-prompt.md, git in the sandbox).
 export function isHandOffBranch(branch: string): boolean {
   return /^(?:(?:feature|fix|hotfix)\/[0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*|chore\/[a-z][a-z0-9]*(?:-[a-z0-9]+)*)$/.test(branch);

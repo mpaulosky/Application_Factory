@@ -91,7 +91,7 @@ describe("isIssueBranch", () => {
 });
 
 // The branches of a pull request handed to Sandcastle with the sandcastle:follow-up label: the same names
-// scripts/check-branch-name.sh lets through, so a name that reaches a shell is as strict as an issue branch's.
+// scripts/check-branch-name.sh lets through (but for its dependabot/*), so a name that reaches a shell is as strict as an issue branch's.
 describe("isHandOffBranch", () => {
   for (const branch of ["feature/5-add-search", "fix/12-stop-the-crash", "hotfix/1-patch", "chore/tidy-up", "chore/a", "chore/bump-v2-deps", "feature/314-x"]) {
     it(`accepts ${branch}`, () => {
@@ -136,7 +136,10 @@ describe("isHandOffBranch", () => {
       "chore/a\t", "chore/a\r", "feature/5-x ", "chore/ ",
     ];
 
-    for (const branch of corpus) assert.equal(isHandOffBranch(branch), passesBranchStandard(branch), JSON.stringify(branch));
+    // The script also lets a person push to Dependabot's dependabot/* branches; a hand-off branch is never one.
+    for (const branch of corpus) {
+      assert.equal(isHandOffBranch(branch), !branch.startsWith("dependabot/") && passesBranchStandard(branch), JSON.stringify(branch));
+    }
   });
 
   // Not in the corpus above: bash's [a-z] and [0-9] take letters and digits of other scripts in some locales, so the

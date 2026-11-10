@@ -29,8 +29,8 @@ if [[ "$branch" =~ ^(feature|fix|hotfix)/[0-9]+-[a-z0-9]+(-[a-z0-9]+)*$ ]] \
 fi
 
 # Dependabot's branches can't be renamed, and a person pushes to one to fix its PR (mirroring a bump into the Template's file, say),
-# so the hook allows them too.
-if [[ "$branch" == dependabot/* ]]; then
+# so the hook allows them too, in shell-safe characters only. Sandcastle hands off no such branch (lib/branches.mts#isHandOffBranch).
+if [[ "$branch" =~ ^dependabot/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]]; then
   exit 0
 fi
 
