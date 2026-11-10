@@ -1448,15 +1448,18 @@ export function repoSlugProblem(slug: string): string | undefined {
 // breakReferences adds (after an @ before a letter or digit, after a # or GH- before a digit, and in github.com): a published `advisory`
 // or `notes` keeps those, and any other zero-width space, such as one in an echoed parse error, is removed.
 function printable(text: string): string {
+  // Only the characters next to a zero-width space are read, so the cost of one text is linear in its length.
+  const wordBefore = (word: string, offset: number, whole: string) =>
+    offset >= word.length && whole.slice(offset - word.length, offset).toLowerCase() === word && !/\w/.test(whole.charAt(offset - word.length - 1));
   return text.replace(/[\p{C}\p{Default_Ignorable_Code_Point}\u2800\u2028\u2029]/gu, (character, offset: number, whole: string) => {
     if (character === "\n" || character === "\t") return character;
     if (character !== "\u200b") return "";
-    const before = whole.slice(0, offset);
-    const after = whole.slice(offset + 1);
+    const previous = whole.charAt(offset - 1);
+    const next = whole.charAt(offset + 1);
     const breaksReference =
-      (before.endsWith("@") && /^[A-Za-z0-9]/.test(after)) ||
-      ((before.endsWith("#") || /\bGH-$/i.test(before)) && /^\d/.test(after)) ||
-      (/\bgithub$/i.test(before) && /^\.com\b/i.test(after));
+      (previous === "@" && /[A-Za-z0-9]/.test(next)) ||
+      ((previous === "#" || wordBefore("gh-", offset, whole)) && /\d/.test(next)) ||
+      (wordBefore("github", offset, whole) && /^\.com\b/i.test(whole.slice(offset + 1, offset + 6)));
     return breaksReference ? character : "";
   });
 }

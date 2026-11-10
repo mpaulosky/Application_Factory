@@ -3920,6 +3920,10 @@ function pid1RefusesSignal(): boolean {
 
 describe("lockIsStale", () => {
   const gone = Number(execFileSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }));
+  it("judges a process we may not signal (pid 1) as running, however old", { skip: !pid1RefusesSignal() }, () => {
+    assert.equal(lockIsStale("1 t\n", 60_001), false);
+  });
+
   for (const [form, content, ageMs, stale] of [
     ["a running process, however old", `${process.pid} t\n`, 10 * 60_000, false],
     ["a process that is gone", `${gone} t\n`, 0, true],
@@ -3934,7 +3938,6 @@ describe("lockIsStale", () => {
     ["a negative id, left past the minute (the id must start the text)", "-1 t\n", 60_001, true],
     ["text before an id", "x 1 t\n", 60_001, true],
     ["an id with no space after it", `${process.pid}`, 60_001, true],
-    ...(pid1RefusesSignal() ? ([["a process we may not signal (pid 1), however old", "1 t\n", 60_001, false]] as const) : []),
   ] as const) {
     it(`judges ${form}`, () => {
       assert.equal(lockIsStale(content, ageMs), stale);
@@ -4139,6 +4142,48 @@ describe("the review command's printed text", () => {
 
     assert.match(result.err, /"ab@\u200bc"/);
     assert.doesNotMatch(result.err, /a\u200b|\u200b\u200b/);
+  });
+
+  // printable keeps a zero-width space only where breakReferences puts one; each row is the text echoed and what is printed.
+  const ZW = "\u200b";
+  const echoed = (key: string): string | undefined => {
+    const file = join(root, "echo.json");
+    writeFileSync(file, JSON.stringify({ ...reviewed(), rounds: 1, findings: [], [key]: 1 }));
+    return /Unrecognized key: "(.*)"/.exec(cli(["record", file]).err)?.[1];
+  };
+  for (const [form, key, printed] of [
+    ["@ before a letter", `@${ZW}c`, `@${ZW}c`],
+    ["@ before a digit", `@${ZW}1`, `@${ZW}1`],
+    ["@ before a dash", `@${ZW}-`, "@-"],
+    ["@ at the end", `@${ZW}`, "@"],
+    ["two after an @ before a letter", `@${ZW}${ZW}c`, "@c"],
+    ["# before a digit", `#${ZW}1`, `#${ZW}1`],
+    ["# before a letter", `#${ZW}x`, "#x"],
+    ["# at the end", `#${ZW}`, "#"],
+    ["GH- before a digit", `GH-${ZW}1`, `GH-${ZW}1`],
+    ["gh- in lower case before a digit", `gh-${ZW}1`, `gh-${ZW}1`],
+    ["GH- before a letter", `GH-${ZW}x`, "GH-x"],
+    ["GH- inside a word", `xGH-${ZW}1`, "xGH-1"],
+    ["GH- after a space", ` GH-${ZW}1`, ` GH-${ZW}1`],
+    ["github.com", `github${ZW}.com`, `github${ZW}.com`],
+    ["GITHUB.COM in capitals", `GITHUB${ZW}.COM`, `GITHUB${ZW}.COM`],
+    ["github.com followed by a path", `github${ZW}.com/x`, `github${ZW}.com/x`],
+    ["github.org", `github${ZW}.org`, "github.org"],
+    ["github.com with letters after it", `github${ZW}.comx`, "github.comx"],
+    ["github inside a word", `xgithub${ZW}.com`, "xgithub.com"],
+    ["the start of the text", `${ZW}ab`, "ab"],
+    ["the end of the text", `ab${ZW}`, "ab"],
+  ] as const) {
+    it(`prints a zero-width space after ${form} as ${printed === key ? "kept" : "removed"}`, () => {
+      assert.equal(echoed(key), printed);
+    });
+  }
+
+  it("prints a text of 200,000 zero-width spaces in linear time", () => {
+    const started = Date.now();
+
+    assert.equal(echoed(ZW.repeat(200_000)), "");
+    assert.ok(Date.now() - started < 10_000, `took ${Date.now() - started} ms`);
   });
 
   it("keeps the zero-width space after GH- and in github.com too", () => {

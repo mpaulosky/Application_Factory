@@ -46,7 +46,8 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   finding whose path, summary or reason holds a link or an image GitHub would render (`RENDERED_LINK` in `lib/plain-text.mts`, which the host's follow-up issue uses too) is only
   counted there, as an accepted security finding is; its words stay in the ledger and the report.
 - The review command prints no control or invisible character of the text it echoes (a parse error, a `.security:` note), keeping its newlines, its tabs and the zero-width
-  space `plainText` adds (after an `@`, a `#` or `GH-` before digits, and in `github.com`, so `advisory` and `notes` still print inert mentions) and removes any other; the host's reviewer schema
+  space `plainText` adds (after an `@` before a letter or digit, after a `#` or `GH-` before a digit,
+  and in `github.com`, so `advisory` and `notes` still print inert mentions) and removes any other; the host's reviewer schema
   applies the same stripping, so a finding of only invisible characters is refused as empty.
 - The ledger's lock names its holder (`<pid> <token>`). A lock whose process is gone is taken over, as is one with no readable holder that is more than a minute old; a lock
   held by a running command still refuses at once, naming the file. A takeover renames the lock to a name of its own (one command wins), judges it again there by its text and age and deletes it only if
