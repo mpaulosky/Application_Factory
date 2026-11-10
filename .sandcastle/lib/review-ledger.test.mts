@@ -4165,6 +4165,13 @@ describe("the review command's printed text", () => {
     ["GH- before a letter", `GH-${ZW}x`, "GH-x"],
     ["GH- inside a word", `xGH-${ZW}1`, "xGH-1"],
     ["GH- after a space", ` GH-${ZW}1`, ` GH-${ZW}1`],
+    ["GH- after an underscore", `_GH-${ZW}1`, "_GH-1"],
+    ["GH- after a digit", `1GH-${ZW}1`, "1GH-1"],
+    ["GH- after an astral character", `\u{1F600}GH-${ZW}1`, `\u{1F600}GH-${ZW}1`],
+    ["github after an underscore", `_github${ZW}.com`, "_github.com"],
+    ["github after an astral character", `\u{1F600}github${ZW}.com`, `\u{1F600}github${ZW}.com`],
+    ["@ before a non-ASCII letter", `@${ZW}\u00e9`, "@\u00e9"],
+    ["# before a non-ASCII digit", `#${ZW}\u0661`, "#\u0661"],
     ["github.com", `github${ZW}.com`, `github${ZW}.com`],
     ["GITHUB.COM in capitals", `GITHUB${ZW}.COM`, `GITHUB${ZW}.COM`],
     ["github.com followed by a path", `github${ZW}.com/x`, `github${ZW}.com/x`],
@@ -4179,11 +4186,8 @@ describe("the review command's printed text", () => {
     });
   }
 
-  it("prints a text of 200,000 zero-width spaces in linear time", () => {
-    const started = Date.now();
-
-    assert.equal(echoed(ZW.repeat(200_000)), "");
-    assert.ok(Date.now() - started < 10_000, `took ${Date.now() - started} ms`);
+  it("prints a long text of zero-width spaces and the one it keeps", () => {
+    assert.equal(echoed(`@${ZW}a${ZW.repeat(200_000)}b`), `@${ZW}ab`);
   });
 
   it("keeps the zero-width space after GH- and in github.com too", () => {

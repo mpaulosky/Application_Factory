@@ -4,10 +4,9 @@
 // "Review notes"). Kept apart from lib/intake.mts so a command-line tool,
 // lib/review-ledger.mts, can use it without loading Sandcastle.
 
-// A zero-width space after @, a # or GH- before digits, and the dot of
-// github.com, so none mentions anyone or links another issue or PR.
-// The review command's `printable` (lib/review-ledger.mts) keeps exactly these: after an @ before a letter or digit, after a # or GH- before a digit,
-// and in github.com.
+// A zero-width space after an @ before an ASCII letter or digit, after a # or GH- before a digit (GH- in any case, at the start of a word), and
+// before the dot of github.com (in any case, at the start of a word, with a word boundary after com), so none mentions anyone or links
+// another issue or PR. The review command's `printable` (lib/review-ledger.mts) keeps exactly these.
 export function breakReferences(text: string): string {
   return text
     .replace(/@(?=[A-Za-z0-9])/g, "@\u200B")

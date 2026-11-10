@@ -1445,7 +1445,7 @@ export function repoSlugProblem(slug: string): string | undefined {
 }
 
 // `text` without the control, format and invisible characters a terminal acts on, except newlines, tabs and the zero-width space
-// breakReferences adds (after an @ before a letter or digit, after a # or GH- before a digit, and in github.com): a published `advisory`
+// breakReferences adds (after an @ before an ASCII letter or digit, after a # or GH- before a digit, and in github.com): a published `advisory`
 // or `notes` keeps those, and any other zero-width space, such as one in an echoed parse error, is removed.
 function printable(text: string): string {
   // Only the characters next to a zero-width space are read, so the cost of one text is linear in its length.
