@@ -43,10 +43,10 @@ In the same worktree. The script refuses `main`, `preview`, `dev`, a detached `H
 
 ```bash
 git add -A
-git commit -m "chore: rename the Starter to [ProjectName]"
+git commit -m "chore: Rename the Starter to [ProjectName]"
 "$BASELINE/apply.sh" .
 git add -A
-git commit -m "chore: apply repo-ci-baseline Template"
+git commit -m "chore: Apply the repo-ci-baseline Template"
 ```
 
 It also runs `git config core.hooksPath .github/hooks`. From here on, `pre-commit` refuses commits in the primary checkout: every
@@ -112,7 +112,7 @@ git worktree add -b chore/standardize-baseline ../[Repo]-worktrees/chore-standar
 cd ../[Repo]-worktrees/chore-standardize-baseline
 "$BASELINE/apply.sh" .
 git add -A
-git commit -m "chore: apply repo-ci-baseline Template"
+git commit -m "chore: Apply the repo-ci-baseline Template"
 ```
 
 ### B3. Adapt
