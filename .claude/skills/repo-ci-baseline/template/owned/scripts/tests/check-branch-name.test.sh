@@ -40,6 +40,7 @@ expect allowed dependabot/github_actions/main/minor-and-patch-actions-401d4b32a3
 expect allowed --pr dependabot/nuget/all-nuget-1a2b3c
 expect refused dependabot
 expect refused "dependabot/x;rm"
+# shellcheck disable=SC2016 # the \$( is the point: a literal name, not an expansion
 expect refused 'dependabot/$(x)'
 expect refused "dependabot/a b"
 # Branches Actions create are allowed only as a PR's head.
