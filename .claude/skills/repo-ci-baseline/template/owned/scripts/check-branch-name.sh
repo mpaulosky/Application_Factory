@@ -6,7 +6,8 @@
 #
 # The pre-push hook runs the first form on each pushed branch. ci.yml's
 # "Branch name" job runs the second on a PR's head branch, which also accepts
-# the branches Actions and Dependabot create, since no hook ever sees them.
+# the branches Actions create, since no hook ever sees them. Dependabot's
+# dependabot/* is allowed in both forms.
 # CI is what catches a push that skipped the hook: a Claude cloud session's
 # claude/... branch, GitHub's web editor, or a clone without core.hooksPath.
 # Exits 0 when the name is allowed, 1 (with the reason) when it isn't.
@@ -27,9 +28,14 @@ if [[ "$branch" =~ ^(feature|fix|hotfix)/[0-9]+-[a-z0-9]+(-[a-z0-9]+)*$ ]] \
   exit 0
 fi
 
-# Made by release.yml, backfill-blog-posts.yml and Dependabot.
-if [[ "$pr" == true ]] \
-  && [[ "$branch" == docs/release-notes || "$branch" == docs/backfill-blog-posts || "$branch" == dependabot/* ]]; then
+# Dependabot's branches can't be renamed, and a person pushes to one to fix its PR (mirroring a bump into the Template's file, say),
+# so the hook allows them too, in shell-safe characters only. Sandcastle hands off no such branch (lib/branches.mts#isHandOffBranch).
+if [[ "$branch" =~ ^dependabot/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]]; then
+  exit 0
+fi
+
+# Made by release.yml and backfill-blog-posts.yml.
+if [[ "$pr" == true ]] && [[ "$branch" == docs/release-notes || "$branch" == docs/backfill-blog-posts ]]; then
   exit 0
 fi
 
