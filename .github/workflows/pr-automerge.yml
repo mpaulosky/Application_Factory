@@ -84,7 +84,9 @@ name: PR Auto-Merge
 # mpaulosky/dotfiles#369; one whose record never shows requests anyway, since a
 # repeat request is idempotent, mpaulosky/dotfiles#374), requests the
 # review with the PAT, and reads the request back for up to COPILOT_ASK_WAIT_MS.
-# A request that fails or doesn't register counts as dropped at once, and a
+# A request that fails, or whose read-back errors or finds the head moved, counts as dropped once the
+# record is COPILOT_ASK_SETTLE_MS old (a wait capped by COPILOT_ASK_WAIT_MS, mpaulosky/Application_Factory#23);
+# one that doesn't register counts the same after the read-back window, and a
 # record COPILOT_ASK_SETTLE_MS old with no review of the head and no request
 # pending counts the same way, whoever wrote it (land.sh writes the same
 # record). Copilot is never asked again for the PR: a later head goes straight
@@ -1711,6 +1713,17 @@ jobs:
               // After the write returns, so a slow write can't shorten the wait:
               // the record's own timestamp is no later than this.
               askWrittenAt = Date.now();
+              // Wait out what is left of COPILOT_ASK_SETTLE_MS (capped by
+              // COPILOT_ASK_WAIT_MS) before a path that returns true without a
+              // registered request lets the caller add review:claude: other
+              // workflows see only the record, which Claude Review skips and PR
+              // Auto-Merge strips while it is younger than that
+              // (mpaulosky/Application_Factory#23). Every such path calls it:
+              // the failed request and the read-back's two early exits.
+              const waitOutSettle = () => new Promise((resolve) => setTimeout(
+                resolve,
+                Math.max(0, Math.min(COPILOT_ASK_WAIT_MS, askWrittenAt + COPILOT_ASK_SETTLE_MS - Date.now()))
+              ));
               // Two runs can both have read "no record" and both posted one.
               // Read the comments again: only the run whose record is
               // listed first makes the request (mpaulosky/dotfiles#369). GraphQL
@@ -1778,13 +1791,7 @@ jobs:
                   throw error;
                 }
                 core.warning(`Couldn't request Copilot's review of PR #${pullNumber}: ${error.message}`);
-                // Wait out what is left of COPILOT_ASK_SETTLE_MS (capped by
-                // COPILOT_ASK_WAIT_MS) before the caller adds review:claude:
-                // other workflows see only the record, which Claude Review
-                // skips and PR Auto-Merge strips while it is younger than that
-                // (mpaulosky/Application_Factory#23).
-                const remainingMs = askWrittenAt + COPILOT_ASK_SETTLE_MS - Date.now();
-                await new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.min(COPILOT_ASK_WAIT_MS, remainingMs))));
+                await waitOutSettle();
                 core.info(`Copilot's review of PR #${pullNumber} wasn't requested, so Claude is called in.`);
                 return true;
               }
@@ -1795,11 +1802,13 @@ jobs:
               // again, and only a sweep ends on an error that ends the run.
               const deadline = Date.now() + COPILOT_ASK_WAIT_MS;
               let registered = false;
+              let headMoved = false;
               try {
                 do {
                   await new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.min(COPILOT_ASK_POLL_MS, deadline - Date.now()))));
                   const seen = await getPullRequestStatus(pullNumber);
                   if (!seen || seen.headRefOid !== pr.headRefOid) {
+                    headMoved = true;
                     break;
                   }
                   registered = copilotPending(seen) || copilotAnsweredHead(seen);
@@ -1809,7 +1818,13 @@ jobs:
                   throw error;
                 }
                 core.warning(`Couldn't read PR #${pullNumber} back after requesting Copilot's review, so the request is taken as made: ${error.message}`);
+                await waitOutSettle();
                 return true;
+              }
+              // The head moved or the PR couldn't be read: nothing was seen to
+              // register, so the record must settle before Claude is called in.
+              if (headMoved) {
+                await waitOutSettle();
               }
               core.info(registered
                 ? `Copilot's review request for PR #${pullNumber} registered.`
