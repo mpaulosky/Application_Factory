@@ -56,3 +56,6 @@ and its .NET required checks, and CLAUDE.md is the Factory's process document; t
   adds `dependabot.yml` tests it. If Dependabot does not group them, the fallback is that a person mirrors the bump (edit the Template's file, copy it over) before merging; an Update note on this
   ADR records which it is. The bump also changes what the Fleet receives, by a Rollout.
 - Nothing is rolled out: no Owned Template file changes.
+- **Update:** Dependabot does not group the two directories. Its first PR (#36, `zizmor-action` 0.8.0 to 0.8.1) bumped only the copy in `.github/workflows/`, titled "across 1 directory", and
+  the gate failed on the drift. So the fallback above is the rule: a person mirrors the bump into the Template's file on Dependabot's branch before the merge. The pre-push hook now accepts
+  `dependabot/*` branches so that push needs no `--no-verify`. The bump reaches the Fleet by a Rollout.
