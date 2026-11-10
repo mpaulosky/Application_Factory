@@ -238,8 +238,8 @@ export function replaceFile(path: string, text: string): void {
 // How many numbers a new entry tries when another writer takes the one it chose.
 const ENTRY_NUMBER_TRIES = 5;
 
-// A test seam: called with the number chosen, before the entry is made.
-export type RecordHooks = { afterNextId?: (id: string) => void };
+// Test seams: `afterNextId` is called with the number chosen, before the entry is made; `link` stands in for the hard link (linkSync); `beforeUpdate` is called with an entry's path before an open entry is marked fixed.
+export type RecordHooks = { afterNextId?: (id: string) => void; link?: (from: string, to: string) => void; beforeUpdate?: (path: string) => void };
 
 // Make a new entry, never over a file that is there, and whole at its final name: the text is written to a temp file and hard-linked to the
 // name (a link fails with EEXIST rather than replacing), so a reader never sees it empty or half written. A name another writer made first
@@ -262,10 +262,16 @@ function createEntry(
       hooks.afterNextId?.(id);
       writeFileSync(temp, text, { flag: "wx", mode: 0o600 });
       try {
-        linkSync(temp, path);
+        (hooks.link ?? linkSync)(temp, path);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "EEXIST") throw error;
-        writeFileSync(path, text, { flag: "wx", mode: 0o600 });
+        // A file system that can't link: write the name in place, and remove what a failed write left (never a file another writer made).
+        try {
+          writeFileSync(path, text, { flag: "wx", mode: 0o600 });
+        } catch (writeError) {
+          if ((writeError as NodeJS.ErrnoException).code !== "EEXIST") rmSync(path, { force: true });
+          throw writeError;
+        }
       }
       return { id, file, path };
     } catch (error) {
@@ -345,6 +351,7 @@ export function recordSecurity(
         }
         if (holder !== undefined) {
           if (holder.status === "open" && finding.status === "fixed") {
+            hooks.beforeUpdate?.(holder.path);
             let text = withStatus(readFileSync(holder.path, "utf8"), "fixed");
             text = withSection(text, "Policy", policyOf(finding));
             text = withSection(text, "Pinned by", pinOf(finding));

@@ -280,6 +280,17 @@ describe("parseReviewerAnswer", () => {
     });
   }
 
+  it("refuses a lens of only a zero-width space", () => {
+    assert.throws(() => parseReviewerAnswer(block([finding({ lens: "\u200b" })])), ReviewerAnswerError);
+  });
+
+  it("strips invisible characters from a fix and a why, which the fix agent's prompt is built from", () => {
+    const parsed = reviewerFindingSchema.parse(finding({ fix: "Trim\u202e it\u{E0041}.", why: "Because\u200b so." }));
+
+    assert.equal(parsed.fix, "Trim it.");
+    assert.equal(parsed.why, "Because so.");
+  });
+
   it("is the same schema the reviewers' findings are checked against", () => {
     assert.equal(reviewerFindingSchema.safeParse(finding()).success, true);
     assert.equal(reviewerFindingSchema.safeParse(finding({ severity: undefined })).success, false);
@@ -332,6 +343,25 @@ describe("triageRound", () => {
     assert.equal(got[0]!.lens, "Security");
     assert.equal(got[0]!.severity, "warning");
     assert.equal(got[0]!.security, true);
+  });
+
+  it("gives a finding whose fix and why are only invisible characters the fallback fix", () => {
+    const got = triage({ "Edge cases": [raw({ fix: "\u200b", why: "\u200b" })] });
+
+    assert.equal(got[0]!.fix, "Decide with the reviewer's reason: none was given");
+  });
+
+  it("uses a why with its invisible characters removed in the fallback fix", () => {
+    const got = triage({ "Edge cases": [raw({ fix: "\u200b", why: "\u200b real\u202e reason" })] });
+
+    assert.equal(got[0]!.fix, "Decide with the reviewer's reason: real reason");
+  });
+
+  it("keeps the real fix of a duplicate when the first one's fix is only invisible characters", () => {
+    const got = triage({ "Edge cases": [raw({ fix: "\u2800" })], Tests: [raw({ lens: "Tests", fix: "Trim the name first." })] });
+
+    assert.equal(got.length, 1);
+    assert.equal(got[0]!.fix, "Trim the name first.");
   });
 
   it("merges one problem reported under different spellings of its path", () => {
@@ -674,6 +704,19 @@ describe("applyOutcomes", () => {
 
     assert.equal(got.status, "fixed");
     assert.equal(got.test, "tests/app.test.ts::blank");
+  });
+
+  it("treats a reason of only invisible characters as none, so a dismissal stays open", () => {
+    const got = apply(triaged({ severity: "advisory" }), [outcome({ status: "dismissed", test: null, reason: "\u200b" })]);
+
+    assert.equal(got.status, "open");
+  });
+
+  it("dismisses on a reason with its invisible characters removed", () => {
+    const got = apply(triaged({ severity: "advisory" }), [outcome({ status: "dismissed", test: null, reason: "src/app.ts:10\u202e is guarded." })]);
+
+    assert.equal(got.status, "dismissed");
+    assert.equal(got.reason, "src/app.ts:10 is guarded.");
   });
 
   it("keeps a Warning open when the backend dismisses it, whatever line the reason cites", () => {
@@ -2499,6 +2542,12 @@ describe("advisoryIssueBody", () => {
 
   for (const [form, branch] of [["a www. address", "feature/www.e.test"], ["a URL", "feature/https://e.test"], ["an inline link", "feature/[a](b)"]] as const) {
     it(`leaves out the whole body when the branch name holds ${form}, which a public page would link`, () => {
+      assert.equal(advisoryIssueBody({ ...ledgerOf([advisory()]), branch }, DOCS), "");
+    });
+  }
+
+  for (const [form, branch] of [["a private-use character inside www.", "feature/www\ue000.e.test"], ["a zero-width space inside ://", "feature/https:\u200b//e.test"]] as const) {
+    it(`leaves out the whole body when the branch name holds ${form}, which the published header shows as a link`, () => {
       assert.equal(advisoryIssueBody({ ...ledgerOf([advisory()]), branch }, DOCS), "");
     });
   }

@@ -817,7 +817,7 @@ export function lockIsStale(content: string, ageMs: number): boolean {
 }
 
 // Test seams, called between the steps of taking over a stale lock, so a test can make another command act there.
-export const lockTestHooks: { afterRead?: () => void; afterRename?: () => void } = {};
+export const lockTestHooks: { beforeRead?: () => void; afterRead?: () => void; afterRename?: () => void; beforeWrite?: () => void } = {};
 
 // The text of the file at `path`, or undefined when there is none. Any other read error (a directory, no permission, no file
 // handles left) throws: a lock that can't be read is not one to break.
@@ -835,7 +835,7 @@ function textOf(path: string): string | undefined {
 // a record reads every review of the branch for the ids taken (takenIds), so a
 // record on another diff mustn't write between that read and its own write.
 // The lock names its holder ("pid token"). A lock left by a process that was killed is taken over: renamed to a name of our own
-// (one command wins the rename), read there, and removed only if it is the text judged stale; if it is not (a live lock was made in
+// (one command wins the rename), judged again there by its own text and age, and removed only if that still says stale; if not (a live lock was made in
 // between), it is put back and the command refuses. Nothing at the shared name is ever removed without being read first, so a live
 // lock is not deleted from under its holder, though a third command taking the name in the instant it is put back could still
 // share the lock: the takeover is best-effort, and a stale lock is rare. The holder removes the lock only while it still carries its
@@ -856,6 +856,7 @@ function withLock<T>(cwd: string, change: () => T): T {
       if (attempt > 0) throw refuse(error);
       let seen: string | undefined;
       let ageMs = 0;
+      lockTestHooks.beforeRead?.();
       try {
         seen = textOf(lock);
         if (seen !== undefined) ageMs = Date.now() - statSync(lock).mtimeMs;
@@ -875,17 +876,19 @@ function withLock<T>(cwd: string, change: () => T): T {
         throw refuse(renameError);
       }
       lockTestHooks.afterRename?.();
-      let movedText: string | undefined;
+      // Judge the lock moved again, by its own text and age (a rename keeps the age): equal text proves nothing for an empty or
+      // tokenless lock, and a fresh one made in the meantime is not stale.
+      let movedStale = false;
       try {
-        movedText = textOf(moved);
+        movedStale = lockIsStale(readFileSync(moved, "utf8"), Date.now() - statSync(moved).mtimeMs);
       } catch {
-        movedText = undefined;
+        movedStale = false;
       }
-      if (movedText === seen) {
+      if (movedStale) {
         rmSync(moved, { force: true });
         continue;
       }
-      // Not the lock judged stale: a live one was made in the meantime. Put it back if its name is free, and refuse.
+      // Not a stale lock: a live one was made in the meantime. Put it back if its name is free, and refuse.
       try {
         linkSync(moved, lock);
       } catch {
@@ -897,6 +900,7 @@ function withLock<T>(cwd: string, change: () => T): T {
   }
   const held = handle;
   try {
+    lockTestHooks.beforeWrite?.();
     writeSync(held, mine);
   } catch (error) {
     // The lock is ours (just made with "wx") and empty: leaving it would refuse every command for a minute.
@@ -1441,7 +1445,7 @@ export function repoSlugProblem(slug: string): string | undefined {
 }
 
 // `text` without the control, format and invisible characters a terminal acts on, except newlines and tabs.
-const printable = (text: string) => text.replace(/[\p{C}\p{Default_Ignorable_Code_Point}\u2800\u2028\u2029]/gu, (character) => (character === "\n" || character === "\t" ? character : ""));
+const printable = (text: string) => text.replace(/[\p{C}\p{Default_Ignorable_Code_Point}\u2800\u2028\u2029]/gu, (character) => (character === "\n" || character === "\t" || character === "\u200b" ? character : ""));
 
 // The command line. Returns the exit code: 0 only for a command that did
 // what it was asked, so the gate can't pass on a failure.
@@ -1510,7 +1514,7 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
       case "accept": {
         const [id, ...reason] = rest;
         if (id === undefined || reason.length === 0) return fail(USAGE);
-        out(renderReport(acceptFinding(cwd, mergeBase(cwd), id, reason.join(" "), (message) => process.stderr.write(`.security: ${message}\n`))));
+        out(renderReport(acceptFinding(cwd, mergeBase(cwd), id, reason.join(" "), (message) => process.stderr.write(`.security: ${printable(message)}\n`))));
         return 0;
       }
       case "report":

@@ -589,6 +589,56 @@ describe("recordSecurity when another writer takes a number first", () => {
     });
   }
 
+  const tmpIn = () => readdirSync(join(repo, SECURITY_DIR)).filter((name) => name.endsWith(".tmp"));
+
+  it("leaves no temp file after a number was taken and retried", () => {
+    let taken = false;
+    record([input()], context);
+    recordSecurity(repo, ledger, [input({ id: "R2", path: "b.sh", summary: "Other." })], context, {
+      afterNextId: (id) => {
+        if (taken) return;
+        taken = true;
+        writeFileSync(join(repo, SECURITY_DIR, `${id}-other.md`), "- Status: fixed\n", { flag: "wx" });
+      },
+    });
+
+    assert.deepEqual(tmpIn(), []);
+  });
+
+  it("writes the entry in place, whole and mode 0600, when the file system can't link", () => {
+    const outcome = recordSecurity(repo, ledger, [input()], context, {
+      link: () => {
+        throw Object.assign(new Error("not permitted"), { code: "EPERM" });
+      },
+    });
+
+    assert.deepEqual(outcome.warnings, []);
+    assert.equal(outcome.written.length, 1);
+    const file = entryFiles()[0] ?? "";
+    assert.match(entryText(file), /^# 0001: /);
+    assert.equal(statSync(join(repo, SECURITY_DIR, file)).mode & 0o777, 0o600);
+    assert.deepEqual(tmpIn(), []);
+  });
+
+  it("tries the next number when the in-place write meets a file another writer made", () => {
+    let taken = false;
+    const outcome = recordSecurity(repo, ledger, [input()], context, {
+      afterNextId: (id) => {
+        if (taken) return;
+        taken = true;
+        writeFileSync(join(repo, SECURITY_DIR, `${id}-the-upload-handler-writes-outside-the.md`), "- Status: fixed\n", { flag: "wx" });
+      },
+      link: () => {
+        throw Object.assign(new Error("not permitted"), { code: "EPERM" });
+      },
+    });
+
+    assert.deepEqual(outcome.warnings, []);
+    assert.equal(outcome.written.length, 1);
+    assert.equal(entryFiles().length, 2);
+    assert.deepEqual(tmpIn(), []);
+  });
+
   it("warns, and writes the other findings, when one entry can't be written", () => {
     let calls = 0;
     const outcome = recordSecurity(repo, ledger, [input(), input({ id: "R2", path: "b.sh", summary: "Other." })], context, {
@@ -650,7 +700,6 @@ describe("replaceFile", () => {
     const file = join(root, "entry.md");
     symlinkSync(target, file);
     symlinkSync(target, `${file}.${process.pid}.tmp`);
-    symlinkSync(target, `${file}.tmp`);
 
     replaceFile(file, "new");
 
@@ -661,7 +710,16 @@ describe("replaceFile", () => {
 
   it("throws, and leaves no temp file, when the directory is gone", () => {
     assert.throws(() => replaceFile(join(root, "missing", "entry.md"), "x"));
+  });
+
+  it("removes its temp file when the rename fails after the temp file was written", () => {
+    const target = join(root, "entry.md");
+    mkdirSync(join(target, "inner"), { recursive: true });
+
+    assert.throws(() => replaceFile(target, "x"));
+
     assert.deepEqual(readdirSync(root).filter((name) => name.endsWith(".tmp")), []);
+    assert.equal(lstatSync(target).isDirectory(), true);
   });
 });
 
@@ -675,5 +733,22 @@ describe("renderSecurityList with a hand-edited path", () => {
 
     assert.equal(row.split("\n").length, 1);
     assert.equal(row.split("\t")[4], "a???b");
+  });
+});
+
+describe("recordSecurity when the entry holding the weakness can't be updated", () => {
+  it("warns, and counts the finding as neither repeated nor recorded", () => {
+    record([input({ status: "open", test: null })]);
+
+    const outcome = recordSecurity(repo, ledger, [input()], context, {
+      beforeUpdate: () => {
+        throw new Error("disk full");
+      },
+    });
+
+    assert.equal(outcome.warnings.length, 1);
+    assert.match(outcome.warnings.join("\n"), /R1.*disk full/);
+    assert.deepEqual(outcome.repeated, []);
+    assert.equal("R1" in outcome.entries, false);
   });
 });

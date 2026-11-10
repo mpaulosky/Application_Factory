@@ -91,9 +91,9 @@ export const reviewerFindingSchema = z
     line: z.number().int().nonnegative(),
     severity: z.enum(["critical", "warning", "advisory"]),
     summary: findingWords(),
-    fix: z.string(),
+    fix: z.string().transform(stripControl),
     needsPerson: z.boolean(),
-    why: z.string(),
+    why: z.string().transform(stripControl),
     security: z.boolean().optional(),
   })
   .strict();
@@ -849,11 +849,12 @@ const ADVISORY_LINE_LIMIT = 2000;
 // fix) of the findings listed so far and the next one, never of the rendered line, whose zero-width spaces the host adds itself after an @, a # or "github.com".
 // So a branch that holds hidden text leaves every finding out (and the body empty), and the issue as a whole keeps no more than eight joiners and no more than eight private-use or unassigned
 // code points, as one text does, and no run of more than eight marks: a finding that would exceed that is left out. A next-line character (U+0085) is left
-// out too, as hidden text. The ledger's schema and plainText (stripControl) now remove it, so only a ledger built by hand can hold one; the check stays for that. `publishable` sees the finding's rendered line, then its path, summary and fix as the reviewer wrote them (trimmed, since publicError trims), never the header with the branch name.
-// At most ADVISORY_ISSUE_FINDINGS are listed; the findings left out are counted, and stay in the local review record. Empty when nothing can be listed.
+// out too, as hidden text. The ledger's schema and plainText (stripControl) remove it, so only a ledger built by hand can hold one; the check stays for that. `publishable` sees the finding's rendered line, then its path, summary and fix as the reviewer wrote them (trimmed, since publicError trims), never the header with the branch name.
+// A branch name that GitHub would render as a link leaves the body empty (checked below). At most ADVISORY_ISSUE_FINDINGS are listed; the findings left out are counted, and stay in the local review record. Empty when nothing can be listed.
 export function advisoryIssueBody(ledger: Ledger, readPaths: ReadonlySet<string>, publishable: (text: string) => boolean = () => true): string {
-  // The header names the branch in public text: a branch that GitHub would render as a link (a name starting www.) leaves every finding out.
-  if (RENDERED_LINK.test(ledger.branch)) return "";
+  // The header names the branch in public text, as plainText shows it (without the characters stripControl removes): a branch that holds anything
+  // RENDERED_LINK matches (a scheme address, a www. address, an inline link), as written or once stripped, leaves every finding out.
+  if (RENDERED_LINK.test(ledger.branch) || RENDERED_LINK.test(stripControl(ledger.branch))) return "";
   const rendered = ledger.findings
     .map((finding) => ({ finding, text: renderAdvisories({ ...ledger, findings: [finding] }) }))
     .filter((entry) => entry.text !== "");
