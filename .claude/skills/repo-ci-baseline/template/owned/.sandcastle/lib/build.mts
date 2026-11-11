@@ -540,7 +540,7 @@ export type LocalReviewArgs = {
 
 // An error's text as it can go on a public issue: no colour codes, no credentials in a URL, no invisible characters, and nothing at all if it holds
 // a secret. Callers compare the result with their input to tell that nothing in it needed changing, so a text comes back as it was given when the
-// only invisible characters in it are the host's own (the zero-width spaces it adds to a mention or a reference, an emoji's variation selector:
+// only invisible characters in it are the host's own (the zero-width spaces it adds to a mention or a reference, a keycap's variation selector:
 // withoutHostInvisible) and the two views below redact the same (else the second view, with the credential gone, comes back), and otherwise
 // as the second view. Other invisible characters are judged as ADR 0010 judges a terminal line (status.mts#hasHiddenText): a joiner in an emoji
 // sequence or in Persian or Indic text stays, a bidi override, a tag character or a stray zero-width space is a change. The checks see the text two ways: as written, and without its invisible
@@ -552,7 +552,7 @@ export function publicErrorText(text: string, holdsSecret: (text: string) => boo
   const seen = redact(withoutInvisible(withoutColour));
   if (holdsSecret(cleaned) || holdsSecret(seen)) return "(This text isn't shown: it looked like it held a secret. It was withheld.)";
   const hostOnly = withoutHostInvisible(cleaned);
-  return !hasHiddenText(hostOnly) && withoutInvisible(cleaned) === seen ? cleaned : seen;
+  return !hasHiddenText(hostOnly) && !hostOnly.includes("\u0085") && withoutInvisible(cleaned) === seen ? cleaned : seen;
 }
 
 // The git arguments listing the .github/workflows/ files each commit from

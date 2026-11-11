@@ -16,10 +16,11 @@ export function breakReferences(text: string): string {
 }
 
 // `text` without the invisible characters a caller treats as the host's own: the zero-width spaces breakReferences puts in a mention or a reference,
-// and a variation selector (U+FE0F) after a pictograph or before a keycap's U+20E3, which plainText removes but an emoji in an error's text carries. Anything invisible left in what this returns was not put there by the host.
+// and the variation selector (U+FE0F) of a keycap (after 0-9, # or *, before U+20E3), which ADR 0010's terminal rules don't keep. A selector after a
+// pictograph stays: hasHiddenText judges it, and counts it against its cap. Anything invisible left in what this returns was not put there by the host.
 export function withoutHostInvisible(text: string): string {
   // Spelled out without the i flag: under i and u together [A-Za-z] also matches U+017F and U+212A, which breakReferences never breaks before.
-  return text.replace(/(?<=@)\u200B(?=[A-Za-z0-9])|(?<=#)\u200B(?=\d)|(?<=\b[Gg][Hh]-)\u200B(?=\d)|(?<=\b[Gg][Ii][Tt][Hh][Uu][Bb])\u200B(?=\.[Cc][Oo][Mm]\b)|(?<=\p{Extended_Pictographic})\uFE0F|\uFE0F(?=\u20E3)/gu, "");
+  return text.replace(/(?<=@)\u200B(?=[A-Za-z0-9])|(?<=#)\u200B(?=\d)|(?<=\b[Gg][Hh]-)\u200B(?=\d)|(?<=\b[Gg][Ii][Tt][Hh][Uu][Bb])\u200B(?=\.[Cc][Oo][Mm]\b)|(?<=[0-9#*])\uFE0F(?=\u20E3)/gu, "");
 }
 
 // `text` with every control, format, private-use and unassigned character, lone surrogate and default-ignorable character (an

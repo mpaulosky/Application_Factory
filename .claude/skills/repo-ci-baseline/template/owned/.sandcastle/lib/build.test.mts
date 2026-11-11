@@ -3308,6 +3308,14 @@ describe("publicErrorText", () => {
     }
   });
 
+  it("returns a changed text when joiners or selectors pass the cap ADR 0010 keeps, or between letters", () => {
+    for (const hidden of ["a\u200db", "a\u200cb", "\u{1f468}\u200d".repeat(9) + "\u{1f469}", "\u26a0\ufe0f".repeat(9), "a\u0085b", "\u0085", "a\ufe0f\u20e3"]) {
+      assert.notEqual(publicErrorText(hidden, () => false), hidden, JSON.stringify(hidden));
+    }
+    const mixed = "\u0645\u06cc\u200c\u062e @\u200bsomeone";
+    assert.equal(publicErrorText(mixed, () => false), mixed);
+  });
+
   it("still redacts a credential a joiner splits, and withholds a token one splits", () => {
     assert.equal(publicErrorText("https\u200d://user:pw@host", () => false), "https://***@host");
     assert.match(publicErrorText(`gh\u200dp_${"a".repeat(30)}`), /isn't shown/);

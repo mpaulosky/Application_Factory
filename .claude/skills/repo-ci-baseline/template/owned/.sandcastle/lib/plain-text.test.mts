@@ -447,11 +447,13 @@ describe("withoutHostInvisible", () => {
     assert.equal(withoutInvisible(withoutHostInvisible(rendered)), withoutHostInvisible(rendered));
   });
 
-  it("removes a variation selector after a pictograph, once", () => {
-    assert.equal(withoutHostInvisible("\u26a0\ufe0f"), "\u26a0");
-    assert.equal(withoutHostInvisible("\u26a0\ufe0f\ufe0f"), "\u26a0\ufe0f");
+  it("removes the variation selector of a keycap, once, and leaves one after a pictograph to hasHiddenText", () => {
     assert.equal(withoutHostInvisible("1\ufe0f\u20e3"), "1\u20e3");
+    assert.equal(withoutHostInvisible("#\ufe0f\u20e3"), "#\u20e3");
+    assert.equal(withoutHostInvisible("1\ufe0f\ufe0f\u20e3"), "1\ufe0f\ufe0f\u20e3");
     assert.equal(withoutHostInvisible("1\ufe0f2"), "1\ufe0f2");
+    assert.equal(withoutHostInvisible("a\ufe0f\u20e3"), "a\ufe0f\u20e3");
+    assert.equal(withoutHostInvisible("\u26a0\ufe0f"), "\u26a0\ufe0f");
   });
 
   it("keeps a zero-width space anywhere else, a variation selector after a letter, and a bidi override", () => {
