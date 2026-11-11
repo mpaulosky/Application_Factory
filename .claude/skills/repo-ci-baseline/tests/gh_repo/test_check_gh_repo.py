@@ -2501,6 +2501,8 @@ def test_comment_start_ignores_an_escaped_word_boundary(line, start):
     ("if false # note\nthen\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
     # if( is an if followed by a subshell, never a condition
     ("if(false)\nthen\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if(false); then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if<f false; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
 ])
 def test_untold_judges_only_an_if_that_starts_its_line_and_at_its_real_then(tmp_path, text, lines):
     assert lines_of(untold(tmp_path, text)) == lines
