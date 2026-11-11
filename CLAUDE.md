@@ -27,7 +27,8 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   The review's own, non-copy files are `.sandcastle/lib/repo-config.mts` (`REPO_SLUG`, `NOT_OWNED_BASELINE_PATHS`), `package.json`, `pnpm-workspace.yaml`,
   `pnpm-lock.yaml` and the `.gitignore` lines for `node_modules/` and `.security/`.
 - `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too. It runs its own test (`scripts/tests/gate.test.sh`) and the review's three tests, checks those copies,
-  fails a bare `#N` in an Owned file (`tests/check-issue-refs.py`, also run by `test.sh`), lints the whole repo's Markdown and YAML as the lint workflows do, requires a clean local review of the branch
+  fails a bare `#N` in an Owned file (the skill's `tests/check-issue-refs.py`, also run by `test.sh`), lints the whole repo's Markdown and YAML as the lint workflows do,
+  requires a clean local review of the branch
   (`scripts/review.sh check`; CI and hand runs set `GATE_SKIP_REVIEW=1`), then runs `test.sh`. [ADR
   0006](docs/adr/0006-the-factory-carries-the-git-hooks-and-a-gate.md).
 - `~/.claude/skills/repo-ci-baseline` is a symlink to the skill here, so editing it changes what `apply.sh` copies everywhere.

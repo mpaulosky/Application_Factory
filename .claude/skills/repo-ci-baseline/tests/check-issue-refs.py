@@ -3,7 +3,7 @@
 
     python3 -I check-issue-refs.py <the Template's owned/ folder>
 
-Exit 0: none found. Exit 1: found, printed. Exit 2: nothing was (fully) checked: the folder is missing, the arguments are wrong, or a file or directory is unreadable.
+Exit 0: none found. Exit 1: found, printed. Exit 2: nothing was (fully) checked: the folder is missing, the arguments are wrong, or a file or directory is unreadable. (An uncaught Python error also exits 1, with its traceback.)
 test.sh runs it, and so does the Factory's scripts/gate.sh (also with --quick), so the rule fails before test.sh does.
 The rule, with its reasons, is the comment in test.sh's "Issue references in Owned files name their repo" step.
 """
@@ -29,14 +29,14 @@ def unlistable(error):
 
 files = sorted(pathlib.Path(folder, name) for folder, _, names in os.walk(root, onerror=unlistable) for name in names)
 for path in files:
-    if not path.is_file():
-        continue
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except UnicodeDecodeError:
         continue
+    except (FileNotFoundError, IsADirectoryError):
+        continue  # a dangling symlink, or a name that is no longer a file: nothing to check
     except OSError as error:
-        # A file it can't read is a file it didn't check, which must not read as a pass or as a bare #N (exit 1).
+        # Any other error (is_file() would have hidden it, e.g. a file in a directory that lists but can't be searched) is a file it didn't check, which must not read as a pass or as a bare #N (exit 1).
         print(f"{path}: {error}", file=sys.stderr)
         sys.exit(2)
     in_tests = "tests" in path.relative_to(root).parts

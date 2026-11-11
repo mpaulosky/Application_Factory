@@ -86,3 +86,23 @@ def test_an_unlistable_directory_exits_2_instead_of_skipping_its_files(tmp_path,
         assert str(target) in result.stderr
     finally:
         target.chmod(0o755)
+
+
+def test_a_directory_that_lists_but_cannot_be_searched_exits_2(tmp_path):
+    # Mode 0o600: the names can be listed, but each file inside can't be statted or opened.
+    root = tree(tmp_path / "owned", {"sub/b.md": "See #5\n", "a.md": "fine\n"})
+    (root / "sub").chmod(0o600)
+    try:
+        if os.access(root / "sub" / "b.md", os.R_OK):
+            pytest.skip("root reads anything")
+        result = run(root)
+        assert result.returncode == 2 and result.stdout == ""
+        assert "b.md" in result.stderr
+    finally:
+        (root / "sub").chmod(0o755)
+
+
+def test_a_dangling_symlink_is_skipped_not_reported(tmp_path):
+    root = tree(tmp_path / "owned", {"a.md": "fine\n"})
+    (root / "gone.md").symlink_to(root / "missing.md")
+    assert run(root).returncode == 0
