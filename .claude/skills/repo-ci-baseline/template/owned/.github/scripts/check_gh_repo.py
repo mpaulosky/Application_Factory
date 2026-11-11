@@ -438,44 +438,43 @@ def keywords(line, command=True):
 
     A keyword is a reserved word as bash reads one: an unquoted word where a command starts, never an argument
     (grep -q fi), never inside quotes ('; fi'), a ${...} or a comment (# fi). A command starts at the start of the line
-    (command: False for the line after one that ends mid-command and a trailing backslash continues), after ; & | ( or {
-    and after one of BEFORE_COMMAND (then, else, do, if, !...). A ) that closes a $(...), $((...)), <(...) or name=(...)
-    ends no command, so a word after it is an argument; any other ) (a subshell's, a case pattern's) does, so the if
-    of a case arm (a) if y; then z; fi ;;) is one. Known limits: a case pattern that reads fi), a ) closing a $( opened
-    on an earlier line, a backtick substitution, and a line of a multi-line string or a heredoc body read as code
-    that starts like a keyword.
+    (command: False for the line after one that ends mid-command with a backslash), after ; & | ( and after a
+    BEFORE_COMMAND word (then, else, do, if, {, !...). A comment ends the command, so the next line starts one.
+    A ( says what its ) ends: a ) that closes $(...), <(...) or >(...) ends no command, so a word after it is an
+    argument; one that closes a subshell, or a case pattern (a) if y; then z; fi ;;), does. What a ((...)), $((...)) or
+    name=(...) holds is arithmetic or array elements, not commands, so it is skipped. Known limits: a case pattern
+    that reads fi), a ) closing a $( opened on an earlier line, a backtick substitution, and a line of a multi-line
+    string or a heredoc body read as code that starts like a keyword.
     """
     found = []
     position = 0
+    # What each open ( is: "expansion" ($( <( >( ), "arithmetic" (( ), "array" (name=( ) or "subshell".
     parentheses = []
     while position < len(line):
         char = line[position]
-        if char in " \t":
+        if parentheses and parentheses[-1] in ("arithmetic", "array") and char not in "()":
+            position += 1
+        elif char in " \t":
             position += 1
         elif char == "#":
+            command = True
             break
         elif char == "\\" and position == len(line) - 1:
             position += 1
         elif char == "(":
-            # True for an expansion, which ends no command: $( $(( <( >( name=( , and the ( inside one.
             before = line[position - 1] if position else ""
-            if before == "(":
-                parentheses.append(bool(parentheses) and parentheses[-1])
-            else:
-                parentheses.append(bool(before) and before in "$=<>")
-            command = True
+            kind = {"(": "arithmetic", "=": "array"}.get(before, "expansion" if before and before in "$<>" else "subshell")
+            parentheses.append(kind)
+            command = kind in ("expansion", "subshell")
             position += 1
         elif char == ")":
-            command = not (parentheses.pop() if parentheses else False)
+            command = (parentheses.pop() if parentheses else "subshell") == "subshell"
             position += 1
         elif char in ";&|":
             command = True
             position += 1
         elif char in "<>":
             command = False
-            position += 1
-        elif char == "{" and (position + 1 == len(line) or line[position + 1] in " \t"):
-            command = True
             position += 1
         else:
             start = position
@@ -557,7 +556,6 @@ def untold(path):
     for number, line in enumerate(lines, 1):
         if bodies and number >= body_start:
             delimiter, tabs, quoted = bodies[0]
-            starts_command = True
             if (line.lstrip("\t") if tabs else line) == delimiter:
                 bodies.pop(0)
                 pending = None

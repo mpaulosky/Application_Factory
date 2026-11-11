@@ -120,8 +120,9 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     in a branch of an `if` whose condition is plainly false (`false`, `! true`, `[ 0 -ne 0 ]`, `[ 1 -eq 0 ]`), or in the `else` of a plainly
     true one (`true`, `:`), is no export; any other condition is assumed to run, and so is an `elif` branch. The condition is judged only on an `if`
     that starts its line. Keywords are read in source order (`fi; if true; then` closes one block and opens the next). An `if` or `fi` counts only where a command starts: not
-    quoted, escaped, in `${...}` or in a comment (`'; fi'`, `echo x # fi`), not an argument (`grep -q fi`), not after a `)` that closes `$(...)`, `<(...)` or `name=(...)`,
-    and not at the start of a line that a trailing backslash continues mid-command. A `)` that closes a subshell or a case pattern does start one (`a) if y; then z; fi ;;`).
+    quoted, escaped, in `${...}` or in a comment (`'; fi'`, `echo x # fi`), not an argument (`grep -q fi`), not after a `)` that closes `$(...)`, `<(...)` or `>(...)`,
+    not inside `((...))`, `$((...))` or `name=(...)`, and not at the start of a line that a trailing backslash continues mid-command (a comment ends the command, so the
+    line after one starts a new one). A `)` that closes a subshell or a case pattern does start a command (`a) if y; then z; fi ;;`).
     A case pattern `fi)`, a `)` that closes a `$(` opened on an earlier line, a backtick substitution, and a line of a multi-line string or of a heredoc body read as code
     that starts like `fi` or `else` can still misjudge a branch.
   - A file with a NUL byte is checked with the NULs removed, as bash reads it, not skipped. `--repo` reads a suffix in

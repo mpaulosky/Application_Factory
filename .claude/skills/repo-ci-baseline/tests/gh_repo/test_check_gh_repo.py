@@ -2138,7 +2138,7 @@ def test_check_repo_escapes_line_breaks_in_the_name_of_a_symlink_it_refuses(tmp_
     ("if false; then\ntime if x; then y; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
     # a line a trailing backslash continues is not the start of a command
     ("if false; then\necho x \\\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
-    # a ) that closes an expansion ends no command; one that closes a case pattern or a subshell does
+    # a ) that closes an expansion ends no command; one that closes a subshell does (a case pattern's is tested above)
     ("if false; then\necho $(true) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
     ("if false; then\necho $((1+2)) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
     ("if false; then\na=(x y) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
@@ -2161,6 +2161,31 @@ def test_check_repo_escapes_line_breaks_in_the_name_of_a_symlink_it_refuses(tmp_
     ("if false; then\necho x \\\\\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
     ("if false; then\n:\necho x \\\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
     ("if false; then\n:\necho x \\\nelif y; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
+    # a comment ends the command, even one that ends in a backslash; a ( inside arithmetic or an array holds no command
+    ("if false; then\necho x # c \\\nif y; then\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
+    ("if false; then\necho x # note \\\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\n:\necho x # c \\\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\necho x \\\n# note\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\n(( fi ))\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho $(( fi ))\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\nx=$(( if ))\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\na=(fi)\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n((if x; then y; fi))\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho $((true) fi)\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\ncat >(true) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho $(a $(b) fi)\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\nx=$(if a; then b; fi) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n(echo $(a)) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\n(true) fi $\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # a { after an argument is an argument; a keyword follows a pipe; an odd run of three backslashes continues the line
+    ("if false; then\necho { fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho x | if y; then z; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n:; \\\\\\\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    # an elif leaves its branch running for the else after it; else and elif are whole words; a stray else is ignored
+    ("if false; then\n:\nelif x; then\n:\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if true; then\nelsewhere\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\neliffy\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("else\nexport GH_REPO=o/r\ngh pr view 1\n", []),
     # the else of a condition that is not plainly true runs
     ("if ! true; then\n:\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
     ("if grep -q :; then\n:\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
@@ -2204,6 +2229,8 @@ def test_data_heredocs_sees_through_the_words_before_a_command(header):
     ("if false", "false"),
     ("if", ""),
     ("iffalse; then", ""),
+    ("if false; then # a # b", "false"),
+    ("ab false", ""),
     ("echo if false", ""),
 ])
 def test_condition_of_cuts_the_then_the_semicolon_and_the_comment(line, condition):
