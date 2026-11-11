@@ -152,6 +152,8 @@ describe("the files a re-Apply may write without a review", () => {
       ".sandcastle/check.sh",
       "global.json",
       "docs/PROCESS.md",
+      "scripts/cleanup.sh",
+      "scripts/work-issue.sh",
       ...GATE_CHAIN,
       ...ROLE_PROMPTS,
     ]) {

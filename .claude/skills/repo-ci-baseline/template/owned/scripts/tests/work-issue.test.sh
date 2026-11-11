@@ -2,8 +2,8 @@
 # Tests for scripts/work-issue.sh, in a throwaway clone with a bare origin and a fake `gh`.
 # Usage: scripts/tests/work-issue.test.sh
 #
-# The fake gh answers `gh issue view <n> --json title|labels` from the table in its case statement; GH_REPO must be o/r.
-# shellcheck disable=SC2034,SC2015 # out and o are read by the eval in check; the setup lines are meant as "or stop"
+# The fake gh answers `gh issue view <n> --json title|labels --jq ...` from the table in its case statement (the jq text is not run); GH_REPO must be o/r.
+# shellcheck disable=SC2034 # o is read by the eval in check
 set -uo pipefail
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
 SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,7 +18,7 @@ mkdir "$work/bin"
 cat > "$work/bin/gh" <<'GH' # gh-repo: ok
 #!/usr/bin/env bash
 # gh issue view <n> --json title|labels --jq ...
-[[ "${GH_REPO:-}" == "o/r" ]] || { echo "fake gh: GH_REPO=${GH_REPO:-}" >&2; exit 2; } # gh-repo: ok
+[[ "${GH_REPO:-}" == "o/r" && "$1 $2" == "issue view" && "$4" == "--json" && "$6" == "--jq" ]] || { echo "fake gh: bad call: $* (GH_REPO=${GH_REPO:-})" >&2; exit 2; } # gh-repo: ok
 n="$3"; what="$5"
 case "$n:$what" in
   54:title) echo "[Feature] Start work in a worktree, review once!" ;;
@@ -36,6 +36,11 @@ case "$n:$what" in
   64:title) echo "Reuse me" ;;
   65:title) echo "Started on another machine" ;;
   66:title) echo "Plain directory in the way" ;;
+  67:title) echo "Elsewhere" ;;
+  68:title) echo "$(printf 'a%.0s' $(seq 1 49)) bbb" ;;
+  69:title) printf 'a%.0s' $(seq 1 50); echo ;;
+  70:title) printf 'a%.0s' $(seq 1 51); echo ;;
+  123456789:title) echo "Nine digits" ;;
   *:title) echo "" ;;
 esac
 exit 0
@@ -49,7 +54,7 @@ git clone -q "$work/origin.git" "$work/Repo" 2>/dev/null
 cd "$work/Repo" || exit 1
 git checkout -q -b main; mkdir scripts
 cp "$SCRIPTS/check-branch-name.sh" "$SCRIPTS/work-issue.sh" scripts/
-git add . && git commit -q -m init && git push -q origin main || { echo "setup failed"; exit 1; }
+{ git add . && git commit -q -m init && git push -q origin main; } || { echo "setup failed"; exit 1; }
 wt="$work/Repo-worktrees"
 
 p=$(bash scripts/work-issue.sh 54 2>/dev/null); st=$?
@@ -66,8 +71,12 @@ check "a leading-zero number is the same number" "[[ \$(bash scripts/work-issue.
 check "a title that is only a tag gets the fallback slug" "[[ \$(bash scripts/work-issue.sh 57 2>/dev/null) == '$wt/feature-57-issue' ]]"
 check "non-ASCII letters are word breaks" "[[ \$(bash scripts/work-issue.sh 58 2>/dev/null) == '$wt/feature-58-caf-au-lait' ]]"
 check "a title with no ASCII letters gets the fallback slug" "[[ \$(bash scripts/work-issue.sh 59 2>/dev/null) == '$wt/feature-59-issue' ]]"
-p60=$(bash scripts/work-issue.sh 60 2>/dev/null)
-check "a very long word is cut to 50 characters" "[[ -d '$p60' && \$(basename '$p60' | sed 's/^feature-60-//' | wc -c) -le 51 ]]"
+a50=$(printf 'a%.0s' $(seq 1 50)); a49=$(printf 'a%.0s' $(seq 1 49))
+check "a very long word is cut to exactly 50 characters" "[[ \$(bash scripts/work-issue.sh 60 2>/dev/null) == '$wt/feature-60-$a50' ]]"
+check "a cut that lands on a hyphen drops the hyphen" "[[ \$(bash scripts/work-issue.sh 68 2>/dev/null) == '$wt/feature-68-$a49' ]]"
+check "a slug of exactly 50 characters is kept whole" "[[ \$(bash scripts/work-issue.sh 69 2>/dev/null) == '$wt/feature-69-$a50' ]]"
+check "a slug of 51 characters is cut to 50" "[[ \$(bash scripts/work-issue.sh 70 2>/dev/null) == '$wt/feature-70-$a50' ]]"
+check "a 9-digit number is accepted" "[[ \$(bash scripts/work-issue.sh 123456789 2>/dev/null) == '$wt/feature-123456789-nine-digits' ]]"
 check "5 words keep all 5" "[[ \$(bash scripts/work-issue.sh 61 2>/dev/null) == '$wt/feature-61-one-two-three-four-five' ]]"
 check "6 words keep all 6" "[[ \$(bash scripts/work-issue.sh 62 2>/dev/null) == '$wt/feature-62-one-two-three-four-five-six' ]]"
 check "7 words keep 6" "[[ \$(bash scripts/work-issue.sh 63 2>/dev/null) == '$wt/feature-63-one-two-three-four-five-six' ]]"
@@ -76,6 +85,17 @@ check "7 words keep 6" "[[ \$(bash scripts/work-issue.sh 63 2>/dev/null) == '$wt
 git branch feature/64-reuse-me origin/main
 p64=$(bash scripts/work-issue.sh 64 2>/dev/null)
 check "a local branch with no worktree is checked out in a new one" "[[ '$p64' == '$wt/feature-64-reuse-me' && \$(git -C '$p64' branch --show-current) == feature/64-reuse-me ]]"
+
+# A worktree the branch already has anywhere is reused, and a folder deleted by hand is made again
+git worktree add -q -b feature/67-elsewhere "$work/elsewhere" origin/main
+check "a worktree at another path is reused, and nothing is made" "[[ \$(bash scripts/work-issue.sh 67 2>/dev/null) == '$work/elsewhere' && ! -e '$wt/feature-67-elsewhere' ]]"
+command rm -rf "$p"
+p54=$(bash scripts/work-issue.sh 54 2>/dev/null); st=$?
+check "a worktree folder deleted by hand is made again" "[[ $st == 0 && '$p54' == '$p' && -d '$p' && \$(git -C '$p' branch --show-current) == feature/54-start-work-in-a-worktree-review ]]"
+
+# Many worktrees: git's list is longer than a pipe buffer, and finding the primary checkout must not stop reading it (SIGPIPE under pipefail)
+for i in $(seq 1 120); do git worktree add -q --detach "$work/many-worktrees-with-a-long-path-so-the-list-is-big/w$i" origin/main; done
+check "finds the primary checkout among many worktrees" "[[ \$(bash scripts/work-issue.sh 54 2>/dev/null) == '$p' ]]"
 
 # A branch already on origin is built from it, not from main
 other="$work/other"; git clone -q "$work/origin.git" "$other" 2>/dev/null

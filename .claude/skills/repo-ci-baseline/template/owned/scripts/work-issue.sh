@@ -18,7 +18,7 @@ n="${1:-}"
 n=$((10#$n))
 command -v gh >/dev/null || die "gh is needed to read the issue" # gh-repo: ok
 
-primary="$(git worktree list --porcelain | awk '/^worktree /{print substr($0,10); exit}')"
+primary="$(git worktree list --porcelain | awk '/^worktree / && !seen {print substr($0,10); seen=1}')"
 [[ -n "$primary" ]] || die "can't find the primary checkout"
 repo="$(basename "$primary")"
 [[ -f "$primary/scripts/check-branch-name.sh" ]] || die "scripts/check-branch-name.sh is missing from $primary: Apply the Template first"
@@ -43,11 +43,13 @@ bash "$primary/scripts/check-branch-name.sh" "$branch" >&2 || die "$branch is no
 
 dir="$(dirname "$primary")/$repo-worktrees/${branch//\//-}"
 existing="$(git -C "$primary" worktree list --porcelain | awk -v ref="refs/heads/$branch" '/^worktree /{p=substr($0,10)} $0=="branch " ref{print p}')"
-if [[ -n "$existing" ]]; then
+if [[ -n "$existing" && -d "$existing" ]]; then
   echo "reusing $existing" >&2
   echo "$existing"
   exit 0
 fi
+# A worktree whose folder was deleted by hand is stale metadata: prune it, then make the worktree again.
+[[ -z "$existing" ]] || git -C "$primary" worktree prune
 [[ ! -e "$dir" ]] || die "$dir exists but is not a worktree of $branch: move it away first"
 
 git -C "$primary" fetch --quiet origin

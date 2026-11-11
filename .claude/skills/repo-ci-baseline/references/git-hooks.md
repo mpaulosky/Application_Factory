@@ -62,12 +62,14 @@ worktree if there is one, and refuses a directory of that name that is not one. 
 
 Once the PR merges, `scripts/cleanup.sh` (run in the primary checkout, on a clean `main`) fast-forwards `main`, then removes each merged branch with its
 worktree and its `origin` branch. It decides from the PR's state on GitHub (a squash merge leaves no ancestry for `git branch --merged`): the PR must be
-this repository's own, merged into `main`, and the branch's tip must be the PR's last head, so no unpushed commit is lost. It keeps, with the reason, a branch
-with an open PR, no PR, a PR merged elsewhere, or a dirty worktree (and that branch's `origin` copy too), and removes a closed-unmerged one only with
+from the repository `origin` points at (a fork's PR of the same name doesn't count), merged into `main`, and the branch's tip must be the PR's last head, so no
+unpushed commit is lost. It keeps, with the reason, a branch with an open PR, no PR, a PR merged elsewhere, or a dirty worktree (and that local branch's
+`origin` copy too), and removes a closed-unmerged one only with
 `--include-closed`. It deletes the `origin` branch only if `origin` still holds the tip it judged. `--dry-run` shows the steps. `git worktree remove` alone
-leaves the local and `origin` branches behind. `pre-commit` enforces
-the rule. Claude Code's own `.claude/worktrees/` (ignored by the Template's `.gitignore`) also passes the check, since
-any linked worktree does, but people use `../<Repo>-worktrees/`.
+leaves the local and `origin` branches behind.
+
+`pre-commit` enforces the rule that a change is committed in a linked worktree. Claude Code's own `.claude/worktrees/` (ignored by the Template's
+`.gitignore`) also passes the check, since any linked worktree does, but people use `../<Repo>-worktrees/`.
 
 ## The hooks
 
