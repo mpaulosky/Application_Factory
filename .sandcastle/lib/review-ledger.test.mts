@@ -4474,7 +4474,7 @@ describe("staging findings between rounds", () => {
 
   it("refuses a staging file that is a FIFO at once, and leaves no lock", { timeout: 150000 }, () => {
     // The timeouts below only catch a blocking open of the FIFO, which would never return. They must outlast tsx starting this module on
-    // a loaded machine (several suites at once took over 10 s), or a slow start looks like a hang (it showed as status 143 in issue #57). Two children at 60 s are 120 s, inside the 150 s test timeout.
+    // a loaded machine (several suites at once took over 10 s), or a slow start looks like a hang (it showed as status 143 in mpaulosky/Application_Factory#57). Two children at 60 s are 120 s, inside the 150 s test timeout.
     makeFolder();
     execFileSync("mkfifo", [join(folder(), "findings.json")]);
 
