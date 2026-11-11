@@ -3289,7 +3289,7 @@ describe("publicErrorText", () => {
       return false;
     });
 
-    assert.deepEqual(checked, ["token gh\u200bp_abcdef rejected\n\u202esecond line", "token ghp_abcdef rejected\nsecond line"]);
+    assert.deepEqual(checked, ["token gh\u200bp_abcdef rejected\n\u202esecond line", "token ghp_abcdef rejected\nsecond line", "token ghp_abcdef rejected second line"]);
     assert.equal(text, "token ghp_abcdef rejected\nsecond line");
   });
 
@@ -3319,6 +3319,12 @@ describe("publicErrorText", () => {
     assert.equal(publicErrorText(mixed, () => false), mixed);
   });
 
+  it("withholds a secret with a space in it that a longer run of whitespace hides, as plainText folds the run after the check", () => {
+    for (const hidden of ["failure: alpha  beta", "failure: alpha\nbeta", "failure: alpha\t\nbeta", "failure: alpha \u200bbeta"]) {
+      assert.match(publicErrorText(hidden, (text) => text.includes("alpha beta")), /isn't shown/, JSON.stringify(hidden));
+    }
+  });
+
   it("still redacts a credential a joiner splits, and withholds a token one splits", () => {
     assert.equal(publicErrorText("https\u200d://user:pw@host", () => false), "https://***@host");
     assert.match(publicErrorText(`gh\u200dp_${"a".repeat(30)}`), /isn't shown/);
@@ -3341,7 +3347,7 @@ describe("publicErrorText", () => {
     assert.match(publicErrorText(`x\u200bghp_${"a".repeat(30)}`), /isn't shown/);
     const seenByPredicate: string[] = [];
     publicErrorText("x\u200by", (text) => (seenByPredicate.push(text), false));
-    assert.deepEqual(seenByPredicate, ["x\u200by", "xy"]);
+    assert.deepEqual(seenByPredicate, ["x\u200by", "xy", "xy"]);
     assert.match(publicErrorText("x\u200by", (text) => text.includes("\u200b")), /isn't shown/);
   });
 
@@ -3350,7 +3356,7 @@ describe("publicErrorText", () => {
     const text = publicErrorText(`https://ghp_${"a".repeat(30)}@github.com/o/r`, (value) => (checked.push(value), false));
 
     assert.equal(text, "https://***@github.com/o/r");
-    assert.deepEqual(checked, ["https://***@github.com/o/r", "https://***@github.com/o/r"]);
+    assert.deepEqual(checked, ["https://***@github.com/o/r", "https://***@github.com/o/r", "https://***@github.com/o/r"]);
   });
 
   it("redacts a URL credential though a zero-width space splits the scheme", () => {
