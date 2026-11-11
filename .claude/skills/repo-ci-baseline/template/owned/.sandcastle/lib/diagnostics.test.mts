@@ -148,10 +148,12 @@ describe("SANDBOX_PROBE", () => {
   });
 
   it("counts a zombie, which a PID 1 that never waits leaves for every orphan", { skip: (process.platform !== "linux" || !hasPs) && "needs ps on Linux" }, async () => {
-    // The shell backgrounds a `sleep 1`, then becomes a `sleep 30`, which never waits for it: the first stays a zombie, a child of the second,
-    // from the end of its second until the test kills the parent. The first must still be running when the shell execs: a child that exits
-    // sooner can be reaped by the shell itself (bash does, on SIGCHLD), which left no zombie in one run in about four under load.
-    const parent = spawn("sh", ["-c", "sleep 1 & exec sleep 30"], { stdio: "ignore" });
+    // The shell backgrounds a `sleep 2`, then becomes a `sleep 120`, which never waits for it: the first stays a zombie, a child of the second,
+    // from the end of its two seconds until the test kills the parent in `finally`. The first must still be running when the shell execs, because a
+    // child that exits sooner can be reaped by the shell itself (bash does, on SIGCHLD), which left no zombie in some runs under load (issue #57);
+    // two seconds narrows that to a shell that takes longer than that to reach `exec`. The parent outlives the longest the waits below can take
+    // (20 s for the zombie to appear, then 10 attempts of a probe that can take seconds each on a loaded machine), since the zombie goes with it.
+    const parent = spawn("sh", ["-c", "sleep 2 & exec sleep 120"], { stdio: "ignore" });
     try {
       // The test's own zombie, found by its parent, so the wait is for what the test made and not for the machine's count to change.
       const ownZombies = () =>
