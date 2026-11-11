@@ -65,7 +65,9 @@ Anyone who can comment can forge a marker and be unheard by the watcher. That is
 
 - The lists are read once, not paged: 100 review threads, 100 checks, the last 100 reviews and the last 100 comments. A list GitHub says has more is an incomplete read,
   a failed poll (never a quiet one), so a PR past those limits ends the watcher with exit 2. The checks come from the PR's own
-  `statusCheckRollup`, and only while it is of `headRefOid`; the last of the PR's commits needn't be the head, and the head ref (in the head repository) isn't read, so a fork PR is watched.
+  `statusCheckRollup`, and only while it is of `headRefOid`; the last of the PR's commits needn't be the head, and the head ref (in the head repository) isn't read,
+  so a fork PR is watched. A PR with no rollup yet has no check reported and is quiet, unless GitHub calls it `UNSTABLE` (a check failed):
+  then the read is incomplete and the poll fails.
 - `behind` appears only where the base branch's rules require an up-to-date branch. PR Auto-Merge also merges `main` into a ready PR, so it may clear before the session acts.
 - The Sandcastle workflow's own red `Sandcastle` check counts as `check-failed`.
 - The tests run against a fake `gh`; nothing in the Template runs it against live GitHub.

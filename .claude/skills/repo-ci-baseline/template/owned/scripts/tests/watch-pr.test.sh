@@ -765,7 +765,8 @@ new_repo
 pr '{"statusCheckRollup":null,"mergeStateStatus":"UNSTABLE"}'
 run --once 7
 check "an UNSTABLE PR with no rollup is a failed poll: exit 2" status_is 2
-for incomplete in '{"statusCheckRollup":{"contexts":null}}' '{"statusCheckRollup":{"commit":{"oid":"x"}}}'; do
+# A rollup with no contexts, or contexts with no nodes, is no whole read.
+for incomplete in '{"statusCheckRollup":{"contexts":null}}' '{"statusCheckRollup":{"contexts":{"nodes":null}}}'; do
   new_repo
   pr "$incomplete"
   run --once 7
