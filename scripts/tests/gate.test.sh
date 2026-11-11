@@ -36,6 +36,8 @@ new_repo() {
   done
   cp -p "$here/.yamllint.yml" "$here/.markdownlint-cli2.jsonc" "$repo/"
   cp -p "$here/$skill/template/owned/.markdownlint-cli2.jsonc" "$repo/$skill/template/owned/"
+  mkdir -p "$repo/$skill/tests"
+  cp -p "$here/$skill/tests/check-issue-refs.py" "$repo/$skill/tests/"
   cat > "$repo/$skill/test.sh" <<'STUB'
 #!/usr/bin/env bash
 touch "$(dirname "${BASH_SOURCE[0]}")/ran"
@@ -143,6 +145,35 @@ GATE_ARGS=--fast run "$repo"
 check "an unknown argument is refused" "$([[ $status == 2 && $ran == no ]] && echo 0 || echo 1)"
 GATE_ARGS="--quick --quick" run "$repo"
 check "a second argument is refused" "$([[ $status == 2 ]] && echo 0 || echo 1)"
+
+# A bare #N in an Owned file fails the full gate and --quick, before test.sh.
+repo="$(new_repo bare-ref)"
+echo "See #5 for why." > "$repo/$skill/template/owned/NOTES.txt"
+run "$repo"
+check "a bare #N in an Owned file fails the gate" "$([[ $status == 1 && $ran == no ]] && grep -q 'NOTES.txt:1' "$repo/out" && echo 0 || echo 1)"
+GATE_ARGS=--quick run "$repo"
+check "--quick fails on a bare #N in an Owned file" "$([[ $status == 1 ]] && grep -q 'NOTES.txt:1' "$repo/out" && echo 0 || echo 1)"
+echo "See mpaulosky/Application_Factory#5 for why." > "$repo/$skill/template/owned/NOTES.txt"
+run "$repo"
+check "a repo-qualified issue reference passes" "$([[ $status == 0 ]] && echo 0 || echo 1)"
+
+# --sync copies the Template's file over a drifted, missing or non-executable copy, then stops without the rest of the gate.
+repo="$(new_repo sync)"
+echo "# local edit" >> "$repo/.github/hooks/pre-push"
+rm "$repo/scripts/check-branch-name.sh"
+chmod -x "$repo/.github/hooks/pre-commit"
+GATE_ARGS=--sync run "$repo"
+check "--sync exits 0 and doesn't run test.sh" "$([[ $status == 0 && $ran == no ]] && echo 0 || echo 1)"
+check "--sync names what it synced" "$(grep -q 'synced .github/hooks/pre-push' "$repo/out" && grep -q 'synced scripts/check-branch-name.sh' "$repo/out" && grep -q 'synced .github/hooks/pre-commit' "$repo/out" && echo 0 || echo 1)"
+check "--sync restores the content and the execute bit" "$(cmp -s "$repo/.github/hooks/pre-push" "$here/.github/hooks/pre-push" && [[ -x $repo/scripts/check-branch-name.sh && -x $repo/.github/hooks/pre-commit ]] && echo 0 || echo 1)"
+GATE_ARGS=--sync run "$repo"
+check "--sync on matching copies syncs nothing" "$([[ $status == 0 ]] && grep -q '^0 copies synced' "$repo/out" && echo 0 || echo 1)"
+GATE_ARGS="--sync --quick" run "$repo"
+check "--sync takes no other argument" "$([[ $status == 2 ]] && echo 0 || echo 1)"
+repo="$(new_repo sync-then-gate)"
+echo "# local edit" >> "$repo/scripts/review.sh"
+run "$repo"
+check "the drift message points at --sync" "$([[ $status == 1 ]] && grep -q 'gate.sh --sync' "$repo/out" && echo 0 || echo 1)"
 
 # What gates a push never passes --quick: the pre-push hook and the Factory's CI call the gate with no argument.
 check "the pre-push hook runs the gate with no argument" "$(grep -E 'scripts/gate\.sh' "$here/.github/hooks/pre-push" | grep -vE '^#' | grep -qE 'gate\.sh"?$' && echo 0 || echo 1)"

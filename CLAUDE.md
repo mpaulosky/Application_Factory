@@ -23,11 +23,11 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   `.github/scripts/post_claude_review.py`, and the issue and PR process (ADR 0009): `.github/ISSUE_TEMPLATE/*`, `.github/pull_request_template.md`, `.github/workflows/pr-title.yml` and
   `scripts/check-pr-title.sh`, and `.github/workflows/lint-{markdown,yaml,actions}.yml`, and the local review (ADR 0010): `scripts/review.sh`, five `.sandcastle/lib/` modules with three tests,
   `.claude/skills/pre-push-review/`, `.claude/agents/pre-push-reviewer.md` and `.security/README.md`: copies of the Template's Owned files. `.github/dependabot.yml`, `.yamllint.yml` and
-  `.markdownlint-cli2.jsonc` are the Factory's own (ADR 0009). Edit the Template's file and copy it over; `scripts/gate.sh` fails when a copy drifts.
+  `.markdownlint-cli2.jsonc` are the Factory's own (ADR 0009). Edit the Template's file and run `scripts/gate.sh --sync` to copy it over; `scripts/gate.sh` fails when a copy drifts.
   The review's own, non-copy files are `.sandcastle/lib/repo-config.mts` (`REPO_SLUG`, `NOT_OWNED_BASELINE_PATHS`), `package.json`, `pnpm-workspace.yaml`,
   `pnpm-lock.yaml` and the `.gitignore` lines for `node_modules/` and `.security/`.
 - `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too. It runs its own test (`scripts/tests/gate.test.sh`) and the review's three tests, checks those copies,
-  lints the whole repo's Markdown and YAML as the lint workflows do, requires a clean local review of the branch
+  fails a bare `#N` in an Owned file (`tests/check-issue-refs.py`, also run by `test.sh`), lints the whole repo's Markdown and YAML as the lint workflows do, requires a clean local review of the branch
   (`scripts/review.sh check`; CI and hand runs set `GATE_SKIP_REVIEW=1`), then runs `test.sh`. [ADR
   0006](docs/adr/0006-the-factory-carries-the-git-hooks-and-a-gate.md).
 - `~/.claude/skills/repo-ci-baseline` is a symlink to the skill here, so editing it changes what `apply.sh` copies everywhere.
@@ -38,6 +38,7 @@ The Factory carries the git hooks and a gate of its own (ADR 0006), Claude Revie
 ## Commands
 
 ```bash
+scripts/gate.sh --sync                                        # copy the Template's files over the Factory's copies of them (after editing the Template)
 scripts/gate.sh --quick                                       # while iterating: the same gate without the local review check and test.sh (about a minute); never for a push
 scripts/gate.sh                                               # the pre-push gate (needs pnpm on the first run): its test, the review's tests, the copies' drift check, lint, the local review check, then test.sh
 .claude/skills/repo-ci-baseline/test.sh                       # all the Template's tests; needs actionlint, zizmor, yamllint, shellcheck, markdownlint-cli2, node, git
