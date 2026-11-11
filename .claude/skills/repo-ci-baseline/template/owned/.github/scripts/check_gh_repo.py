@@ -434,23 +434,41 @@ ALWAYS = re.compile(r"(true|:)$")
 
 
 def keywords(line, command=True):
-    """The if and fi keywords of line, in source order, each "if" or "fi".
+    """The if and fi keywords of line, in source order (each "if" or "fi"), and whether the line ends where a command may start.
 
-    A keyword is a reserved word as bash reads one: an unquoted word at the start of the line (command; False for a
-    line a trailing backslash continues) or after ; & | ( ) or { or one of BEFORE_COMMAND (then, else, do, if, !...),
-    never an argument (grep -q fi), never inside quotes ('; fi'), a ${...} or a comment (# fi). A ) counts as the end of
-    a command, so the if of a case arm (a) if y; then z; fi) is one. Known limits: a case pattern that reads fi) or
-    a line inside a multi-line string or heredoc body that starts like a keyword is read as one.
+    A keyword is a reserved word as bash reads one: an unquoted word where a command starts, never an argument
+    (grep -q fi), never inside quotes ('; fi'), a ${...} or a comment (# fi). A command starts at the start of the line
+    (command: False for the line after one that ends mid-command and a trailing backslash continues), after ; & | ( or {
+    and after one of BEFORE_COMMAND (then, else, do, if, !...). A ) that closes a $(...), $((...)), <(...) or name=(...)
+    ends no command, so a word after it is an argument; any other ) (a subshell's, a case pattern's) does, so the if
+    of a case arm (a) if y; then z; fi ;;) is one. Known limits: a case pattern that reads fi), a ) closing a $( opened
+    on an earlier line, a backtick substitution, and a line of a multi-line string or a heredoc body read as code
+    that starts like a keyword.
     """
     found = []
     position = 0
+    parentheses = []
     while position < len(line):
         char = line[position]
         if char in " \t":
             position += 1
         elif char == "#":
             break
-        elif char in ";&|()":
+        elif char == "\\" and position == len(line) - 1:
+            position += 1
+        elif char == "(":
+            # True for an expansion, which ends no command: $( $(( <( >( name=( , and the ( inside one.
+            before = line[position - 1] if position else ""
+            if before == "(":
+                parentheses.append(bool(parentheses) and parentheses[-1])
+            else:
+                parentheses.append(bool(before) and before in "$=<>")
+            command = True
+            position += 1
+        elif char == ")":
+            command = not (parentheses.pop() if parentheses else False)
+            position += 1
+        elif char in ";&|":
             command = True
             position += 1
         elif char in "<>":
@@ -481,7 +499,7 @@ def keywords(line, command=True):
             if command and word in ("if", "fi"):
                 found.append(word)
             command = command and word in BEFORE_COMMAND
-    return found
+    return found, command
 
 
 def condition_of(line):
@@ -494,28 +512,34 @@ def condition_of(line):
     return text.lstrip(" \t")
 
 
-def track_branches(line, branches, continued=False):
-    """Keep branches, one (runs, always) pair per open if, up to date for this line.
+def track_branches(line, branches, command=True):
+    """Keep branches, one (runs, always) pair per open if, up to date for this line, and return whether the next line starts a command.
 
     runs is False while the branch being read can't run. Only a condition that is plainly false (or plainly true,
     for its else) is judged, and only on an if that starts its line; any other branch may run. Keywords count in
     source order, so a fi closes the block it ends before an if later on the line opens the next. A quoted or
-    commented keyword is not one, and neither is a keyword on a line a trailing backslash continues. A line inside
-    a multi-line string or a non-data heredoc body that looks like a fi or an else can misjudge a branch, either way:
-    it can pop a branch that never runs, so an export in it counts again, as it did before branches were tracked, or
-    flip one.
+    commented keyword is not one, and neither is a keyword where no command starts, such as the line after
+    `echo x \\`: command says whether the line starts one. A line inside a multi-line string or a non-data heredoc
+    body that looks like a fi or an else can misjudge a branch, either way: it can pop a branch that never runs, so
+    an export in it counts again, as it did before branches were tracked, or flip one.
     """
-    if not continued and re.match(r"[ \t]*else\b", line) and branches:
+    if command and re.match(r"[ \t]*else\b", line) and branches:
         branches[-1] = (not branches[-1][1], branches[-1][1])
-    elif not continued and re.match(r"[ \t]*elif\b", line) and branches:
+    elif command and re.match(r"[ \t]*elif\b", line) and branches:
         branches[-1] = (True, False)
-    for number, word in enumerate(keywords(line, not continued)):
+    found, command = keywords(line, command)
+    for word in found:
         if word == "if":
-            # Only the line's first if can start the text condition_of reads.
-            text = condition_of(line) if number == 0 else ""
+            text = condition_of(line)
             branches.append((NEVER.match(text) is None, ALWAYS.match(text) is not None))
         elif branches:
             branches.pop()
+    return command
+
+
+def continues(line):
+    """True when line ends in an odd number of backslashes, so bash joins the next line to it."""
+    return (len(line) - len(line.rstrip("\\"))) % 2 == 1
 
 
 def untold(path):
@@ -528,9 +552,12 @@ def untold(path):
     body_start = header_end = 0
     pending = None
     branches = []
+    # Whether the line being read starts a command: not the line after one that ends mid-command with a backslash.
+    starts_command = True
     for number, line in enumerate(lines, 1):
         if bodies and number >= body_start:
             delimiter, tabs, quoted = bodies[0]
+            starts_command = True
             if (line.lstrip("\t") if tabs else line) == delimiter:
                 bodies.pop(0)
                 pending = None
@@ -542,13 +569,14 @@ def untold(path):
                     found.append(f"{for_log(str(path))}:{number}: {shown(line)}")
             continue
         if re.match(r"[ \t]*#", line):
+            starts_command = True
             continue
         if not bodies and number > header_end:
             header, count = logical_line(lines, number)
             header_end = number + count - 1
             body_start = header_end + 1
             bodies = data_heredocs(header, lines, header_end)
-        track_branches(line, branches, bool(continued_text(lines, number)))
+        starts_command = track_branches(line, branches, starts_command) or not continues(line)
         if EXPORTS.match(line):
             # An export in a branch that never runs leaves GH_REPO unset.
             exported = exported or all(runs for runs, _ in branches)

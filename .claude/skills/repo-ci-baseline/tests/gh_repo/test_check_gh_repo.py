@@ -2120,9 +2120,10 @@ def test_check_repo_escapes_line_breaks_in_the_name_of_a_symlink_it_refuses(tmp_
     # the if of a case arm is one
     ("if false; then\ncase $x in\n a) if y; then z; fi ;;\nesac\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
     # a backslash escapes a quote inside "..." and $'...', not inside '...'
-    ("if false; then\necho \"a\\\"; fi\"\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho \"a\\\" ; fi \"\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
     ("if false; then\necho 'a\\'; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
-    ("if false; then\necho $'\\'; fi'\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho $'\\' ; fi '\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n'a\\' ; fi $\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
     # ${...} is one word, closed or not; a word after it is an argument
     ("if false; then\necho ${x:-a; fi}\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
     ("if false; then\necho ${x; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
@@ -2137,6 +2138,29 @@ def test_check_repo_escapes_line_breaks_in_the_name_of_a_symlink_it_refuses(tmp_
     ("if false; then\ntime if x; then y; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
     # a line a trailing backslash continues is not the start of a command
     ("if false; then\necho x \\\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    # a ) that closes an expansion ends no command; one that closes a case pattern or a subshell does
+    ("if false; then\necho $(true) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho $((1+2)) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\na=(x y) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\ncat <(true) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n(true) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\necho $(if x; then y; fi)\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # a redirect at the start of a command is followed by an argument; {if is one word, { if starts a block
+    ("if false; then\n> fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n{if x; then y; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\n{\tif y; then z; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # a ; or & right after ${...} starts a command
+    ("if false; then\necho ${x}; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # a line after one that ends mid-command is no command start; after ; && then or a blank, a comment, or an even run of backslashes it is
+    ("if false; then\n:; \\\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\nif x; then \\\nif y; then z; fi; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if true; then \\\nif false; then\nexport GH_REPO=o/r\nfi\nfi\ngh pr view 1\n", [6]),
+    ("foo && \\\nif false; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("# note \\\nif false; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    (" \\\nif false; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho x \\\\\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\n:\necho x \\\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
+    ("if false; then\n:\necho x \\\nelif y; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
     # the else of a condition that is not plainly true runs
     ("if ! true; then\n:\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
     ("if grep -q :; then\n:\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
@@ -2188,3 +2212,22 @@ def test_condition_of_cuts_the_then_the_semicolon_and_the_comment(line, conditio
 
 def test_untold_reads_an_if_followed_by_a_long_run_of_blanks_without_hanging(tmp_path):
     assert untold(tmp_path, "if x" + " " * 5000 + "y\nfi\n") == []
+
+
+class NoSlice(list):
+    """A list that fails when sliced, as a copy of the rest of a long file would."""
+
+    def __getitem__(self, index):
+        assert not isinstance(index, slice), "the lines after a header were sliced"
+        return super().__getitem__(index)
+
+
+def test_data_heredocs_reads_the_lines_after_the_header_without_slicing_them():
+    assert check_gh_repo.data_heredocs("cat <<EOF", NoSlice(["cat <<EOF", "gh pr view 1", "EOF"]), 1) == [("EOF", False, False)]
+
+
+def test_untold_never_slices_the_lines_of_a_file_with_a_heredoc(tmp_path, monkeypatch):
+    path = tmp_path / "script.sh"
+    path.write_text("cat <<EOF\nhello\nEOF\ngh pr view 1\n")
+    monkeypatch.setattr(check_gh_repo, "read_lines", lambda _: NoSlice(["cat <<EOF", "hello", "EOF", "gh pr view 1"]))
+    assert lines_of(check_gh_repo.untold(path)) == [4]
