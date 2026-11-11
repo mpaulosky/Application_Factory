@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Tests scripts/gate.sh against throwaway repos with a stub test.sh and a stub review.sh: matching copies run the stub and pass its exit
 # status on; a changed, missing or execute-bit-mismatched copy stops the gate before the stub runs; the local review check (ADR 0010)
-# skips only on GATE_SKIP_REVIEW=1, fails without an origin/main, and passes review.sh check's status on, ahead of test.sh. It also checks
+# skips only on GATE_SKIP_REVIEW=1, fails without an origin/main or when origin/main shares no history with HEAD, and passes review.sh check's status on, ahead of test.sh. It also checks
 # that gate.sh names each copied stand-alone test, that repo-config.mts lists the Factory's own files under Owned patterns, and that
-# dependabot.yml watches the root package.json. It also covers the review tests' install step: a missing pnpm, a pnpm that leaves no tsx, and a pnpm that
-# installs it.
+# dependabot.yml watches the root package.json, and the review tests' install step (a missing pnpm, a pnpm that leaves no tsx, a pnpm that installs it).
 #
 #   scripts/tests/gate.test.sh
 set -euo pipefail
