@@ -11,7 +11,8 @@ SCRIPT = pathlib.Path(__file__).resolve().parent.parent / "check-issue-refs.py"
 
 def run(root, *extra):
     args = [str(root)] if root is not None else []
-    return subprocess.run([sys.executable, "-I", str(SCRIPT), *args, *extra], capture_output=True, text=True)
+    # A timeout, so a checker that blocks (on a FIFO) fails the test instead of hanging the suite.
+    return subprocess.run([sys.executable, "-I", str(SCRIPT), *args, *extra], capture_output=True, text=True, timeout=20)
 
 
 def tree(tmp_path, files):
@@ -102,7 +103,18 @@ def test_a_directory_that_lists_but_cannot_be_searched_exits_2(tmp_path):
         (root / "sub").chmod(0o755)
 
 
-def test_a_dangling_symlink_is_skipped_not_reported(tmp_path):
+def test_names_that_resolve_to_nothing_are_skipped_without_hiding_a_real_finding(tmp_path):
+    root = tree(tmp_path / "owned", {"a.md": "fine\n", "real.md": "See #5\n"})
+    (root / "dangling.md").symlink_to(root / "missing.md")  # ENOENT
+    (root / "loop.md").symlink_to("loop.md")  # ELOOP
+    (root / "through.md").symlink_to(root / "a.md" / "x")  # ENOTDIR
+    result = run(root)
+    assert result.returncode == 1 and result.stderr == ""
+    assert result.stdout.splitlines() == ["real.md:1: See #5"]
+
+
+def test_a_fifo_is_skipped_not_opened(tmp_path):
     root = tree(tmp_path / "owned", {"a.md": "fine\n"})
-    (root / "gone.md").symlink_to(root / "missing.md")
-    assert run(root).returncode == 0
+    os.mkfifo(root / "pipe.md")
+    result = run(root)  # opening a FIFO with no writer would block until the timeout
+    assert result.returncode == 0 and result.stdout == "" and result.stderr == ""

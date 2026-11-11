@@ -7,7 +7,7 @@ Exit 0: none found. Exit 1: found, printed. Exit 2: nothing was (fully) checked:
 test.sh runs it, and so does the Factory's scripts/gate.sh (also with --quick), so the rule fails before test.sh does.
 The rule, with its reasons, is the comment in test.sh's "Issue references in Owned files name their repo" step.
 """
-import os, pathlib, re, sys
+import errno, os, pathlib, re, stat, sys
 
 CITATION = re.compile(r"\((?:[^()]*, )?#\d+\)")
 BARE = re.compile(r"(?<![\w/&])#\d+\b")
@@ -30,13 +30,18 @@ def unlistable(error):
 files = sorted(pathlib.Path(folder, name) for folder, _, names in os.walk(root, onerror=unlistable) for name in names)
 for path in files:
     try:
+        # Only a regular file is read: a FIFO would block open(), and stat (unlike Path.is_file(), which hides every error on Python 3.13+)
+        # fails loudly for a file in a directory that lists but can't be searched.
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            continue
         lines = path.read_text(encoding="utf-8").splitlines()
     except UnicodeDecodeError:
         continue
-    except (FileNotFoundError, IsADirectoryError):
-        continue  # a dangling symlink, or a name that is no longer a file: nothing to check
     except OSError as error:
-        # Any other error (is_file() would have hidden it, e.g. a file in a directory that lists but can't be searched) is a file it didn't check, which must not read as a pass or as a bare #N (exit 1).
+        # A name that resolves to nothing (dangling, looping, or through a file) has nothing to check, as is_file() had it.
+        if isinstance(error, (FileNotFoundError, NotADirectoryError)) or error.errno == errno.ELOOP:
+            continue
+        # Any other error is a file it didn't check, which must not read as a pass or as a bare #N (exit 1).
         print(f"{path}: {error}", file=sys.stderr)
         sys.exit(2)
     in_tests = "tests" in path.relative_to(root).parts
