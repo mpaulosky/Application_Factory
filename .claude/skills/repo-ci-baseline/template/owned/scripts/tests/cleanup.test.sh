@@ -17,7 +17,7 @@ trap 'command rm -rf "$work"' EXIT
 mkdir "$work/no-template"
 export GIT_TEMPLATE_DIR="$work/no-template" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 
-if ! command -v jq >/dev/null 2>&1; then echo "skip - jq is not installed, and the fake gh runs cleanup.sh's jq with it"; exit 0; fi
+if ! command -v jq >/dev/null 2>&1; then echo "skip - jq is not installed, and the fake gh runs cleanup.sh's jq with it"; exit 0; fi # gh-repo: ok
 
 PASSED=0; FAILED=0
 ok() { PASSED=$((PASSED + 1)); echo "ok   - $1"; }
