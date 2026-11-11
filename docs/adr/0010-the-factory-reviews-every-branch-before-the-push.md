@@ -24,7 +24,7 @@ The Factory carries the review's own pieces, not the rest of Sandcastle:
 
 `host-limit.test.mts` stays out: it spawns a child that imports `step-limit.mts`, which pulls in `status.mts` and more of the host pipeline, and the Template's Sandcastle check already runs
 it there.
-Still not carried: the rest of Sandcastle (the host pipeline, roles, prompts), `hardening-review`, and `scripts/watch-pr.sh`.
+Still not carried: the rest of Sandcastle (the host pipeline, roles, prompts), `hardening-review`, `scripts/watch-pr.sh`, `scripts/work-issue.sh` and `scripts/cleanup.sh`.
 
 ## Considered Options
 

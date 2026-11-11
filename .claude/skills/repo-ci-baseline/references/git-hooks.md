@@ -56,8 +56,10 @@ cd "$(scripts/work-issue.sh 42)"
 
 `scripts/work-issue.sh <n>` reads issue `n` and makes its branch and worktree from `origin/main` (or from `origin/<branch>` when that branch is already
 on origin), then prints the path. The branch is `fix/{n}-{slug}` for an issue labelled `bug` (any case), `feature/{n}-{slug}` for any other; the slug is the
-title's lowercase `a-z0-9` words (a leading `[tag]` dropped, at most 6 words and 50 characters, `issue` when none is left). It reuses the branch's
-worktree if there is one, and refuses a directory of that name that is not one. Work without an issue is made by hand:
+title's lowercase `a-z0-9` words (a leading `[tag]` dropped, at most 6 words and 50 characters, `issue` when none is left). An issue renamed since keeps the branch already named for its
+number. It reuses the branch's
+worktree if there is one; git's entry for one whose folder was deleted by hand is forgotten (that one only) and the worktree made again, a locked one is an error with the `git worktree
+unlock` hint; it refuses a directory of that name that is not a worktree of the branch. Work without an issue is made by hand:
 `git worktree add -b chore/upgrade-net10 ../<Repo>-worktrees/chore-upgrade-net10 origin/main`.
 
 Once the PR merges, `scripts/cleanup.sh` (run in the primary checkout, on a clean `main`) fast-forwards `main`, then removes each merged branch with its

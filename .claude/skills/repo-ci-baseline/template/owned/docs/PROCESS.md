@@ -30,7 +30,8 @@ fetches and prunes the remote-tracking refs). It fast-forwards `main` to `origin
 `main`, with its worktree (ignored files in it go too) and its `origin` branch. It reads the PR's state from GitHub, because a squash merge leaves nothing
 for `git branch --merged` to see, and counts only a PR whose head repository is the one `origin` points at (a fork's PR of the same name doesn't count). It keeps, and says why, a branch with an
 open PR, no PR, a commit the PR never had, a PR merged into another branch, or a worktree with uncommitted changes, and keeps that local branch's `origin` copy
-too; a branch whose PR closed unmerged goes only with `--include-closed`. A `gh` failure stops it, and a removal git refuses is reported while the rest is done.
+too; a branch whose PR closed unmerged goes only with `--include-closed`. A `gh` failure stops it, and a removal git refuses, or a check of `origin` that failed, is reported (exit 1) while
+the rest is done. A worktree whose folder was deleted by hand has git's entry for it forgotten.
 
 | Branch | Use |
 | --- | --- |

@@ -17,7 +17,11 @@ trap 'command rm -rf "$work"' EXIT
 mkdir "$work/no-template"
 export GIT_TEMPLATE_DIR="$work/no-template" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 
-if ! command -v jq >/dev/null 2>&1; then echo "skip - jq is not installed, and the fake gh runs cleanup.sh's jq with it"; exit 0; fi # gh-repo: ok
+if ! command -v jq >/dev/null 2>&1; then # gh-repo: ok
+  echo "jq is not installed, and the fake gh runs cleanup.sh's jq with it" # gh-repo: ok
+  [[ -z "${CI:-}" ]] && { echo "skip"; exit 0; } # a developer machine may skip; CI must not
+  exit 1
+fi
 
 PASSED=0; FAILED=0
 ok() { PASSED=$((PASSED + 1)); echo "ok   - $1"; }
@@ -77,30 +81,37 @@ pr() { # pr <branch> <STATE> <oid> [base] [head repository, owner/name; - for no
 }
 remote_only() { git worktree remove "$work/wt/${1//\//-}" && git branch -q -D "$1"; }
 
-tip=$(branch feature/1-merged yes);       pr feature/1-merged MERGED "$tip"
-tip=$(branch fix/2-dirty yes);            pr fix/2-dirty MERGED "$tip"; echo dirt > "$work/wt/fix-2-dirty/f"
-tip=$(branch chore/open-one yes);         pr chore/open-one OPEN "$tip"
-tip=$(branch fix/3-unpushed yes);         pr fix/3-unpushed MERGED "$tip"
+tip=$(branch feature/1-merged yes) || exit 1;       pr feature/1-merged MERGED "$tip"
+tip=$(branch fix/2-dirty yes) || exit 1;            pr fix/2-dirty MERGED "$tip"; echo dirt > "$work/wt/fix-2-dirty/f"
+tip=$(branch chore/open-one yes) || exit 1;         pr chore/open-one OPEN "$tip"
+tip=$(branch fix/3-unpushed yes) || exit 1;         pr fix/3-unpushed MERGED "$tip"
 echo more > "$work/wt/fix-3-unpushed/g"; git -C "$work/wt/fix-3-unpushed" add g; git -C "$work/wt/fix-3-unpushed" commit -q -m more
-tip=$(branch feature/4-closed yes);       pr feature/4-closed CLOSED "$tip"
+tip=$(branch feature/4-closed yes) || exit 1;       pr feature/4-closed CLOSED "$tip"
 tip=$(branch chore/nopr no)
-tip=$(branch chore/remote-only yes);      pr chore/remote-only MERGED "$tip"; remote_only chore/remote-only
-tip=$(branch chore/forked yes);           pr chore/forked MERGED "$tip" main someone/r; remote_only chore/forked
-tip=$(branch chore/stacked yes);          pr chore/stacked MERGED "$tip" feature/9-base; remote_only chore/stacked
-tip=$(branch chore/open-and-merged yes);  pr chore/open-and-merged MERGED "$tip"; pr chore/open-and-merged OPEN "$tip"
-tip=$(branch chore/closed-then-merged yes); pr chore/closed-then-merged CLOSED "$tip"; pr chore/closed-then-merged MERGED "$tip"
-tip=$(branch chore/locked yes);           pr chore/locked MERGED "$tip"; git worktree lock "$work/wt/chore-locked"
-tip=$(branch chore/owner-case yes);       pr chore/owner-case MERGED "$tip" main Acme/R
-tip=$(branch chore/stale yes);            pr chore/stale MERGED "$tip"; command rm -rf "$work/wt/chore-stale"
-tip=$(branch chore/unreadable yes);       pr chore/unreadable MERGED "$tip"; echo garbage > "$repo/.git/worktrees/chore-unreadable/index"
-tip=$(branch chore/delfail yes);          pr chore/delfail MERGED "$tip"; git worktree remove "$work/wt/chore-delfail"; touch "$repo/.git/refs/heads/chore/delfail.lock"
-tip=$(branch chore/pre yes);              pr chore/pre OPEN "$tip"
-tip=$(branch chore/pre-fix yes);          pr chore/pre-fix MERGED "$tip"; remote_only chore/pre-fix
-tip=$(branch chore/gone-race yes);        pr chore/gone-race MERGED "$tip"; remote_only chore/gone-race
-tip=$(branch chore/deleted-fork yes);     pr chore/deleted-fork MERGED "$tip" main -; remote_only chore/deleted-fork
-tip=$(branch chore/stale-locked yes);     pr chore/stale-locked MERGED "$tip"; git worktree lock "$work/wt/chore-stale-locked"; command rm -rf "$work/wt/chore-stale-locked"
-tip=$(branch chore/net-fail yes);         pr chore/net-fail MERGED "$tip"; remote_only chore/net-fail
-tip=$(branch chore/lease-race yes);       pr chore/lease-race MERGED "$tip"; remote_only chore/lease-race
+tip=$(branch chore/remote-only yes) || exit 1;      pr chore/remote-only MERGED "$tip"; remote_only chore/remote-only
+tip=$(branch chore/forked yes) || exit 1;           pr chore/forked MERGED "$tip" main someone/r; remote_only chore/forked
+tip=$(branch chore/stacked yes) || exit 1;          pr chore/stacked MERGED "$tip" feature/9-base; remote_only chore/stacked
+tip=$(branch chore/open-and-merged yes) || exit 1;  pr chore/open-and-merged MERGED "$tip"; pr chore/open-and-merged OPEN "$tip"
+tip=$(branch chore/closed-then-merged yes) || exit 1; pr chore/closed-then-merged CLOSED "$tip"; pr chore/closed-then-merged MERGED "$tip"
+tip=$(branch chore/locked yes) || exit 1;           pr chore/locked MERGED "$tip"; git worktree lock "$work/wt/chore-locked"
+tip=$(branch chore/owner-case yes) || exit 1;       pr chore/owner-case MERGED "$tip" main Acme/R
+tip=$(branch chore/stale yes) || exit 1;            pr chore/stale MERGED "$tip"; command rm -rf "$work/wt/chore-stale"
+tip=$(branch chore/unreadable yes) || exit 1;       pr chore/unreadable MERGED "$tip"; echo garbage > "$repo/.git/worktrees/chore-unreadable/index"
+tip=$(branch chore/delfail yes) || exit 1;          pr chore/delfail MERGED "$tip"; git worktree remove "$work/wt/chore-delfail"; touch "$repo/.git/refs/heads/chore/delfail.lock"
+tip=$(branch chore/pre yes) || exit 1;              pr chore/pre OPEN "$tip"
+tip=$(branch chore/pre-fix yes) || exit 1;          pr chore/pre-fix MERGED "$tip"; remote_only chore/pre-fix
+tip=$(branch chore/gone-race yes) || exit 1;        pr chore/gone-race MERGED "$tip"; remote_only chore/gone-race
+tip=$(branch chore/deleted-fork yes) || exit 1;     pr chore/deleted-fork MERGED "$tip" main -; remote_only chore/deleted-fork
+tip=$(branch chore/stale-locked yes) || exit 1;     pr chore/stale-locked MERGED "$tip"; git worktree lock "$work/wt/chore-stale-locked"; command rm -rf "$work/wt/chore-stale-locked"
+tip=$(branch chore/net-fail yes) || exit 1;         pr chore/net-fail MERGED "$tip"; remote_only chore/net-fail
+# A worktree git records with a relative path (git 2.48+; skipped where git writes absolute paths)
+git config worktree.useRelativePaths true
+tip=$(branch chore/relative-path yes) || exit 1; pr chore/relative-path MERGED "$tip"
+git config --unset worktree.useRelativePaths
+rel_ok=false; [[ "$(<"$repo/.git/worktrees/chore-relative-path/gitdir")" != /* ]] && rel_ok=true
+command rm -rf "$work/wt/chore-relative-path"
+git worktree add -q --detach "$work/wt/detached" main
+tip=$(branch chore/lease-race yes) || exit 1;       pr chore/lease-race MERGED "$tip"; remote_only chore/lease-race
 git push -q origin main:refs/heads/Bad_Name
 
 mkdir "$work/shim"
@@ -131,6 +142,8 @@ check "dry run succeeds" "[[ $st == 0 ]]"
 check "dry run changes nothing" "has_local feature/1-merged && [[ -d $work/wt/feature-1-merged ]] && has_remote chore/remote-only && has_remote feature/1-merged && [[ \$(git rev-parse main) == $main_before ]]"
 check "dry run lists every step" "grep -q 'would: git worktree remove .*feature-1-merged' <<<\"\$out\" && grep -q 'would: git branch -q -D feature/1-merged' <<<\"\$out\" && grep -q 'would: git push .*feature/1-merged' <<<\"\$out\" && grep -q 'would: git merge --ff-only origin/main' <<<\"\$out\""
 
+check "a dry run keeps a locked worktree with a missing folder, as the real run does" "grep -q 'keep   chore/stale-locked: its worktree is locked and its folder is missing' <<<\"\$out\" && ! grep -q 'remove chore/stale-locked' <<<\"\$out\" && ! grep -q 'would: git branch -q -D chore/stale-locked' <<<\"\$out\""
+if [[ "$rel_ok" == true ]]; then check "a dry run finds the entry of a worktree git stored with a relative path" "grep -q 'would: forget the missing worktree .*chore-relative-path' <<<\"\$out\""; else echo "skip - this git stores absolute worktree paths"; fi
 check "a dry run forgets no worktree entry, but says it would" "grep -q '^remove chore/stale\$' <<<\"\$out\" && grep -q 'would: forget the missing worktree .*chore-stale\$' <<<\"\$out\" && grep -q 'would: git branch -q -D chore/stale' <<<\"\$out\" && [[ -d $repo/.git/worktrees/chore-stale ]] && has_local chore/stale"
 
 # The owner of origin: github.com URL forms (through the git shim), without regard to case; a PR from "Acme/R" counts for acme/r, not for o/r
@@ -184,6 +197,8 @@ out=$(PATH="$work/shim:$PATH" SHIM_LSREMOTE_FAIL=chore/net-fail bash scripts/cle
 check "exits 1 when git refused a removal, after doing the rest" "[[ $st == 1 ]]"
 check "a worktree folder deleted by hand is forgotten and its branch removed in the same run" "! has_local chore/stale && ! has_remote chore/stale && [[ ! -d $repo/.git/worktrees/chore-stale ]]"
 check "only that worktree's entry is forgotten: a locked one with a missing folder is kept, with a hint" "has_local chore/stale-locked && has_remote chore/stale-locked && [[ -d $repo/.git/worktrees/chore-stale-locked ]] && grep -q 'keep   chore/stale-locked: its worktree is locked and its folder is missing' <<<\"\$out\""
+if [[ "$rel_ok" == true ]]; then check "a worktree stored with a relative path, its folder deleted, is forgotten and its branch removed" "! has_local chore/relative-path && ! has_remote chore/relative-path && [[ ! -d $repo/.git/worktrees/chore-relative-path ]]"; fi
+check "a worktree on a detached HEAD is never touched" "[[ -d $work/wt/detached ]]"
 check "a deleted fork's PR (no head repository) does not count" "has_remote chore/deleted-fork && grep -q 'keep   origin/chore/deleted-fork: no PR from origin' <<<\"\$out\""
 check "a failed push whose ls-remote check also fails is kept and fails the run" "has_remote chore/net-fail && grep -q 'keep   origin/chore/net-fail: git could not delete it, and origin could not be checked' <<<\"\$out\""
 check "each hook ran once, so the races really happened" "[[ ! -f $GH_FIX/chore_gone-race.hook && ! -f $GH_FIX/chore_lease-race.hook && ! -f $GH_FIX/chore_net-fail.hook ]]"
@@ -210,10 +225,11 @@ check "an origin branch deleted by GitHub since the fetch counts as removed, not
 check "keeps an origin branch that moved after the fetch" "has_remote chore/lease-race && [[ \$(git rev-parse origin/chore/lease-race) != $lease_tip_before ]] && grep -q 'keep   origin/chore/lease-race: git could not delete it' <<<\"\$out\""
 
 # A later run, once what git refused is out of the way, finishes the job and exits 0
-git worktree unlock "$work/wt/chore-locked"; command rm -f "$repo/.git/worktrees/chore-unreadable/index"; git -C "$work/wt/chore-unreadable" read-tree HEAD; git worktree unlock "$work/wt/chore-stale-locked" 2>/dev/null; git worktree prune; command rm -f "$repo/.git/refs/heads/chore/delfail.lock"
+git worktree unlock "$work/wt/chore-locked"; command rm -f "$repo/.git/worktrees/chore-unreadable/index"; git -C "$work/wt/chore-unreadable" read-tree HEAD; git worktree unlock "$work/wt/chore-stale-locked"; command rm -f "$repo/.git/refs/heads/chore/delfail.lock"
 bash scripts/cleanup.sh --include-closed >/dev/null 2>&1; st=$?
 check "a later run with nothing refused exits 0" "[[ $st == 0 ]]"
 check "--include-closed removes a closed-unmerged branch" "! has_local feature/4-closed && ! has_remote feature/4-closed"
+check "an unlocked worktree with a missing folder is forgotten by the later run, and its branch goes" "! has_local chore/stale-locked && ! has_remote chore/stale-locked && [[ ! -d $repo/.git/worktrees/chore-stale-locked ]]"
 check "the branches git had refused are removed by the later run" "! has_local chore/locked && ! has_remote chore/locked && ! has_local chore/delfail && ! has_remote chore/delfail && ! has_local chore/unreadable && ! has_remote chore/unreadable"
 
 echo "$PASSED passed, $FAILED failed"

@@ -38,6 +38,8 @@ case "$n:$what" in
   66:title) echo "Plain directory in the way" ;;
   67:title) echo "Elsewhere" ;;
   71:title) echo "Locked and gone" ;;
+  74:title) echo "Relative path" ;;
+  73:title) cat "$TITLE73" ;;
   68:title) echo "$(printf 'a%.0s' $(seq 1 49)) bbb" ;;
   69:title) printf 'a%.0s' $(seq 1 50); echo ;;
   70:title) printf 'a%.0s' $(seq 1 51); echo ;;
@@ -49,6 +51,7 @@ GH
 chmod +x "$work/bin/gh" # gh-repo: ok
 export PATH="$work/bin:$PATH"
 export GITHUB_REPOSITORY=o/r
+export TITLE73="$work/title73"; echo "Original name" > "$TITLE73"
 
 git init -q --bare "$work/origin.git"
 git clone -q "$work/origin.git" "$work/Repo" 2>/dev/null
@@ -107,6 +110,19 @@ o=$(bash scripts/work-issue.sh 71 2>&1 >/dev/null); st=$?
 check "a missing but locked worktree is refused with a hint" "[[ $st != 0 ]] && grep -q 'missing but locked' <<<\"\$o\""
 command rm -rf "$p"; bash scripts/work-issue.sh 54 >/dev/null 2>&1
 check "forgetting one stale entry leaves the other stale entries alone" "[[ -d '$p' && -d '$work/Repo/.git/worktrees/other-stale' && -d '$work/Repo/.git/worktrees/locked-and-gone' ]]"
+
+# A renamed issue keeps its branch
+p73=$(bash scripts/work-issue.sh 73 2>/dev/null); echo "A completely different title" > "$TITLE73"
+check "an issue renamed since its branch was made keeps the branch and its worktree" "[[ '$p73' == '$wt/feature-73-original-name' && \$(bash scripts/work-issue.sh 73 2>/dev/null) == '$p73' && ! -e '$wt/feature-73-a-completely-different-title' ]]"
+
+# A worktree git stored with a relative path (git 2.48+), its folder deleted by hand, is forgotten and made again
+git config worktree.useRelativePaths true
+git worktree add -q -b feature/74-relative-path "$work/relative-path" origin/main
+git config --unset worktree.useRelativePaths
+if [[ "$(<"$work/Repo/.git/worktrees/relative-path/gitdir")" != /* ]]; then
+  command rm -rf "$work/relative-path"
+  check "a missing worktree stored with a relative path is found, forgotten and made again" "[[ \$(bash scripts/work-issue.sh 74 2>/dev/null) == '$wt/feature-74-relative-path' && -d '$wt/feature-74-relative-path' ]]"
+else echo "skip - this git stores absolute worktree paths"; fi
 
 # A branch already on origin is built from it, not from main
 other="$work/other"; git clone -q "$work/origin.git" "$other" 2>/dev/null

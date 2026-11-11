@@ -6,7 +6,7 @@
 # Fetches and prunes origin, fast-forwards main to origin/main, then, for every branch that follows the branch standard (check-branch-name.sh),
 # local and on origin, decides from the PR's state on GitHub, not from git ancestry (a squash merge leaves no ancestry to see). Only a PR whose head
 # repository is the one origin points at counts (owner/name, compared without regard to case; origin's slug is read from a github.com URL, else
-# GH_REPO's is used, which a GitHub Enterprise origin should set), so a fork's PR of the same name cannot stand in for it:
+# the repository from GITHUB_REPOSITORY or the upstream remote is used, which a GitHub Enterprise origin should set), so a fork's PR of the same name cannot stand in for it:
 #   - removed: the PR merged into main and the branch's tip is the PR's last head, so nothing unpushed is lost. The branch's worktree is removed
 #     first, and only when it is clean (ignored files in it go with it). When the local branch is kept, its origin copy is kept too; an origin branch
 #     alone is kept when it has moved or its tip is not the PR's last head. The origin branch is deleted only if it still holds the tip that was judged; one already gone by then (GitHub's auto-delete) counts as removed.
@@ -16,7 +16,8 @@
 # A worktree whose folder was deleted by hand has git's entry for it forgotten (only that one; a locked one is kept). --dry-run prints what would happen and changes no branch, worktree or commit (it still
 # fetches and prunes the remote-tracking refs).
 # Exits 1 when it can't run (not main, not the primary checkout, dirty main, main can't fast-forward, no gh, no repository, a gh lookup failed,
-# a bad argument, no scripts/check-branch-name.sh) and, after finishing the rest, when a removal git refused.
+# a bad argument, no scripts/check-branch-name.sh) and, after finishing the rest, when a removal git refused or a check of origin failed.
+# A worktree on a detached HEAD belongs to no branch and is never touched.
 set -euo pipefail
 
 dry=false
@@ -56,16 +57,28 @@ lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 origin_slug="$(slug_of "$(git remote get-url origin 2>/dev/null || true)")"
 origin_slug="$(lc "${origin_slug:-$repo}")"
 
-# drop_stale_worktree <path>: forget the one worktree whose folder was deleted by hand (git's own admin entry for it). 0 forgotten, 1 locked, 2 none.
-drop_stale_worktree() {
-  local d
-  for d in "$(git rev-parse --git-common-dir)"/worktrees/*/; do
-    [[ -f "${d}gitdir" && "$(<"${d}gitdir")" == "$1/.git" ]] || continue
-    [[ ! -e "${d}locked" ]] || return 1
-    command rm -rf -- "$d"
-    return 0
+# resolve_path <dir> <path>: <path> made absolute against <dir>, with . and .. collapsed (text only: the folder may be gone, so no symlinks are followed).
+resolve_path() {
+  local p="$2" out="" seg rest
+  [[ "$p" == /* ]] || p="$1/$p"
+  rest="$p/"
+  while [[ -n "$rest" ]]; do
+    seg="${rest%%/*}"; rest="${rest#*/}"
+    case "$seg" in ''|.) ;; ..) out="${out%/*}" ;; *) out="$out/$seg" ;; esac
   done
-  return 2
+  printf '%s' "${out:-/}"
+}
+# stale_entry <path>: prints git's admin directory for the worktree at <path> (whose folder was deleted by hand). Git writes its gitdir file as an absolute
+# path, or relative to the admin directory with worktree.useRelativePaths. Returns 1 when there is none.
+stale_entry() {
+  local common d g
+  common="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"
+  for d in "$common"/worktrees/*/; do
+    [[ -f "${d}gitdir" ]] || continue
+    g="$(<"${d}gitdir")"
+    if [[ "$(resolve_path "${d%/}" "$g")" == "$(resolve_path / "$1")/.git" ]]; then printf '%s' "$d"; return 0; fi
+  done
+  return 1
 }
 
 run() { if [[ "$dry" == true ]]; then echo "   would: $*"; else "$@"; fi; }
@@ -124,11 +137,9 @@ while read -r ref; do
     if [[ -n "$st" ]]; then keep "$b" "its worktree has uncommitted changes"; kept_local+="$b "; continue; fi
   fi
   if [[ -n "$stale" ]]; then
-    if [[ "$dry" == true ]]; then echo "   would: forget the missing worktree $stale"
-    else
-      rc=0; drop_stale_worktree "$stale" || rc=$?
-      if [[ "$rc" == 1 ]]; then keep "$b" "its worktree is locked and its folder is missing: git worktree unlock '$stale', then run this again"; kept_local+="$b "; continue; fi
-    fi
+    if ! entry="$(stale_entry "$stale")"; then keep "$b" "its worktree's folder is missing and git's entry for it was not found ($stale): git worktree prune"; kept_local+="$b "; continue; fi
+    if [[ -e "${entry}locked" ]]; then keep "$b" "its worktree is locked and its folder is missing: git worktree unlock '$stale', then run this again"; kept_local+="$b "; continue; fi
+    if [[ "$dry" == true ]]; then echo "   would: forget the missing worktree $stale"; else command rm -rf -- "$entry"; fi
   fi
   echo "remove $b${wt:+ (worktree $wt)}"
   if [[ -n "$wt" ]] && ! run git worktree remove "$wt"; then keep "$b" "git could not remove its worktree"; kept_local+="$b "; failed=1; continue; fi

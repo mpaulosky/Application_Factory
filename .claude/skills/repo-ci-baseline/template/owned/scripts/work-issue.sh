@@ -6,7 +6,7 @@
 #
 # The branch is fix/{n}-{slug} for an issue labelled bug (any case), feature/{n}-{slug} for any other. The slug is the issue's title in lowercase
 # a-z0-9 words (a leading [tag] dropped, other characters, non-ASCII ones included, read as word breaks, at most 6 words and 50 characters; "issue"
-# when none is left), and the folder is the branch with / as -, under ../<Repo>-worktrees/. A leading-zero number is read as the same number (054 is 54).
+# when none is left; an issue whose branch already exists locally or on origin keeps that branch's name), and the folder is the branch with / as -, under ../<Repo>-worktrees/. A leading-zero number is read as the same number (054 is 54).
 # The branch starts from origin/main, or from origin/<branch> when that branch is already on origin. A worktree the branch already has is reused,
 # wherever it is, if its folder still exists (git's entry for one deleted by hand is forgotten, that one only, and the worktree made again; a locked
 # one is an error); a directory in the way that is not that worktree is an error. An issue number has at most 9 digits. Run it from the primary checkout or any worktree.
@@ -30,6 +30,17 @@ slug_of() {
   u="${u%.git}"; u="${u%/}"
   if [[ "$u" =~ ^((ssh|https?|git)://)?([^@/[:space:]]+@)?github\.com(:[0-9]+)?[:/]([^/[:space:]]+/[^/[:space:]]+)$ ]]; then printf '%s' "${BASH_REMATCH[5]}"; fi
 }
+# resolve_path <dir> <path>: <path> made absolute against <dir>, with . and .. collapsed (text only: the folder may be gone, so no symlinks are followed).
+resolve_path() {
+  local p="$2" out="" seg rest
+  [[ "$p" == /* ]] || p="$1/$p"
+  rest="$p/"
+  while [[ -n "$rest" ]]; do
+    seg="${rest%%/*}"; rest="${rest#*/}"
+    case "$seg" in ''|.) ;; ..) out="${out%/*}" ;; *) out="$out/$seg" ;; esac
+  done
+  printf '%s' "${out:-/}"
+}
 url="$(git remote get-url upstream 2>/dev/null || git remote get-url origin 2>/dev/null || true)"
 repo_slug="${GITHUB_REPOSITORY:-}"
 if [[ -z "$repo_slug" ]]; then repo_slug="$(slug_of "$url")"; fi
@@ -45,6 +56,11 @@ grep -qix bug <<<"$labels" && type=fix
 slug="$(sed -E 's/^\[[^]]*\][[:space:]]*//' <<<"$title" | tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -c 'a-z0-9\n' ' ' | tr -s ' ' | sed -E 's/^ //; s/ $//' | cut -d' ' -f1-6 | tr ' ' '-' | cut -c1-50 | sed -E 's/-+$//')"
 slug="${slug:-issue}"
 branch="$type/$n-$slug"
+# An issue renamed since the branch was made keeps its branch: a local or origin branch already named for this number wins.
+while read -r ref; do
+  name="${ref#refs/heads/}"; name="${name#refs/remotes/origin/}"
+  case "$name" in feature/"$n"-*|fix/"$n"-*|hotfix/"$n"-*) branch="$name"; break ;; esac
+done < <(git -C "$primary" for-each-ref --format='%(refname)' "refs/heads/*/$n-*" "refs/remotes/origin/*/$n-*")
 bash "$primary/scripts/check-branch-name.sh" "$branch" >&2 || die "$branch is not an allowed branch name"
 
 dir="$(dirname "$primary")/$repo-worktrees/${branch//\//-}"
@@ -56,12 +72,15 @@ if [[ -n "$existing" && -d "$existing" ]]; then
 fi
 # A worktree whose folder was deleted by hand is stale: forget git's entry for it (this one only), then make the worktree again.
 if [[ -n "$existing" ]]; then
-  common="$(cd "$primary" && cd "$(git rev-parse --git-common-dir)" && pwd)"
+  common="$(cd "$primary" && cd "$(git rev-parse --git-common-dir)" && pwd -P)"
+  entry=""
   for d in "$common"/worktrees/*/; do
-    [[ -f "${d}gitdir" && "$(<"${d}gitdir")" == "$existing/.git" ]] || continue
-    [[ ! -e "${d}locked" ]] || die "$existing is a missing but locked worktree of $branch: run git worktree unlock '$existing', then try again"
-    command rm -rf -- "$d"
+    [[ -f "${d}gitdir" ]] || continue
+    if [[ "$(resolve_path "${d%/}" "$(<"${d}gitdir")")" == "$(resolve_path / "$existing")/.git" ]]; then entry="$d"; break; fi
   done
+  [[ -n "$entry" ]] || die "$existing is a worktree of $branch whose folder is missing, and git's entry for it was not found: run git worktree prune, then try again"
+  [[ ! -e "${entry}locked" ]] || die "$existing is a missing but locked worktree of $branch: run git worktree unlock '$existing', then try again"
+  command rm -rf -- "$entry"
 fi
 [[ ! -e "$dir" ]] || die "$dir exists but is not a worktree of $branch: move it away first"
 
