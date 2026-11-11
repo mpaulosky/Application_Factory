@@ -2297,20 +2297,6 @@ def test_data_heredocs_sees_through_the_words_before_a_command(header):
     assert check_gh_repo.data_heredocs(header, ["gh pr view 1", "EOF"], 0) == [("EOF", False, False)]
 
 
-@pytest.mark.parametrize("line, condition", [
-    ("if false; then", "false"),
-    ("  if false;then", "false"),
-    ("if\tfalse ; then # note", "false"),
-    ("if false # note", "false"),
-    ("if false", "false"),
-    ("if", ""),
-    ("iffalse; then", ""),
-    ("if false; then # a # b", "false"),
-    ("ab false", ""),
-    ("echo if false", ""),
-])
-def test_condition_of_cuts_the_then_the_semicolon_and_the_comment(line, condition):
-    assert check_gh_repo.condition_of(line) == condition
 
 
 def test_untold_reads_an_if_followed_by_a_long_run_of_blanks_without_hanging(tmp_path):
@@ -2377,9 +2363,6 @@ def test_quoted_end_follows_nested_quotes_exactly_fifty_deep(monkeypatch):
     assert max(seen) == 50 == check_gh_repo.NESTING_LIMIT
 
 
-@pytest.mark.parametrize("line, condition", [("if true; then :; else", "true"), ("if false;then :; fi", "false"), ("if echo then; then", "echo then"), ("if true then && false; then", "true then && false")])
-def test_condition_of_stops_at_the_first_then(line, condition):
-    assert check_gh_repo.condition_of(line) == condition
 
 
 def test_untold_reads_a_file_of_heredoc_headers_without_a_terminator_in_linear_time(tmp_path):
@@ -2442,9 +2425,6 @@ def test_data_heredocs_takes_the_last_occurrence_of_a_delimiter():
     assert check_gh_repo.data_heredocs(tabbed[1], tabbed, 2) == [("EOF", True, False)]
 
 
-@pytest.mark.parametrize("line, condition", [("if false thenx; then", "false thenx"), ("if echo xthen; then", "echo xthen")])
-def test_condition_of_stops_only_at_the_word_then(line, condition):
-    assert check_gh_repo.condition_of(line) == condition
 
 
 def test_continued_text_stops_at_the_first_line_of_the_file():
@@ -2487,8 +2467,10 @@ def test_untold_reads_a_chain_as_bash_does_and_fails_closed_when_it_is_cut(tmp_p
     # An operand inside [[ ... ]] is never a keyword: it can't close or open a branch.
     ("if false; then\n[[ value == other || fi == value ]]\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
     ("if false; then\n[[ value =~ (fi) ]]\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
-    ("if x; then\n[[ a == if || b ]]\nfi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
-    ("if true; then\nexport GH_REPO=o/r\nfi\n[[ a == if ]]\ngh pr view 1\n", []),
+    ("if false; then\n[[ a == b && fi ]]\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n[[ a == b ; fi ]]\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n[[ x ]]; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if false; then\necho [[; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
     # An escaped space before # is no word boundary, so the comment doesn't hide the wrapper.
     ("export GH_REPO=o/r\nsudo -p foo\\ # \\\ngh pr view 1\n", [3]),
     # A then that is an argument doesn't end the condition.
@@ -2504,3 +2486,68 @@ def test_untold_reads_conditions_tests_and_comments_as_bash_does(tmp_path, text,
 @pytest.mark.parametrize("line, start", [("sudo -p foo\\ # x", -1), ("echo a\\;# x", -1), ("echo a ;# x", 8)])
 def test_comment_start_ignores_an_escaped_word_boundary(line, start):
     assert check_gh_repo.comment_start(line) == start
+
+
+@pytest.mark.parametrize("text, lines", [
+    # fi, else and elif arrive while the condition is pending
+    ("if x\nfi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if false\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # a comment on the first or a later line of a condition
+    ("if\nfalse # note\nthen\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if true &&\ntrue &&\nfalse\nthen\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false \\\n; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # the then line holds an else: the condition is judged before the else flips
+    ("if true\nthen :; else\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # an if that doesn't start its line is no condition to judge
+    ("x; if foo ||\nfalse\nthen\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("{ if false\nthen\nexport GH_REPO=o/r\n}\nfi\ngh pr view 1\n", []),
+    ("echo x \\\nif false; if x; then\n:\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # if( is an if followed by a subshell, never a condition
+    ("if(false)\nthen\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+])
+def test_untold_judges_only_an_if_that_starts_its_line_and_at_its_real_then(tmp_path, text, lines):
+    assert lines_of(untold(tmp_path, text)) == lines
+
+
+@pytest.mark.parametrize("text, condition, ended", [
+    ("false; then", "false", True), ("false;then", "false", True), ("false # x", "false # x", False), ("false", "false", False),
+    ("echo then; then", "echo then", True), ("true then && false; then", "true then && false", True),
+    ("false thenx; then", "false thenx", True), ("[[ a == then ]]; then", "[[ a == then ]]", True),
+    ("true; false; then", "true; false", True), ("", "", False), ("false;", "false", False),
+])
+def test_split_condition_cuts_at_the_real_then_and_the_semicolon_before_it(text, condition, ended):
+    assert check_gh_repo.split_condition(text) == (condition, ended)
+
+
+@pytest.mark.parametrize("line, kept", [("false # note", "false "), ("false \\", "false "), ("false \\\\", "false \\\\"), ("# note", "")])
+def test_condition_text_drops_the_comment_and_a_joining_backslash(line, kept):
+    assert check_gh_repo.condition_text(line) == kept
+
+
+@pytest.mark.parametrize("keyword, expected", [
+    ("[[ a == b && if ]]", []), ("[[ a == b ; if ]]", []), ("[[ a == b || if ]]", []),
+    ("[[ a ]] && fi", ["fi"]), ("echo [[ ; fi", ["fi"]), ("[[ (fi) ]]", []),
+])
+def test_keywords_reads_a_test_expression_as_operands(keyword, expected):
+    assert check_gh_repo.keywords(keyword)[0] == expected
+
+
+def test_untold_reads_a_file_with_an_if_that_never_has_a_then_in_linear_time(tmp_path):
+    text = "if x\n" + "echo hi\n" * 50_000 + "gh pr view 1\n"
+    started = time.monotonic()
+    found = untold(tmp_path, text)
+    assert time.monotonic() - started < 5
+    assert lines_of(found) == [50_002]
+
+
+@pytest.mark.parametrize("blank_lines, runs", [
+    (check_gh_repo.PENDING_LIMIT - 2, False),
+    (check_gh_repo.PENDING_LIMIT - 1, False),
+    (check_gh_repo.PENDING_LIMIT, True),
+])
+def test_a_pending_condition_is_judged_up_to_the_limit_and_runs_past_it(blank_lines, runs):
+    # `if false`, then blank lines of the condition, then its then: the limit is on the lines read before the then.
+    branches = []
+    for line in ["if false"] + [""] * blank_lines + ["then"]:
+        check_gh_repo.track_branches(line, branches)
+    assert branches[-1][0] is runs

@@ -517,7 +517,7 @@ def parenthesis_end(line, position, depth):
 def keywords(line, command=True, names=("if", "fi", "else", "elif"), where=None):
     """The if, fi, else and elif keywords of line (or the reserved words in names), in source order, and whether the line ends where a command may start.
 
-    where, a list, gets the index each keyword starts at. Inside [[ ... ]] a word, ||, && and ( ) are operands, never keywords.
+    where, a list, gets the index each keyword starts at. Inside [[ ... ]] a word, ||, &&, ; and ( ) are operands, never keywords.
 
     A keyword is a reserved word as bash reads one: an unquoted word where a command starts, never an argument
     (grep -q fi), never inside quotes ('; fi'), a ${...} or a comment (# fi). A command starts at the start of the line
@@ -530,7 +530,7 @@ def keywords(line, command=True, names=("if", "fi", "else", "elif"), where=None)
     backslashes and ${...} in it still hide a parenthesis). Known limits: a case pattern that reads fi), a ( left open
     at the end of a line (a $( or (( or name=( spanning lines: the next line is read as code), a backtick
     substitution, a ${...} that holds a quote, a } or a ) (it ends at the first }, and quoted_end and
-    parenthesis_end don't see it), quotes nested deeper than NESTING_LIMIT, and a line of a multi-line string or a
+    parenthesis_end don't see it), quotes nested deeper than NESTING_LIMIT, a [[ ... ]] test that spans lines (the next line is read as code), and a line of a multi-line string or a
     heredoc body read as code that starts like a keyword.
     """
     found = []
@@ -569,8 +569,7 @@ def keywords(line, command=True, names=("if", "fi", "else", "elif"), where=None)
             command = kind != "skipped"
             position += 1
         elif char == ")":
-            if not (in_test and not parentheses):
-                command = (parentheses.pop() if parentheses else "subshell") == "subshell"
+            command = (parentheses.pop() if parentheses else "subshell") == "subshell"
             position += 1
         elif char in ";&|":
             command = command if in_test else True
@@ -618,19 +617,39 @@ def without_comment(line):
     return line if start < 0 else line[:start]
 
 
-def condition_of(line):
-    """The condition of a line that starts with if and a blank, cut at its then, its ; and its comment, or "" when it doesn't (if(...) and a bare if have none)."""
-    text = line.lstrip(" \t")
-    if not text.startswith("if") or text[2:3] not in (" ", "\t"):
-        return ""
-    return split_condition(without_comment(text[2:]))[0]
+def condition_text(text):
+    """text up to its comment, without a backslash that joins the next line to it."""
+    text = without_comment(text)
+    return text[:-1] if (len(text) - len(text.rstrip("\\"))) % 2 else text
+
+
+# How many lines a condition may go on over before its if is read as one that may run: a bound on the work a file with an if and no then costs.
+PENDING_LIMIT = 20
+UNKNOWN = (True, False, None)
+
+
+def judged(condition):
+    """The [runs, always, pending] of a branch whose whole condition is known."""
+    condition = condition.strip()
+    return [NEVER.match(condition) is None, ALWAYS.match(condition) is not None, None]
+
+
+def opened(line, start):
+    """The branch of the if keyword that starts at line[start]: judged now when its condition ends in a then on this line,
+    pending (the condition so far, in a list) when the condition goes on, and one that may run when the if doesn't start the line."""
+    if line[:start].strip(" \t") or line[start + 2:start + 3] not in ("", " ", "\t"):
+        return list(UNKNOWN)
+    condition, ended = split_condition(condition_text(line[start + 2:]))
+    return judged(condition) if ended else [True, False, [condition]]
 
 
 def track_branches(line, branches, command=True):
-    """Keep branches, one (runs, always) pair per open if, up to date for this line, and return whether the line ends where a command may start.
+    """Keep branches, one [runs, always, pending] per open if, up to date for this line, and return whether the line ends where a command may start.
 
     runs is False while the branch being read can't run. Only a condition that is plainly false (or plainly true,
-    for its else) is judged, and only on an if that starts its line; any other branch may run. Keywords
+    for its else) is judged, and only on an if that starts its line; any other branch may run. A condition that
+    goes on past its line is pending (the lines so far, in a list) and is judged at its real then, from all its
+    lines; one that has no then within PENDING_LIMIT lines may run. Keywords
     count in source order, so a fi closes the block it ends before an if later on the line opens the next, and an
     else flips the branch whether it starts the line or follows a ;. A quoted or commented keyword is not one, and
     neither is a keyword where no command starts, such as the line after `echo x \\`: command says whether the line
@@ -639,30 +658,24 @@ def track_branches(line, branches, command=True):
     before branches were tracked, or flip one.
     """
     if branches and branches[-1][2] is not None:
-        # The condition of the open if goes on past its first line: it is judged at the real then, from all its lines.
-        condition, ended = split_condition(without_comment(line))
-        branches[-1][2] += "\n" + condition
+        part, ended = split_condition(condition_text(line))
+        branches[-1][2].append(part)
         if ended:
-            branches[-1] = judged(branches[-1][2])
-    found, command = keywords(line, command)
+            branches[-1] = judged("\n".join(branches[-1][2]))
+        elif len(branches[-1][2]) > PENDING_LIMIT:
+            branches[-1] = list(UNKNOWN)
+    where = []
+    found, command = keywords(line, command, where=where)
     for index, word in enumerate(found):
         if word == "if":
-            # condition_of reads a line that starts with if; an if that is not the line's first keyword has no condition to judge.
-            text = condition_of(line) if index == 0 else ""
-            ended = index == 0 and split_condition(without_comment(line.lstrip(" \t")[2:]))[1]
-            branches.append(judged(text) if ended or index else [True, False, text.strip()])
+            # Only the first keyword of a line can be an if that starts it.
+            branches.append(opened(line, where[index]) if index == 0 else list(UNKNOWN))
         elif word == "fi":
             if branches:
                 branches.pop()
         elif branches:
-            branches[-1] = [not branches[-1][1], branches[-1][1], None] if word == "else" else [True, False, None]
+            branches[-1] = [not branches[-1][1], branches[-1][1], None] if word == "else" else list(UNKNOWN)
     return command
-
-
-def judged(condition):
-    """The [runs, always, pending] of a branch whose whole condition is known."""
-    condition = condition.strip()
-    return [NEVER.match(condition) is None, ALWAYS.match(condition) is not None, None]
 
 
 def comment_start(line):

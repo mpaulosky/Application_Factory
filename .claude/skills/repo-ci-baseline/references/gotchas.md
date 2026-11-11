@@ -119,13 +119,16 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     (mpaulosky/dotfiles#344). A later `unset GH_REPO`, or an assignment that is no prefix of a `gh` command, ends an export. An `export GH_REPO=...` that starts its line
     in a branch of an `if` whose condition is plainly false (`false`, `! true`, `[ 0 -ne 0 ]`, `[ 1 -eq 0 ]`), or in the `else` of a plainly
     true one (`true`, `:`), is no export; any other condition is assumed to run, and so is an `elif` branch. The condition is judged only on an `if`
-    that starts its line and is cut at its first `then`. Keywords are read in source order (`fi; if true; then` closes one block and opens the next; an `else` flips the
+    that starts its line, and at its real `then` (a `then` where a command starts, never `echo then`), read over the following lines when the condition goes on
+    (a condition with no `then` within 20 lines may run). Inside `[[ ... ]]` a word, `||`, `&&`, `;` and parentheses are operands, never keywords; a `#` after an escaped blank (`foo\ #`) is
+    no comment. Keywords are read in source order (`fi; if true; then` closes one block and opens the next; an `else` flips the
     branch whether it starts the line or follows a `;`). An `if`, `fi`, `else` or `elif` counts only where a command starts: not quoted, escaped, in `${...}` or in a
     comment (`'; fi'`, `echo x # fi`), not an argument (`grep -q fi`), not after a `)` that closes `$(...)`, `<(...)` or `>(...)`, not inside `((...))`,
     `$((...))`, `name=(...)` or an extglob group `+(...)` (a parenthesis nested in them, except a `$(`, and a quoted or escaped one, are part of them), and not at the
     start of a line that a trailing backslash continues mid-command (a comment ends the command, so the line after one starts a new one). A `)` that closes a
     subshell or a case pattern does start a command (`a) if y; then z; fi ;;`). A case pattern `fi)`, a `(` left open at the end of a line (a `$(`, `((` or `name=(`
-    that spans lines: the next line is read as code), a backtick substitution, a `${...}` that holds a quote, a `}` or a `)` (it ends at the first `}`), double quotes
+    that spans lines: the next line is read as code), a `[[ ... ]]` that spans lines (the next line is read as code), a backtick substitution, a `${...}` that holds a quote, a `}` or a `)`
+    (it ends at the first `}`), double quotes
     nested more than 50 deep in `"$(...)"`, and a line of a multi-line string or of a heredoc body read as code that starts like `fi` or `else` can still misjudge a branch.
     A backslash-continued chain is read back at most 100 lines (a trailing backslash inside a comment joins nothing); an export no longer tells a gh after a longer
     chain, since a `sudo` that drops `GH_REPO` may have started before the part read, so only a `GH_REPO=` right before that gh does.
