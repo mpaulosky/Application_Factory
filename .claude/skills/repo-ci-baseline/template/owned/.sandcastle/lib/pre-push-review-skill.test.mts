@@ -671,11 +671,13 @@ describe("the pre-push-review skill's staging of findings", () => {
     assert.match(flat, /scripts\/review\.sh stage <run> <run>\/round-N\.json/);
     assert.match(flat, /with the Write tool to `<run>\/round-N\.json`/);
     assert.match(flat, /scripts\/review\.sh record - --staged <run>/);
+    assert.match(skill, /scripts\/review\.sh record - --staged <run> <<'JSON'/);
   });
 
   it("says when to stage: at the end of triage, again as fixed at the end of step 6, and the last round's before step 8", () => {
     assert.match(flat, /Stage every finding as it stands when triage ends/);
-    assert.match(flat, /stage each one again at the end of step 6 as fixed with its `test`/);
+    assert.match(flat, /stage each fixed one again at the end of step 6 as `fixed` with its `test`/);
+    assert.match(flat, /a finding still to be fixed as `open`, with its `fix`/);
     assert.match(flat, /stage the last round's before step 8/);
   });
 

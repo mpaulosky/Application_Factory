@@ -1,6 +1,7 @@
 """mutations.json is the scanner's mutation spec for the hardening-review skill's mutate.py (run it by hand: see CLAUDE.md). A full run
 takes about a minute and edits the tree, so the gate only checks that the spec still fits the code: each mutation's `old` occurs
-exactly once in its file (the runner reports NOT FOUND or AMBIGUOUS otherwise), and changes something.
+exactly once in its file (the runner reports NOT FOUND or AMBIGUOUS otherwise), changes something, and leaves a file that still compiles
+(a mutant that doesn't compile would be "caught" by every test).
 """
 
 import json

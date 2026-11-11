@@ -34,7 +34,7 @@
 // the sandbox's scripts/review.sh; the module lives in .sandcastle/lib/ too.
 
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, closeSync, existsSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
@@ -1477,16 +1477,48 @@ function printable(text: string): string {
 // `record --staged` reads them, so the record doesn't depend on what the session still remembers of the earlier rounds.
 const STAGED_FILE = "findings.json";
 
-// The findings staged in `directory`, each checked as `record` checks its input. A file that is missing, a symlink, not JSON, not an array or
-// holding a finding `record` would refuse stops the command and names the file, so a damaged file fails where it is met.
+// Why a staging file or folder isn't the run's own, or undefined: it belongs to another user, or others can write to it. `uid` is the
+// current user's (undefined where the platform has none, which skips the check). The findings in it are unpublished, and the file is read back
+// into the record, so a file another user could have written is not trusted.
+export function stagedOwnerProblem(info: { uid: number; mode: number }, uid: number | undefined, what: string): string | undefined {
+  if (uid === undefined) return undefined;
+  if (info.uid !== uid) return `${what} isn't owned by you.`;
+  if ((info.mode & 0o022) !== 0) return `${what} can be written by others: make it owner-only (chmod 700 for a folder, 600 for a file).`;
+  return undefined;
+}
+
+// The findings staged in `directory`, each checked as `record` checks its input. A file that is missing, a symlink or not a regular file,
+// not the current user's, unreadable, not JSON, not an array, or holding a finding `record` would refuse stops the command and names the file,
+// so a damaged file fails where it is met. The file is opened once, without following a link, and judged by that descriptor, so it can't be
+// swapped between the check and the read.
 function readStaged(directory: string): z.infer<typeof findingListSchema> {
   const file = join(directory, STAGED_FILE);
-  const info = lstatOrUndefined(file);
-  if (info === undefined) throw new Error(`${file} doesn't exist: stage the findings of a round first (scripts/review.sh stage).`);
-  if (!info.isFile()) throw new Error(`${file} isn't a regular file.`);
+  let handle: number;
+  try {
+    handle = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") throw new Error(`${file} doesn't exist: stage the findings of a round first (scripts/review.sh stage).`, { cause: error });
+    if (code === "ELOOP") throw new Error(`${file} isn't a regular file (it is a symlink).`, { cause: error });
+    throw new Error(`${file} can't be opened: ${(error as Error).message}`, { cause: error });
+  }
+  let text: string;
+  try {
+    const info = fstatSync(handle);
+    if (!info.isFile()) throw new Error(`${file} isn't a regular file.`);
+    const problem = stagedOwnerProblem(info, process.getuid?.(), file);
+    if (problem !== undefined) throw new Error(problem);
+    try {
+      text = readFileSync(handle, "utf8");
+    } catch (error) {
+      throw new Error(`${file} can't be read: ${(error as Error).message}`, { cause: error });
+    }
+  } finally {
+    closeSync(handle);
+  }
   let staged: unknown;
   try {
-    staged = JSON.parse(readFileSync(file, "utf8"));
+    staged = JSON.parse(text);
   } catch {
     throw new Error(`${file} isn't JSON.`);
   }
@@ -1498,12 +1530,17 @@ function readStaged(directory: string): z.infer<typeof findingListSchema> {
 
 // Add `findings` (a JSON array, each checked as `record` will check it) to the folder's file; a finding whose id is staged already
 // replaces that one, since a later round may change what became of it. The file holds the run's unpublished findings: it is made
-// owner-only and whole (a temp file renamed over it, never written through a link), and a second `stage` that runs at the same time is refused
-// by a lock file, since two would each merge into the same old file and one would lose the other's findings.
-function stageFindings(directory: string, findings: unknown): { added: number; total: number } {
+// owner-only and whole (a temp file renamed over it, never written through a link), in a folder that is the current user's, not a symlink
+// (a trailing slash doesn't hide one: the path is resolved first) and not writable by others, and a second `stage` that runs at the same
+// time is refused by a lock file, since two would each merge into the same old file and one would lose the other's findings.
+function stageFindings(given: string, findings: unknown): { added: number; total: number } {
   const parsed = findingListSchema.parse(findings);
+  const directory = resolve(given);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  if (lstatSync(directory).isSymbolicLink()) throw new Error(`${directory} is a symlink: give the run's own folder.`);
+  const folder = lstatSync(directory);
+  if (folder.isSymbolicLink()) throw new Error(`${directory} is a symlink: give the run's own folder.`);
+  const problem = stagedOwnerProblem(folder, process.getuid?.(), directory);
+  if (problem !== undefined) throw new Error(problem);
   const file = join(directory, STAGED_FILE);
   const lock = `${file}.lock`;
   let handle: number;
@@ -1520,8 +1557,12 @@ function stageFindings(directory: string, findings: unknown): { added: number; t
     replaceFile(file, `${JSON.stringify(merged, null, 2)}\n`);
     return { added: parsed.length, total: merged.length };
   } finally {
-    closeSync(handle);
-    rmSync(lock, { force: true });
+    // The lock goes even when the close fails.
+    try {
+      closeSync(handle);
+    } finally {
+      rmSync(lock, { force: true });
+    }
   }
 }
 

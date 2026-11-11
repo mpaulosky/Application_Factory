@@ -135,7 +135,7 @@ GATE_ARGS=--quick run "$repo2"
 check "--quick fails on a Markdown lint error" "$([[ $status == 1 ]] && grep -q 'MD013' "$repo2/out" && echo 0 || echo 1)"
 rm "$repo2/bad.md"; printf 'a: [\n' > "$repo2/bad.yml"
 GATE_ARGS=--quick run "$repo2"
-check "--quick fails on a YAML lint error" "$([[ $status == 1 && $ran == no ]] && echo 0 || echo 1)"
+check "--quick fails on a YAML lint error" "$([[ $status == 1 && $ran == no ]] && grep -q 'yamllint' "$repo2/out" && grep -q 'syntax error' "$repo2/out" && echo 0 || echo 1)"
 echo changed >> "$repo/scripts/check-pr-title.sh"
 GATE_ARGS=--quick run "$repo"
 check "--quick still fails a copy that drifted" "$([[ $status == 1 ]] && echo 0 || echo 1)"
@@ -146,7 +146,10 @@ check "a second argument is refused" "$([[ $status == 2 ]] && echo 0 || echo 1)"
 
 # What gates a push never passes --quick: the pre-push hook and the Factory's CI call the gate with no argument.
 check "the pre-push hook runs the gate with no argument" "$(grep -E 'scripts/gate\.sh' "$here/.github/hooks/pre-push" | grep -vE '^#' | grep -qE 'gate\.sh"?$' && echo 0 || echo 1)"
-check "no hook or workflow passes --quick" "$(grep -rqE -e '--quick' "$here/.github/hooks" "$here/.github/workflows" && echo 1 || echo 0)"
+# grep exits 1 for no match and 2 for an error (a moved folder): only 1 passes, so the guard can't go quiet when its paths move.
+quick_rc=0
+grep -rqE -e '--quick' "$here/.github/hooks" "$here/.github/workflows" 2>/dev/null && quick_rc=0 || quick_rc=$?
+check "no hook or workflow passes --quick" "$([[ -d $here/.github/hooks && -d $here/.github/workflows && $quick_rc == 1 ]] && echo 0 || echo 1)"
 check "the Factory's CI runs the gate with no argument" "$(grep -E 'run: bash "scripts/gate\.sh"$' "$here/.github/workflows/template-tests.yml" >/dev/null && echo 0 || echo 1)"
 
 # The local review check (ADR 0010). The stub review.sh stands for scripts/review.sh; GATE_SKIP_REVIEW=1 skips it, anything else doesn't.

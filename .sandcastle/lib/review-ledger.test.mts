@@ -27,6 +27,7 @@ import {
   underOwnedPattern,
   ledgerDir,
   main,
+  stagedOwnerProblem,
   mergeBase,
   OWNED_PATHS,
   prepareRound,
@@ -4310,7 +4311,9 @@ describe("staging findings between rounds", () => {
       assert.equal(result.code, 1, args.join(" "));
       assert.match(result.err, USAGE_LINE, args.join(" "));
     }
-    assert.equal(cli(["stage", folder(), notArray]).code, 1);
+    const refused = cli(["stage", folder(), notArray]);
+    assert.equal(refused.code, 1);
+    assert.match(refused.err, /expected array/i);
     assert.equal(existsSync(join(folder(), "findings.json")), false);
   });
 
@@ -4327,6 +4330,7 @@ describe("staging findings between rounds", () => {
     const result = spawned(["stage", folder()], "");
 
     assert.equal(result.status, 1);
+    assert.match(result.stderr, /JSON/);
     assert.equal(existsSync(join(folder(), "findings.json")), false);
   });
 
@@ -4400,7 +4404,55 @@ describe("staging findings between rounds", () => {
     symlinkSync(join(root, "elsewhere"), link);
     mkdirSync(join(root, "elsewhere"));
     assert.match(cli(["stage", link, array("b.json", [finding()])]).err, /is a symlink/);
-    assert.equal(existsSync(join(root, "elsewhere", "findings.json")), false);
+    // A trailing slash makes lstat follow the link, so the path is resolved before it is judged.
+    assert.match(cli(["stage", `${link}/`, array("b.json", [finding()])]).err, /is a symlink/);
+    assert.deepEqual(readdirSync(join(root, "elsewhere")), []);
+  });
+
+  it("refuses a staging file that is a folder", () => {
+    mkdirSync(join(folder(), "findings.json"), { recursive: true });
+
+    assert.match(cli(["stage", folder(), array("a.json", [finding()])]).err, /isn't a regular file\./);
+    assert.match(cli(["record", inputFile(), "--staged", folder()]).err, /isn't a regular file\./);
+  });
+
+  it("names a staging file it can't read, not the JSON in it", (context) => {
+    if (process.getuid?.() === 0) return context.skip("root reads any file");
+    cli(["stage", folder(), array("a.json", [finding()])]);
+    chmodSync(join(folder(), "findings.json"), 0o000);
+
+    const result = cli(["stage", folder(), array("b.json", [finding({ id: "R2" })])]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /can't be (opened|read)/);
+    assert.doesNotMatch(result.err, /isn't JSON/);
+  });
+
+  it("makes an existing staging file owner-only and replaces it whole, never writing through a link to it", () => {
+    cli(["stage", folder(), array("a.json", [finding()])]);
+    const file = join(folder(), "findings.json");
+    chmodSync(file, 0o644);
+    const other = join(root, "hard-link.json");
+    linkSync(file, other);
+    const before = readFileSync(other, "utf8");
+
+    cli(["stage", folder(), array("b.json", [finding({ id: "R2" })])]);
+
+    assert.equal(statSync(file).mode & 0o777, 0o600);
+    assert.equal(readFileSync(other, "utf8"), before);
+    assert.deepEqual(ids(), ["R1", "R2"]);
+  });
+
+  it("refuses a staging file or folder that others can write to", () => {
+    cli(["stage", folder(), array("a.json", [finding()])]);
+    chmodSync(join(folder(), "findings.json"), 0o666);
+    assert.match(cli(["stage", folder(), array("b.json", [finding({ id: "R2" })])]).err, /can be written by others/);
+    assert.match(cli(["record", inputFile(), "--staged", folder()]).err, /can be written by others/);
+    chmodSync(join(folder(), "findings.json"), 0o600);
+    chmodSync(folder(), 0o777);
+
+    assert.match(cli(["stage", folder(), array("c.json", [finding({ id: "R3" })])]).err, /can be written by others/);
+    assert.deepEqual(ids(), ["R1"]);
   });
 
   it("records the staged findings with the file's own, staged ones first", () => {
@@ -4439,13 +4491,21 @@ describe("staging findings between rounds", () => {
     branchWithChange();
     cli(["stage", folder(), array("a.json", [finding()])]);
 
-    for (const text of ['{"findings":"x"}', '{"findings":{}}', '{"findings":null}', "null", "[]", '"x"']) {
+    const cases: [string, RegExp][] = [
+      ['{"findings":"x"}', /findings in the review input must be an array/],
+      ['{"findings":{}}', /findings in the review input must be an array/],
+      ['{"findings":null}', /findings in the review input must be an array/],
+      ["null", /review input must be a JSON object/],
+      ["[]", /review input must be a JSON object/],
+      ['"x"', /review input must be a JSON object/],
+    ];
+    for (const [text, message] of cases) {
       const file = join(root, "bad.json");
       writeFileSync(file, text);
       const result = cli(["record", file, "--staged", folder()]);
 
       assert.equal(result.code, 1, text);
-      assert.match(result.err, /must be (an array|a JSON object)/, text);
+      assert.match(result.err, message, text);
     }
     assert.equal(nearest(), undefined);
   });
@@ -4472,5 +4532,23 @@ describe("staging findings between rounds", () => {
       assert.match(result.err, USAGE_LINE, args.join(" "));
     }
     assert.equal(nearest(), undefined);
+  });
+});
+
+describe("stagedOwnerProblem", () => {
+  it("accepts the current user's file that only the owner can write", () => {
+    assert.equal(stagedOwnerProblem({ uid: 1000, mode: 0o100600 }, 1000, "f"), undefined);
+    assert.equal(stagedOwnerProblem({ uid: 1000, mode: 0o100644 }, 1000, "f"), undefined);
+    assert.equal(stagedOwnerProblem({ uid: 1000, mode: 0o40700 }, 1000, "d"), undefined);
+  });
+
+  it("refuses another user's file or folder, and one that the group or others can write", () => {
+    assert.match(stagedOwnerProblem({ uid: 1001, mode: 0o100600 }, 1000, "f") ?? "", /^f isn't owned by you\.$/);
+    assert.match(stagedOwnerProblem({ uid: 1000, mode: 0o100620 }, 1000, "f") ?? "", /^f can be written by others/);
+    assert.match(stagedOwnerProblem({ uid: 1000, mode: 0o100602 }, 1000, "f") ?? "", /^f can be written by others/);
+  });
+
+  it("checks nothing where the platform has no user id", () => {
+    assert.equal(stagedOwnerProblem({ uid: 1001, mode: 0o100666 }, undefined, "f"), undefined);
   });
 });

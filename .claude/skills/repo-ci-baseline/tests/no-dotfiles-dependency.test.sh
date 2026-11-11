@@ -97,11 +97,13 @@ check("a script is a Template file", not is_cache(Path("template/owned/s/check.p
 # The walk skips caches and reads the rest, on a throwaway Template.
 with tempfile.TemporaryDirectory() as tmp:
     fake = Path(tmp)
-    for name in ("template/owned/s/__pycache__/x.txt", "template/seed/.pytest_cache/README.md", "template/owned/s/cached.pyc", "template/owned/s/real.sh"):
+    for name in ("template/owned/s/__pycache__/x.txt", "template/seed/.pytest_cache/README.md", "template/owned/s/cached.pyc", "template/owned/s/.git/config",
+                 "template/owned/s/real.sh", "template/seed/docs/real.md"):
         (fake / name).parent.mkdir(parents=True, exist_ok=True)
         (fake / name).write_text("see mpaulosky/dotfiles\n")
     seen, count = walk(fake)
-    check("the walk skips cache files and reads the others", seen == {"template/owned/s/real.sh": 1} and count == 1, f"{seen} {count}")
+    check("the walk skips cache files and .git, and reads Owned and Seed files",
+          seen == {"template/owned/s/real.sh": 1, "template/seed/docs/real.md": 1} and count == 2, f"{seen} {count}")
 
 # The Template.
 found, files = walk(skill)
