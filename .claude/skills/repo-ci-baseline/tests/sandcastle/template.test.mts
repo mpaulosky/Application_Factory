@@ -357,7 +357,8 @@ describe("the Template's .sandcastle/ in a repo it is Applied to", () => {
       .map((file) => relative(scratch, join(sandcastle, file)));
 
     assert.ok(tests.length > 0, "the Template's .sandcastle/ holds no tests");
-    const result = spawnSync(join(root, "node_modules/.bin/tsx"), ["--test", ...tests], { cwd: scratch, encoding: "utf8", env: childEnv() });
+    // The whole suite's TAP output is more than spawnSync's default 1 MiB: past it the child is killed and the output cut short, which looked like a failing run with no failing test.
+    const result = spawnSync(join(root, "node_modules/.bin/tsx"), ["--test", ...tests], { cwd: scratch, encoding: "utf8", env: childEnv(), maxBuffer: 256 * 1024 * 1024 });
 
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
   });
