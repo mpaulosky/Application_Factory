@@ -720,7 +720,7 @@ for incomplete in \
   check "an incomplete read ($incomplete) is a failed poll: exit 2" status_is 2
 done
 
-# A merged or closed PR is reported whatever its lists hold: it has no head ref once the branch is gone, and its lists are never read.
+# A merged or closed PR is reported whatever its pageInfo holds: it has no head ref once the branch is gone, and its lists' pages are never read.
 for done_state in MERGED CLOSED; do
   for over in '{"reviewThreads":{"pageInfo":{"hasNextPage":true}}}' '{"reviews":{"pageInfo":{"hasPreviousPage":true}}}' \
     '{"comments":{"pageInfo":{"hasPreviousPage":true}}}' '{"headRef":null}'; do

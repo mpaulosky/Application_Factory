@@ -442,9 +442,9 @@ def track_branches(line, branches):
 
     runs is False while the branch being read can't run. Only a condition that is plainly false (or plainly true,
     for its else) is judged, and only on an if that starts its line; any other branch may run. An if and its fi on one
-    line cancel out. A fi or an else inside a string or a heredoc body that looks like a keyword can misjudge a branch;
-    that can only make the checker refuse a script, never accept one (an export it misses is not counted), and
-    `# gh-repo: ok` skips a line.
+    line cancel out. A line inside a multi-line string or a non-data heredoc body that looks like a fi or an else can
+    misjudge a branch, either way: it can pop a branch that never runs, so an export in it counts again, as it did before
+    branches were tracked, or flip one. `# gh-repo: ok` skips a line.
     """
     if re.match(r"[ \t]*else\b", line) and branches:
         branches[-1] = (not branches[-1][1], branches[-1][1])

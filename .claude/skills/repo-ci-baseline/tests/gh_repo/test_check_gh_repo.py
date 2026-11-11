@@ -2091,6 +2091,15 @@ def test_check_repo_escapes_line_breaks_in_the_name_of_a_symlink_it_refuses(tmp_
     ("if x; then echo fi; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
     ("if false; then\necho fi\nfi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
     ("if false; then\n:\nelse\nif y; then\nexport GH_REPO=o/r\nfi\nfi\ngh pr view 1\n", []),
+    # what the keyword regexes separate from a trailing-fi guess
+    ("if false; then\nif x; then y; fi # note\nfi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if false; then\nif grep -q fi; then\n:\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
+    ("  if false; then\nexport GH_REPO=o/r\n  fi\ngh pr view 1\n", [4]),
+    ("if false; then\nwhile x; do if y; then z; fi; done\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\nx; { if y; then z; fi; }\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\nif y; then z; else if w; then v; fi; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # the known limit: a line of a multi-line string that looks like fi pops the dead branch, so the export counts as before
+    ("if false; then\necho \"\nfi\"\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
 ])
 def test_untold_takes_an_export_only_from_a_branch_that_can_run(tmp_path, text, refused):
     assert lines_of(untold(tmp_path, text)) == refused

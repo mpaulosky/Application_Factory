@@ -107,7 +107,7 @@ QUERY='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,
 # The response must have GitHub's shape, with every list present and read whole: anything else is a failed poll, never a quiet one.
 # The checks come from the PR's head ref, not the last of its commits (GitHub lists them by date, so the last needn't be the head), and
 # only when that ref is still at headRefOid. A list GitHub says has more pages than the query took is an incomplete read. Only an
-# open PR's lists are read: a merged or closed one is reported from its state alone, whatever its lists or its deleted head hold.
+# open PR's lists are read: a merged or closed one is reported from its state alone, whatever its pageInfo or its deleted head hold (its lists must still be arrays).
 SHAPE_JQ='
   .data.repository.pullRequest
   | type == "object" and (.state | type == "string")
