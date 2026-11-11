@@ -3293,7 +3293,7 @@ describe("publicErrorText", () => {
     assert.equal(text, "token ghp_abcdef rejected\nsecond line");
   });
 
-  it("returns a text unchanged when only the host's own zero-width spaces and an emoji's selector are invisible in it", () => {
+  it("returns a text unchanged when only the host's own zero-width spaces and an emoji's selector, which ADR 0010 keeps, are invisible in it", () => {
     const rendered = plainText("see #12 on github.com @someone");
     const emoji = "\u26a0\ufe0f check failed";
 
@@ -3309,9 +3309,10 @@ describe("publicErrorText", () => {
   });
 
   it("returns a changed text when joiners or selectors pass the cap ADR 0010 keeps, or between letters", () => {
-    for (const hidden of ["a\u200db", "a\u200cb", "\u{1f468}\u200d".repeat(9) + "\u{1f469}", "\u26a0\ufe0f".repeat(9), "a\u0085b", "\u0085", "a\ufe0f\u20e3"]) {
+    for (const hidden of ["a\u200db", "a\u200cb", "\u{1f468}\u200d".repeat(9) + "\u{1f469}", "\u26a0\ufe0f".repeat(9), "a\u0085b", "\u0085", "a\ufeffb", "a\ufe0f\u20e3"]) {
       assert.notEqual(publicErrorText(hidden, () => false), hidden, JSON.stringify(hidden));
     }
+    assert.equal(publicErrorText("a\ufeffb", () => false), "a b");
     const mixed = "\u0645\u06cc\u200c\u062e @\u200bsomeone";
     assert.equal(publicErrorText(mixed, () => false), mixed);
   });

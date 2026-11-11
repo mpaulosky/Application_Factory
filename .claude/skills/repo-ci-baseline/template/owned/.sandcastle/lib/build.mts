@@ -552,7 +552,7 @@ export function publicErrorText(text: string, holdsSecret: (text: string) => boo
   const seen = redact(withoutInvisible(withoutColour));
   if (holdsSecret(cleaned) || holdsSecret(seen)) return "(This text isn't shown: it looked like it held a secret. It was withheld.)";
   const hostOnly = withoutHostInvisible(cleaned);
-  return !hasHiddenText(hostOnly) && !hostOnly.includes("\u0085") && withoutInvisible(cleaned) === seen ? cleaned : seen;
+  return !hasHiddenText(hostOnly) && !hostOnly.includes("\u0085") && withoutInvisible(cleaned) === seen ? cleaned : seen.replace(/\ufeff/g, " "); // a byte-order mark is whitespace to withoutInvisible; plainText makes it a space too
 }
 
 // The git arguments listing the .github/workflows/ files each commit from
