@@ -14,10 +14,11 @@ Template's file does not fit, a file of its own. It still carries no .NET workfl
 | `pr-title.yml` with `scripts/check-pr-title.sh` | copies |
 | `lint-markdown.yml`, `lint-yaml.yml`, `lint-actions.yml` (actionlint, zizmor, shellcheck) | copies |
 | `.github/dependabot.yml` | the Factory's own: the `github-actions` block of the Template's Seed, with its groups limited to minor and patch updates (see Consequences) |
+| `docs/SECURITY.md` | the Factory's own: how to report a vulnerability, and where the reason for an accepted security finding of the local review goes (the local review's notes and the pre-push-review skill's step 9 point to it) |
 | `.yamllint.yml`, `.markdownlint-cli2.jsonc` | the Factory's own, each starting from the Template's file and free to differ; the lint workflows read them, so an exclusion goes here, never in a copy |
 
-Not carried: `dependabot-auto-merge.yml` (see Consequences), `docs/PROCESS.md`, `docs/CONTRIBUTING.md`, `docs/SECURITY.md` and `docs/CODE_OF_CONDUCT.md` (the first two describe an Application's flow
-and its .NET required checks, and CLAUDE.md is the Factory's process document; the other two can follow if the repo gets outside contributors), `ci.yml`, `release.yml`, `code-metrics.yml`,
+Not carried: `dependabot-auto-merge.yml` (see Consequences), `docs/PROCESS.md`, `docs/CONTRIBUTING.md` and `docs/CODE_OF_CONDUCT.md` (the first two describe an Application's flow
+and its .NET required checks, and CLAUDE.md is the Factory's process document; the last can follow if the repo gets outside contributors), `ci.yml`, `release.yml`, `code-metrics.yml`,
 `codeql-analysis.yml`, `sandcastle.yml`, `backfill-blog-posts.yml` and `copilot-review-sync.yml`.
 
 ## Considered Options

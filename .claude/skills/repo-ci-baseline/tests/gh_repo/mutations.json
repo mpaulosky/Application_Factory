@@ -1,0 +1,91 @@
+{
+  "test": [
+    "uvx",
+    "pytest",
+    ".claude/skills/repo-ci-baseline/tests/gh_repo/test_check_gh_repo.py",
+    "-q",
+    "-p",
+    "no:cacheprovider"
+  ],
+  "timeout": 600,
+  "mutations": [
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "exported = exported and not truncated and not wrapped(before)",
+      "new": "exported = exported and not wrapped(before)",
+      "why": "a cut chain no longer stops an export from telling the gh"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "exported = exported and not truncated and not wrapped(before)",
+      "new": "exported = exported and not truncated",
+      "why": "a wrapper (sudo, env -i) no longer stops an export from telling the gh"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "return text, index >= 0 and continues(lines[index])",
+      "new": "return text, False",
+      "why": "a chain past the limit is never reported as cut"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "return text, index >= 0 and continues(lines[index])",
+      "new": "return text, continues(lines[index])",
+      "why": "the first line of the file is read as a chain"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "while index >= 0 and number - 2 - index < CONTINUATION_LIMIT and continues(lines[index]):",
+      "new": "while number - 2 - index < CONTINUATION_LIMIT and continues(lines[index]):",
+      "why": "the walk back may run past the start of the file"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "and comment_start(line) < 0",
+      "new": "",
+      "why": "a backslash inside a comment joins the next line"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "(len(line) - len(line.rstrip(\"\\\\\"))) % 2 == 1 and",
+      "new": "(len(line) - len(line.rstrip(\"\\\\\"))) % 2 == 0 and",
+      "why": "an even run of trailing backslashes joins"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "    while index - dollars >= 0 and line[index - dollars] == \"$\":",
+      "new": "    while line[index - dollars] == \"$\":",
+      "why": "live_dollar reads before the start of the line"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "    while index - dollars - slashes >= 0 and line[index - dollars - slashes] == \"\\\\\":",
+      "new": "    while line[index - dollars - slashes] == \"\\\\\":",
+      "why": "live_dollar reads before the start of the line on escapes"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "elif char == \"#\" and boundary:",
+      "new": "elif char == \"#\":",
+      "why": "a # inside a word is a comment"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "boundary = char in \" \\t;&|()<>\"",
+      "new": "boundary = False",
+      "why": "only a # at the start of the line is a comment"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "boundary = char in \" \\t;&|()<>\"",
+      "new": "boundary = char in \" \\t\"",
+      "why": "a # after ; & | ( ) < > is not a comment"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "            position += 2\n            boundary = False\n        elif char in \"'\\\"\"",
+      "new": "            position += 1\n            boundary = False\n        elif char in \"'\\\"\"",
+      "why": "an escaped character is read twice"
+    }
+  ]
+}

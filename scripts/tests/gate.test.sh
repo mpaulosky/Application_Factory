@@ -80,7 +80,10 @@ run() {
   status=0
   local skip=(GATE_SKIP_REVIEW=1)
   if [[ -n "${REVIEW_SKIP+x}" ]]; then skip=(); [[ -z "$REVIEW_SKIP" ]] || skip=(GATE_SKIP_REVIEW="$REVIEW_SKIP"); fi
-  (cd "$1" && env -u GATE_SKIP_REVIEW "${skip[@]+"${skip[@]}"}" GATE_SKIP_SELF_TEST=1 STUB_EXIT="${STUB_EXIT:-0}" REVIEW_EXIT="${REVIEW_EXIT:-0}" bash scripts/gate.sh >"$1/out" 2>&1) || status=$?
+  # $GATE_ARGS is the gate's arguments, split on spaces.
+  local gate_args=()
+  [[ -z "${GATE_ARGS:-}" ]] || read -ra gate_args <<<"$GATE_ARGS"
+  (cd "$1" && env -u GATE_SKIP_REVIEW "${skip[@]+"${skip[@]}"}" GATE_SKIP_SELF_TEST=1 STUB_EXIT="${STUB_EXIT:-0}" REVIEW_EXIT="${REVIEW_EXIT:-0}" bash scripts/gate.sh "${gate_args[@]+"${gate_args[@]}"}" >"$1/out" 2>&1) || status=$?
   [[ -e "$1/$skill/ran" ]] && ran=yes || ran=no
 }
 
@@ -117,6 +120,37 @@ repo="$(new_repo execbit-original)"
 chmod -x "$repo/$skill/template/owned/.github/hooks/post-checkout"
 run "$repo"
 check "a copy executable where the original isn't fails the gate" "$([[ $status == 1 ]] && echo 0 || echo 1)"
+
+# --quick stops after the lint, before the review check and test.sh, and never passes the gate for a push: only the bare script does.
+repo="$(new_repo quick)"; stub_review "$repo"; with_origin "$repo"
+GATE_ARGS=--quick STUB_EXIT=3 REVIEW_EXIT=1 REVIEW_SKIP='' run "$repo"
+check "--quick passes without running test.sh" "$([[ $status == 0 && $ran == no ]] && echo 0 || echo 1)"
+check "--quick doesn't call review.sh" "$([[ ! -e $repo/review-args ]] && echo 0 || echo 1)"
+check "--quick runs the Markdown and YAML lint" "$(grep -q 'markdownlint (whole repo' "$repo/out" && grep -q 'yamllint (whole repo' "$repo/out" && echo 0 || echo 1)"
+check "--quick says it is not the gate" "$(grep -q 'Run scripts/gate.sh, with no argument, before pushing' "$repo/out" && echo 0 || echo 1)"
+# A Markdown or YAML lint failure stops --quick too.
+repo2="$(new_repo quick-lint)"
+{ printf '# T\n\n'; printf 'word %.0s' $(seq 1 80); printf '\n'; } > "$repo2/bad.md"
+GATE_ARGS=--quick run "$repo2"
+check "--quick fails on a Markdown lint error" "$([[ $status == 1 ]] && grep -q 'MD013' "$repo2/out" && echo 0 || echo 1)"
+rm "$repo2/bad.md"; printf 'a: [\n' > "$repo2/bad.yml"
+GATE_ARGS=--quick run "$repo2"
+check "--quick fails on a YAML lint error" "$([[ $status == 1 && $ran == no ]] && grep -q 'bad.yml' "$repo2/out" && grep -q 'syntax error' "$repo2/out" && echo 0 || echo 1)"
+echo changed >> "$repo/scripts/check-pr-title.sh"
+GATE_ARGS=--quick run "$repo"
+check "--quick still fails a copy that drifted" "$([[ $status == 1 ]] && echo 0 || echo 1)"
+GATE_ARGS=--fast run "$repo"
+check "an unknown argument is refused" "$([[ $status == 2 && $ran == no ]] && echo 0 || echo 1)"
+GATE_ARGS="--quick --quick" run "$repo"
+check "a second argument is refused" "$([[ $status == 2 ]] && echo 0 || echo 1)"
+
+# What gates a push never passes --quick: the pre-push hook and the Factory's CI call the gate with no argument.
+check "the pre-push hook runs the gate with no argument" "$(grep -E 'scripts/gate\.sh' "$here/.github/hooks/pre-push" | grep -vE '^#' | grep -qE 'gate\.sh"?$' && echo 0 || echo 1)"
+# grep exits 1 for no match and 2 for an error (a moved folder): only 1 passes, so the guard can't go quiet when its paths move.
+quick_rc=0
+grep -rqE -e '--quick' "$here/.github/hooks" "$here/.github/workflows" 2>/dev/null && quick_rc=0 || quick_rc=$?
+check "no hook or workflow passes --quick" "$([[ -d $here/.github/hooks && -d $here/.github/workflows && $quick_rc == 1 ]] && echo 0 || echo 1)"
+check "the Factory's CI runs the gate with no argument" "$(grep -E 'run: bash "scripts/gate\.sh"$' "$here/.github/workflows/template-tests.yml" >/dev/null && echo 0 || echo 1)"
 
 # The local review check (ADR 0010). The stub review.sh stands for scripts/review.sh; GATE_SKIP_REVIEW=1 skips it, anything else doesn't.
 repo="$(new_repo review-skipped)"; stub_review "$repo"; with_origin "$repo"

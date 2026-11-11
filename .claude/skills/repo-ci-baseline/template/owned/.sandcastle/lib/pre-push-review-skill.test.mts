@@ -663,3 +663,25 @@ describe("the pre-push-review skill's fewer-rounds rules", () => {
     assert.match(flat, /Template mirror copies identical to the root copy are left out of the patch, so the root file is the one to read/);
   });
 });
+
+describe("the pre-push-review skill's staging of findings", () => {
+  const flat = skill.replace(/\s+/g, " ");
+
+  it("says to stage each round's findings from a file the Write tool wrote, and to record with --staged", () => {
+    assert.match(flat, /scripts\/review\.sh stage <run> <run>\/round-N\.json/);
+    assert.match(flat, /with the Write tool to `<run>\/round-N\.json`/);
+    assert.match(flat, /scripts\/review\.sh record - --staged <run>/);
+    assert.match(skill, /scripts\/review\.sh record - --staged <run> <<'JSON'/);
+  });
+
+  it("says when to stage: at the end of triage, again as fixed at the end of step 6, and the last round's before step 8", () => {
+    assert.match(flat, /Stage every finding as it stands when triage ends/);
+    assert.match(flat, /stage each fixed one again at the end of step 6 as `fixed` with its `test`/);
+    assert.match(flat, /a finding still to be fixed, or left open for a person, as `open` with its `fix`/);
+    assert.match(flat, /stage the last round's before step 8/);
+  });
+
+  it("writes decisions.md with the Write tool, not a heredoc", () => {
+    assert.match(flat, /Write to `<run>\/decisions\.md`, with the Write tool and not a shell heredoc/);
+  });
+});

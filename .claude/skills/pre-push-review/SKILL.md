@@ -126,7 +126,8 @@ a copy drifts, so reading both doubles the reading; a mirror that differs from i
 the sections must match in order), and prints two lines on stdout, the diff's
 key and HEAD: keep both, since they name exactly the code this round reviews. The key is that of the whole diff, mirrors included, so a change in a
 mirror alone still needs a new review. In a later round, run `scripts/review.sh prepare <run> <HEAD the round before printed>`: it also writes the
-diff of that round's fixes to `<run>/fixes.patch`, filtered the same way. Write to `<run>/decisions.md` the earlier decisions from step 3 and every finding this run's earlier rounds
+diff of that round's fixes to `<run>/fixes.patch`, filtered the same way. Write to `<run>/decisions.md`, with the Write tool and not a shell heredoc (the text quotes code such as `$(...)`,
+which a safety check may block), the earlier decisions from step 3 and every finding this run's earlier rounds
 raised, each with its id, outcome and reason, so no round raises again what an earlier one dismissed. A fixed item stays settled only until
 a reviewer reads the code at its `path:line` and finds the problem still there, then it is raised again. Label
 accepted and open ones "raise again if still in the code". Give a security finding (every finding the report marks
@@ -221,6 +222,12 @@ code at each finding's line yourself, then give it one outcome:
   An earlier Advisory finding that's still there is fixed now, unless it waits for a person: then it's recorded open
   again as Advisory, its summary opening with the old id (`R3 again: ...`), and it never blocks.
 
+Stage the findings, so a long session that loses its memory of the earlier rounds still records them. Write the round's JSON array, every
+field of step 8's `findings` (ids as below), with the Write tool to `<run>/round-N.json` (the text quotes code, as in step 4), and run
+`scripts/review.sh stage <run> <run>/round-N.json`. Stage every finding as it stands when triage ends (a finding still to be fixed, or left open for a person, as `open`
+with its `fix`; a dismissed one with its `reason`), stage each fixed one again at the end of step 6 as `fixed` with its `test` (or `reason`), and stage the last round's before step 8. A finding
+staged again under the same id replaces the earlier one.
+
 Number this run's findings from the id `scripts/review.sh next` prints at the start of the run, continuing across its
 rounds. `record` refuses any id at or below the highest that the review it replaces, or any earlier review of the
 branch's own commits, took, so a person reading an older report can't accept a different finding by its id.
@@ -261,13 +268,15 @@ that only reviews: anything it finds new stays open for a person (an Advisory on
 
 ### 8. Record
 
-Record the outcome with the key and HEAD `prepare` printed when the last round started. Every finding has exactly these fields, with `test`,
+Record the outcome with the key and HEAD `prepare` printed when the last round started. The findings staged in `<run>/findings.json`
+(step 5) are the run's findings: leave `findings` out of the JSON below, or give it only the ones not staged, and run
+`scripts/review.sh record - --staged <run>`; the example's `findings` shows the shape of one finding, which is also the shape of a staged one. Every finding has exactly these fields, with `test`,
 `reason` and `fix` always present and `null` when unused. `fix` is the reviewer's suggested fix, and `record`
 refuses an open finding without one (`scripts/review.sh advisory` reads it, and step 9 gives it to the person deciding). The reviewers'
 `needsPerson` and `why` stay out:
 
 ```bash
-scripts/review.sh record - <<'JSON'
+scripts/review.sh record - --staged <run> <<'JSON'
 {
   "reviewedKey": "<the key prepare printed in the last round>",
   "reviewedHead": "<the HEAD prepare printed in the last round>",

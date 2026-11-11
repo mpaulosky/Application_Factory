@@ -344,8 +344,7 @@ def logical_line(lines, number):
     return text, count
 
 
-# The most physical lines continued_text reads back. A longer chain loses its start, which may hold a wrapper (sudo, env -i) that
-# drops GH_REPO, so continued_text says so and told() then lets only a GH_REPO= of the gh's own tell it.
+# The most physical lines continued_text reads back; what a longer chain does to the export is in references/gotchas.md (the conditional-export bullet).
 CONTINUATION_LIMIT = 100
 
 

@@ -131,7 +131,7 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     (it ends at the first `}`), double quotes
     nested more than 50 deep in `"$(...)"`, and a line of a multi-line string or of a heredoc body read as code that starts like `fi` or `else` can still misjudge a branch.
     A backslash-continued chain is read back at most 100 lines (a trailing backslash inside a comment joins nothing); an export no longer tells a gh after a longer
-    chain, since a `sudo` that drops `GH_REPO` may have started before the part read, so only a `GH_REPO=` right before that gh does.
+    chain, since a `sudo` that drops `GH_REPO` may have started before the part read, so only that gh's own `--repo` or a `GH_REPO=` right before it does.
   - A file with a NUL byte is checked with the NULs removed, as bash reads it, not skipped. `--repo` reads a suffix in
     lower case (`up.SH`) and `.zsh`, treats every extensionless file under `scripts/` and `.github/ci/` as shell
     (under `.claude/skills/` it needs a shell shebang), and refuses a symlink whose target is outside the repo or
