@@ -116,7 +116,7 @@ echo "${#copies[@]} copies match the Template."
 
 # test.sh's issue-reference rule (a bare #N in an Owned file), run here too so --quick catches it and not only the full gate's last step.
 echo -e "\n${CYAN}▶ Issue references in Owned files${RESET}"
-# Exit 1 is a bare #N (the checker printed it); anything else (2: bad folder, 127: no python3, a traceback) is the check itself failing, and fails the gate too.
+# Exit 1 is a bare #N (the checker printed it); anything else (2: bad folder or an unreadable file) is the check itself failing, and fails the gate too.
 if ! command -v python3 >/dev/null 2>&1; then
   echo -e "${RED}❌ python3 not found: the issue-reference check needs it.${RESET}" >&2
   exit 1

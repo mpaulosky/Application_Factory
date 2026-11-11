@@ -3,6 +3,7 @@
 
     python3 -I check-issue-refs.py <the Template's owned/ folder>
 
+Exit 0: none found. Exit 1: found, printed. Exit 2: nothing was (fully) checked: the folder is missing, the arguments are wrong or a file is unreadable.
 test.sh runs it, and so does the Factory's scripts/gate.sh (also with --quick), so the rule fails before test.sh does.
 The rule, with its reasons, is the comment in test.sh's "Issue references in Owned files name their repo" step.
 """
@@ -23,6 +24,10 @@ for path in sorted(p for p in root.rglob("*") if p.is_file()):
         lines = path.read_text(encoding="utf-8").splitlines()
     except UnicodeDecodeError:
         continue
+    except OSError as error:
+        # A file it can't read is a file it didn't check, which must not read as a pass or as a bare #N (exit 1).
+        print(f"{path}: {error.strerror}", file=sys.stderr)
+        sys.exit(2)
     in_tests = "tests" in path.relative_to(root).parts
     is_ts_test = path.name.endswith(".test.mts")
     for number, line in enumerate(lines, 1):

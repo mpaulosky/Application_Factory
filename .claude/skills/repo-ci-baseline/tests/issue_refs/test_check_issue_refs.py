@@ -1,4 +1,5 @@
 """Tests for ../check-issue-refs.py: what it flags, what it lets through, and that a bad folder is never a pass."""
+import os
 import pathlib
 import subprocess
 import sys
@@ -55,3 +56,15 @@ def test_a_missing_folder_or_no_argument_is_not_a_pass(tmp_path):
     assert run(tmp_path / "nope").returncode == 2
     assert run(None).returncode == 2
     assert run(tmp_path, "extra").returncode == 2
+
+
+def test_an_unreadable_file_is_not_a_pass_and_not_a_finding(tmp_path):
+    root = tree(tmp_path, {"a.md": "See #5\n", "b.md": "fine\n"})
+    (root / "b.md").chmod(0)
+    try:
+        if os.access(root / "b.md", os.R_OK):
+            return  # root reads anything
+        result = run(root)
+        assert result.returncode == 2 and "b.md" in result.stderr
+    finally:
+        (root / "b.md").chmod(0o644)
