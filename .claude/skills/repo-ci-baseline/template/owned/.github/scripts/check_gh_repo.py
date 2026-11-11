@@ -118,14 +118,15 @@ def wrapped(before):
         env_drops_gh_repo(words[env.end():]) for env in ENV.finditer(words))
 
 
-def told(before, after, exported, earlier=""):
+def told(before, after, exported, earlier="", truncated=False):
     """Whether the gh between before and after is told its repository.
 
     earlier is the text of the backslash-continued lines before this one: a wrapper or an assignment may have
-    started on them, and bash reads them as one line.
+    started on them, and bash reads them as one line. truncated says the chain went on past what was read, so
+    a wrapper that drops GH_REPO may have started before it: the export no longer tells this gh.
     """
     before = earlier + before
-    exported = exported and not wrapped(before)
+    exported = exported and not truncated and not wrapped(before)
     # gh closing a quoted word: judge what follows the quote.
     if after[:1] in ("\"", "'"):
         after = after[1:]
@@ -344,25 +345,20 @@ def logical_line(lines, number):
 
 
 # The most physical lines continued_text reads back. A longer chain loses its start, which may hold a wrapper (sudo, env -i) that
-# drops GH_REPO, so the text then starts with one: such a gh is told only by a --repo or a GH_REPO= of its own.
+# drops GH_REPO, so continued_text says so and told() then lets only a GH_REPO= of the gh's own tell it.
 CONTINUATION_LIMIT = 100
-TRUNCATED = "sudo "
 
 
 def continued_text(lines, number):
-    """The text of the physical lines right before lines[number - 1] that a trailing backslash joins to it, backslashes removed.
-
-    At most CONTINUATION_LIMIT lines are read, so a file of many continued lines costs a bounded amount per line;
-    a chain that goes on past them starts with TRUNCATED.
+    """The text of the physical lines right before lines[number - 1] that a trailing backslash joins to it, backslashes removed,
+    and whether the chain goes on past the CONTINUATION_LIMIT lines read (a file of many continued lines costs a bounded amount per line).
     """
     text = ""
     index = number - 2
     while index >= 0 and number - 2 - index < CONTINUATION_LIMIT and continues(lines[index]):
         text = lines[index][:-1] + text
         index -= 1
-    if index >= 0 and continues(lines[index]):
-        text = TRUNCATED + text
-    return text
+    return text, index >= 0 and continues(lines[index])
 
 
 def close_parenthesis(line, start, depth):
@@ -482,8 +478,9 @@ def live_dollar(line, index):
 def quoted_end(line, position, depth=0):
     """The index right after the quoted string that starts at line[position], a ' or a " (past the end of line when it never closes).
 
-    Inside "..." and $'...' a backslash escapes the next character; inside '...' it doesn't. A $( inside "..." holds
-    commands with quotes of their own, so the string goes on to the ) that closes it.
+    Inside "..." and $'...' (a ' after a live $, see live_dollar) a backslash escapes the next character; inside '...'
+    it doesn't. A live $( inside "..." (a doubled dollar before a paren is a process id and a paren) holds commands
+    with quotes of their own, so the string goes on to the ) that closes it, down to NESTING_LIMIT levels.
     """
     quote = line[position]
     escapes = quote == '"' or (quote == "'" and live_dollar(line, position - 1))
@@ -530,8 +527,9 @@ def keywords(line, command=True):
     array elements or a pattern, not commands, so it is skipped, and so is any ( nested in it except a $( (quotes,
     backslashes and ${...} in it still hide a parenthesis). Known limits: a case pattern that reads fi), a ( left open
     at the end of a line (a $( or (( or name=( spanning lines: the next line is read as code), a backtick
-    substitution, a ${...} inside a "..." or a $(...) that holds a quote or a ), quotes nested deeper than
-    NESTING_LIMIT, and a line of a multi-line string or a heredoc body read as code that starts like a keyword.
+    substitution, a ${...} that holds a quote, a } or a ) (it ends at the first }, and quoted_end and
+    parenthesis_end don't see it), quotes nested deeper than NESTING_LIMIT, and a line of a multi-line string or a
+    heredoc body read as code that starts like a keyword.
     """
     found = []
     position = 0
@@ -622,7 +620,7 @@ def track_branches(line, branches, command=True):
     found, command = keywords(line, command)
     for index, word in enumerate(found):
         if word == "if":
-            # condition_of reads the line's first if; a later one on the line has no condition to judge.
+            # condition_of reads a line that starts with if; an if that is not the line's first keyword has no condition to judge.
             text = condition_of(line) if index == 0 else ""
             branches.append((NEVER.match(text) is None, ALWAYS.match(text) is not None))
         elif word == "fi":
@@ -633,9 +631,28 @@ def track_branches(line, branches, command=True):
     return command
 
 
+def comment_start(line):
+    """The index of the # that starts a comment in line, a # that begins a word outside quotes and ${...}, or -1."""
+    position = 0
+    while position < len(line):
+        char = line[position]
+        if char == "\\":
+            position += 2
+        elif char in "'\"":
+            position = quoted_end(line, position)
+        elif line.startswith("${", position):
+            end = line.find("}", position)
+            position = len(line) if end < 0 else end + 1
+        elif char == "#" and (position == 0 or line[position - 1] in " \t;&|()<>"):
+            return position
+        else:
+            position += 1
+    return -1
+
+
 def continues(line):
-    """True when line ends in an odd number of backslashes, so bash joins the next line to it."""
-    return (len(line) - len(line.rstrip("\\"))) % 2 == 1
+    """True when line ends in an odd number of backslashes outside a comment, so bash joins the next line to it."""
+    return (len(line) - len(line.rstrip("\\"))) % 2 == 1 and comment_start(line) < 0
 
 
 def untold(path):
@@ -683,8 +700,8 @@ def untold(path):
             exported = False
         if OPT_OUT.search(line):
             continue
-        earlier = continued_text(lines, number)
-        if any(not told(line[:match.start()], line[match.end():], exported, earlier) for match in GH.finditer(line)):
+        earlier, truncated = continued_text(lines, number)
+        if any(not told(line[:match.start()], line[match.end():], exported, earlier, truncated) for match in GH.finditer(line)):
             found.append(f"{for_log(str(path))}:{number}: {shown(line)}")
     return found
 
