@@ -11,7 +11,7 @@ PASSED=0; FAILED=0
 check() { if eval "$2"; then PASSED=$((PASSED + 1)); echo "ok   - $1"; else FAILED=$((FAILED + 1)); echo "FAIL - $1"; fi; }
 
 mkdir "$work/bin"
-cat > "$work/bin/gh" <<'GH'
+cat > "$work/bin/gh" <<'GH' # gh-repo: ok
 #!/usr/bin/env bash
 # gh issue view <n> --json title|labels --jq ...
 n="$3"; what="$5"
@@ -23,7 +23,7 @@ case "$n:$what" in
 esac
 exit 0
 GH
-chmod +x "$work/bin/gh"; export PATH="$work/bin:$PATH"
+chmod +x "$work/bin/gh"; export PATH="$work/bin:$PATH" # gh-repo: ok
 export GITHUB_REPOSITORY=o/r
 
 git init -q --bare "$work/origin.git"

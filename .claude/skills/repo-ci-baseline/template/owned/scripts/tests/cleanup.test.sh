@@ -19,13 +19,13 @@ check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 
 export GH_FIX="$work/fix"; mkdir "$GH_FIX"
 mkdir "$work/bin"
-cat > "$work/bin/gh" <<'GH'
+cat > "$work/bin/gh" <<'GH' # gh-repo: ok
 #!/usr/bin/env bash
 while [[ $# -gt 0 ]]; do [[ "$1" == --head ]] && { b="$2"; break; }; shift; done
 f="$GH_FIX/${b//\//_}"; [[ -f "$f" ]] && cat "$f"
 exit 0
 GH
-chmod +x "$work/bin/gh"
+chmod +x "$work/bin/gh" # gh-repo: ok
 export PATH="$work/bin:$PATH"
 export GITHUB_REPOSITORY=o/r
 

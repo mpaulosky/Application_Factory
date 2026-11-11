@@ -21,7 +21,7 @@ url="${url%.git}"
 repo_slug="${GITHUB_REPOSITORY:-}"
 if [[ -z "$repo_slug" && -n "$url" ]]; then repo_slug="${url#*github.com[:/]}"; fi
 [[ "$repo_slug" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] || { echo "❌ can't tell which repository: set GITHUB_REPOSITORY or add an origin remote" >&2; exit 1; }
-export GH_REPO="$repo_slug"
+export GH_REPO="${repo_slug:?}"
 
 title="$(gh issue view "$n" --json title --jq .title)"
 labels="$(gh issue view "$n" --json labels --jq '.labels[].name')"
