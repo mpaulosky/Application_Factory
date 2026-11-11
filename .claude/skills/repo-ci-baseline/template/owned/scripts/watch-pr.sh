@@ -20,7 +20,7 @@
 # owner's token, so the marker is the only way to tell them from the owner.
 #
 # Exit codes: 0 the session is needed; 1 quiet until the timeout (or after --once); 2 a usage error, a missing tool or a PR that
-# can't be read (five polls in a row fail; a poll that fails, isn't GitHub's answer, or reads an open PR's list or head ref only in part
+# can't be read (five polls in a row fail; a poll that fails, isn't GitHub's answer, or reads an open PR's list or rollup only in part
 # is never read as quiet).
 # Environment: WATCH_PR_MARKER, WATCH_PR_INTERVAL (default 60 seconds; each poll costs about 1-3 GraphQL points, so not lower),
 # WATCH_PR_TIMEOUT (default 120 minutes), GITHUB_REPOSITORY (else the upstream, then the origin remote).
@@ -106,8 +106,9 @@ QUERY='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,
 
 # The response must have GitHub's shape, with every list present and read whole: anything else is a failed poll, never a quiet one.
 # The checks come from the PR's own rollup, not the last of its commits (GitHub lists them by date, so the last needn't be the head) and not
-# the head ref (which lives in the head repository: a fork's, or one that is gone), and only when that rollup is of headRefOid. A list GitHub says has more pages than the query took is an incomplete read. Only an
-# open PR's lists are read: a merged or closed one is reported from its state alone, whatever its pageInfo or its rollup hold (its lists must still be arrays).
+# the head ref (which lives in the head repository: a fork's, or one that is gone), and only when that rollup is of headRefOid.
+# No rollup means no check has reported, unless the PR is UNSTABLE (a check failed): then the read is incomplete. A list GitHub says has
+# more pages than the query took is an incomplete read. Only an open PR's lists are read: a merged or closed one is reported from its state alone, whatever its pageInfo or its rollup hold (its lists must still be arrays).
 SHAPE_JQ='
   .data.repository.pullRequest
   | type == "object" and (.state | type == "string")
@@ -117,9 +118,9 @@ SHAPE_JQ='
       and (.reviews.pageInfo.hasPreviousPage == false)
       and (.comments.pageInfo.hasPreviousPage == false)
       and (.headRefOid | type == "string")
-      and (.statusCheckRollup == null or (
+      and ((.statusCheckRollup == null and .mergeStateStatus != "UNSTABLE") or (.statusCheckRollup != null and (
         .statusCheckRollup.commit.oid == .headRefOid
-        and (.statusCheckRollup.contexts | (.nodes | type == "array") and .pageInfo.hasNextPage == false)))))
+        and (.statusCheckRollup.contexts | (.nodes | type == "array") and .pageInfo.hasNextPage == false))))))
 '
 
 # One line per reason: code, detail and the node id of a one-shot event (else empty), apart by the unit separator.

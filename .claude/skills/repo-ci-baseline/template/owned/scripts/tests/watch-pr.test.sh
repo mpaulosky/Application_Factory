@@ -751,11 +751,26 @@ for wanted in 'reviewThreads(first:100){pageInfo{hasNextPage}' 'reviews(last:100
 done
 check "the query no longer reads the last commit" not grep -qF 'commits(last' "$GH_LOG"
 
-# A PR whose head repository is gone or a fork (no head ref) is still watched: the rollup is the PR's own.
+# A PR whose head repository is gone, or a fork, is watched from its own rollup: the query reads no head ref.
 new_repo
-pr '{"headRef":null,"isCrossRepository":true}'
+pr '{}'
 run --once 7
-check "an open PR with no head ref is read from its own rollup: quiet" status_is 1
+check "the query reads no head ref" not grep -qF 'headRef{' "$GH_LOG"
+# No rollup yet is no check reported: quiet, unless the PR is UNSTABLE (a check failed), which is an incomplete read.
+new_repo
+pr '{"statusCheckRollup":null}'
+run --once 7
+check "an open PR with no rollup is quiet" status_is 1
+new_repo
+pr '{"statusCheckRollup":null,"mergeStateStatus":"UNSTABLE"}'
+run --once 7
+check "an UNSTABLE PR with no rollup is a failed poll: exit 2" status_is 2
+for incomplete in '{"statusCheckRollup":{"contexts":null}}' '{"statusCheckRollup":{"commit":{"oid":"x"}}}'; do
+  new_repo
+  pr "$incomplete"
+  run --once 7
+  check "an open PR with rollup $incomplete is a failed poll: exit 2" status_is 2
+done
 
 # A failing check on the PR rollup is found even though the PR has no commits list at all.
 new_repo
