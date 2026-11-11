@@ -126,7 +126,8 @@ a copy drifts, so reading both doubles the reading; a mirror that differs from i
 the sections must match in order), and prints two lines on stdout, the diff's
 key and HEAD: keep both, since they name exactly the code this round reviews. The key is that of the whole diff, mirrors included, so a change in a
 mirror alone still needs a new review. In a later round, run `scripts/review.sh prepare <run> <HEAD the round before printed>`: it also writes the
-diff of that round's fixes to `<run>/fixes.patch`, filtered the same way. Write to `<run>/decisions.md` the earlier decisions from step 3 and every finding this run's earlier rounds
+diff of that round's fixes to `<run>/fixes.patch`, filtered the same way. Write to `<run>/decisions.md`, with the Write tool and not a shell heredoc (the text quotes code such as `$(...)`,
+which a shell may run or a safety check may block), the earlier decisions from step 3 and every finding this run's earlier rounds
 raised, each with its id, outcome and reason, so no round raises again what an earlier one dismissed. A fixed item stays settled only until
 a reviewer reads the code at its `path:line` and finds the problem still there, then it is raised again. Label
 accepted and open ones "raise again if still in the code". Give a security finding (every finding the report marks

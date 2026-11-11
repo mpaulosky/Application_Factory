@@ -17,6 +17,7 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   (`owned-paths`, `template`, `seed-config` and `template-prompts`) are in the skill's `tests/sandcastle/`; `tests/sandcastle-check.test.sh` copies them into a repo the Template was
   Applied to and runs them there. They ran in `dotfiles` before the Template moved.
 - `docs/adr/`: the Factory's decisions. `docs/Instructions.md`: the steps for setting up a new Application or standardizing an existing one.
+  `docs/SECURITY.md`: how to report a vulnerability, and where an accepted security finding's reason goes.
 - `.github/workflows/template-tests.yml`: the Factory's own workflow (named `repo-ci-baseline Template`, job `Template tests`). It runs `test.sh` and the Sandcastle check on every PR.
 - `.github/hooks/` (`pre-commit`, `pre-push`, `post-checkout`), `scripts/check-branch-name.sh`, `.github/workflows/{claude-review,pr-automerge,pr-review-submitted}.yml` and
   `.github/scripts/post_claude_review.py`, and the issue and PR process (ADR 0009): `.github/ISSUE_TEMPLATE/*`, `.github/pull_request_template.md`, `.github/workflows/pr-title.yml` and
@@ -37,6 +38,7 @@ The Factory carries the git hooks and a gate of its own (ADR 0006), Claude Revie
 ## Commands
 
 ```bash
+scripts/gate.sh --quick                                       # while iterating: the same gate without the local review check and test.sh (about a minute); never for a push
 scripts/gate.sh                                               # the pre-push gate (needs pnpm on the first run): its test, the review's tests, the copies' drift check, lint, the local review check, then test.sh
 .claude/skills/repo-ci-baseline/test.sh                       # all the Template's tests; needs actionlint, zizmor, yamllint, shellcheck, markdownlint-cli2, node, git
 .claude/skills/repo-ci-baseline/tests/sandcastle-check.test.sh # Sandcastle's type-check and tests on a throwaway Application; needs pnpm and the network
