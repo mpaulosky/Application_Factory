@@ -3313,6 +3313,8 @@ describe("publicErrorText", () => {
       assert.notEqual(publicErrorText(hidden, () => false), hidden, JSON.stringify(hidden));
     }
     assert.equal(publicErrorText("a\ufeffb", () => false), "a b");
+    // What comes back is what both checks saw: a secret with a space in it, written with a byte-order mark, is withheld.
+    assert.match(publicErrorText("failure: alpha\ufeffbeta", (text) => text.includes("alpha beta")), /isn't shown/);
     const mixed = "\u0645\u06cc\u200c\u062e @\u200bsomeone";
     assert.equal(publicErrorText(mixed, () => false), mixed);
   });

@@ -544,15 +544,16 @@ export type LocalReviewArgs = {
 // withoutHostInvisible) and the two views below redact the same (else the second view, with the credential gone, comes back), and otherwise
 // as the second view. Other invisible characters are judged as ADR 0010 judges a terminal line (status.mts#hasHiddenText): a joiner in an emoji
 // sequence or in Persian or Indic text stays, a bidi override, a tag character or a stray zero-width space is a change. The checks see the text two ways: as written, and without its invisible
-// characters, which plainText removes after the check. A secret or a URL credential split by one is withheld or redacted.
+// characters, which plainText removes after the check. A secret or a URL credential split by one is withheld or redacted. A byte-order mark becomes a space first, as plainText makes it, so a text that held one comes back changed, and what comes back is always a text both checks saw.
 export function publicErrorText(text: string, holdsSecret: (text: string) => boolean = (t) => containsSecret(t, [])): string {
-  const withoutColour = text.replace(/\u001b\[[0-9;]*[A-Za-z]/g, "");
+  // A byte-order mark is whitespace to withoutInvisible and a space once plainText has run, so it becomes one here, before either check: what comes back is what was checked.
+  const withoutColour = text.replace(/\u001b\[[0-9;]*[A-Za-z]/g, "").replace(/\ufeff/g, " ");
   const redact = (t: string) => t.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/gi, "$1***@").trim();
   const cleaned = redact(withoutColour);
   const seen = redact(withoutInvisible(withoutColour));
   if (holdsSecret(cleaned) || holdsSecret(seen)) return "(This text isn't shown: it looked like it held a secret. It was withheld.)";
   const hostOnly = withoutHostInvisible(cleaned);
-  return !hasHiddenText(hostOnly) && !hostOnly.includes("\u0085") && withoutInvisible(cleaned) === seen ? cleaned : seen.replace(/\ufeff/g, " "); // a byte-order mark is whitespace to withoutInvisible; plainText makes it a space too
+  return !hasHiddenText(hostOnly) && !hostOnly.includes("\u0085") && withoutInvisible(cleaned) === seen ? cleaned : seen;
 }
 
 // The git arguments listing the .github/workflows/ files each commit from
