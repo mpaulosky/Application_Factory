@@ -731,6 +731,16 @@ for done_state in MERGED CLOSED; do
   done
 done
 
+# A merged or closed PR's lists must still be arrays: the shape check keeps that rule outside its OPEN-only part.
+for done_state in MERGED CLOSED; do
+  for list in reviewThreads reviews comments; do
+    new_repo
+    pr "$(jq -n --arg state "$done_state" --arg list "$list" '{state: $state, merged: ($state == "MERGED")} * {($list): {nodes: null}}')"
+    run --once 7
+    check "a $done_state PR whose $list is not an array is a failed poll: exit 2" status_is 2
+  done
+done
+
 # An OPEN PR whose rollup isn't of its head, or a response with neither oid, is a failed poll, and a missing pageInfo is no proof of a whole read.
 for incomplete in '{"headRefOid":null,"statusCheckRollup":{"commit":{"oid":null}}}' '{"statusCheckRollup":{"commit":null}}' \
   '{"reviewThreads":{"pageInfo":null}}' '{"reviews":{"pageInfo":null}}' '{"comments":{"pageInfo":null}}' \
@@ -746,7 +756,7 @@ new_repo
 pr '{}'
 run --once 7
 for wanted in 'reviewThreads(first:100){pageInfo{hasNextPage}' 'reviews(last:100){pageInfo{hasPreviousPage}' \
-  'comments(last:100){pageInfo{hasPreviousPage}' 'contexts(first:100){pageInfo{hasNextPage}' 'statusCheckRollup{commit{oid}'; do
+  'comments(last:100){pageInfo{hasPreviousPage}' 'contexts(first:100){pageInfo{hasNextPage}' 'statusCheckRollup{commit{oid}' 'headRefOid'; do
   check "the query asks for $wanted" grep -qF -- "$wanted" "$GH_LOG"
 done
 check "the query no longer reads the last commit" not grep -qF 'commits(last' "$GH_LOG"
