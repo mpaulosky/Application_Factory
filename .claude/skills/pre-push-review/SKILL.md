@@ -224,8 +224,8 @@ code at each finding's line yourself, then give it one outcome:
 
 Stage the findings, so a long session that loses its memory of the earlier rounds still records them. Write the round's JSON array, every
 field of step 8's `findings` (ids as below), with the Write tool to `<run>/round-N.json` (the text quotes code, as in step 4), and run
-`scripts/review.sh stage <run> <run>/round-N.json`. Stage every finding as it stands when triage ends (a finding still to be fixed as `open`, with its `fix`; a dismissed one
-with its `reason`), stage each fixed one again at the end of step 6 as `fixed` with its `test` (or `reason`), and stage the last round's before step 8. A finding
+`scripts/review.sh stage <run> <run>/round-N.json`. Stage every finding as it stands when triage ends (a finding still to be fixed, or left open for a person, as `open`
+with its `fix`; a dismissed one with its `reason`), stage each fixed one again at the end of step 6 as `fixed` with its `test` (or `reason`), and stage the last round's before step 8. A finding
 staged again under the same id replaces the earlier one.
 
 Number this run's findings from the id `scripts/review.sh next` prints at the start of the run, continuing across its

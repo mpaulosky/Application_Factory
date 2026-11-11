@@ -1488,14 +1488,14 @@ export function stagedOwnerProblem(info: { uid: number; mode: number }, uid: num
 }
 
 // The findings staged in `directory`, each checked as `record` checks its input. A file that is missing, a symlink or not a regular file,
-// not the current user's, unreadable, not JSON, not an array, or holding a finding `record` would refuse stops the command and names the file,
-// so a damaged file fails where it is met. The file is opened once, without following a link, and judged by that descriptor, so it can't be
-// swapped between the check and the read.
+// not the current user's or writable by the group or others, unopenable, not JSON, not an array, or holding a finding `record` would refuse
+// stops the command and names the file, so a damaged file fails where it is met. The file is opened once, without following a link and without
+// blocking (a FIFO opens at once and is refused below), and judged by that descriptor, so it can't be swapped between the check and the read.
 function readStaged(directory: string): z.infer<typeof findingListSchema> {
   const file = join(directory, STAGED_FILE);
   let handle: number;
   try {
-    handle = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+    handle = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") throw new Error(`${file} doesn't exist: stage the findings of a round first (scripts/review.sh stage).`, { cause: error });
@@ -1508,11 +1508,7 @@ function readStaged(directory: string): z.infer<typeof findingListSchema> {
     if (!info.isFile()) throw new Error(`${file} isn't a regular file.`);
     const problem = stagedOwnerProblem(info, process.getuid?.(), file);
     if (problem !== undefined) throw new Error(problem);
-    try {
-      text = readFileSync(handle, "utf8");
-    } catch (error) {
-      throw new Error(`${file} can't be read: ${(error as Error).message}`, { cause: error });
-    }
+    text = readFileSync(handle, "utf8");
   } finally {
     closeSync(handle);
   }
@@ -1533,7 +1529,8 @@ function readStaged(directory: string): z.infer<typeof findingListSchema> {
 // owner-only and whole (a temp file renamed over it, never written through a link), in a folder that is the current user's, not a symlink
 // (a trailing slash doesn't hide one: the path is resolved first) and not writable by others, and a second `stage` that runs at the same
 // time is refused by a lock file, since two would each merge into the same old file and one would lose the other's findings.
-function stageFindings(given: string, findings: unknown): { added: number; total: number } {
+// `close` is the descriptor close, a seam for the test that makes it fail.
+export function stageFindings(given: string, findings: unknown, close: (handle: number) => void = closeSync): { added: number; total: number } {
   const parsed = findingListSchema.parse(findings);
   const directory = resolve(given);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -1559,7 +1556,7 @@ function stageFindings(given: string, findings: unknown): { added: number; total
   } finally {
     // The lock goes even when the close fails.
     try {
-      closeSync(handle);
+      close(handle);
     } finally {
       rmSync(lock, { force: true });
     }

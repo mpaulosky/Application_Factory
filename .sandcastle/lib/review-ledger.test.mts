@@ -27,6 +27,7 @@ import {
   underOwnedPattern,
   ledgerDir,
   main,
+  stageFindings,
   stagedOwnerProblem,
   mergeBase,
   OWNED_PATHS,
@@ -4243,6 +4244,20 @@ describe("staging findings between rounds", () => {
     return file;
   };
   const folder = () => join(root, "run");
+  // A folder or staging file made by hand is owner-only whatever the umask is, as the folder `mktemp -d` makes is: `stage` refuses one others can write.
+  const ownerOnly = (path: string, mode: number) => {
+    chmodSync(path, mode);
+    return path;
+  };
+  const makeFolder = (path = folder()) => {
+    mkdirSync(path, { recursive: true });
+    return ownerOnly(path, 0o700);
+  };
+  const writeStaged = (text: string) => {
+    const file = join(makeFolder(), "findings.json");
+    writeFileSync(file, text);
+    return ownerOnly(file, 0o600);
+  };
   const staged = (directory = folder()): { id: string; status: string; policy?: string }[] => JSON.parse(readFileSync(join(directory, "findings.json"), "utf8"));
   const ids = (directory = folder()) => staged(directory).map((found) => found.id);
   const USAGE_LINE = /Usage: scripts\/review\.sh <command>/;
@@ -4363,14 +4378,15 @@ describe("staging findings between rounds", () => {
     assert.match(held.err, /another stage is writing/);
     assert.deepEqual(ids(), ["R1"]);
     rmSync(join(folder(), "findings.json.lock"));
-    writeFileSync(join(folder(), "findings.json"), "not json");
-    assert.equal(cli(["stage", folder(), array("c.json", [finding({ id: "R3" })])]).code, 1);
+    writeStaged("not json");
+    const failed = cli(["stage", folder(), array("c.json", [finding({ id: "R3" })])]);
+    assert.equal(failed.code, 1);
+    assert.match(failed.err, /isn't JSON/);
     assert.equal(existsSync(join(folder(), "findings.json.lock")), false);
   });
 
   it("fails on a staged file that is damaged, names it, and leaves it as it was", () => {
-    mkdirSync(folder(), { recursive: true });
-    const file = join(folder(), "findings.json");
+    const file = writeStaged("");
     const cases: [string, RegExp][] = [
       ["not json", /isn't JSON/],
       ["{}", /isn't a JSON array/],
@@ -4379,7 +4395,7 @@ describe("staging findings between rounds", () => {
       [JSON.stringify([finding({ status: "accepted", reason: "ok" })]), /can't be recorded as accepted/],
     ];
     for (const [text, message] of cases) {
-      writeFileSync(file, text);
+      writeStaged(text);
       const staging = cli(["stage", folder(), array("a.json", [finding({ id: "R9" })])]);
       const recording = cli(["record", inputFile(), "--staged", folder()]);
 
@@ -4393,7 +4409,7 @@ describe("staging findings between rounds", () => {
   });
 
   it("refuses a staging file that is a symlink or a folder, and a folder that is a symlink", () => {
-    mkdirSync(folder(), { recursive: true });
+    makeFolder();
     const target = array("target.json", [finding()]);
     symlinkSync(target, join(folder(), "findings.json"));
     assert.match(cli(["stage", folder(), array("a.json", [finding({ id: "R2" })])]).err, /isn't a regular file/);
@@ -4410,7 +4426,8 @@ describe("staging findings between rounds", () => {
   });
 
   it("refuses a staging file that is a folder", () => {
-    mkdirSync(join(folder(), "findings.json"), { recursive: true });
+    makeFolder();
+    mkdirSync(join(folder(), "findings.json"));
 
     assert.match(cli(["stage", folder(), array("a.json", [finding()])]).err, /isn't a regular file\./);
     assert.match(cli(["record", inputFile(), "--staged", folder()]).err, /isn't a regular file\./);
@@ -4424,7 +4441,7 @@ describe("staging findings between rounds", () => {
     const result = cli(["stage", folder(), array("b.json", [finding({ id: "R2" })])]);
 
     assert.equal(result.code, 1);
-    assert.match(result.err, /can't be (opened|read)/);
+    assert.match(result.err, /can't be opened/);
     assert.doesNotMatch(result.err, /isn't JSON/);
   });
 
@@ -4452,6 +4469,31 @@ describe("staging findings between rounds", () => {
     chmodSync(folder(), 0o777);
 
     assert.match(cli(["stage", folder(), array("c.json", [finding({ id: "R3" })])]).err, /can be written by others/);
+    assert.deepEqual(ids(), ["R1"]);
+  });
+
+  it("refuses a staging file that is a FIFO at once, and leaves no lock", { timeout: 20000 }, () => {
+    makeFolder();
+    execFileSync("mkfifo", [join(folder(), "findings.json")]);
+
+    const staging = spawnSync("bash", [reviewScript, "stage", folder(), array("a.json", [finding()])], { cwd: repo, encoding: "utf8", env: childEnv, timeout: 10000 });
+    const recording = spawnSync("bash", [reviewScript, "record", inputFile(), "--staged", folder()], { cwd: repo, encoding: "utf8", env: childEnv, timeout: 10000 });
+
+    assert.equal(staging.status, 1, staging.stderr);
+    assert.match(staging.stderr, /isn't a regular file\./);
+    assert.equal(recording.status, 1, recording.stderr);
+    assert.match(recording.stderr, /isn't a regular file\./);
+    assert.equal(existsSync(join(folder(), "findings.json.lock")), false);
+  });
+
+  it("removes the lock when closing the lock file fails, and passes the error on", () => {
+    const failing = () => {
+      throw new Error("close failed");
+    };
+
+    assert.throws(() => stageFindings(folder(), [finding()], failing), /close failed/);
+
+    assert.equal(existsSync(join(folder(), "findings.json.lock")), false);
     assert.deepEqual(ids(), ["R1"]);
   });
 
