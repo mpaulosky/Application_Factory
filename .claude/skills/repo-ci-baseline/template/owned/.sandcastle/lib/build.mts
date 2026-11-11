@@ -538,14 +538,18 @@ export type LocalReviewArgs = {
   reviewerMode?: ReviewerMode;
 };
 
-// An error's text as it can go on a public issue: no colour codes, no invisible
-// characters, no credentials in a URL, and nothing at all if it holds a secret.
+// An error's text as it can go on a public issue: no colour codes, no credentials in a URL, and nothing at all if it holds a secret. The text
+// comes back as it was given apart from that (callers compare it with their input to tell that nothing in it needed changing, and the
+// zero-width spaces the host adds to a mention or a reference, or an emoji's variation selector, are not a change), but the checks see it two
+// ways: as written, and without its invisible characters, which plainText removes after the check. A secret or a URL credential split by one is
+// withheld or redacted, and when only the second view had a credential, that redacted view is what comes back.
 export function publicErrorText(text: string, holdsSecret: (text: string) => boolean = (t) => containsSecret(t, [])): string {
-  // Invisible characters go first (after the colour codes, which start with one), so a secret split by one is whole when it is checked.
-  const cleaned = withoutInvisible(text.replace(/\u001b\[[0-9;]*[A-Za-z]/g, ""))
-    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/gi, "$1***@")
-    .trim();
-  return holdsSecret(cleaned) ? "(This text isn't shown: it looked like it held a secret. It was withheld.)" : cleaned;
+  const withoutColour = text.replace(/\u001b\[[0-9;]*[A-Za-z]/g, "");
+  const redact = (t: string) => t.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/gi, "$1***@").trim();
+  const cleaned = redact(withoutColour);
+  const seen = redact(withoutInvisible(withoutColour));
+  if (holdsSecret(cleaned) || holdsSecret(seen)) return "(This text isn't shown: it looked like it held a secret. It was withheld.)";
+  return withoutInvisible(cleaned) === seen ? cleaned : seen;
 }
 
 // The git arguments listing the .github/workflows/ files each commit from
@@ -1287,7 +1291,7 @@ async function buildMarkedIssue(
       problem = `lacks the ${missing.map((heading) => `"## ${heading}"`).join(", ")} heading${missing.length > 1 ? "s" : ""}`;
     } else if (prBody.length > PR_BODY_LIMIT) {
       problem = `is ${prBody.length} characters, more than the ${PR_BODY_LIMIT} a PR body can hold`;
-    } else if (host.publicError(prBody) !== prBody) {
+    } else if (host.publicError(prBody) !== prBody) { // publicErrorText returns a text as it was given unless it needed a change (colour, a URL credential, a secret, or invisible characters other than the ones the host adds)
       // publicError also strips colour codes and URL credentials. Any change
       // means the file isn't safe to publish as written, so it isn't.
       problem = "holds a secret, a token shape or other text that isn't safe to publish";

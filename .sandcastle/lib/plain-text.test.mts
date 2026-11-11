@@ -420,3 +420,19 @@ describe("withoutInvisible", () => {
     assert.equal(withoutInvisible("gh\u200bp_abc"), "ghp_abc");
   });
 });
+
+describe("stripControl and withoutInvisible", () => {
+  // They hold the same character class twice; this fails when one is changed without the other.
+  it("remove the same characters from `a<c>b` for every code point", () => {
+    const disagree: string[] = [];
+    for (let point = 0; point <= 0x10ffff; point += 1) {
+      if (point >= 0xd800 && point <= 0xdfff) continue;
+      const character = String.fromCodePoint(point);
+      const text = `a${character}b`;
+      const collapsed = withoutInvisible(text).replace(/\s+/gu, " ");
+      if (collapsed !== stripControl(text)) disagree.push(point.toString(16));
+    }
+
+    assert.deepEqual(disagree, []);
+  });
+});

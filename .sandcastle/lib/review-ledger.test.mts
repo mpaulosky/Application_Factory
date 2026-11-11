@@ -1122,7 +1122,7 @@ describe("recordReview", () => {
     });
   }
 
-  it("takes a path with single spaces, as every file of the Template has under \"Support For New Projects/\"", () => {
+  it("takes a path with single spaces, as a folder named with spaces has", () => {
     const path = "Support For New Projects/.claude/skills/repo-ci-baseline/apply.sh";
 
     const ledger = record([finding({ path })]);

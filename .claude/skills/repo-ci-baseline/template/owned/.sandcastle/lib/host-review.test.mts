@@ -153,7 +153,7 @@ describe("the host's reviewers against /pre-push-review's own", () => {
     assert.ok(!names(reviewersFor(["src/app.ts"], lenses)).includes("GitHub Actions"));
   });
 
-  it("matches the Template's own folder, whose name holds spaces", () => {
+  it("matches a folder whose name holds spaces", () => {
     const files = ["Support For New Projects/.claude/skills/repo-ci-baseline/template/owned/.sandcastle/lib/build.mts"];
     assert.ok(names(reviewersFor(files, lenses)).includes("Edge cases"));
   });
@@ -181,7 +181,7 @@ describe("patchPaths", () => {
     assert.deepEqual(patchPaths(header("src/b.ts") + header("src/a.ts") + header("src/b.ts")), ["src/b.ts", "src/a.ts"]);
   });
 
-  it("reads a path with spaces, as the Template's folder has", () => {
+  it("reads a path with spaces", () => {
     const path = "Support For New Projects/.claude/skills/x/SKILL.md";
 
     assert.deepEqual(patchPaths(header(path)), [path]);

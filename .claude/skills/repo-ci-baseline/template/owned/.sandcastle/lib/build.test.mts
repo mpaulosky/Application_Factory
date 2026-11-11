@@ -59,6 +59,7 @@ import { StalledStepError, TamperedWorktreeError } from "./errors.mts";
 import { gitSandboxFake } from "./git-sandbox-fake.mts";
 import type { HostReviewResult } from "./host-review.mts";
 import { RunLimits } from "./limits.mts";
+import { plainText } from "./plain-text.mts";
 import { PR_BODY_RULES } from "./prompts.mts";
 import { ledgerGitEnv, renderAdvisories, type Ledger } from "./review-ledger.mts";
 import type { SecretMatch } from "./scan.mts";
@@ -3281,15 +3282,31 @@ describe("publicErrorText", () => {
     );
   });
 
-  it("removes invisible characters before the secret check, so a token split by one is checked whole", () => {
-    let checked = "";
+  it("checks the text as written and without its invisible characters, so a token split by one is checked whole", () => {
+    const checked: string[] = [];
     const text = publicErrorText("token gh\u200bp_abcdef rejected\n\u202esecond line", (cleaned) => {
-      checked = cleaned;
+      checked.push(cleaned);
       return false;
     });
 
-    assert.equal(checked, "token ghp_abcdef rejected\nsecond line");
-    assert.equal(text, "token ghp_abcdef rejected\nsecond line");
+    assert.deepEqual(checked, ["token gh\u200bp_abcdef rejected\n\u202esecond line", "token ghp_abcdef rejected\nsecond line"]);
+    assert.equal(text, "token gh\u200bp_abcdef rejected\n\u202esecond line"); // plainText removes them when the text is published
+  });
+
+  it("returns a text unchanged when only the host's own zero-width spaces and an emoji's selector are invisible in it", () => {
+    const rendered = plainText("see #12 on github.com @someone");
+    const emoji = "\u26a0\ufe0f check failed";
+
+    assert.notEqual(rendered, "see #12 on github.com @someone");
+    assert.equal(publicErrorText(rendered, () => false), rendered);
+    assert.equal(publicErrorText(emoji, () => false), emoji);
+  });
+
+  it("redacts a URL credential though a zero-width space splits the scheme", () => {
+    const text = publicErrorText("failed: https\u200b://x-access:abc123@github.com/o/r.git", () => false);
+
+    assert.ok(!text.includes("abc123"), text);
+    assert.match(text, /\*\*\*@github\.com\/o\/r\.git/);
   });
 
   it("still takes a colour code out whole, though its escape is an invisible character", () => {
