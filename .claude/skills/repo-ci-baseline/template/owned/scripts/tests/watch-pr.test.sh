@@ -5,7 +5,7 @@
 # The fake gh ignores the query it is given and prints a canned GraphQL response, so the script must read gh's whole output with jq
 # itself (no `gh --jq`). The response has GitHub's own shape, under .data.repository.pullRequest:
 #   state, merged, mergeable, mergeStateStatus, headRefOid,
-#   headRef.target.{oid, statusCheckRollup.contexts.nodes[]}  (CheckRun: name, conclusion, status; StatusContext: context, state),
+#   statusCheckRollup.{commit.oid, contexts.nodes[]}  (CheckRun: name, conclusion, status; StatusContext: context, state),
 #   reviewThreads.nodes[]  (isResolved, comments.nodes[]: author { __typename, login }, body; the last one is the thread's last comment),
 #   reviews.nodes[] and comments.nodes[]  (id, author { __typename, login }, body, and state for a review).
 set -uo pipefail
@@ -104,14 +104,14 @@ new_repo() {
 pr() {
   jq -n --argjson over "$1" --arg sha "$SHA" '
     {state: "OPEN", merged: false, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", headRefOid: $sha,
-     headRef: {target: {oid: $sha, statusCheckRollup: {contexts: {pageInfo: {hasNextPage: false}, nodes: []}}}},
+     statusCheckRollup: {commit: {oid: $sha}, contexts: {pageInfo: {hasNextPage: false}, nodes: []}},
      reviewThreads: {pageInfo: {hasNextPage: false}, nodes: []},
      reviews: {pageInfo: {hasPreviousPage: false}, nodes: []},
      comments: {pageInfo: {hasPreviousPage: false}, nodes: []}} * $over
     | {data: {repository: {pullRequest: .}}}' > "$GH_FIXTURE"
 }
 # checks <nodes-json>: the PR's checks.
-checks() { pr "{\"headRef\":{\"target\":{\"statusCheckRollup\":{\"contexts\":{\"nodes\":$1}}}}}"; }
+checks() { pr "{\"statusCheckRollup\":{\"contexts\":{\"nodes\":$1}}}"; }
 # thread <resolved> <author-json> <body>: one thread whose only (so last) comment is that.
 thread() {
   pr "$(jq -n --argjson resolved "$1" --argjson author "$2" --arg body "$3" \
@@ -673,7 +673,7 @@ check "three failures, then quiet until the timeout: exit 1" status_is 1
 # A response with GitHub's shape whose text can't be read (a number for a comment body) is a failed poll every time: the failures add up
 # across polls and end the watcher, rather than each one counting as the first.
 new_repo
-echo '{"data":{"repository":{"pullRequest":{"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"x","headRef":{"target":{"oid":"x","statusCheckRollup":null}},"reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":[]},"reviews":{"pageInfo":{"hasPreviousPage":false},"nodes":[]},"comments":{"pageInfo":{"hasPreviousPage":false},"nodes":[{"id":"C_1","author":{"__typename":"User","login":"reviewer"},"body":5}]}}}}}' > "$GH_FIXTURE"
+echo '{"data":{"repository":{"pullRequest":{"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"x","statusCheckRollup":null,"reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":[]},"reviews":{"pageInfo":{"hasPreviousPage":false},"nodes":[]},"comments":{"pageInfo":{"hasPreviousPage":false},"nodes":[{"id":"C_1","author":{"__typename":"User","login":"reviewer"},"body":5}]}}}}}' > "$GH_FIXTURE"
 run --interval 60 --timeout 120 7
 check "an unreadable answer five times: exit 2" status_is 2
 check "an unreadable answer is never reported as quiet" out_is_empty
@@ -706,13 +706,13 @@ echo '{"data":{"repository":{"pullRequest":{"state":"OPEN"}}}}' > "$GH_FIXTURE"
 run --once 7
 check "a response missing its lists is not quiet" not status_is 1
 
-# A list GitHub says has more pages, or a head ref that isn't headRefOid, is an incomplete read: a failed poll, never quiet.
+# A list GitHub says has more pages, or a rollup that isn't of headRefOid, is an incomplete read: a failed poll, never quiet.
 for incomplete in \
   '{"reviewThreads":{"pageInfo":{"hasNextPage":true}}}' \
   '{"reviews":{"pageInfo":{"hasPreviousPage":true}}}' \
   '{"comments":{"pageInfo":{"hasPreviousPage":true}}}' \
-  '{"headRef":{"target":{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true}}}}}}' \
-  '{"headRef":{"target":{"oid":"not-the-head"}}}'; do
+  '{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true}}}}' \
+  '{"statusCheckRollup":{"commit":{"oid":"not-the-head"}}}'; do
   new_repo
   pr "$incomplete"
   run --once 7
@@ -720,10 +720,10 @@ for incomplete in \
   check "an incomplete read ($incomplete) is a failed poll: exit 2" status_is 2
 done
 
-# A merged or closed PR is reported whatever its pageInfo holds: it has no head ref once the branch is gone, and its lists' pages are never read.
+# A merged or closed PR is reported whatever its pageInfo holds: its rollup may be of nothing once the branch is gone, and its lists' pages are never read.
 for done_state in MERGED CLOSED; do
   for over in '{"reviewThreads":{"pageInfo":{"hasNextPage":true}}}' '{"reviews":{"pageInfo":{"hasPreviousPage":true}}}' \
-    '{"comments":{"pageInfo":{"hasPreviousPage":true}}}' '{"headRef":null}'; do
+    '{"comments":{"pageInfo":{"hasPreviousPage":true}}}' '{"statusCheckRollup":{"commit":{"oid":"not-the-head"}}}'; do
     new_repo
     pr "$(jq -n --arg state "$done_state" --argjson over "$over" '{state: $state, merged: ($state == "MERGED")} * $over')"
     run --once 7
@@ -731,10 +731,10 @@ for done_state in MERGED CLOSED; do
   done
 done
 
-# An OPEN PR needs a head ref at its head: none, or a response with neither oid, is a failed poll, and a missing pageInfo is no proof of a whole read.
-for incomplete in '{"headRef":null}' '{"headRefOid":null,"headRef":{"target":{"oid":null}}}' \
+# An OPEN PR whose rollup isn't of its head, or a response with neither oid, is a failed poll, and a missing pageInfo is no proof of a whole read.
+for incomplete in '{"headRefOid":null,"statusCheckRollup":{"commit":{"oid":null}}}' '{"statusCheckRollup":{"commit":null}}' \
   '{"reviewThreads":{"pageInfo":null}}' '{"reviews":{"pageInfo":null}}' '{"comments":{"pageInfo":null}}' \
-  '{"headRef":{"target":{"statusCheckRollup":{"contexts":{"pageInfo":null}}}}}'; do
+  '{"statusCheckRollup":{"contexts":{"pageInfo":null}}}'; do
   new_repo
   pr "$incomplete"
   run --once 7
@@ -746,16 +746,22 @@ new_repo
 pr '{}'
 run --once 7
 for wanted in 'reviewThreads(first:100){pageInfo{hasNextPage}' 'reviews(last:100){pageInfo{hasPreviousPage}' \
-  'comments(last:100){pageInfo{hasPreviousPage}' 'contexts(first:100){pageInfo{hasNextPage}' 'headRef{target{... on Commit{oid'; do
+  'comments(last:100){pageInfo{hasPreviousPage}' 'contexts(first:100){pageInfo{hasNextPage}' 'statusCheckRollup{commit{oid}'; do
   check "the query asks for $wanted" grep -qF -- "$wanted" "$GH_LOG"
 done
 check "the query no longer reads the last commit" not grep -qF 'commits(last' "$GH_LOG"
 
-# A failing check on the head ref is found even though the PR has no commits list at all.
+# A PR whose head repository is gone or a fork (no head ref) is still watched: the rollup is the PR's own.
+new_repo
+pr '{"headRef":null,"isCrossRepository":true}'
+run --once 7
+check "an open PR with no head ref is read from its own rollup: quiet" status_is 1
+
+# A failing check on the PR rollup is found even though the PR has no commits list at all.
 new_repo
 checks '[{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"FAILURE"}]'
 run --once 7
-check "a failing check on headRef is reported" status_is 0
+check "a failing check on the PR rollup is reported" status_is 0
 
 # ---------------------------------------------------------------------------
 # --would-skip: the classifier alone, reading a comment body on stdin.

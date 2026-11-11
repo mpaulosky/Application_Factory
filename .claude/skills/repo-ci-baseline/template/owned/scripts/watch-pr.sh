@@ -102,12 +102,12 @@ common_dir="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
 seen_file="$common_dir/watch-pr-$pr.seen"
 
 # shellcheck disable=SC2016 # GraphQL's $variables are not the shell's
-QUERY='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){state merged mergeable mergeStateStatus headRefOid headRef{target{... on Commit{oid statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}} reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved comments(last:1){nodes{author{__typename login} body}}}} reviews(last:100){pageInfo{hasPreviousPage} nodes{id state author{__typename login} body}} comments(last:100){pageInfo{hasPreviousPage} nodes{id author{__typename login} body}}}}}'
+QUERY='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){state merged mergeable mergeStateStatus headRefOid statusCheckRollup{commit{oid} contexts(first:100){pageInfo{hasNextPage} nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}} reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved comments(last:1){nodes{author{__typename login} body}}}} reviews(last:100){pageInfo{hasPreviousPage} nodes{id state author{__typename login} body}} comments(last:100){pageInfo{hasPreviousPage} nodes{id author{__typename login} body}}}}}'
 
 # The response must have GitHub's shape, with every list present and read whole: anything else is a failed poll, never a quiet one.
-# The checks come from the PR's head ref, not the last of its commits (GitHub lists them by date, so the last needn't be the head), and
-# only when that ref is still at headRefOid. A list GitHub says has more pages than the query took is an incomplete read. Only an
-# open PR's lists are read: a merged or closed one is reported from its state alone, whatever its pageInfo or its deleted head hold (its lists must still be arrays).
+# The checks come from the PR's own rollup, not the last of its commits (GitHub lists them by date, so the last needn't be the head) and not
+# the head ref (which lives in the head repository: a fork's, or one that is gone), and only when that rollup is of headRefOid. A list GitHub says has more pages than the query took is an incomplete read. Only an
+# open PR's lists are read: a merged or closed one is reported from its state alone, whatever its pageInfo or its rollup hold (its lists must still be arrays).
 SHAPE_JQ='
   .data.repository.pullRequest
   | type == "object" and (.state | type == "string")
@@ -117,9 +117,9 @@ SHAPE_JQ='
       and (.reviews.pageInfo.hasPreviousPage == false)
       and (.comments.pageInfo.hasPreviousPage == false)
       and (.headRefOid | type == "string")
-      and .headRef.target.oid == .headRefOid
-      and ((.headRef.target.statusCheckRollup.contexts // {nodes: [], pageInfo: {hasNextPage: false}})
-           | (.nodes | type == "array") and .pageInfo.hasNextPage == false)))
+      and (.statusCheckRollup == null or (
+        .statusCheckRollup.commit.oid == .headRefOid
+        and (.statusCheckRollup.contexts | (.nodes | type == "array") and .pageInfo.hasNextPage == false)))))
 '
 
 # One line per reason: code, detail and the node id of a one-shot event (else empty), apart by the unit separator.
@@ -138,7 +138,7 @@ REASONS_JQ="$OURS_JQ"'
       (if $pr.mergeable == "CONFLICTING" then line("conflict"; "the PR conflicts with its base branch"; "")
        elif $pr.mergeStateStatus == "BEHIND" then line("behind"; "the base branch has moved on; merge it into the PR"; "")
        else empty end),
-      ([($pr.headRef.target.statusCheckRollup.contexts.nodes // [])[]
+      ([($pr.statusCheckRollup.contexts.nodes // [])[]
         | select((.conclusion as $c | ["FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"] | index($c))
                  or (.state as $s | ["FAILURE", "ERROR"] | index($s)))
         | (.name // .context)]

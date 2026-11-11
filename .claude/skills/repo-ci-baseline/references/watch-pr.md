@@ -42,7 +42,7 @@ A bot (`__typename` Bot: Copilot, github-actions) is never a person for `changes
 | --- | --- |
 | 0 | The session is needed; the reasons are on stdout. |
 | 1 | Quiet until the timeout, or after `--once`. |
-| 2 | A usage error, a missing `gh` or `jq`, an unknown repository, or a PR that can't be read. A poll that fails, answers with something other than a pull request, or reads an open PR's lists or head ref only in part (see Limits), is retried; five in a row end the watch. Output that isn't GitHub's answer is never read as quiet. |
+| 2 | A usage error, a missing `gh` or `jq`, an unknown repository, or a PR that can't be read. A poll that fails, answers with something other than a pull request, or reads an open PR's lists or rollup only in part (see Limits), is retried; five in a row end the watch. Output that isn't GitHub's answer is never read as quiet. |
 
 The timeout is counted in the waits between quiet polls (a failed poll's wait isn't counted; at most four of them run in a row).
 
@@ -64,9 +64,8 @@ Anyone who can comment can forge a marker and be unheard by the watcher. That is
 ## Limits
 
 - The lists are read once, not paged: 100 review threads, 100 checks, the last 100 reviews and the last 100 comments. A list GitHub says has more is an incomplete read,
-  a failed poll (never a quiet one), so a PR past those limits ends the watcher with exit 2. The checks come from the PR's head ref,
-  and only while it is at `headRefOid`; the last of the PR's commits needn't be the head.
-- The checks are read through the PR's head ref, in the head repository: an open PR whose head ref GitHub can't resolve (a deleted fork), or a fork PR, whose checks may not be listed there, is not watched.
+  a failed poll (never a quiet one), so a PR past those limits ends the watcher with exit 2. The checks come from the PR's own
+  `statusCheckRollup`, and only while it is of `headRefOid`; the last of the PR's commits needn't be the head, and the head ref (in the head repository) isn't read, so a fork PR is watched.
 - `behind` appears only where the base branch's rules require an up-to-date branch. PR Auto-Merge also merges `main` into a ready PR, so it may clear before the session acts.
 - The Sandcastle workflow's own red `Sandcastle` check counts as `check-failed`.
 - The tests run against a fake `gh`; nothing in the Template runs it against live GitHub.
