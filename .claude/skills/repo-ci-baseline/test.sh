@@ -47,6 +47,8 @@ bash "$owned/scripts/tests/check-branch-name.test.sh" || fail "check-branch-name
 bash "$owned/scripts/tests/check-pr-title.test.sh" || fail "check-pr-title.test.sh"
 bash "$owned/scripts/tests/sync-copilot-review.test.sh" || fail "sync-copilot-review.test.sh"
 bash "$owned/scripts/tests/watch-pr.test.sh" || fail "watch-pr.test.sh"
+bash "$owned/scripts/tests/cleanup.test.sh" || fail "cleanup.test.sh"
+bash "$owned/scripts/tests/work-issue.test.sh" || fail "work-issue.test.sh"
 # Both places that enforce the sync run the script's --check, which skips a repo without the code-review skill.
 # It runs through bash, so a lost mode bit fails loudly instead of skipping the check, and the anchors are the invocation lines (a step's label names the script too).
 grep -qxF '  bash scripts/sync-copilot-review.sh --check' "$owned/scripts/gate.sh" || fail "the Owned gate.sh must run: bash scripts/sync-copilot-review.sh --check"

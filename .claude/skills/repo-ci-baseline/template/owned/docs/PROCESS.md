@@ -14,16 +14,21 @@ git config core.hooksPath .github/hooks
 
 ## Branches and worktrees
 
-Every change is made on its own branch, in its own **worktree** beside the clone. The clone itself stays on `main`, and
-the pre-commit hook refuses a commit made there:
+Every change is made on its own branch, in its own **worktree** beside the clone, made when you start the work, not later. The clone
+itself stays on `main`, and the pre-commit hook refuses a commit made there. For an issue, one command makes the branch and worktree from
+`origin/main`, names them from the issue, and prints the path; then do all the work there, and make every follow-up fix there too, until the PR merges:
 
 ```bash
-git fetch origin
-git worktree add -b fix/42-null-children ../<Repo>-worktrees/fix-42-null-children origin/main
+cd "$(scripts/work-issue.sh 42)"   # e.g. fix/42-null-children in ../<Repo>-worktrees/fix-42-null-children
 ```
 
-The folder is the branch name with `/` turned into `-`. Remove the worktree once its PR merges:
-`git worktree remove ../<Repo>-worktrees/fix-42-null-children`.
+For work without an issue, make it by hand: `git worktree add -b chore/upgrade-net10 ../<Repo>-worktrees/chore-upgrade-net10 origin/main`.
+The folder is the branch name with `/` turned into `-`.
+
+**After the PR merges**, go back to the clone, run `scripts/cleanup.sh` (`--dry-run` first to see what it would do): it fetches and prunes,
+rebases `main` onto `origin/main`, and removes every branch whose PR merged, with its worktree and its `origin` branch. It reads the PR's state from
+GitHub, because a squash merge leaves nothing for `git branch --merged` to see. It keeps, and says why, a branch with an open PR, no PR, a commit the PR
+never had, or a worktree with uncommitted changes; a branch whose PR closed unmerged goes only with `--include-closed`.
 
 | Branch | Use |
 | --- | --- |
