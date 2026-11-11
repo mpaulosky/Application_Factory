@@ -146,6 +146,9 @@ wt_at chore/ord-a-clean "$work/wt-ord/a"
 wt_at chore/ord-b-stale "$work/wt-ord/b"; command rm -rf "$work/wt-ord/b"
 wt_at chore/ord-c-clean "$work/wt-ord/c"
 wt_at chore/ord-d-stale "$work/wt-ord/d"; command rm -rf "$work/wt-ord/d"
+# A hand-deleted worktree whose folder name ends in a space is still found (the path is read whole, not trimmed), and its parent is not empty
+mkdir -p "$work/wt-ts"; touch "$work/wt-ts/other"
+wt_at chore/trail-space "$work/wt-ts/t "; command rm -rf "$work/wt-ts/t "
 wt_at chore/parent-file "$work/wt-pf/pf"; command rm -rf "$work/wt-pf"; touch "$work/wt-pf"; chmod 755 "$work/wt-pf" # the parent is now an executable file, not a folder
 # A branch a worktree is rebasing shows as detached in the worktree list: git branch -D refuses it
 wt_at chore/rebasing "$work/wt/chore-rebasing"
@@ -298,6 +301,7 @@ check "a commit made after the branch was judged keeps the branch, and its origi
 check "a branch a worktree is rebasing is kept, with its origin copy" "has_local chore/rebasing && has_remote chore/rebasing && grep -q 'keep   chore/rebasing: git could not delete the branch' <<<\"\$out\" && [[ -d $work/wt/chore-rebasing ]]"
 check "a worktree whose parent folder is empty is kept as maybe out of reach, with the prune hint, and its entry kept" "has_local chore/only-child && has_remote chore/only-child && [[ -d $repo/.git/worktrees/oc ]] && grep -q \"keep   chore/only-child: its worktree's folder can't be reached\" <<<\"\$out\" && grep -q 'git worktree prune' <<<\"\$out\""
 check "hand-deleted worktrees are forgotten the same in the real run, whichever side of the clean ones they sort" "! has_local chore/ord-b-stale && ! has_remote chore/ord-b-stale && ! has_local chore/ord-d-stale && ! has_remote chore/ord-d-stale && ! has_local chore/ord-a-clean && ! has_local chore/ord-c-clean"
+check "a hand-deleted worktree whose folder name ends in a space is forgotten, not kept as out of reach" "! has_local chore/trail-space && ! has_remote chore/trail-space"
 check "a worktree whose parent is a file, not a folder, is kept the same way" "has_local chore/parent-file && has_remote chore/parent-file && [[ -d $repo/.git/worktrees/pf ]] && grep -q \"keep   chore/parent-file: its worktree's folder can't be reached\" <<<\"\$out\""
 check "a worktree whose parent folder is gone is kept the same way" "has_local chore/parent-gone && has_remote chore/parent-gone && [[ -d $repo/.git/worktrees/pg ]] && grep -q \"keep   chore/parent-gone: its worktree's folder can't be reached\" <<<\"\$out\""
 check "a PR merged into another base, then one into main, at the same tip: merged" "! has_remote chore/v-other-main"

@@ -15,7 +15,7 @@
 #     other than main, a dirty or unreadable worktree, a worktree whose folder can't be reached, a commit made after it was judged, a step git refused (a branch a worktree
 #     is rebasing or bisecting included), or a closed PR without --include-closed.
 # A worktree whose folder was deleted by hand has git's entry for it forgotten (only that one, and only if it is a real directory in .git/worktrees; a locked one is kept), when its
-# parent folder is still there, searchable and not empty. A parent that is missing, empty or unsearchable may be an unmounted drive (its mount point is left empty), so the branch is
+# parent folder is still there, searchable and not empty. A parent that is missing, empty, unreadable or unsearchable may be an unmounted drive (its mount point is left empty), so the branch is
 # kept, with the hint to run git worktree prune if the folder was deleted for good. --dry-run prints what would happen and changes no branch, worktree or commit (it still
 # fetches and prunes the remote-tracking refs).
 # Exits 1 when it can't run (not main, not the primary checkout, dirty main, main can't fast-forward, origin can't be fetched, no gh, no repository,
@@ -88,7 +88,7 @@ stale_entry() {
 # Which missing worktree folders count as deleted by hand: their parent was searchable and not empty before this run removed anything. Decided up front, so the answer does
 # not depend on which branch comes first (removing a clean sibling worktree can empty the parent) and a dry run gives the same answer as the real run.
 hand_deleted=""
-while read -r wpath; do
+while IFS= read -r wpath; do
   [[ -n "$wpath" && ! -e "$wpath" ]] || continue
   d="$(dirname "$wpath")"
   if [[ -d "$d" && -x "$d" && -n "$(ls -A "$d" 2>/dev/null)" ]]; then hand_deleted+="$wpath"$'\n'; fi
