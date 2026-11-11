@@ -3487,7 +3487,7 @@ describe("a git call the host's time limit ended", () => {
 });
 
 describe("branchSize and sizeWarning", () => {
-  const MIRROR = "Support For New Projects/.claude/skills/repo-ci-baseline/template/owned/";
+  const MIRROR = TEMPLATE_OWNED_PREFIX;
   // A patch that adds `added` lines to each named file.
   const patchOf = (files: { path: string; added: number }[]) =>
     files
@@ -3648,6 +3648,30 @@ describe("prepare's size warning", () => {
     commit(repo, "fix.cs", "y\n", "a fix");
 
     assert.equal(cli(["prepare", dir, head]).err, "");
+  });
+});
+
+describe("the Factory's Template mirrors", () => {
+  const file = (path: string, line: string, blob = "a".repeat(40)) =>
+    `diff --git a/${path} b/${path}\nnew file mode 100644\nindex ${"0".repeat(40)}..${blob}\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1 @@\n+${line}\n`;
+
+  it("are under .claude/skills/repo-ci-baseline/template/owned/, as they are in the Application Factory", () => {
+    assert.equal(TEMPLATE_OWNED_PREFIX, ".claude/skills/repo-ci-baseline/template/owned/");
+  });
+
+  it("are left out of the reader's patch when identical to the root file, and kept when they differ", () => {
+    const mirror = ".claude/skills/repo-ci-baseline/template/owned/.sandcastle/lib/a.mts";
+    const same = readerPatch(Buffer.from(file(".sandcastle/lib/a.mts", "x") + file(mirror, "x"))).toString();
+    const differs = readerPatch(Buffer.from(file(".sandcastle/lib/a.mts", "x") + file(mirror, "y", "b".repeat(40)))).toString();
+
+    assert.doesNotMatch(same, new RegExp(mirror.replace(/\./g, "\\.")));
+    assert.match(differs, new RegExp(mirror.replace(/\./g, "\\.")));
+  });
+
+  it("are counted once by branchSize when identical to the root file", () => {
+    const mirror = ".claude/skills/repo-ci-baseline/template/owned/.sandcastle/lib/a.mts";
+
+    assert.equal(branchSize(file(".sandcastle/lib/a.mts", "x") + file(mirror, "x")).files, 1);
   });
 });
 

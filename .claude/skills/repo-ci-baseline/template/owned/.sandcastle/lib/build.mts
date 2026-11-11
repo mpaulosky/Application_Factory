@@ -38,7 +38,7 @@ import { isBlocking, mergeBase, pinLedgerGit, prepareRound, recordReview, render
 import { containsSandboxSecret, containsSecret, sandboxSecrets } from "./sandbox-env.mts";
 import { describeSecretMatch, firstSecretMatch, type SecretMatch } from "./scan.mts";
 import { git, hostGitInvocation, runHostGit } from "./shell.mts";
-import { visibleLetters } from "./plain-text.mts";
+import { visibleLetters, withoutInvisible } from "./plain-text.mts";
 import { agentSandbox } from "./skills.mts";
 import { logSandboxState } from "./diagnostics.mts";
 import { buildLogs } from "./role-logs.mts";
@@ -538,11 +538,11 @@ export type LocalReviewArgs = {
   reviewerMode?: ReviewerMode;
 };
 
-// An error's text as it can go on a public issue: no colour codes, no
-// credentials in a URL, and nothing at all if it holds a secret.
+// An error's text as it can go on a public issue: no colour codes, no invisible
+// characters, no credentials in a URL, and nothing at all if it holds a secret.
 export function publicErrorText(text: string, holdsSecret: (text: string) => boolean = (t) => containsSecret(t, [])): string {
-  const cleaned = text
-    .replace(/\u001b\[[0-9;]*[A-Za-z]/g, "")
+  // Invisible characters go first (after the colour codes, which start with one), so a secret split by one is whole when it is checked.
+  const cleaned = withoutInvisible(text.replace(/\u001b\[[0-9;]*[A-Za-z]/g, ""))
     .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/gi, "$1***@")
     .trim();
   return holdsSecret(cleaned) ? "(This text isn't shown: it looked like it held a secret. It was withheld.)" : cleaned;

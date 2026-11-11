@@ -38,7 +38,7 @@ import { chmodSync, closeSync, existsSync, linkSync, lstatSync, mkdirSync, openS
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { plainText, RENDERED_LINK, stripControl, visibleLetters } from "./plain-text.mts";
+import { plainText, RENDERED_LINK, stripControl, visibleLetters, withoutInvisible } from "./plain-text.mts";
 import { NOT_OWNED_BASELINE_PATHS, REPO_SLUG } from "./repo-config.mts";
 import { hostExecFileSync } from "./host-limit.mts";
 import { ledgerGitEnv, markAccepted, pinLedgerGit, readEntries, recordSecurity, renderSecurityList, replaceFile, type SecurityInput, type SecurityOutcome } from "./security-record.mts";
@@ -237,15 +237,13 @@ export const FINDING_PATH_SHAPE = /^[^\s<>`]+( [^\s<>`]+)*$/;
 // ledger would refuse is asked for again, not found out when the review is recorded.
 export const findingWords = () => z.string().transform(stripControl).pipe(z.string().trim().min(1));
 
-// A repository path: no markup or backtick, and no whitespace but single spaces between its parts (the Template's own files sit
-// under "Support For New Projects/"), so it can't carry anything into the PR description that plainText would have to undo:
-// renderReport and the notes run it through plainText, and a tab, newline or double space never gets that far. It keeps its
+// A repository path: no markup or backtick, and no whitespace but single spaces between its parts (a folder name may hold one), so it can't
+// carry anything into the PR description that plainText would have to undo: renderReport and the notes run it through plainText, and a tab, newline or double space never gets that far. It keeps its
 // whitespace through the strip, so a tab or a double space is still refused rather than made a single space.
-const withoutControl = (text: string) => text.replace(/[\p{C}\p{Default_Ignorable_Code_Point}\u2800]/gu, (character) => (/\s/u.test(character) ? character : ""));
 export const findingPath = () =>
   z
     .string()
-    .transform(withoutControl)
+    .transform(withoutInvisible)
     .pipe(z.string().trim().min(1).regex(FINDING_PATH_SHAPE, "a path has no whitespace but single spaces between its parts, and no <, > or backtick"));
 
 // One finding. `fixed` needs the regression test that pins it, or the reason
@@ -618,9 +616,9 @@ export function patchPaths(patch: string): string[] {
   return [...paths];
 }
 
-// In the dotfiles repository an Owned Template file is held twice, at the repository root and under this path. In other repositories nothing starts
-// with it, so everything that reads it does nothing there.
-export const TEMPLATE_OWNED_PREFIX = "Support For New Projects/.claude/skills/repo-ci-baseline/template/owned/";
+// In the Application Factory, which owns the Template, an Owned Template file is held twice, at the repository root and under this path. In an
+// Application nothing starts with it, so everything that reads it does nothing there.
+export const TEMPLATE_OWNED_PREFIX = ".claude/skills/repo-ci-baseline/template/owned/";
 
 // The patch the reviewers read: `patch` without the sections of verbatim Template mirrors. A section is a mirror when its path is
 // TEMPLATE_OWNED_PREFIX + <P> and the same patch has a root section for <P> with the same final state (the same after-blob and the same

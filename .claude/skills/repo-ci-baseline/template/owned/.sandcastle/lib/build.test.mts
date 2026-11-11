@@ -3281,6 +3281,25 @@ describe("publicErrorText", () => {
     );
   });
 
+  it("removes invisible characters before the secret check, so a token split by one is checked whole", () => {
+    let checked = "";
+    const text = publicErrorText("token gh\u200bp_abcdef rejected\n\u202esecond line", (cleaned) => {
+      checked = cleaned;
+      return false;
+    });
+
+    assert.equal(checked, "token ghp_abcdef rejected\nsecond line");
+    assert.equal(text, "token ghp_abcdef rejected\nsecond line");
+  });
+
+  it("still takes a colour code out whole, though its escape is an invisible character", () => {
+    assert.equal(publicErrorText("\u001b[31mred\u001b[0m", () => false), "red");
+  });
+
+  it("withholds a real token shape split by a zero-width space", () => {
+    assert.match(publicErrorText(`failed with gh\u200bp_${"a".repeat(30)}`), /isn't shown/);
+  });
+
   it("withholds an error that holds a secret", () => {
     assert.match(publicErrorText("token abcdefgh12345 rejected", (text) => text.includes("abcdefgh12345")), /isn't shown/);
   });

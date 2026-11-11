@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { CAPITAL_LOOK_ALIKES, LOOK_ALIKES, plainText, RENDERED_LINK, stripControl, TAG, visibleLetters } from "./plain-text.mts";
+import { CAPITAL_LOOK_ALIKES, LOOK_ALIKES, plainText, RENDERED_LINK, stripControl, TAG, visibleLetters, withoutInvisible } from "./plain-text.mts";
 
 describe("visibleLetters", () => {
   for (const [form, text] of [
@@ -396,5 +396,27 @@ describe("stripControl", () => {
 
   it("leaves the empty string alone", () => {
     assert.equal(stripControl(""), "");
+  });
+});
+
+describe("withoutInvisible", () => {
+  for (const [form, character] of [["a zero-width space", "\u200b"], ["a soft hyphen", "\u00ad"], ["a variation selector", "\ufe0f"], ["a Unicode tag character", "\u{E0041}"], ["a braille blank", "\u2800"], ["a bidi override", "\u202e"], ["a null", "\u0000"], ["a private-use character", "\ue000"]] as const) {
+    it(`removes ${form}`, () => {
+      assert.equal(withoutInvisible(`a${character}b`), "ab");
+    });
+  }
+
+  it("keeps every whitespace character as it is, unlike stripControl", () => {
+    assert.equal(withoutInvisible("a\n\n b\t\tc\u00a0d"), "a\n\n b\t\tc\u00a0d");
+    assert.equal(stripControl("a\n\n b"), "a b");
+  });
+
+  it("leaves ordinary text, an accented letter and an astral character alone", () => {
+    assert.equal(withoutInvisible("caf\u00e9 \u{1F600}"), "caf\u00e9 \u{1F600}");
+    assert.equal(withoutInvisible(""), "");
+  });
+
+  it("joins a token an invisible character split, which is what a secret check needs to see", () => {
+    assert.equal(withoutInvisible("gh\u200bp_abc"), "ghp_abc");
   });
 });

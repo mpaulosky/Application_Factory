@@ -26,6 +26,13 @@ export function stripControl(text: string): string {
   return text.replace(/[\p{C}\p{Default_Ignorable_Code_Point}\u2800\s]+/gu, (run) => (/\s/u.test(run) ? " " : ""));
 }
 
+// `text` without the control, format, private-use and default-ignorable characters stripControl removes, but keeping its whitespace as it is (a
+// newline stays a newline). For a text that is checked for a secret before it is published: the check must see the text as a reader gets it, or a token
+// split by an invisible character passes the check and is whole once plainText has removed the character.
+export function withoutInvisible(text: string): string {
+  return text.replace(/[\p{C}\p{Default_Ignorable_Code_Point}\u2800]/gu, (character) => (/\s/u.test(character) ? character : ""));
+}
+
 // What GitHub renders as a link or an image, or fetches: an address with a scheme (`://`, `mailto:`), a www. address (GitHub links one anywhere after a space or
 // an underscore too, in a path as well as in prose), an inline, reference or image link (`](`, `][`, `![`), and a link reference definition (`]:`). Text that holds
 // one is not published to a public page: a reviewer that read untrusted text can be made to put one in a summary, a fix or a reason, and the host would publish it

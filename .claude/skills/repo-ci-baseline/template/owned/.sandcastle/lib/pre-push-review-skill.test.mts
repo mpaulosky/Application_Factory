@@ -635,7 +635,7 @@ describe("the pre-push-review skill's fewer-rounds rules", () => {
     assert.match(skill, /Check the fix before committing it/);
     assert.match(skill, /Write n-1, n and n\+1 boundary tests for each/);
     assert.match(skill, /\(a mutation check\)/);
-    assert.match(skill, /\]\(\.\.\/hardening-review\/references\/mutations\.md\)/);
+    assert.match(skill, /hardening-review\/references\/mutations\.md/);
     assert.match(skill, /\*\*Edge-case checklist\*\* in \[lenses\.md\]/);
     assert.match(skill, /^4\. Commit the test and the fix together/m);
     assert.match(skill, /in the fixes of two rounds in a row, stop patching it/);
