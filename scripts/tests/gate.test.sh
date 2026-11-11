@@ -123,7 +123,7 @@ check "a copy executable where the original isn't fails the gate" "$([[ $status 
 
 # --quick stops after the lint, before the review check and test.sh, and never passes the gate for a push: only the bare script does.
 repo="$(new_repo quick)"; stub_review "$repo"; with_origin "$repo"
-GATE_ARGS=--quick STUB_EXIT=3 REVIEW_EXIT=1 REVIEW_SKIP= run "$repo"
+GATE_ARGS=--quick STUB_EXIT=3 REVIEW_EXIT=1 REVIEW_SKIP='' run "$repo"
 check "--quick passes without running test.sh" "$([[ $status == 0 && $ran == no ]] && echo 0 || echo 1)"
 check "--quick doesn't call review.sh" "$([[ ! -e $repo/review-args ]] && echo 0 || echo 1)"
 check "--quick runs the Markdown and YAML lint" "$(grep -q 'markdownlint (whole repo' "$repo/out" && grep -q 'yamllint (whole repo' "$repo/out" && echo 0 || echo 1)"
