@@ -344,11 +344,16 @@ export function terminalText(text: string): string {
         return keep ? character : "";
       })
       .replace(/[\p{Co}\p{Cn}]/gu, (character) => ((odd += 1) <= MAX_KEPT_ODD ? character : ""))
-      .replace(new RegExp(`(\\p{M}{${MAX_MARKS}})\\p{M}+`, "gu"), "$1")
+      .replace(MARK_RUN, "$1")
       // Dropping a character can leave the spaces on either side of it side by side.
       .replace(/ {2,}/g, " ")
       .trim()
   );
+}
+
+// `text` with no more than MAX_MARKS combining marks in a row, as terminalText leaves it. Run it after the characters that draw as nothing are gone: they can split a run.
+export function capMarks(text: string): string {
+  return text.replace(MARK_RUN, "$1");
 }
 
 // Whether terminalText would drop anything from `text` but whitespace: a character that draws as nothing or reorders what a reader sees, a joiner outside the
@@ -361,6 +366,7 @@ export function hasHiddenText(text: string): boolean {
 // The most private-use or unassigned code points, and the most combining marks in a row, one text keeps.
 const MAX_KEPT_ODD = 8;
 const MAX_MARKS = 8;
+const MARK_RUN = new RegExp(`(\\p{M}{${MAX_MARKS}})\\p{M}+`, "gu");
 
 const HIDDEN_CHARACTERS =
   /[\p{Cc}\p{Cf}\p{Cs}\p{Noncharacter_Code_Point}\p{Default_Ignorable_Code_Point}\p{Variation_Selector}\u034f\u115f\u1160\u2800\u3164\uffa0\u{F0000}-\u{10FFFF}]/gu;
