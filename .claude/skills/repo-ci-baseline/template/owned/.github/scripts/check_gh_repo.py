@@ -1,7 +1,6 @@
 """Checks that every gh command in the Template's Owned scripts and a repo's own scripts and skills is told its repository; the rules are in references/gotchas.md."""
 
 import os
-import itertools
 import re
 import sys
 from pathlib import Path
@@ -311,7 +310,7 @@ def data_heredocs(header, lines, start):
     """The (delimiter, tabs, quoted) of each heredoc on the logical line header whose body is data, not code, in the order the bodies follow.
 
     An unquoted delimiter still lets bash run the $(...) and backticks in a data body. A heredoc whose delimiter never
-    comes again is no heredoc. lines[start:] are the lines after the header, not copied unless the header has a heredoc.
+    comes again is no heredoc. lines[start:] are the lines after the header, read only up to the delimiter.
     """
     if "<<" not in header:
         return []
@@ -319,7 +318,7 @@ def data_heredocs(header, lines, start):
     if not data:
         return []
     return [(delimiter, tabs, quoted) for delimiter, tabs, quoted in heredocs
-            if any((text.lstrip("\t") if tabs else text) == delimiter for text in itertools.islice(lines, start, None))]
+            if any((text.lstrip("\t") if tabs else text) == delimiter for text in (lines[index] for index in range(start, len(lines))))]
 
 
 def logical_line(lines, number):
@@ -429,20 +428,22 @@ def shown(line):
     return for_log(line.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace"))
 
 
-WORD_END = " \t;&|(){}<>"
-# After one of these a command starts, so the next word may be a keyword.
-BEFORE_COMMAND = ("then", "else", "do")
+WORD_END = " \t;&|()<>"
+NEVER = re.compile(r"(false|! *true|\[ +0 +-ne +0 +\]|\[ +1 +-eq +0 +\])$")
+ALWAYS = re.compile(r"(true|:)$")
 
 
-def keywords(line):
-    """The if and fi keywords of line, in source order, as (word, is_first): (\"if\" or \"fi\", True if it is the line's first word).
+def keywords(line, command=True):
+    """The if and fi keywords of line, in source order, as (word, is_first): word is "if" or "fi", is_first is True for the line's first word.
 
-    A keyword is a reserved word as bash reads one: an unquoted word at the start of a line or after ; & | ( { or then/else/do,
-    never an argument (grep -q fi), never inside quotes ('; fi') and never in a comment (# fi).
+    A keyword is a reserved word as bash reads one: an unquoted word at the start of the line (command; False for a
+    line a trailing backslash continues) or after ; & | ( ) or { or one of BEFORE_COMMAND (then, else, do, if, !...),
+    never an argument (grep -q fi), never inside quotes ('; fi'), a ${...} or a comment (# fi). A ) counts as the end of
+    a command, so the if of a case arm (a) if y; then z; fi) is one. Known limits: a case pattern that reads fi) or
+    a line inside a multi-line string or heredoc body that starts like a keyword is read as one.
     """
     found = []
     position = 0
-    command = True
     first = True
     while position < len(line):
         char = line[position]
@@ -450,63 +451,69 @@ def keywords(line):
             position += 1
         elif char == "#":
             break
-        elif char in ";&|({":
+        elif char in ";&|()":
             command = True
             position += 1
-        elif char in ")}<>":
+        elif char in "<>":
             command = False
+            position += 1
+        elif char == "{" and (position + 1 == len(line) or line[position + 1] in " \t"):
+            command = True
             position += 1
         else:
             start = position
-            plain = True
             while position < len(line) and line[position] not in WORD_END:
                 if line[position] == "\\":
-                    plain = False
                     position += 2
                 elif line[position] in "'\"":
-                    plain = False
                     quote = line[position]
+                    # Inside "..." and $'...' a backslash escapes the next character; inside '...' it doesn't.
+                    escapes = quote == '"' or (position > start and line[position - 1] == "$")
                     position += 1
                     while position < len(line) and line[position] != quote:
-                        position += 2 if quote == '"' and line[position] == "\\" else 1
+                        position += 2 if escapes and line[position] == "\\" else 1
                     position += 1
                 elif line.startswith("${", position):
-                    plain = False
                     end = line.find("}", position)
                     position = len(line) if end < 0 else end + 1
                 else:
                     position += 1
-            word = line[start:position] if plain else ""
-            blank = position >= len(line) or line[position] in " \t"
-            if command and ((word == "if" and blank and position < len(line)) or word == "fi"):
+            word = line[start:position]
+            if command and word in ("if", "fi"):
                 found.append((word, first))
-            command = word in BEFORE_COMMAND or (command and word in ("if", "fi", "elif", "while", "until", "!"))
+            command = command and word in BEFORE_COMMAND
             first = False
     return found
 
 
-IF_CONDITION = re.compile(r"[ \t]*if[ \t]+(.*?)[ \t]*;?[ \t]*(?:then)?[ \t]*(?:#.*)?$")
-NEVER = re.compile(r"(false|! *true|\[ +0 +-ne +0 +\]|\[ +1 +-eq +0 +\])$")
-ALWAYS = re.compile(r"(true|:)$")
+def condition_of(line):
+    """The condition of a line that starts with if, its trailing then, ; and comment cut off, or "" when the line doesn't start with one."""
+    text = line.lstrip(" \t")
+    if not text.startswith("if") or text[2:3] not in (" ", "\t"):
+        return ""
+    text = text[2:].split("#", 1)[0].rstrip(" \t")
+    text = text.removesuffix("then").rstrip(" \t").removesuffix(";").rstrip(" \t")
+    return text.lstrip(" \t")
 
 
-def track_branches(line, branches):
+def track_branches(line, branches, continued=False):
     """Keep branches, one (runs, always) pair per open if, up to date for this line.
 
     runs is False while the branch being read can't run. Only a condition that is plainly false (or plainly true,
-    for its else) is judged, and only on an if that starts its line; any other branch may run. An if and its fi on one
-    line cancel out. Keywords count in source order; a quoted or commented one is not a keyword. A line inside a multi-line string or a non-data heredoc body that looks like a fi or an else can
-    misjudge a branch, either way: it can pop a branch that never runs, so an export in it counts again, as it did before
-    branches were tracked, or flip one. `# gh-repo: ok` skips a line.
+    for its else) is judged, and only on an if that starts its line; any other branch may run. Keywords count in
+    source order, so a fi closes the block it ends before an if later on the line opens the next. A quoted or
+    commented keyword is not one, and neither is a keyword on a line a trailing backslash continues. A line inside
+    a multi-line string or a non-data heredoc body that looks like a fi or an else can misjudge a branch, either way:
+    it can pop a branch that never runs, so an export in it counts again, as it did before branches were tracked, or
+    flip one.
     """
-    if re.match(r"[ \t]*else\b", line) and branches:
+    if not continued and re.match(r"[ \t]*else\b", line) and branches:
         branches[-1] = (not branches[-1][1], branches[-1][1])
-    elif re.match(r"[ \t]*elif\b", line) and branches:
+    elif not continued and re.match(r"[ \t]*elif\b", line) and branches:
         branches[-1] = (True, False)
-    for word, first in keywords(line):
+    for word, first in keywords(line, not continued):
         if word == "if":
-            condition = IF_CONDITION.match(line) if first else None
-            text = condition.group(1) if condition else ""
+            text = condition_of(line) if first else ""
             branches.append((NEVER.match(text) is None, ALWAYS.match(text) is not None))
         elif branches:
             branches.pop()
@@ -542,7 +549,7 @@ def untold(path):
             header_end = number + count - 1
             body_start = header_end + 1
             bodies = data_heredocs(header, lines, header_end)
-        track_branches(line, branches)
+        track_branches(line, branches, bool(continued_text(lines, number)))
         if EXPORTS.match(line):
             # An export in a branch that never runs leaves GH_REPO unset.
             exported = exported or all(runs for runs, _ in branches)

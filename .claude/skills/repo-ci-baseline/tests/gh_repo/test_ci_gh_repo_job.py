@@ -614,6 +614,26 @@ def test_the_job_ignores_a_file_the_base_added_to_an_owned_folder_after_the_head
     assert code == 0, output
 
 
+def test_the_job_passes_an_apply_branch_that_adds_a_single_file_owned_entry(tmp_path):
+    # Arrange, Act
+    code, output = run_job(tmp_path, {"scripts/review.sh": "#!/usr/bin/env bash\ntrue\n"}, head_ref="chore/reapply-baseline")
+
+    # Assert
+    assert code == 0, output
+
+
+def test_the_job_ignores_a_single_file_owned_entry_the_base_added_after_the_head_was_cut(tmp_path):
+    # Arrange
+    job = Job(tmp_path, BASE, {})
+    job.advance_base({"scripts/review.sh": "#!/usr/bin/env bash\ntrue\n"})
+
+    # Act
+    code, output = job.run()
+
+    # Assert
+    assert code == 0, output
+
+
 def test_the_job_fails_a_pr_that_adds_an_absent_single_file_owned_entry(tmp_path):
     # Arrange: scripts/review.sh is an Owned entry the base lacks, so there is no base file to differ from.
     added = "scripts/review.sh"

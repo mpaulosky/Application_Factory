@@ -755,7 +755,7 @@ check "the query no longer reads the last commit" not grep -qF 'commits(last' "$
 new_repo
 pr '{}'
 run --once 7
-check "the query reads no head ref" not grep -qF 'headRef{' "$GH_LOG"
+check "the query reads no head ref" not grep -qE 'headRef([^O]|$)|headRepository' "$GH_LOG"
 # No rollup yet is no check reported: quiet, unless the PR is UNSTABLE (a check failed), which is an incomplete read.
 new_repo
 pr '{"statusCheckRollup":null}'

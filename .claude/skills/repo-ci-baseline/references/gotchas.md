@@ -118,7 +118,10 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     (`sudo GH_REPO=o/r gh pr view 1`). `bash -c`, `eval`, `| sh` and `xargs gh` inherit the export and are accepted
     (mpaulosky/dotfiles#344). A later `unset GH_REPO`, or an assignment that is no prefix of a `gh` command, ends an export. An `export GH_REPO=...`
     in a branch of an `if` whose condition is plainly false (`false`, `! true`, `[ 0 -ne 0 ]`, `[ 1 -eq 0 ]`), or in the `else` of a plainly
-    true one (`true`, `:`), is no export; any other condition is assumed to run.
+    true one (`true`, `:`), is no export; any other condition is assumed to run, and so is an `elif` branch. The condition is judged only on an `if`
+    that starts its line. Keywords are read in source order (`fi; if true; then` closes one block and opens the next), and a quoted, escaped, commented or
+    argument `if` or `fi` (`'; fi'`, `echo x # fi`, `grep -q fi`) is none. A line of a multi-line string or a heredoc body that starts like `fi` or `else`, and a case
+    pattern `fi)`, can still misjudge a branch.
   - A file with a NUL byte is checked with the NULs removed, as bash reads it, not skipped. `--repo` reads a suffix in
     lower case (`up.SH`) and `.zsh`, treats every extensionless file under `scripts/` and `.github/ci/` as shell
     (under `.claude/skills/` it needs a shell shebang), and refuses a symlink whose target is outside the repo or
