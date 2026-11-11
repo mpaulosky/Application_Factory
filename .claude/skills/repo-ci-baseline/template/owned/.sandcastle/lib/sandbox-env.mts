@@ -48,7 +48,7 @@ export function sandboxEnv(envFile: string, hostEnv: Record<string, string | und
 // each with the name secretKindIn reports it by. None needs a word boundary: a text
 // that has had an invisible character taken out of it can run a word up against a
 // token (x, a zero-width space and the token read as one word), and a boundary
-// would let that through. The pattern is loose on purpose (see role-logs.mts).
+// would let that through. The patterns are loose on purpose.
 const tokenShapes = [
   { shape: "sk-ant-", pattern: /sk-ant-[A-Za-z0-9_-]{16,}/ },
   { shape: "gh*_", pattern: /gh[pousr]_[A-Za-z0-9]{20,}/ },

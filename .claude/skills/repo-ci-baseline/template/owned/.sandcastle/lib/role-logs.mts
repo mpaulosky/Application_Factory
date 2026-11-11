@@ -106,9 +106,6 @@ const errorLine = /\b(?:abort(?:ed)?|error|errors|fail(?:ed|ure|ures)?|exception
 // A run of token characters long enough to be an encoded secret.
 const tokenRun = new RegExp(`[A-Za-z0-9+/_=-]{${REPORT_TOKEN_RUN},}`);
 
-// A token shape without the word boundaries, for the view with its spacing taken out, where a boundary can't hold.
-const looseTokenShape = /sk-ant-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}/;
-
 // The fixed message that stands for an error line: the error word it matched, which only ASCII letters and single spaces can spell
 // (a case-insensitive match without the `u` flag never lets a non-ASCII character stand for an ASCII one), never the line. Only a line `errorLine` matched comes here.
 function errorMessage(line: string): string {
@@ -149,7 +146,7 @@ export function allowlistedView(text: string, held: (line: string) => boolean = 
 // callback), and on the finished view as a second check.
 function looksLikeSecret(view: string, secrets: readonly string[]): boolean {
   const spaceless = view.replace(/\u001b\[[0-?]*[ -\/]*[@-~]/g, "").replace(/[\s\p{Cc}\p{Cf}\p{M}]/gu, "");
-  return [view, spaceless].some((form) => containsSecret(form, secrets) || looseTokenShape.test(form));
+  return [view, spaceless].some((form) => containsSecret(form, secrets));
 }
 
 // The file in the reviewers' folder that says which build each `reviewer-<n>.log` is, since the numbers carry no name.
