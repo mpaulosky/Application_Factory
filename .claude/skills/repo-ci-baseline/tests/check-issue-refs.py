@@ -19,6 +19,7 @@ if len(sys.argv) != 2 or not pathlib.Path(sys.argv[1]).is_dir():
     sys.exit(2)
 root = pathlib.Path(sys.argv[1])
 found = []
+# rglob skips a directory it can't list, so only an unreadable file exits 2; the Template's owned/ folder comes from git, with no such directory.
 for path in sorted(p for p in root.rglob("*") if p.is_file()):
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -26,7 +27,7 @@ for path in sorted(p for p in root.rglob("*") if p.is_file()):
         continue
     except OSError as error:
         # A file it can't read is a file it didn't check, which must not read as a pass or as a bare #N (exit 1).
-        print(f"{path}: {error.strerror}", file=sys.stderr)
+        print(f"{path}: {error.strerror or error}", file=sys.stderr)
         sys.exit(2)
     in_tests = "tests" in path.relative_to(root).parts
     is_ts_test = path.name.endswith(".test.mts")

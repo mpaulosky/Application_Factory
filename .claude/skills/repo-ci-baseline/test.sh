@@ -177,7 +177,7 @@ step "Issue references in Owned files name their repo"
 # #N. Python, not grep -P, which BSD grep lacks.
 # The rule is tests/check-issue-refs.py (its EXAMPLES list is there, and its pytest in tests/issue_refs/); the Factory's scripts/gate.sh runs it too,
 # so --quick catches a bare #N before this step does.
-(cd "$skill_dir/tests" && "${pytest_cmd[@]}" -q -p no:cacheprovider issue_refs) || fail "issue_refs pytest"
+(cd "$skill_dir/tests" && "${pytest_cmd[@]}" -q -p no:cacheprovider -rs issue_refs) || fail "issue_refs pytest"
 python3 -I "$skill_dir/tests/check-issue-refs.py" "$owned" || fail "write issue references in Owned files as mpaulosky/dotfiles#N (or <Repo>#N), not a bare #N"
 
 step "gh commands in Owned scripts are told their repository"
