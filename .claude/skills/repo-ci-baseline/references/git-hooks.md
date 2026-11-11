@@ -1,7 +1,8 @@
 # Git hooks and branch names
 
 Template files (Owned): `.github/hooks/` (`pre-commit`, `pre-push`, `post-checkout`), `.github/hooks/tests/`,
-`scripts/gate.sh`, `scripts/check-branch-name.sh` with its test, and the `branch-name` job in `ci.yml`. History: IssueTracker #182 (the branch standard).
+`scripts/gate.sh`, `scripts/check-branch-name.sh` with its test,
+`scripts/work-issue.sh` and `scripts/cleanup.sh` with their tests, and the `branch-name` job in `ci.yml`. History: IssueTracker #182 (the branch standard).
 
 ## Branch-name standard
 
@@ -50,11 +51,21 @@ for pulls and dry-run surveys. A branch's worktree lives beside the repo, in `..
 branch with `/` turned into `-`:
 
 ```bash
-git fetch origin
-git worktree add -b fix/42-null-children ../<Repo>-worktrees/fix-42-null-children origin/main
+cd "$(scripts/work-issue.sh 42)"
 ```
 
-Remove it once the PR merges: `git worktree remove ../<Repo>-worktrees/fix-42-null-children`. `pre-commit` enforces
+`scripts/work-issue.sh <n>` reads issue `n` and makes its branch and worktree from `origin/main` (or from `origin/<branch>` when that branch is already
+on origin), then prints the path. The branch is `fix/{n}-{slug}` for an issue labelled `bug` (any case), `feature/{n}-{slug}` for any other; the slug is the
+title's lowercase `a-z0-9` words (a leading `[tag]` dropped, at most 6 words and 50 characters, `issue` when none is left). It reuses the branch's
+worktree if there is one, and refuses a directory of that name that is not one. Work without an issue is made by hand:
+`git worktree add -b chore/upgrade-net10 ../<Repo>-worktrees/chore-upgrade-net10 origin/main`.
+
+Once the PR merges, `scripts/cleanup.sh` (run in the primary checkout, on a clean `main`) fast-forwards `main`, then removes each merged branch with its
+worktree and its `origin` branch. It decides from the PR's state on GitHub (a squash merge leaves no ancestry for `git branch --merged`): the PR must be
+this repository's own, merged into `main`, and the branch's tip must be the PR's last head, so no unpushed commit is lost. It keeps, with the reason, a branch
+with an open PR, no PR, a PR merged elsewhere, or a dirty worktree (and that branch's `origin` copy too), and removes a closed-unmerged one only with
+`--include-closed`. It deletes the `origin` branch only if `origin` still holds the tip it judged. `--dry-run` shows the steps. `git worktree remove` alone
+leaves the local and `origin` branches behind. `pre-commit` enforces
 the rule. Claude Code's own `.claude/worktrees/` (ignored by the Template's `.gitignore`) also passes the check, since
 any linked worktree does, but people use `../<Repo>-worktrees/`.
 
@@ -135,7 +146,7 @@ and `git commit` end to end, which runs the hook with `GIT_DIR` set.
 `scripts/tests/check-branch-name.test.sh` covers the script's `--pr` form, which the CI job uses: the Actions
 branches and any `dependabot/*` allowed only there, a shell-safe `dependabot/*` allowed for a push too, a `claude/...` branch refused, and other `docs/` names refused.
 
-CI's hook-tests job runs this suite, `pre-commit.test.sh`, `check-branch-name.test.sh`, `check-pr-title.test.sh` and `sync-copilot-review.test.sh`.
+CI's hook-tests job runs this suite, `pre-commit.test.sh`, `check-branch-name.test.sh`, `check-pr-title.test.sh`, `sync-copilot-review.test.sh`, `watch-pr.test.sh`, `cleanup.test.sh` and `work-issue.test.sh`.
 
 ## Session-start check
 

@@ -25,10 +25,12 @@ cd "$(scripts/work-issue.sh 42)"   # e.g. fix/42-null-children in ../<Repo>-work
 For work without an issue, make it by hand: `git worktree add -b chore/upgrade-net10 ../<Repo>-worktrees/chore-upgrade-net10 origin/main`.
 The folder is the branch name with `/` turned into `-`.
 
-**After the PR merges**, go back to the clone, run `scripts/cleanup.sh` (`--dry-run` first to see what it would do): it fetches and prunes,
-rebases `main` onto `origin/main`, and removes every branch whose PR merged, with its worktree and its `origin` branch. It reads the PR's state from
-GitHub, because a squash merge leaves nothing for `git branch --merged` to see. It keeps, and says why, a branch with an open PR, no PR, a commit the PR
-never had, or a worktree with uncommitted changes; a branch whose PR closed unmerged goes only with `--include-closed`.
+**After the PR merges**, go to the clone, on `main` with a clean tree, and run `scripts/cleanup.sh` (`--dry-run` first to see what it would do; it still
+fetches and prunes the remote-tracking refs). It fast-forwards `main` to `origin/main`, then removes every branch named to the standard whose PR merged into
+`main`, with its worktree (ignored files in it go too) and its `origin` branch. It reads the PR's state from GitHub, because a squash merge leaves nothing
+for `git branch --merged` to see, and counts only a PR from this repository's own branch. It keeps, and says why, a branch with an open PR, no PR, a commit
+the PR never had, a PR merged into another branch, or a worktree with uncommitted changes, and keeps that branch's `origin` copy too; a branch whose PR
+closed unmerged goes only with `--include-closed`. A `gh` failure stops it, and a removal git refuses is reported while the rest is done.
 
 | Branch | Use |
 | --- | --- |

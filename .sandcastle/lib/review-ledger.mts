@@ -125,6 +125,8 @@ export const OWNED_PATHS = [
   "scripts/sync-copilot-review.sh",
   "scripts/review.sh",
   "scripts/watch-pr.sh",
+  "scripts/cleanup.sh",
+  "scripts/work-issue.sh",
   "scripts/tests/**",
   "docs/PROCESS.md",
   "docs/CODE_OF_CONDUCT.md",
@@ -161,6 +163,8 @@ export const OWNED_PATHS = [
 // The exemption judges a path, never the bytes, since a repository has no copy
 // of the Template to compare with.
 export const REVIEWED_ON_REAPPLY: ReadonlySet<string> = new Set([
+  "scripts/cleanup.sh",
+  "scripts/work-issue.sh",
   ".github/ci/coverage-threshold",
   ".claude/rules/sandcastle-hand-off.md",
   ".github/ISSUE_TEMPLATE/bug_report.md",

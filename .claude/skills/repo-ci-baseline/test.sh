@@ -58,6 +58,10 @@ grep -qxF '        run: bash scripts/tests/sync-copilot-review.test.sh' "$owned/
   || fail "the Owned ci.yml's hook-tests job must run scripts/tests/sync-copilot-review.test.sh, so every repo tests its copy"
 grep -qxF '        run: bash scripts/tests/watch-pr.test.sh' "$owned/.github/workflows/ci.yml" \
   || fail "the Owned ci.yml's hook-tests job must run scripts/tests/watch-pr.test.sh, so every repo tests its copy"
+grep -qxF '        run: bash scripts/tests/cleanup.test.sh' "$owned/.github/workflows/ci.yml" \
+  || fail "the Owned ci.yml's hook-tests job must run scripts/tests/cleanup.test.sh, so every repo tests its copy"
+grep -qxF '        run: bash scripts/tests/work-issue.test.sh' "$owned/.github/workflows/ci.yml" \
+  || fail "the Owned ci.yml's hook-tests job must run scripts/tests/work-issue.test.sh, so every repo tests its copy"
 bash "$owned/scripts/tests/check-git-hooks.test.sh" || fail "check-git-hooks.test.sh"
 
 step "Auto-merge script tests"
@@ -124,6 +128,7 @@ shell_files=(
   "$owned/scripts/check-pr-title.sh" "$owned/scripts/tests/check-pr-title.test.sh"
   "$owned/scripts/sync-copilot-review.sh" "$owned/scripts/tests/sync-copilot-review.test.sh"
   "$owned/scripts/watch-pr.sh" "$owned/scripts/tests/watch-pr.test.sh"
+  "$owned/scripts/cleanup.sh" "$owned/scripts/tests/cleanup.test.sh" "$owned/scripts/work-issue.sh" "$owned/scripts/tests/work-issue.test.sh"
   "$owned/scripts/check-git-hooks.sh" "$owned/scripts/tests/check-git-hooks.test.sh" "$owned/scripts/review.sh"
   "$seed/.github/ci/prepare.sh" "$seed/.github/ci/gate-checks.sh" "$owned/.sandcastle/check.sh"
   "$owned/.github/hooks/pre-commit" "$owned/.github/hooks/pre-push" "$owned/.github/hooks/post-checkout"

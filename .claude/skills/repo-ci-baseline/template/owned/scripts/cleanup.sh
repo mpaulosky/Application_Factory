@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
-# Cleans up after merged work: run it in the primary checkout, on main.
+# Cleans up after merged work: run it in the primary checkout, on main, with a clean tree.
 #
 #   scripts/cleanup.sh [--dry-run] [--include-closed]
 #
-# Fetches and prunes origin, rebases main onto origin/main, then, for every branch that follows the branch standard (check-branch-name.sh),
-# local and on origin, decides from the PR's state on GitHub, not from git ancestry (a squash merge leaves no ancestry to see):
-#   - removed: the PR merged and the branch's tip is the PR's last head, so nothing unpushed is lost. The branch's worktree is removed first,
-#     and only when it is clean. Both the local branch and the origin branch go.
+# Fetches and prunes origin, fast-forwards main to origin/main, then, for every branch that follows the branch standard (check-branch-name.sh),
+# local and on origin, decides from the PR's state on GitHub, not from git ancestry (a squash merge leaves no ancestry to see). Only a PR whose head
+# repository belongs to the owner of origin counts, so a fork's PR of the same name cannot stand in for it:
+#   - removed: the PR merged into main and the branch's tip is the PR's last head, so nothing unpushed is lost. The branch's worktree is removed
+#     first, and only when it is clean (ignored files in it go with it). The local branch and the origin branch go together: when one is kept,
+#     the other is kept too. The origin branch is deleted only if it still holds the tip that was judged.
 #   - removed with --include-closed only: the PR closed unmerged and the tip is its last head.
-#   - kept, with the reason: an open PR, no PR, a tip the PR never had, a dirty worktree, or a closed PR without --include-closed.
-# --dry-run prints what would happen and changes nothing. Exits 1 when it can't run (not main, not the primary checkout, dirty main, no gh).
+#   - kept, with the reason: a name outside the branch standard, an open PR, no PR or a tip no PR had, a PR merged into a branch other than main,
+#     a dirty or unreadable worktree, a step git refused, or a closed PR without --include-closed.
+# --dry-run prints what would happen and changes no branch, worktree or commit (it still fetches and prunes the remote-tracking refs).
+# Exits 1 when it can't run (not main, not the primary checkout, dirty main, main can't fast-forward, no gh, no repository, a gh lookup failed,
+# a bad argument, no scripts/check-branch-name.sh) and, after finishing the rest, when a removal git refused.
 set -euo pipefail
 
 dry=false
@@ -27,74 +32,101 @@ root="$(git rev-parse --show-toplevel)"
 cd "$root"
 check_name="$root/scripts/check-branch-name.sh"
 
+[[ -f "$check_name" ]] || die "scripts/check-branch-name.sh is missing: Apply the Template first"
 [[ "$(git rev-parse --git-dir)" == "$(git rev-parse --git-common-dir)" ]] || die "run this in the primary checkout, not a linked worktree"
 [[ "$(git branch --show-current)" == "main" ]] || die "run this on main"
 [[ -z "$(git status --porcelain)" ]] || die "main has uncommitted changes"
 command -v gh >/dev/null || die "gh is needed to read PR states" # gh-repo: ok
+
 url="$(git remote get-url upstream 2>/dev/null || git remote get-url origin 2>/dev/null || true)"
 url="${url%.git}"
 repo="${GITHUB_REPOSITORY:-}"
 if [[ -z "$repo" && -n "$url" ]]; then repo="${url#*github.com[:/]}"; fi
 [[ "$repo" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] || die "can't tell which repository: set GITHUB_REPOSITORY or add an origin remote"
 export GH_REPO="${repo:?}"
+# A PR counts only when its head repository belongs to the owner of origin, the repository the branches are pushed to.
+origin_url="$(git remote get-url origin 2>/dev/null || true)"
+origin_url="${origin_url%.git}"
+if [[ "$origin_url" == *github.com[:/]* ]]; then repo_owner="${origin_url#*github.com[:/]}"; else repo_owner="$repo"; fi
+repo_owner="${repo_owner%%/*}"
 
 run() { if [[ "$dry" == true ]]; then echo "   would: $*"; else "$@"; fi; }
 
 git fetch --prune --quiet origin
-if [[ "$dry" == true ]]; then echo "   would: git rebase origin/main"; else git rebase --quiet origin/main; fi
+if [[ "$dry" == true ]]; then
+  echo "   would: git merge --ff-only origin/main"
+else
+  git merge --ff-only --quiet origin/main || die "main has commits origin/main lacks, so it can't fast-forward: resolve them first"
+fi
 
-# verdict <branch> <tip-sha> -> merged | closed | open | none
+# verdict <branch> <tip-sha> -> merged | merged-other:<base> | closed | open | none. Exits 1 (the caller's $(...) fails) when gh does.
 verdict() {
-  local branch="$1" sha="$2" state oid seen=none
-  while read -r state oid; do
-    [[ -n "$state" ]] || continue
+  local branch="$1" sha="$2" state oid base owner prs seen=none
+  prs="$(gh pr list --state all --limit 100 --head "$branch" --json state,headRefOid,baseRefName,headRepositoryOwner \
+    --jq '.[] | "\(.state) \(.headRefOid) \(.baseRefName) \(.headRepositoryOwner.login)"')" \
+    || { echo "❌ gh pr list failed for $branch" >&2; exit 1; }
+  while read -r state oid base owner; do
+    [[ -n "$state" && "$owner" == "$repo_owner" ]] || continue
     if [[ "$state" == OPEN ]]; then echo open; return; fi
-    if [[ "$state" == MERGED && "$oid" == "$sha" ]]; then seen=merged
+    if [[ "$state" == MERGED && "$oid" == "$sha" ]]; then
+      if [[ "$base" == main ]]; then seen=merged; elif [[ "$seen" != merged ]]; then seen="merged-other:$base"; fi
     elif [[ "$state" == CLOSED && "$oid" == "$sha" && "$seen" == none ]]; then seen=closed; fi
-  done < <(gh pr list --state all --head "$branch" --json state,headRefOid --jq '.[] | "\(.state) \(.headRefOid)"')
+  done <<<"$prs"
   echo "$seen"
 }
 
-# decide <branch> <sha> -> removable | the reason it is kept
+# decide <branch> <tip-sha> -> removable | the reason it is kept
 decide() {
-  local v; v="$(verdict "$1" "$2")"
+  local v
+  v="$(verdict "$1" "$2")" || exit 1
   case "$v" in
     merged) echo removable ;;
+    merged-other:*) echo "its PR merged into ${v#merged-other:}, not main" ;;
     closed) if [[ "$closed" == true ]]; then echo removable; else echo "its PR closed unmerged (use --include-closed)"; fi ;;
     open) echo "its PR is open" ;;
-    *) echo "no PR has this tip, or no PR" ;;
+    *) echo "no PR of this repository has this tip, or no PR" ;;
   esac
 }
 
-removed=0; kept=0
+removed=0; kept=0; failed=0; kept_local=" "
 keep() { echo "keep   $1: $2"; kept=$((kept + 1)); }
 
 # Local branches
-while read -r b; do
+while read -r ref; do
+  b="${ref#refs/heads/}"
   [[ -n "$b" && "$b" != main ]] || continue
   bash "$check_name" "$b" >/dev/null 2>&1 || { keep "$b" "not a standard branch name"; continue; }
-  d="$(decide "$b" "$(git rev-parse "refs/heads/$b")")"
-  if [[ "$d" != removable ]]; then keep "$b" "$d"; continue; fi
-  wt="$(git worktree list --porcelain | awk -v ref="refs/heads/$b" '/^worktree /{p=substr($0,10)} $0=="branch " ref{print p}')"
-  if [[ -n "$wt" && -n "$(git -C "$wt" status --porcelain)" ]]; then keep "$b" "its worktree has uncommitted changes"; continue; fi
+  d="$(decide "$b" "$(git rev-parse "$ref")")" || exit 1
+  if [[ "$d" != removable ]]; then keep "$b" "$d"; kept_local+="$b "; continue; fi
+  wt="$(git worktree list --porcelain | awk -v ref="$ref" '/^worktree /{p=substr($0,10)} $0=="branch " ref{print p}')"
+  if [[ -n "$wt" ]]; then
+    if ! st="$(git -C "$wt" status --porcelain 2>/dev/null)"; then keep "$b" "its worktree can't be read ($wt)"; kept_local+="$b "; continue; fi
+    if [[ -n "$st" ]]; then keep "$b" "its worktree has uncommitted changes"; kept_local+="$b "; continue; fi
+  fi
   echo "remove $b${wt:+ (worktree $wt)}"
-  [[ -z "$wt" ]] || run git worktree remove "$wt"
-  run git branch -D "$b" >/dev/null
+  if [[ -n "$wt" ]] && ! run git worktree remove "$wt"; then keep "$b" "git could not remove its worktree"; kept_local+="$b "; failed=1; continue; fi
+  if ! run git branch -q -D "$b"; then keep "$b" "git could not delete the branch"; kept_local+="$b "; failed=1; continue; fi
   removed=$((removed + 1))
-done < <(git for-each-ref --format='%(refname:short)' refs/heads)
+done < <(git for-each-ref --format='%(refname)' refs/heads)
 
 # Branches left on origin
-while read -r r; do
-  b="${r#origin/}"
-  [[ "$b" != HEAD && "$b" != main && -n "$b" ]] || continue
+while read -r ref; do
+  b="${ref#refs/remotes/origin/}"
+  [[ -n "$b" && "$b" != HEAD && "$b" != main ]] || continue
   bash "$check_name" "$b" >/dev/null 2>&1 || { keep "origin/$b" "not a standard branch name"; continue; }
-  d="$(decide "$b" "$(git rev-parse "refs/remotes/origin/$b")")"
+  if [[ "$kept_local" == *" $b "* ]]; then keep "origin/$b" "its local branch was kept"; continue; fi
+  sha="$(git rev-parse "$ref")"
+  d="$(decide "$b" "$sha")" || exit 1
   if [[ "$d" != removable ]]; then keep "origin/$b" "$d"; continue; fi
   echo "remove origin/$b"
-  run git push --quiet origin --delete "$b"
+  # The lease deletes the branch only if origin still holds the tip that was judged.
+  if ! run git push --quiet --force-with-lease="refs/heads/$b:$sha" origin ":refs/heads/$b"; then
+    keep "origin/$b" "git could not delete it (it may have moved since the fetch)"; failed=1; continue
+  fi
   removed=$((removed + 1))
-done < <(git for-each-ref --format='%(refname:short)' refs/remotes/origin)
+done < <(git for-each-ref --format='%(refname)' refs/remotes/origin)
 
 run git worktree prune
 [[ "$dry" == true ]] || git fetch --prune --quiet origin
 echo "Done: $removed removed, $kept kept$([[ "$dry" == true ]] && echo " (dry run)")."
+[[ "$failed" == 0 ]] || exit 1
