@@ -4472,12 +4472,14 @@ describe("staging findings between rounds", () => {
     assert.deepEqual(ids(), ["R1"]);
   });
 
-  it("refuses a staging file that is a FIFO at once, and leaves no lock", { timeout: 20000 }, () => {
+  it("refuses a staging file that is a FIFO at once, and leaves no lock", { timeout: 150000 }, () => {
+    // The timeouts below only catch a blocking open of the FIFO, which would never return. They must outlast tsx starting this module on
+    // a loaded machine (several suites at once took over 10 s), or a slow start looks like a hang: status 143, from tsx relaying the kill.
     makeFolder();
     execFileSync("mkfifo", [join(folder(), "findings.json")]);
 
-    const staging = spawnSync("bash", [reviewScript, "stage", folder(), array("a.json", [finding()])], { cwd: repo, encoding: "utf8", env: childEnv, timeout: 10000 });
-    const recording = spawnSync("bash", [reviewScript, "record", inputFile(), "--staged", folder()], { cwd: repo, encoding: "utf8", env: childEnv, timeout: 10000 });
+    const staging = spawnSync("bash", [reviewScript, "stage", folder(), array("a.json", [finding()])], { cwd: repo, encoding: "utf8", env: childEnv, timeout: 60000 });
+    const recording = spawnSync("bash", [reviewScript, "record", inputFile(), "--staged", folder()], { cwd: repo, encoding: "utf8", env: childEnv, timeout: 60000 });
 
     assert.equal(staging.status, 1, staging.stderr);
     assert.match(staging.stderr, /isn't a regular file\./);
