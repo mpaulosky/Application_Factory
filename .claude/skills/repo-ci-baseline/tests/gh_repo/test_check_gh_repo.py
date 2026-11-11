@@ -2297,8 +2297,6 @@ def test_data_heredocs_sees_through_the_words_before_a_command(header):
     assert check_gh_repo.data_heredocs(header, ["gh pr view 1", "EOF"], 0) == [("EOF", False, False)]
 
 
-
-
 def test_untold_reads_an_if_followed_by_a_long_run_of_blanks_without_hanging(tmp_path):
     assert untold(tmp_path, "if x" + " " * 5000 + "y\nfi\n") == []
 
@@ -2363,8 +2361,6 @@ def test_quoted_end_follows_nested_quotes_exactly_fifty_deep(monkeypatch):
     assert max(seen) == 50 == check_gh_repo.NESTING_LIMIT
 
 
-
-
 def test_untold_reads_a_file_of_heredoc_headers_without_a_terminator_in_linear_time(tmp_path):
     start = time.perf_counter()
     found = untold(tmp_path, "cat <<EOF\n" * 30_000 + "gh pr view 1\n")
@@ -2423,8 +2419,6 @@ def test_data_heredocs_takes_the_last_occurrence_of_a_delimiter():
     assert check_gh_repo.data_heredocs(lines[1], lines, 3) == []
     tabbed = ["\tEOF", "cat <<-EOF", "\tEOF"]
     assert check_gh_repo.data_heredocs(tabbed[1], tabbed, 2) == [("EOF", True, False)]
-
-
 
 
 def test_continued_text_stops_at_the_first_line_of_the_file():
@@ -2502,6 +2496,9 @@ def test_comment_start_ignores_an_escaped_word_boundary(line, start):
     ("x; if foo ||\nfalse\nthen\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
     ("{ if false\nthen\nexport GH_REPO=o/r\n}\nfi\ngh pr view 1\n", []),
     ("echo x \\\nif false; if x; then\n:\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # a tab after the if, and a comment on the if line, are read as a blank and a comment
+    ("if\tfalse; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [4]),
+    ("if false # note\nthen\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
     # if( is an if followed by a subshell, never a condition
     ("if(false)\nthen\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
 ])
@@ -2533,6 +2530,7 @@ def test_keywords_reads_a_test_expression_as_operands(keyword, expected):
 
 
 def test_untold_reads_a_file_with_an_if_that_never_has_a_then_in_linear_time(tmp_path):
+    # A regression guard for a pending condition kept as a string that each line was added to; the cap itself is pinned below.
     text = "if x\n" + "echo hi\n" * 50_000 + "gh pr view 1\n"
     started = time.monotonic()
     found = untold(tmp_path, text)

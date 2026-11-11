@@ -637,7 +637,7 @@ def judged(condition):
 def opened(line, start):
     """The branch of the if keyword that starts at line[start]: judged now when its condition ends in a then on this line,
     pending (the condition so far, in a list) when the condition goes on, and one that may run when the if doesn't start the line."""
-    if line[:start].strip(" \t") or line[start + 2:start + 3] not in ("", " ", "\t"):
+    if line[:start].strip(" \t"):
         return list(UNKNOWN)
     condition, ended = split_condition(condition_text(line[start + 2:]))
     return judged(condition) if ended else [True, False, [condition]]
