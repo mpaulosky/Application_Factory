@@ -434,7 +434,7 @@ ALWAYS = re.compile(r"(true|:)$")
 
 
 def keywords(line, command=True):
-    """The if and fi keywords of line, in source order, as (word, is_first): word is "if" or "fi", is_first is True for the line's first word.
+    """The if and fi keywords of line, in source order, each "if" or "fi".
 
     A keyword is a reserved word as bash reads one: an unquoted word at the start of the line (command; False for a
     line a trailing backslash continues) or after ; & | ( ) or { or one of BEFORE_COMMAND (then, else, do, if, !...),
@@ -444,7 +444,6 @@ def keywords(line, command=True):
     """
     found = []
     position = 0
-    first = True
     while position < len(line):
         char = line[position]
         if char in " \t":
@@ -480,9 +479,8 @@ def keywords(line, command=True):
                     position += 1
             word = line[start:position]
             if command and word in ("if", "fi"):
-                found.append((word, first))
+                found.append(word)
             command = command and word in BEFORE_COMMAND
-            first = False
     return found
 
 
@@ -511,9 +509,10 @@ def track_branches(line, branches, continued=False):
         branches[-1] = (not branches[-1][1], branches[-1][1])
     elif not continued and re.match(r"[ \t]*elif\b", line) and branches:
         branches[-1] = (True, False)
-    for word, first in keywords(line, not continued):
+    for number, word in enumerate(keywords(line, not continued)):
         if word == "if":
-            text = condition_of(line) if first else ""
+            # Only the line's first if can start the text condition_of reads.
+            text = condition_of(line) if number == 0 else ""
             branches.append((NEVER.match(text) is None, ALWAYS.match(text) is not None))
         elif branches:
             branches.pop()
