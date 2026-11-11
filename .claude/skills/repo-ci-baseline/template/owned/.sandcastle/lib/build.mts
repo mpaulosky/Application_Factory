@@ -44,7 +44,7 @@ import { logSandboxState } from "./diagnostics.mts";
 import { buildLogs } from "./role-logs.mts";
 import { closeAfterWork, hostExecFileSync, withinDockerLimit } from "./host-limit.mts";
 import { PROBE_LIMIT_MINUTES, type StepLimitOptions, limitSandboxExec, stalledStepOf } from "./step-limit.mts";
-import { terminalText } from "./status.mts";
+import { hasHiddenText, terminalText } from "./status.mts";
 
 // A conventional-commit prefix as scripts/check-pr-title.sh accepts it: a type,
 // an optional scope, an optional breaking-change marker, a colon and a space.
@@ -542,7 +542,8 @@ export type LocalReviewArgs = {
 // a secret. Callers compare the result with their input to tell that nothing in it needed changing, so a text comes back as it was given when the
 // only invisible characters in it are the host's own (the zero-width spaces it adds to a mention or a reference, an emoji's variation selector:
 // withoutHostInvisible) and the two views below redact the same (else the second view, with the credential gone, comes back), and otherwise
-// as the second view. A joiner (an emoji sequence, Persian or Indic text) is not the host's, so it counts as a change. The checks see the text two ways: as written, and without its invisible
+// as the second view. Other invisible characters are judged as ADR 0010 judges a terminal line (status.mts#hasHiddenText): a joiner in an emoji
+// sequence or in Persian or Indic text stays, a bidi override, a tag character or a stray zero-width space is a change. The checks see the text two ways: as written, and without its invisible
 // characters, which plainText removes after the check. A secret or a URL credential split by one is withheld or redacted.
 export function publicErrorText(text: string, holdsSecret: (text: string) => boolean = (t) => containsSecret(t, [])): string {
   const withoutColour = text.replace(/\u001b\[[0-9;]*[A-Za-z]/g, "");
@@ -551,7 +552,7 @@ export function publicErrorText(text: string, holdsSecret: (text: string) => boo
   const seen = redact(withoutInvisible(withoutColour));
   if (holdsSecret(cleaned) || holdsSecret(seen)) return "(This text isn't shown: it looked like it held a secret. It was withheld.)";
   const hostOnly = withoutHostInvisible(cleaned);
-  return withoutInvisible(hostOnly) === hostOnly && withoutInvisible(cleaned) === seen ? cleaned : seen;
+  return !hasHiddenText(hostOnly) && withoutInvisible(cleaned) === seen ? cleaned : seen;
 }
 
 // The git arguments listing the .github/workflows/ files each commit from

@@ -450,6 +450,8 @@ describe("withoutHostInvisible", () => {
   it("removes a variation selector after a pictograph, once", () => {
     assert.equal(withoutHostInvisible("\u26a0\ufe0f"), "\u26a0");
     assert.equal(withoutHostInvisible("\u26a0\ufe0f\ufe0f"), "\u26a0\ufe0f");
+    assert.equal(withoutHostInvisible("1\ufe0f\u20e3"), "1\u20e3");
+    assert.equal(withoutHostInvisible("1\ufe0f2"), "1\ufe0f2");
   });
 
   it("keeps a zero-width space anywhere else, a variation selector after a letter, and a bidi override", () => {

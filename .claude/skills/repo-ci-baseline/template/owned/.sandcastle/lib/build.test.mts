@@ -3302,6 +3302,17 @@ describe("publicErrorText", () => {
     assert.equal(publicErrorText(emoji, () => false), emoji);
   });
 
+  it("returns a text unchanged when its only other invisible characters are joiners where ADR 0010 keeps them", () => {
+    for (const kept of ["family \u{1f468}\u200d\u{1f469}\u200d\u{1f467} here", "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645", "press 1\ufe0f\u20e3 now"]) {
+      assert.equal(publicErrorText(kept, () => false), kept, JSON.stringify(kept));
+    }
+  });
+
+  it("still redacts a credential a joiner splits, and withholds a token one splits", () => {
+    assert.equal(publicErrorText("https\u200d://user:pw@host", () => false), "https://***@host");
+    assert.match(publicErrorText(`gh\u200dp_${"a".repeat(30)}`), /isn't shown/);
+  });
+
   it("returns a changed text for hidden text the host did not add, so a caller comparing it with its input sees it", () => {
     for (const hidden of ["a\u202eb", "a\u{e0041}b", "a\u200bb", "x\ufe0fy", "hello \u200b", "\u200b hi", "\u200b"]) {
       assert.notEqual(publicErrorText(hidden, () => false), hidden, JSON.stringify(hidden));
