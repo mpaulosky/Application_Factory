@@ -15,10 +15,11 @@ export function breakReferences(text: string): string {
     .replace(/\b(github)\.(com)\b/gi, "$1\u200B.$2");
 }
 
-// `text` without the invisible characters the host itself adds: the zero-width spaces breakReferences puts in a mention or a reference, and an
-// emoji's variation selector (U+FE0F after a pictograph). Anything invisible left in what this returns was not put there by the host.
+// `text` without the invisible characters a caller treats as the host's own: the zero-width spaces breakReferences puts in a mention or a reference,
+// and a variation selector (U+FE0F) after a pictograph, which plainText removes but an emoji in an error's text carries. Anything invisible left in what this returns was not put there by the host.
 export function withoutHostInvisible(text: string): string {
-  return text.replace(/(?<=@)\u200B(?=[A-Za-z0-9])|(?<=#)\u200B(?=\d)|(?<=\bGH-)\u200B(?=\d)|(?<=\bgithub)\u200B(?=\.com\b)|(?<=\p{Extended_Pictographic})\uFE0F/giu, "");
+  // Spelled out without the i flag: under i and u together [A-Za-z] also matches U+017F and U+212A, which breakReferences never breaks before.
+  return text.replace(/(?<=@)\u200B(?=[A-Za-z0-9])|(?<=#)\u200B(?=\d)|(?<=\b[Gg][Hh]-)\u200B(?=\d)|(?<=\b[Gg][Ii][Tt][Hh][Uu][Bb])\u200B(?=\.[Cc][Oo][Mm]\b)|(?<=\p{Extended_Pictographic})\uFE0F/gu, "");
 }
 
 // `text` with every control, format, private-use and unassigned character, lone surrogate and default-ignorable character (an

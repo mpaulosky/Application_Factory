@@ -541,7 +541,8 @@ export type LocalReviewArgs = {
 // An error's text as it can go on a public issue: no colour codes, no credentials in a URL, no invisible characters, and nothing at all if it holds
 // a secret. Callers compare the result with their input to tell that nothing in it needed changing, so a text comes back as it was given when the
 // only invisible characters in it are the host's own (the zero-width spaces it adds to a mention or a reference, an emoji's variation selector:
-// withoutHostInvisible), and otherwise as the second view below. The checks see the text two ways: as written, and without its invisible
+// withoutHostInvisible) and the two views below redact the same (else the second view, with the credential gone, comes back), and otherwise
+// as the second view. A joiner (an emoji sequence, Persian or Indic text) is not the host's, so it counts as a change. The checks see the text two ways: as written, and without its invisible
 // characters, which plainText removes after the check. A secret or a URL credential split by one is withheld or redacted.
 export function publicErrorText(text: string, holdsSecret: (text: string) => boolean = (t) => containsSecret(t, [])): string {
   const withoutColour = text.replace(/\u001b\[[0-9;]*[A-Za-z]/g, "");
@@ -550,7 +551,7 @@ export function publicErrorText(text: string, holdsSecret: (text: string) => boo
   const seen = redact(withoutInvisible(withoutColour));
   if (holdsSecret(cleaned) || holdsSecret(seen)) return "(This text isn't shown: it looked like it held a secret. It was withheld.)";
   const hostOnly = withoutHostInvisible(cleaned);
-  return withoutInvisible(hostOnly) === hostOnly && withoutInvisible(cleaned).trim() === seen ? cleaned : seen;
+  return withoutInvisible(hostOnly) === hostOnly && withoutInvisible(cleaned) === seen ? cleaned : seen;
 }
 
 // The git arguments listing the .github/workflows/ files each commit from

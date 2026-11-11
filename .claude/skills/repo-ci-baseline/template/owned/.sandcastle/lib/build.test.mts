@@ -3311,6 +3311,10 @@ describe("publicErrorText", () => {
     assert.equal(publicErrorText("hello \u200b", () => false), "hello");
   });
 
+  it("returns the redacted invisible-free text when a host space splits a URL scheme so only that view could redact the credential", () => {
+    assert.equal(publicErrorText("GH-\u200b1://user:pw@host", () => false), "GH-1://***@host");
+  });
+
   it("withholds a token the as-written text holds though the invisible-free text does not", () => {
     assert.match(publicErrorText(`x\u200bghp_${"a".repeat(30)}`), /isn't shown/);
     const seenByPredicate: string[] = [];

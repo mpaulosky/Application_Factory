@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { CAPITAL_LOOK_ALIKES, LOOK_ALIKES, plainText, RENDERED_LINK, stripControl, TAG, visibleLetters, withoutHostInvisible, withoutInvisible } from "./plain-text.mts";
+import { CAPITAL_LOOK_ALIKES, LOOK_ALIKES, plainText, RENDERED_LINK, stripControl, TAG, visibleLetters, withoutHostInvisible, withoutInvisible, breakReferences } from "./plain-text.mts";
 
 describe("visibleLetters", () => {
   for (const [form, text] of [
@@ -437,15 +437,23 @@ describe("stripControl and withoutInvisible", () => {
 });
 
 describe("withoutHostInvisible", () => {
-  it("removes exactly the invisible characters plainText adds to a mention, a reference, github.com and an emoji", () => {
-    const rendered = plainText("cc @someone, see #12 and GH-7 on github.com \u26a0\ufe0f");
-
-    assert.notEqual(rendered, withoutHostInvisible(rendered));
+  it("removes exactly the zero-width spaces breakReferences adds", () => {
+    for (const text of ["gh-1", "Gh-1", "GH-1", "GitHub.com", "github.COM", "@a", "@1", "#1", "x@github.com", "see #12 and GH-7 on github.com"]) {
+      const broken = breakReferences(text);
+      assert.notEqual(broken, text, text);
+      assert.equal(withoutHostInvisible(broken), text, text);
+    }
+    const rendered = plainText("cc @someone, see #12 and GH-7 on github.com");
     assert.equal(withoutInvisible(withoutHostInvisible(rendered)), withoutHostInvisible(rendered));
   });
 
+  it("removes a variation selector after a pictograph, once", () => {
+    assert.equal(withoutHostInvisible("\u26a0\ufe0f"), "\u26a0");
+    assert.equal(withoutHostInvisible("\u26a0\ufe0f\ufe0f"), "\u26a0\ufe0f");
+  });
+
   it("keeps a zero-width space anywhere else, a variation selector after a letter, and a bidi override", () => {
-    for (const text of ["a\u200bb", "@\u200b ", "#\u200bx", "x\ufe0fy", "a\u202eb", "githubx\u200b.com", "github\u200b.comx"]) {
+    for (const text of ["a\u200bb", "@\u200b ", "#\u200bx", "x\ufe0fy", "a\u202eb", "githubx\u200b.com", "github\u200b.comx", "xGH-\u200b1", "GH-\u200bx", "xgithub\u200b.com", "github\u200bx", "1\ufe0f", "@\u200b\u017f", "@\u200b\u212a"]) {
       assert.equal(withoutHostInvisible(text), text, JSON.stringify(text));
     }
   });
