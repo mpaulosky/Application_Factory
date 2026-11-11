@@ -6,7 +6,8 @@
 # headRepository), and runs the --jq text cleanup.sh passes it through the real jq, as gh does. It fails unless it is given --state all, --limit 100, a
 # --head, exactly the four --json fields cleanup.sh needs, and GH_REPO. A file $GH_FIX/_fail makes it exit 1. A file $GH_FIX/<branch with / as _>.hook is
 # run once, the first time that branch is asked about (a push that lands after the fetch). A git shim answers `git remote get-url origin` from
-# $SHIM_ORIGIN_URL, to try github.com URL forms, and fails `git ls-remote` for the branch in $SHIM_LSREMOTE_FAIL.
+# $SHIM_ORIGIN_URL, to try github.com URL forms, fails `git ls-remote` for the branch in $SHIM_LSREMOTE_FAIL, and fails `git fetch` when SHIM_FETCH_FAIL is set (all: every fetch;
+# closing: the first passes and the later ones fail, counted in the file $SHIM_FETCH_COUNT). The fake gh prints at most 100 rows, as --limit 100 does.
 # Needs jq (a developer machine without it skips this file; CI fails), bash, git and chmod; the unsearchable-folder check is skipped as root, which can search any folder.
 # shellcheck disable=SC2034 # out and o are read by the eval in check
 set -uo pipefail
@@ -34,7 +35,7 @@ mkdir "$work/bin"
 cat > "$work/bin/gh" <<'GH' # gh-repo: ok
 #!/usr/bin/env bash
 args="$*"
-[[ $# == 12 && "$1 $2 $3 $4 $5 $6 $7" == "pr list --state all --limit 100 --head" && "$9 ${10} ${11}" == "--json state,headRefOid,baseRefName,headRepository --jq" \
+[[ $# == 12 && "$1 $2 $3 $4 $5 $6 $7" == "pr list --state all --limit 100 --head" && -n "$8" && "$9 ${10} ${11}" == "--json state,headRefOid,baseRefName,headRepository --jq" \
   && "${GH_REPO:-}" == "${EXPECT_GH_REPO:-o/r}" ]] || { echo "fake gh: bad call: $args (GH_REPO=${GH_REPO:-})" >&2; exit 2; } # gh-repo: ok
 [[ ! -f "$GH_FIX/_fail" ]] || { echo "fake gh: network down" >&2; exit 1; } # gh-repo: ok
 while [[ $# -gt 0 ]]; do
@@ -140,6 +141,11 @@ wt_at() { # wt_at <branch> <dir>: a pushed worktree at <dir>, with a merged PR a
 # A folder whose parent is empty or gone can't be told from an unmounted drive: kept, with the hint to prune
 wt_at chore/only-child "$work/wt-oc/oc"; command rm -rf "$work/wt-oc/oc"
 wt_at chore/parent-gone "$work/wt-pg/pg"; command rm -rf "$work/wt-pg"
+# Four merged branches under one parent: clean ones before and after the hand-deleted ones. Removing the clean ones empties the parent, but the answer was decided before the run.
+wt_at chore/ord-a-clean "$work/wt-ord/a"
+wt_at chore/ord-b-stale "$work/wt-ord/b"; command rm -rf "$work/wt-ord/b"
+wt_at chore/ord-c-clean "$work/wt-ord/c"
+wt_at chore/ord-d-stale "$work/wt-ord/d"; command rm -rf "$work/wt-ord/d"
 wt_at chore/parent-file "$work/wt-pf/pf"; command rm -rf "$work/wt-pf"; touch "$work/wt-pf"; chmod 755 "$work/wt-pf" # the parent is now an executable file, not a folder
 # A branch a worktree is rebasing shows as detached in the worktree list: git branch -D refuses it
 wt_at chore/rebasing "$work/wt/chore-rebasing"
@@ -192,6 +198,7 @@ check "dry run lists every step" "grep -q 'would: git worktree remove .*feature-
 check "a dry run keeps a locked worktree with a missing folder, as the real run does" "grep -q 'keep   chore/stale-locked: its worktree is locked and its folder is missing' <<<\"\$out\" && ! grep -q 'remove chore/stale-locked' <<<\"\$out\" && ! grep -q 'would: git branch -q -D chore/stale-locked' <<<\"\$out\""
 if [[ "$rel_ok" == true ]]; then check "a dry run finds the entry of a worktree git stored with a relative path" "grep -q 'would: forget the missing worktree .*chore-relative-path' <<<\"\$out\""
 elif [[ -n "${CI:-}" ]]; then bad "this git can't read a worktree stored with a relative path, and CI must test it"; else echo "skip - this git can't read a relative worktree path"; fi
+check "a dry run says it would forget both hand-deleted worktrees, whichever side of the clean ones they sort" "grep -q 'would: forget the missing worktree .*wt-ord/b' <<<\"\$out\" && grep -q 'would: forget the missing worktree .*wt-ord/d' <<<\"\$out\" && ! grep -q 'keep   chore/ord-' <<<\"\$out\""
 check "a dry run forgets no worktree entry, but says it would" "grep -q '^remove chore/stale\$' <<<\"\$out\" && grep -q 'would: forget the missing worktree .*chore-stale\$' <<<\"\$out\" && grep -q 'would: git branch -q -D chore/stale' <<<\"\$out\" && [[ -d $repo/.git/worktrees/chore-stale ]] && has_local chore/stale"
 
 # The owner of origin: github.com URL forms (through the git shim), without regard to case; a PR from "Acme/R" counts for acme/r, not for o/r
@@ -290,6 +297,7 @@ check "a worktree entry that is a symlink is never followed or removed" "has_loc
 check "a commit made after the branch was judged keeps the branch, and its origin copy" "has_local chore/local-race && has_remote chore/local-race && [[ \$(git log -1 --format=%s chore/local-race) == late-local ]] && grep -q 'keep   chore/local-race: it has a commit that was made after it was judged' <<<\"\$out\" && grep -q 'keep   origin/chore/local-race: its local branch was kept' <<<\"\$out\" && [[ -n \"\$(git config --get-regexp '^branch\\.chore/local-race\\.')\" ]]"
 check "a branch a worktree is rebasing is kept, with its origin copy" "has_local chore/rebasing && has_remote chore/rebasing && grep -q 'keep   chore/rebasing: git could not delete the branch' <<<\"\$out\" && [[ -d $work/wt/chore-rebasing ]]"
 check "a worktree whose parent folder is empty is kept as maybe out of reach, with the prune hint, and its entry kept" "has_local chore/only-child && has_remote chore/only-child && [[ -d $repo/.git/worktrees/oc ]] && grep -q \"keep   chore/only-child: its worktree's folder can't be reached\" <<<\"\$out\" && grep -q 'git worktree prune' <<<\"\$out\""
+check "hand-deleted worktrees are forgotten the same in the real run, whichever side of the clean ones they sort" "! has_local chore/ord-b-stale && ! has_remote chore/ord-b-stale && ! has_local chore/ord-d-stale && ! has_remote chore/ord-d-stale && ! has_local chore/ord-a-clean && ! has_local chore/ord-c-clean"
 check "a worktree whose parent is a file, not a folder, is kept the same way" "has_local chore/parent-file && has_remote chore/parent-file && [[ -d $repo/.git/worktrees/pf ]] && grep -q \"keep   chore/parent-file: its worktree's folder can't be reached\" <<<\"\$out\""
 check "a worktree whose parent folder is gone is kept the same way" "has_local chore/parent-gone && has_remote chore/parent-gone && [[ -d $repo/.git/worktrees/pg ]] && grep -q \"keep   chore/parent-gone: its worktree's folder can't be reached\" <<<\"\$out\""
 check "a PR merged into another base, then one into main, at the same tip: merged" "! has_remote chore/v-other-main"

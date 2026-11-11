@@ -59,8 +59,10 @@ that name if there is one (checked out as it is, even if it is behind `origin`),
 `fix/{n}-{slug}` for an issue labelled `bug` (any case), `feature/{n}-{slug}` for any other; the slug is the title's lowercase `a-z0-9` words (a leading `[tag]` dropped, at most
 6 words and 50 characters, `issue` when none is left). An issue renamed since keeps the branch already named for its number, local or on `origin`. It reuses the branch's worktree
 if there is one; git's entry for one whose folder was deleted by hand is forgotten (that one only, and only a real directory entry) and the worktree made again. It refuses, with a hint,
-a locked one, one whose folder can't be reached (its parent folder is missing, empty or unsearchable, which an unmounted drive also looks like: run `git worktree prune` if it was deleted for good),
-the primary checkout holding the branch, and a directory of that name that is not a worktree of the branch. When `origin` can't be fetched it still prints a worktree the branch already has,
+a locked one, one whose folder can't be reached (its parent folder is missing, empty, unreadable or unsearchable, which an unmounted drive also looks like: run `git worktree prune` if it
+was deleted for good),
+the primary checkout holding the branch, and a directory of that name that is not a worktree of the branch. When `origin` can't be fetched (but `gh` works: the issue is read first) it still
+prints a worktree the branch already has,
 with a warning, and stops otherwise. It needs `gh` logged in, and for an origin that is not on github.com, `GITHUB_REPOSITORY`. Work without an issue is made by hand:
 `git worktree add -b chore/upgrade-net10 ../<Repo>-worktrees/chore-upgrade-net10 origin/main`.
 
@@ -70,9 +72,10 @@ from the repository `origin` points at (a fork's PR of the same name doesn't cou
 unpushed commit is lost. It keeps, with the reason, a branch with an open PR, no PR, 100 or more PRs of that name, a PR merged elsewhere, a commit made after it was judged, a branch a worktree
 is rebasing or bisecting, a dirty worktree, or a worktree whose folder can't be reached (and that local branch's `origin` copy too), and removes a closed-unmerged one only with
 `--include-closed`. It deletes the `origin` branch only if `origin` still holds the tip it judged (one GitHub already deleted counts as removed), and for a worktree whose folder was
-deleted by hand it forgets git's entry for that one worktree only (a locked one is kept; a parent folder that is missing, empty or unsearchable may be an unmounted drive, so the branch is kept
+deleted by hand it forgets git's entry for that one worktree only (a locked one is kept; a parent folder that is missing, empty, unreadable or unsearchable may be an unmounted drive, so the
+branch is kept
 with the hint to run `git worktree prune`). It exits 1 when it can't fetch `origin`, `main` can't fast-forward or a `gh` lookup fails, and, after doing the rest, when a removal git refused,
-a check of `origin` or the closing fetch failed. `--dry-run` shows the steps. `git worktree remove` alone
+a check of `origin` or the closing fetch failed, or a commit was made after a branch was judged. `--dry-run` shows the steps. `git worktree remove` alone
 leaves the local and `origin` branches behind.
 
 `pre-commit` enforces the rule that a change is committed in a linked worktree. Claude Code's own `.claude/worktrees/` (ignored by the Template's

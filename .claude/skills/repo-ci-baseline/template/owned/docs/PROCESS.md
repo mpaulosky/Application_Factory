@@ -33,8 +33,9 @@ for `git branch --merged` to see, and counts only a PR whose head repository is 
 open PR, no PR, a commit the PR never had or one made while it ran, 100 or more PRs of that name, a PR merged into another branch, a worktree with uncommitted changes
 or one whose folder can't be reached, and keeps that local branch's `origin` copy
 too; a branch whose PR closed unmerged goes only with `--include-closed`. A `gh` failure, a failed fetch of `origin`, or a `main` that can't fast-forward stops it; a removal git refuses, a check of
-`origin` that failed, or a failed closing fetch is reported (exit 1) while the rest is done. A worktree whose folder was deleted by hand has git's entry for it forgotten (a locked one is kept;
-a parent folder that is missing, empty or unsearchable may be an unmounted drive, so the branch is kept: run `git worktree prune` if you deleted it for good, then `scripts/cleanup.sh` again).
+`origin` that failed, a failed closing fetch, or a commit made after a branch was judged is reported (exit 1) while the rest is done. A worktree whose folder was deleted by hand has git's
+entry for it forgotten (a locked one is kept;
+a parent folder that is missing, empty, unreadable or unsearchable may be an unmounted drive, so the branch is kept: run `git worktree prune` if you deleted it for good, then `scripts/cleanup.sh` again).
 
 | Branch | Use |
 | --- | --- |

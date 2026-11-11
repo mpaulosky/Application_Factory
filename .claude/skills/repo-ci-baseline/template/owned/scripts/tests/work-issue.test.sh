@@ -5,7 +5,8 @@
 #
 # The fake gh answers `gh issue view <n> --json title|labels --jq <expr>` from the file $GH_FIX/<n>.json ({"title", "labels": [{"name"}]}), and runs the --jq text work-issue.sh passes
 # it through the real jq, as gh does. It fails unless it is given exactly those seven arguments, --json title or labels, and GH_REPO (o/r, or $EXPECT_GH_REPO); a missing file is an
-# unknown issue (exit 1), and a file $GH_FIX/_fail makes it exit 1. A git shim answers `git remote get-url origin` from $SHIM_ORIGIN_URL, to try URL forms.
+# unknown issue (exit 1), and a file $GH_FIX/_fail makes it exit 1. A git shim answers `git remote get-url origin` from $SHIM_ORIGIN_URL, to try URL forms, and fails
+# `git -C <dir> fetch` when SHIM_FETCH_FAIL is set, to try an origin that can't be fetched.
 # shellcheck disable=SC2034 # o is read by the eval in check
 set -uo pipefail
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
@@ -223,6 +224,12 @@ o=$(PATH="$work/shim:$PATH" SHIM_FETCH_FAIL=1 bash scripts/work-issue.sh 103 2>&
 check "origin can't be fetched: a new worktree is refused, and nothing is made" "[[ $st != 0 ]] && grep -q \"can't fetch origin\" <<<\"\$o\" && [[ ! -e '$wt/feature-103-offline' ]] && ! git show-ref --verify --quiet refs/heads/feature/103-offline"
 out54=$(PATH="$work/shim:$PATH" SHIM_FETCH_FAIL=1 bash scripts/work-issue.sh 54 2>"$work/err"); st=$?
 check "origin can't be fetched: a worktree the branch already has is still printed, with a warning" "[[ $st == 0 && '$out54' == '$p' ]] && grep -q \"can't fetch origin: using what was fetched last\" '$work/err'"
+
+# The fetch failing before git's entry for a hand-deleted worktree is forgotten: the entry stays, and a later run (fetch working) makes the worktree again
+issue 105 "Stale offline"; git worktree add -q -b feature/105-stale-offline "$wt/feature-105-stale-offline" origin/main; command rm -rf "$wt/feature-105-stale-offline"
+o=$(PATH="$work/shim:$PATH" SHIM_FETCH_FAIL=1 bash scripts/work-issue.sh 105 2>&1 >/dev/null); st=$?
+check "a failed fetch stops before git's entry for a hand-deleted worktree is forgotten" "[[ $st != 0 ]] && grep -q \"can't fetch origin\" <<<\"\$o\" && [[ -d '$work/Repo/.git/worktrees/feature-105-stale-offline' && ! -e '$wt/feature-105-stale-offline' ]]"
+check "a later run makes that worktree again" "[[ \$(bash scripts/work-issue.sh 105 2>/dev/null) == '$wt/feature-105-stale-offline' && -d '$wt/feature-105-stale-offline' ]]"
 
 # gh failing, an unknown issue, no gh, a check-branch-name.sh that refuses, a path with spaces and a non-ASCII letter
 before="$(git branch | wc -l)$(find "$wt" -mindepth 1 -maxdepth 1 | wc -l)"

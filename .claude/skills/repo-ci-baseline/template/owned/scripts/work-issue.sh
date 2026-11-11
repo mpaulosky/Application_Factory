@@ -10,9 +10,9 @@
 # The branch starts from the local branch when there is one (checked out as it is), else from origin/<branch> when that branch is on origin, else from origin/main; origin is fetched
 # first, so a branch pushed from another machine is seen. A worktree the branch already has is reused,
 # wherever it is, if its folder still exists (git's entry for one deleted by hand is forgotten, that one only, and the worktree made again; a locked
-# one is an error, and so is one whose folder can't be reached (its parent folder is missing, empty or unsearchable: it may be on an unmounted drive; run git worktree prune if it was
+# one is an error, and so is one whose folder can't be reached (its parent folder is missing, empty, unreadable or unsearchable: it may be on an unmounted drive; run git worktree prune if it was
 # deleted for good), or the primary checkout when it has the branch checked out); a directory in the way that is not that worktree is an error. It needs gh logged in, and for an origin
-# that is not on github.com, GITHUB_REPOSITORY. When origin can't be fetched it still prints a worktree it already has (with a warning), and stops otherwise. An issue number has at most 9 digits. Run it from the primary checkout or any worktree.
+# that is not on github.com, GITHUB_REPOSITORY. When origin can't be fetched (but gh works: the issue is read first) it still prints a worktree it already has, with a warning, and stops otherwise. An issue number has at most 9 digits. Run it from the primary checkout or any worktree.
 # Everything but the path goes to stderr.
 set -euo pipefail
 
@@ -81,7 +81,7 @@ fi
 if [[ -n "$existing" ]]; then
   p="$(dirname "$existing")"
   [[ -d "$p" && -x "$p" && -n "$(ls -A "$p" 2>/dev/null)" ]] \
-    || die "$existing is a worktree of $branch whose folder can't be reached: its parent folder is missing, empty or unsearchable, so it may be on an unmounted drive. If you deleted it, run git worktree prune, then try again"
+    || die "$existing is a worktree of $branch whose folder can't be reached: its parent folder is missing, empty, unreadable or unsearchable, so it may be on an unmounted drive. If you deleted it, run git worktree prune, then try again"
   common="$(cd "$primary" && cd "$(git rev-parse --git-common-dir)" && pwd -P)"
   entry=""
   for d in "$common"/worktrees/*/; do

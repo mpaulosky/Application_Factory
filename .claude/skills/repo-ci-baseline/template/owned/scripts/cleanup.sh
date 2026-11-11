@@ -20,7 +20,7 @@
 # fetches and prunes the remote-tracking refs).
 # Exits 1 when it can't run (not main, not the primary checkout, dirty main, main can't fast-forward, origin can't be fetched, no gh, no repository,
 # a gh lookup failed, a bad argument, no scripts/check-branch-name.sh) and, after finishing the rest, when a removal git refused, a check of origin
-# failed or the closing fetch failed. A branch is judged by its PR, and at most 100 PRs are read per branch name: 100 or more keeps the branch.
+# failed, the closing fetch failed or a commit was made after a branch was judged. A branch is judged by its PR, and at most 100 PRs are read per branch name: 100 or more keeps the branch.
 # A worktree on a detached HEAD belongs to no branch and is never touched.
 set -euo pipefail
 
@@ -85,6 +85,15 @@ stale_entry() {
   return 1
 }
 
+# Which missing worktree folders count as deleted by hand: their parent was searchable and not empty before this run removed anything. Decided up front, so the answer does
+# not depend on which branch comes first (removing a clean sibling worktree can empty the parent) and a dry run gives the same answer as the real run.
+hand_deleted=""
+while read -r wpath; do
+  [[ -n "$wpath" && ! -e "$wpath" ]] || continue
+  d="$(dirname "$wpath")"
+  if [[ -d "$d" && -x "$d" && -n "$(ls -A "$d" 2>/dev/null)" ]]; then hand_deleted+="$wpath"$'\n'; fi
+done < <(git worktree list --porcelain | awk '/^worktree /{print substr($0,10)}')
+
 run() { if [[ "$dry" == true ]]; then echo "   would: $*"; else "$@"; fi; }
 
 git fetch --prune --quiet origin || die "can't fetch origin"
@@ -140,10 +149,9 @@ while read -r ref; do
   wt="$(git worktree list --porcelain | awk -v ref="$ref" '/^worktree /{p=substr($0,10)} $0=="branch " ref{print p}')"
   stale=""
   if [[ -n "$wt" && ! -e "$wt" ]]; then
-    # Deleted by hand, or out of reach? An unmounted drive leaves its mount point behind: empty. A parent that is missing, empty or unsearchable can't tell the two apart, so it is kept.
-    p="$(dirname "$wt")"
-    if [[ ! -d "$p" || ! -x "$p" || -z "$(ls -A "$p" 2>/dev/null)" ]]; then
-      keep "$b" "its worktree's folder can't be reached ($wt): its parent folder is missing, empty or unsearchable, so it may be on an unmounted drive. If you deleted it, run git worktree prune, then run this again"
+    # Deleted by hand, or out of reach? An unmounted drive leaves its mount point behind: empty. A parent that is missing, empty, unreadable or unsearchable can't tell the two apart (see hand_deleted).
+    if ! grep -Fxq -- "$wt" <<<"$hand_deleted"; then
+      keep "$b" "its worktree's folder can't be reached ($wt): its parent folder is missing, empty, unreadable or unsearchable, so it may be on an unmounted drive. If you deleted it, run git worktree prune, then run this again"
       kept_local+="$b "; continue
     fi
     stale="$wt"; wt="" # only git's stale entry for it is left
