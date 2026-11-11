@@ -2201,7 +2201,7 @@ def test_check_repo_escapes_line_breaks_in_the_name_of_a_symlink_it_refuses(tmp_
     ("if false; then\narr=( \\) ; fi )\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
     ("if false; then\na=( \\\nfi )\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
     ("if false; then\nx=( $(fi) )\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
-    # a $ that is escaped or the second $ of $$ doesn't make the ' that follows an ANSI-C quote
+    # an escaped $ and the second $ of $$ open no ANSI-C quote; a live $ does, and a backslash then escapes the quote
     ("if false; then\necho \\$'a\\' ; if x; then\n:\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
     ("if false; then\necho $$'a\\' ; if x; then\n:\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
     ("if false; then\n$'\\' ; fi '\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
@@ -2228,6 +2228,28 @@ def test_check_repo_escapes_line_breaks_in_the_name_of_a_symlink_it_refuses(tmp_
     ("export GH_REPO=o/r\nif false; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
     ("if false; then\necho x|if y; then z; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
     ("if false; then\necho x&if y; then z; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # an escaped $ before a $ run, and the second $ of $$, decide what a ' or a ( after them opens
+    ("if false; then\necho \\$$'a\\' ; fi '\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho \"$$(\" ; if y; then\n:\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
+    ("if false; then\necho '$(' ; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if false; then\necho $'$(' ; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    # parenthesis_end steps over a backslash, quotes holding ) and parentheses of their own
+    ("if false; then\necho \"$(echo \\\")\" ; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if false; then\necho \"$(echo \")\")\" ; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if false; then\necho \"$(echo '\"')\" ; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if false; then\necho \"$(echo (x) \")\")\" ; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    # extglob groups, every prefix character
+    ("if false; then\n[[ $x == ?(fi) ]]\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n[[ $x == *(fi) ]]\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n[[ $x == !(fi) ]]\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # only the first if of a line is judged by its condition
+    ("if false; then :; fi; if y; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if true; then :; fi; if y; then :; else\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # an elif runs whatever the if before it was, and keeps no always flag for an else after it
+    ("if false; then :; elif y; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if true; then\n:\nelif x; then\n:\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # a stray fi is ignored
+    ("fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
     # a stray elif before any if is ignored
     ("elif x; then\nexport GH_REPO=o/r\ngh pr view 1\n", []),
     # a { after an argument is an argument; a keyword follows a pipe; an odd run of three backslashes continues the line
@@ -2329,15 +2351,28 @@ def test_keywords_takes_every_character_that_ends_a_word(char):
 
 @pytest.mark.parametrize("text, expected", [
     ("$'a'", True), ("a$'a'", True), ("'a'", False), ("\\$'a'", False), ("$$'a'", False), ("$$$'a'", True), ("\\\\$'a'", True),
-    ("\"$'a'\"", True),
+    ("\\$$'a'", True), ("\\\\$$'a'", False), ("\\$$$'a'", False), ("\"$'a'\"", True),
 ])
-def test_ansi_quote_takes_a_live_dollar_before_the_quote(text, expected):
-    assert check_gh_repo.ansi_quote(text, text.index("'")) is expected
+def test_live_dollar_takes_a_dollar_that_is_live_before_the_quote(text, expected):
+    assert check_gh_repo.live_dollar(text, text.index("'") - 1) is expected
 
 
-@pytest.mark.parametrize("depth", [check_gh_repo.NESTING_LIMIT - 1, check_gh_repo.NESTING_LIMIT, check_gh_repo.NESTING_LIMIT + 1, 2000])
+def test_live_dollar_is_false_outside_the_line():
+    assert not check_gh_repo.live_dollar("$", -1)
+    assert not check_gh_repo.live_dollar("a", 0)
+
+
+@pytest.mark.parametrize("depth", [49, 50, 51, 2000])
 def test_keywords_reads_deeply_nested_quotes_without_failing(depth):
     assert check_gh_repo.keywords('"$(' * depth + "x")[0] == []
+
+
+def test_quoted_end_follows_nested_quotes_exactly_fifty_deep(monkeypatch):
+    seen = []
+    real = check_gh_repo.parenthesis_end
+    monkeypatch.setattr(check_gh_repo, "parenthesis_end", lambda line, position, depth: (seen.append(depth), real(line, position, depth))[1])
+    check_gh_repo.keywords('"$(' * 200 + "x")
+    assert max(seen) == 50 == check_gh_repo.NESTING_LIMIT
 
 
 @pytest.mark.parametrize("line, condition", [("if true; then :; else", "true"), ("if false;then :; fi", "false"), ("if echo then; then", "echo")])
@@ -2363,7 +2398,8 @@ def test_untold_reads_a_file_of_continued_lines_in_linear_time(tmp_path):
 def test_continued_text_reads_back_at_most_the_limit(chain):
     lines = [f"{index}\\" for index in range(chain)] + ["end"]
     wanted = "".join(str(index) for index in range(max(0, chain - check_gh_repo.CONTINUATION_LIMIT), chain))
-    assert check_gh_repo.continued_text(lines, len(lines)) == wanted
+    marker = check_gh_repo.TRUNCATED if chain > check_gh_repo.CONTINUATION_LIMIT else ""
+    assert check_gh_repo.continued_text(lines, len(lines)) == marker + wanted
 
 
 @pytest.mark.parametrize("text", ["\\a" * 100_000, "'a'" * 100_000, "$((1))" * 100_000, "a'b'" * 100_000])
@@ -2382,3 +2418,29 @@ def test_tokens_takes_linear_time_for_a_long_word_of_every_kind(text):
 ])
 def test_data_heredocs_finds_a_delimiter_from_the_line_after_the_header(lines, start, expected):
     assert check_gh_repo.data_heredocs(lines[0], lines, start) == expected
+
+
+@pytest.mark.parametrize("chain, refused", [(check_gh_repo.CONTINUATION_LIMIT - 1, []), (check_gh_repo.CONTINUATION_LIMIT, []),
+                                            (check_gh_repo.CONTINUATION_LIMIT + 1, "last")])
+def test_untold_refuses_a_gh_command_after_a_continued_chain_longer_than_the_limit(tmp_path, chain, refused):
+    # The start of a chain this long may hold a sudo that drops GH_REPO, so the export no longer tells the gh.
+    found = untold(tmp_path, "export GH_REPO=o/r\n" + "\\\n" * chain + "gh pr view 1\n")
+    assert lines_of(found) == ([chain + 2] if refused else [])
+
+
+def test_untold_accepts_a_gh_command_told_by_its_own_assignment_after_a_long_chain(tmp_path):
+    chain = check_gh_repo.CONTINUATION_LIMIT + 5
+    assert untold(tmp_path, "\\\n" * chain + "GH_REPO=o/r gh pr view 1\n") == []
+
+
+def test_data_heredocs_takes_the_last_occurrence_of_a_delimiter():
+    lines = ["EOF", "cat <<EOF", "EOF"]
+    assert check_gh_repo.data_heredocs(lines[1], lines, 2) == [("EOF", False, False)]
+    assert check_gh_repo.data_heredocs(lines[1], lines, 3) == []
+    tabbed = ["\tEOF", "cat <<-EOF", "\tEOF"]
+    assert check_gh_repo.data_heredocs(tabbed[1], tabbed, 2) == [("EOF", True, False)]
+
+
+@pytest.mark.parametrize("line, condition", [("if false thenx; then", "false thenx"), ("if echo xthen; then", "echo xthen")])
+def test_condition_of_stops_only_at_the_word_then(line, condition):
+    assert check_gh_repo.condition_of(line) == condition

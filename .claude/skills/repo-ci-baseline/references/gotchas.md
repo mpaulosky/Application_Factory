@@ -125,8 +125,10 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     `$((...))`, `name=(...)` or an extglob group `+(...)` (a parenthesis nested in them, except a `$(`, and a quoted or escaped one, are part of them), and not at the
     start of a line that a trailing backslash continues mid-command (a comment ends the command, so the line after one starts a new one). A `)` that closes a
     subshell or a case pattern does start a command (`a) if y; then z; fi ;;`). A case pattern `fi)`, a `(` left open at the end of a line (a `$(`, `((` or `name=(`
-    that spans lines: the next line is read as code), a backtick substitution, double quotes nested more than 50 deep in `"$(...)"`, and a line of a multi-line
-    string or of a heredoc body read as code that starts like `fi` or `else` can still misjudge a branch.
+    that spans lines: the next line is read as code), a backtick substitution, a `${...}` that holds a quote or a `)` inside a `"..."` or a `$(...)`, double quotes
+    nested more than 50 deep in `"$(...)"`, and a line of a multi-line string or of a heredoc body read as code that starts like `fi` or `else` can still misjudge a branch.
+    A backslash-continued chain is read back at most 100 lines; a gh after a longer chain is checked as if the chain began with `sudo`, so only its own `--repo` or
+    `GH_REPO=` tells it.
   - A file with a NUL byte is checked with the NULs removed, as bash reads it, not skipped. `--repo` reads a suffix in
     lower case (`up.SH`) and `.zsh`, treats every extensionless file under `scripts/` and `.github/ci/` as shell
     (under `.claude/skills/` it needs a shell shebang), and refuses a symlink whose target is outside the repo or

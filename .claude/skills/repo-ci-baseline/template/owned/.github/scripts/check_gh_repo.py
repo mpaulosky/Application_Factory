@@ -343,20 +343,25 @@ def logical_line(lines, number):
     return text, count
 
 
-# The most physical lines continued_text reads back; a longer chain loses its start, which only makes a gh command look less told.
+# The most physical lines continued_text reads back. A longer chain loses its start, which may hold a wrapper (sudo, env -i) that
+# drops GH_REPO, so the text then starts with one: such a gh is told only by a --repo or a GH_REPO= of its own.
 CONTINUATION_LIMIT = 100
+TRUNCATED = "sudo "
 
 
 def continued_text(lines, number):
     """The text of the physical lines right before lines[number - 1] that a trailing backslash joins to it, backslashes removed.
 
-    At most CONTINUATION_LIMIT lines are read, so a file of many continued lines costs a bounded amount per line.
+    At most CONTINUATION_LIMIT lines are read, so a file of many continued lines costs a bounded amount per line;
+    a chain that goes on past them starts with TRUNCATED.
     """
     text = ""
     index = number - 2
     while index >= 0 and number - 2 - index < CONTINUATION_LIMIT and continues(lines[index]):
         text = lines[index][:-1] + text
         index -= 1
+    if index >= 0 and continues(lines[index]):
+        text = TRUNCATED + text
     return text
 
 
@@ -455,19 +460,22 @@ ALWAYS = re.compile(r"(true|:)$")
 NESTING_LIMIT = 50
 
 
-def ansi_quote(line, position):
-    """Whether the ' at line[position] opens a $'...' string: a $ right before it that isn't escaped and isn't the second $ of $$."""
-    index = position - 1
+def live_dollar(line, index):
+    """Whether line[index] is a $ that starts an expansion.
+
+    A run of $ pairs up into process ids ($$), so only an odd run ends in a live $; a backslash before the run makes
+    its first $ a literal.
+    """
     if index < 0 or line[index] != "$":
-        return False
-    slashes = 0
-    while index - 1 - slashes >= 0 and line[index - 1 - slashes] == "\\":
-        slashes += 1
-    if slashes % 2:
         return False
     dollars = 1
     while index - dollars >= 0 and line[index - dollars] == "$":
         dollars += 1
+    slashes = 0
+    while index - dollars - slashes >= 0 and line[index - dollars - slashes] == "\\":
+        slashes += 1
+    if slashes % 2:
+        dollars -= 1
     return dollars % 2 == 1
 
 
@@ -478,12 +486,12 @@ def quoted_end(line, position, depth=0):
     commands with quotes of their own, so the string goes on to the ) that closes it.
     """
     quote = line[position]
-    escapes = quote == '"' or (quote == "'" and ansi_quote(line, position))
+    escapes = quote == '"' or (quote == "'" and live_dollar(line, position - 1))
     position += 1
     while position < len(line) and line[position] != quote:
         if escapes and line[position] == "\\":
             position += 2
-        elif quote == '"' and line.startswith("$(", position) and depth < NESTING_LIMIT:
+        elif quote == '"' and line.startswith("$(", position) and live_dollar(line, position) and depth < NESTING_LIMIT:
             position = parenthesis_end(line, position + 2, depth + 1)
         else:
             position += 1
@@ -522,8 +530,8 @@ def keywords(line, command=True):
     array elements or a pattern, not commands, so it is skipped, and so is any ( nested in it except a $( (quotes,
     backslashes and ${...} in it still hide a parenthesis). Known limits: a case pattern that reads fi), a ( left open
     at the end of a line (a $( or (( or name=( spanning lines: the next line is read as code), a backtick
-    substitution, quotes nested deeper than NESTING_LIMIT, and a line of a multi-line string or a heredoc body read
-    as code that starts like a keyword.
+    substitution, a ${...} inside a "..." or a $(...) that holds a quote or a ), quotes nested deeper than
+    NESTING_LIMIT, and a line of a multi-line string or a heredoc body read as code that starts like a keyword.
     """
     found = []
     position = 0
@@ -593,7 +601,7 @@ def condition_of(line):
     if not text.startswith("if") or text[2:3] not in (" ", "\t"):
         return ""
     text = text[2:].split("#", 1)[0]
-    then = re.search(r"(?:^|[;\s])then\b", text)
+    then = re.search(r"[;\s]then\b", text)
     if then:
         text = text[:then.start()]
     return text.strip(" \t").removesuffix(";").strip(" \t")
@@ -603,7 +611,7 @@ def track_branches(line, branches, command=True):
     """Keep branches, one (runs, always) pair per open if, up to date for this line, and return whether the line ends where a command may start.
 
     runs is False while the branch being read can't run. Only a condition that is plainly false (or plainly true,
-    for its else) is judged, and only on an if whose condition ends on its line; any other branch may run. Keywords
+    for its else) is judged, and only on an if that starts its line; any other branch may run. Keywords
     count in source order, so a fi closes the block it ends before an if later on the line opens the next, and an
     else flips the branch whether it starts the line or follows a ;. A quoted or commented keyword is not one, and
     neither is a keyword where no command starts, such as the line after `echo x \\`: command says whether the line
@@ -612,9 +620,10 @@ def track_branches(line, branches, command=True):
     before branches were tracked, or flip one.
     """
     found, command = keywords(line, command)
-    for word in found:
+    for index, word in enumerate(found):
         if word == "if":
-            text = condition_of(line)
+            # condition_of reads the line's first if; a later one on the line has no condition to judge.
+            text = condition_of(line) if index == 0 else ""
             branches.append((NEVER.match(text) is None, ALWAYS.match(text) is not None))
         elif word == "fi":
             if branches:
