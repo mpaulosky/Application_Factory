@@ -383,15 +383,17 @@ def test_the_job_passes_a_pr_that_leaves_every_owned_file_alone(tmp_path):
     assert differs_lines(output) == []
 
 
-def test_the_job_passes_a_pr_that_adds_an_owned_file_the_base_lacks(tmp_path):
-    # Arrange: the first Apply has no base copy to differ from.
+def test_the_job_fails_a_pr_that_adds_an_owned_file_the_base_lacks(tmp_path):
+    # Arrange: only an Apply branch, or a base with no checker, may add an Owned file.
     base = {CHECKER_PATH: CHECKER.read_text(), "scripts/ok.sh": TOLD}
 
     # Act
     code, output = run_job(tmp_path, {"scripts/gate.sh": GATE, "scripts/review.sh": GATE}, base_files=base)
 
     # Assert
-    assert code == 0, output
+    assert code != 0
+    assert "Owned file scripts/gate.sh differs from main" in output
+    assert "Owned file scripts/review.sh differs from main" in output
 
 
 def test_the_job_names_each_edited_owned_file_once(tmp_path):
@@ -610,3 +612,36 @@ def test_the_job_ignores_a_file_the_base_added_to_an_owned_folder_after_the_head
 
     # Assert
     assert code == 0, output
+
+
+def test_the_job_passes_an_apply_branch_that_adds_a_single_file_owned_entry(tmp_path):
+    # Arrange, Act
+    code, output = run_job(tmp_path, {"scripts/review.sh": "#!/usr/bin/env bash\ntrue\n"}, head_ref="chore/reapply-baseline")
+
+    # Assert
+    assert code == 0, output
+
+
+def test_the_job_ignores_a_single_file_owned_entry_the_base_added_after_the_head_was_cut(tmp_path):
+    # Arrange
+    job = Job(tmp_path, BASE, {})
+    job.advance_base({"scripts/review.sh": "#!/usr/bin/env bash\ntrue\n"})
+
+    # Act
+    code, output = job.run()
+
+    # Assert
+    assert code == 0, output
+
+
+def test_the_job_fails_a_pr_that_adds_an_absent_single_file_owned_entry(tmp_path):
+    # Arrange: scripts/review.sh is an Owned entry the base lacks, so there is no base file to differ from.
+    added = "scripts/review.sh"
+    assert added not in BASE
+
+    # Act
+    code, output = run_job(tmp_path, {added: "#!/usr/bin/env bash\ntrue\n"})
+
+    # Assert
+    assert code != 0
+    assert f"Owned file {added} differs from main" in output

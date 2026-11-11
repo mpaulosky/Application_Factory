@@ -7,8 +7,10 @@ Baseline repo's gate check for gh commands that reach gh's default repository
 import ast
 import os
 import re
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -2055,3 +2057,497 @@ def test_check_repo_escapes_line_breaks_in_the_name_of_a_symlink_it_refuses(tmp_
 
     # Assert
     assert found == ["scripts/a\\r::error::b: a symlink to nothing"]
+
+
+@pytest.mark.parametrize("text, refused", [
+    ("if false; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [4]),
+    ("if false\nthen\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if true; then\n  :\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if [ -n \"$x\" ]; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if true; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\n  :\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if ! true; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [4]),
+    ("if [ 0 -ne 0 ]; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [4]),
+    ("if [ 1 -eq 0 ]; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [4]),
+    ("if :; then\n:\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if false; then # note\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [4]),
+    # near misses still run
+    ("if falsey; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false && x; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if ! false; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # an elif branch is assumed to run, whatever the if's condition
+    ("if false; then\n:\nelif x; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # nesting
+    ("if false; then\nif true; then\nexport GH_REPO=o/r\nfi\nfi\ngh pr view 1\n", [6]),
+    ("if true; then\nif false; then\n:\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\nif x; then\n:\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
+    # a one-line if opens and closes on its line, however its fi is followed
+    ("if false; then\nif x; then y; fi # note\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if x; then y; fi && z\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if false; then :; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("(if x; then y; fi)\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if x; then y; fi; if z; then w; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    # the word fi that is no keyword
+    ("if grep -q fi f; then\n:\nfi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if x; then echo fi; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if false; then\necho fi\nfi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if false; then\n:\nelse\nif y; then\nexport GH_REPO=o/r\nfi\nfi\ngh pr view 1\n", []),
+    # what the scanner tells apart by reading the keywords in source order
+    ("if false; then\nif x; then y; fi # note\nfi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if false; then\nif grep -q fi; then\n:\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
+    ("  if false; then\nexport GH_REPO=o/r\n  fi\ngh pr view 1\n", [4]),
+    ("if false; then\nwhile x; do if y; then z; fi; done\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\nx; { if y; then z; fi; }\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\nif y; then z; else if w; then v; fi; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # a line of a multi-line string that starts like fi but is glued to a quote is not a keyword, so the dead branch stays dead
+    ("if false; then\necho \"\nfi\"\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    # a quoted or commented keyword is not one: it neither pops the dead branch nor opens a phantom one
+    ("if false; then\nprintf '%s\\n' '; fi'\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho \"; fi\"\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho x # ; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho x \\; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("echo '; if false; then'\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("echo x # ; if false; then\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    # keywords on one line count in source order: the fi closes the old block before the new if opens
+    ("if false; then\n:\nfi; if true; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\n:\nfi; if x; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if true; then\nif false; then\n:\nfi; if false; then\n:\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # an if alone on its line, or glued to ( , still opens a block that its fi closes
+    ("if false; then\nif\n  x\nthen\n  :\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [9]),
+    ("if false; then\nif(true); then :; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # a word after > or < is an argument, never a keyword
+    ("if false; then\necho x > fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\ncat < fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # the if of a case arm is one
+    ("if false; then\ncase $x in\n a) if y; then z; fi ;;\nesac\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
+    # a backslash escapes a quote inside "..." and $'...', not inside '...'
+    ("if false; then\necho \"a\\\" ; fi \"\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho 'a\\'; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\necho $'\\' ; fi '\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n'a\\' ; fi $\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # ${...} is one word, closed or not; a word after it is an argument
+    ("if false; then\necho ${x:-a; fi}\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho ${x; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho ${x} fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # {fi} is one word; a keyword is one only at the start of a command
+    ("if false; then\n{fi}\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho then if x\nfi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    # then, !, while and time keep the next word at the start of a command
+    ("if false; then\nif x; then if y; then z; fi; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n! if x; then y; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\nwhile if x; then y; fi; do :; done\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\ntime if x; then y; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # a line a trailing backslash continues is not the start of a command
+    ("if false; then\necho x \\\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    # a ) that closes an expansion, however the parentheses nest, ends no command; one that closes a subshell does
+    ("if false; then\necho $(true) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho $((1+2)) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\na=(x y) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\ncat <(true) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n(true) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\necho $(if x; then y; fi)\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # a redirect at the start of a command is followed by an argument; {if is one word, { if starts a block
+    ("if false; then\n> fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n{if x; then y; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\n{\tif y; then z; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # a ; or & right after ${...} starts a command
+    ("if false; then\necho ${x}; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # a line after one that ends mid-command is no command start; after ; && then or a blank, a comment, or an even run of backslashes it is
+    ("if false; then\n:; \\\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\nif x; then \\\nif y; then z; fi; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if true; then \\\nif false; then\nexport GH_REPO=o/r\nfi\nfi\ngh pr view 1\n", [6]),
+    ("foo && \\\nif false; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("# note \\\nif false; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    (" \\\nif false; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho x \\\\\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\n:\necho x \\\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
+    ("if false; then\n:\necho x \\\nelif y; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
+    # a comment ends the command, even one that ends in a backslash
+    ("if false; then\necho x # c \\\nif y; then\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
+    ("if false; then\necho x # note \\\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\n:\necho x # c \\\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\necho x \\\n# note\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # arithmetic and array elements are not commands
+    ("if false; then\n(( fi ))\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho $(( fi ))\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\nx=$(( if ))\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\na=(fi)\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n((if x; then y; fi))\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho $((true) fi)\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\ncat >(true) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho $(a $(b) fi)\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\nx=$(if a; then b; fi) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n(echo $(a)) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\n(true) fi $\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # parentheses nested in arithmetic or an array are skipped too; the contents end at the matching )
+    ("if false; then\nx=$(( (fi) ))\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n(( (if) ))\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\na=( (if) )\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho $(( (1+2) * 3 )) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n(( (a) * 2 )) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\nx=(a (b)) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho $(( (1) )) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n((x)); fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\na=(x); fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\na=(x; fi)\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n(if x; then y; fi)\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # a quoted, escaped or ${...} parenthesis in an array or arithmetic neither closes nor opens it
+    ("if false; then\narr=( \"a)\" ); if true; then\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if false; then\narr=( \"(\" ); if true; then\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if false; then\narr=( ')' ); if true; then\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if false; then\narr=( \\) ); if true; then\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if false; then\narr=( ${x:-)} ); if true; then\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if false; then\narr=( \"a\\\"b)\" ); if true; then\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if false; then\narr=( \\) ; fi )\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\na=( \\\nfi )\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if false; then\nx=( $(fi) )\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # an escaped $ and the second $ of $$ open no ANSI-C quote; a live $ does, and a backslash then escapes the quote
+    ("if false; then\necho \\$'a\\' ; if x; then\n:\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
+    ("if false; then\necho $$'a\\' ; if x; then\n:\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
+    ("if false; then\n$'\\' ; fi '\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # a "..." that holds a $( holds commands with quotes of their own
+    ("if false; then\necho \"$(echo \"; fi \")\"\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # else and elif are keywords wherever a command starts, not only at the start of a line
+    ("if true; then :; else\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [4]),
+    ("if false; then :; else\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if x; then :; elif y; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # an extglob group holds a pattern, not a command
+    ("if false; then\n[[ $x == +(fi) ]]\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\ncase $x in @(if|fi)) :;; esac\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # a ( that follows a space inside a $( or a subshell is a subshell, and its fi counts
+    ("if false; then\n( (fi) )\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\n$( (fi) )\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\na=( $( (fi) ) )\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\ncase x in (a) if y; then z; fi;; esac\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # ${...} in an array or arithmetic is stepped over, closed or not; a block that is open at the end of the line goes on in the next
+    ("if false; then\narr=( ${x:-)} ; fi )\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\narr=( ${x ) ; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n(if x; then\n:\nfi)\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
+    ("if false; then\nx=$(if y; then\n:\nfi)\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
+    # a dead export doesn't cancel an earlier one; | and & end a word
+    ("export GH_REPO=o/r\nif false; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\necho x|if y; then z; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho x&if y; then z; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # an escaped $ before a $ run, and the second $ of $$, decide what a ' or a ( after them opens
+    ("if false; then\necho \\$$'a\\' ; fi '\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho \"$$(\" ; if y; then\n:\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
+    # a dollar-paren inside '...' or $'...' is no substitution (only "..." follows one)
+    ("if false; then\necho '$(' ; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if false; then\necho $'$(' ; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    # parenthesis_end steps over a backslash, quotes holding ) and parentheses of their own
+    ("if false; then\necho \"$(echo \\\")\" ; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if false; then\necho \"$(echo \")\")\" ; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if false; then\necho \"$(echo '\"')\" ; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if false; then\necho \"$(echo (x) \")\")\" ; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    # extglob groups with the prefixes ?, * and ! (@ and + are tested above)
+    ("if false; then\n[[ $x == ?(fi) ]]\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n[[ $x == *(fi) ]]\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n[[ $x == !(fi) ]]\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # a condition is judged only on an if that is the first keyword of its line
+    ("if false; then :; fi; if y; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if true; then :; fi; if y; then :; else\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # an elif runs whatever the if before it was, and keeps no always flag for an else after it
+    ("if false; then :; elif y; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if true; then\n:\nelif x; then\n:\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # a stray fi is ignored
+    ("fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    # a stray elif before any if is ignored
+    ("elif x; then\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    # a { after an argument is an argument; a keyword follows a pipe; an odd run of three backslashes continues the line
+    ("if false; then\necho { fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho x | if y; then z; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n:; \\\\\\\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    # an elif leaves its branch running for the else after it; else and elif are whole words; a stray else is ignored
+    ("if false; then\n:\nelif x; then\n:\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if true; then\nelsewhere\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\neliffy\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("else\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    # the else of a condition that is not plainly true runs
+    ("if ! true; then\n:\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if grep -q :; then\n:\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+])
+def test_untold_takes_an_export_only_from_a_branch_that_can_run(tmp_path, text, refused):
+    assert lines_of(untold(tmp_path, text)) == refused
+
+
+def test_tokens_takes_linear_time_for_a_long_unquoted_word():
+    start = time.perf_counter()
+    found = check_gh_repo.tokens("a" * 200_000)
+    assert found == [("word", "a" * 200_000, False)]
+    assert time.perf_counter() - start < 10
+
+
+def test_data_heredocs_does_not_tokenize_a_line_without_a_heredoc(monkeypatch):
+    monkeypatch.setattr(check_gh_repo, "tokens", lambda text: pytest.fail("tokenized"))
+    assert check_gh_repo.data_heredocs("echo hi && ls", ["x"], 0) == []
+
+
+def test_untold_reads_a_long_file_of_short_lines_in_linear_time(tmp_path):
+    start = time.perf_counter()
+    found = untold(tmp_path, "export GH_REPO=o/r\n" + "echo hi\n" * 40_000 + "gh pr view 1\n")
+    assert found == []
+    assert time.perf_counter() - start < 30
+
+
+@pytest.mark.parametrize("header", [
+    "if cat <<EOF", "elif cat <<EOF", "while cat <<EOF", "until cat <<EOF", "! cat <<EOF", "{ cat <<EOF", "time cat <<EOF",
+    "then cat <<EOF", "else cat <<EOF", "do cat <<EOF",
+])
+def test_data_heredocs_sees_through_the_words_before_a_command(header):
+    assert check_gh_repo.data_heredocs(header, ["gh pr view 1", "EOF"], 0) == [("EOF", False, False)]
+
+
+def test_untold_reads_an_if_followed_by_a_long_run_of_blanks_without_hanging(tmp_path):
+    assert untold(tmp_path, "if x" + " " * 5000 + "y\nfi\n") == []
+
+
+class NoSlice(list):
+    """A list that fails when sliced, as a copy of the rest of a long file would."""
+
+    def __getitem__(self, index):
+        assert not isinstance(index, slice), "the lines after a header were sliced"
+        return super().__getitem__(index)
+
+
+def test_data_heredocs_reads_the_lines_after_the_header_without_slicing_them():
+    assert check_gh_repo.data_heredocs("cat <<EOF", NoSlice(["cat <<EOF", "gh pr view 1", "EOF"]), 1) == [("EOF", False, False)]
+
+
+def test_untold_never_slices_the_lines_of_a_file_with_a_heredoc(tmp_path, monkeypatch):
+    path = tmp_path / "script.sh"
+    path.write_text("cat <<EOF\nhello\nEOF\ngh pr view 1\n")
+    monkeypatch.setattr(check_gh_repo, "read_lines", lambda _: NoSlice(["cat <<EOF", "hello", "EOF", "gh pr view 1"]))
+    assert lines_of(check_gh_repo.untold(path)) == [4]
+
+
+@pytest.mark.parametrize("char", sorted(check_gh_repo.WORD_END) + ["{", "}", "\\", "'", '"', "$", "#"])
+def test_keywords_takes_every_character_that_ends_a_word(char):
+    # A character that ends a word but that no branch of the scan takes would never advance it: fail after 5 s instead of hanging.
+    def stop(*_):
+        raise TimeoutError(f"keywords() did not finish on {char!r}")
+    previous = signal.signal(signal.SIGALRM, stop)
+    signal.alarm(5)
+    try:
+        assert check_gh_repo.keywords(char * 3)[0] == []
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("$'a'", True), ("a$'a'", True), ("'a'", False), ("\\$'a'", False), ("$$'a'", False), ("$$$'a'", True), ("\\\\$'a'", True),
+    ("\\$$'a'", True), ("\\\\$$'a'", False), ("\\$$$'a'", False), ("\"$'a'\"", True),
+    ("$'a'$", True), ("$'a'\\", True), ("$$$'a'\\", True),
+])
+def test_live_dollar_takes_a_dollar_that_is_live_before_the_quote(text, expected):
+    assert check_gh_repo.live_dollar(text, text.index("'") - 1) is expected
+
+
+def test_live_dollar_is_false_outside_the_line():
+    assert not check_gh_repo.live_dollar("$", -1)
+    assert not check_gh_repo.live_dollar("a", 0)
+
+
+@pytest.mark.parametrize("depth", [49, 50, 51, 2000])
+def test_keywords_reads_deeply_nested_quotes_without_failing(depth):
+    assert check_gh_repo.keywords('"$(' * depth + "x")[0] == []
+
+
+def test_quoted_end_follows_nested_quotes_exactly_fifty_deep(monkeypatch):
+    seen = []
+    real = check_gh_repo.parenthesis_end
+    monkeypatch.setattr(check_gh_repo, "parenthesis_end", lambda line, position, depth: (seen.append(depth), real(line, position, depth))[1])
+    check_gh_repo.keywords('"$(' * 200 + "x")
+    assert max(seen) == 50 == check_gh_repo.NESTING_LIMIT
+
+
+def test_untold_reads_a_file_of_heredoc_headers_without_a_terminator_in_linear_time(tmp_path):
+    start = time.perf_counter()
+    found = untold(tmp_path, "cat <<EOF\n" * 30_000 + "gh pr view 1\n")
+    assert lines_of(found) == [30_001]
+    assert time.perf_counter() - start < 20
+
+
+def test_untold_reads_a_file_of_continued_lines_in_linear_time(tmp_path):
+    start = time.perf_counter()
+    found = untold(tmp_path, "x \\\n" * 20_000 + "gh pr view 1\n")
+    assert lines_of(found) == [20_001]
+    assert time.perf_counter() - start < 20
+
+
+@pytest.mark.parametrize("chain", [check_gh_repo.CONTINUATION_LIMIT - 1, check_gh_repo.CONTINUATION_LIMIT, check_gh_repo.CONTINUATION_LIMIT + 1])
+def test_continued_text_reads_back_at_most_the_limit(chain):
+    lines = [f"{index}\\" for index in range(chain)] + ["end"]
+    wanted = "".join(str(index) for index in range(max(0, chain - check_gh_repo.CONTINUATION_LIMIT), chain))
+    assert check_gh_repo.continued_text(lines, len(lines)) == (wanted, chain > check_gh_repo.CONTINUATION_LIMIT)
+
+
+@pytest.mark.parametrize("text", ["\\a" * 100_000, "'a'" * 100_000, "$((1))" * 100_000, "a'b'" * 100_000])
+def test_tokens_takes_linear_time_for_a_long_word_of_every_kind(text):
+    start = time.perf_counter()
+    assert len(check_gh_repo.tokens(text)) == 1
+    assert time.perf_counter() - start < 10
+
+
+@pytest.mark.parametrize("lines, start, expected", [
+    (["cat <<EOF", "EOF"], 1, [("EOF", False, False)]),
+    (["cat <<EOF", "EOF"], 2, []),
+    (["cat <<EOF", "x", "EOF"], 1, [("EOF", False, False)]),
+    (["cat <<-EOF", "\tEOF"], 1, [("EOF", True, False)]),
+    (["cat <<EOF", "\tEOF"], 1, []),
+])
+def test_data_heredocs_finds_a_delimiter_from_the_line_after_the_header(lines, start, expected):
+    assert check_gh_repo.data_heredocs(lines[0], lines, start) == expected
+
+
+@pytest.mark.parametrize("chain, refused", [(check_gh_repo.CONTINUATION_LIMIT - 1, False), (check_gh_repo.CONTINUATION_LIMIT, False),
+                                            (check_gh_repo.CONTINUATION_LIMIT + 1, True)])
+def test_untold_refuses_a_gh_command_after_a_continued_chain_longer_than_the_limit(tmp_path, chain, refused):
+    # The start of a chain this long may hold a sudo that drops GH_REPO, so the export no longer tells the gh.
+    found = untold(tmp_path, "export GH_REPO=o/r\n" + "\\\n" * chain + "gh pr view 1\n")
+    assert lines_of(found) == ([chain + 2] if refused else [])
+
+
+def test_untold_accepts_a_gh_command_told_by_its_own_assignment_after_a_long_chain(tmp_path):
+    chain = check_gh_repo.CONTINUATION_LIMIT + 5
+    assert untold(tmp_path, "\\\n" * chain + "GH_REPO=o/r gh pr view 1\n") == []
+
+
+def test_data_heredocs_takes_the_last_occurrence_of_a_delimiter():
+    lines = ["EOF", "cat <<EOF", "EOF"]
+    assert check_gh_repo.data_heredocs(lines[1], lines, 2) == [("EOF", False, False)]
+    assert check_gh_repo.data_heredocs(lines[1], lines, 3) == []
+    tabbed = ["\tEOF", "cat <<-EOF", "\tEOF"]
+    assert check_gh_repo.data_heredocs(tabbed[1], tabbed, 2) == [("EOF", True, False)]
+
+
+def test_continued_text_stops_at_the_first_line_of_the_file():
+    assert check_gh_repo.continued_text(["a\\", "b\\"], 2) == ("a", False)
+    assert check_gh_repo.continued_text(["a\\", "b\\"], 1) == ("", False)
+
+
+@pytest.mark.parametrize("line, start", [
+    ("# note", 0), ("echo x # note", 7), ("echo x#y", -1), ("echo '#' x", -1), ("echo \"# x\"", -1), ("echo ${#x}", -1), ("echo $#", -1),
+    ("echo x;# c", 7), ("a\\# b", -1), ("echo \"$(echo '#')\" # c", 19), ("", -1),
+    ("echo 'a #b' # c", 12), ("echo \"a #b\" # c", 12), ("echo ${x:- #y} # c", 15), ("echo ${x:- #y}", -1),
+])
+def test_comment_start_finds_a_hash_that_begins_a_word_outside_quotes(line, start):
+    assert check_gh_repo.comment_start(line) == start
+
+
+@pytest.mark.parametrize("line, joins", [
+    ("x \\", True), ("x \\\\", False), ("x \\\\\\", True), ("# x \\", False), ("echo x # y \\", False), ("echo '#' \\", True), ("", False),
+])
+def test_continues_counts_a_trailing_backslash_outside_a_comment(line, joins):
+    assert check_gh_repo.continues(line) is joins
+
+
+@pytest.mark.parametrize("text, refused", [
+    ("export GH_REPO=o/r\n# unset GH_REPO \\\ngh pr view 1\n", []),
+    ("# GH_REPO=o/r \\\ngh pr view 1\n", [2]),
+    ("echo # GH_REPO=o/r \\\ngh pr view 1\n", [2]),
+    ("export GH_REPO=o/r\n# sudo \\\ngh pr view 1\n", []),
+    ("export GH_REPO=o/r\nsudo env \"FOO=a \\\n; \\\n" + "\\\n" * 101 + "\" gh pr view 1\n", [105]),
+    ("export GH_REPO=o/r\n" + "x \\\n" * 100 + "gh pr view 1\n", []),
+    ("export GH_REPO=o/r\n" + "x \\\n" * 101 + "gh pr view 1\n", [103]),
+    ("export GH_REPO=o/r\n" + "echo hi; \\\n" * 100 + "gh pr view 1\n", []),
+    ("export GH_REPO=o/r\n" + "echo hi; \\\n" * 101 + "gh pr view 1\n", [103]),
+])
+def test_untold_reads_a_chain_as_bash_does_and_fails_closed_when_it_is_cut(tmp_path, text, refused):
+    assert lines_of(untold(tmp_path, text)) == refused
+
+
+@pytest.mark.parametrize("text, lines", [
+    # An operand inside [[ ... ]] is never a keyword: it can't close or open a branch.
+    ("if false; then\n[[ value == other || fi == value ]]\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n[[ value =~ (fi) ]]\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n[[ a == b && fi ]]\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n[[ a == b ; fi ]]\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n[[ x ]]; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if false; then\necho [[; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    # An escaped space before # is no word boundary, so the comment doesn't hide the wrapper.
+    ("export GH_REPO=o/r\nsudo -p foo\\ # \\\ngh pr view 1\n", [3]),
+    # A then that is an argument doesn't end the condition.
+    ("if true then && false; then\n:\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # A condition of several lines is judged at its real then.
+    ("if false\ntrue\nthen\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false\n# note\nthen\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+])
+def test_untold_reads_conditions_tests_and_comments_as_bash_does(tmp_path, text, lines):
+    assert lines_of(untold(tmp_path, text)) == lines
+
+
+@pytest.mark.parametrize("line, start", [("sudo -p foo\\ # x", -1), ("echo a\\;# x", -1), ("echo a ;# x", 8)])
+def test_comment_start_ignores_an_escaped_word_boundary(line, start):
+    assert check_gh_repo.comment_start(line) == start
+
+
+@pytest.mark.parametrize("text, lines", [
+    # fi, else and elif arrive while the condition is pending
+    ("if x\nfi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if false\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # a comment on the first or a later line of a condition
+    ("if\nfalse # note\nthen\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if true &&\ntrue &&\nfalse\nthen\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false \\\n; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # the then line holds an else: the condition is judged before the else flips
+    ("if true\nthen :; else\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # an if that doesn't start its line is no condition to judge
+    ("x; if foo ||\nfalse\nthen\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("{ if false\nthen\nexport GH_REPO=o/r\n}\nfi\ngh pr view 1\n", []),
+    ("echo x \\\nif false; if x; then\n:\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # a tab after the if, and a comment on the if line, are read as a blank and a comment
+    ("if\tfalse; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [4]),
+    ("if false # note\nthen\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # if( is an if followed by a subshell, never a condition
+    ("if(false)\nthen\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if(false); then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if<f false; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+])
+def test_untold_judges_only_an_if_that_starts_its_line_and_at_its_real_then(tmp_path, text, lines):
+    assert lines_of(untold(tmp_path, text)) == lines
+
+
+@pytest.mark.parametrize("text, condition, ended", [
+    ("false; then", "false", True), ("false;then", "false", True), ("false # x", "false # x", False), ("false", "false", False),
+    ("echo then; then", "echo then", True), ("true then && false; then", "true then && false", True),
+    ("false thenx; then", "false thenx", True), ("[[ a == then ]]; then", "[[ a == then ]]", True),
+    ("true; false; then", "true; false", True), ("", "", False), ("false;", "false", False),
+])
+def test_split_condition_cuts_at_the_real_then_and_the_semicolon_before_it(text, condition, ended):
+    assert check_gh_repo.split_condition(text) == (condition, ended)
+
+
+@pytest.mark.parametrize("line, kept", [("false # note", "false "), ("false \\", "false "), ("false \\\\", "false \\\\"), ("# note", "")])
+def test_condition_text_drops_the_comment_and_a_joining_backslash(line, kept):
+    assert check_gh_repo.condition_text(line) == kept
+
+
+@pytest.mark.parametrize("keyword, expected", [
+    ("[[ a == b && if ]]", []), ("[[ a == b ; if ]]", []), ("[[ a == b || if ]]", []),
+    ("[[ a ]] && fi", ["fi"]), ("echo [[ ; fi", ["fi"]), ("[[ (fi) ]]", []),
+])
+def test_keywords_reads_a_test_expression_as_operands(keyword, expected):
+    assert check_gh_repo.keywords(keyword)[0] == expected
+
+
+def test_untold_reads_a_file_with_an_if_that_never_has_a_then_in_linear_time(tmp_path):
+    # A regression guard for a pending condition kept as a string that each line was added to; the cap itself is pinned below.
+    text = "if x\n" + "echo hi\n" * 50_000 + "gh pr view 1\n"
+    started = time.monotonic()
+    found = untold(tmp_path, text)
+    assert time.monotonic() - started < 5
+    assert lines_of(found) == [50_002]
+
+
+@pytest.mark.parametrize("blank_lines, runs", [
+    (check_gh_repo.PENDING_LIMIT - 2, False),
+    (check_gh_repo.PENDING_LIMIT - 1, False),
+    (check_gh_repo.PENDING_LIMIT, True),
+])
+def test_a_pending_condition_is_judged_up_to_the_limit_and_runs_past_it(blank_lines, runs):
+    # `if false`, then blank lines of the condition, then its then: the limit is on the lines read before the then.
+    branches = []
+    for line in ["if false"] + [""] * blank_lines + ["then"]:
+        check_gh_repo.track_branches(line, branches)
+    assert branches[-1][0] is runs

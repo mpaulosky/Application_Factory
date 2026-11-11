@@ -20,7 +20,8 @@
 # owner's token, so the marker is the only way to tell them from the owner.
 #
 # Exit codes: 0 the session is needed; 1 quiet until the timeout (or after --once); 2 a usage error, a missing tool or a PR that
-# can't be read (five polls in a row fail; a poll that fails or isn't GitHub's answer is never read as quiet).
+# can't be read (five polls in a row fail; a poll that fails, isn't GitHub's answer, or reads an open PR's list or rollup only in part
+# is never read as quiet).
 # Environment: WATCH_PR_MARKER, WATCH_PR_INTERVAL (default 60 seconds; each poll costs about 1-3 GraphQL points, so not lower),
 # WATCH_PR_TIMEOUT (default 120 minutes), GITHUB_REPOSITORY (else the upstream, then the origin remote).
 set -euo pipefail
@@ -101,13 +102,25 @@ common_dir="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
 seen_file="$common_dir/watch-pr-$pr.seen"
 
 # shellcheck disable=SC2016 # GraphQL's $variables are not the shell's
-QUERY='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){state merged mergeable mergeStateStatus headRefOid commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}} reviewThreads(first:100){nodes{isResolved comments(last:1){nodes{author{__typename login} body}}}} reviews(last:50){nodes{id state author{__typename login} body}} comments(last:50){nodes{id author{__typename login} body}}}}}'
+QUERY='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){state merged mergeable mergeStateStatus headRefOid statusCheckRollup{commit{oid} contexts(first:100){pageInfo{hasNextPage} nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}} reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved comments(last:1){nodes{author{__typename login} body}}}} reviews(last:100){pageInfo{hasPreviousPage} nodes{id state author{__typename login} body}} comments(last:100){pageInfo{hasPreviousPage} nodes{id author{__typename login} body}}}}}'
 
-# The response must have GitHub's shape, with every list present: anything else is a failed poll, never a quiet one.
+# The response must have GitHub's shape, with every list present and read whole: anything else is a failed poll, never a quiet one.
+# The checks come from the PR's own rollup, not the last of its commits (GitHub lists them by date, so the last needn't be the head) and not
+# the head ref (which lives in the head repository: a fork's, or one that is gone), and only when that rollup is of headRefOid.
+# No rollup means no check has reported, unless the PR is UNSTABLE (a check failed): then the read is incomplete. A list GitHub says has
+# more pages than the query took is an incomplete read. Only an open PR's lists are read: a merged or closed one is reported from its state alone, whatever its pageInfo or its rollup hold (its lists must still be arrays).
 SHAPE_JQ='
   .data.repository.pullRequest
   | type == "object" and (.state | type == "string")
-    and ([.commits.nodes, .reviewThreads.nodes, .reviews.nodes, .comments.nodes] | all(type == "array"))
+    and ([.reviewThreads.nodes, .reviews.nodes, .comments.nodes] | all(type == "array"))
+    and (.state != "OPEN" or (
+      (.reviewThreads.pageInfo.hasNextPage == false)
+      and (.reviews.pageInfo.hasPreviousPage == false)
+      and (.comments.pageInfo.hasPreviousPage == false)
+      and (.headRefOid | type == "string")
+      and ((.statusCheckRollup == null and .mergeStateStatus != "UNSTABLE") or (.statusCheckRollup != null and (
+        .statusCheckRollup.commit.oid == .headRefOid
+        and (.statusCheckRollup.contexts | (.nodes | type == "array") and .pageInfo.hasNextPage == false))))))
 '
 
 # One line per reason: code, detail and the node id of a one-shot event (else empty), apart by the unit separator.
@@ -126,7 +139,7 @@ REASONS_JQ="$OURS_JQ"'
       (if $pr.mergeable == "CONFLICTING" then line("conflict"; "the PR conflicts with its base branch"; "")
        elif $pr.mergeStateStatus == "BEHIND" then line("behind"; "the base branch has moved on; merge it into the PR"; "")
        else empty end),
-      ([($pr.commits.nodes[0].commit.statusCheckRollup.contexts.nodes // [])[]
+      ([($pr.statusCheckRollup.contexts.nodes // [])[]
         | select((.conclusion as $c | ["FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"] | index($c))
                  or (.state as $s | ["FAILURE", "ERROR"] | index($s)))
         | (.name // .context)]

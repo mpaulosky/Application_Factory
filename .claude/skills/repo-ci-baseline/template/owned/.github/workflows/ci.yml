@@ -166,7 +166,7 @@ jobs:
   # written outside the checkout and run isolated (python3 -I) over the PR's
   # tree, with no secrets and a read-only token. A PR that changes the checker
   # is judged by the old one. The second step fails when a PR's Owned file
-  # differs from the base's, except in an Apply PR (chore/standardize-baseline,
+  # differs from the base's, or adds an Owned file the base lacks, except in an Apply PR (chore/standardize-baseline,
   # chore/reapply-baseline), whose job is to change them. Anyone who can push a
   # branch can name theirs so: this stops a careless edit, not a deliberate one.
   # Both steps read the base at github.event.pull_request.base.sha, the commit the
@@ -244,18 +244,14 @@ jobs:
                 report "$path"
               fi
             done < <(git ls-tree -r -z "$BASE_SHA" -- "$entry")
-            # A file the PR adds inside an Owned folder isn't in the base's tree, and the checker
-            # skips the folder: report it, or nothing reads it.
-            case $entry in
-              */)
-                while IFS= read -r -d '' head_entry; do
-                  path=${head_entry#*$'\t'}
-                  if ! git cat-file -e "${BASE_SHA}:${path}" 2>/dev/null; then
-                    report "$path"
-                  fi
-                done < <(git ls-tree -r -z HEAD -- "$entry")
-                ;;
-            esac
+            # A file the PR adds (inside an Owned folder, or as an Owned entry itself) isn't in the base's
+            # tree, and the checker skips it: report it, or nothing reads it.
+            while IFS= read -r -d '' head_entry; do
+              path=${head_entry#*$'\t'}
+              if ! git cat-file -e "${BASE_SHA}:${path}" 2>/dev/null; then
+                report "$path"
+              fi
+            done < <(git ls-tree -r -z HEAD -- "$entry")
           done < "$tmp/owned.txt"
           exit "$status"
 

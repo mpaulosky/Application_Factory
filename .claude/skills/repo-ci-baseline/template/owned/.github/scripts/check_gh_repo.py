@@ -118,14 +118,15 @@ def wrapped(before):
         env_drops_gh_repo(words[env.end():]) for env in ENV.finditer(words))
 
 
-def told(before, after, exported, earlier=""):
+def told(before, after, exported, earlier="", truncated=False):
     """Whether the gh between before and after is told its repository.
 
     earlier is the text of the backslash-continued lines before this one: a wrapper or an assignment may have
-    started on them, and bash reads them as one line.
+    started on them, and bash reads them as one line. truncated says the chain went on past what was read, so
+    a wrapper that drops GH_REPO may have started before it: the export no longer tells this gh.
     """
     before = earlier + before
-    exported = exported and not wrapped(before)
+    exported = exported and not truncated and not wrapped(before)
     # gh closing a quoted word: judge what follows the quote.
     if after[:1] in ("\"", "'"):
         after = after[1:]
@@ -202,13 +203,15 @@ def tokens(text):
             flush()
             index += 1
         elif char == "\\":
-            word = (word or []) + [text[index + 1:index + 2]]
+            word = [] if word is None else word
+            word.append(text[index + 1:index + 2])
             quoted = True
             index += 2
         elif char == "'":
             end = text.find("'", index + 1)
             end = len(text) if end < 0 else end
-            word = (word or []) + [text[index + 1:end]]
+            word = [] if word is None else word
+            word.append(text[index + 1:end])
             quoted = True
             index = end + 1
         elif char == '"':
@@ -225,7 +228,8 @@ def tokens(text):
                 index += 1
                 if depth == 0:
                     break
-            word = (word or []) + ["0"]
+            word = [] if word is None else word
+            word.append("0")
         elif text.startswith("$(", index):
             flush()
             found.append(("open", "$(", False))
@@ -254,7 +258,9 @@ def tokens(text):
             found.append(("op", operator.group(), False))
             index = operator.end()
         else:
-            word = (word or []) + [char]
+            if word is None:
+                word = []
+            word.append(char)
             index += 1
     flush()
     return found
@@ -301,17 +307,30 @@ def heredoc_header(text):
     return heredocs, data and found[-1:] != [("op", "|", False)]
 
 
-def data_heredocs(header, later):
+def last_lines(lines):
+    """Where each line of lines last occurs, as two dicts of text -> index: as written, and without its leading tabs."""
+    whole, stripped = {}, {}
+    for index, text in enumerate(lines):
+        whole[str(text)] = index
+        stripped[str(text).lstrip("\t")] = index
+    return whole, stripped
+
+
+def data_heredocs(header, lines, start, last=None):
     """The (delimiter, tabs, quoted) of each heredoc on the logical line header whose body is data, not code, in the order the bodies follow.
 
     An unquoted delimiter still lets bash run the $(...) and backticks in a data body. A heredoc whose delimiter never
-    comes again is no heredoc.
+    comes again in lines[start:] is no heredoc. last is last_lines(lines), which the caller builds once for a file with
+    many headers (else a file of `cat <<EOF` lines with no terminator would be read to its end once per line).
     """
+    if "<<" not in header:
+        return []
     heredocs, data = heredoc_header(header)
     if not data:
         return []
+    whole, stripped = last or last_lines(lines)
     return [(delimiter, tabs, quoted) for delimiter, tabs, quoted in heredocs
-            if any((text.lstrip("\t") if tabs else text) == delimiter for text in later)]
+            if (stripped if tabs else whole).get(delimiter, -1) >= start]
 
 
 def logical_line(lines, number):
@@ -325,14 +344,21 @@ def logical_line(lines, number):
     return text, count
 
 
+# The most physical lines continued_text reads back. A longer chain loses its start, which may hold a wrapper (sudo, env -i) that
+# drops GH_REPO, so continued_text says so and told() then lets only a GH_REPO= of the gh's own tell it.
+CONTINUATION_LIMIT = 100
+
+
 def continued_text(lines, number):
-    """The text of the physical lines right before lines[number - 1] that a trailing backslash joins to it, backslashes removed."""
+    """The text of the physical lines right before lines[number - 1] that a trailing backslash joins to it, backslashes removed,
+    and whether the chain goes on past the CONTINUATION_LIMIT lines read (a file of many continued lines costs a bounded amount per line).
+    """
     text = ""
     index = number - 2
-    while index >= 0 and (len(lines[index]) - len(lines[index].rstrip("\\"))) % 2:
+    while index >= 0 and number - 2 - index < CONTINUATION_LIMIT and continues(lines[index]):
         text = lines[index][:-1] + text
         index -= 1
-    return text
+    return text, index >= 0 and continues(lines[index])
 
 
 def close_parenthesis(line, start, depth):
@@ -421,6 +447,269 @@ def shown(line):
     return for_log(line.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace"))
 
 
+WORD_END = " \t;&|()<>"
+NEVER = re.compile(r"(false|! *true|\[ +0 +-ne +0 +\]|\[ +1 +-eq +0 +\])$")
+ALWAYS = re.compile(r"(true|:)$")
+
+
+# How deep quoted_end follows a "..." that holds a $( that holds a "...": past it, the text is read as plain characters.
+NESTING_LIMIT = 50
+
+
+def live_dollar(line, index):
+    """Whether line[index] is a $ that starts an expansion.
+
+    A run of $ pairs up into process ids ($$), so only an odd run ends in a live $; a backslash before the run makes
+    its first $ a literal.
+    """
+    if index < 0 or line[index] != "$":
+        return False
+    dollars = 1
+    while index - dollars >= 0 and line[index - dollars] == "$":
+        dollars += 1
+    slashes = 0
+    while index - dollars - slashes >= 0 and line[index - dollars - slashes] == "\\":
+        slashes += 1
+    if slashes % 2:
+        dollars -= 1
+    return dollars % 2 == 1
+
+
+def quoted_end(line, position, depth=0):
+    """The index right after the quoted string that starts at line[position], a ' or a " (past the end of line when it never closes).
+
+    Inside "..." and $'...' (a ' after a live $, see live_dollar) a backslash escapes the next character; inside '...'
+    it doesn't. A live $( inside "..." (a doubled dollar before a paren is a process id and a paren) holds commands
+    with quotes of their own, so the string goes on to the ) that closes it, down to NESTING_LIMIT levels.
+    """
+    quote = line[position]
+    escapes = quote == '"' or (quote == "'" and live_dollar(line, position - 1))
+    position += 1
+    while position < len(line) and line[position] != quote:
+        if escapes and line[position] == "\\":
+            position += 2
+        elif quote == '"' and line.startswith("$(", position) and live_dollar(line, position) and depth < NESTING_LIMIT:
+            position = parenthesis_end(line, position + 2, depth + 1)
+        else:
+            position += 1
+    return position + 1
+
+
+def parenthesis_end(line, position, depth):
+    """The index right after the ) that closes a $( whose text starts at line[position] (past the end of line when it never closes)."""
+    open_count = 1
+    while position < len(line):
+        char = line[position]
+        if char == "\\":
+            position += 2
+        elif char in "'\"":
+            position = quoted_end(line, position, depth)
+        elif char in "()":
+            open_count += 1 if char == "(" else -1
+            position += 1
+            if not open_count:
+                return position
+        else:
+            position += 1
+    return position
+
+
+def keywords(line, command=True, names=("if", "fi", "else", "elif"), where=None):
+    """The if, fi, else and elif keywords of line (or the reserved words in names), in source order, and whether the line ends where a command may start.
+
+    where, a list, gets the index each keyword starts at. Inside [[ ... ]] a word, ||, &&, ; and ( ) are operands, never keywords.
+
+    A keyword is a reserved word as bash reads one: an unquoted word where a command starts, never an argument
+    (grep -q fi), never inside quotes ('; fi'), a ${...} or a comment (# fi). A command starts at the start of the line
+    (command: False for the line after one that ends mid-command with a backslash), after ; & | ( and after a
+    BEFORE_COMMAND word (then, else, do, if, {, !...). A comment ends the command, so the next line starts one.
+    A ( says what its ) ends: a ) that closes $(...), <(...) or >(...) ends no command, so a word after it is an
+    argument; one that closes a subshell, or a case pattern (a) if y; then z; fi ;;), does. What a ((...)), $((...)),
+    name=(...) or extglob group (@( ) *( ) +( ) ?( ) !( )) holds (a (( is arithmetic, never two subshells) is arithmetic,
+    array elements or a pattern, not commands, so it is skipped, and so is any ( nested in it except a $( (quotes,
+    backslashes and ${...} in it still hide a parenthesis). Known limits: a case pattern that reads fi), a ( left open
+    at the end of a line (a $( or (( or name=( spanning lines: the next line is read as code), a backtick
+    substitution, a ${...} that holds a quote, a } or a ) (it ends at the first }, and quoted_end and
+    parenthesis_end don't see it), quotes nested deeper than NESTING_LIMIT, a [[ ... ]] test that spans lines (the next line is read as code), and a line of a multi-line string or a
+    heredoc body read as code that starts like a keyword.
+    """
+    found = []
+    position = 0
+    # What each open ( is: "expansion" ($( <( >( ), "skipped" (( ), name=( ), an extglob group and what nests in them) or "subshell".
+    parentheses = []
+    in_test = False
+    while position < len(line):
+        char = line[position]
+        if parentheses and parentheses[-1] == "skipped" and char not in "()":
+            if char == "\\":
+                position += 2
+            elif char in "'\"":
+                position = quoted_end(line, position)
+            elif line.startswith("${", position):
+                end = line.find("}", position)
+                position = len(line) if end < 0 else end + 1
+            else:
+                position += 1
+        elif char in " \t":
+            position += 1
+        elif char == "#":
+            command = True
+            break
+        elif char == "\\" and position == len(line) - 1:
+            position += 1
+        elif char == "(":
+            before = line[position - 1] if position else ""
+            if before == "$":
+                kind = "expansion"
+            elif line.startswith("((", position) or (parentheses and parentheses[-1] == "skipped") or in_test or (before and before in "=(@?*+!"):
+                kind = "skipped"
+            else:
+                kind = "expansion" if before and before in "<>" else "subshell"
+            parentheses.append(kind)
+            command = kind != "skipped"
+            position += 1
+        elif char == ")":
+            command = (parentheses.pop() if parentheses else "subshell") == "subshell"
+            position += 1
+        elif char in ";&|":
+            command = command if in_test else True
+            position += 1
+        elif char in "<>":
+            command = False
+            position += 1
+        else:
+            start = position
+            while position < len(line) and line[position] not in WORD_END:
+                if line[position] == "\\":
+                    position += 2
+                elif line[position] in "'\"":
+                    position = quoted_end(line, position)
+                elif line.startswith("${", position):
+                    end = line.find("}", position)
+                    position = len(line) if end < 0 else end + 1
+                else:
+                    position += 1
+            word = line[start:position]
+            if command and word in names:
+                found.append(word)
+                if where is not None:
+                    where.append(start)
+            if command and word == "[[":
+                in_test = True
+            elif word == "]]":
+                in_test = False
+            command = command and word in BEFORE_COMMAND
+    return found, command
+
+
+def split_condition(text):
+    """text cut at its real then (a then where a command starts, never an argument: echo then), without the ; before it, and whether it has one."""
+    where = []
+    keywords(text, True, ("then",), where)
+    if where:
+        return text[:where[0]].strip(" \t").removesuffix(";").strip(" \t"), True
+    return text.strip(" \t").removesuffix(";").strip(" \t"), False
+
+
+def without_comment(line):
+    """line up to its comment."""
+    start = comment_start(line)
+    return line if start < 0 else line[:start]
+
+
+def condition_text(text):
+    """text up to its comment, without a backslash that joins the next line to it."""
+    text = without_comment(text)
+    return text[:-1] if (len(text) - len(text.rstrip("\\"))) % 2 else text
+
+
+# How many lines a condition may go on over before its if is read as one that may run: a bound on the work a file with an if and no then costs.
+PENDING_LIMIT = 20
+UNKNOWN = (True, False, None)
+
+
+def judged(condition):
+    """The [runs, always, pending] of a branch whose whole condition is known."""
+    condition = condition.strip()
+    return [NEVER.match(condition) is None, ALWAYS.match(condition) is not None, None]
+
+
+def opened(line, start):
+    """The branch of the if keyword that starts at line[start]: judged now when its condition ends in a then on this line,
+    pending (the condition so far, in a list) when the condition goes on, and one that may run when the if doesn't start the line."""
+    if line[:start].strip(" \t"):
+        return list(UNKNOWN)
+    condition, ended = split_condition(condition_text(line[start + 2:]))
+    return judged(condition) if ended else [True, False, [condition]]
+
+
+def track_branches(line, branches, command=True):
+    """Keep branches, one [runs, always, pending] per open if, up to date for this line, and return whether the line ends where a command may start.
+
+    runs is False while the branch being read can't run. Only a condition that is plainly false (or plainly true,
+    for its else) is judged, and only on an if that starts its line; any other branch may run. A condition that
+    goes on past its line is pending (the lines so far, in a list) and is judged at its real then, from all its
+    lines; one that has no then within PENDING_LIMIT lines may run. Keywords
+    count in source order, so a fi closes the block it ends before an if later on the line opens the next, and an
+    else flips the branch whether it starts the line or follows a ;. A quoted or commented keyword is not one, and
+    neither is a keyword where no command starts, such as the line after `echo x \\`: command says whether the line
+    starts one. A line inside a multi-line string or a non-data heredoc body that looks like a fi or an else can
+    misjudge a branch, either way: it can pop a branch that never runs, so an export in it counts again, as it did
+    before branches were tracked, or flip one.
+    """
+    if branches and branches[-1][2] is not None:
+        part, ended = split_condition(condition_text(line))
+        branches[-1][2].append(part)
+        if ended:
+            branches[-1] = judged("\n".join(branches[-1][2]))
+        elif len(branches[-1][2]) > PENDING_LIMIT:
+            branches[-1] = list(UNKNOWN)
+    where = []
+    found, command = keywords(line, command, where=where)
+    for index, word in enumerate(found):
+        if word == "if":
+            # Only the first keyword of a line can be an if that starts it.
+            branches.append(opened(line, where[index]) if index == 0 else list(UNKNOWN))
+        elif word == "fi":
+            if branches:
+                branches.pop()
+        elif branches:
+            branches[-1] = [not branches[-1][1], branches[-1][1], None] if word == "else" else list(UNKNOWN)
+    return command
+
+
+def comment_start(line):
+    """The index of the # that starts a comment in line, a # that begins a word outside quotes and ${...}, or -1.
+
+    A space or ; & | ( ) < > before the # ends the word only when no backslash escapes it (foo\\ # is one word).
+    """
+    position = 0
+    boundary = True
+    while position < len(line):
+        char = line[position]
+        if char == "\\":
+            position += 2
+            boundary = False
+        elif char in "'\"":
+            position = quoted_end(line, position)
+            boundary = False
+        elif line.startswith("${", position):
+            end = line.find("}", position)
+            position = len(line) if end < 0 else end + 1
+            boundary = False
+        elif char == "#" and boundary:
+            return position
+        else:
+            boundary = char in " \t;&|()<>"
+            position += 1
+    return -1
+
+
+def continues(line):
+    """True when line ends in an odd number of backslashes outside a comment, so bash joins the next line to it."""
+    return (len(line) - len(line.rstrip("\\"))) % 2 == 1 and comment_start(line) < 0
+
+
 def untold(path):
     """Each line of path with a gh command not told its repository, as file:line: text."""
     lines = read_lines(path)
@@ -430,6 +719,10 @@ def untold(path):
     # The first line of the bodies, the last line of the command that opens them, and a substitution a body leaves open.
     body_start = header_end = 0
     pending = None
+    branches = []
+    last = None
+    # Whether the line being read starts a command: not the line after one that ends mid-command with a backslash.
+    starts_command = True
     for number, line in enumerate(lines, 1):
         if bodies and number >= body_start:
             delimiter, tabs, quoted = bodies[0]
@@ -444,21 +737,26 @@ def untold(path):
                     found.append(f"{for_log(str(path))}:{number}: {shown(line)}")
             continue
         if re.match(r"[ \t]*#", line):
+            starts_command = True
             continue
         if not bodies and number > header_end:
             header, count = logical_line(lines, number)
             header_end = number + count - 1
             body_start = header_end + 1
-            bodies = data_heredocs(header, lines[header_end:])
+            if last is None and "<<" in header:
+                last = last_lines(lines)
+            bodies = data_heredocs(header, lines, header_end, last)
+        starts_command = track_branches(line, branches, starts_command) or not continues(line)
         if EXPORTS.match(line):
-            exported = True
+            # An export in a branch that never runs leaves GH_REPO unset.
+            exported = exported or all(runs for runs, _, _ in branches)
         elif UNSET.search(line) or any(
                 not PREFIX_OF_GH.match(line, assignment.start()) for assignment in ASSIGNMENT.finditer(line)):
             exported = False
         if OPT_OUT.search(line):
             continue
-        earlier = continued_text(lines, number)
-        if any(not told(line[:match.start()], line[match.end():], exported, earlier) for match in GH.finditer(line)):
+        earlier, truncated = continued_text(lines, number)
+        if any(not told(line[:match.start()], line[match.end():], exported, earlier, truncated) for match in GH.finditer(line)):
             found.append(f"{for_log(str(path))}:{number}: {shown(line)}")
     return found
 
