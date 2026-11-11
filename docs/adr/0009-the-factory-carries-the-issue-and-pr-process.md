@@ -6,7 +6,7 @@ status: accepted
 The Factory is where new Applications get their way of working with issues and pull requests, yet its own repo ran on a fraction of it: no issue or PR template, no PR title check, no lint
 workflows and no Dependabot. ADR 0006 and ADR 0008 added the git hooks, a gate, Claude Review and PR Auto-Merge and left the rest out, and CLAUDE.md says not to add the rest without an ADR.
 This is that ADR. The Factory now carries the parts of the Baseline that are not about a .NET Application, as copies of the Template's Owned files (kept in step by `scripts/gate.sh`) or, where the
-Template's file does not fit, a file of its own. It still carries no `.sandcastle/`, local review, .NET workflow, release workflow or `package.json`.
+Template's file does not fit, a file of its own. It still carries no .NET workflow or release workflow. (Since ADR 0010 it carries the local review, the `.sandcastle/lib` modules it needs and a `package.json`.)
 
 | Carried | How |
 | --- | --- |

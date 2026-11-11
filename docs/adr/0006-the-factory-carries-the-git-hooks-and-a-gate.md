@@ -26,4 +26,4 @@ copy that has drifted.
 clone, so CI runs the same gate for a push from a clone without hooks.
 - A push is gated by `scripts/gate.sh`, so it runs `test.sh` and needs its tools (`actionlint`, `zizmor`, `yamllint`, `shellcheck`, `markdownlint-cli2`, `node`, `git`).
 - `scripts/gate.sh` is the Factory's own and is not overwritten by any Apply. The hooks and `check-branch-name.sh` are copies, kept in sync by the gate, as `dotfiles` does.
-- Not carried yet: the local review (`/pre-push-review`, `scripts/review.sh`), Sandcastle and `scripts/watch-pr.sh`. Each needs its own decision. Claude Review and PR Auto-Merge: ADR 0008.
+- Not carried yet: Sandcastle and `scripts/watch-pr.sh`. Each needs its own decision. Claude Review and PR Auto-Merge: ADR 0008. The local review: ADR 0010.

@@ -24,7 +24,6 @@ skill = Path(sys.argv[1])
 MENTION = re.compile(r"mpaulosky/dotfiles(?!#[0-9])", re.IGNORECASE)
 
 KNOWN = {
-    "template/owned/.claude/skills/pre-push-review/SKILL.md": 1,
     "template/owned/.github/scripts/check_gh_repo.py": 1,
     "template/owned/.github/workflows/claude-review.yml": 1,
     "template/owned/.sandcastle/lib/review-ledger.test.mts": 3,

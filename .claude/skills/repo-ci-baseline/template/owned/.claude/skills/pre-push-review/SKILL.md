@@ -236,8 +236,8 @@ Fix the Critical, Warning and Advisory findings. For each one:
    - List every branch, constant, regex, cap and window the fix adds.
    - Write n-1, n and n+1 boundary tests for each.
    - Show that removing each one, or shifting it by one, fails a test (a mutation check): edit the line, see a test fail, restore it.
-     `mutate.py` ([the hardening-review's runner](../hardening-review/references/mutations.md)) does the same on a committed fix,
-     but refuses a dirty file, so use it only after the commit.
+     Where the repository has the hardening-review skill, its `mutate.py` ([the runner](../hardening-review/references/mutations.md)) does the same
+     on a committed fix, but refuses a dirty file, so use it only after the commit.
    - Go through the **Edge-case checklist** in [lenses.md](lenses.md) on the lines the fix wrote.
 4. Commit the test and the fix together: `fix(<scope>): <Summary>`.
 
@@ -247,7 +247,7 @@ nothing needs closing; or refuse an input over a fixed count outright instead of
 the repeats with `git log -p` over the earlier round's `fix(` commits.
 
 A finding no test can pin, such as one in a workflow or in prose, gets a deterministic check in
-`.github/ci/gate-checks.sh` when one can express it, or a reason saying why it has no test. A security finding (every Warning) is
+the repository's gate checks (`.github/ci/gate-checks.sh`, where it has one) when one can express it, or a reason saying why it has no test. A security finding (every Warning) is
 recorded `fixed` only with a `test`, which may name that gate check: a reason alone leaves it `open` with its suggested fix. Most Advisory findings are
 prose: fix them, commit them as `docs(<scope>): <Summary>`, and record the reason. Fix every Advisory finding of a round
 in that round, with its Critical and Warning ones, so the next round reviews them together.
@@ -378,14 +378,14 @@ without this run's fixes. Push a thread's fix before replying to or resolving it
 Review reads the notes' accepted non-security findings on an owner's same-repo PR while it carries `review:claude`, and raises a
 security finding again, since the notes only count it. Copilot isn't known to read them, so a thread may still be raised on an
 accepted finding: its thread gets the reply
-every thread left for the owner gets (docs/PROCESS.md), only "Left for the owner." and the `<!-- claude-session -->` marker.
+every thread left for the owner gets (`docs/PROCESS.md`, where the repository has it), only "Left for the owner." and the `<!-- claude-session -->` marker.
 
 The description becomes public release notes, so the notes list the accepted Critical and Advisory findings, leave out
 accepted security findings (every finding the report marks `(security)`: one graded Warning, one whose lens names
 security, and any finding not marked `security: false`) and only count them, so the
 maintainer knows to wait for the private report. Before the notes go into the PR, have the person check the severities
 and `(security)` marks in the report on every accepted finding: an unmarked one is published.
-Tell the person to report each one privately before pushing, naming the branch, as `docs/SECURITY.md` describes, unless
+Tell the person to report each one privately before pushing, naming the branch, as the repository's `docs/SECURITY.md` describes (where it has one), unless
 it re-accepts a weakness already reported for this branch, and never quote one
 in a PR, a commit message, a thread reply or an issue. The reply above is the same on every thread left for the owner,
 so it doesn't say which thread an accepted security finding is on, while the notes count them. Don't add
@@ -401,10 +401,10 @@ The local review is the heavy pass, and GitHub's Claude Review checks for what i
 thread on a problem this review missed, the fix comes with a lesson, so the next branch catches it locally:
 
 - a test, when code can pin it;
-- a deterministic check in `.github/ci/gate-checks.sh`, when a pattern can express it;
+- a deterministic check in the repository's gate checks (`.github/ci/gate-checks.sh`, where it has one), when a pattern can express it;
 - otherwise a sharper instruction in a lens of the repository's `.claude/skills/code-review/SKILL.md`. `lenses.md` and
   `review-bar.md` are Owned Baseline files, which a repository can't change (the next Apply reverts it): a lesson for
-  them goes to the Template first, as a mpaulosky/dotfiles issue or PR.
+  them goes to the Template first, as an issue or PR in the Application Factory repository, which owns the Template.
 
 The agent watching the PR records each such thread with its lesson: the reply that says what changed also names the
 lesson and where it lives, and the lesson is committed with the fix.

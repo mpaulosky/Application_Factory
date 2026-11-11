@@ -60,7 +60,14 @@ if [[ "${GATE_SKIP_SELF_TEST:-}" != "1" ]]; then
 
   # The three copied tests that stand alone (ADR 0010); the Template's Sandcastle check runs the rest.
   echo -e "\n${CYAN}▶ Local review tests${RESET}"
-  if [[ ! -x node_modules/.bin/tsx ]]; then pnpm install --frozen-lockfile >&2; fi
+  if [[ ! -x node_modules/.bin/tsx ]]; then
+    if ! command -v pnpm >/dev/null 2>&1; then
+      echo "❌ node_modules/.bin/tsx not found, and pnpm isn't installed: run corepack enable pnpm, then pnpm install." >&2
+      exit 1
+    fi
+    pnpm install --frozen-lockfile >&2
+    if [[ ! -x node_modules/.bin/tsx ]]; then echo "❌ pnpm install did not install node_modules/.bin/tsx." >&2; exit 1; fi
+  fi
   node_modules/.bin/tsx --test .sandcastle/lib/review-ledger.test.mts .sandcastle/lib/security-record.test.mts .sandcastle/lib/plain-text.test.mts
 fi
 
@@ -90,8 +97,11 @@ yamllint -c .yamllint.yml . || { echo -e "${RED}❌ yamllint${RESET}" >&2; exit 
 echo -e "\n${CYAN}▶ Local review (scripts/review.sh check)${RESET}"
 if [[ "${GATE_SKIP_REVIEW:-}" == "1" ]]; then
   echo "Local review check skipped (GATE_SKIP_REVIEW=1)."
-elif ! BASE="$(git merge-base HEAD origin/main 2>/dev/null)"; then
+elif ! git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null; then
   echo "❌ No origin/main to diff against, so the review can't be checked: run git fetch origin main." >&2
+  exit 1
+elif ! BASE="$(git merge-base HEAD refs/remotes/origin/main 2>/dev/null)"; then
+  echo "❌ HEAD and origin/main share no history to diff from (a shallow clone, or unrelated histories): run git fetch --unshallow origin main, or rebase the branch onto origin/main." >&2
   exit 1
 else
   scripts/review.sh check "$BASE"

@@ -136,6 +136,25 @@ REVIEW_SKIP="" REVIEW_EXIT=0 run "$repo"
 check "a passing review check lets the gate run test.sh" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
 check "review.sh is called as check <merge base with origin/main>" "$([[ "$(cat "$repo/review-args")" == "check $base" ]] && echo 0 || echo 1)"
 
+# An origin/main that shares no history with HEAD (a shallow clone, or unrelated histories) is named as that, not as a missing origin/main.
+repo="$(new_repo review-unrelated)"; stub_review "$repo"; tcommit "$repo" base
+unrelated="$(git -C "$repo" -c user.name=t -c user.email=t@example.com commit-tree -m unrelated "$(git -C "$repo" hash-object -t tree -w /dev/null)")"
+git -C "$repo" update-ref refs/remotes/origin/main "$unrelated"
+REVIEW_SKIP="" run "$repo"
+check "an origin/main with no shared history fails the gate" "$([[ $status == 1 && $ran == no ]] && echo 0 || echo 1)"
+check "unrelated histories are named, not reported as a missing origin/main" "$(grep -q 'share no history' "$repo/out" && ! grep -q 'No origin/main' "$repo/out" && echo 0 || echo 1)"
+check "unrelated histories don't call review.sh" "$([[ ! -e $repo/review-args ]] && echo 0 || echo 1)"
+
+# The review's stand-alone tests need tsx: without it and without pnpm the gate says how to get it, before anything else.
+repo="$(new_repo no-pnpm)"; printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/scripts/tests/gate.test.sh" 2>/dev/null || { mkdir -p "$repo/scripts/tests"; printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/scripts/tests/gate.test.sh"; }
+chmod +x "$repo/scripts/tests/gate.test.sh"
+bare="$work/bare-bin"; mkdir -p "$bare"
+for tool in git env bash dirname; do ln -sf "$(command -v "$tool")" "$bare/$tool"; done
+status=0
+(cd "$repo" && env -u GATE_SKIP_SELF_TEST PATH="$bare" "$(command -v bash)" scripts/gate.sh >"$repo/out" 2>&1) || status=$?
+check "a missing pnpm fails the gate" "$([[ $status == 1 ]] && echo 0 || echo 1)"
+check "a missing pnpm says to run corepack enable pnpm" "$(grep -q 'corepack enable pnpm' "$repo/out" && echo 0 || echo 1)"
+
 repo="$(new_repo review-fails)"; stub_review "$repo"; with_origin "$repo"
 REVIEW_SKIP="" REVIEW_EXIT=1 run "$repo"
 check "a failing review check fails the gate" "$([[ $status != 0 ]] && echo 0 || echo 1)"
