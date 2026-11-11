@@ -60,6 +60,7 @@ import { gitSandboxFake } from "./git-sandbox-fake.mts";
 import type { HostReviewResult } from "./host-review.mts";
 import { RunLimits } from "./limits.mts";
 import { plainText } from "./plain-text.mts";
+import { hasHiddenText } from "./status.mts";
 import { PR_BODY_RULES } from "./prompts.mts";
 import { ledgerGitEnv, renderAdvisories, type Ledger } from "./review-ledger.mts";
 import type { SecretMatch } from "./scan.mts";
@@ -3341,6 +3342,27 @@ describe("publicErrorText", () => {
 
   it("returns the redacted invisible-free text when a host space splits a URL scheme so only that view could redact the credential", () => {
     assert.equal(publicErrorText("GH-\u200b1://user:pw@host", () => false), "GH-1://***@host");
+  });
+
+  it("keeps at most the combining marks in a row that ADR 0010 keeps, so the text comes back changed and passes hasHiddenText", () => {
+    const marks = (count: number) => `a${"\u0301".repeat(count)}b`;
+
+    assert.equal(publicErrorText(marks(8), () => false), marks(8));
+    assert.equal(publicErrorText(marks(9), () => false), marks(8));
+    assert.equal(publicErrorText(marks(30), () => false), marks(8));
+    assert.equal(publicErrorText(`${marks(9)} ${marks(9)}`, () => false), `${marks(8)} ${marks(8)}`);
+  });
+
+  it("never returns a text hasHiddenText calls hidden", () => {
+    const hidden = [
+      "a\u202eb", "a\u{e0041}b", "a\u200bb", "x\ufe0fy", "hello \u200b", "a\u0085b", "a\ufeffb", "a\u200db", "a\u200cb", "a\ufe0f\u20e3",
+      `a${"\u0301".repeat(9)}b`, `a${"\u0301".repeat(40)}`, "\u{1f468}\u200d".repeat(9) + "\u{1f469}", "\u26a0\ufe0f".repeat(9),
+      "\ue000".repeat(9), "\u0378".repeat(9), "\u{f0000}".repeat(9),
+    ];
+    for (const text of hidden) {
+      const result = publicErrorText(text, () => false);
+      assert.equal(hasHiddenText(result), false, JSON.stringify(text));
+    }
   });
 
   it("withholds a token the as-written text holds though the invisible-free text does not", () => {

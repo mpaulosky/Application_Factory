@@ -360,7 +360,7 @@ export function hasHiddenText(text: string): boolean {
 
 // The most private-use or unassigned code points, and the most combining marks in a row, one text keeps.
 const MAX_KEPT_ODD = 8;
-const MAX_MARKS = 8;
+export const MAX_MARKS = 8;
 
 const HIDDEN_CHARACTERS =
   /[\p{Cc}\p{Cf}\p{Cs}\p{Noncharacter_Code_Point}\p{Default_Ignorable_Code_Point}\p{Variation_Selector}\u034f\u115f\u1160\u2800\u3164\uffa0\u{F0000}-\u{10FFFF}]/gu;
