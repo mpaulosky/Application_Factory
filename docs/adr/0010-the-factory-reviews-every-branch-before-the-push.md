@@ -55,6 +55,6 @@ reviewers run on Sonnet
   own invocation
   only. The `pre-push` hook still removes the variable, so a push never skips the review; CI keeps the gate's other checks, and the local review stays a local guarantee.
 - A finding in a Template file goes to the Template's file, not to an edit of its copy, as for every other copy.
-- A few Owned Template files change after the first version (the `pre-push` hook and its test, which drop `GATE_SKIP_SELF_TEST` as they drop `GATE_SKIP_REVIEW`; the
+- This branch changes a few Owned Template files (the `pre-push` hook and its test, which drop `GATE_SKIP_SELF_TEST` as they drop `GATE_SKIP_REVIEW`; the
   `pre-push-review` skill's wording; the `.sandcastle/lib` review modules), so they reach the Fleet by the next Rollout (`rollout.sh`).
   None is urgent: an Application's gate has no `GATE_SKIP_SELF_TEST`.

@@ -3,7 +3,8 @@
 # status on; a changed, missing or execute-bit-mismatched copy stops the gate before the stub runs; the local review check (ADR 0010)
 # skips only on GATE_SKIP_REVIEW=1, fails without an origin/main, and passes review.sh check's status on, ahead of test.sh. It also checks
 # that gate.sh names each copied stand-alone test, that repo-config.mts lists the Factory's own files under Owned patterns, and that
-# dependabot.yml watches the root package.json.
+# dependabot.yml watches the root package.json. It also covers the review tests' install step: a missing pnpm, a pnpm that leaves no tsx, and a pnpm that
+# installs it.
 #
 #   scripts/tests/gate.test.sh
 set -euo pipefail
@@ -168,7 +169,7 @@ chmod +x "$repo/scripts/tests/gate.test.sh"
 printf '#!/usr/bin/env bash\nmkdir -p node_modules/.bin && printf "#!/usr/bin/env bash\\nexit 0\\n" > node_modules/.bin/tsx && chmod +x node_modules/.bin/tsx\n' > "$bare/pnpm"
 status=0
 (cd "$repo" && env -u GATE_SKIP_SELF_TEST PATH="$bare" "$(command -v bash)" scripts/gate.sh >"$repo/out" 2>&1) || status=$?
-check "a pnpm that installs tsx gets the gate past the install step" "$(! grep -q 'did not install\|pnpm isn.t installed' "$repo/out" && grep -q 'Copies of Template files\|copies match' "$repo/out" && echo 0 || echo 1)"
+check "a pnpm that installs tsx gets the gate past the install step" "$(! grep -qE 'did not install|pnpm isn.t installed' "$repo/out" && grep -q 'Copies of Template files' "$repo/out" && echo 0 || echo 1)"
 rm -f "$bare/pnpm"
 
 repo="$(new_repo review-fails)"; stub_review "$repo"; with_origin "$repo"
