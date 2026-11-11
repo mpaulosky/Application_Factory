@@ -3353,11 +3353,26 @@ describe("publicErrorText", () => {
     assert.equal(publicErrorText(`${marks(9)} ${marks(9)}`, () => false), `${marks(8)} ${marks(8)}`);
   });
 
+  it("counts the combining marks a dropped character separates as one run", () => {
+    const five = "\u0301".repeat(5);
+    // Each separator is dropped from the returned text, which leaves ten marks in a row.
+    for (const separator of ["\u200b", "\u200d", "\u202e", "\ue000", "\u0378", "\ud800", "\ufdd0", "\u3164", "\u2800", "\u034f", "\u0007", "\u{e0100}"]) {
+      const text = `a${five}${separator}${five}b`;
+      const result = publicErrorText(text, () => false);
+
+      assert.equal(hasHiddenText(result), false, JSON.stringify(text));
+      assert.equal(result, `a${"\u0301".repeat(8)}b`, JSON.stringify(text));
+    }
+    // A newline is whitespace, so it keeps the runs apart and nothing is cut.
+    assert.equal(publicErrorText(`a${five}\n${five}b`, () => false), `a${five}\n${five}b`);
+  });
+
   it("never returns a text hasHiddenText calls hidden", () => {
     const hidden = [
       "a\u202eb", "a\u{e0041}b", "a\u200bb", "x\ufe0fy", "hello \u200b", "a\u0085b", "a\ufeffb", "a\u200db", "a\u200cb", "a\ufe0f\u20e3",
       `a${"\u0301".repeat(9)}b`, `a${"\u0301".repeat(40)}`, "\u{1f468}\u200d".repeat(9) + "\u{1f469}", "\u26a0\ufe0f".repeat(9),
-      "\ue000".repeat(9), "\u0378".repeat(9), "\u{f0000}".repeat(9),
+      "\ue000".repeat(9), "\u0378".repeat(9), "\u{f0000}".repeat(9), "a\ud800b", "a\ufdd0b", "a\uffffb", "a\u{e0100}b", "a\u034fb", "a\u115fb",
+      "a\u1160b", "a\u2800b", "a\u3164b", "a\uffa0b", "a\u0007b", "a\u001b[2Jb", "\u0627\u200c\u0628".repeat(9), "\u{1d167}" + "\u0301".repeat(9),
     ];
     for (const text of hidden) {
       const result = publicErrorText(text, () => false);
