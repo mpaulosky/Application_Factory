@@ -37,7 +37,7 @@ starts with a letter, so `chore/7-cleanup` is refused. The pre-push hook refuses
 allows so a person can push a fix to a Dependabot PR. The required **Branch name** check allows the same names, plus any
 `dependabot/*` whatever its characters and the `docs/release-notes` and `docs/backfill-blog-posts` branches the release
 workflows create. It refuses everything else, so it catches a push that skipped the hook (a Claude cloud session's
-`claude/...` branch, GitHub's web editor). To fix one, rename the branch on GitHub, then close and reopen the PR.
+`claude/...` branch, GitHub's web editor). To fix a refused name, rename the branch on GitHub, then close and reopen the PR.
 
 ## Commits and PR titles
 
