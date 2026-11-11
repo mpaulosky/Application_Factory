@@ -33,9 +33,10 @@ The folder is the branch name with `/` turned into `-`. Remove the worktree once
 | `chore/{slug}` | Work without an issue |
 
 `{slug}` is lowercase letters and digits in words joined by `-` (`upgrade-net10`, `oauth2-login`). A `chore/` slug
-starts with a letter, so `chore/7-cleanup` is refused. The pre-push hook refuses any other name, and so does the
-required **Branch name** check, which also catches a push that skipped the hook (a Claude cloud session's `claude/...`
-branch, GitHub's web editor). To fix one, rename the branch on GitHub, then close and reopen the PR.
+starts with a letter, so `chore/7-cleanup` is refused. The pre-push hook refuses any other name, except a shell-safe `dependabot/*` name, which it
+allows so a person can push a fix to a Dependabot PR. The required **Branch name** check refuses any other name too (it
+accepts any `dependabot/*`), and so catches a push that skipped the hook (a Claude cloud session's `claude/...` branch,
+GitHub's web editor). To fix one, rename the branch on GitHub, then close and reopen the PR.
 
 ## Commits and PR titles
 
