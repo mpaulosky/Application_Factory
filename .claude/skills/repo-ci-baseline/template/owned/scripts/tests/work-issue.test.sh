@@ -2,7 +2,9 @@
 # Tests for scripts/work-issue.sh, in a throwaway clone with a bare origin and a fake `gh`.
 # Usage: scripts/tests/work-issue.test.sh
 #
-# The fake gh answers `gh issue view <n> --json title|labels --jq ...` from the table in its case statement (the jq text is not run); GH_REPO must be o/r.
+# The fake gh answers `gh issue view <n> --json title|labels --jq <expr>` from the file $GH_FIX/<n>.json ({"title", "labels": [{"name"}]}), and runs the --jq text work-issue.sh passes
+# it through the real jq, as gh does. It fails unless it is given exactly those seven arguments, --json title or labels, and GH_REPO (o/r, or $EXPECT_GH_REPO); a missing file is an
+# unknown issue (exit 1), and a file $GH_FIX/_fail makes it exit 1. A git shim answers `git remote get-url origin` from $SHIM_ORIGIN_URL, to try URL forms.
 # shellcheck disable=SC2034 # o is read by the eval in check
 set -uo pipefail
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
@@ -14,52 +16,62 @@ export GIT_TEMPLATE_DIR="$work/no-template" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t
 PASSED=0; FAILED=0
 check() { if eval "$2"; then PASSED=$((PASSED + 1)); echo "ok   - $1"; else FAILED=$((FAILED + 1)); echo "FAIL - $1"; fi; }
 
+if ! command -v jq >/dev/null 2>&1; then # gh-repo: ok
+  echo "jq is not installed, and the fake gh runs work-issue.sh's jq with it" # gh-repo: ok
+  [[ -z "${CI:-}" ]] && { echo "skip"; exit 0; } # a developer machine may skip; CI must not
+  exit 1
+fi
+export GH_FIX="$work/fix"; mkdir "$GH_FIX"
 mkdir "$work/bin"
 cat > "$work/bin/gh" <<'GH' # gh-repo: ok
 #!/usr/bin/env bash
-# gh issue view <n> --json title|labels --jq ...
-[[ "${GH_REPO:-}" == "o/r" && "$1 $2" == "issue view" && "$4" == "--json" && "$6" == "--jq" ]] || { echo "fake gh: bad call: $* (GH_REPO=${GH_REPO:-})" >&2; exit 2; } # gh-repo: ok
-n="$3"; what="$5"
-case "$n:$what" in
-  54:title) echo "[Feature] Start work in a worktree, review once!" ;;
-  55:title) echo "Null children crash the   grid" ;;
-  55:labels) printf 'enhancement\nBug\n' ;;
-  56:title) echo "bugfix" ;;
-  56:labels) echo bugfix ;;
-  57:title) echo "[Feature]" ;;
-  58:title) echo "Café au lait" ;;
-  59:title) echo "Один два три" ;;
-  60:title) echo "$(printf 'a%.0s' $(seq 1 300)) tail" ;;
-  61:title) echo "one two three four five" ;;
-  62:title) echo "one two three four five six" ;;
-  63:title) echo "one two three four five six seven" ;;
-  64:title) echo "Reuse me" ;;
-  65:title) echo "Started on another machine" ;;
-  66:title) echo "Plain directory in the way" ;;
-  67:title) echo "Elsewhere" ;;
-  71:title) echo "Locked and gone" ;;
-  74:title) echo "Relative path" ;;
-  73:title) cat "$TITLE73" ;;
-  68:title) echo "$(printf 'a%.0s' $(seq 1 49)) bbb" ;;
-  69:title) printf 'a%.0s' $(seq 1 50); echo ;;
-  70:title) printf 'a%.0s' $(seq 1 51); echo ;;
-  123456789:title) echo "Nine digits" ;;
-  *:title) echo "" ;;
-esac
-exit 0
+[[ $# == 7 && "${GH_REPO:-}" == "${EXPECT_GH_REPO:-o/r}" && "$1 $2" == "issue view" && "$4" == "--json" && ( "$5" == title || "$5" == labels ) && "$6" == "--jq" ]] \
+  || { echo "fake gh: bad call: $* (GH_REPO=${GH_REPO:-})" >&2; exit 2; } # gh-repo: ok
+[[ ! -f "$GH_FIX/_fail" ]] || { echo "fake gh: network down" >&2; exit 1; } # gh-repo: ok
+[[ -f "$GH_FIX/$3.json" ]] || { echo "fake gh: no issue $3" >&2; exit 1; } # gh-repo: ok
+jq -c "{$5: .$5}" "$GH_FIX/$3.json" | jq -r "$7"
 GH
 chmod +x "$work/bin/gh" # gh-repo: ok
 export PATH="$work/bin:$PATH"
 export GITHUB_REPOSITORY=o/r
-export TITLE73="$work/title73"; echo "Original name" > "$TITLE73"
+issue() { local n="$1" t="$2"; shift 2; jq -nc --arg t "$t" '$ARGS.positional as $l | {title: $t, labels: [$l[] | {name: .}]}' --args "$@" > "$GH_FIX/$n.json"; } # issue <n> <title> [label...]
+issue 54 "[Feature] Start work in a worktree, review once!"
+issue 55 "Null children crash the   grid" enhancement Bug
+issue 56 "bugfix" bugfix
+issue 57 "[Feature]"
+issue 58 "Café au lait"
+issue 59 "Один два три"
+issue 60 "$(printf 'a%.0s' $(seq 1 300)) tail"
+issue 61 "one two three four five"
+issue 62 "one two three four five six"
+issue 63 "one two three four five six seven"
+issue 64 "Reuse me"
+issue 65 "Started on another machine"
+issue 66 "Plain directory in the way"
+issue 67 "Elsewhere"
+issue 68 "$(printf 'a%.0s' $(seq 1 49)) bbb"
+issue 69 "$(printf 'a%.0s' $(seq 1 50))"
+issue 70 "$(printf 'a%.0s' $(seq 1 51))"
+issue 71 "Locked and gone"
+issue 73 "Original name"
+issue 74 "Relative path"
+issue 99 ""
+issue 123456789 "Nine digits"
 
 git init -q --bare "$work/origin.git"
 git clone -q "$work/origin.git" "$work/Repo" 2>/dev/null
 cd "$work/Repo" || exit 1
+git config fetch.prune false; git config remote.origin.prune false # a user's own config must not prune for the script: only its --prune may
 git checkout -q -b main; mkdir scripts
 cp "$SCRIPTS/check-branch-name.sh" "$SCRIPTS/work-issue.sh" scripts/
 { git add . && git commit -q -m init && git push -q origin main; } || { echo "setup failed"; exit 1; }
 wt="$work/Repo-worktrees"
+# A second clone, to push to origin as someone else would, without fetching in Repo
+other="$work/other"; git clone -q "$work/origin.git" "$other" 2>/dev/null
+other_push() { # other_push <branch> <file> [<start>]: a commit on <branch> (new from <start> or origin/main), pushed from the second clone
+  git -C "$other" fetch -q origin && git -C "$other" checkout -q -B tmp "${3:-origin/$1}" && echo "$2" > "$other/$2" && git -C "$other" add "$2" \
+    && git -C "$other" commit -q -m "$2" && git -C "$other" push -q origin "tmp:refs/heads/$1"
+}
 
 p=$(bash scripts/work-issue.sh 54 2>/dev/null); st=$?
 check "makes the worktree and prints its path" "[[ $st == 0 && '$p' == '$wt/feature-54-start-work-in-a-worktree-review' && -d '$p' ]]"
@@ -112,22 +124,21 @@ command rm -rf "$p"; bash scripts/work-issue.sh 54 >/dev/null 2>&1
 check "forgetting one stale entry leaves the other stale entries alone" "[[ -d '$p' && -d '$work/Repo/.git/worktrees/other-stale' && -d '$work/Repo/.git/worktrees/locked-and-gone' ]]"
 
 # A renamed issue keeps its branch
-p73=$(bash scripts/work-issue.sh 73 2>/dev/null); echo "A completely different title" > "$TITLE73"
+p73=$(bash scripts/work-issue.sh 73 2>/dev/null); issue 73 "A completely different title"
 check "an issue renamed since its branch was made keeps the branch and its worktree" "[[ '$p73' == '$wt/feature-73-original-name' && \$(bash scripts/work-issue.sh 73 2>/dev/null) == '$p73' && ! -e '$wt/feature-73-a-completely-different-title' ]]"
 
-# A worktree git stored with a relative path (git 2.48+), its folder deleted by hand, is forgotten and made again
-git config worktree.useRelativePaths true
+# A worktree whose gitdir file holds a relative path (what git 2.48+ writes with worktree.useRelativePaths), written by hand so the test does not depend on git's version;
+# its folder deleted by hand, it is forgotten and made again
 git worktree add -q -b feature/74-relative-path "$work/relative-path" origin/main
-git config --unset worktree.useRelativePaths
-if [[ "$(<"$work/Repo/.git/worktrees/relative-path/gitdir")" != /* ]]; then
-  command rm -rf "$work/relative-path"
+printf '%s\n' "../../../../relative-path/.git" > "$work/Repo/.git/worktrees/relative-path/gitdir"
+command rm -rf "$work/relative-path"
+if git worktree list --porcelain | grep -qx "worktree $work/relative-path"; then
   check "a missing worktree stored with a relative path is found, forgotten and made again" "[[ \$(bash scripts/work-issue.sh 74 2>/dev/null) == '$wt/feature-74-relative-path' && -d '$wt/feature-74-relative-path' ]]"
-else echo "skip - this git stores absolute worktree paths"; fi
+elif [[ -n "${CI:-}" ]]; then check "this git can't read a worktree stored with a relative path, and CI must test it" "false"
+else echo "skip - this git can't read a relative worktree path"; fi
 
 # A branch already on origin is built from it, not from main
-other="$work/other"; git clone -q "$work/origin.git" "$other" 2>/dev/null
-git -C "$other" checkout -q -b feature/65-started-on-another-machine origin/main
-echo remote > "$other/r" && git -C "$other" add r && git -C "$other" commit -q -m remote && git -C "$other" push -q origin feature/65-started-on-another-machine 2>/dev/null
+other_push feature/65-started-on-another-machine r origin/main 2>/dev/null
 p65=$(bash scripts/work-issue.sh 65 2>/dev/null)
 check "a branch on origin is built from origin/<branch>" "[[ -f '$p65/r' && \$(git -C '$p65' rev-parse HEAD) == \$(git rev-parse origin/feature/65-started-on-another-machine) ]]"
 
@@ -135,6 +146,71 @@ check "a branch on origin is built from origin/<branch>" "[[ -f '$p65/r' && \$(g
 mkdir -p "$wt/feature-66-plain-directory-in-the-way"; touch "$wt/feature-66-plain-directory-in-the-way/keep"
 o=$(bash scripts/work-issue.sh 66 2>&1 >/dev/null); st=$?
 check "a plain directory in the way is refused, and left alone" "[[ $st != 0 && -f '$wt/feature-66-plain-directory-in-the-way/keep' ]] && grep -q 'is not a worktree of' <<<\"\$o\" && ! git show-ref --verify --quiet refs/heads/feature/66-plain-directory-in-the-way"
+
+# Origin is fetched first (and pruned): the base is its main as it is now, and a branch pushed from another machine, under an older title, is seen
+other_push main fresh-main origin/main
+check "a new branch starts from origin/main as it is now, not as it was at the last fetch" "[[ \$(git -C \"\$(bash scripts/work-issue.sh 54 2>/dev/null >/dev/null; issue 80 'Fresh base'; bash scripts/work-issue.sh 80 2>/dev/null)\" rev-parse HEAD) == \$(git ls-remote origin refs/heads/main | cut -f1) ]]"
+other_push feature/75-old-name n75 origin/main; issue 75 "New name"
+check "an issue renamed on another machine keeps the branch pushed from there (feature/)" "[[ \$(bash scripts/work-issue.sh 75 2>/dev/null) == '$wt/feature-75-old-name' && ! -e '$wt/feature-75-new-name' && -f '$wt/feature-75-old-name/n75' ]]"
+other_push fix/81-old-fix n81 origin/main; issue 81 "Totally new words" Bug
+other_push hotfix/82-old-hot n82 origin/main; issue 82 "Other new words"
+check "a renamed issue keeps a fix/ branch" "[[ \$(bash scripts/work-issue.sh 81 2>/dev/null) == '$wt/fix-81-old-fix' ]]"
+check "a renamed issue keeps a hotfix/ branch" "[[ \$(bash scripts/work-issue.sh 82 2>/dev/null) == '$wt/hotfix-82-old-hot' ]]"
+issue 5 "Five"
+check "issue 5 does not pick up issue 54's branch" "[[ \$(bash scripts/work-issue.sh 5 2>/dev/null) == '$wt/feature-5-five' ]]"
+git branch feature/90-local-name origin/main; other_push fix/90-origin-name n90 origin/main; issue 90 "Anything"
+check "with a local and an origin branch for one number, the local one wins" "[[ \$(bash scripts/work-issue.sh 90 2>/dev/null) == '$wt/feature-90-local-name' ]]"
+other_push feature/91-gone n91 origin/main; git fetch -q origin; git -C "$other" push -q origin --delete feature/91-gone; issue 91 "Fresh start"
+check "an origin branch deleted since the last fetch is pruned, not reused" "[[ \$(bash scripts/work-issue.sh 91 2>/dev/null) == '$wt/feature-91-fresh-start' && \$(git -C '$wt/feature-91-fresh-start' rev-parse HEAD) == \$(git rev-parse origin/main) ]]"
+issue 83 "From a worktree"
+check "makes a new worktree when run from inside another one" "[[ \$(cd '$p65' && bash '$work/Repo/scripts/work-issue.sh' 83 2>/dev/null) == '$wt/feature-83-from-a-worktree' ]]"
+
+# The repository when GITHUB_REPOSITORY is not set (the usual case on a developer machine): upstream's URL, else origin's
+mkdir "$work/shim"
+cat > "$work/shim/git" <<SHIM
+#!/usr/bin/env bash
+if [[ "\$1 \$2 \$3" == "remote get-url origin" && -n "\${SHIM_ORIGIN_URL:-}" ]]; then echo "\$SHIM_ORIGIN_URL"; exit 0; fi
+exec "$(command -v git)" "\$@"
+SHIM
+chmod +x "$work/shim/git"
+issue 84 "From url"; issue 85 "From upstream"; issue 86 "No repository"
+check "with no GITHUB_REPOSITORY, the repository is read from origin's URL" "[[ \$(env -u GITHUB_REPOSITORY EXPECT_GH_REPO=acme/r PATH='$work/shim:'\"\$PATH\" SHIM_ORIGIN_URL=git@github.com:acme/r.git bash scripts/work-issue.sh 84 2>/dev/null) == '$wt/feature-84-from-url' ]]"
+git remote add upstream https://github.com/up/r.git
+check "an upstream remote, not origin, names the repository gh is asked about" "[[ \$(env -u GITHUB_REPOSITORY EXPECT_GH_REPO=up/r PATH='$work/shim:'\"\$PATH\" SHIM_ORIGIN_URL=git@github.com:acme/r.git bash scripts/work-issue.sh 85 2>/dev/null) == '$wt/feature-85-from-upstream' ]]" # gh-repo: ok
+git remote remove upstream
+o=$(env -u GITHUB_REPOSITORY PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r bash scripts/work-issue.sh 86 2>&1 >/dev/null); st=$?
+check "a non-GitHub origin with no GITHUB_REPOSITORY fails, saying why" "[[ $st != 0 ]] && grep -q \"can't tell which repository\" <<<\"\$o\" && [[ ! -e '$wt/feature-86-no-repository' ]]"
+
+# The branch checked out in the primary checkout is not a place to work
+issue 92 "In primary"; git checkout -q -b feature/92-in-primary
+o=$(bash scripts/work-issue.sh 92 2>&1 >/dev/null); st=$?; git checkout -q main
+check "refuses a branch that is checked out in the primary checkout" "[[ $st != 0 ]] && grep -q 'checked out in the primary checkout' <<<\"\$o\" && [[ ! -e '$wt/feature-92-in-primary' ]]"
+
+# A folder that can't be reached is not a folder deleted by hand; an entry that is a symlink is not followed
+issue 93 "Unreachable"; mkdir "$work/np"; git worktree add -q -b feature/93-unreachable "$work/np/w" origin/main
+if [[ "$(id -u)" != 0 ]]; then
+  chmod 000 "$work/np"; o=$(bash scripts/work-issue.sh 93 2>&1 >/dev/null); st=$?; chmod 755 "$work/np"
+  check "a worktree whose parent folder can't be searched is refused, and its entry kept" "[[ $st != 0 ]] && grep -q \"can't be reached\" <<<\"\$o\" && [[ -d '$work/Repo/.git/worktrees/w' && -d '$work/np/w' ]]"
+else echo "skip - running as root, so no folder can be made unsearchable"; fi
+issue 94 "Symlinked"; git worktree add -q -b feature/94-symlinked "$work/sl" origin/main; command rm -rf "$work/sl"
+mv "$work/Repo/.git/worktrees/sl" "$work/elsewhere-entry"; ln -s "$work/elsewhere-entry" "$work/Repo/.git/worktrees/sl"
+o=$(bash scripts/work-issue.sh 94 2>&1 >/dev/null); st=$?
+check "a worktree entry that is a symlink is never followed or removed" "[[ $st != 0 && -f '$work/elsewhere-entry/gitdir' ]] && grep -q 'was not found' <<<\"\$o\""
+
+# gh failing, an unknown issue, no gh, a check-branch-name.sh that refuses, a path with spaces and a non-ASCII letter
+before="$(git branch | wc -l)$(find "$wt" -mindepth 1 -maxdepth 1 | wc -l)"
+touch "$GH_FIX/_fail"; o=$(bash scripts/work-issue.sh 54 2>&1 >/dev/null); st=$?; command rm -f "$GH_FIX/_fail"
+check "a gh failure fails the run and makes nothing" "[[ $st != 0 ]] && grep -q 'network down' <<<\"\$o\" && [[ \"\$(git branch | wc -l)\$(find '$wt' -mindepth 1 -maxdepth 1 | wc -l)\" == '$before' ]]" # gh-repo: ok
+o=$(bash scripts/work-issue.sh 98 2>&1 >/dev/null); st=$?
+check "an unknown issue fails the run and makes nothing" "[[ $st != 0 ]] && grep -q 'no issue 98' <<<\"\$o\" && [[ \"\$(git branch | wc -l)\$(find '$wt' -mindepth 1 -maxdepth 1 | wc -l)\" == '$before' ]]"
+mkdir "$work/nogh"; ln -s "$(command -v git)" "$work/nogh/git"
+o=$(PATH="$work/nogh" "$(command -v bash)" scripts/work-issue.sh 54 2>&1 >/dev/null); st=$?
+check "refuses without gh" "[[ $st != 0 ]] && grep -q 'gh is needed' <<<\"\$o\"" # gh-repo: ok
+issue 95 "Guard"; cp scripts/check-branch-name.sh "$work/cbn-real.sh"; printf '#!/usr/bin/env bash\nexit 1\n' > scripts/check-branch-name.sh
+o=$(bash scripts/work-issue.sh 95 2>&1 >/dev/null); st=$?; cp "$work/cbn-real.sh" scripts/check-branch-name.sh
+check "a branch name the standard refuses is not made" "[[ $st != 0 ]] && grep -q 'is not an allowed branch name' <<<\"\$o\" && [[ ! -e '$wt/feature-95-guard' ]]"
+sp="$work/Réo x"; git clone -q "$work/origin.git" "$sp" 2>/dev/null
+check "a primary checkout whose path has spaces and a non-ASCII letter works" "[[ \$(cd '$sp' && bash scripts/work-issue.sh 55 2>/dev/null) == '$work/Réo x-worktrees/fix-55-null-children-crash-the-grid' && -d '$work/Réo x-worktrees/fix-55-null-children-crash-the-grid' ]]"
 
 o=$(bash scripts/work-issue.sh 99 2>&1 >/dev/null); st=$?
 check "refuses an issue with no title" "[[ $st != 0 ]] && grep -q 'has no title' <<<\"\$o\""

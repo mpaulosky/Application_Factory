@@ -54,12 +54,13 @@ branch with `/` turned into `-`:
 cd "$(scripts/work-issue.sh 42)"
 ```
 
-`scripts/work-issue.sh <n>` reads issue `n` and makes its branch and worktree from `origin/main` (or from `origin/<branch>` when that branch is already
-on origin), then prints the path. The branch is `fix/{n}-{slug}` for an issue labelled `bug` (any case), `feature/{n}-{slug}` for any other; the slug is the
-title's lowercase `a-z0-9` words (a leading `[tag]` dropped, at most 6 words and 50 characters, `issue` when none is left). An issue renamed since keeps the branch already named for its
-number. It reuses the branch's
-worktree if there is one; git's entry for one whose folder was deleted by hand is forgotten (that one only) and the worktree made again, a locked one is an error with the `git worktree
-unlock` hint; it refuses a directory of that name that is not a worktree of the branch. Work without an issue is made by hand:
+`scripts/work-issue.sh <n>` fetches and prunes `origin`, reads issue `n` and makes its branch and worktree, then prints the path. The branch starts from the local branch of
+that name if there is one (checked out as it is, even if it is behind `origin`), else from `origin/<branch>` when that branch is on `origin`, else from `origin/main`. The branch is
+`fix/{n}-{slug}` for an issue labelled `bug` (any case), `feature/{n}-{slug}` for any other; the slug is the title's lowercase `a-z0-9` words (a leading `[tag]` dropped, at most
+6 words and 50 characters, `issue` when none is left). An issue renamed since keeps the branch already named for its number, local or on `origin`. It reuses the branch's worktree
+if there is one; git's entry for one whose folder was deleted by hand is forgotten (that one only, and only a real directory entry) and the worktree made again. It refuses, with a hint,
+a locked one, one whose folder can't be reached (an unsearchable parent folder), the primary checkout holding the branch, and a directory of that name that is not a worktree of the branch.
+It needs `gh` logged in, and for an origin that is not on github.com, `GITHUB_REPOSITORY`. Work without an issue is made by hand:
 `git worktree add -b chore/upgrade-net10 ../<Repo>-worktrees/chore-upgrade-net10 origin/main`.
 
 Once the PR merges, `scripts/cleanup.sh` (run in the primary checkout, on a clean `main`) fast-forwards `main`, then removes each merged branch with its

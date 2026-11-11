@@ -73,7 +73,8 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   and `plan-prompt.md`, `review-prompt.md` and the role prompts under `.sandcastle/roles/`
   (`architect.md`, `backend.md`, `tester.md`, `follow-up.md`, `gate-fixer.md`, `scribe.md` and `ui.md`), which instruct the
   pipeline's roles, `.sandcastle/check.sh`, whose watched paths decide whether the Sandcastle check runs,
-  `global.json`, which sets the SDK and msbuild-sdks a build runs, `docs/PROCESS.md`, which `review-prompt.md` tells a role to follow, and the chain that runs the review and the gate:
+  `global.json`, which sets the SDK and msbuild-sdks a build runs, `docs/PROCESS.md`, which `review-prompt.md` tells a role to follow, `scripts/cleanup.sh`, which deletes branches,
+  worktrees and origin branches, `scripts/work-issue.sh`, which makes a branch and worktree named from issue text, and the chain that runs the review and the gate:
   `scripts/gate.sh`, `scripts/review.sh`, `.github/hooks/pre-push` and the `lib/` modules `review-ledger.mts`, `host-safety.mts`, `sandbox-env.mts`, `host-review.mts`,
   `host-review-prompts.mts` and `build.mts`, and the host's entrypoint and status command `.sandcastle/main.mts` and `.sandcastle/status.mts`, which wire those modules together,
   since the Template's checks run in the Template and in a repo judge whatever bytes the re-Apply wrote)

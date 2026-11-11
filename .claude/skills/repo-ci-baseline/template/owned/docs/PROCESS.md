@@ -15,8 +15,9 @@ git config core.hooksPath .github/hooks
 ## Branches and worktrees
 
 Every change is made on its own branch, in its own **worktree** beside the clone, made when you start the work, not later. The clone
-itself stays on `main`, and the pre-commit hook refuses a commit made there. For an issue, one command makes the branch and worktree from
-`origin/main`, names them from the issue, and prints the path; then do all the work there, and make every follow-up fix there too, until the PR merges:
+itself stays on `main`, and the pre-commit hook refuses a commit made there. For an issue, one command fetches `origin`, makes the branch and worktree from
+`origin/main` (or reuses the branch the issue already has, even if it was renamed), names them from the issue, and prints the path; it needs `gh` logged in, and `GITHUB_REPOSITORY` for an
+`origin` that is not on github.com. Then do all the work there, and make every follow-up fix there too, until the PR merges:
 
 ```bash
 cd "$(scripts/work-issue.sh 42)"   # e.g. fix/42-null-children in ../<Repo>-worktrees/fix-42-null-children
@@ -29,9 +30,10 @@ The folder is the branch name with `/` turned into `-`.
 fetches and prunes the remote-tracking refs). It fast-forwards `main` to `origin/main`, then removes every branch named to the standard whose PR merged into
 `main`, with its worktree (ignored files in it go too) and its `origin` branch. It reads the PR's state from GitHub, because a squash merge leaves nothing
 for `git branch --merged` to see, and counts only a PR whose head repository is the one `origin` points at (a fork's PR of the same name doesn't count). It keeps, and says why, a branch with an
-open PR, no PR, a commit the PR never had, a PR merged into another branch, or a worktree with uncommitted changes, and keeps that local branch's `origin` copy
+open PR, no PR, a commit the PR never had or one made while it ran, 100 or more PRs of that name, a PR merged into another branch, a worktree with uncommitted changes
+or one whose folder can't be reached, and keeps that local branch's `origin` copy
 too; a branch whose PR closed unmerged goes only with `--include-closed`. A `gh` failure stops it, and a removal git refuses, or a check of `origin` that failed, is reported (exit 1) while
-the rest is done. A worktree whose folder was deleted by hand has git's entry for it forgotten.
+the rest is done. A worktree whose folder was deleted by hand has git's entry for it forgotten (a locked one is kept).
 
 | Branch | Use |
 | --- | --- |

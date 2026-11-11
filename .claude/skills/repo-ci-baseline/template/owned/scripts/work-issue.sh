@@ -7,9 +7,10 @@
 # The branch is fix/{n}-{slug} for an issue labelled bug (any case), feature/{n}-{slug} for any other. The slug is the issue's title in lowercase
 # a-z0-9 words (a leading [tag] dropped, other characters, non-ASCII ones included, read as word breaks, at most 6 words and 50 characters; "issue"
 # when none is left; an issue whose branch already exists locally or on origin keeps that branch's name), and the folder is the branch with / as -, under ../<Repo>-worktrees/. A leading-zero number is read as the same number (054 is 54).
-# The branch starts from origin/main, or from origin/<branch> when that branch is already on origin. A worktree the branch already has is reused,
+# The branch starts from the local branch when there is one (checked out as it is), else from origin/<branch> when that branch is on origin, else from origin/main; origin is fetched
+# first, so a branch pushed from another machine is seen. A worktree the branch already has is reused,
 # wherever it is, if its folder still exists (git's entry for one deleted by hand is forgotten, that one only, and the worktree made again; a locked
-# one is an error); a directory in the way that is not that worktree is an error. An issue number has at most 9 digits. Run it from the primary checkout or any worktree.
+# one is an error, and so is one whose folder can't be reached, or the primary checkout when it has the branch checked out); a directory in the way that is not that worktree is an error. An issue number has at most 9 digits. Run it from the primary checkout or any worktree.
 # Everything but the path goes to stderr.
 set -euo pipefail
 
@@ -44,7 +45,7 @@ resolve_path() {
 url="$(git remote get-url upstream 2>/dev/null || git remote get-url origin 2>/dev/null || true)"
 repo_slug="${GITHUB_REPOSITORY:-}"
 if [[ -z "$repo_slug" ]]; then repo_slug="$(slug_of "$url")"; fi
-[[ "$repo_slug" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] || die "can't tell which repository: set GITHUB_REPOSITORY or add a github.com origin remote"
+[[ "$repo_slug" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] || die "can't tell which repository: set GITHUB_REPOSITORY or add a github.com upstream or origin remote"
 export GH_REPO="${repo_slug:?}"
 
 title="$(gh issue view "$n" --json title --jq .title)"
@@ -56,6 +57,7 @@ grep -qix bug <<<"$labels" && type=fix
 slug="$(sed -E 's/^\[[^]]*\][[:space:]]*//' <<<"$title" | tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -c 'a-z0-9\n' ' ' | tr -s ' ' | sed -E 's/^ //; s/ $//' | cut -d' ' -f1-6 | tr ' ' '-' | cut -c1-50 | sed -E 's/-+$//')"
 slug="${slug:-issue}"
 branch="$type/$n-$slug"
+git -C "$primary" fetch --prune --quiet origin || die "can't fetch origin"
 # An issue renamed since the branch was made keeps its branch: a local or origin branch already named for this number wins.
 while read -r ref; do
   name="${ref#refs/heads/}"; name="${name#refs/remotes/origin/}"
@@ -65,6 +67,7 @@ bash "$primary/scripts/check-branch-name.sh" "$branch" >&2 || die "$branch is no
 
 dir="$(dirname "$primary")/$repo-worktrees/${branch//\//-}"
 existing="$(git -C "$primary" worktree list --porcelain | awk -v ref="refs/heads/$branch" '/^worktree /{p=substr($0,10)} $0=="branch " ref{print p}')"
+if [[ -n "$existing" && "$existing" == "$primary" ]]; then die "$branch is checked out in the primary checkout: run git switch main there, then try again"; fi
 if [[ -n "$existing" && -d "$existing" ]]; then
   echo "reusing $existing" >&2
   echo "$existing"
@@ -72,10 +75,11 @@ if [[ -n "$existing" && -d "$existing" ]]; then
 fi
 # A worktree whose folder was deleted by hand is stale: forget git's entry for it (this one only), then make the worktree again.
 if [[ -n "$existing" ]]; then
+  [[ -d "$(dirname "$existing")" && -x "$(dirname "$existing")" ]] || die "$existing is a worktree of $branch whose folder can't be reached: fix that first (an unmounted drive?), then try again"
   common="$(cd "$primary" && cd "$(git rev-parse --git-common-dir)" && pwd -P)"
   entry=""
   for d in "$common"/worktrees/*/; do
-    [[ -f "${d}gitdir" ]] || continue
+    [[ -d "$d" && ! -L "${d%/}" && -f "${d}gitdir" ]] || continue # a real directory only: never follow a symlink out of .git/worktrees
     if [[ "$(resolve_path "${d%/}" "$(<"${d}gitdir")")" == "$(resolve_path / "$existing")/.git" ]]; then entry="$d"; break; fi
   done
   [[ -n "$entry" ]] || die "$existing is a worktree of $branch whose folder is missing, and git's entry for it was not found: run git worktree prune, then try again"
@@ -84,7 +88,6 @@ if [[ -n "$existing" ]]; then
 fi
 [[ ! -e "$dir" ]] || die "$dir exists but is not a worktree of $branch: move it away first"
 
-git -C "$primary" fetch --quiet origin
 mkdir -p "$(dirname "$dir")"
 if git -C "$primary" show-ref --verify --quiet "refs/heads/$branch"; then
   git -C "$primary" worktree add --quiet "$dir" "$branch" >&2

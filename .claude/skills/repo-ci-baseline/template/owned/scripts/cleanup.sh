@@ -13,10 +13,12 @@
 #   - removed with --include-closed only: the PR closed unmerged and the tip is its last head.
 #   - kept, with the reason: a name outside the branch standard, an open PR, no PR or a tip no PR had, a PR merged into a branch other than main,
 #     a dirty or unreadable worktree, a step git refused, or a closed PR without --include-closed.
-# A worktree whose folder was deleted by hand has git's entry for it forgotten (only that one; a locked one is kept). --dry-run prints what would happen and changes no branch, worktree or commit (it still
+# A worktree whose folder was deleted by hand (its parent folder is still there, so it is not just out of reach) has git's entry for it forgotten (only that one, and only if it is a real
+# directory in .git/worktrees; a locked one is kept). --dry-run prints what would happen and changes no branch, worktree or commit (it still
 # fetches and prunes the remote-tracking refs).
-# Exits 1 when it can't run (not main, not the primary checkout, dirty main, main can't fast-forward, no gh, no repository, a gh lookup failed,
-# a bad argument, no scripts/check-branch-name.sh) and, after finishing the rest, when a removal git refused or a check of origin failed.
+# Exits 1 when it can't run (not main, not the primary checkout, dirty main, main can't fast-forward, origin can't be fetched, no gh, no repository,
+# a gh lookup failed, a bad argument, no scripts/check-branch-name.sh) and, after finishing the rest, when a removal git refused, a check of origin
+# failed or the closing fetch failed. A branch is judged by its PR, and at most 100 PRs are read per branch name: 100 or more keeps the branch.
 # A worktree on a detached HEAD belongs to no branch and is never touched.
 set -euo pipefail
 
@@ -50,7 +52,7 @@ slug_of() {
 url="$(git remote get-url upstream 2>/dev/null || git remote get-url origin 2>/dev/null || true)"
 repo="${GITHUB_REPOSITORY:-}"
 if [[ -z "$repo" ]]; then repo="$(slug_of "$url")"; fi
-[[ "$repo" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] || die "can't tell which repository: set GITHUB_REPOSITORY or add a github.com origin remote"
+[[ "$repo" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] || die "can't tell which repository: set GITHUB_REPOSITORY or add a github.com upstream or origin remote"
 export GH_REPO="${repo:?}"
 # A PR counts only when its head repository is the one origin points at: origin's owner/name when it is a github.com URL, else GH_REPO's.
 lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
@@ -74,7 +76,7 @@ stale_entry() {
   local common d g
   common="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"
   for d in "$common"/worktrees/*/; do
-    [[ -f "${d}gitdir" ]] || continue
+    [[ -d "$d" && ! -L "${d%/}" && -f "${d}gitdir" ]] || continue # a real directory only: never follow a symlink out of .git/worktrees
     g="$(<"${d}gitdir")"
     if [[ "$(resolve_path "${d%/}" "$g")" == "$(resolve_path / "$1")/.git" ]]; then printf '%s' "$d"; return 0; fi
   done
@@ -83,19 +85,21 @@ stale_entry() {
 
 run() { if [[ "$dry" == true ]]; then echo "   would: $*"; else "$@"; fi; }
 
-git fetch --prune --quiet origin
+git fetch --prune --quiet origin || die "can't fetch origin"
 if [[ "$dry" == true ]]; then
   echo "   would: git merge --ff-only origin/main"
 else
   git merge --ff-only --quiet origin/main || die "main has commits origin/main lacks, so it can't fast-forward: resolve them first"
 fi
 
-# verdict <branch> <tip-sha> -> merged | merged-other:<base> | closed | open | none. Exits 1 (the caller's $(...) fails) when gh does.
+# verdict <branch> <tip-sha> -> merged | merged-other:<base> | closed | open | capped | none. Exits 1 (the caller's $(...) fails) when gh does.
 verdict() {
-  local branch="$1" sha="$2" state oid base head prs seen=none
+  local branch="$1" sha="$2" state oid base head prs seen=none rows=0
   prs="$(gh pr list --state all --limit 100 --head "$branch" --json state,headRefOid,baseRefName,headRepository \
     --jq '.[] | "\(.state) \(.headRefOid) \(.baseRefName) \(.headRepository.nameWithOwner)"')" \
     || { echo "❌ gh pr list failed for $branch" >&2; exit 1; }
+  [[ -z "$prs" ]] || rows="$(grep -c '' <<<"$prs")"
+  if [[ "$rows" -ge 100 ]]; then echo capped; return; fi # --limit 100 may have cut the branch's own PR off: it can't be judged
   while read -r state oid base head; do
     [[ -n "$state" && "$(lc "$head")" == "$origin_slug" ]] || continue
     if [[ "$state" == OPEN ]]; then echo open; return; fi
@@ -115,6 +119,7 @@ decide() {
     merged-other:*) echo "its PR merged into ${v#merged-other:}, not main" ;;
     closed) if [[ "$closed" == true ]]; then echo removable; else echo "its PR closed unmerged (use --include-closed)"; fi ;;
     open) echo "its PR is open" ;;
+    capped) echo "100 or more PRs share this branch name, so its own can't be told apart" ;;
     *) echo "no PR from origin's repository has this tip, or no PR" ;;
   esac
 }
@@ -127,11 +132,16 @@ while read -r ref; do
   b="${ref#refs/heads/}"
   [[ -n "$b" && "$b" != main ]] || continue
   bash "$check_name" "$b" >/dev/null 2>&1 || { keep "$b" "not a standard branch name"; continue; }
-  d="$(decide "$b" "$(git rev-parse "$ref")")" || exit 1
+  tip="$(git rev-parse "$ref")"
+  d="$(decide "$b" "$tip")" || exit 1
   if [[ "$d" != removable ]]; then keep "$b" "$d"; kept_local+="$b "; continue; fi
   wt="$(git worktree list --porcelain | awk -v ref="$ref" '/^worktree /{p=substr($0,10)} $0=="branch " ref{print p}')"
   stale=""
-  if [[ -n "$wt" && ! -d "$wt" ]]; then stale="$wt"; wt=""; fi # a folder deleted by hand: only git's stale entry for it is left
+  if [[ -n "$wt" && ! -e "$wt" ]]; then
+    # Deleted by hand, or out of reach (an unmounted drive, a parent folder without search permission)? Only a reachable parent says the first.
+    if [[ ! -d "$(dirname "$wt")" || ! -x "$(dirname "$wt")" ]]; then keep "$b" "its worktree's folder can't be reached ($wt)"; kept_local+="$b "; continue; fi
+    stale="$wt"; wt="" # only git's stale entry for it is left
+  fi
   if [[ -n "$wt" ]]; then
     if ! st="$(git -C "$wt" status --porcelain 2>/dev/null)"; then keep "$b" "its worktree can't be read ($wt)"; kept_local+="$b "; continue; fi
     if [[ -n "$st" ]]; then keep "$b" "its worktree has uncommitted changes"; kept_local+="$b "; continue; fi
@@ -143,7 +153,12 @@ while read -r ref; do
   fi
   echo "remove $b${wt:+ (worktree $wt)}"
   if [[ -n "$wt" ]] && ! run git worktree remove "$wt"; then keep "$b" "git could not remove its worktree"; kept_local+="$b "; failed=1; continue; fi
-  if ! run git branch -q -D "$b"; then keep "$b" "git could not delete the branch"; kept_local+="$b "; failed=1; continue; fi
+  # The branch goes only if it still holds the tip that was judged (a commit made since stays), as the origin branch's lease does.
+  if [[ "$dry" == true ]]; then echo "   would: git branch -q -D $b"
+  elif ! git update-ref -d "$ref" "$tip"; then
+    if [[ "$(git rev-parse "$ref" 2>/dev/null || true)" != "$tip" ]]; then keep "$b" "it has a commit that was made after it was judged"; else keep "$b" "git could not delete the branch"; fi
+    kept_local+="$b "; failed=1; continue
+  else git config --remove-section "branch.$b" 2>/dev/null || true; fi
   removed=$((removed + 1))
 done < <(git for-each-ref --format='%(refname)' refs/heads)
 
@@ -168,6 +183,6 @@ while read -r ref; do
   removed=$((removed + 1))
 done < <(git for-each-ref --format='%(refname)' refs/remotes/origin)
 
-[[ "$dry" == true ]] || git fetch --prune --quiet origin
+if [[ "$dry" != true ]] && ! git fetch --prune --quiet origin; then echo "❌ the closing fetch of origin failed" >&2; failed=1; fi
 echo "Done: $removed removed, $kept kept$([[ "$dry" == true ]] && echo " (dry run)")."
 [[ "$failed" == 0 ]] || exit 1

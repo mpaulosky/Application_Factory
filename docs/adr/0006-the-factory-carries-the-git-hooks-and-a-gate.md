@@ -28,4 +28,4 @@ clone, so CI runs the same gate for a push from a clone without hooks.
   `pnpm` on the first run, for the review's tests).
 - `scripts/gate.sh` is the Factory's own and is not overwritten by any Apply. The hooks and `check-branch-name.sh` are copies, kept in sync by the gate, as `dotfiles` does.
 - Not carried yet: Sandcastle, `scripts/watch-pr.sh`, `scripts/work-issue.sh` and `scripts/cleanup.sh` (Owned Template files that reach the Fleet by a Rollout). Each needs its own decision.
-Claude Review and PR Auto-Merge: ADR 0008. The local review: ADR 0010.
+  Claude Review and PR Auto-Merge: ADR 0008. The local review: ADR 0010.
