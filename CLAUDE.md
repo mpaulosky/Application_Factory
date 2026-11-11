@@ -37,7 +37,7 @@ The Factory carries the git hooks and a gate of its own (ADR 0006), Claude Revie
 ## Commands
 
 ```bash
-scripts/gate.sh                                               # the pre-push gate: its test, the review's tests, the copies' drift check, lint, the local review check, then test.sh
+scripts/gate.sh                                               # the pre-push gate (needs pnpm on the first run): its test, the review's tests, the copies' drift check, lint, the local review check, then test.sh
 .claude/skills/repo-ci-baseline/test.sh                       # all the Template's tests; needs actionlint, zizmor, yamllint, shellcheck, markdownlint-cli2, node, git
 .claude/skills/repo-ci-baseline/tests/sandcastle-check.test.sh # Sandcastle's type-check and tests on a throwaway Application; needs pnpm and the network
 .claude/skills/repo-ci-baseline/apply.sh --dry-run <repo>      # what Apply would write into an Application; writes nothing

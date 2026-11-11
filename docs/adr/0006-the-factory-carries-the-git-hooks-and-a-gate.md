@@ -24,6 +24,7 @@ copy that has drifted.
 - Commits are made in a linked worktree under `../Application_Factory-worktrees/`, and the hook refuses one in the primary checkout. `git config core.hooksPath .github/hooks` turns the hooks on
   in each clone; the setting is required, because git doesn't run any hook until it is on. `post-checkout` can only repair the setting and the execute bits after that; it can't bootstrap a fresh
 clone, so CI runs the same gate for a push from a clone without hooks.
-- A push is gated by `scripts/gate.sh`, so it runs `test.sh` and needs its tools (`actionlint`, `zizmor`, `yamllint`, `shellcheck`, `markdownlint-cli2`, `node`, `git`).
+- A push is gated by `scripts/gate.sh`, so it runs `test.sh` and needs its tools (`actionlint`, `zizmor`, `yamllint`, `shellcheck`, `markdownlint-cli2`, `node`, `git`, and
+  `pnpm` on the first run, for the review's tests).
 - `scripts/gate.sh` is the Factory's own and is not overwritten by any Apply. The hooks and `check-branch-name.sh` are copies, kept in sync by the gate, as `dotfiles` does.
 - Not carried yet: Sandcastle and `scripts/watch-pr.sh`. Each needs its own decision. Claude Review and PR Auto-Merge: ADR 0008. The local review: ADR 0010.

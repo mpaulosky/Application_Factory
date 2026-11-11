@@ -236,7 +236,7 @@ Fix the Critical, Warning and Advisory findings. For each one:
    - List every branch, constant, regex, cap and window the fix adds.
    - Write n-1, n and n+1 boundary tests for each.
    - Show that removing each one, or shifting it by one, fails a test (a mutation check): edit the line, see a test fail, restore it.
-     Where the repository has the hardening-review skill, its `mutate.py` ([the runner](../hardening-review/references/mutations.md)) does the same
+     Where the repository has the hardening-review skill, its `mutate.py` (the runner, in `.claude/skills/hardening-review/references/mutations.md`) does the same
      on a committed fix, but refuses a dirty file, so use it only after the commit.
    - Go through the **Edge-case checklist** in [lenses.md](lenses.md) on the lines the fix wrote.
 4. Commit the test and the fix together: `fix(<scope>): <Summary>`.

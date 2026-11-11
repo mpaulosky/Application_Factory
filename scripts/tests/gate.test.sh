@@ -146,14 +146,30 @@ check "unrelated histories are named, not reported as a missing origin/main" "$(
 check "unrelated histories don't call review.sh" "$([[ ! -e $repo/review-args ]] && echo 0 || echo 1)"
 
 # The review's stand-alone tests need tsx: without it and without pnpm the gate says how to get it, before anything else.
-repo="$(new_repo no-pnpm)"; printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/scripts/tests/gate.test.sh" 2>/dev/null || { mkdir -p "$repo/scripts/tests"; printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/scripts/tests/gate.test.sh"; }
+repo="$(new_repo no-pnpm)"; mkdir -p "$repo/scripts/tests"; printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/scripts/tests/gate.test.sh"
 chmod +x "$repo/scripts/tests/gate.test.sh"
 bare="$work/bare-bin"; mkdir -p "$bare"
-for tool in git env bash dirname; do ln -sf "$(command -v "$tool")" "$bare/$tool"; done
+for tool in git env bash dirname mkdir chmod; do ln -sf "$(command -v "$tool")" "$bare/$tool"; done
 status=0
 (cd "$repo" && env -u GATE_SKIP_SELF_TEST PATH="$bare" "$(command -v bash)" scripts/gate.sh >"$repo/out" 2>&1) || status=$?
 check "a missing pnpm fails the gate" "$([[ $status == 1 ]] && echo 0 || echo 1)"
 check "a missing pnpm says to run corepack enable pnpm" "$(grep -q 'corepack enable pnpm' "$repo/out" && echo 0 || echo 1)"
+
+# A pnpm that installs nothing leaves no tsx: the gate says so instead of dying on a missing binary; one that installs it gets past this step.
+repo="$(new_repo pnpm-no-tsx)"; mkdir -p "$repo/scripts/tests"; printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/scripts/tests/gate.test.sh"
+chmod +x "$repo/scripts/tests/gate.test.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$bare/pnpm"; chmod +x "$bare/pnpm"
+status=0
+(cd "$repo" && env -u GATE_SKIP_SELF_TEST PATH="$bare" "$(command -v bash)" scripts/gate.sh >"$repo/out" 2>&1) || status=$?
+check "a pnpm that installs no tsx fails the gate" "$([[ $status == 1 ]] && echo 0 || echo 1)"
+check "a pnpm that installs no tsx says so" "$(grep -q 'pnpm install did not install node_modules/.bin/tsx' "$repo/out" && echo 0 || echo 1)"
+repo="$(new_repo pnpm-with-tsx)"; mkdir -p "$repo/scripts/tests"; printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/scripts/tests/gate.test.sh"
+chmod +x "$repo/scripts/tests/gate.test.sh"
+printf '#!/usr/bin/env bash\nmkdir -p node_modules/.bin && printf "#!/usr/bin/env bash\\nexit 0\\n" > node_modules/.bin/tsx && chmod +x node_modules/.bin/tsx\n' > "$bare/pnpm"
+status=0
+(cd "$repo" && env -u GATE_SKIP_SELF_TEST PATH="$bare" "$(command -v bash)" scripts/gate.sh >"$repo/out" 2>&1) || status=$?
+check "a pnpm that installs tsx gets the gate past the install step" "$(! grep -q 'did not install\|pnpm isn.t installed' "$repo/out" && grep -q 'Copies of Template files\|copies match' "$repo/out" && echo 0 || echo 1)"
+rm -f "$bare/pnpm"
 
 repo="$(new_repo review-fails)"; stub_review "$repo"; with_origin "$repo"
 REVIEW_SKIP="" REVIEW_EXIT=1 run "$repo"
