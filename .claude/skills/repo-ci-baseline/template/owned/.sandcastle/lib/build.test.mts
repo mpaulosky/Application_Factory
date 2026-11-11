@@ -59,6 +59,7 @@ import { StalledStepError, TamperedWorktreeError } from "./errors.mts";
 import { gitSandboxFake } from "./git-sandbox-fake.mts";
 import type { HostReviewResult } from "./host-review.mts";
 import { RunLimits } from "./limits.mts";
+import { plainText } from "./plain-text.mts";
 import { PR_BODY_RULES } from "./prompts.mts";
 import { ledgerGitEnv, renderAdvisories, type Ledger } from "./review-ledger.mts";
 import type { SecretMatch } from "./scan.mts";
@@ -3279,6 +3280,98 @@ describe("publicErrorText", () => {
       publicErrorText("\u001b[31merror\u001b[0m: failed to push to 'https://x-access:abc123@github.com/o/r.git'", () => false),
       "error: failed to push to 'https://***@github.com/o/r.git'",
     );
+  });
+
+  it("checks the text as written and without its invisible characters, so a token split by one is checked whole", () => {
+    const checked: string[] = [];
+    const text = publicErrorText("token gh\u200bp_abcdef rejected\n\u202esecond line", (cleaned) => {
+      checked.push(cleaned);
+      return false;
+    });
+
+    assert.deepEqual(checked, ["token gh\u200bp_abcdef rejected\n\u202esecond line", "token ghp_abcdef rejected\nsecond line", "token ghp_abcdef rejected second line"]);
+    assert.equal(text, "token ghp_abcdef rejected\nsecond line");
+  });
+
+  it("returns a text unchanged when only the host's own zero-width spaces and an emoji's selector, which ADR 0010 keeps, are invisible in it", () => {
+    const rendered = plainText("see #12 on github.com @someone");
+    const emoji = "\u26a0\ufe0f check failed";
+
+    assert.notEqual(rendered, "see #12 on github.com @someone");
+    assert.equal(publicErrorText(rendered, () => false), rendered);
+    assert.equal(publicErrorText(emoji, () => false), emoji);
+  });
+
+  it("returns a text unchanged when its only other invisible characters are joiners where ADR 0010 keeps them", () => {
+    for (const kept of ["family \u{1f468}\u200d\u{1f469}\u200d\u{1f467} here", "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645", "press 1\ufe0f\u20e3 now"]) {
+      assert.equal(publicErrorText(kept, () => false), kept, JSON.stringify(kept));
+    }
+  });
+
+  it("returns a changed text when joiners or selectors pass the cap ADR 0010 keeps, or between letters", () => {
+    for (const hidden of ["a\u200db", "a\u200cb", "\u{1f468}\u200d".repeat(9) + "\u{1f469}", "\u26a0\ufe0f".repeat(9), "a\u0085b", "\u0085", "a\ufeffb", "a\ufe0f\u20e3"]) {
+      assert.notEqual(publicErrorText(hidden, () => false), hidden, JSON.stringify(hidden));
+    }
+    assert.equal(publicErrorText("a\ufeffb", () => false), "a b");
+    // What comes back is what both checks saw: a secret with a space in it, written with a byte-order mark, is withheld.
+    assert.match(publicErrorText("failure: alpha\ufeffbeta", (text) => text.includes("alpha beta")), /isn't shown/);
+    const mixed = "\u0645\u06cc\u200c\u062e @\u200bsomeone";
+    assert.equal(publicErrorText(mixed, () => false), mixed);
+  });
+
+  it("withholds a secret with a space in it that a longer run of whitespace hides, as plainText folds the run after the check", () => {
+    for (const hidden of ["failure: alpha  beta", "failure: alpha\nbeta", "failure: alpha\t\nbeta", "failure: alpha \u200bbeta"]) {
+      assert.match(publicErrorText(hidden, (text) => text.includes("alpha beta")), /isn't shown/, JSON.stringify(hidden));
+    }
+  });
+
+  it("still redacts a credential a joiner splits, and withholds a token one splits", () => {
+    assert.equal(publicErrorText("https\u200d://user:pw@host", () => false), "https://***@host");
+    assert.match(publicErrorText(`gh\u200dp_${"a".repeat(30)}`), /isn't shown/);
+  });
+
+  it("returns a changed text for hidden text the host did not add, so a caller comparing it with its input sees it", () => {
+    for (const hidden of ["a\u202eb", "a\u{e0041}b", "a\u200bb", "x\ufe0fy", "hello \u200b", "\u200b hi", "\u200b"]) {
+      assert.notEqual(publicErrorText(hidden, () => false), hidden, JSON.stringify(hidden));
+    }
+    assert.equal(publicErrorText("a\u202eb", () => false), "ab");
+    assert.equal(publicErrorText("\u200b", () => false), "");
+    assert.equal(publicErrorText("hello \u200b", () => false), "hello");
+  });
+
+  it("returns the redacted invisible-free text when a host space splits a URL scheme so only that view could redact the credential", () => {
+    assert.equal(publicErrorText("GH-\u200b1://user:pw@host", () => false), "GH-1://***@host");
+  });
+
+  it("withholds a token the as-written text holds though the invisible-free text does not", () => {
+    assert.match(publicErrorText(`x\u200bghp_${"a".repeat(30)}`), /isn't shown/);
+    const seenByPredicate: string[] = [];
+    publicErrorText("x\u200by", (text) => (seenByPredicate.push(text), false));
+    assert.deepEqual(seenByPredicate, ["x\u200by", "xy", "xy"]);
+    assert.match(publicErrorText("x\u200by", (text) => text.includes("\u200b")), /isn't shown/);
+  });
+
+  it("redacts a URL credential before the secret check, so a token used as one is redacted, not withheld", () => {
+    const checked: string[] = [];
+    const text = publicErrorText(`https://ghp_${"a".repeat(30)}@github.com/o/r`, (value) => (checked.push(value), false));
+
+    assert.equal(text, "https://***@github.com/o/r");
+    assert.deepEqual(checked, ["https://***@github.com/o/r", "https://***@github.com/o/r", "https://***@github.com/o/r"]);
+  });
+
+  it("redacts a URL credential though a zero-width space splits the scheme", () => {
+    const text = publicErrorText("failed: https\u200b://x-access:abc123@github.com/o/r.git", () => false);
+
+    assert.ok(!text.includes("abc123"), text);
+    assert.match(text, /\*\*\*@github\.com\/o\/r\.git/);
+  });
+
+  it("still takes a colour code out whole, though its escape is an invisible character", () => {
+    assert.equal(publicErrorText("\u001b[31mred\u001b[0m", () => false), "red");
+  });
+
+  it("withholds a real token shape split by a zero-width space", () => {
+    assert.match(publicErrorText(`failed with gh\u200bp_${"a".repeat(30)}`), /isn't shown/);
   });
 
   it("withholds an error that holds a secret", () => {

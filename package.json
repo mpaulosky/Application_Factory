@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "devDependencies": {
+    "tsx": "^4.23.15"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "engines": {
+    "npm": "please-use-pnpm"
+  },
+  "packageManager": "pnpm@12.6.0"
+}

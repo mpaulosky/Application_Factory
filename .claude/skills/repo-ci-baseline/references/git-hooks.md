@@ -102,7 +102,7 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
   repo's own `scripts/`, `.github/ci/` and skills that isn't told its repository (not the Owned Baseline files;
   [gotchas.md](gotchas.md)). Then it checks that the branch's diff passed the local review (`scripts/review.sh check`, [pre-push-review.md](pre-push-review.md)) in a repo that
   has `.sandcastle/lib/review-ledger.mts`; `GATE_SKIP_REVIEW=1` skips that for gate runs you start yourself (the hook drops the variable, so a push never
-  skips it), and it is the one check CI doesn't repeat.
+  skips it; it drops `GATE_SKIP_SELF_TEST` too, the switch of a gate that tests itself), and it is the one check CI doesn't repeat.
   Then it runs `bash scripts/sync-copilot-review.sh --check` when the repo has the script: the Copilot review instructions must match the
   code-review skill, and a repo without the skill passes ([copilot-review-sync.md](copilot-review-sync.md)).
   Between the lints and the build it runs the Seed `.github/ci/gate-checks.sh <merge-base>` when the repo has one:

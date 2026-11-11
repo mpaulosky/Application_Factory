@@ -4,8 +4,9 @@
 // "Review notes"). Kept apart from lib/intake.mts so a command-line tool,
 // lib/review-ledger.mts, can use it without loading Sandcastle.
 
-// A zero-width space after @, a # or GH- before digits, and the dot of
-// github.com, so none mentions anyone or links another issue or PR.
+// A zero-width space after an @ before an ASCII letter or digit, after a # or GH- before a digit (GH- in any case, at the start of a word), and
+// before the dot of github.com (in any case, at the start of a word, with a word boundary after com), so none mentions anyone or links
+// another issue or PR. The review command's `printable` (lib/review-ledger.mts) keeps exactly these.
 export function breakReferences(text: string): string {
   return text
     .replace(/@(?=[A-Za-z0-9])/g, "@\u200B")
@@ -13,6 +14,38 @@ export function breakReferences(text: string): string {
     .replace(/\b(GH)-(?=\d)/gi, "$1-\u200B")
     .replace(/\b(github)\.(com)\b/gi, "$1\u200B.$2");
 }
+
+// `text` without the invisible characters a caller treats as the host's own: the zero-width spaces breakReferences puts in a mention or a reference,
+// and the variation selector (U+FE0F) of a keycap (after 0-9, # or *, before U+20E3), which ADR 0010's terminal rules don't keep. A selector after a
+// pictograph stays: hasHiddenText judges it, and counts it against its cap. Anything invisible left in what this returns was not put there by the host.
+export function withoutHostInvisible(text: string): string {
+  // Spelled out without the i flag: under i and u together [A-Za-z] also matches U+017F and U+212A, which breakReferences never breaks before.
+  return text.replace(/(?<=@)\u200B(?=[A-Za-z0-9])|(?<=#)\u200B(?=\d)|(?<=\b[Gg][Hh]-)\u200B(?=\d)|(?<=\b[Gg][Ii][Tt][Hh][Uu][Bb])\u200B(?=\.[Cc][Oo][Mm]\b)|(?<=[0-9#*])\uFE0F(?=\u20E3)/gu, "");
+}
+
+// `text` with every control, format, private-use and unassigned character, lone surrogate and default-ignorable character (an
+// escape, a bell, a bidi override, a zero-width space or joiner, a variation selector, a Hangul filler, U+2800) removed, and each
+// run of whitespace made one space. The text of a finding reaches a terminal (the gate's message, the report) and a PR
+// description, and a reviewer agent that read hostile diff text may have written an escape sequence, a bidi override or an
+// invisible payload into it. A run that holds whitespace (JS `\s`, which includes U+FEFF and the line separators) becomes a space,
+// so words around a newline stay apart; one that doesn't is dropped, which joins the words around it. A joiner in an emoji
+// sequence or in Persian or Indic text goes too: the loss is accepted for words that are published or printed raw.
+export function stripControl(text: string): string {
+  return text.replace(/[\p{C}\p{Default_Ignorable_Code_Point}\u2800\s]+/gu, (run) => (/\s/u.test(run) ? " " : ""));
+}
+
+// `text` without the control, format, private-use and default-ignorable characters stripControl removes, but keeping its whitespace as it is (a
+// newline stays a newline). For a text that is checked for a secret before it is published: the check must see the text as a reader gets it, or a token
+// split by an invisible character passes the check and is whole once plainText has removed the character.
+export function withoutInvisible(text: string): string {
+  return text.replace(/[\p{C}\p{Default_Ignorable_Code_Point}\u2800]/gu, (character) => (/\s/u.test(character) ? character : ""));
+}
+
+// What GitHub renders as a link or an image, or fetches: an address with a scheme (`://`, `mailto:`), a www. address (GitHub links one anywhere after a space or
+// an underscore too, in a path as well as in prose), an inline, reference or image link (`](`, `][`, `![`), and a link reference definition (`]:`). Text that holds
+// one is not published to a public page: a reviewer that read untrusted text can be made to put one in a summary, a fix or a reason, and the host would publish it
+// under its own account. Over-reading only leaves more out.
+export const RENDERED_LINK = /:\/\/|mailto:|www\.|\]\(|\]\[|!\[|\]:/i;
 
 // Untrusted `text` as one line of plain Markdown for a GitHub comment or
 // description: intake's words to an issue's author, a follow-up reply, the
@@ -24,11 +57,12 @@ export function breakReferences(text: string): string {
 // < (no HTML tag, such as an unclosed <details>, or comment to hide them);
 // mentions and cross-references are broken (see breakReferences); and a
 // leading Markdown marker is escaped so it can't start a list, heading, quote
-// or ~~~ code fence.
+// or ~~~ code fence. Control and format characters are removed (stripControl).
+// It does not stop a link or an image: a caller that publishes the text to a
+// public page leaves out text that holds one (RENDERED_LINK).
 export function plainText(text: string): string {
   return breakReferences(
-    text
-      .replace(/\s+/g, " ")
+    stripControl(text)
       .trim()
       .replace(/[\\`]/g, "\\$&")
       .replace(/&/g, "&amp;")

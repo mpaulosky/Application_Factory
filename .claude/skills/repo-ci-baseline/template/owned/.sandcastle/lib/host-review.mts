@@ -10,9 +10,9 @@ import { isRoleTimeout } from "./agents.mts";
 import { MAX_REVIEWERS_PER_ROUND, REVIEW_FIX_ROUNDS, REVIEW_WALL_CLOCK_MINUTES, REVIEWER_ATTEMPTS, SESSION_REPLY_MARKER } from "./config.mts";
 import { TimeBudgetStopError, UncountedStopError } from "./errors.mts";
 import { decisionsMarkdown, leadPrompt, reviewerPrompt, reviewFixPrompt, reviewTag } from "./host-review-prompts.mts";
-import { plainText } from "./plain-text.mts";
+import { plainText, RENDERED_LINK, stripControl } from "./plain-text.mts";
 import { hasHiddenText } from "./status.mts";
-import { FINDING_PATH_SHAPE, isSecurity, patchPaths, renderAdvisories, severityOf, sizeWarning, type Ledger, type PreparedRound, type ReviewInput } from "./review-ledger.mts";
+import { findingPath, findingWords, isSecurity, patchPaths, renderAdvisories, severityOf, sizeWarning, type Ledger, type PreparedRound, type ReviewInput } from "./review-ledger.mts";
 
 // One row of lenses.md's table (or of a repo's own lenses table).
 export type Lens = { name: string; appliesTo: string; row: string };
@@ -86,14 +86,14 @@ export function reviewersFor(files: readonly string[], lenses: readonly Lens[]):
 // `security` is the reviewer's own call: true for a weakness, or when unsure; only an explicit false lets the PR note list the finding.
 export const reviewerFindingSchema = z
   .object({
-    lens: z.string().trim().min(1),
-    path: z.string().trim().min(1).regex(FINDING_PATH_SHAPE, "a path has no whitespace but single spaces, and no <, > or backtick"),
+    lens: findingWords(),
+    path: findingPath(),
     line: z.number().int().nonnegative(),
     severity: z.enum(["critical", "warning", "advisory"]),
-    summary: z.string().trim().min(1),
-    fix: z.string(),
+    summary: findingWords(),
+    fix: z.string().transform(stripControl),
     needsPerson: z.boolean(),
-    why: z.string(),
+    why: z.string().transform(stripControl),
     security: z.boolean().optional(),
   })
   .strict();
@@ -240,7 +240,7 @@ export function triageRound({
         ...earlier,
         lens: (lenses.includes(found.lens) ? lenses : [...lenses, found.lens]).join("/"),
         severity: RANK[found.severity] > RANK[earlier.severity] ? found.severity : earlier.severity,
-        fix: earlier.fix.trim() === "" ? found.fix : earlier.fix,
+        fix: stripControl(earlier.fix).trim() === "" ? found.fix : earlier.fix,
         needsPerson: earlier.needsPerson || found.needsPerson,
         // Not a weakness only when every reviewer that raised it said so.
         security: earlier.security === false && found.security === false ? false : true,
@@ -264,7 +264,7 @@ export function triageRound({
       status: "open",
       test: null,
       reason: null,
-      fix: found.fix.trim() === "" ? `Decide with the reviewer's reason: ${found.why.trim() === "" ? "none was given" : found.why.trim()}` : found.fix,
+      fix: stripControl(found.fix).trim() === "" ? `Decide with the reviewer's reason: ${stripControl(found.why).trim() === "" ? "none was given" : stripControl(found.why).trim()}` : found.fix,
       needsPerson: found.needsPerson,
       fixable: !found.needsPerson && !reviewOnly,
     };
@@ -303,7 +303,7 @@ export function applyOutcomes(
   return findings.map(({ needsPerson: _needsPerson, fixable, ...open }) => {
     const outcome = outcomes.find((candidate) => candidate.id === open.id);
     if (!fixable || outcome === undefined) return open;
-    const reason = outcome.reason?.trim() ? outcome.reason.trim() : null;
+    const reason = stripControl(outcome.reason ?? "").trim() || null;
     if (outcome.status === "dismissed") {
       // A Warning or a security finding is never cleared on the backend's word alone: the host can't check the line it cites, so the
       // finding stays open, counted in the PR note, for a person.
@@ -841,11 +841,6 @@ export function openFindingsNote(ledger: Ledger, readPaths: ReadonlySet<string>,
 const ADVISORY_ISSUE_FINDINGS = 20;
 const ADVISORY_LINE_LIMIT = 2000;
 
-// What GitHub renders as a link or an image, or fetches: an address with a scheme (`://`, `mailto:`), a www. address (GitHub links one anywhere after a space or
-// an underscore too, in a path as well as in prose), an inline, reference or image link (`](`, `][`, `![`), and a link reference definition (`]:`). A finding whose
-// line holds one is not published: a reviewer that read untrusted text can be made to put one in a summary or fix, and the host would publish it under its own account.
-const RENDERED_LINK = /:\/\/|mailto:|www\.|\]\(|\]\[|!\[|\]:/i;
-
 // The public follow-up issue's body for the review's open Advisory findings (review-ledger.mts#renderAdvisories), held to the PR note's rules: a
 // finding is listed only when its path is one of the files the review read and is made of plain file-name characters, its line (id, place, summary and fix)
 // is no longer than ADVISORY_LINE_LIMIT and holds no link or image GitHub would render (RENDERED_LINK), and `publishable` leaves that line as it is
@@ -854,9 +849,12 @@ const RENDERED_LINK = /:\/\/|mailto:|www\.|\]\(|\]\[|!\[|\]:/i;
 // fix) of the findings listed so far and the next one, never of the rendered line, whose zero-width spaces the host adds itself after an @, a # or "github.com".
 // So a branch that holds hidden text leaves every finding out (and the body empty), and the issue as a whole keeps no more than eight joiners and no more than eight private-use or unassigned
 // code points, as one text does, and no run of more than eight marks: a finding that would exceed that is left out. A next-line character (U+0085) is left
-// out too, since terminalText reads it as a space but plainText, which writes the issue, does not. `publishable` sees the finding's rendered line, then its path, summary and fix as the reviewer wrote them (trimmed, since publicError trims), never the header with the branch name.
-// At most ADVISORY_ISSUE_FINDINGS are listed; the findings left out are counted, and stay in the local review record. Empty when nothing can be listed.
+// out too, as hidden text. The ledger's schema and plainText (stripControl) remove it, so only a ledger built by hand can hold one; the check stays for that. `publishable` sees the finding's rendered line, then its path, summary and fix as the reviewer wrote them (trimmed, since publicError trims; publicErrorText also checks them without their invisible characters), never the header with the branch name.
+// A branch name that GitHub would render as a link leaves the body empty (checked below). At most ADVISORY_ISSUE_FINDINGS are listed; the findings left out are counted, and stay in the local review record. Empty when nothing can be listed.
 export function advisoryIssueBody(ledger: Ledger, readPaths: ReadonlySet<string>, publishable: (text: string) => boolean = () => true): string {
+  // The header names the branch in public text, as plainText shows it (without the characters stripControl removes): a branch that holds anything
+  // RENDERED_LINK matches (a scheme address, a www. address, an inline link), as written or once stripped, leaves every finding out.
+  if (RENDERED_LINK.test(ledger.branch) || RENDERED_LINK.test(stripControl(ledger.branch))) return "";
   const rendered = ledger.findings
     .map((finding) => ({ finding, text: renderAdvisories({ ...ledger, findings: [finding] }) }))
     .filter((entry) => entry.text !== "");
@@ -868,7 +866,7 @@ export function advisoryIssueBody(ledger: Ledger, readPaths: ReadonlySet<string>
     const line = text.split("\n").find((candidate) => candidate.startsWith("- ")) ?? "";
     const together = `${shown} ${finding.id} ${finding.path} ${finding.summary} ${finding.fix ?? ""}`;
     if (!readPaths.has(path) || !SAFE_NOTE_PATH.test(path) || line.length > ADVISORY_LINE_LIMIT || RENDERED_LINK.test(line)) continue;
-    // U+0085 is whitespace to terminalText but not to plainText, which would publish it raw. The secret check sees each field as the reviewer wrote it as well as the
+    // U+0085 is whitespace to terminalText; a ledger built by hand (not parsed by the schema) could still hold one. The secret check sees each field as the reviewer wrote it as well as the
     // rendered line: plainText escapes & < \ ` and breaks @ and #, so a secret holding one of them no longer matches there.
     if (hasHiddenText(together) || together.includes("\u0085") || !publishable(line)) continue;
     if (![finding.path, finding.summary, finding.fix ?? ""].every((field) => publishable(field.trim()))) continue;

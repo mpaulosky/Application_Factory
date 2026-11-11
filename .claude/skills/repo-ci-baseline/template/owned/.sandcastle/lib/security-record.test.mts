@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import {
+  replaceFile,
   fingerprint,
   markAccepted,
   pinLedgerGit,
@@ -54,6 +55,23 @@ const input = (overrides: Partial<SecurityInput> = {}): SecurityInput => ({
   fix: "Resolve the path and refuse one outside the folder.",
   ...overrides,
 });
+
+// Whether a directory without write permission refuses a file here (not so for root, or a file system that ignores modes).
+function canNotWriteInReadOnlyDir(): boolean {
+  const dir = mkdtempSync(join(tmpdir(), "ro-probe-"));
+  try {
+    chmodSync(dir, 0o500);
+    try {
+      writeFileSync(join(dir, "x"), "");
+      return false;
+    } catch {
+      return true;
+    }
+  } finally {
+    chmodSync(dir, 0o700);
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+}
 
 const context = { pr: 12, slug: "o/r" };
 const ledger = { branch: "feature/1-thing" };
@@ -222,6 +240,44 @@ describe("an entry", () => {
     const text = entryText(entryFiles()[0] ?? "");
     assert.match(text, /^- Status: open$/m);
     assert.match(text, /^## Pinned by\n\nNothing yet: the entry is open\.$/m);
+  });
+
+  // The heading is cut to 80 characters; the whole text is under ## Weakness.
+  const heading = (file: string) => /^# \d+: (.*)$/m.exec(entryText(file))?.[1] ?? "";
+  const loneSurrogate = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+
+  for (const before of [78, 79, 80]) {
+    it(`cuts the heading by code point, not through an astral character that starts at the ${before + 1}th (${before} before it)`, () => {
+      record([input({ summary: `${"a".repeat(before)}\u{1F600}\u{1F600}tail` })]);
+
+      const cut = heading(entryFiles()[0] ?? "");
+      assert.doesNotMatch(cut, loneSurrogate);
+      assert.ok(!cut.includes("\ufffd"));
+      assert.ok([...cut].length <= 80, `${[...cut].length} characters`);
+      assert.match(entryText(entryFiles()[0] ?? ""), new RegExp(`^## Weakness\\n\\n${"a".repeat(before)}\u{1F600}\u{1F600}tail$`, "mu"));
+    });
+  }
+
+  it("cuts the heading at 80 characters exactly", () => {
+    record([input({ summary: "b".repeat(200) })]);
+
+    assert.equal(heading(entryFiles()[0] ?? ""), "b".repeat(80));
+  });
+
+  for (const before of [75, 76, 77, 78, 79]) {
+    it(`doesn't leave half of a character reference in the heading (${before} characters before the &)`, () => {
+      record([input({ summary: `${"c".repeat(before)}&rest of the text` })]);
+
+      const cut = heading(entryFiles()[0] ?? "");
+      assert.doesNotMatch(cut, /&[a-z]*$/);
+      assert.ok(cut.startsWith("c".repeat(before)));
+    });
+  }
+
+  it("keeps a whole character reference that ends exactly at the cut", () => {
+    record([input({ summary: `${"d".repeat(75)}&rest` })]);
+
+    assert.equal(heading(entryFiles()[0] ?? ""), `${"d".repeat(75)}&amp;`);
   });
 
   it("keeps a weakness's text on one line, so it can't add a heading or a field", () => {
@@ -449,6 +505,156 @@ describe("markAccepted", () => {
   });
 });
 
+// The entries are replaced whole, by a rename, so a reader or a crash never sees a truncated one.
+describe("an entry that is updated", () => {
+  const inode = (file: string) => lstatSync(join(repo, SECURITY_DIR, file)).ino;
+  const tmpFiles = () => readdirSync(join(repo, SECURITY_DIR)).filter((name) => name.endsWith(".tmp"));
+
+  it("is replaced by a new file when an open weakness is recorded fixed, with its mode kept private and no temp file left", () => {
+    record([input({ status: "open", test: null })]);
+    const file = entryFiles()[0] ?? "";
+    const before = inode(file);
+
+    record([input({ id: "R2" })]);
+
+    assert.notEqual(inode(file), before);
+    assert.equal(lstatSync(join(repo, SECURITY_DIR, file)).mode & 0o777, 0o600);
+    assert.match(entryText(file), /^- Status: fixed$/m);
+    assert.deepEqual(tmpFiles(), []);
+  });
+
+  it("is replaced by a new file when it is accepted", () => {
+    record([input({ status: "open", test: null })]);
+    const file = entryFiles()[0] ?? "";
+    const before = inode(file);
+
+    markAccepted(repo, { path: input().path, summary: input().summary }, "Because.");
+
+    assert.notEqual(inode(file), before);
+    assert.equal(lstatSync(join(repo, SECURITY_DIR, file)).mode & 0o777, 0o600);
+    assert.match(entryText(file), /^- Status: accepted$/m);
+    assert.deepEqual(tmpFiles(), []);
+  });
+
+  it("keeps the old text, and leaves no temp file, when the new text can't be written", { skip: !canNotWriteInReadOnlyDir() }, () => {
+    record([input({ status: "open", test: null })]);
+    const file = entryFiles()[0] ?? "";
+    const before = entryText(file);
+    chmodSync(join(repo, SECURITY_DIR), 0o500);
+    try {
+      assert.throws(() => markAccepted(repo, { path: input().path, summary: input().summary }, "Because."));
+    } finally {
+      chmodSync(join(repo, SECURITY_DIR), 0o700);
+    }
+
+    assert.equal(entryText(file), before);
+    assert.deepEqual(tmpFiles(), []);
+  });
+});
+
+// Two writers: a file with the number nextId chose appears before the entry is made.
+describe("recordSecurity when another writer takes a number first", () => {
+  it("tries the next number, and still writes every other finding", () => {
+    let taken = false;
+    const outcome = recordSecurity(repo, ledger, [input(), input({ id: "R2", path: "b.sh", summary: "Other." })], context, {
+      afterNextId: (id) => {
+        if (taken) return;
+        taken = true;
+        writeFileSync(join(repo, SECURITY_DIR, `${id}-the-upload-handler-writes-outside-the.md`), "- Status: fixed\n", { flag: "wx" });
+      },
+    });
+
+    assert.deepEqual(outcome.warnings, []);
+    assert.equal(outcome.written.length, 2);
+    assert.deepEqual(Object.keys(outcome.entries).sort(), ["R1", "R2"]);
+    assert.equal(new Set(Object.values(outcome.entries)).size, 2);
+  });
+
+  // The number is chosen again up to five times: four collisions still write the entry, five give up on that finding alone.
+  for (const [collisions, written] of [[4, true], [5, false]] as const) {
+    it(`${written ? "writes" : "gives up on"} a finding after ${collisions} numbers taken in a row, and still writes the next`, () => {
+      let taken = 0;
+      const outcome = recordSecurity(repo, ledger, [input(), input({ id: "R2", path: "b.sh", summary: "Other." })], context, {
+        afterNextId: (id) => {
+          if (taken >= collisions) return;
+          taken += 1;
+          writeFileSync(join(repo, SECURITY_DIR, `${id}-the-upload-handler-writes-outside-the.md`), "- Status: fixed\n", { flag: "wx" });
+        },
+      });
+
+      assert.equal("R1" in outcome.entries, written);
+      assert.equal("R2" in outcome.entries, true);
+      assert.equal(outcome.warnings.length, written ? 0 : 1);
+      if (!written) assert.match(outcome.warnings.join("\n"), /R1.*taken by another writer/);
+    });
+  }
+
+  const tmpIn = () => readdirSync(join(repo, SECURITY_DIR)).filter((name) => name.endsWith(".tmp"));
+
+  it("leaves no temp file after a number was taken and retried", () => {
+    let taken = false;
+    record([input()], context);
+    recordSecurity(repo, ledger, [input({ id: "R2", path: "b.sh", summary: "Other." })], context, {
+      afterNextId: (id) => {
+        if (taken) return;
+        taken = true;
+        writeFileSync(join(repo, SECURITY_DIR, `${id}-other.md`), "- Status: fixed\n", { flag: "wx" });
+      },
+    });
+
+    assert.deepEqual(tmpIn(), []);
+  });
+
+  it("writes the entry in place, whole and mode 0600, when the file system can't link", () => {
+    const outcome = recordSecurity(repo, ledger, [input()], context, {
+      link: () => {
+        throw Object.assign(new Error("not permitted"), { code: "EPERM" });
+      },
+    });
+
+    assert.deepEqual(outcome.warnings, []);
+    assert.equal(outcome.written.length, 1);
+    const file = entryFiles()[0] ?? "";
+    assert.match(entryText(file), /^# 0001: /);
+    assert.equal(statSync(join(repo, SECURITY_DIR, file)).mode & 0o777, 0o600);
+    assert.deepEqual(tmpIn(), []);
+  });
+
+  it("tries the next number when the in-place write meets a file another writer made", () => {
+    let taken = false;
+    const outcome = recordSecurity(repo, ledger, [input()], context, {
+      afterNextId: (id) => {
+        if (taken) return;
+        taken = true;
+        writeFileSync(join(repo, SECURITY_DIR, `${id}-the-upload-handler-writes-outside-the.md`), "- Status: fixed\n", { flag: "wx" });
+      },
+      link: () => {
+        throw Object.assign(new Error("not permitted"), { code: "EPERM" });
+      },
+    });
+
+    assert.deepEqual(outcome.warnings, []);
+    assert.equal(outcome.written.length, 1);
+    assert.equal(entryFiles().length, 2);
+    assert.deepEqual(tmpIn(), []);
+  });
+
+  it("warns, and writes the other findings, when one entry can't be written", () => {
+    let calls = 0;
+    const outcome = recordSecurity(repo, ledger, [input(), input({ id: "R2", path: "b.sh", summary: "Other." })], context, {
+      afterNextId: () => {
+        calls += 1;
+        if (calls === 1) throw new Error("disk full");
+      },
+    });
+
+    assert.equal(outcome.warnings.length, 1);
+    assert.match(outcome.warnings.join("\n"), /R1.*disk full/);
+    assert.equal(outcome.written.length, 1);
+    assert.deepEqual(Object.keys(outcome.entries), ["R2"]);
+  });
+});
+
 describe("renderSecurityList", () => {
   it("says there are none for an empty record", () => {
     assert.equal(renderSecurityList([]), "No security entries.");
@@ -484,5 +690,64 @@ describe("renderSecurityList", () => {
 
     assert.equal(renderSecurityList(entries).trim().split("\n").length, 1);
     assert.equal(renderSecurityList(entries).split("\t").length, 5);
+  });
+});
+
+describe("replaceFile", () => {
+  it("replaces a symlink at the path instead of writing through it", () => {
+    const target = join(root, "target.txt");
+    writeFileSync(target, "keep");
+    const file = join(root, "entry.md");
+    symlinkSync(target, file);
+
+    replaceFile(file, "new");
+
+    assert.equal(readFileSync(target, "utf8"), "keep");
+    assert.equal(lstatSync(file).isSymbolicLink(), false);
+    assert.equal(readFileSync(file, "utf8"), "new");
+  });
+
+  it("throws when the directory is gone", () => {
+    assert.throws(() => replaceFile(join(root, "missing", "entry.md"), "x"));
+  });
+
+  it("removes its temp file when the rename fails after the temp file was written", () => {
+    const target = join(root, "entry.md");
+    mkdirSync(join(target, "inner"), { recursive: true });
+
+    assert.throws(() => replaceFile(target, "x"));
+
+    assert.deepEqual(readdirSync(root).filter((name) => name.endsWith(".tmp")), []);
+    assert.equal(lstatSync(target).isDirectory(), true);
+  });
+});
+
+describe("renderSecurityList with a hand-edited path", () => {
+  it("shows a control, format or line-separator character as ?, so the row stays one line", () => {
+    mkdirSync(join(repo, SECURITY_DIR));
+    writeFileSync(join(repo, SECURITY_DIR, "0001-a.md"), "# 0001: A\n\n- Status: fixed\n- Lens: Security\n- Path: a.sh\n");
+    const entries = readEntries(repo).map((entry) => ({ ...entry, path: "a\u001b\u202e\u2028b" }));
+
+    const row = renderSecurityList(entries).trim();
+
+    assert.equal(row.split("\n").length, 1);
+    assert.equal(row.split("\t")[4], "a???b");
+  });
+});
+
+describe("recordSecurity when the entry holding the weakness can't be updated", () => {
+  it("warns, and counts the finding as neither repeated nor recorded", () => {
+    record([input({ status: "open", test: null })]);
+
+    const outcome = recordSecurity(repo, ledger, [input()], context, {
+      beforeUpdate: () => {
+        throw new Error("disk full");
+      },
+    });
+
+    assert.equal(outcome.warnings.length, 1);
+    assert.match(outcome.warnings.join("\n"), /R1.*disk full/);
+    assert.deepEqual(outcome.repeated, []);
+    assert.equal("R1" in outcome.entries, false);
   });
 });

@@ -14,12 +14,12 @@
 // read-only folder there (protectedRecordMounts in host-safety.mts). Entry text is data: a reviewer is handed an entry's id,
 // lens, path and status only, never its words.
 //
-// The writers never throw for an environment problem (no main worktree, a symlinked directory, a directory git doesn't
+// recordSecurity never throws for an environment problem (no main worktree, a symlinked directory, a directory git doesn't
 // ignore, a write error): the ledger is what the gate checks, so a record that can't be written is a warning for the person,
-// not a failed review.
+// not a failed review. markAccepted, which `accept` calls, lets a write error through for its caller to report.
 import { hostExecFileSync } from "./host-limit.mts";
-import { createHash } from "node:crypto";
-import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { chmodSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { plainText } from "./plain-text.mts";
 import type { Ledger } from "./review-ledger.mts";
@@ -195,8 +195,10 @@ const pinOf = (finding: SecurityInput) =>
 // An entry's text. Every field goes through plainText, so a summary can't start a line that reads as a heading or a field.
 function entryText(id: string, finding: SecurityInput, branch: string, context: { pr?: number; slug: string }): string {
   const weakness = plainText(finding.summary);
+  // Cut by code point, not UTF-16 unit, and not inside a character reference plainText wrote (&amp; or &lt;): the whole text is under ## Weakness.
+  const heading = [...weakness].slice(0, 80).join("").replace(/&[a-z]*$/i, "");
   return [
-    `# ${id}: ${weakness.slice(0, 80)}`,
+    `# ${id}: ${heading}`,
     "",
     `- Status: ${finding.status}`,
     `- Lens: ${plainText(finding.lens)}`,
@@ -218,6 +220,67 @@ function entryText(id: string, finding: SecurityInput, branch: string, context: 
     pinOf(finding),
     "",
   ].join("\n");
+}
+
+// Replace the file at `path` with `text` whole: a temp file beside it, renamed over it, so a reader or a crash never sees a
+// truncated entry, and a symlink put at `path` is replaced, never written through. Throws on a write error, with no temp file left.
+export function replaceFile(path: string, text: string): void {
+  const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  try {
+    writeFileSync(temp, text, { flag: "wx", mode: 0o600 });
+    renameSync(temp, path);
+  } catch (error) {
+    rmSync(temp, { force: true });
+    throw error;
+  }
+}
+
+// How many numbers a new entry tries when another writer takes the one it chose.
+const ENTRY_NUMBER_TRIES = 5;
+
+// Test seams: `afterNextId` is called with the number chosen, before the entry is made; `link` stands in for the hard link (linkSync); `beforeUpdate` is called with an entry's path before an open entry is marked fixed.
+export type RecordHooks = { afterNextId?: (id: string) => void; link?: (from: string, to: string) => void; beforeUpdate?: (path: string) => void };
+
+// Make a new entry, never over a file that is there, and whole at its final name: the text is written to a temp file and hard-linked to the
+// name (a link fails with EEXIST rather than replacing), so a reader never sees it empty or half written. A name another writer made first
+// (EEXIST) means the number is taken: it is chosen again. The numbers are otherwise kept apart by the ledger lock every caller holds, and
+// by nextId counting any file that starts with a number, a hand-made one too. When the filesystem can't link, the entry is created in place.
+function createEntry(
+  directory: string,
+  finding: SecurityInput,
+  branch: string,
+  context: { pr?: number; slug: string },
+  hooks: RecordHooks,
+): { id: string; file: string; path: string } {
+  for (let attempt = 0; attempt < ENTRY_NUMBER_TRIES; attempt += 1) {
+    const id = nextId(directory);
+    const file = `${id}-${slugOf(finding.summary)}.md`;
+    const path = join(directory, file);
+    const text = entryText(id, finding, branch, context);
+    const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+    try {
+      hooks.afterNextId?.(id);
+      writeFileSync(temp, text, { flag: "wx", mode: 0o600 });
+      try {
+        (hooks.link ?? linkSync)(temp, path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") throw error;
+        // A file system that can't link: write the name in place, and remove what a failed write left (never a file another writer made).
+        try {
+          writeFileSync(path, text, { flag: "wx", mode: 0o600 });
+        } catch (writeError) {
+          if ((writeError as NodeJS.ErrnoException).code !== "EEXIST") rmSync(path, { force: true });
+          throw writeError;
+        }
+      }
+      return { id, file, path };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    } finally {
+      rmSync(temp, { force: true });
+    }
+  }
+  throw new Error(`every entry number it tried was taken by another writer (${ENTRY_NUMBER_TRIES} tries)`);
 }
 
 // `text` with the body of its `## heading` section replaced.
@@ -255,6 +318,7 @@ export function recordSecurity(
   ledger: Pick<Ledger, "branch">,
   findings: SecurityInput[],
   context: { pr?: number; slug: string },
+  hooks: RecordHooks = {},
 ): SecurityOutcome {
   const outcome: SecurityOutcome = { written: [], repeated: [], entries: {}, warnings: [] };
   if (findings.length === 0) return outcome;
@@ -276,33 +340,35 @@ export function recordSecurity(
     chmodSync(directory, 0o700);
     const known = entriesIn(directory);
     for (const finding of findings) {
-      const print = fingerprint(finding.path, finding.summary);
-      let holder = known.find((entry) => holdsWeakness(entry) && entry.fingerprint === print);
-      if (finding.repeats !== undefined) {
-        const named = known.find((entry) => holdsWeakness(entry) && Number(entry.id) === Number(finding.repeats));
-        if (named === undefined) outcome.warnings.push(`${finding.id} says it repeats ${finding.repeats}, but no entry has that number; recorded by its text instead`);
-        else holder = named;
-      }
-      if (holder !== undefined) {
-        outcome.repeated.push({ finding: finding.id, entry: holder.id });
-        outcome.entries[finding.id] = holder.id;
-        if (holder.status === "open" && finding.status === "fixed") {
-          let text = withStatus(readFileSync(holder.path, "utf8"), "fixed");
-          text = withSection(text, "Policy", policyOf(finding));
-          text = withSection(text, "Pinned by", pinOf(finding));
-          writeFileSync(holder.path, text);
-          holder.status = "fixed";
+      // One finding that can't be written is a warning for the person, and the others are still written.
+      try {
+        const print = fingerprint(finding.path, finding.summary);
+        let holder = known.find((entry) => holdsWeakness(entry) && entry.fingerprint === print);
+        if (finding.repeats !== undefined) {
+          const named = known.find((entry) => holdsWeakness(entry) && Number(entry.id) === Number(finding.repeats));
+          if (named === undefined) outcome.warnings.push(`${finding.id} says it repeats ${finding.repeats}, but no entry has that number; recorded by its text instead`);
+          else holder = named;
         }
-        continue;
+        if (holder !== undefined) {
+          if (holder.status === "open" && finding.status === "fixed") {
+            hooks.beforeUpdate?.(holder.path);
+            let text = withStatus(readFileSync(holder.path, "utf8"), "fixed");
+            text = withSection(text, "Policy", policyOf(finding));
+            text = withSection(text, "Pinned by", pinOf(finding));
+            replaceFile(holder.path, text);
+            holder.status = "fixed";
+          }
+          outcome.repeated.push({ finding: finding.id, entry: holder.id });
+          outcome.entries[finding.id] = holder.id;
+          continue;
+        }
+        const made = createEntry(directory, finding, ledger.branch, context, hooks);
+        outcome.written.push(made.file);
+        outcome.entries[finding.id] = made.id;
+        known.push({ id: made.id, file: made.file, path: made.path, status: finding.status, lens: finding.lens, findingPath: finding.path, fingerprint: print });
+      } catch (error) {
+        outcome.warnings.push(`${finding.id}: the security record couldn't be written for this finding: ${(error as Error).message ?? String(error)}`);
       }
-      const id = nextId(directory);
-      const file = `${id}-${slugOf(finding.summary)}.md`;
-      const path = join(directory, file);
-      // "wx": never over a file that's there, whatever it is.
-      writeFileSync(path, entryText(id, finding, ledger.branch, context), { flag: "wx", mode: 0o600 });
-      outcome.written.push(file);
-      outcome.entries[finding.id] = id;
-      known.push({ id, file, path, status: finding.status, lens: finding.lens, findingPath: finding.path, fingerprint: print });
     }
   } catch (error) {
     outcome.warnings.push(`the security record couldn't be written: ${(error as Error).message ?? String(error)}`);
@@ -334,7 +400,7 @@ export function markAccepted(
     return undefined;
   }
   const text = withSection(withStatus(readFileSync(entry.path, "utf8"), "accepted"), "Accepted", plainText(reason));
-  writeFileSync(entry.path, text);
+  replaceFile(entry.path, text);
   return entry.id;
 }
 
@@ -343,6 +409,6 @@ export function markAccepted(
 export function renderSecurityList(entries: readonly SecurityEntry[]): string {
   if (entries.length === 0) return "No security entries.";
   return entries
-    .map((entry) => [entry.id, entry.status, plainText(entry.lens), plainText(entry.findingPath), entry.path.replace(/[\t\r\n]/g, "?")].join("\t"))
+    .map((entry) => [entry.id, entry.status, plainText(entry.lens), plainText(entry.findingPath), entry.path.replace(/[\p{C}\u2028\u2029]/gu, "?")].join("\t"))
     .join("\n");
 }

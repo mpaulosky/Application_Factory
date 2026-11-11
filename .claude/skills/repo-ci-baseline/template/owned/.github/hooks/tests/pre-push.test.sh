@@ -377,6 +377,7 @@ commit_on feature/12-local-review .sandcastle/lib/review-ledger.mts "// a placeh
 cat > "$REPO/scripts/review.sh" <<EOF
 #!/usr/bin/env bash
 echo "review.sh \$*" >> "$LOG"
+[[ -z "\${GATE_SKIP_SELF_TEST:-}" ]] || echo "GATE_SKIP_SELF_TEST=\$GATE_SKIP_SELF_TEST" >> "$LOG"
 [[ -z "\${FAIL_REVIEW:-}" ]]
 EOF
 chmod +x "$REPO/scripts/review.sh"
@@ -391,6 +392,12 @@ expect_log "a failing review check stops the gate before the build" not-ran 'dot
 GATE_SKIP_REVIEW=1 FAIL_REVIEW=1 run_hook feature/12-local-review "$(push_stdin feature/12-local-review)"
 expect "a push ignores GATE_SKIP_REVIEW=1, so the review check still refuses it" refused any
 expect_log "a push with GATE_SKIP_REVIEW=1 still calls review.sh" ran "review.sh check $(git -C "$REPO" rev-parse origin/main)"
+# GATE_SKIP_SELF_TEST=1 is the switch a gate that tests itself (the Application Factory's) gives its own test; a push drops it too, and a gate run keeps it.
+GATE_SKIP_SELF_TEST=1 run_hook feature/12-local-review "$(push_stdin feature/12-local-review)"
+expect "a push with GATE_SKIP_SELF_TEST=1 set is still allowed" allowed tests-ran
+expect_log "a push drops GATE_SKIP_SELF_TEST, so the gate it starts doesn't skip its self-test" not-ran 'GATE_SKIP_SELF_TEST=*'
+GATE_SKIP_SELF_TEST=1 run_gate feature/12-local-review
+expect_log "a gate run started by hand keeps GATE_SKIP_SELF_TEST" ran 'GATE_SKIP_SELF_TEST=1'
 # The gate itself still honours GATE_SKIP_REVIEW=1, and only that value: gate runs
 # while iterating and Sandcastle's checkpoints rely on it.
 GATE_SKIP_REVIEW=1 FAIL_REVIEW=1 run_gate feature/12-local-review

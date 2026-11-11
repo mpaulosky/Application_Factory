@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { CAPITAL_LOOK_ALIKES, LOOK_ALIKES, plainText, TAG, visibleLetters } from "./plain-text.mts";
+import { CAPITAL_LOOK_ALIKES, LOOK_ALIKES, plainText, RENDERED_LINK, stripControl, TAG, visibleLetters, withoutHostInvisible, withoutInvisible, breakReferences } from "./plain-text.mts";
 
 describe("visibleLetters", () => {
   for (const [form, text] of [
@@ -303,5 +303,162 @@ describe("plainText", () => {
   it("escapes it after leading whitespace too, and leaves a tilde elsewhere in the line alone", () => {
     assert.equal(plainText("  ~~~x"), "\\~~~x");
     assert.equal(plainText("a ~~~x"), "a ~~~x");
+  });
+
+  // Finding text is written by a reviewer agent that read hostile diff text, then published in a PR description, an issue and the report.
+  for (const [form, character] of [
+    ["an escape", "\u001b"],
+    ["a bell", "\u0007"],
+    ["a NUL", "\u0000"],
+    ["a C1 control", "\u0085"],
+    ["a bidi override", "\u202e"],
+    ["a bidi isolate", "\u2066"],
+    ["a zero-width space", "\u200b"],
+    ["a delete", "\u007f"],
+  ] as const) {
+    it(`removes ${form}, which could rewrite a terminal or a rendered line`, () => {
+      assert.equal(plainText(`a${character}b`), "ab");
+    });
+  }
+
+  it("removes an escape sequence's escape and keeps the rest as text", () => {
+    assert.equal(plainText("x\u001b[2Jy"), "x[2Jy");
+  });
+
+  it("is empty for text of only control characters, and still folds whitespace to single spaces", () => {
+    assert.equal(plainText("\u001b\u202e"), "");
+    assert.equal(plainText("a \r\n\t b"), "a b");
+  });
+});
+
+// What the host's follow-up issue and the PR's Review notes leave out of a public page.
+describe("RENDERED_LINK", () => {
+  for (const [form, text] of [
+    ["a URL with a scheme", "see https://e.test/x"],
+    ["a scheme in capitals", "HTTP://E.TEST"],
+    ["any scheme", "ftp://e.test"],
+    ["a mailto address", "mailto:a@e.test"],
+    ["a www. address", "go to www.e.test"],
+    ["a www. address in a path", "docs/www.e.test"],
+    ["an inline link", "[a](b)"],
+    ["an image", "![a](b)"],
+    ["a reference link", "[a][b]"],
+    ["a link reference definition", "[a]: b"],
+    ["an image reference", "![a][b]"],
+  ] as const) {
+    it(`matches ${form}`, () => {
+      assert.match(text, RENDERED_LINK);
+    });
+  }
+
+  for (const [form, text] of [
+    ["an index in brackets", "items[0] and a[b]"],
+    ["a call", "calls trim(x) twice"],
+    ["a colon and slashes apart", "a: b // c"],
+    ["a placeholder", "[redacted]"],
+  ] as const) {
+    it(`doesn't match ${form}`, () => {
+      assert.doesNotMatch(text, RENDERED_LINK);
+    });
+  }
+});
+
+describe("stripControl", () => {
+  it("removes control and format characters and turns each run of whitespace into one space", () => {
+    assert.equal(stripControl("a\u001b[2J\nb\u202ec"), "a[2J bc");
+    assert.equal(stripControl(" a \u001b b "), " a b ");
+  });
+
+  it("leaves ordinary text, including an astral character and a combining mark, alone", () => {
+    assert.equal(stripControl("caf\u00e9 e\u0301 \u{1F600}"), "caf\u00e9 e\u0301 \u{1F600}");
+  });
+
+  for (const [form, character] of [
+    ["a zero-width space", "\u200b"],
+    ["a soft hyphen", "\u00ad"],
+    ["a variation selector", "\ufe0f"],
+    ["a Unicode tag character", "\u{E0041}"],
+    ["a braille blank", "\u2800"],
+    ["a bidirectional override", "\u202e"],
+    ["a null", "\u0000"],
+    ["a next-line character", "\u0085"],
+  ] as const) {
+    it(`removes ${form}, so it can't hide inside a word`, () => {
+      assert.equal(stripControl(`a${character}b`), "ab");
+    });
+  }
+
+  for (const [form, character] of [["a tab", "\t"], ["a no-break space", "\u00a0"], ["a line separator", "\u2028"], ["an ideographic space", "\u3000"]] as const) {
+    it(`turns ${form} into a space`, () => {
+      assert.equal(stripControl(`a${character}${character}b`), "a b");
+    });
+  }
+
+  it("leaves the empty string alone", () => {
+    assert.equal(stripControl(""), "");
+  });
+});
+
+describe("withoutInvisible", () => {
+  for (const [form, character] of [["a zero-width space", "\u200b"], ["a soft hyphen", "\u00ad"], ["a variation selector", "\ufe0f"], ["a Unicode tag character", "\u{E0041}"], ["a braille blank", "\u2800"], ["a bidi override", "\u202e"], ["a null", "\u0000"], ["a private-use character", "\ue000"]] as const) {
+    it(`removes ${form}`, () => {
+      assert.equal(withoutInvisible(`a${character}b`), "ab");
+    });
+  }
+
+  it("keeps every whitespace character as it is, unlike stripControl", () => {
+    assert.equal(withoutInvisible("a\n\n b\t\tc\u00a0d"), "a\n\n b\t\tc\u00a0d");
+    assert.equal(stripControl("a\n\n b"), "a b");
+  });
+
+  it("leaves ordinary text, an accented letter and an astral character alone", () => {
+    assert.equal(withoutInvisible("caf\u00e9 \u{1F600}"), "caf\u00e9 \u{1F600}");
+    assert.equal(withoutInvisible(""), "");
+  });
+
+  it("joins a token an invisible character split, which is what a secret check needs to see", () => {
+    assert.equal(withoutInvisible("gh\u200bp_abc"), "ghp_abc");
+  });
+});
+
+describe("stripControl and withoutInvisible", () => {
+  // They hold the same character class twice; this fails when one is changed without the other.
+  it("remove the same characters from `a<c>b` for every code point", () => {
+    const disagree: string[] = [];
+    for (let point = 0; point <= 0x10ffff; point += 1) {
+      const character = String.fromCodePoint(point);
+      const text = `a${character}b`;
+      const collapsed = withoutInvisible(text).replace(/\s+/gu, " ");
+      if (collapsed !== stripControl(text)) disagree.push(point.toString(16));
+    }
+
+    assert.deepEqual(disagree, []);
+  });
+});
+
+describe("withoutHostInvisible", () => {
+  it("removes exactly the zero-width spaces breakReferences adds", () => {
+    for (const text of ["gh-1", "Gh-1", "GH-1", "GitHub.com", "github.COM", "@a", "@1", "#1", "x@github.com", "see #12 and GH-7 on github.com"]) {
+      const broken = breakReferences(text);
+      assert.notEqual(broken, text, text);
+      assert.equal(withoutHostInvisible(broken), text, text);
+    }
+    const rendered = plainText("cc @someone, see #12 and GH-7 on github.com");
+    assert.equal(withoutInvisible(withoutHostInvisible(rendered)), withoutHostInvisible(rendered));
+  });
+
+  it("removes the variation selector of a keycap, once, and leaves one after a pictograph to hasHiddenText", () => {
+    assert.equal(withoutHostInvisible("1\ufe0f\u20e3"), "1\u20e3");
+    assert.equal(withoutHostInvisible("#\ufe0f\u20e3"), "#\u20e3");
+    assert.equal(withoutHostInvisible("1\ufe0f\ufe0f\u20e3"), "1\ufe0f\ufe0f\u20e3");
+    assert.equal(withoutHostInvisible("1\ufe0f2"), "1\ufe0f2");
+    assert.equal(withoutHostInvisible("a\ufe0f\u20e3"), "a\ufe0f\u20e3");
+    assert.equal(withoutHostInvisible("\u26a0\ufe0f"), "\u26a0\ufe0f");
+  });
+
+  it("keeps a zero-width space anywhere else, a variation selector after a letter, and a bidi override", () => {
+    for (const text of ["a\u200bb", "@\u200b ", "#\u200bx", "x\ufe0fy", "a\u202eb", "githubx\u200b.com", "github\u200b.comx", "xGH-\u200b1", "GH-\u200bx", "xgithub\u200b.com", "github\u200bx", "1\ufe0f", "@\u200b\u017f", "@\u200b\u212a"]) {
+      assert.equal(withoutHostInvisible(text), text, JSON.stringify(text));
+    }
   });
 });

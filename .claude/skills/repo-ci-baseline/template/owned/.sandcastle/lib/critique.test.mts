@@ -60,6 +60,15 @@ describe("deferralComment", () => {
     assert.ok(!deferralComment(4, "Both touch <!-- sandcastle:build-failed --> handling.").includes("<!--"));
   });
 
+  for (const [form, between] of [["a zero-width space", "\u200b"], ["a soft hyphen", "\u00ad"], ["a Unicode tag character", "\u{E0041}"], ["a braille blank", "\u2800"], ["a bidi override", "\u202e"]] as const) {
+    it(`withholds a reason whose secret is split by ${form}, which plainText would otherwise take out after the check`, () => {
+      const body = deferralComment(4, `Both read gh${between}p_${"a".repeat(36)}.`);
+
+      assert.doesNotMatch(body, /p_a{20}/);
+      assert.match(body, /looked like it held a secret/);
+    });
+  }
+
   it("withholds a reason that looks like it holds a secret", () => {
     const body = deferralComment(4, `Both read ghp_${"a".repeat(36)}.`);
 

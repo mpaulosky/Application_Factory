@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  findingPath,
+  findingWords,
   isAncestor,
+  lockIsStale,
+  lockTestHooks,
   mergeTreeWorks,
   isReviewedCode,
   ledgerGitEnv,
@@ -560,6 +564,20 @@ describe("diffKey", () => {
     });
   }
 
+  // A lone \r is not a line ending in git's output, but `^` under the m flag matches after one.
+  for (const [form, change] of [
+    ["a Binary files line", "changed\rBinary files a/app.cs and b/app.cs differ"],
+    ["a diff header", "changed\rdiff --git a/app.cs b/app.cs"],
+    ["an index line", "changed\rindex 1234567..89abcde 100644"],
+  ] as const) {
+    it(`reads ${form} after a lone carriage return in a changed line as text, not as git's own line`, () => {
+      commit(repo, "app.cs", lines(50, (index) => (index === 2 ? change : undefined)), "cr");
+
+      assert.doesNotThrow(() => reviewPatch(repo, mergeBase(repo), run(repo, "rev-parse", "HEAD")));
+      assert.doesNotThrow(() => diffKey(repo, mergeBase(repo)));
+    });
+  }
+
   it("lets a branch delete or empty a text file a diff attribute marks binary, since the new side has no text to hide", () => {
     commit(repo, ".gitattributes", "*.cs -diff\n", "attributes");
     run(repo, "rm", "--quiet", "app.cs");
@@ -1104,7 +1122,7 @@ describe("recordReview", () => {
     });
   }
 
-  it("takes a path with single spaces, as every file of the Template has under \"Support For New Projects/\"", () => {
+  it("takes a path with single spaces, as a folder named with spaces has", () => {
     const path = "Support For New Projects/.claude/skills/repo-ci-baseline/apply.sh";
 
     const ledger = record([finding({ path })]);
@@ -1319,6 +1337,95 @@ describe("recordReview", () => {
 
   it("refuses findings that share an id", () => {
     assert.throws(() => record([finding(), finding()]), /repeat: R1/);
+  });
+
+  it("removes control and format characters from a finding's text, so the gate's message and the report can't rewrite a terminal", () => {
+    const ledger = record([
+      finding({
+        status: "open",
+        test: null,
+        lens: "Edge\u0007 cases",
+        path: "app\u001b.cs",
+        summary: "Hidden\u001b[2J\u202e text\r\nnext line",
+        reason: "why\u0000",
+        fix: "do\u200b this",
+      }),
+    ]);
+
+    const stored = readLedger(repo, ledger.key)?.findings[0];
+    assert.equal(stored?.lens, "Edge cases");
+    assert.equal(stored?.path, "app.cs");
+    assert.equal(stored?.summary, "Hidden[2J text next line");
+    assert.equal(stored?.reason, "why");
+    assert.equal(stored?.fix, "do this");
+    const { message } = checkReview(repo, mergeBase(repo), {});
+    assert.doesNotMatch(message, /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/);
+    assert.match(message, /R1 critical app\.cs:3 \(Edge cases\): Hidden\[2J text next line/);
+  });
+
+  it("refuses a finding whose text is only control characters, as an empty one", () => {
+    assert.throws(() => record([finding({ summary: "\u001b\u202e" })]));
+  });
+
+  it("replaces a lock left by a process that is gone, so a killed command doesn't block every later one", () => {
+    mkdirSync(ledgerDir(repo), { recursive: true });
+    const gone = Number(execFileSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }));
+    writeFileSync(join(ledgerDir(repo), ".lock"), `${gone} left-behind\n`);
+
+    assert.doesNotThrow(() => record([]));
+    assert.equal(existsSync(join(ledgerDir(repo), ".lock")), false);
+  });
+
+  it("keeps a lock held by a process that is running", () => {
+    mkdirSync(ledgerDir(repo), { recursive: true });
+    writeFileSync(join(ledgerDir(repo), ".lock"), `${process.pid} held\n`);
+
+    assert.throws(() => record([]), /another review command/);
+    assert.equal(readFileSync(join(ledgerDir(repo), ".lock"), "utf8"), `${process.pid} held\n`);
+  });
+
+  for (const [form, content] of [["empty", ""], ["unreadable as a process id", "held"]] as const) {
+    it(`keeps a ${form} lock that was just made, since its holder may be about to write its id`, () => {
+      mkdirSync(ledgerDir(repo), { recursive: true });
+      writeFileSync(join(ledgerDir(repo), ".lock"), content);
+      const seconds = (Date.now() - 55_000) / 1000;
+      utimesSync(join(ledgerDir(repo), ".lock"), seconds, seconds);
+
+      assert.throws(() => record([]), /another review command/);
+    });
+
+    it(`replaces a ${form} lock left for more than a minute`, () => {
+      mkdirSync(ledgerDir(repo), { recursive: true });
+      writeFileSync(join(ledgerDir(repo), ".lock"), content);
+      const seconds = (Date.now() - 65_000) / 1000;
+      utimesSync(join(ledgerDir(repo), ".lock"), seconds, seconds);
+
+      assert.doesNotThrow(() => record([]));
+      assert.equal(existsSync(join(ledgerDir(repo), ".lock")), false);
+    });
+  }
+
+  it("writes its process id into the lock it holds", () => {
+    let held: string | undefined;
+    const taken = (...args: Parameters<typeof takenIds>) => {
+      held = readFileSync(join(ledgerDir(repo), ".lock"), "utf8");
+      return takenIds(...args);
+    };
+
+    recordReview(repo, mergeBase(repo), { ...reviewed(), rounds: 1, findings: [] }, undefined, taken);
+
+    assert.match(held ?? "", new RegExp(`^${process.pid} [0-9a-f]{16,}\\n$`));
+  });
+
+  it("leaves a lock another command took in its place, instead of deleting it on the way out", () => {
+    const taken = (...args: Parameters<typeof takenIds>) => {
+      writeFileSync(join(ledgerDir(repo), ".lock"), `${process.pid} someone-else\n`);
+      return takenIds(...args);
+    };
+
+    recordReview(repo, mergeBase(repo), { ...reviewed(), rounds: 1, findings: [] }, undefined, taken);
+
+    assert.equal(readFileSync(join(ledgerDir(repo), ".lock"), "utf8"), `${process.pid} someone-else\n`);
   });
 
   it("refuses while another review command holds the ledger's lock", () => {
@@ -1675,6 +1782,47 @@ describe("renderReviewNotes", () => {
     assert.doesNotMatch(notes, /reaches the/);
     assert.match(notes, /2 accepted security finding\(s\) are left out here and reported privately/);
     assert.match(notes, /Accepted: Spec\./);
+  });
+
+  // The description is public, and a reviewer agent that read hostile text wrote these words.
+  for (const [form, overrides] of [
+    ["summary holds a link", { summary: "See [the docs](https://e.test/x) for it." }],
+    ["summary holds an image", { summary: "Shown as ![x](https://e.test/p.png)." }],
+    ["summary holds a bare URL", { summary: "Sent to https://e.test/collect." }],
+    ["reason holds a www. address", { reason: "Tracked at www.e.test." }],
+    ["path holds a scheme", { path: "https://e.test/a.md" }],
+  ] as const) {
+    it(`counts an accepted finding whose ${form} without listing it, since GitHub would render it`, () => {
+      const ledger = record([
+        finding({ status: "accepted", test: null, summary: "A plain bug.", reason: "Spec.", ...overrides }),
+        finding({ id: "R2", status: "accepted", test: null, summary: "Reads items[0] and calls trim(x).", reason: "Fine." }),
+      ]);
+
+      const notes = renderReviewNotes(ledger);
+
+      assert.doesNotMatch(notes, /e\.test/);
+      assert.match(notes, /1 accepted finding\(s\) holding a link or an image are left out here/);
+      assert.match(notes, /Reads items\[0\] and calls trim\(x\)\. Accepted: Fine\./);
+    });
+  }
+
+  it("says so when every accepted finding holds a link, and lists none", () => {
+    const ledger = record([finding({ status: "accepted", test: null, summary: "See https://e.test.", reason: "Spec." })]);
+
+    const notes = renderReviewNotes(ledger);
+
+    assert.match(notes, /^<!-- review-notes -->\n## Review notes\n/);
+    assert.match(notes, /1 accepted finding\(s\) holding a link or an image are left out here/);
+    assert.doesNotMatch(notes, /The local review raised these/);
+  });
+
+  it("counts a security finding that holds a link as a security finding, not twice", () => {
+    const ledger = record([finding({ status: "accepted", test: null, severity: "warning", summary: "Leaks to https://e.test.", reason: "Later." })]);
+
+    const notes = renderReviewNotes(ledger);
+
+    assert.match(notes, /1 accepted security finding/);
+    assert.doesNotMatch(notes, /holding a link/);
   });
 
   it("lists accepted Critical and Advisory findings and only counts Warnings", () => {
@@ -2833,6 +2981,23 @@ describe("the security record", () => {
       assert.match(firstEntry(), /The folder is a sandbox\./);
     });
 
+    it("accept prints its .security: note without an escape character, even when the error names a file with one", { skip: !canNotWriteInReadOnlyDir() }, () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      const dir = join(repo, ".security");
+      const [name] = entries();
+      renameSync(join(dir, name ?? ""), join(dir, "0001-a\u001b[2Jb.md"));
+      chmodSync(dir, 0o500);
+      let result: { code: number; out: string; err: string };
+      try {
+        result = cli(["accept", "R1", "Fine."]);
+      } finally {
+        chmodSync(dir, 0o700);
+      }
+
+      assert.match(result.err, /^\.security: couldn't mark the entry accepted: /m);
+      assert.doesNotMatch(result.err, /\u001b/);
+    });
+
     it("accept still finds the entry by the finding's text when no note of the entry was kept (an older record)", () => {
       recordHere([weakness({ status: "open", test: null })]);
       for (const name of readdirSync(ledgerDir(repo))) if (name.endsWith(".entries")) rmSync(join(ledgerDir(repo), name));
@@ -3322,7 +3487,7 @@ describe("a git call the host's time limit ended", () => {
 });
 
 describe("branchSize and sizeWarning", () => {
-  const MIRROR = "Support For New Projects/.claude/skills/repo-ci-baseline/template/owned/";
+  const MIRROR = TEMPLATE_OWNED_PREFIX;
   // A patch that adds `added` lines to each named file.
   const patchOf = (files: { path: string; added: number }[]) =>
     files
@@ -3483,6 +3648,30 @@ describe("prepare's size warning", () => {
     commit(repo, "fix.cs", "y\n", "a fix");
 
     assert.equal(cli(["prepare", dir, head]).err, "");
+  });
+});
+
+describe("the Factory's Template mirrors", () => {
+  const file = (path: string, line: string, blob = "a".repeat(40)) =>
+    `diff --git a/${path} b/${path}\nnew file mode 100644\nindex ${"0".repeat(40)}..${blob}\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1 @@\n+${line}\n`;
+
+  it("are under .claude/skills/repo-ci-baseline/template/owned/, as they are in the Application Factory", () => {
+    assert.equal(TEMPLATE_OWNED_PREFIX, ".claude/skills/repo-ci-baseline/template/owned/");
+  });
+
+  it("are left out of the reader's patch when identical to the root file, and kept when they differ", () => {
+    const mirror = ".claude/skills/repo-ci-baseline/template/owned/.sandcastle/lib/a.mts";
+    const same = readerPatch(Buffer.from(file(".sandcastle/lib/a.mts", "x") + file(mirror, "x"))).toString();
+    const differs = readerPatch(Buffer.from(file(".sandcastle/lib/a.mts", "x") + file(mirror, "y", "b".repeat(40)))).toString();
+
+    assert.doesNotMatch(same, new RegExp(mirror.replace(/\./g, "\\.")));
+    assert.match(differs, new RegExp(mirror.replace(/\./g, "\\.")));
+  });
+
+  it("are counted once by branchSize when identical to the root file", () => {
+    const mirror = ".claude/skills/repo-ci-baseline/template/owned/.sandcastle/lib/a.mts";
+
+    assert.equal(branchSize(file(".sandcastle/lib/a.mts", "x") + file(mirror, "x")).files, 1);
   });
 });
 
@@ -3707,3 +3896,340 @@ describe("a branch that holds Template mirrors", () => {
   });
 });
 
+
+// Whether a directory without write permission refuses a file here (not so for root, or a file system that ignores modes).
+function canNotWriteInReadOnlyDir(): boolean {
+  const dir = mkdtempSync(join(tmpdir(), "ro-probe-"));
+  try {
+    chmodSync(dir, 0o500);
+    try {
+      writeFileSync(join(dir, "x"), "");
+      return false;
+    } catch {
+      return true;
+    }
+  } finally {
+    chmodSync(dir, 0o700);
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+}
+
+// Whether a file with mode 000 can't be read here (not so for root).
+function canNotReadMode0(): boolean {
+  const dir = mkdtempSync(join(tmpdir(), "ro-probe-"));
+  try {
+    const file = join(dir, "x");
+    writeFileSync(file, "");
+    chmodSync(file, 0o000);
+    try {
+      readFileSync(file);
+      return false;
+    } catch {
+      return true;
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+}
+
+// Whether this process may not signal pid 1 (EPERM), which is what the lockIsStale case for a live process we can't signal needs.
+function pid1RefusesSignal(): boolean {
+  try {
+    process.kill(1, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+describe("lockIsStale", () => {
+  const gone = Number(execFileSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }));
+  it("judges a process we may not signal (pid 1) as running, however old", { skip: !pid1RefusesSignal() }, () => {
+    assert.equal(lockIsStale("1 t\n", 60_001), false);
+  });
+
+  for (const [form, content, ageMs, stale] of [
+    ["a running process, however old", `${process.pid} t\n`, 10 * 60_000, false],
+    ["a process that is gone", `${gone} t\n`, 0, true],
+    ["an id no process can have", `${"9".repeat(30)} t\n`, 0, true],
+    ["a zero id, which names no process, just made", "0 t\n", 0, false],
+    ["a zero id, left past the minute", "0 t\n", 60_001, true],
+    ["no id, at the minute", "held", 60_000, false],
+    ["no id, a millisecond past the minute", "held", 60_001, true],
+    ["empty, just under the minute", "", 59_999, false],
+    ["empty, past the minute", "", 60_001, true],
+    ["a negative id, which names no process, just made", "-1 t\n", 0, false],
+    ["a negative id, left past the minute (the id must start the text)", "-1 t\n", 60_001, true],
+    ["text before an id", "x 1 t\n", 60_001, true],
+    ["an id with no space after it", `${process.pid}`, 60_001, true],
+  ] as const) {
+    it(`judges ${form}`, () => {
+      assert.equal(lockIsStale(content, ageMs), stale);
+    });
+  }
+});
+
+describe("taking over a stale lock", () => {
+  const lockFile = () => join(ledgerDir(repo), ".lock");
+  const staleLock = (text = "held") => {
+    mkdirSync(ledgerDir(repo), { recursive: true });
+    writeFileSync(lockFile(), text);
+    const seconds = (Date.now() - 65_000) / 1000;
+    utimesSync(lockFile(), seconds, seconds);
+  };
+  afterEach(() => {
+    delete lockTestHooks.beforeRead;
+    delete lockTestHooks.beforeWrite;
+    delete lockTestHooks.afterRead;
+    delete lockTestHooks.afterRename;
+  });
+
+  it("refuses, and puts a live lock back, when another command made one between the judging and the rename", () => {
+    staleLock();
+    lockTestHooks.afterRead = () => writeFileSync(lockFile(), `${process.pid} live\n`);
+
+    assert.throws(() => record([]), /another review command/);
+    assert.equal(readFileSync(lockFile(), "utf8"), `${process.pid} live\n`);
+    assert.deepEqual(readdirSync(ledgerDir(repo)).filter((name) => name.includes(".stale.")), []);
+  });
+
+  it("refuses, and keeps a fresh empty lock, when one replaced the stale empty lock before the rename (equal text proves nothing)", () => {
+    staleLock("");
+    lockTestHooks.afterRead = () => {
+      rmSync(lockFile());
+      writeFileSync(lockFile(), "");
+    };
+
+    assert.throws(() => record([]), /another review command/);
+    assert.equal(existsSync(lockFile()), true);
+    assert.equal(readFileSync(lockFile(), "utf8"), "");
+  });
+
+  it("refuses, and puts the lock back, when the lock it moved can't be read", { skip: !canNotReadMode0() }, () => {
+    staleLock();
+    lockTestHooks.afterRename = () => {
+      for (const name of readdirSync(ledgerDir(repo))) if (name.includes(".stale.")) chmodSync(join(ledgerDir(repo), name), 0o000);
+    };
+
+    assert.throws(() => record([]), /another review command/);
+
+    chmodSync(lockFile(), 0o600);
+    assert.equal(readFileSync(lockFile(), "utf8"), "held");
+    assert.deepEqual(readdirSync(ledgerDir(repo)).filter((name) => name.includes(".stale.")), []);
+  });
+
+  it("goes on when the lock vanished before it was read", () => {
+    staleLock();
+    lockTestHooks.beforeRead = () => rmSync(lockFile());
+
+    assert.doesNotThrow(() => record([]));
+  });
+
+  it("leaves no moved lock behind after a takeover", () => {
+    staleLock();
+
+    record([]);
+
+    assert.deepEqual(readdirSync(ledgerDir(repo)).filter((name) => name.includes(".stale.") || name === ".lock"), []);
+  });
+
+  it("refuses, keeping the lock a third command made, when one appears right after the stale lock was removed", () => {
+    staleLock();
+    lockTestHooks.afterRename = () => writeFileSync(lockFile(), `${process.pid} third\n`);
+
+    assert.throws(() => record([]), /another review command/);
+    assert.equal(readFileSync(lockFile(), "utf8"), `${process.pid} third\n`);
+  });
+
+  it("removes its empty lock, and rethrows, when it can't write its id", () => {
+    lockTestHooks.beforeWrite = () => {
+      throw new Error("disk full");
+    };
+
+    assert.throws(() => record([]), /disk full/);
+    assert.equal(existsSync(lockFile()), false);
+  });
+
+  it("refuses when the stale lock can't be moved for a reason other than being gone", { skip: !canNotWriteInReadOnlyDir() }, () => {
+    staleLock();
+    lockTestHooks.afterRead = () => chmodSync(ledgerDir(repo), 0o500);
+    try {
+      assert.throws(() => record([]), /another review command/);
+    } finally {
+      chmodSync(ledgerDir(repo), 0o700);
+    }
+    assert.equal(existsSync(lockFile()), true);
+  });
+
+  it("goes on when another command removed the stale lock first", () => {
+    staleLock();
+    lockTestHooks.afterRead = () => rmSync(lockFile());
+
+    assert.doesNotThrow(() => record([]));
+  });
+
+  it("refuses, and leaves nothing behind, when the name was taken again as the live lock was put back", () => {
+    staleLock();
+    lockTestHooks.afterRead = () => writeFileSync(lockFile(), `${process.pid} live\n`);
+    lockTestHooks.afterRename = () => writeFileSync(lockFile(), `${process.pid} newer\n`);
+
+    assert.throws(() => record([]), /another review command/);
+    assert.equal(readFileSync(lockFile(), "utf8"), `${process.pid} newer\n`);
+    assert.deepEqual(readdirSync(ledgerDir(repo)).filter((name) => name.includes(".stale.")), []);
+  });
+
+  it("refuses a lock that can't be read, rather than breaking it", () => {
+    mkdirSync(lockFile(), { recursive: true });
+
+    assert.throws(() => record([]), /another review command/);
+    assert.equal(statSync(lockFile()).isDirectory(), true);
+  });
+});
+
+describe("finding text read back from a stored ledger", () => {
+  it("strips control characters from every text field of a finding written by hand, as it does when recording", () => {
+    const ledger = record([finding({ status: "open", test: null })]);
+    const path = join(ledgerDir(repo), `${ledger.key}.json`);
+    rewriteFindings(path, (stored) => ({ ...stored, lens: "Edge\u200b cases", path: "app\u001b.cs", summary: "Bad\u001b[2J\u202e text", fix: "do\u200b this", reason: "why\u0000" }));
+
+    const read = readLedger(repo, ledger.key)?.findings[0];
+    assert.equal(read?.lens, "Edge cases");
+    assert.equal(read?.path, "app.cs");
+    assert.equal(read?.summary, "Bad[2J text");
+    assert.equal(read?.fix, "do this");
+    assert.equal(read?.reason, "why");
+    const { message } = checkReview(repo, mergeBase(repo), {});
+    assert.doesNotMatch(message, /[\u001b\u202e\u200b]/);
+  });
+});
+
+describe("acceptFinding's reason", () => {
+  it("refuses a reason of only invisible characters", () => {
+    record([finding({ status: "open", test: null })]);
+
+    assert.throws(() => acceptFinding(repo, mergeBase(repo), "R1", "\u200b"), /say why/);
+  });
+
+  it("stores the reason without invisible characters, and returns the ledger as stored", () => {
+    record([finding({ status: "open", test: null })]);
+
+    const returned = acceptFinding(repo, mergeBase(repo), "R1", "ok\u001b[2J\u202e fine");
+
+    assert.equal(returned.findings[0]?.reason, "ok[2J fine");
+    assert.equal(readLedger(repo, returned.key)?.findings[0]?.reason, "ok[2J fine");
+  });
+});
+
+describe("findingWords and findingPath", () => {
+  for (const [form, text] of [["a zero-width space", "\u200b"], ["a braille blank", "\u2800"], ["a soft hyphen and a tab", "\u00ad\t"], ["nothing", ""]] as const) {
+    it(`refuses words that are only ${form}`, () => {
+      assert.equal(findingWords().safeParse(text).success, false);
+    });
+    it(`refuses a path that is only ${form}`, () => {
+      assert.equal(findingPath().safeParse(text).success, false);
+    });
+  }
+
+  it("drops a variation selector and a Hangul filler from a path, and refuses a tab that stays in it", () => {
+    assert.equal(findingPath().parse("src/a\ufe0f.cs"), "src/a.cs");
+    assert.equal(findingPath().parse("src/a\u3164b.cs"), "src/ab.cs");
+    assert.equal(findingPath().safeParse("a\u200b\tb").success, false);
+  });
+
+  it("keeps a word's inner space and drops an invisible character", () => {
+    assert.equal(findingWords().parse(" a\u200b  b\n"), "a b");
+  });
+
+  it("drops an invisible character from a path, and keeps the path's own shape", () => {
+    assert.equal(findingPath().parse("src/a\u200b.cs"), "src/a.cs");
+  });
+});
+
+describe("the review command's printed text", () => {
+  it("prints no control character of the input a parse error echoes, and keeps the lines and tabs", () => {
+    const file = join(root, "bad.json");
+    writeFileSync(file, JSON.stringify({ ...reviewed(), rounds: 1, findings: [], "extra\u001b[2J\u202e\u2028\tkey": 1 }));
+
+    const result = cli(["record", file]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /extra\[2J\tkey/);
+    assert.doesNotMatch(result.out + result.err, /[\u001b\u202e\u2028]/);
+    assert.ok(result.err.trimEnd().includes("\n"));
+  });
+
+  it("removes a zero-width space of an echoed parse error, which breakReferences didn't add", () => {
+    const file = join(root, "bad2.json");
+    writeFileSync(file, JSON.stringify({ ...reviewed(), rounds: 1, findings: [], "a\u200b\u200bb@\u200bc": 1 }));
+
+    const result = cli(["record", file]);
+
+    assert.match(result.err, /"ab@\u200bc"/);
+    assert.doesNotMatch(result.err, /a\u200b|\u200b\u200b/);
+  });
+
+  // printable keeps a zero-width space only where breakReferences puts one; each row is the text echoed and what is printed.
+  const ZW = "\u200b";
+  const echoed = (key: string): string | undefined => {
+    const file = join(root, "echo.json");
+    writeFileSync(file, JSON.stringify({ ...reviewed(), rounds: 1, findings: [], [key]: 1 }));
+    return /Unrecognized key: "(.*)"/.exec(cli(["record", file]).err)?.[1];
+  };
+  for (const [form, key, printed] of [
+    ["@ before a letter", `@${ZW}c`, `@${ZW}c`],
+    ["@ before a digit", `@${ZW}1`, `@${ZW}1`],
+    ["@ before a dash", `@${ZW}-`, "@-"],
+    ["@ at the end", `@${ZW}`, "@"],
+    ["two after an @ before a letter", `@${ZW}${ZW}c`, "@c"],
+    ["# before a digit", `#${ZW}1`, `#${ZW}1`],
+    ["# before a letter", `#${ZW}x`, "#x"],
+    ["# at the end", `#${ZW}`, "#"],
+    ["GH- before a digit", `GH-${ZW}1`, `GH-${ZW}1`],
+    ["gh- in lower case before a digit", `gh-${ZW}1`, `gh-${ZW}1`],
+    ["GH- before a letter", `GH-${ZW}x`, "GH-x"],
+    ["GH- inside a word", `xGH-${ZW}1`, "xGH-1"],
+    ["GH- after a space", ` GH-${ZW}1`, ` GH-${ZW}1`],
+    ["GH- after an underscore", `_GH-${ZW}1`, "_GH-1"],
+    ["GH- after a digit", `1GH-${ZW}1`, "1GH-1"],
+    ["GH- after an astral character", `\u{1F600}GH-${ZW}1`, `\u{1F600}GH-${ZW}1`],
+    ["github after an underscore", `_github${ZW}.com`, "_github.com"],
+    ["github after an astral character", `\u{1F600}github${ZW}.com`, `\u{1F600}github${ZW}.com`],
+    ["@ before a non-ASCII letter", `@${ZW}\u00e9`, "@\u00e9"],
+    ["# before a non-ASCII digit", `#${ZW}\u0661`, "#\u0661"],
+    ["github.com", `github${ZW}.com`, `github${ZW}.com`],
+    ["GITHUB.COM in capitals", `GITHUB${ZW}.COM`, `GITHUB${ZW}.COM`],
+    ["github.com followed by a path", `github${ZW}.com/x`, `github${ZW}.com/x`],
+    ["github.org", `github${ZW}.org`, "github.org"],
+    ["github.com with letters after it", `github${ZW}.comx`, "github.comx"],
+    ["github inside a word", `xgithub${ZW}.com`, "xgithub.com"],
+    ["the start of the text", `${ZW}ab`, "ab"],
+    ["the end of the text", `ab${ZW}`, "ab"],
+  ] as const) {
+    it(`prints a zero-width space after ${form} as ${printed === key ? "kept" : "removed"}`, () => {
+      assert.equal(echoed(key), printed);
+    });
+  }
+
+  it("prints a long text of zero-width spaces and the one it keeps", () => {
+    assert.equal(echoed(`@${ZW}a${ZW.repeat(200_000)}b`), `@${ZW}ab`);
+  });
+
+  it("keeps the zero-width space after GH- and in github.com too", () => {
+    record([finding({ severity: "advisory", status: "open", test: null, lens: "Docs match the code", summary: "See GH-7 and github.com.", fix: "Reword." })]);
+
+    const result = cli(["advisory"]);
+
+    assert.match(result.out, /GH-\u200b7/);
+    assert.match(result.out, /github\u200b\.com/);
+  });
+
+  it("keeps the zero-width space plainText puts after an @ and a # in the output that is published", () => {
+    record([finding({ severity: "advisory", status: "open", test: null, lens: "Docs match the code", summary: "Ask @octocat about #12 on github.com.", fix: "Reword." })]);
+
+    const result = cli(["advisory"]);
+
+    assert.equal(result.code, 0);
+    assert.match(result.out, /@\u200boctocat/);
+    assert.match(result.out, /#\u200b12/);
+  });
+});

@@ -38,6 +38,24 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
 - Critical and Warning findings left open (because they need a person, or the last, review-only round raised them) block the push until the person fixes them or accepts
   them with `scripts/review.sh accept` (never on their behalf).
   Advisory findings never block: one that needs a person goes to one follow-up issue per branch.
+- A finding's words are a reviewer agent's, who read hostile diff text, so they are made safe where they enter and where they are published. The ledger removes control and
+  invisible characters (an escape, a bidi override, a zero-width space or joiner, a variation selector, U+2800) from a finding's lens, path, summary, test, reason and fix
+  when it records one and when it reads an older ledger (a field made only of them is refused as empty), and turns each run of
+  whitespace in all but the path into one space (a path keeps its whitespace, so a tab or a double space is still refused), so the gate's
+  message can't rewrite a terminal; `plainText`, which renders the report, the notes and the follow-up issue, removes them too. The PR's `## Review notes` is public, so an accepted
+  finding whose path, summary or reason holds a link or an image GitHub would render (`RENDERED_LINK` in `lib/plain-text.mts`, which the host's follow-up issue uses too) is only
+  counted there, as an accepted security finding is; its words stay in the ledger and the report.
+- The review command prints no control or invisible character of the text it echoes (a parse error, a `.security:` note), keeping its newlines, its tabs and the zero-width
+  space `plainText` adds (after an `@` before an ASCII letter or digit, after a `#` or `GH-` before a digit,
+  and in `github.com`, so `advisory` and `notes` still print inert mentions) and removes any other; the host's reviewer schema
+  applies the same stripping, so a finding of only invisible characters is refused as empty.
+- The ledger's lock names its holder (`<pid> <token>`). A lock whose process is gone is taken over, as is one with no readable holder that is more than a minute old; a lock
+  held by a running command still refuses at once, naming the file. A takeover renames the lock to a name of its own (one command wins), judges it again there by its text and age and deletes it only if
+  it is still stale; a live lock made in between is put back and the command refuses. The holder removes the lock only while it still carries its token.
+- A ledger or a security entry is replaced whole (a temp file with a random name, renamed over it), and a new security entry is written to a temp file and hard-linked to its number
+  (on a file system that can't link, it is written in place instead), so a reader never sees a half-written file where links work and a symlink put at the name is replaced, not written through. A number
+  another writer took is tried again, up to five times; a
+  finding whose entry can't be written is a warning, and the other findings are still written.
 - The ledger is keyed by the branch's hunks against its merge base with `origin/main`. A clean merge of `main` keeps the review; a new commit, a conflict
   resolution or a `main` change inside one of the branch's hunks needs a new one. A re-Apply on `chore/reapply-baseline` passes without one only when every
   change is a regular Owned file added or modified, as Apply writes them (`OWNED_PATHS` in the ledger lists them, and a dotfiles test keeps it equal to
@@ -100,14 +118,18 @@ again, and settled differently, on the next (one weakness took six rounds). The 
   path, and the branch and PR it came from.
 - **Who writes it.** `scripts/review.sh record` writes an entry for every security finding it records `fixed` or `open` (every Warning, and any finding marked
   `security: true`; see `isSecurity`), under the ledger's lock, after the ledger is written. A problem writing entries is a warning on stderr (`.security: ...`),
-  never a failed record. The finding may carry a `policy` (one sentence, the rule that now holds) and `repeats` (the number of the entry it repeats), and the review a `pr`;
+  never a failed record; one finding that can't be written is a warning of its own and the others are still written, and a number another writer took first is chosen again
+  (up to five times). The finding may carry a `policy` (one sentence, the rule that now holds) and `repeats` (the number of the entry it repeats), and the review a `pr`;
   none is stored in the ledger. `scripts/review.sh accept` turns the matching entry `accepted`. A person may edit an entry; an entry whose status can't be
   read counts as `unknown` and suppresses nothing.
 - **No second file.** A finding for a weakness an entry holds writes none: the entry it names in `repeats`, else the one with the same fingerprint (a hash of the
-  path and the summary, case and spacing set aside). An `open` entry recorded `fixed` later is updated in place. The match is exact on purpose: a wrongly merged
+  path and the summary, case and spacing set aside). An `open` entry recorded `fixed` later is updated in place (the file is replaced whole by a rename, as is one `accept` turns
+  `accepted`, so no reader sees a truncated entry). The match is exact on purpose: a wrongly merged
   entry would hide a real weakness, while a reworded repeat only gets a second file.
 - **Where.** The main worktree's `.security/`, found with `git worktree list`, so a review in any worktree or branch reads and writes the same entries. A bare clone has none:
-  nothing is written, with a warning. The directory is mode 0700, entries 0600, written with `wx`; a symlink there is refused.
+  nothing is written, with a warning. The directory is mode 0700, entries 0600, each written to a temp file with `wx` and then
+  hard-linked (new) or renamed (updated) to its name; a symlinked directory is refused, a symlink at an entry's name is replaced. On a file system that can't hard-link, a new
+  entry is written in place with `wx` instead (a failed write removes what it left), so the whole-file guarantee holds only where links work.
 - **Git-ignored, never published.** The Owned `.gitignore` carries `.security/*` and `!.security/README.md`, and `record` writes nothing, with a warning to
   re-Apply, where `git check-ignore` says the directory isn't ignored. The README is Owned, so a re-Apply restores it, and it leaves every entry alone. (The
   ignore lines are in the Owned `.gitignore` too, so they reach every repo.) The follow-up issue, the PR's Review notes and the
