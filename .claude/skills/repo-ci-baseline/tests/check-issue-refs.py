@@ -12,6 +12,10 @@ CITATION = re.compile(r"\((?:[^()]*, )?#\d+\)")
 BARE = re.compile(r"(?<![\w/&])#\d+\b")
 # Examples, not references: the exact text each one sits in.
 EXAMPLES = ("`Fixes #123`", "`Refs #456`", "Fixes #42", '"1, #3"', '("Fixes #16.")', "so PR #1 doesn't", "release for #10.")
+if len(sys.argv) != 2 or not pathlib.Path(sys.argv[1]).is_dir():
+    # A folder that isn't there has no files to find a bare #N in, which must not read as a pass.
+    print("usage: check-issue-refs.py <the Template's owned/ folder, which must exist>", file=sys.stderr)
+    sys.exit(2)
 root = pathlib.Path(sys.argv[1])
 found = []
 for path in sorted(p for p in root.rglob("*") if p.is_file()):

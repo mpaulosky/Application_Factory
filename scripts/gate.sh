@@ -6,10 +6,10 @@
 # then the repo-ci-baseline skill's test.sh. This script is the Factory's own, not a copy of the Template's scripts/gate.sh.
 set -euo pipefail
 
-# scripts/gate.sh --quick: the checks that finish in about a minute (its test, the review tests, the copies' drift, lint), then stop before the local
+# scripts/gate.sh --quick: the checks that finish in about a minute (its test, the review tests, the copies' drift, the bare-#N check, lint), then stop before the local
 # review check and test.sh. It is for iterating, never for pushing: the pre-push hook and CI call this script with no argument.
 # scripts/gate.sh --sync: copies every Template file the Factory carries over its copy (cp -p keeps the execute bit), prints the ones that changed,
-# and stops. Run it after editing the Template's file; the drift check below is what finds a copy you forgot.
+# and stops. A copy edited by hand is overwritten, so edit the Template's file. Run it after editing the Template's file; the drift check below is what finds a copy you forgot.
 quick=0
 sync=0
 case "${1:-}" in
@@ -72,7 +72,7 @@ if ((sync)); then
   for file in "${copies[@]}"; do
     if ! cmp -s "$owned/$file" "$file" || [[ "$([[ -x "$file" ]] && echo x)" != "$([[ -x "$owned/$file" ]] && echo x)" ]]; then
       mkdir -p "$(dirname "$file")"
-      /bin/cp -pf "$owned/$file" "$file"
+      command cp -pf "$owned/$file" "$file"
       echo "synced $file"
       changed=$((changed + 1))
     fi
@@ -116,8 +116,18 @@ echo "${#copies[@]} copies match the Template."
 
 # test.sh's issue-reference rule (a bare #N in an Owned file), run here too so --quick catches it and not only the full gate's last step.
 echo -e "\n${CYAN}▶ Issue references in Owned files${RESET}"
-if ! python3 -I "$skill/tests/check-issue-refs.py" "$owned"; then
+# Exit 1 is a bare #N (the checker printed it); anything else (2: bad folder, 127: no python3, a traceback) is the check itself failing, and fails the gate too.
+if ! command -v python3 >/dev/null 2>&1; then
+  echo -e "${RED}❌ python3 not found: the issue-reference check needs it.${RESET}" >&2
+  exit 1
+fi
+refs_rc=0
+python3 -I "$skill/tests/check-issue-refs.py" "$owned" || refs_rc=$?
+if ((refs_rc == 1)); then
   echo -e "${RED}❌ Write issue references in Owned files as mpaulosky/dotfiles#N (or <Repo>#N), not a bare #N.${RESET}" >&2
+  exit 1
+elif ((refs_rc != 0)); then
+  echo -e "${RED}❌ check-issue-refs.py failed (exit $refs_rc) without checking: see its output above.${RESET}" >&2
   exit 1
 fi
 
