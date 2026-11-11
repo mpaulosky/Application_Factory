@@ -38,7 +38,7 @@ import { isBlocking, mergeBase, pinLedgerGit, prepareRound, recordReview, render
 import { containsSandboxSecret, containsSecret, sandboxSecrets } from "./sandbox-env.mts";
 import { describeSecretMatch, firstSecretMatch, type SecretMatch } from "./scan.mts";
 import { git, hostGitInvocation, runHostGit } from "./shell.mts";
-import { visibleLetters, withoutInvisible } from "./plain-text.mts";
+import { visibleLetters, withoutHostInvisible, withoutInvisible } from "./plain-text.mts";
 import { agentSandbox } from "./skills.mts";
 import { logSandboxState } from "./diagnostics.mts";
 import { buildLogs } from "./role-logs.mts";
@@ -538,18 +538,19 @@ export type LocalReviewArgs = {
   reviewerMode?: ReviewerMode;
 };
 
-// An error's text as it can go on a public issue: no colour codes, no credentials in a URL, and nothing at all if it holds a secret. The text
-// comes back as it was given apart from that (callers compare it with their input to tell that nothing in it needed changing, and the
-// zero-width spaces the host adds to a mention or a reference, or an emoji's variation selector, are not a change), but the checks see it two
-// ways: as written, and without its invisible characters, which plainText removes after the check. A secret or a URL credential split by one is
-// withheld or redacted, and when only the second view had a credential, that redacted view is what comes back.
+// An error's text as it can go on a public issue: no colour codes, no credentials in a URL, no invisible characters, and nothing at all if it holds
+// a secret. Callers compare the result with their input to tell that nothing in it needed changing, so a text comes back as it was given when the
+// only invisible characters in it are the host's own (the zero-width spaces it adds to a mention or a reference, an emoji's variation selector:
+// withoutHostInvisible), and otherwise as the second view below. The checks see the text two ways: as written, and without its invisible
+// characters, which plainText removes after the check. A secret or a URL credential split by one is withheld or redacted.
 export function publicErrorText(text: string, holdsSecret: (text: string) => boolean = (t) => containsSecret(t, [])): string {
   const withoutColour = text.replace(/\u001b\[[0-9;]*[A-Za-z]/g, "");
   const redact = (t: string) => t.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/gi, "$1***@").trim();
   const cleaned = redact(withoutColour);
   const seen = redact(withoutInvisible(withoutColour));
   if (holdsSecret(cleaned) || holdsSecret(seen)) return "(This text isn't shown: it looked like it held a secret. It was withheld.)";
-  return withoutInvisible(cleaned) === seen ? cleaned : seen;
+  const hostOnly = withoutHostInvisible(cleaned);
+  return withoutInvisible(hostOnly) === hostOnly && withoutInvisible(cleaned).trim() === seen ? cleaned : seen;
 }
 
 // The git arguments listing the .github/workflows/ files each commit from
@@ -1291,7 +1292,7 @@ async function buildMarkedIssue(
       problem = `lacks the ${missing.map((heading) => `"## ${heading}"`).join(", ")} heading${missing.length > 1 ? "s" : ""}`;
     } else if (prBody.length > PR_BODY_LIMIT) {
       problem = `is ${prBody.length} characters, more than the ${PR_BODY_LIMIT} a PR body can hold`;
-    } else if (host.publicError(prBody) !== prBody) { // publicErrorText returns a text as it was given unless it needed a change (colour, a URL credential, a secret, or invisible characters other than the ones the host adds)
+    } else if (host.publicError(prBody) !== prBody) { // publicErrorText returns a text as it was given unless it needed a change: colour, a URL credential, a secret, or an invisible character the host did not add
       // publicError also strips colour codes and URL credentials. Any change
       // means the file isn't safe to publish as written, so it isn't.
       problem = "holds a secret, a token shape or other text that isn't safe to publish";

@@ -15,6 +15,12 @@ export function breakReferences(text: string): string {
     .replace(/\b(github)\.(com)\b/gi, "$1\u200B.$2");
 }
 
+// `text` without the invisible characters the host itself adds: the zero-width spaces breakReferences puts in a mention or a reference, and an
+// emoji's variation selector (U+FE0F after a pictograph). Anything invisible left in what this returns was not put there by the host.
+export function withoutHostInvisible(text: string): string {
+  return text.replace(/(?<=@)\u200B(?=[A-Za-z0-9])|(?<=#)\u200B(?=\d)|(?<=\bGH-)\u200B(?=\d)|(?<=\bgithub)\u200B(?=\.com\b)|(?<=\p{Extended_Pictographic})\uFE0F/giu, "");
+}
+
 // `text` with every control, format, private-use and unassigned character, lone surrogate and default-ignorable character (an
 // escape, a bell, a bidi override, a zero-width space or joiner, a variation selector, a Hangul filler, U+2800) removed, and each
 // run of whitespace made one space. The text of a finding reaches a terminal (the gate's message, the report) and a PR

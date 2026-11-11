@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { CAPITAL_LOOK_ALIKES, LOOK_ALIKES, plainText, RENDERED_LINK, stripControl, TAG, visibleLetters, withoutInvisible } from "./plain-text.mts";
+import { CAPITAL_LOOK_ALIKES, LOOK_ALIKES, plainText, RENDERED_LINK, stripControl, TAG, visibleLetters, withoutHostInvisible, withoutInvisible } from "./plain-text.mts";
 
 describe("visibleLetters", () => {
   for (const [form, text] of [
@@ -426,7 +426,6 @@ describe("stripControl and withoutInvisible", () => {
   it("remove the same characters from `a<c>b` for every code point", () => {
     const disagree: string[] = [];
     for (let point = 0; point <= 0x10ffff; point += 1) {
-      if (point >= 0xd800 && point <= 0xdfff) continue;
       const character = String.fromCodePoint(point);
       const text = `a${character}b`;
       const collapsed = withoutInvisible(text).replace(/\s+/gu, " ");
@@ -434,5 +433,20 @@ describe("stripControl and withoutInvisible", () => {
     }
 
     assert.deepEqual(disagree, []);
+  });
+});
+
+describe("withoutHostInvisible", () => {
+  it("removes exactly the invisible characters plainText adds to a mention, a reference, github.com and an emoji", () => {
+    const rendered = plainText("cc @someone, see #12 and GH-7 on github.com \u26a0\ufe0f");
+
+    assert.notEqual(rendered, withoutHostInvisible(rendered));
+    assert.equal(withoutInvisible(withoutHostInvisible(rendered)), withoutHostInvisible(rendered));
+  });
+
+  it("keeps a zero-width space anywhere else, a variation selector after a letter, and a bidi override", () => {
+    for (const text of ["a\u200bb", "@\u200b ", "#\u200bx", "x\ufe0fy", "a\u202eb", "githubx\u200b.com", "github\u200b.comx"]) {
+      assert.equal(withoutHostInvisible(text), text, JSON.stringify(text));
+    }
   });
 });
