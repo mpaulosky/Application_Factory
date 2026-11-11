@@ -27,7 +27,7 @@ for path in sorted(p for p in root.rglob("*") if p.is_file()):
         continue
     except OSError as error:
         # A file it can't read is a file it didn't check, which must not read as a pass or as a bare #N (exit 1).
-        print(f"{path}: {error.strerror or error}", file=sys.stderr)
+        print(f"{path}: {error}", file=sys.stderr)
         sys.exit(2)
     in_tests = "tests" in path.relative_to(root).parts
     is_ts_test = path.name.endswith(".test.mts")
