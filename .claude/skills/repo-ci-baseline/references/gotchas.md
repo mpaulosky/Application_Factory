@@ -121,10 +121,11 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     true one (`true`, `:`), is no export; any other condition is assumed to run, and so is an `elif` branch. The condition is judged only on an `if`
     that starts its line. Keywords are read in source order (`fi; if true; then` closes one block and opens the next). An `if` or `fi` counts only where a command starts: not
     quoted, escaped, in `${...}` or in a comment (`'; fi'`, `echo x # fi`), not an argument (`grep -q fi`), not after a `)` that closes `$(...)`, `<(...)` or `>(...)`,
-    not inside `((...))`, `$((...))` or `name=(...)`, and not at the start of a line that a trailing backslash continues mid-command (a comment ends the command, so the
-    line after one starts a new one). A `)` that closes a subshell or a case pattern does start a command (`a) if y; then z; fi ;;`).
-    A case pattern `fi)`, a `)` that closes a `$(` opened on an earlier line, a backtick substitution, and a line of a multi-line string or of a heredoc body read as code
-    that starts like `fi` or `else` can still misjudge a branch.
+    not inside `((...))`, `$((...))` or `name=(...)` (parentheses nested in them, and a quoted or escaped one, are part of them), and not at the start of a line
+    that a trailing backslash continues mid-command (a comment ends the command, so the line after one starts a new one). A `)` that closes a subshell or a
+    case pattern does start a command (`a) if y; then z; fi ;;`). A case pattern `fi)`, a `(` left open at the end of a line (a `$(`, `((` or `name=(` that
+    spans lines: the next line is read as code), a backtick substitution, and a line of a multi-line string or of a heredoc body read as code that starts like
+    `fi` or `else` can still misjudge a branch.
   - A file with a NUL byte is checked with the NULs removed, as bash reads it, not skipped. `--repo` reads a suffix in
     lower case (`up.SH`) and `.zsh`, treats every extensionless file under `scripts/` and `.github/ci/` as shell
     (under `.claude/skills/` it needs a shell shebang), and refuses a symlink whose target is outside the repo or

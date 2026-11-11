@@ -7,6 +7,7 @@ Baseline repo's gate check for gh commands that reach gh's default repository
 import ast
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -2138,7 +2139,7 @@ def test_check_repo_escapes_line_breaks_in_the_name_of_a_symlink_it_refuses(tmp_
     ("if false; then\ntime if x; then y; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
     # a line a trailing backslash continues is not the start of a command
     ("if false; then\necho x \\\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
-    # a ) that closes an expansion ends no command; one that closes a subshell does (a case pattern's is tested above)
+    # a ) that closes an expansion ends no command, however the parentheses nest; one that closes a subshell does (a case pattern's is tested above)
     ("if false; then\necho $(true) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
     ("if false; then\necho $((1+2)) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
     ("if false; then\na=(x y) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
@@ -2161,11 +2162,12 @@ def test_check_repo_escapes_line_breaks_in_the_name_of_a_symlink_it_refuses(tmp_
     ("if false; then\necho x \\\\\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
     ("if false; then\n:\necho x \\\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
     ("if false; then\n:\necho x \\\nelif y; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
-    # a comment ends the command, even one that ends in a backslash; a ( inside arithmetic or an array holds no command
+    # a comment ends the command, even one that ends in a backslash
     ("if false; then\necho x # c \\\nif y; then\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
     ("if false; then\necho x # note \\\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
     ("if false; then\n:\necho x # c \\\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
     ("if false; then\necho x \\\n# note\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # arithmetic and array elements are not commands
     ("if false; then\n(( fi ))\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
     ("if false; then\necho $(( fi ))\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
     ("if false; then\nx=$(( if ))\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
@@ -2177,6 +2179,30 @@ def test_check_repo_escapes_line_breaks_in_the_name_of_a_symlink_it_refuses(tmp_
     ("if false; then\nx=$(if a; then b; fi) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
     ("if false; then\n(echo $(a)) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
     ("if false; then\n(true) fi $\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # parentheses nested in arithmetic or an array are skipped too; the contents end at the matching )
+    ("if false; then\nx=$(( (fi) ))\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n(( (if) ))\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\na=( (if) )\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho $(( (1+2) * 3 )) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n(( (a) * 2 )) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\nx=(a (b)) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho $(( (1) )) fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n((x)); fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\na=(x); fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\na=(x; fi)\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n(if x; then y; fi)\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    # a quoted, escaped or ${...} parenthesis in an array or arithmetic neither closes nor opens it
+    ("if false; then\narr=( \"a)\" ); if true; then\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if false; then\narr=( \"(\" ); if true; then\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if false; then\narr=( ')' ); if true; then\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if false; then\narr=( \\) ); if true; then\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if false; then\narr=( ${x:-)} ); if true; then\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if false; then\narr=( \"a\\\"b)\" ); if true; then\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if false; then\narr=( \\) ; fi )\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\na=( \\\nfi )\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if false; then\nx=( $(fi) )\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # a stray elif before any if is ignored
+    ("elif x; then\nexport GH_REPO=o/r\ngh pr view 1\n", []),
     # a { after an argument is an argument; a keyword follows a pipe; an odd run of three backslashes continues the line
     ("if false; then\necho { fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
     ("if false; then\necho x | if y; then z; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
@@ -2258,3 +2284,17 @@ def test_untold_never_slices_the_lines_of_a_file_with_a_heredoc(tmp_path, monkey
     path.write_text("cat <<EOF\nhello\nEOF\ngh pr view 1\n")
     monkeypatch.setattr(check_gh_repo, "read_lines", lambda _: NoSlice(["cat <<EOF", "hello", "EOF", "gh pr view 1"]))
     assert lines_of(check_gh_repo.untold(path)) == [4]
+
+
+@pytest.mark.parametrize("char", sorted(check_gh_repo.WORD_END) + ["{", "}", "\\", "'", '"', "$", "#"])
+def test_keywords_takes_every_character_that_ends_a_word(char):
+    # A character that ends a word but that no branch of the scan takes would never advance it: fail after 5 s instead of hanging.
+    def stop(*_):
+        raise TimeoutError(f"keywords() did not finish on {char!r}")
+    previous = signal.signal(signal.SIGALRM, stop)
+    signal.alarm(5)
+    try:
+        assert check_gh_repo.keywords(char * 3)[0] == []
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)

@@ -433,6 +433,19 @@ NEVER = re.compile(r"(false|! *true|\[ +0 +-ne +0 +\]|\[ +1 +-eq +0 +\])$")
 ALWAYS = re.compile(r"(true|:)$")
 
 
+def quoted_end(line, position):
+    """The index right after the quoted string that starts at line[position], a ' or a " (past the end of line when it never closes).
+
+    Inside "..." and $'...' a backslash escapes the next character; inside '...' it doesn't.
+    """
+    quote = line[position]
+    escapes = quote == '"' or (position > 0 and line[position - 1] == "$")
+    position += 1
+    while position < len(line) and line[position] != quote:
+        position += 2 if escapes and line[position] == "\\" else 1
+    return position + 1
+
+
 def keywords(line, command=True):
     """The if and fi keywords of line, in source order (each "if" or "fi"), and whether the line ends where a command may start.
 
@@ -442,18 +455,27 @@ def keywords(line, command=True):
     BEFORE_COMMAND word (then, else, do, if, {, !...). A comment ends the command, so the next line starts one.
     A ( says what its ) ends: a ) that closes $(...), <(...) or >(...) ends no command, so a word after it is an
     argument; one that closes a subshell, or a case pattern (a) if y; then z; fi ;;), does. What a ((...)), $((...)) or
-    name=(...) holds is arithmetic or array elements, not commands, so it is skipped. Known limits: a case pattern
-    that reads fi), a ) closing a $( opened on an earlier line, a backtick substitution, and a line of a multi-line
-    string or a heredoc body read as code that starts like a keyword.
+    name=(...) holds (a (( is arithmetic, never two subshells), parentheses nested in it included, is arithmetic or array elements, not commands, so it is
+    skipped (quotes, backslashes and ${...} in it still hide a parenthesis). Known limits: a case pattern that reads
+    fi), a ( left open at the end of a line (a $( or (( or name=( spanning lines: the next line is read as code), a
+    backtick substitution, and a line of a multi-line string or a heredoc body read as code that starts like a keyword.
     """
     found = []
     position = 0
-    # What each open ( is: "expansion" ($( <( >( ), "arithmetic" (( ), "array" (name=( ) or "subshell".
+    # What each open ( is: "expansion" ($( <( >( ), "skipped" (( ), name=( ) and what nests in them) or "subshell".
     parentheses = []
     while position < len(line):
         char = line[position]
-        if parentheses and parentheses[-1] in ("arithmetic", "array") and char not in "()":
-            position += 1
+        if parentheses and parentheses[-1] == "skipped" and char not in "()":
+            if char == "\\":
+                position += 2
+            elif char in "'\"":
+                position = quoted_end(line, position)
+            elif line.startswith("${", position):
+                end = line.find("}", position)
+                position = len(line) if end < 0 else end + 1
+            else:
+                position += 1
         elif char in " \t":
             position += 1
         elif char == "#":
@@ -463,9 +485,12 @@ def keywords(line, command=True):
             position += 1
         elif char == "(":
             before = line[position - 1] if position else ""
-            kind = {"(": "arithmetic", "=": "array"}.get(before, "expansion" if before and before in "$<>" else "subshell")
+            if before != "$" and (line.startswith("((", position) or (parentheses and parentheses[-1] == "skipped")):
+                kind = "skipped"
+            else:
+                kind = {"(": "skipped", "=": "skipped"}.get(before, "expansion" if before and before in "$<>" else "subshell")
             parentheses.append(kind)
-            command = kind in ("expansion", "subshell")
+            command = kind != "skipped"
             position += 1
         elif char == ")":
             command = (parentheses.pop() if parentheses else "subshell") == "subshell"
@@ -482,13 +507,7 @@ def keywords(line, command=True):
                 if line[position] == "\\":
                     position += 2
                 elif line[position] in "'\"":
-                    quote = line[position]
-                    # Inside "..." and $'...' a backslash escapes the next character; inside '...' it doesn't.
-                    escapes = quote == '"' or (position > start and line[position - 1] == "$")
-                    position += 1
-                    while position < len(line) and line[position] != quote:
-                        position += 2 if escapes and line[position] == "\\" else 1
-                    position += 1
+                    position = quoted_end(line, position)
                 elif line.startswith("${", position):
                     end = line.find("}", position)
                     position = len(line) if end < 0 else end + 1
@@ -502,7 +521,7 @@ def keywords(line, command=True):
 
 
 def condition_of(line):
-    """The condition of a line that starts with if, its trailing then, ; and comment cut off, or "" when the line doesn't start with one."""
+    """The condition of a line that starts with if and a blank, its trailing then, ; and comment cut off, or "" when it doesn't (if(...) and a bare if have none)."""
     text = line.lstrip(" \t")
     if not text.startswith("if") or text[2:3] not in (" ", "\t"):
         return ""
