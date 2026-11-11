@@ -71,3 +71,18 @@ def test_an_unreadable_file_exits_2_and_hides_the_findings_found_before_it(tmp_p
         assert result.stdout == ""
     finally:
         (root / "b.md").chmod(0o644)
+
+
+@pytest.mark.parametrize("unreadable", ["sub", "."])
+def test_an_unlistable_directory_exits_2_instead_of_skipping_its_files(tmp_path, unreadable):
+    root = tree(tmp_path / "owned", {"sub/b.md": "See #5\n", "a.md": "fine\n"})
+    target = root / unreadable
+    target.chmod(0)
+    try:
+        if os.access(target, os.R_OK | os.X_OK):
+            pytest.skip("root lists anything")
+        result = run(root)
+        assert result.returncode == 2 and result.stdout == ""
+        assert str(target) in result.stderr
+    finally:
+        target.chmod(0o755)

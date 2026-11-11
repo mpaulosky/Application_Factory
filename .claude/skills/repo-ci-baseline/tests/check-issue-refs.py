@@ -3,11 +3,11 @@
 
     python3 -I check-issue-refs.py <the Template's owned/ folder>
 
-Exit 0: none found. Exit 1: found, printed. Exit 2: nothing was (fully) checked: the folder is missing, the arguments are wrong or a file is unreadable.
+Exit 0: none found. Exit 1: found, printed. Exit 2: nothing was (fully) checked: the folder is missing, the arguments are wrong, or a file or directory is unreadable.
 test.sh runs it, and so does the Factory's scripts/gate.sh (also with --quick), so the rule fails before test.sh does.
 The rule, with its reasons, is the comment in test.sh's "Issue references in Owned files name their repo" step.
 """
-import pathlib, re, sys
+import os, pathlib, re, sys
 
 CITATION = re.compile(r"\((?:[^()]*, )?#\d+\)")
 BARE = re.compile(r"(?<![\w/&])#\d+\b")
@@ -19,8 +19,18 @@ if len(sys.argv) != 2 or not pathlib.Path(sys.argv[1]).is_dir():
     sys.exit(2)
 root = pathlib.Path(sys.argv[1])
 found = []
-# rglob skips a directory it can't list, so only an unreadable file exits 2; the Template's owned/ folder comes from git, with no such directory.
-for path in sorted(p for p in root.rglob("*") if p.is_file()):
+
+
+def unlistable(error):
+    # A directory it can't list is a set of files it didn't check, which must not read as a pass (os.walk skips it without this).
+    print(f"{error}", file=sys.stderr)
+    sys.exit(2)
+
+
+files = sorted(pathlib.Path(folder, name) for folder, _, names in os.walk(root, onerror=unlistable) for name in names)
+for path in files:
+    if not path.is_file():
+        continue
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except UnicodeDecodeError:
