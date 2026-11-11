@@ -148,9 +148,10 @@ describe("SANDBOX_PROBE", () => {
   });
 
   it("counts a zombie, which a PID 1 that never waits leaves for every orphan", { skip: (process.platform !== "linux" || !hasPs) && "needs ps on Linux" }, async () => {
-    // The shell backgrounds a subshell that exits at once, then becomes `sleep`, which never waits for it: the subshell stays a
-    // zombie, a child of `sleep`, for the five seconds `sleep` runs.
-    const parent = spawn("sh", ["-c", "(true) & exec sleep 5"], { stdio: "ignore" });
+    // The shell backgrounds a `sleep 1`, then becomes a `sleep 30`, which never waits for it: the first stays a zombie, a child of the second,
+    // from the end of its second until the test kills the parent. The first must still be running when the shell execs: a child that exits
+    // sooner can be reaped by the shell itself (bash does, on SIGCHLD), which left no zombie in one run in about four under load.
+    const parent = spawn("sh", ["-c", "sleep 1 & exec sleep 30"], { stdio: "ignore" });
     try {
       // The test's own zombie, found by its parent, so the wait is for what the test made and not for the machine's count to change.
       const ownZombies = () =>
@@ -158,14 +159,14 @@ describe("SANDBOX_PROBE", () => {
           .stdout.split("\n")
           .map((line) => line.trim().split(/\s+/))
           .filter(([ppid, stat]) => Number(ppid) === parent.pid && stat?.startsWith("Z")).length;
-      for (const deadline = Date.now() + 4_000; ownZombies() < 1 && Date.now() < deadline; ) await new Promise((resolve) => setTimeout(resolve, 100));
+      for (const deadline = Date.now() + 20_000; ownZombies() < 1 && Date.now() < deadline; ) await new Promise((resolve) => setTimeout(resolve, 100));
       assert.equal(ownZombies(), 1, "the test's own zombie never appeared");
 
       // The test's count of every zombie, from `ps` alone. The probe's count must lie between two of these taken around it, which a count of
       // some other state (a sleeping `sleep` is also running now) does not. Other zombies can come and go meanwhile, so a miss is tried again.
       const counted = () => spawnSync("ps", ["-eo", "stat="], { encoding: "utf8" }).stdout.split("\n").filter((line) => line.startsWith("Z")).length;
       let last = "";
-      for (let attempt = 0; attempt < 3; attempt++) {
+      for (let attempt = 0; attempt < 10; attempt++) {
         const low = counted();
         const run = spawnSync("sh", ["-c", PROBE_SCRIPT], { encoding: "utf8" });
         const high = counted();
