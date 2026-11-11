@@ -14,7 +14,8 @@ SPEC = json.loads((HERE / "mutations.json").read_text())
 
 
 def test_the_spec_runs_this_directorys_tests_and_has_mutations():
-    assert (ROOT / SPEC["test"][2]).is_file()
+    tests = [part for part in SPEC["test"] if part.endswith("test_check_gh_repo.py")]
+    assert len(tests) == 1 and (ROOT / tests[0]).is_file()
     assert SPEC["timeout"] > 0
     assert len(SPEC["mutations"]) >= 10
 
@@ -24,6 +25,8 @@ def test_a_mutation_still_fits_the_code(mutation):
     text = (ROOT / mutation["path"]).read_text()
     assert text.count(mutation["old"]) == 1, "old must occur exactly once: update the spec to the code"
     assert mutation["new"] != mutation["old"]
+    # A mutant that doesn't compile would be "caught" by every test: it must be code.
+    compile(text.replace(mutation["old"], mutation["new"], 1), mutation["path"], "exec")
     assert mutation["why"].strip()
 
 

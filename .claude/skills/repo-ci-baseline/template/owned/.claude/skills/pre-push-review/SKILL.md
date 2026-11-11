@@ -127,7 +127,7 @@ the sections must match in order), and prints two lines on stdout, the diff's
 key and HEAD: keep both, since they name exactly the code this round reviews. The key is that of the whole diff, mirrors included, so a change in a
 mirror alone still needs a new review. In a later round, run `scripts/review.sh prepare <run> <HEAD the round before printed>`: it also writes the
 diff of that round's fixes to `<run>/fixes.patch`, filtered the same way. Write to `<run>/decisions.md`, with the Write tool and not a shell heredoc (the text quotes code such as `$(...)`,
-which a shell may run or a safety check may block), the earlier decisions from step 3 and every finding this run's earlier rounds
+which a safety check may block), the earlier decisions from step 3 and every finding this run's earlier rounds
 raised, each with its id, outcome and reason, so no round raises again what an earlier one dismissed. A fixed item stays settled only until
 a reviewer reads the code at its `path:line` and finds the problem still there, then it is raised again. Label
 accepted and open ones "raise again if still in the code". Give a security finding (every finding the report marks
@@ -222,9 +222,11 @@ code at each finding's line yourself, then give it one outcome:
   An earlier Advisory finding that's still there is fixed now, unless it waits for a person: then it's recorded open
   again as Advisory, its summary opening with the old id (`R3 again: ...`), and it never blocks.
 
-End each round's triage by staging its findings, every field of step 8's `findings` (ids as below), so a long session that loses its
-memory of the earlier rounds still records them: `scripts/review.sh stage <run> <<'JSON'` with the round's JSON array. A finding staged
-again under the same id replaces the earlier one, so stage a fixed finding again with its `test`, and a dismissed one with its `reason`.
+Stage the findings, so a long session that loses its memory of the earlier rounds still records them. Write the round's JSON array, every
+field of step 8's `findings` (ids as below), with the Write tool to `<run>/round-N.json` (the text quotes code, as in step 4), and run
+`scripts/review.sh stage <run> <run>/round-N.json`. Stage every finding as it stands when triage ends (open, dismissed with its `reason`, or to be
+fixed), stage each one again at the end of step 6 as fixed with its `test` (or `reason`), and stage the last round's before step 8. A finding
+staged again under the same id replaces the earlier one.
 
 Number this run's findings from the id `scripts/review.sh next` prints at the start of the run, continuing across its
 rounds. `record` refuses any id at or below the highest that the review it replaces, or any earlier review of the

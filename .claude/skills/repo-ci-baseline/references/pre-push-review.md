@@ -38,9 +38,10 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
 - Critical and Warning findings left open (because they need a person, or the last, review-only round raised them) block the push until the person fixes them or accepts
   them with `scripts/review.sh accept` (never on their behalf).
   Advisory findings never block: one that needs a person goes to one follow-up issue per branch.
-- A run's findings are staged, not held in the session. Each round's triage goes to `scripts/review.sh stage <run>` (each finding checked as `record` checks it; one staged again
-  under the same id replaces the earlier), and `record - --staged <run>` records `<run>/findings.json` with any findings in the JSON after them, so a long session that was
-  compacted still records every round exactly (ids, lines, tests). The folder is the run's own `mktemp -d`; `record` is still the only writer of the ledger.
+- A run's findings are staged, not held in the session. Each round's triage goes to `scripts/review.sh stage <run> <file>`: each finding is checked as `record` checks it (an
+  `accepted` one is refused), and one staged again under the same id replaces the earlier. The file is owner-only and replaced whole, and a second `stage` at the same time is
+  refused. `record - --staged <run>` records `<run>/findings.json` with any findings in the JSON after them, so a long session that was compacted still records every round
+  exactly (ids, lines, tests). The folder is the run's own `mktemp -d`; `record` is still the only writer of the ledger.
 - A finding's words are a reviewer agent's, who read hostile diff text, so they are made safe where they enter and where they are published. The ledger removes control and
   invisible characters (an escape, a bidi override, a zero-width space or joiner, a variation selector, U+2800) from a finding's lens, path, summary, test, reason and fix
   when it records one and when it reads an older ledger (a field made only of them is refused as empty), and turns each run of

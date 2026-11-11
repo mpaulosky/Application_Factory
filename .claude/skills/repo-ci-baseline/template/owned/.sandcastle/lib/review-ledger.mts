@@ -365,22 +365,28 @@ export const reviewInputSchema = z
     findings: z.array(inputFindingSchema),
   })
   .strict()
-  .superRefine((input, context) => {
-    const ids = input.findings.map((finding) => finding.id);
-    const repeated = ids.filter((id, index) => ids.indexOf(id) !== index);
-    if (repeated.length > 0) {
-      context.addIssue({ code: "custom", message: `finding ids repeat: ${[...new Set(repeated)].join(", ")}` });
-    }
-    const accepted = input.findings.filter((finding) => finding.status === "accepted").map((finding) => finding.id);
-    if (accepted.length > 0) {
-      context.addIssue({
-        code: "custom",
-        message: `${accepted.join(", ")} can't be recorded as accepted: record it open, and the person accepts it with scripts/review.sh accept`,
-      });
-    }
-  });
+  .superRefine((input, context) => checkFindingList(input.findings, context));
+
+function checkFindingList(findings: readonly { id: string; status: string }[], context: z.RefinementCtx): void {
+  const ids = findings.map((finding) => finding.id);
+  const repeated = ids.filter((id, index) => ids.indexOf(id) !== index);
+  if (repeated.length > 0) {
+    context.addIssue({ code: "custom", message: `finding ids repeat: ${[...new Set(repeated)].join(", ")}` });
+  }
+  const accepted = findings.filter((finding) => finding.status === "accepted").map((finding) => finding.id);
+  if (accepted.length > 0) {
+    context.addIssue({
+      code: "custom",
+      message: `${accepted.join(", ")} can't be recorded as accepted: record it open, and the person accepts it with scripts/review.sh accept`,
+    });
+  }
+}
 
 export type ReviewInput = z.infer<typeof reviewInputSchema>;
+
+// What a list of findings must satisfy as a whole: `record` applies it to its input, and `stage` to what it stages and to what is staged already,
+// so a finding `record` would refuse is refused where it enters.
+const findingListSchema = z.array(inputFindingSchema).superRefine((findings, context) => checkFindingList(findings, context));
 
 export const ledgerSchema = z
   .object({
@@ -1424,8 +1430,8 @@ const USAGE = `Usage: scripts/review.sh <command>
                          the key of the whole diff, then HEAD
   key                    print the ledger key of HEAD's diff against origin/main
   check [<base>]         the gate's check: exit 1 unless HEAD's diff was reviewed clean
-  stage <absolute dir> [<file>]
-                         add the findings in the JSON array in <file> (stdin by default) to <dir>/findings.json, a finding with an id already there replacing
+  stage <absolute dir> [<file>|-]
+                         add the findings in the JSON array in <file> (stdin by default, or -) to <dir>/findings.json, a finding with an id already there replacing
                          it, so a round's triage survives a long session; prints how many are staged
   record <file> [--staged <absolute dir>]
                          record a review from JSON ({ reviewedKey, reviewedHead, rounds, reviewerAgent, pr, findings }); - reads stdin;
@@ -1471,26 +1477,52 @@ function printable(text: string): string {
 // `record --staged` reads them, so the record doesn't depend on what the session still remembers of the earlier rounds.
 const STAGED_FILE = "findings.json";
 
-function readStaged(directory: string): unknown[] {
+// The findings staged in `directory`, each checked as `record` checks its input. A file that is missing, a symlink, not JSON, not an array or
+// holding a finding `record` would refuse stops the command and names the file, so a damaged file fails where it is met.
+function readStaged(directory: string): z.infer<typeof findingListSchema> {
   const file = join(directory, STAGED_FILE);
-  if (!existsSync(file)) throw new Error(`${file} doesn't exist: stage the findings of a round first (scripts/review.sh stage).`);
-  const staged = JSON.parse(readFileSync(file, "utf8")) as unknown;
+  const info = lstatOrUndefined(file);
+  if (info === undefined) throw new Error(`${file} doesn't exist: stage the findings of a round first (scripts/review.sh stage).`);
+  if (!info.isFile()) throw new Error(`${file} isn't a regular file.`);
+  let staged: unknown;
+  try {
+    staged = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    throw new Error(`${file} isn't JSON.`);
+  }
   if (!Array.isArray(staged)) throw new Error(`${file} isn't a JSON array.`);
-  return staged;
+  const checked = findingListSchema.safeParse(staged);
+  if (!checked.success) throw new Error(`${file} holds findings the review refuses:\n${z.prettifyError(checked.error)}`);
+  return checked.data;
 }
 
 // Add `findings` (a JSON array, each checked as `record` will check it) to the folder's file; a finding whose id is staged already
-// replaces that one, since a later round may change what became of it.
+// replaces that one, since a later round may change what became of it. The file holds the run's unpublished findings: it is made
+// owner-only and whole (a temp file renamed over it, never written through a link), and a second `stage` that runs at the same time is refused
+// by a lock file, since two would each merge into the same old file and one would lose the other's findings.
 function stageFindings(directory: string, findings: unknown): { added: number; total: number } {
-  const parsed = z.array(inputFindingSchema).parse(findings);
+  const parsed = findingListSchema.parse(findings);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (lstatSync(directory).isSymbolicLink()) throw new Error(`${directory} is a symlink: give the run's own folder.`);
   const file = join(directory, STAGED_FILE);
-  const kept = existsSync(file) ? (readStaged(directory) as { id: string }[]) : [];
-  const ids = new Set(parsed.map((finding) => finding.id));
-  if (ids.size !== parsed.length) throw new Error("finding ids repeat within the array.");
-  const merged = [...kept.filter((finding) => !ids.has(finding.id)), ...parsed];
-  mkdirSync(directory, { recursive: true });
-  writeFileSync(file, `${JSON.stringify(merged, null, 2)}\n`);
-  return { added: parsed.length, total: merged.length };
+  const lock = `${file}.lock`;
+  let handle: number;
+  try {
+    handle = openSync(lock, "wx", 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error(`another stage is writing ${file}; try again, or delete ${lock} if none is running.`, { cause: error });
+    throw error;
+  }
+  try {
+    const kept = lstatOrUndefined(file) === undefined ? [] : readStaged(directory);
+    const ids = new Set(parsed.map((finding) => finding.id));
+    const merged = [...kept.filter((finding) => !ids.has(finding.id)), ...parsed];
+    replaceFile(file, `${JSON.stringify(merged, null, 2)}\n`);
+    return { added: parsed.length, total: merged.length };
+  } finally {
+    closeSync(handle);
+    rmSync(lock, { force: true });
+  }
 }
 
 // The command line. Returns the exit code: 0 only for a command that did
@@ -1540,9 +1572,10 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         return 0;
       }
       case "stage": {
-        if ((rest.length !== 1 && rest.length !== 2) || !isAbsolute(rest[0])) return fail(USAGE);
-        const staged = stageFindings(rest[0], JSON.parse(readFileSync(rest[1] ?? 0, "utf8")));
-        out(`Staged ${staged.added} finding(s); ${staged.total} in ${join(rest[0], STAGED_FILE)}.`);
+        const [directory, source] = rest;
+        if ((rest.length !== 1 && rest.length !== 2) || directory === undefined || !isAbsolute(directory)) return fail(USAGE);
+        const staged = stageFindings(directory, JSON.parse(readFileSync(source === undefined || source === "-" ? 0 : source, "utf8")));
+        out(`Staged ${staged.added} finding(s); ${staged.total} in ${join(directory, STAGED_FILE)}.`);
         return 0;
       }
       case "record": {
@@ -1550,10 +1583,15 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         const stagedDirectory = flag < 0 ? undefined : rest[flag + 1];
         if (flag >= 0 && (stagedDirectory === undefined || !isAbsolute(stagedDirectory) || rest.length !== 3 || flag !== 1)) return fail(USAGE);
         if (rest[0] === undefined || (flag < 0 && rest.length !== 1)) return fail(USAGE);
-        const parsed = JSON.parse(readFileSync(rest[0] === "-" ? 0 : rest[0], "utf8")) as { findings?: unknown };
-        const text = JSON.stringify(
-          stagedDirectory === undefined ? parsed : { ...parsed, findings: [...readStaged(stagedDirectory), ...(Array.isArray(parsed.findings) ? parsed.findings : [])] },
-        );
+        let text = readFileSync(rest[0] === "-" ? 0 : rest[0], "utf8");
+        if (stagedDirectory !== undefined) {
+          // The file's own findings are kept whole (a value that isn't an array is the schema's to refuse, as without --staged).
+          const parsed: unknown = JSON.parse(text);
+          if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return fail("The review input must be a JSON object.");
+          const own = (parsed as { findings?: unknown }).findings;
+          if (own !== undefined && !Array.isArray(own)) return fail("findings in the review input must be an array.");
+          text = JSON.stringify({ ...parsed, findings: [...readStaged(stagedDirectory), ...(own ?? [])] });
+        }
         const note = (message: string) => process.stderr.write(`.security: ${printable(message)}\n`);
         const report = renderReport(
           recordReview(cwd, mergeBase(cwd), JSON.parse(text) as ReviewInput, undefined, undefined, {

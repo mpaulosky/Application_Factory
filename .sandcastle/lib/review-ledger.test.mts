@@ -4235,85 +4235,242 @@ describe("the review command's printed text", () => {
 });
 
 describe("staging findings between rounds", () => {
-  // A findings array in a file, as the skill pipes it to `stage`.
+  // A findings array in a file, as the skill hands it to `stage`.
   const array = (name: string, findings: unknown[]): string => {
     const file = join(root, name);
     writeFileSync(file, JSON.stringify(findings));
     return file;
   };
-  const run1 = () => join(root, "run");
-  const staged = (): { id: string; status: string }[] => JSON.parse(readFileSync(join(run1(), "findings.json"), "utf8"));
+  const folder = () => join(root, "run");
+  const staged = (directory = folder()): { id: string; status: string; policy?: string }[] => JSON.parse(readFileSync(join(directory, "findings.json"), "utf8"));
+  const ids = (directory = folder()) => staged(directory).map((found) => found.id);
+  const USAGE_LINE = /Usage: scripts\/review\.sh <command>/;
   // A branch with a change to review, so `record` has a diff.
   const branchWithChange = () => commit(repo, "app.cs", lines(50, (index) => (index === 2 ? "fix 1" : undefined)), "fix 1");
+  // The review input file `record` reads.
+  const inputFile = (extra: Record<string, unknown> = { findings: [] }) => {
+    const file = join(root, "input.json");
+    writeFileSync(file, JSON.stringify({ ...reviewed(), rounds: 1, ...extra }));
+    return file;
+  };
+  // The CLI as a child process, for the forms that read stdin.
+  const childEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "GATE_SKIP_REVIEW"));
+  const spawned = (args: string[], input: string) => spawnSync("bash", [reviewScript, ...args], { cwd: repo, encoding: "utf8", env: childEnv, input });
 
   it("keeps the findings of each round in the run folder, in order", () => {
-    assert.match(cli(["stage", run1(), array("a.json", [finding()])]).out, /Staged 1 finding\(s\); 1 in /);
-    assert.match(cli(["stage", run1(), array("b.json", [finding({ id: "R2" })])]).out, /Staged 1 finding\(s\); 2 in /);
+    assert.match(cli(["stage", folder(), array("a.json", [finding()])]).out, /Staged 1 finding\(s\); 1 in /);
+    assert.match(cli(["stage", folder(), array("b.json", [finding({ id: "R2" })])]).out, /Staged 1 finding\(s\); 2 in /);
 
-    assert.deepEqual(staged().map((found) => found.id), ["R1", "R2"]);
+    assert.deepEqual(ids(), ["R1", "R2"]);
   });
 
   it("replaces a staged finding with the same id, as a later round changes what became of it", () => {
-    cli(["stage", run1(), array("a.json", [finding({ status: "open", test: null }), finding({ id: "R2" })])]);
+    cli(["stage", folder(), array("a.json", [finding({ status: "open", test: null }), finding({ id: "R2" })])]);
 
-    const result = cli(["stage", run1(), array("b.json", [finding()])]);
+    const result = cli(["stage", folder(), array("b.json", [finding()])]);
 
     assert.match(result.out, /Staged 1 finding\(s\); 2 in /);
     assert.deepEqual(staged().map((found) => `${found.id}:${found.status}`), ["R2:fixed", "R1:fixed"]);
   });
 
-  it("refuses a finding record would refuse, and stages nothing", () => {
-    const bad = finding({ severity: "advisory", lens: "Security" });
+  it("keeps what is staged when an empty array is staged", () => {
+    cli(["stage", folder(), array("a.json", [finding()])]);
 
-    const result = cli(["stage", run1(), array("a.json", [finding({ id: "R2" }), bad])]);
+    const result = cli(["stage", folder(), array("b.json", [])]);
+
+    assert.match(result.out, /Staged 0 finding\(s\); 1 in /);
+    assert.deepEqual(ids(), ["R1"]);
+  });
+
+  it("refuses a finding record would refuse, and stages nothing", () => {
+    const result = cli(["stage", folder(), array("a.json", [finding({ id: "R2" }), finding({ severity: "advisory", lens: "Security" })])]);
 
     assert.equal(result.code, 1);
     assert.match(result.err, /lens names security/);
-    assert.equal(existsSync(join(run1(), "findings.json")), false);
+    assert.equal(existsSync(join(folder(), "findings.json")), false);
   });
 
-  it("refuses a repeated id within one array, a relative folder and an array that is not one", () => {
-    assert.equal(cli(["stage", run1(), array("a.json", [finding(), finding()])]).code, 1);
-    assert.equal(cli(["stage", "run", array("b.json", [finding()])]).code, 1);
-    assert.equal(cli(["stage", run1(), array("c.json", [])]).code, 0);
-    writeFileSync(join(root, "d.json"), "{}");
-    assert.equal(cli(["stage", run1(), join(root, "d.json")]).code, 1);
-    assert.equal(cli(["stage"]).code, 1);
+  it("refuses a finding given as accepted, as record does, and repeated ids within an array", () => {
+    const accepted = cli(["stage", folder(), array("a.json", [finding({ status: "accepted", reason: "ok" })])]);
+    const repeated = cli(["stage", folder(), array("b.json", [finding(), finding()])]);
+
+    assert.equal(accepted.code, 1);
+    assert.match(accepted.err, /R1 can't be recorded as accepted/);
+    assert.equal(repeated.code, 1);
+    assert.match(repeated.err, /finding ids repeat: R1/);
+    assert.equal(existsSync(join(folder(), "findings.json")), false);
+  });
+
+  it("refuses a relative folder, a file that is not an array, and the wrong number of arguments, with the usage", () => {
+    const notArray = join(root, "d.json");
+    writeFileSync(notArray, "{}");
+
+    for (const args of [["stage"], ["stage", "run", array("b.json", [finding()])], ["stage", folder(), array("c.json", []), "extra"]]) {
+      const result = cli(args);
+      assert.equal(result.code, 1, args.join(" "));
+      assert.match(result.err, USAGE_LINE, args.join(" "));
+    }
+    assert.equal(cli(["stage", folder(), notArray]).code, 1);
+    assert.equal(existsSync(join(folder(), "findings.json")), false);
+  });
+
+  it("reads the findings from stdin, as the skill does, and from - too", () => {
+    const first = spawned(["stage", folder()], JSON.stringify([finding()]));
+    const second = spawned(["stage", folder(), "-"], JSON.stringify([finding({ id: "R2" })]));
+
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(second.status, 0, second.stderr);
+    assert.deepEqual(ids(), ["R1", "R2"]);
+  });
+
+  it("refuses empty stdin and stages nothing", () => {
+    const result = spawned(["stage", folder()], "");
+
+    assert.equal(result.status, 1);
+    assert.equal(existsSync(join(folder(), "findings.json")), false);
+  });
+
+  it("works in a folder whose path has a space", () => {
+    const spaced = join(root, "my run");
+    assert.equal(cli(["stage", spaced, array("a.json", [finding()])]).code, 0);
+    branchWithChange();
+
+    const result = cli(["record", inputFile(), "--staged", spaced]);
+
+    assert.equal(result.code, 0, result.err);
+    assert.deepEqual(ids(spaced), ["R1"]);
+  });
+
+  it("writes the findings owner-only, in an owner-only folder it made, and leaves no temp or lock file", () => {
+    cli(["stage", folder(), array("a.json", [finding()])]);
+
+    assert.equal(statSync(join(folder(), "findings.json")).mode & 0o777, 0o600);
+    assert.equal(statSync(folder()).mode & 0o777, 0o700);
+    assert.deepEqual(readdirSync(folder()), ["findings.json"]);
+  });
+
+  it("refuses a second stage that runs at the same time, and a failed one releases the lock", () => {
+    cli(["stage", folder(), array("a.json", [finding()])]);
+    writeFileSync(join(folder(), "findings.json.lock"), "");
+
+    const held = cli(["stage", folder(), array("b.json", [finding({ id: "R2" })])]);
+
+    assert.equal(held.code, 1);
+    assert.match(held.err, /another stage is writing/);
+    assert.deepEqual(ids(), ["R1"]);
+    rmSync(join(folder(), "findings.json.lock"));
+    writeFileSync(join(folder(), "findings.json"), "not json");
+    assert.equal(cli(["stage", folder(), array("c.json", [finding({ id: "R3" })])]).code, 1);
+    assert.equal(existsSync(join(folder(), "findings.json.lock")), false);
+  });
+
+  it("fails on a staged file that is damaged, names it, and leaves it as it was", () => {
+    mkdirSync(folder(), { recursive: true });
+    const file = join(folder(), "findings.json");
+    const cases: [string, RegExp][] = [
+      ["not json", /isn't JSON/],
+      ["{}", /isn't a JSON array/],
+      ["[null]", /holds findings the review refuses/],
+      [JSON.stringify([{ lens: "x" }]), /holds findings the review refuses/],
+      [JSON.stringify([finding({ status: "accepted", reason: "ok" })]), /can't be recorded as accepted/],
+    ];
+    for (const [text, message] of cases) {
+      writeFileSync(file, text);
+      const staging = cli(["stage", folder(), array("a.json", [finding({ id: "R9" })])]);
+      const recording = cli(["record", inputFile(), "--staged", folder()]);
+
+      assert.equal(staging.code, 1, text);
+      assert.match(staging.err, message, text);
+      assert.match(staging.err, /findings\.json/, text);
+      assert.equal(recording.code, 1, text);
+      assert.match(recording.err, message, text);
+      assert.equal(readFileSync(file, "utf8"), text);
+    }
+  });
+
+  it("refuses a staging file that is a symlink or a folder, and a folder that is a symlink", () => {
+    mkdirSync(folder(), { recursive: true });
+    const target = array("target.json", [finding()]);
+    symlinkSync(target, join(folder(), "findings.json"));
+    assert.match(cli(["stage", folder(), array("a.json", [finding({ id: "R2" })])]).err, /isn't a regular file/);
+    assert.match(cli(["record", inputFile(), "--staged", folder()]).err, /isn't a regular file/);
+    assert.deepEqual(JSON.parse(readFileSync(target, "utf8")).map((found: { id: string }) => found.id), ["R1"]);
+
+    const link = join(root, "link");
+    symlinkSync(join(root, "elsewhere"), link);
+    mkdirSync(join(root, "elsewhere"));
+    assert.match(cli(["stage", link, array("b.json", [finding()])]).err, /is a symlink/);
+    assert.equal(existsSync(join(root, "elsewhere", "findings.json")), false);
   });
 
   it("records the staged findings with the file's own, staged ones first", () => {
     branchWithChange();
-    cli(["stage", run1(), array("a.json", [finding()])]);
-    const input = join(root, "input.json");
-    writeFileSync(input, JSON.stringify({ ...reviewed(), rounds: 2, findings: [finding({ id: "R2" })] }));
+    cli(["stage", folder(), array("a.json", [finding()])]);
 
-    const result = cli(["record", input, "--staged", run1()]);
+    const result = cli(["record", inputFile({ rounds: 2, findings: [finding({ id: "R2" })] }), "--staged", folder()]);
 
     assert.equal(result.code, 0, result.err);
     assert.deepEqual(nearest()?.findings.map((found) => found.id), ["R1", "R2"]);
   });
 
-  it("records the staged findings alone when the file has none", () => {
+  it("records the staged findings alone when the file has none, and reads the review from stdin as the skill does", () => {
     branchWithChange();
-    cli(["stage", run1(), array("a.json", [finding()])]);
-    const input = join(root, "input.json");
-    writeFileSync(input, JSON.stringify({ ...reviewed(), rounds: 1 }));
+    cli(["stage", folder(), array("a.json", [finding()])]);
 
-    assert.equal(cli(["record", input, "--staged", run1()]).code, 0);
+    const result = spawned(["record", "-", "--staged", folder()], JSON.stringify({ ...reviewed(), rounds: 1 }));
+
+    assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(nearest()?.findings.map((found) => found.id), ["R1"]);
   });
 
-  it("refuses an id both staged and in the file, a missing staging file and a malformed --staged", () => {
+  it("keeps policy and repeats through the staging, so the security record gets them", () => {
     branchWithChange();
-    cli(["stage", run1(), array("a.json", [finding()])]);
-    const input = join(root, "input.json");
-    writeFileSync(input, JSON.stringify({ ...reviewed(), rounds: 1, findings: [finding()] }));
+    const weakness = finding({ severity: "warning", security: true, lens: "Edge cases", summary: "A path outside the folder is written." }) as Finding & { policy: string };
+    cli(["stage", folder(), array("a.json", [{ ...weakness, policy: "Every path is resolved and refused outside the folder." }])]);
 
-    assert.match(cli(["record", input, "--staged", run1()]).err, /ids repeat: R1/);
+    const result = cli(["record", inputFile(), "--staged", folder()]);
+
+    assert.equal(result.code, 0, result.err);
+    assert.equal(staged()[0]?.policy, "Every path is resolved and refused outside the folder.");
+    assert.deepEqual(nearest()?.findings.map((found) => found.id), ["R1"]);
+  });
+
+  it("refuses a findings value that is not an array, and an input that is not an object, with --staged as without it", () => {
+    branchWithChange();
+    cli(["stage", folder(), array("a.json", [finding()])]);
+
+    for (const text of ['{"findings":"x"}', '{"findings":{}}', '{"findings":null}', "null", "[]", '"x"']) {
+      const file = join(root, "bad.json");
+      writeFileSync(file, text);
+      const result = cli(["record", file, "--staged", folder()]);
+
+      assert.equal(result.code, 1, text);
+      assert.match(result.err, /must be (an array|a JSON object)/, text);
+    }
+    assert.equal(nearest(), undefined);
+  });
+
+  it("refuses an id both staged and in the file, a missing staging file, and a malformed --staged, with the usage", () => {
+    branchWithChange();
+    cli(["stage", folder(), array("a.json", [finding()])]);
+    const input = inputFile({ findings: [finding()] });
+    const unusable: string[][] = [
+      ["record", input, "--staged"],
+      ["record", input, "--staged", "run"],
+      ["record", input, "--staged", folder(), "extra"],
+      ["record", input, "--staged", folder(), "--staged", folder()],
+      ["record", "--staged", folder(), input],
+      ["record", input, folder()],
+      ["record"],
+    ];
+
+    assert.match(cli(["record", input, "--staged", folder()]).err, /ids repeat: R1/);
     assert.match(cli(["record", input, "--staged", join(root, "none")]).err, /stage the findings of a round first/);
-    assert.equal(cli(["record", input, "--staged"]).code, 1);
-    assert.equal(cli(["record", input, "--staged", "run"]).code, 1);
-    assert.equal(cli(["record", "--staged", run1(), input]).code, 1);
-    assert.equal(cli(["record", input, run1()]).code, 1);
+    for (const args of unusable) {
+      const result = cli(args);
+      assert.equal(result.code, 1, args.join(" "));
+      assert.match(result.err, USAGE_LINE, args.join(" "));
+    }
+    assert.equal(nearest(), undefined);
   });
 });
