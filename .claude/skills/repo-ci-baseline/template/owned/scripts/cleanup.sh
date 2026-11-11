@@ -11,10 +11,12 @@
 #     first, and only when it is clean (ignored files in it go with it). When the local branch is kept, its origin copy is kept too; an origin branch
 #     alone is kept when it has moved or its tip is not the PR's last head. The origin branch is deleted only if it still holds the tip that was judged; one already gone by then (GitHub's auto-delete) counts as removed.
 #   - removed with --include-closed only: the PR closed unmerged and the tip is its last head.
-#   - kept, with the reason: a name outside the branch standard, an open PR, no PR or a tip no PR had, a PR merged into a branch other than main,
-#     a dirty or unreadable worktree, a step git refused, or a closed PR without --include-closed.
-# A worktree whose folder was deleted by hand (its parent folder is still there, so it is not just out of reach) has git's entry for it forgotten (only that one, and only if it is a real
-# directory in .git/worktrees; a locked one is kept). --dry-run prints what would happen and changes no branch, worktree or commit (it still
+#   - kept, with the reason: a name outside the branch standard, an open PR, no PR or a tip no PR had, 100 or more PRs of that branch name, a PR merged into a branch
+#     other than main, a dirty or unreadable worktree, a worktree whose folder can't be reached, a commit made after it was judged, a step git refused (a branch a worktree
+#     is rebasing or bisecting included), or a closed PR without --include-closed.
+# A worktree whose folder was deleted by hand has git's entry for it forgotten (only that one, and only if it is a real directory in .git/worktrees; a locked one is kept), when its
+# parent folder is still there, searchable and not empty. A parent that is missing, empty or unsearchable may be an unmounted drive (its mount point is left empty), so the branch is
+# kept, with the hint to run git worktree prune if the folder was deleted for good. --dry-run prints what would happen and changes no branch, worktree or commit (it still
 # fetches and prunes the remote-tracking refs).
 # Exits 1 when it can't run (not main, not the primary checkout, dirty main, main can't fast-forward, origin can't be fetched, no gh, no repository,
 # a gh lookup failed, a bad argument, no scripts/check-branch-name.sh) and, after finishing the rest, when a removal git refused, a check of origin
@@ -138,8 +140,12 @@ while read -r ref; do
   wt="$(git worktree list --porcelain | awk -v ref="$ref" '/^worktree /{p=substr($0,10)} $0=="branch " ref{print p}')"
   stale=""
   if [[ -n "$wt" && ! -e "$wt" ]]; then
-    # Deleted by hand, or out of reach (an unmounted drive, a parent folder without search permission)? Only a reachable parent says the first.
-    if [[ ! -d "$(dirname "$wt")" || ! -x "$(dirname "$wt")" ]]; then keep "$b" "its worktree's folder can't be reached ($wt)"; kept_local+="$b "; continue; fi
+    # Deleted by hand, or out of reach? An unmounted drive leaves its mount point behind: empty. A parent that is missing, empty or unsearchable can't tell the two apart, so it is kept.
+    p="$(dirname "$wt")"
+    if [[ ! -d "$p" || ! -x "$p" || -z "$(ls -A "$p" 2>/dev/null)" ]]; then
+      keep "$b" "its worktree's folder can't be reached ($wt): its parent folder is missing, empty or unsearchable, so it may be on an unmounted drive. If you deleted it, run git worktree prune, then run this again"
+      kept_local+="$b "; continue
+    fi
     stale="$wt"; wt="" # only git's stale entry for it is left
   fi
   if [[ -n "$wt" ]]; then
@@ -153,12 +159,12 @@ while read -r ref; do
   fi
   echo "remove $b${wt:+ (worktree $wt)}"
   if [[ -n "$wt" ]] && ! run git worktree remove "$wt"; then keep "$b" "git could not remove its worktree"; kept_local+="$b "; failed=1; continue; fi
-  # The branch goes only if it still holds the tip that was judged (a commit made since stays), as the origin branch's lease does.
-  if [[ "$dry" == true ]]; then echo "   would: git branch -q -D $b"
-  elif ! git update-ref -d "$ref" "$tip"; then
-    if [[ "$(git rev-parse "$ref" 2>/dev/null || true)" != "$tip" ]]; then keep "$b" "it has a commit that was made after it was judged"; else keep "$b" "git could not delete the branch"; fi
-    kept_local+="$b "; failed=1; continue
-  else git config --remove-section "branch.$b" 2>/dev/null || true; fi
+  # The branch goes only if it still holds the tip that was judged (a commit made since stays, as the origin branch's lease keeps one), and git branch -D itself
+  # refuses a branch a worktree has checked out or is rebasing or bisecting, which the worktree list shows as detached.
+  if [[ "$dry" != true && "$(git rev-parse "$ref" 2>/dev/null || true)" != "$tip" ]]; then
+    keep "$b" "it has a commit that was made after it was judged"; kept_local+="$b "; failed=1; continue
+  fi
+  if ! run git branch -q -D "$b"; then keep "$b" "git could not delete the branch"; kept_local+="$b "; failed=1; continue; fi
   removed=$((removed + 1))
 done < <(git for-each-ref --format='%(refname)' refs/heads)
 

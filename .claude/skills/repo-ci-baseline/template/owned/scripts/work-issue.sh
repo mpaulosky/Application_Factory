@@ -10,7 +10,9 @@
 # The branch starts from the local branch when there is one (checked out as it is), else from origin/<branch> when that branch is on origin, else from origin/main; origin is fetched
 # first, so a branch pushed from another machine is seen. A worktree the branch already has is reused,
 # wherever it is, if its folder still exists (git's entry for one deleted by hand is forgotten, that one only, and the worktree made again; a locked
-# one is an error, and so is one whose folder can't be reached, or the primary checkout when it has the branch checked out); a directory in the way that is not that worktree is an error. An issue number has at most 9 digits. Run it from the primary checkout or any worktree.
+# one is an error, and so is one whose folder can't be reached (its parent folder is missing, empty or unsearchable: it may be on an unmounted drive; run git worktree prune if it was
+# deleted for good), or the primary checkout when it has the branch checked out); a directory in the way that is not that worktree is an error. It needs gh logged in, and for an origin
+# that is not on github.com, GITHUB_REPOSITORY. When origin can't be fetched it still prints a worktree it already has (with a warning), and stops otherwise. An issue number has at most 9 digits. Run it from the primary checkout or any worktree.
 # Everything but the path goes to stderr.
 set -euo pipefail
 
@@ -57,7 +59,7 @@ grep -qix bug <<<"$labels" && type=fix
 slug="$(sed -E 's/^\[[^]]*\][[:space:]]*//' <<<"$title" | tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -c 'a-z0-9\n' ' ' | tr -s ' ' | sed -E 's/^ //; s/ $//' | cut -d' ' -f1-6 | tr ' ' '-' | cut -c1-50 | sed -E 's/-+$//')"
 slug="${slug:-issue}"
 branch="$type/$n-$slug"
-git -C "$primary" fetch --prune --quiet origin || die "can't fetch origin"
+fetched=true; git -C "$primary" fetch --prune --quiet origin || fetched=false
 # An issue renamed since the branch was made keeps its branch: a local or origin branch already named for this number wins.
 while read -r ref; do
   name="${ref#refs/heads/}"; name="${name#refs/remotes/origin/}"
@@ -69,13 +71,17 @@ dir="$(dirname "$primary")/$repo-worktrees/${branch//\//-}"
 existing="$(git -C "$primary" worktree list --porcelain | awk -v ref="refs/heads/$branch" '/^worktree /{p=substr($0,10)} $0=="branch " ref{print p}')"
 if [[ -n "$existing" && "$existing" == "$primary" ]]; then die "$branch is checked out in the primary checkout: run git switch main there, then try again"; fi
 if [[ -n "$existing" && -d "$existing" ]]; then
+  [[ "$fetched" == true ]] || echo "⚠ can't fetch origin: using what was fetched last" >&2
   echo "reusing $existing" >&2
   echo "$existing"
   exit 0
 fi
+[[ "$fetched" == true ]] || die "can't fetch origin"
 # A worktree whose folder was deleted by hand is stale: forget git's entry for it (this one only), then make the worktree again.
 if [[ -n "$existing" ]]; then
-  [[ -d "$(dirname "$existing")" && -x "$(dirname "$existing")" ]] || die "$existing is a worktree of $branch whose folder can't be reached: fix that first (an unmounted drive?), then try again"
+  p="$(dirname "$existing")"
+  [[ -d "$p" && -x "$p" && -n "$(ls -A "$p" 2>/dev/null)" ]] \
+    || die "$existing is a worktree of $branch whose folder can't be reached: its parent folder is missing, empty or unsearchable, so it may be on an unmounted drive. If you deleted it, run git worktree prune, then try again"
   common="$(cd "$primary" && cd "$(git rev-parse --git-common-dir)" && pwd -P)"
   entry=""
   for d in "$common"/worktrees/*/; do

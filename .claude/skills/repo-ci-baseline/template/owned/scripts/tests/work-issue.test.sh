@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests for scripts/work-issue.sh, in a throwaway clone with a bare origin and a fake `gh`.
 # Usage: scripts/tests/work-issue.test.sh
+# Needs jq (a developer machine without it skips this file; CI fails), bash, git and chmod; the unsearchable-folder check is skipped as root, which can search any folder.
 #
 # The fake gh answers `gh issue view <n> --json title|labels --jq <expr>` from the file $GH_FIX/<n>.json ({"title", "labels": [{"name"}]}), and runs the --jq text work-issue.sh passes
 # it through the real jq, as gh does. It fails unless it is given exactly those seven arguments, --json title or labels, and GH_REPO (o/r, or $EXPECT_GH_REPO); a missing file is an
@@ -10,7 +11,7 @@ set -uo pipefail
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
 SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work="$(mktemp -d)"
-trap 'command rm -rf "$work"' EXIT
+trap 'chmod -R u+rwx "$work/np" 2>/dev/null; command rm -rf "$work"' EXIT
 mkdir "$work/no-template"
 export GIT_TEMPLATE_DIR="$work/no-template" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 PASSED=0; FAILED=0
@@ -58,7 +59,7 @@ issue 74 "Relative path"
 issue 99 ""
 issue 123456789 "Nine digits"
 
-git init -q --bare "$work/origin.git"
+git init -q --bare -b main "$work/origin.git"
 git clone -q "$work/origin.git" "$work/Repo" 2>/dev/null
 cd "$work/Repo" || exit 1
 git config fetch.prune false; git config remote.origin.prune false # a user's own config must not prune for the script: only its --prune may
@@ -170,6 +171,7 @@ mkdir "$work/shim"
 cat > "$work/shim/git" <<SHIM
 #!/usr/bin/env bash
 if [[ "\$1 \$2 \$3" == "remote get-url origin" && -n "\${SHIM_ORIGIN_URL:-}" ]]; then echo "\$SHIM_ORIGIN_URL"; exit 0; fi
+if [[ "\$1" == -C && "\$3" == fetch && -n "\${SHIM_FETCH_FAIL:-}" ]]; then echo "shim: fetch failed" >&2; exit 128; fi
 exec "$(command -v git)" "\$@"
 SHIM
 chmod +x "$work/shim/git"
@@ -191,11 +193,36 @@ issue 93 "Unreachable"; mkdir "$work/np"; git worktree add -q -b feature/93-unre
 if [[ "$(id -u)" != 0 ]]; then
   chmod 000 "$work/np"; o=$(bash scripts/work-issue.sh 93 2>&1 >/dev/null); st=$?; chmod 755 "$work/np"
   check "a worktree whose parent folder can't be searched is refused, and its entry kept" "[[ $st != 0 ]] && grep -q \"can't be reached\" <<<\"\$o\" && [[ -d '$work/Repo/.git/worktrees/w' && -d '$work/np/w' ]]"
-else echo "skip - running as root, so no folder can be made unsearchable"; fi
+else echo "skip - running as root, so no folder can be made unsearchable (the empty and missing parents are tried below)"; fi
 issue 94 "Symlinked"; git worktree add -q -b feature/94-symlinked "$work/sl" origin/main; command rm -rf "$work/sl"
 mv "$work/Repo/.git/worktrees/sl" "$work/elsewhere-entry"; ln -s "$work/elsewhere-entry" "$work/Repo/.git/worktrees/sl"
 o=$(bash scripts/work-issue.sh 94 2>&1 >/dev/null); st=$?
 check "a worktree entry that is a symlink is never followed or removed" "[[ $st != 0 && -f '$work/elsewhere-entry/gitdir' ]] && grep -q 'was not found' <<<\"\$o\""
+
+# A parent folder that is empty or gone can't be told from an unmounted drive: refused with the prune hint, and made again after git worktree prune
+issue 101 "Only child"; git worktree add -q -b feature/101-only-child "$work/oc/oc" origin/main; command rm -rf "$work/oc/oc"
+issue 102 "Parent gone"; git worktree add -q -b feature/102-parent-gone "$work/pg/pg" origin/main; command rm -rf "$work/pg"
+issue 104 "Parent file"; git worktree add -q -b feature/104-parent-file "$work/pf/pf" origin/main; command rm -rf "$work/pf"; touch "$work/pf"; chmod 755 "$work/pf" # an executable file, not a folder
+o=$(bash scripts/work-issue.sh 101 2>&1 >/dev/null); st=$?
+check "a worktree whose parent folder is empty is refused, with the prune hint, and its entry kept" "[[ $st != 0 ]] && grep -q 'git worktree prune' <<<\"\$o\" && [[ -d '$work/Repo/.git/worktrees/oc' ]]"
+o=$(bash scripts/work-issue.sh 102 2>&1 >/dev/null); st=$?
+check "a worktree whose parent folder is gone is refused the same way" "[[ $st != 0 ]] && grep -q 'git worktree prune' <<<\"\$o\" && [[ -d '$work/Repo/.git/worktrees/pg' ]]"
+o=$(bash scripts/work-issue.sh 104 2>&1 >/dev/null); st=$?
+check "a worktree whose parent is a file, not a folder, is refused the same way" "[[ $st != 0 ]] && grep -q 'git worktree prune' <<<\"\$o\" && [[ -d '$work/Repo/.git/worktrees/pf' ]]"
+git worktree prune
+check "after git worktree prune, all three are made again" "[[ \$(bash scripts/work-issue.sh 101 2>/dev/null) == '$wt/feature-101-only-child' && \$(bash scripts/work-issue.sh 102 2>/dev/null) == '$wt/feature-102-parent-gone' && \$(bash scripts/work-issue.sh 104 2>/dev/null) == '$wt/feature-104-parent-file' ]]"
+
+# A local branch is checked out as it is, even when origin's copy of it is ahead
+issue 100 "Behind"; git branch feature/100-behind origin/main; other_push feature/100-behind n100 origin/main; git fetch -q origin
+p100=$(bash scripts/work-issue.sh 100 2>/dev/null)
+check "a local branch is checked out as it is, even when origin's copy is ahead" "[[ '$p100' == '$wt/feature-100-behind' && \$(git -C '$p100' rev-parse HEAD) == \$(git rev-parse feature/100-behind) && \$(git rev-parse feature/100-behind) != \$(git rev-parse origin/feature/100-behind) ]]"
+
+# Origin can't be fetched: a new worktree is refused, one the branch already has is still printed (with a warning)
+issue 103 "Offline"
+o=$(PATH="$work/shim:$PATH" SHIM_FETCH_FAIL=1 bash scripts/work-issue.sh 103 2>&1 >/dev/null); st=$?
+check "origin can't be fetched: a new worktree is refused, and nothing is made" "[[ $st != 0 ]] && grep -q \"can't fetch origin\" <<<\"\$o\" && [[ ! -e '$wt/feature-103-offline' ]] && ! git show-ref --verify --quiet refs/heads/feature/103-offline"
+out54=$(PATH="$work/shim:$PATH" SHIM_FETCH_FAIL=1 bash scripts/work-issue.sh 54 2>"$work/err"); st=$?
+check "origin can't be fetched: a worktree the branch already has is still printed, with a warning" "[[ $st == 0 && '$out54' == '$p' ]] && grep -q \"can't fetch origin: using what was fetched last\" '$work/err'"
 
 # gh failing, an unknown issue, no gh, a check-branch-name.sh that refuses, a path with spaces and a non-ASCII letter
 before="$(git branch | wc -l)$(find "$wt" -mindepth 1 -maxdepth 1 | wc -l)"

@@ -32,8 +32,9 @@ fetches and prunes the remote-tracking refs). It fast-forwards `main` to `origin
 for `git branch --merged` to see, and counts only a PR whose head repository is the one `origin` points at (a fork's PR of the same name doesn't count). It keeps, and says why, a branch with an
 open PR, no PR, a commit the PR never had or one made while it ran, 100 or more PRs of that name, a PR merged into another branch, a worktree with uncommitted changes
 or one whose folder can't be reached, and keeps that local branch's `origin` copy
-too; a branch whose PR closed unmerged goes only with `--include-closed`. A `gh` failure stops it, and a removal git refuses, or a check of `origin` that failed, is reported (exit 1) while
-the rest is done. A worktree whose folder was deleted by hand has git's entry for it forgotten (a locked one is kept).
+too; a branch whose PR closed unmerged goes only with `--include-closed`. A `gh` failure, a failed fetch of `origin`, or a `main` that can't fast-forward stops it; a removal git refuses, a check of
+`origin` that failed, or a failed closing fetch is reported (exit 1) while the rest is done. A worktree whose folder was deleted by hand has git's entry for it forgotten (a locked one is kept;
+a parent folder that is missing, empty or unsearchable may be an unmounted drive, so the branch is kept: run `git worktree prune` if you deleted it for good, then `scripts/cleanup.sh` again).
 
 | Branch | Use |
 | --- | --- |
