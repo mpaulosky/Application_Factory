@@ -20,7 +20,8 @@
 # owner's token, so the marker is the only way to tell them from the owner.
 #
 # Exit codes: 0 the session is needed; 1 quiet until the timeout (or after --once); 2 a usage error, a missing tool or a PR that
-# can't be read (five polls in a row fail; a poll that fails or isn't GitHub's answer is never read as quiet).
+# can't be read (five polls in a row fail; a poll that fails, isn't GitHub's answer, or reads an open PR's list or head ref only in part
+# is never read as quiet).
 # Environment: WATCH_PR_MARKER, WATCH_PR_INTERVAL (default 60 seconds; each poll costs about 1-3 GraphQL points, so not lower),
 # WATCH_PR_TIMEOUT (default 120 minutes), GITHUB_REPOSITORY (else the upstream, then the origin remote).
 set -euo pipefail
@@ -105,16 +106,18 @@ QUERY='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,
 
 # The response must have GitHub's shape, with every list present and read whole: anything else is a failed poll, never a quiet one.
 # The checks come from the PR's head ref, not the last of its commits (GitHub lists them by date, so the last needn't be the head), and
-# only when that ref is still at headRefOid. A list GitHub says has more pages than the query took is an incomplete read.
+# only when that ref is still at headRefOid. A list GitHub says has more pages than the query took is an incomplete read. Only an
+# open PR's lists are read: a merged or closed one is reported from its state alone, whatever its lists or its deleted head hold.
 SHAPE_JQ='
   .data.repository.pullRequest
   | type == "object" and (.state | type == "string")
     and ([.reviewThreads.nodes, .reviews.nodes, .comments.nodes] | all(type == "array"))
-    and (.reviewThreads.pageInfo.hasNextPage == false)
-    and (.reviews.pageInfo.hasPreviousPage == false)
-    and (.comments.pageInfo.hasPreviousPage == false)
     and (.state != "OPEN" or (
-      .headRef.target.oid == .headRefOid
+      (.reviewThreads.pageInfo.hasNextPage == false)
+      and (.reviews.pageInfo.hasPreviousPage == false)
+      and (.comments.pageInfo.hasPreviousPage == false)
+      and (.headRefOid | type == "string")
+      and .headRef.target.oid == .headRefOid
       and ((.headRef.target.statusCheckRollup.contexts // {nodes: [], pageInfo: {hasNextPage: false}})
            | (.nodes | type == "array") and .pageInfo.hasNextPage == false)))
 '

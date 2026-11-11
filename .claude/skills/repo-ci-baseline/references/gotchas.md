@@ -116,7 +116,9 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     `--ignore-environment`, `env -u GH_REPO` / `--unset=GH_REPO` or `env -S` is refused even after an export, since
     those drop `GH_REPO` before `gh` runs; only a `GH_REPO=<value>` right before `gh` on the same line tells it
     (`sudo GH_REPO=o/r gh pr view 1`). `bash -c`, `eval`, `| sh` and `xargs gh` inherit the export and are accepted
-    (mpaulosky/dotfiles#344). A later `unset GH_REPO`, or an assignment that is no prefix of a `gh` command, ends an export.
+    (mpaulosky/dotfiles#344). A later `unset GH_REPO`, or an assignment that is no prefix of a `gh` command, ends an export. An `export GH_REPO=...`
+    in a branch of an `if` whose condition is plainly false (`false`, `! true`, `[ 0 -ne 0 ]`, `[ 1 -eq 0 ]`), or in the `else` of a plainly
+    true one (`true`, `:`), is no export; any other condition is assumed to run.
   - A file with a NUL byte is checked with the NULs removed, as bash reads it, not skipped. `--repo` reads a suffix in
     lower case (`up.SH`) and `.zsh`, treats every extensionless file under `scripts/` and `.github/ci/` as shell
     (under `.claude/skills/` it needs a shell shebang), and refuses a symlink whose target is outside the repo or
@@ -126,7 +128,8 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     HTML comments, `<script>` and `<style>` are not read, and `<!-- gh-repo: ok -->` skips a line in each kind.
   - CI's `gh-repo` job (Owned `ci.yml`, on pull requests) runs the base branch's `check_gh_repo.py` against the PR's
     tree, so `--no-verify` or an edited checker can't skip it, and fails with `Owned file <path> differs from <base>`
-    when a PR changes, deletes or (in an Owned folder) adds an Owned file (the checker's `OWNED` paths), unless its
+    when a PR changes, deletes or adds an Owned file (the checker's `OWNED` paths: a file in an Owned folder, or an Owned file the base
+    lacks, such as `scripts/review.sh`), unless its
     head branch is `chore/standardize-baseline` or `chore/reapply-baseline`. Anyone who can push a branch can use those names: it
     stops a careless edit, not a deliberate one.
   - A bare `gh` that ends its line in `||` or `&&` (`command -v gh >/dev/null 2>&1 ||`) is a lookup that goes on to

@@ -1,6 +1,7 @@
 """Checks that every gh command in the Template's Owned scripts and a repo's own scripts and skills is told its repository; the rules are in references/gotchas.md."""
 
 import os
+import itertools
 import re
 import sys
 from pathlib import Path
@@ -306,11 +307,11 @@ def heredoc_header(text):
     return heredocs, data and found[-1:] != [("op", "|", False)]
 
 
-def data_heredocs(header, later):
+def data_heredocs(header, lines, start):
     """The (delimiter, tabs, quoted) of each heredoc on the logical line header whose body is data, not code, in the order the bodies follow.
 
     An unquoted delimiter still lets bash run the $(...) and backticks in a data body. A heredoc whose delimiter never
-    comes again is no heredoc.
+    comes again is no heredoc. lines[start:] are the lines after the header, not copied unless the header has a heredoc.
     """
     if "<<" not in header:
         return []
@@ -318,7 +319,7 @@ def data_heredocs(header, later):
     if not data:
         return []
     return [(delimiter, tabs, quoted) for delimiter, tabs, quoted in heredocs
-            if any((text.lstrip("\t") if tabs else text) == delimiter for text in later)]
+            if any((text.lstrip("\t") if tabs else text) == delimiter for text in itertools.islice(lines, start, None))]
 
 
 def logical_line(lines, number):
@@ -428,7 +429,10 @@ def shown(line):
     return for_log(line.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace"))
 
 
-IF_OPEN = re.compile(r"[ \t]*if[ \t]+(.*?)[ \t]*;?[ \t]*(then)?[ \t]*(#.*)?$")
+# An if keyword, and a fi keyword, as bash reads one: at the start of a line or after ; & | ( { or then/else/do, never as an argument (grep -q fi).
+IF_KEYWORD = re.compile(r"(?:^|[;&|({]|\b(?:then|else|do))[ \t]*if(?=[ \t])")
+FI_KEYWORD = re.compile(r"(?:^|[;&|({]|\b(?:then|else|do))[ \t]*fi(?![A-Za-z0-9_-])")
+IF_CONDITION = re.compile(r"[ \t]*if[ \t]+(.*?)[ \t]*;?[ \t]*(?:then)?[ \t]*(?:#.*)?$")
 NEVER = re.compile(r"(false|! *true|\[ +0 +-ne +0 +\]|\[ +1 +-eq +0 +\])$")
 ALWAYS = re.compile(r"(true|:)$")
 
@@ -437,18 +441,23 @@ def track_branches(line, branches):
     """Keep branches, one (runs, always) pair per open if, up to date for this line.
 
     runs is False while the branch being read can't run. Only a condition that is plainly false (or plainly true,
-    for its else) is judged; any other branch may run.
+    for its else) is judged, and only on an if that starts its line; any other branch may run. An if and its fi on one
+    line cancel out. A fi or an else inside a string or a heredoc body that looks like a keyword can misjudge a branch;
+    that can only make the checker refuse a script, never accept one (an export it misses is not counted), and
+    `# gh-repo: ok` skips a line.
     """
-    opened = IF_OPEN.match(line)
-    if opened and not re.search(r"\bfi[ \t]*(;|$)", line):
-        condition = opened.group(1)
-        branches.append((NEVER.match(condition) is None, ALWAYS.match(condition) is not None))
-    elif re.match(r"[ \t]*else\b", line) and branches:
+    if re.match(r"[ \t]*else\b", line) and branches:
         branches[-1] = (not branches[-1][1], branches[-1][1])
     elif re.match(r"[ \t]*elif\b", line) and branches:
         branches[-1] = (True, False)
-    elif re.match(r"[ \t]*fi\b", line) and branches:
-        branches.pop()
+    opened = list(IF_KEYWORD.finditer(line))
+    for number, keyword in enumerate(opened):
+        condition = IF_CONDITION.match(line) if number == 0 and keyword.start() == 0 else None
+        text = condition.group(1) if condition else ""
+        branches.append((NEVER.match(text) is None, ALWAYS.match(text) is not None))
+    for _ in FI_KEYWORD.finditer(line):
+        if branches:
+            branches.pop()
 
 
 def untold(path):
@@ -480,7 +489,7 @@ def untold(path):
             header, count = logical_line(lines, number)
             header_end = number + count - 1
             body_start = header_end + 1
-            bodies = data_heredocs(header, lines[header_end:])
+            bodies = data_heredocs(header, lines, header_end)
         track_branches(line, branches)
         if EXPORTS.match(line):
             # An export in a branch that never runs leaves GH_REPO unset.

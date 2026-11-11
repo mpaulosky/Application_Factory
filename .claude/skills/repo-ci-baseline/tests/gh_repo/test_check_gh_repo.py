@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -2064,13 +2065,38 @@ def test_check_repo_escapes_line_breaks_in_the_name_of_a_symlink_it_refuses(tmp_
     ("if [ -n \"$x\" ]; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
     ("if true; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
     ("if false; then\n  :\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if ! true; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [4]),
+    ("if [ 0 -ne 0 ]; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [4]),
+    ("if [ 1 -eq 0 ]; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [4]),
+    ("if :; then\n:\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if false; then # note\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [4]),
+    # near misses still run
+    ("if falsey; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false && x; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if ! false; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # elif after a false if may run; after a true if it is dead only through the if's own else
+    ("if false; then\n:\nelif x; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # nesting
+    ("if false; then\nif true; then\nexport GH_REPO=o/r\nfi\nfi\ngh pr view 1\n", [6]),
+    ("if true; then\nif false; then\n:\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\nif x; then\n:\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
+    # a one-line if opens and closes on its line, however its fi is followed
+    ("if false; then\nif x; then y; fi # note\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if x; then y; fi && z\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if false; then :; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("(if x; then y; fi)\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if x; then y; fi; if z; then w; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    # the word fi that is no keyword
+    ("if grep -q fi f; then\n:\nfi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if x; then echo fi; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if false; then\necho fi\nfi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if false; then\n:\nelse\nif y; then\nexport GH_REPO=o/r\nfi\nfi\ngh pr view 1\n", []),
 ])
 def test_untold_takes_an_export_only_from_a_branch_that_can_run(tmp_path, text, refused):
     assert lines_of(untold(tmp_path, text)) == refused
 
 
 def test_tokens_takes_linear_time_for_a_long_unquoted_word():
-    import time
     start = time.perf_counter()
     found = check_gh_repo.tokens("a" * 200_000)
     assert found == [("word", "a" * 200_000, False)]
@@ -2079,4 +2105,11 @@ def test_tokens_takes_linear_time_for_a_long_unquoted_word():
 
 def test_data_heredocs_does_not_tokenize_a_line_without_a_heredoc(monkeypatch):
     monkeypatch.setattr(check_gh_repo, "tokens", lambda text: pytest.fail("tokenized"))
-    assert check_gh_repo.data_heredocs("echo hi && ls", ["x"]) == []
+    assert check_gh_repo.data_heredocs("echo hi && ls", ["x"], 0) == []
+
+
+def test_untold_reads_a_long_file_of_short_lines_in_linear_time(tmp_path):
+    start = time.perf_counter()
+    found = untold(tmp_path, "export GH_REPO=o/r\n" + "echo hi\n" * 40_000 + "gh pr view 1\n")
+    assert found == []
+    assert time.perf_counter() - start < 5

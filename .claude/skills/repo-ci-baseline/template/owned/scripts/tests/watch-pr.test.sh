@@ -720,6 +720,37 @@ for incomplete in \
   check "an incomplete read ($incomplete) is a failed poll: exit 2" status_is 2
 done
 
+# A merged or closed PR is reported whatever its lists hold: it has no head ref once the branch is gone, and its lists are never read.
+for done_state in MERGED CLOSED; do
+  for over in '{"reviewThreads":{"pageInfo":{"hasNextPage":true}}}' '{"reviews":{"pageInfo":{"hasPreviousPage":true}}}' \
+    '{"comments":{"pageInfo":{"hasPreviousPage":true}}}' '{"headRef":null}'; do
+    new_repo
+    pr "$(jq -n --arg state "$done_state" --argjson over "$over" '{state: $state, merged: ($state == "MERGED")} * $over')"
+    run --once 7
+    check "a $done_state PR with $over is still reported: exit 0" status_is 0
+  done
+done
+
+# An OPEN PR needs a head ref at its head: none, or a response with neither oid, is a failed poll, and a missing pageInfo is no proof of a whole read.
+for incomplete in '{"headRef":null}' '{"headRefOid":null,"headRef":{"target":{"oid":null}}}' \
+  '{"reviewThreads":{"pageInfo":null}}' '{"reviews":{"pageInfo":null}}' '{"comments":{"pageInfo":null}}' \
+  '{"headRef":{"target":{"statusCheckRollup":{"contexts":{"pageInfo":null}}}}}'; do
+  new_repo
+  pr "$incomplete"
+  run --once 7
+  check "an open PR with $incomplete is a failed poll: exit 2" status_is 2
+done
+
+# The query asks for what the shape check requires (the fake gh ignores the query, so pin its text).
+new_repo
+pr '{}'
+run --once 7
+for wanted in 'reviewThreads(first:100){pageInfo{hasNextPage}' 'reviews(last:100){pageInfo{hasPreviousPage}' \
+  'comments(last:100){pageInfo{hasPreviousPage}' 'contexts(first:100){pageInfo{hasNextPage}' 'headRef{target{... on Commit{oid'; do
+  check "the query asks for $wanted" grep -qF -- "$wanted" "$GH_LOG"
+done
+check "the query no longer reads the last commit" not grep -qF 'commits(last' "$GH_LOG"
+
 # A failing check on the head ref is found even though the PR has no commits list at all.
 new_repo
 checks '[{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"FAILURE"}]'

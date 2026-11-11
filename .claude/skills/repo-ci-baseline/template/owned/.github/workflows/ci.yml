@@ -166,7 +166,7 @@ jobs:
   # written outside the checkout and run isolated (python3 -I) over the PR's
   # tree, with no secrets and a read-only token. A PR that changes the checker
   # is judged by the old one. The second step fails when a PR's Owned file
-  # differs from the base's, except in an Apply PR (chore/standardize-baseline,
+  # differs from the base's, or adds an Owned file the base lacks, except in an Apply PR (chore/standardize-baseline,
   # chore/reapply-baseline), whose job is to change them. Anyone who can push a
   # branch can name theirs so: this stops a careless edit, not a deliberate one.
   # Both steps read the base at github.event.pull_request.base.sha, the commit the
