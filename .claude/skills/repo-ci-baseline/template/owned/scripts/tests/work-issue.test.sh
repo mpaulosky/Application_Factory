@@ -37,6 +37,7 @@ case "$n:$what" in
   65:title) echo "Started on another machine" ;;
   66:title) echo "Plain directory in the way" ;;
   67:title) echo "Elsewhere" ;;
+  71:title) echo "Locked and gone" ;;
   68:title) echo "$(printf 'a%.0s' $(seq 1 49)) bbb" ;;
   69:title) printf 'a%.0s' $(seq 1 50); echo ;;
   70:title) printf 'a%.0s' $(seq 1 51); echo ;;
@@ -93,9 +94,19 @@ command rm -rf "$p"
 p54=$(bash scripts/work-issue.sh 54 2>/dev/null); st=$?
 check "a worktree folder deleted by hand is made again" "[[ $st == 0 && '$p54' == '$p' && -d '$p' && \$(git -C '$p' branch --show-current) == feature/54-start-work-in-a-worktree-review ]]"
 
-# Many worktrees: git's list is longer than a pipe buffer, and finding the primary checkout must not stop reading it (SIGPIPE under pipefail)
+# Many worktrees: git writes its list in several chunks, and finding the primary checkout must not stop reading it, or git gets SIGPIPE under pipefail
+# (a race, but the 120 worktrees make the old `awk ... exit` form fail on every run tried)
 for i in $(seq 1 120); do git worktree add -q --detach "$work/many-worktrees-with-a-long-path-so-the-list-is-big/w$i" origin/main; done
 check "finds the primary checkout among many worktrees" "[[ \$(bash scripts/work-issue.sh 54 2>/dev/null) == '$p' ]]"
+
+# A missing folder whose worktree is locked is an error with a hint, and only its own entry is forgotten
+git worktree add -q -b feature/71-locked-and-gone "$work/locked-and-gone" origin/main
+git worktree add -q -b feature/72-other-stale "$work/other-stale" origin/main; command rm -rf "$work/other-stale"
+git worktree lock "$work/locked-and-gone"; command rm -rf "$work/locked-and-gone"
+o=$(bash scripts/work-issue.sh 71 2>&1 >/dev/null); st=$?
+check "a missing but locked worktree is refused with a hint" "[[ $st != 0 ]] && grep -q 'missing but locked' <<<\"\$o\""
+command rm -rf "$p"; bash scripts/work-issue.sh 54 >/dev/null 2>&1
+check "forgetting one stale entry leaves the other stale entries alone" "[[ -d '$p' && -d '$work/Repo/.git/worktrees/other-stale' && -d '$work/Repo/.git/worktrees/locked-and-gone' ]]"
 
 # A branch already on origin is built from it, not from main
 other="$work/other"; git clone -q "$work/origin.git" "$other" 2>/dev/null

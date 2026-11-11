@@ -156,8 +156,8 @@ export const OWNED_PATHS = [
 // (lib/build.mts#readSkillFiles), the prompts that instruct the pipeline's roles, the
 // local gate's .sandcastle/check.sh, whose watched paths and early exit decide
 // whether the Sandcastle check runs at all, global.json, which sets the SDK and the msbuild-sdks a build runs,
-// docs/PROCESS.md, which review-prompt.md tells a role to follow, scripts/cleanup.sh and scripts/work-issue.sh, which delete branches, worktrees and origin
-// branches and make them from issue text, and the gate chain (see OWNED_PATHS above).
+// docs/PROCESS.md, which review-prompt.md tells a role to follow, scripts/cleanup.sh, which deletes branches, worktrees and origin
+// branches, and scripts/work-issue.sh, which makes a branch and worktree named from issue text, and the gate chain (see OWNED_PATHS above).
 // The other files that moved from Seed to Owned (CODE_OF_CONDUCT.md,
 // the READMEs under .security/ and .claude/skills/) are audited text that no
 // role reads, and a wrong one only misleads a person, so they stay exempt.

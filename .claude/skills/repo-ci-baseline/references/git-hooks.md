@@ -65,7 +65,8 @@ worktree and its `origin` branch. It decides from the PR's state on GitHub (a sq
 from the repository `origin` points at (a fork's PR of the same name doesn't count), merged into `main`, and the branch's tip must be the PR's last head, so no
 unpushed commit is lost. It keeps, with the reason, a branch with an open PR, no PR, a PR merged elsewhere, or a dirty worktree (and that local branch's
 `origin` copy too), and removes a closed-unmerged one only with
-`--include-closed`. It deletes the `origin` branch only if `origin` still holds the tip it judged. `--dry-run` shows the steps. `git worktree remove` alone
+`--include-closed`. It deletes the `origin` branch only if `origin` still holds the tip it judged (one GitHub already deleted counts as removed), and for a worktree whose folder was
+deleted by hand it forgets git's entry for that one worktree only (a locked one is kept). `--dry-run` shows the steps. `git worktree remove` alone
 leaves the local and `origin` branches behind.
 
 `pre-commit` enforces the rule that a change is committed in a linked worktree. Claude Code's own `.claude/worktrees/` (ignored by the Template's

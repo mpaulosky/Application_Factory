@@ -6,14 +6,14 @@
 # Fetches and prunes origin, fast-forwards main to origin/main, then, for every branch that follows the branch standard (check-branch-name.sh),
 # local and on origin, decides from the PR's state on GitHub, not from git ancestry (a squash merge leaves no ancestry to see). Only a PR whose head
 # repository is the one origin points at counts (owner/name, compared without regard to case; origin's slug is read from a github.com URL, else
-# GH_REPO's is used), so a fork's PR of the same name cannot stand in for it:
+# GH_REPO's is used, which a GitHub Enterprise origin should set), so a fork's PR of the same name cannot stand in for it:
 #   - removed: the PR merged into main and the branch's tip is the PR's last head, so nothing unpushed is lost. The branch's worktree is removed
 #     first, and only when it is clean (ignored files in it go with it). When the local branch is kept, its origin copy is kept too; an origin branch
-#     alone is kept when it has moved or its tip is not the PR's last head. The origin branch is deleted only if it still holds the tip that was judged.
+#     alone is kept when it has moved or its tip is not the PR's last head. The origin branch is deleted only if it still holds the tip that was judged; one already gone by then (GitHub's auto-delete) counts as removed.
 #   - removed with --include-closed only: the PR closed unmerged and the tip is its last head.
 #   - kept, with the reason: a name outside the branch standard, an open PR, no PR or a tip no PR had, a PR merged into a branch other than main,
 #     a dirty or unreadable worktree, a step git refused, or a closed PR without --include-closed.
-# A worktree whose folder was deleted by hand is pruned first. --dry-run prints what would happen and changes no branch, worktree or commit (it still
+# A worktree whose folder was deleted by hand has git's entry for it forgotten (only that one; a locked one is kept). --dry-run prints what would happen and changes no branch, worktree or commit (it still
 # fetches and prunes the remote-tracking refs).
 # Exits 1 when it can't run (not main, not the primary checkout, dirty main, main can't fast-forward, no gh, no repository, a gh lookup failed,
 # a bad argument, no scripts/check-branch-name.sh) and, after finishing the rest, when a removal git refused.
@@ -40,20 +40,33 @@ check_name="$root/scripts/check-branch-name.sh"
 [[ -z "$(git status --porcelain)" ]] || die "main has uncommitted changes"
 command -v gh >/dev/null || die "gh is needed to read PR states" # gh-repo: ok
 
+# slug_of <url> -> owner/name of a github.com URL (https, ssh://, git@github.com:o/r, with a port, userinfo, .git and a trailing /), else nothing.
+slug_of() {
+  local u="${1%/}"
+  u="${u%.git}"; u="${u%/}"
+  if [[ "$u" =~ ^((ssh|https?|git)://)?([^@/[:space:]]+@)?github\.com(:[0-9]+)?[:/]([^/[:space:]]+/[^/[:space:]]+)$ ]]; then printf '%s' "${BASH_REMATCH[5]}"; fi
+}
 url="$(git remote get-url upstream 2>/dev/null || git remote get-url origin 2>/dev/null || true)"
-url="${url%.git}"
 repo="${GITHUB_REPOSITORY:-}"
-if [[ -z "$repo" && -n "$url" ]]; then repo="${url#*github.com[:/]}"; fi
-[[ "$repo" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] || die "can't tell which repository: set GITHUB_REPOSITORY or add an origin remote"
+if [[ -z "$repo" ]]; then repo="$(slug_of "$url")"; fi
+[[ "$repo" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] || die "can't tell which repository: set GITHUB_REPOSITORY or add a github.com origin remote"
 export GH_REPO="${repo:?}"
 # A PR counts only when its head repository is the one origin points at: origin's owner/name when it is a github.com URL, else GH_REPO's.
 lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
-origin_url="$(git remote get-url origin 2>/dev/null || true)"
-origin_url="${origin_url%.git}"
-origin_url="${origin_url%/}"
-origin_slug="$repo"
-if [[ "$origin_url" == *github.com[:/]* && "${origin_url#*github.com[:/]}" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then origin_slug="${origin_url#*github.com[:/]}"; fi
-origin_slug="$(lc "$origin_slug")"
+origin_slug="$(slug_of "$(git remote get-url origin 2>/dev/null || true)")"
+origin_slug="$(lc "${origin_slug:-$repo}")"
+
+# drop_stale_worktree <path>: forget the one worktree whose folder was deleted by hand (git's own admin entry for it). 0 forgotten, 1 locked, 2 none.
+drop_stale_worktree() {
+  local d
+  for d in "$(git rev-parse --git-common-dir)"/worktrees/*/; do
+    [[ -f "${d}gitdir" && "$(<"${d}gitdir")" == "$1/.git" ]] || continue
+    [[ ! -e "${d}locked" ]] || return 1
+    command rm -rf -- "$d"
+    return 0
+  done
+  return 2
+}
 
 run() { if [[ "$dry" == true ]]; then echo "   would: $*"; else "$@"; fi; }
 
@@ -93,7 +106,6 @@ decide() {
   esac
 }
 
-run git worktree prune
 removed=0; kept=0; failed=0; kept_local=" "
 keep() { echo "keep   $1: $2"; kept=$((kept + 1)); }
 
@@ -105,10 +117,18 @@ while read -r ref; do
   d="$(decide "$b" "$(git rev-parse "$ref")")" || exit 1
   if [[ "$d" != removable ]]; then keep "$b" "$d"; kept_local+="$b "; continue; fi
   wt="$(git worktree list --porcelain | awk -v ref="$ref" '/^worktree /{p=substr($0,10)} $0=="branch " ref{print p}')"
-  if [[ -n "$wt" && ! -d "$wt" ]]; then wt=""; fi # a folder deleted by hand: stale metadata, which the prune above removes
+  stale=""
+  if [[ -n "$wt" && ! -d "$wt" ]]; then stale="$wt"; wt=""; fi # a folder deleted by hand: only git's stale entry for it is left
   if [[ -n "$wt" ]]; then
     if ! st="$(git -C "$wt" status --porcelain 2>/dev/null)"; then keep "$b" "its worktree can't be read ($wt)"; kept_local+="$b "; continue; fi
     if [[ -n "$st" ]]; then keep "$b" "its worktree has uncommitted changes"; kept_local+="$b "; continue; fi
+  fi
+  if [[ -n "$stale" ]]; then
+    if [[ "$dry" == true ]]; then echo "   would: forget the missing worktree $stale"
+    else
+      rc=0; drop_stale_worktree "$stale" || rc=$?
+      if [[ "$rc" == 1 ]]; then keep "$b" "its worktree is locked and its folder is missing: git worktree unlock '$stale', then run this again"; kept_local+="$b "; continue; fi
+    fi
   fi
   echo "remove $b${wt:+ (worktree $wt)}"
   if [[ -n "$wt" ]] && ! run git worktree remove "$wt"; then keep "$b" "git could not remove its worktree"; kept_local+="$b "; failed=1; continue; fi
@@ -128,15 +148,15 @@ while read -r ref; do
   echo "remove origin/$b"
   # The lease deletes the branch only if origin still holds the tip that was judged.
   if ! run git push --quiet --force-with-lease="refs/heads/$b:$sha" origin ":refs/heads/$b"; then
-    # GitHub may have deleted it since the fetch (auto-delete of merged branches): then it is gone, which is what was wanted.
-    if git ls-remote --exit-code --heads origin "$b" >/dev/null 2>&1; then
-      keep "origin/$b" "git could not delete it (it may have moved since the fetch)"; failed=1; continue
-    fi
+    # GitHub may have deleted it since the fetch (auto-delete of merged branches): then it is gone, which is what was wanted. Only ls-remote's
+    # status 2 (no such ref) says so; a branch still there, or a check that failed, is kept.
+    rc=0; git ls-remote --exit-code --heads origin "refs/heads/$b" >/dev/null 2>&1 || rc=$?
+    if [[ "$rc" == 0 ]]; then keep "origin/$b" "git could not delete it (it may have moved since the fetch)"; failed=1; continue
+    elif [[ "$rc" != 2 ]]; then keep "origin/$b" "git could not delete it, and origin could not be checked"; failed=1; continue; fi
   fi
   removed=$((removed + 1))
 done < <(git for-each-ref --format='%(refname)' refs/remotes/origin)
 
-run git worktree prune
 [[ "$dry" == true ]] || git fetch --prune --quiet origin
 echo "Done: $removed removed, $kept kept$([[ "$dry" == true ]] && echo " (dry run)")."
 [[ "$failed" == 0 ]] || exit 1
