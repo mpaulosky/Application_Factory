@@ -178,7 +178,10 @@ step "Issue references in Owned files name their repo"
 # The rule is tests/check-issue-refs.py (its EXAMPLES list is there, and its pytest in tests/issue_refs/); the Factory's scripts/gate.sh runs it too,
 # so --quick catches a bare #N before this step does.
 (cd "$skill_dir/tests" && "${pytest_cmd[@]}" -q -p no:cacheprovider -rs issue_refs) || fail "issue_refs pytest"
-python3 -I "$skill_dir/tests/check-issue-refs.py" "$owned" || fail "write issue references in Owned files as mpaulosky/dotfiles#N (or <Repo>#N), not a bare #N"
+refs_rc=0
+python3 -I "$skill_dir/tests/check-issue-refs.py" "$owned" || refs_rc=$?
+((refs_rc != 1)) || fail "write issue references in Owned files as mpaulosky/dotfiles#N (or <Repo>#N), not a bare #N"
+((refs_rc == 0)) || fail "check-issue-refs.py failed (exit $refs_rc) without checking: see its output above"
 
 step "gh commands in Owned scripts are told their repository"
 # A Baseline repo's gate refuses a gh command under scripts/ that reaches gh's

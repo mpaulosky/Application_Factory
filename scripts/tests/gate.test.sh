@@ -175,10 +175,11 @@ repo="$(new_repo drift-message)"
 echo "# local edit" >> "$repo/scripts/review.sh"
 run "$repo"
 check "the drift message points at --sync" "$([[ $status == 1 ]] && grep -q 'gate.sh --sync' "$repo/out" && echo 0 || echo 1)"
-# The workflow the message describes: after --sync the next full gate passes, a mode mismatch in the Template's original included.
+# The workflow the message describes: after --sync the next full gate passes.
 GATE_ARGS=--sync run "$repo"
 run "$repo"
 check "the gate passes after --sync" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
+# A copy whose Template original lacks the execute bit is made non-executable too.
 repo="$(new_repo sync-execbit)"
 chmod -x "$repo/$skill/template/owned/.github/hooks/post-checkout"
 GATE_ARGS=--sync run "$repo"

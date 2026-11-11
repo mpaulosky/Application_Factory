@@ -31,7 +31,7 @@ CYAN='\033[0;36m'; RED='\033[0;31m'; RESET='\033[0m'
 skill=".claude/skills/repo-ci-baseline"
 owned="$skill/template/owned"
 
-# The Factory carries these Owned files as copies, for its git hooks, review layer and issue and PR process. Edit the Template's file and copy it over.
+# The Factory carries these Owned files as copies, for its git hooks, review layer and issue and PR process. Edit the Template's file, then run scripts/gate.sh --sync to copy it over.
 # Keep this list in step with ADR 0006, ADR 0008, ADR 0009, ADR 0010 and CLAUDE.md.
 copies=(
   .github/hooks/pre-commit
