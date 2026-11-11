@@ -2098,8 +2098,19 @@ def test_check_repo_escapes_line_breaks_in_the_name_of_a_symlink_it_refuses(tmp_
     ("if false; then\nwhile x; do if y; then z; fi; done\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
     ("if false; then\nx; { if y; then z; fi; }\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
     ("if false; then\nif y; then z; else if w; then v; fi; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
-    # the known limit: a line of a multi-line string that looks like fi pops the dead branch, so the export counts as before
-    ("if false; then\necho \"\nfi\"\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # a line of a multi-line string that starts like fi but is glued to a quote is not a keyword, so the dead branch stays dead
+    ("if false; then\necho \"\nfi\"\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    # a quoted or commented keyword is not one: it neither pops the dead branch nor opens a phantom one
+    ("if false; then\nprintf '%s\\n' '; fi'\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho \"; fi\"\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho x # ; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\necho x \\; fi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("echo '; if false; then'\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("echo x # ; if false; then\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    # keywords on one line count in source order: the fi closes the old block before the new if opens
+    ("if false; then\n:\nfi; if true; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\n:\nfi; if x; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if true; then\nif false; then\n:\nfi; if false; then\n:\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
 ])
 def test_untold_takes_an_export_only_from_a_branch_that_can_run(tmp_path, text, refused):
     assert lines_of(untold(tmp_path, text)) == refused

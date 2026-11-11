@@ -429,9 +429,62 @@ def shown(line):
     return for_log(line.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace"))
 
 
-# An if keyword, and a fi keyword, as bash reads one: at the start of a line or after ; & | ( { or then/else/do, never as an argument (grep -q fi).
-IF_KEYWORD = re.compile(r"(?:^|[;&|({]|\b(?:then|else|do))[ \t]*if(?=[ \t])")
-FI_KEYWORD = re.compile(r"(?:^|[;&|({]|\b(?:then|else|do))[ \t]*fi(?![A-Za-z0-9_-])")
+WORD_END = " \t;&|(){}<>"
+# After one of these a command starts, so the next word may be a keyword.
+BEFORE_COMMAND = ("then", "else", "do")
+
+
+def keywords(line):
+    """The if and fi keywords of line, in source order, as (word, is_first): (\"if\" or \"fi\", True if it is the line's first word).
+
+    A keyword is a reserved word as bash reads one: an unquoted word at the start of a line or after ; & | ( { or then/else/do,
+    never an argument (grep -q fi), never inside quotes ('; fi') and never in a comment (# fi).
+    """
+    found = []
+    position = 0
+    command = True
+    first = True
+    while position < len(line):
+        char = line[position]
+        if char in " \t":
+            position += 1
+        elif char == "#":
+            break
+        elif char in ";&|({":
+            command = True
+            position += 1
+        elif char in ")}<>":
+            command = False
+            position += 1
+        else:
+            start = position
+            plain = True
+            while position < len(line) and line[position] not in WORD_END:
+                if line[position] == "\\":
+                    plain = False
+                    position += 2
+                elif line[position] in "'\"":
+                    plain = False
+                    quote = line[position]
+                    position += 1
+                    while position < len(line) and line[position] != quote:
+                        position += 2 if quote == '"' and line[position] == "\\" else 1
+                    position += 1
+                elif line.startswith("${", position):
+                    plain = False
+                    end = line.find("}", position)
+                    position = len(line) if end < 0 else end + 1
+                else:
+                    position += 1
+            word = line[start:position] if plain else ""
+            blank = position >= len(line) or line[position] in " \t"
+            if command and ((word == "if" and blank and position < len(line)) or word == "fi"):
+                found.append((word, first))
+            command = word in BEFORE_COMMAND or (command and word in ("if", "fi", "elif", "while", "until", "!"))
+            first = False
+    return found
+
+
 IF_CONDITION = re.compile(r"[ \t]*if[ \t]+(.*?)[ \t]*;?[ \t]*(?:then)?[ \t]*(?:#.*)?$")
 NEVER = re.compile(r"(false|! *true|\[ +0 +-ne +0 +\]|\[ +1 +-eq +0 +\])$")
 ALWAYS = re.compile(r"(true|:)$")
@@ -442,7 +495,7 @@ def track_branches(line, branches):
 
     runs is False while the branch being read can't run. Only a condition that is plainly false (or plainly true,
     for its else) is judged, and only on an if that starts its line; any other branch may run. An if and its fi on one
-    line cancel out. A line inside a multi-line string or a non-data heredoc body that looks like a fi or an else can
+    line cancel out. Keywords count in source order; a quoted or commented one is not a keyword. A line inside a multi-line string or a non-data heredoc body that looks like a fi or an else can
     misjudge a branch, either way: it can pop a branch that never runs, so an export in it counts again, as it did before
     branches were tracked, or flip one. `# gh-repo: ok` skips a line.
     """
@@ -450,13 +503,12 @@ def track_branches(line, branches):
         branches[-1] = (not branches[-1][1], branches[-1][1])
     elif re.match(r"[ \t]*elif\b", line) and branches:
         branches[-1] = (True, False)
-    opened = list(IF_KEYWORD.finditer(line))
-    for number, keyword in enumerate(opened):
-        condition = IF_CONDITION.match(line) if number == 0 and keyword.start() == 0 else None
-        text = condition.group(1) if condition else ""
-        branches.append((NEVER.match(text) is None, ALWAYS.match(text) is not None))
-    for _ in FI_KEYWORD.finditer(line):
-        if branches:
+    for word, first in keywords(line):
+        if word == "if":
+            condition = IF_CONDITION.match(line) if first else None
+            text = condition.group(1) if condition else ""
+            branches.append((NEVER.match(text) is None, ALWAYS.match(text) is not None))
+        elif branches:
             branches.pop()
 
 
