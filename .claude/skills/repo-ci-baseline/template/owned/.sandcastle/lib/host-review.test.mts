@@ -284,6 +284,15 @@ describe("parseReviewerAnswer", () => {
     assert.throws(() => parseReviewerAnswer(block([finding({ lens: "\u200b" })])), ReviewerAnswerError);
   });
 
+  it("leaves a summary whose token an invisible character hid from the secret check as a text the check still finds", () => {
+    const token = `${"gh"}p_${"a".repeat(30)}`;
+    const parsed = reviewerFindingSchema.parse(finding({ summary: `leaked x\u200b${token} here`, fix: `use x\u200b${token}` }));
+
+    assert.ok(parsed.summary.includes(`x${token}`));
+    assert.ok(containsSecret(parsed.summary, []));
+    assert.ok(containsSecret(parsed.fix, []));
+  });
+
   it("strips invisible characters from a fix and a why, which the fix agent's prompt is built from", () => {
     const parsed = reviewerFindingSchema.parse(finding({ fix: "Trim\u202e it\u{E0041}.", why: "Because\u200b so." }));
 

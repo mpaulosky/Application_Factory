@@ -45,11 +45,14 @@ export function sandboxEnv(envFile: string, hostEnv: Record<string, string | und
 }
 
 // Token shapes worth catching even when they didn't come from the env file,
-// each with the name secretKindIn reports it by.
+// each with the name secretKindIn reports it by. None needs a word boundary: a text
+// that has had an invisible character taken out of it can run a word up against a
+// token (x, a zero-width space and the token read as one word), and a boundary
+// would let that through. The patterns are loose on purpose.
 const tokenShapes = [
   { shape: "sk-ant-", pattern: /sk-ant-[A-Za-z0-9_-]{16,}/ },
-  { shape: "gh*_", pattern: /\bgh[pousr]_[A-Za-z0-9]{20,}\b/ },
-  { shape: "github_pat_", pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/ },
+  { shape: "gh*_", pattern: /gh[pousr]_[A-Za-z0-9]{20,}/ },
+  { shape: "github_pat_", pattern: /github_pat_[A-Za-z0-9_]{20,}/ },
 ] as const;
 
 // Shorter values are too likely to be ordinary words to look for.

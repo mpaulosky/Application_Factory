@@ -47,6 +47,22 @@ describe("containsSecret", () => {
     assert.ok(containsSecret(`x = "${githubShaped}"`, []));
   });
 
+  it("finds a token run up against other word characters, as it is after an invisible character between them is removed", () => {
+    const patShaped = `${"github"}_pat_${"A".repeat(22)}`;
+    for (const token of [githubShaped, patShaped, claudeShaped]) {
+      for (const text of [`x${token}`, `${token}_x`, `a_${token}`, `9${token}9`, `x${token}`.replace("x", "\u00e9")]) {
+        assert.ok(containsSecret(text, []), text);
+      }
+    }
+  });
+
+  it("still needs the shape's minimum length", () => {
+    assert.ok(!containsSecret(`x${"gh"}p_${"A".repeat(19)}`, []));
+    assert.ok(containsSecret(`x${"gh"}p_${"A".repeat(20)}`, []));
+    assert.ok(!containsSecret(`x${"github"}_pat_${"A".repeat(19)}`, []));
+    assert.ok(containsSecret(`x${"github"}_pat_${"A".repeat(20)}`, []));
+  });
+
   it("finds nothing in ordinary code", () => {
     assert.ok(!containsSecret("const answer = 42;\n", ["abcdefgh12345"]));
   });
