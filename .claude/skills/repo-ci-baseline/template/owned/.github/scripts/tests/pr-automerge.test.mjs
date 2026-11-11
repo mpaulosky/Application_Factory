@@ -5163,7 +5163,9 @@ const copilotRequestedAt = (at, reviewer = { login: "Copilot", type: "Bot" }) =>
 test("a request for a copilot-x user or team does not save an add that PR Auto-Merge removed (mpaulosky/Application_Factory#22)", async () => {
   for (const event of [
     { event: "review_requested", created_at: "2026-01-02T00:30:03Z", requested_reviewer: { login: "copilot-x", type: "User" }, actor: { login: "ruleset" } },
-    { event: "review_requested", created_at: "2026-01-02T00:30:03Z", requested_team: { name: "copilot-team" }, actor: { login: "ruleset" } }
+    { event: "review_requested", created_at: "2026-01-02T00:30:03Z", requested_team: { name: "copilot-team" }, actor: { login: "ruleset" } },
+    { event: "review_requested", created_at: "2026-01-02T00:30:03Z", requested_reviewer: { type: "Bot" }, actor: { login: "ruleset" } },
+    { event: "review_requested", created_at: "2026-01-02T00:30:03Z", requested_reviewer: { login: null, type: "Bot" }, actor: { login: "ruleset" } }
   ]) {
     const result = await evaluate(documentedLoop({ reviewRequests: COPILOT_PENDING }), [addedBy(OWNER), event, removedByActions("2026-01-02T00:30:05Z")]);
     assert.equal(result.merges.length, 1, result.logs.join("\n"));
