@@ -1424,7 +1424,12 @@ const USAGE = `Usage: scripts/review.sh <command>
                          the key of the whole diff, then HEAD
   key                    print the ledger key of HEAD's diff against origin/main
   check [<base>]         the gate's check: exit 1 unless HEAD's diff was reviewed clean
-  record <file>          record a review from JSON ({ reviewedKey, reviewedHead, rounds, reviewerAgent, pr, findings }); - reads stdin
+  stage <absolute dir> [<file>]
+                         add the findings in the JSON array in <file> (stdin by default) to <dir>/findings.json, a finding with an id already there replacing
+                         it, so a round's triage survives a long session; prints how many are staged
+  record <file> [--staged <absolute dir>]
+                         record a review from JSON ({ reviewedKey, reviewedHead, rounds, reviewerAgent, pr, findings }); - reads stdin;
+                         with --staged the findings in <dir>/findings.json come before the file's own
   accept <id> <reason>   accept an open finding on HEAD's review
   report                 print HEAD's review report
   notes                  print the "## Review notes" section for the PR description
@@ -1460,6 +1465,32 @@ function printable(text: string): string {
       (wordBefore("github", offset, whole) && /^\.com\b/i.test(whole.slice(offset + 1, offset + 6)));
     return breaksReference ? character : "";
   });
+}
+
+// The findings a run keeps between its rounds, in the run folder `prepare` writes to: each round's triage is `stage`d as it ends, and
+// `record --staged` reads them, so the record doesn't depend on what the session still remembers of the earlier rounds.
+const STAGED_FILE = "findings.json";
+
+function readStaged(directory: string): unknown[] {
+  const file = join(directory, STAGED_FILE);
+  if (!existsSync(file)) throw new Error(`${file} doesn't exist: stage the findings of a round first (scripts/review.sh stage).`);
+  const staged = JSON.parse(readFileSync(file, "utf8")) as unknown;
+  if (!Array.isArray(staged)) throw new Error(`${file} isn't a JSON array.`);
+  return staged;
+}
+
+// Add `findings` (a JSON array, each checked as `record` will check it) to the folder's file; a finding whose id is staged already
+// replaces that one, since a later round may change what became of it.
+function stageFindings(directory: string, findings: unknown): { added: number; total: number } {
+  const parsed = z.array(inputFindingSchema).parse(findings);
+  const file = join(directory, STAGED_FILE);
+  const kept = existsSync(file) ? (readStaged(directory) as { id: string }[]) : [];
+  const ids = new Set(parsed.map((finding) => finding.id));
+  if (ids.size !== parsed.length) throw new Error("finding ids repeat within the array.");
+  const merged = [...kept.filter((finding) => !ids.has(finding.id)), ...parsed];
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(file, `${JSON.stringify(merged, null, 2)}\n`);
+  return { added: parsed.length, total: merged.length };
 }
 
 // The command line. Returns the exit code: 0 only for a command that did
@@ -1508,9 +1539,21 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         out(result.message);
         return 0;
       }
+      case "stage": {
+        if ((rest.length !== 1 && rest.length !== 2) || !isAbsolute(rest[0])) return fail(USAGE);
+        const staged = stageFindings(rest[0], JSON.parse(readFileSync(rest[1] ?? 0, "utf8")));
+        out(`Staged ${staged.added} finding(s); ${staged.total} in ${join(rest[0], STAGED_FILE)}.`);
+        return 0;
+      }
       case "record": {
-        if (rest[0] === undefined) return fail(USAGE);
-        const text = readFileSync(rest[0] === "-" ? 0 : rest[0], "utf8");
+        const flag = rest.indexOf("--staged");
+        const stagedDirectory = flag < 0 ? undefined : rest[flag + 1];
+        if (flag >= 0 && (stagedDirectory === undefined || !isAbsolute(stagedDirectory) || rest.length !== 3 || flag !== 1)) return fail(USAGE);
+        if (rest[0] === undefined || (flag < 0 && rest.length !== 1)) return fail(USAGE);
+        const parsed = JSON.parse(readFileSync(rest[0] === "-" ? 0 : rest[0], "utf8")) as { findings?: unknown };
+        const text = JSON.stringify(
+          stagedDirectory === undefined ? parsed : { ...parsed, findings: [...readStaged(stagedDirectory), ...(Array.isArray(parsed.findings) ? parsed.findings : [])] },
+        );
         const note = (message: string) => process.stderr.write(`.security: ${printable(message)}\n`);
         const report = renderReport(
           recordReview(cwd, mergeBase(cwd), JSON.parse(text) as ReviewInput, undefined, undefined, {

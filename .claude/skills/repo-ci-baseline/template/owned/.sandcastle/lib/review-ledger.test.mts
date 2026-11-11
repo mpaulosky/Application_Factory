@@ -4233,3 +4233,87 @@ describe("the review command's printed text", () => {
     assert.match(result.out, /#\u200b12/);
   });
 });
+
+describe("staging findings between rounds", () => {
+  // A findings array in a file, as the skill pipes it to `stage`.
+  const array = (name: string, findings: unknown[]): string => {
+    const file = join(root, name);
+    writeFileSync(file, JSON.stringify(findings));
+    return file;
+  };
+  const run1 = () => join(root, "run");
+  const staged = (): { id: string; status: string }[] => JSON.parse(readFileSync(join(run1(), "findings.json"), "utf8"));
+  // A branch with a change to review, so `record` has a diff.
+  const branchWithChange = () => commit(repo, "app.cs", lines(50, (index) => (index === 2 ? "fix 1" : undefined)), "fix 1");
+
+  it("keeps the findings of each round in the run folder, in order", () => {
+    assert.match(cli(["stage", run1(), array("a.json", [finding()])]).out, /Staged 1 finding\(s\); 1 in /);
+    assert.match(cli(["stage", run1(), array("b.json", [finding({ id: "R2" })])]).out, /Staged 1 finding\(s\); 2 in /);
+
+    assert.deepEqual(staged().map((found) => found.id), ["R1", "R2"]);
+  });
+
+  it("replaces a staged finding with the same id, as a later round changes what became of it", () => {
+    cli(["stage", run1(), array("a.json", [finding({ status: "open", test: null }), finding({ id: "R2" })])]);
+
+    const result = cli(["stage", run1(), array("b.json", [finding()])]);
+
+    assert.match(result.out, /Staged 1 finding\(s\); 2 in /);
+    assert.deepEqual(staged().map((found) => `${found.id}:${found.status}`), ["R2:fixed", "R1:fixed"]);
+  });
+
+  it("refuses a finding record would refuse, and stages nothing", () => {
+    const bad = finding({ severity: "advisory", lens: "Security" });
+
+    const result = cli(["stage", run1(), array("a.json", [finding({ id: "R2" }), bad])]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /lens names security/);
+    assert.equal(existsSync(join(run1(), "findings.json")), false);
+  });
+
+  it("refuses a repeated id within one array, a relative folder and an array that is not one", () => {
+    assert.equal(cli(["stage", run1(), array("a.json", [finding(), finding()])]).code, 1);
+    assert.equal(cli(["stage", "run", array("b.json", [finding()])]).code, 1);
+    assert.equal(cli(["stage", run1(), array("c.json", [])]).code, 0);
+    writeFileSync(join(root, "d.json"), "{}");
+    assert.equal(cli(["stage", run1(), join(root, "d.json")]).code, 1);
+    assert.equal(cli(["stage"]).code, 1);
+  });
+
+  it("records the staged findings with the file's own, staged ones first", () => {
+    branchWithChange();
+    cli(["stage", run1(), array("a.json", [finding()])]);
+    const input = join(root, "input.json");
+    writeFileSync(input, JSON.stringify({ ...reviewed(), rounds: 2, findings: [finding({ id: "R2" })] }));
+
+    const result = cli(["record", input, "--staged", run1()]);
+
+    assert.equal(result.code, 0, result.err);
+    assert.deepEqual(nearest()?.findings.map((found) => found.id), ["R1", "R2"]);
+  });
+
+  it("records the staged findings alone when the file has none", () => {
+    branchWithChange();
+    cli(["stage", run1(), array("a.json", [finding()])]);
+    const input = join(root, "input.json");
+    writeFileSync(input, JSON.stringify({ ...reviewed(), rounds: 1 }));
+
+    assert.equal(cli(["record", input, "--staged", run1()]).code, 0);
+    assert.deepEqual(nearest()?.findings.map((found) => found.id), ["R1"]);
+  });
+
+  it("refuses an id both staged and in the file, a missing staging file and a malformed --staged", () => {
+    branchWithChange();
+    cli(["stage", run1(), array("a.json", [finding()])]);
+    const input = join(root, "input.json");
+    writeFileSync(input, JSON.stringify({ ...reviewed(), rounds: 1, findings: [finding()] }));
+
+    assert.match(cli(["record", input, "--staged", run1()]).err, /ids repeat: R1/);
+    assert.match(cli(["record", input, "--staged", join(root, "none")]).err, /stage the findings of a round first/);
+    assert.equal(cli(["record", input, "--staged"]).code, 1);
+    assert.equal(cli(["record", input, "--staged", "run"]).code, 1);
+    assert.equal(cli(["record", "--staged", run1(), input]).code, 1);
+    assert.equal(cli(["record", input, run1()]).code, 1);
+  });
+});

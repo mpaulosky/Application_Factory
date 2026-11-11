@@ -70,12 +70,20 @@ with tempfile.TemporaryDirectory() as tmp:
     bad.write_bytes(b"# \xa9 2022\ngit clone https://github.com/mpaulosky/dotfiles.git\n")
     check("undecodable bytes do not hide a mention", count_in(read(bad)) == 1)
 
+def is_cache(relative):
+    # What apply.sh never copies (its file list skips these too): a Python cache a local run left in the Template is no Template file.
+    return "__pycache__" in relative.parts or ".pytest_cache" in relative.parts or relative.suffix == ".pyc"
+
+
+check("a Python cache file is not a Template file", is_cache(Path("template/owned/s/__pycache__/x.cpython-314.pyc")) and is_cache(Path("a/x.pyc")) and is_cache(Path("a/.pytest_cache/v")))
+check("a script is a Template file", not is_cache(Path("template/owned/s/check.py")) and not is_cache(Path("template/owned/s/pycache.sh")))
+
 # The Template.
 found = {}
 files = 0
 for root in ("template/owned", "template/seed"):
     for path in sorted((skill / root).rglob("*")):
-        if not path.is_file() or ".git" in path.relative_to(skill).parts:
+        if not path.is_file() or ".git" in path.relative_to(skill).parts or is_cache(path.relative_to(skill)):
             continue
         text = read(path)
         files += 1

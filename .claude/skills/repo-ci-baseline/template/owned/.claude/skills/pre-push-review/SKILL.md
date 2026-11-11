@@ -221,6 +221,10 @@ code at each finding's line yourself, then give it one outcome:
   An earlier Advisory finding that's still there is fixed now, unless it waits for a person: then it's recorded open
   again as Advisory, its summary opening with the old id (`R3 again: ...`), and it never blocks.
 
+End each round's triage by staging its findings, every field of step 8's `findings` (ids as below), so a long session that loses its
+memory of the earlier rounds still records them: `scripts/review.sh stage <run> <<'JSON'` with the round's JSON array. A finding staged
+again under the same id replaces the earlier one, so stage a fixed finding again with its `test`, and a dismissed one with its `reason`.
+
 Number this run's findings from the id `scripts/review.sh next` prints at the start of the run, continuing across its
 rounds. `record` refuses any id at or below the highest that the review it replaces, or any earlier review of the
 branch's own commits, took, so a person reading an older report can't accept a different finding by its id.
@@ -261,7 +265,9 @@ that only reviews: anything it finds new stays open for a person (an Advisory on
 
 ### 8. Record
 
-Record the outcome with the key and HEAD `prepare` printed when the last round started. Every finding has exactly these fields, with `test`,
+Record the outcome with the key and HEAD `prepare` printed when the last round started. The findings staged in `<run>/findings.json`
+(step 5) are the run's findings: leave `findings` out of the JSON below, or give it only the ones not staged, and run
+`scripts/review.sh record - --staged <run>`. Every finding has exactly these fields, with `test`,
 `reason` and `fix` always present and `null` when unused. `fix` is the reviewer's suggested fix, and `record`
 refuses an open finding without one (`scripts/review.sh advisory` reads it, and step 9 gives it to the person deciding). The reviewers'
 `needsPerson` and `why` stay out:
