@@ -5,7 +5,7 @@
 # The fake gh ignores the query it is given and prints a canned GraphQL response, so the script must read gh's whole output with jq
 # itself (no `gh --jq`). The response has GitHub's own shape, under .data.repository.pullRequest:
 #   state, merged, mergeable, mergeStateStatus, headRefOid,
-#   commits.nodes[0].commit.statusCheckRollup.contexts.nodes[]  (CheckRun: name, conclusion, status; StatusContext: context, state),
+#   headRef.target.{oid, statusCheckRollup.contexts.nodes[]}  (CheckRun: name, conclusion, status; StatusContext: context, state),
 #   reviewThreads.nodes[]  (isResolved, comments.nodes[]: author { __typename, login }, body; the last one is the thread's last comment),
 #   reviews.nodes[] and comments.nodes[]  (id, author { __typename, login }, body, and state for a review).
 set -uo pipefail
@@ -104,12 +104,14 @@ new_repo() {
 pr() {
   jq -n --argjson over "$1" --arg sha "$SHA" '
     {state: "OPEN", merged: false, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", headRefOid: $sha,
-     commits: {nodes: [{commit: {statusCheckRollup: {contexts: {nodes: []}}}}]},
-     reviewThreads: {nodes: []}, reviews: {nodes: []}, comments: {nodes: []}} * $over
+     headRef: {target: {oid: $sha, statusCheckRollup: {contexts: {pageInfo: {hasNextPage: false}, nodes: []}}}},
+     reviewThreads: {pageInfo: {hasNextPage: false}, nodes: []},
+     reviews: {pageInfo: {hasPreviousPage: false}, nodes: []},
+     comments: {pageInfo: {hasPreviousPage: false}, nodes: []}} * $over
     | {data: {repository: {pullRequest: .}}}' > "$GH_FIXTURE"
 }
 # checks <nodes-json>: the PR's checks.
-checks() { pr "{\"commits\":{\"nodes\":[{\"commit\":{\"statusCheckRollup\":{\"contexts\":{\"nodes\":$1}}}}]}}"; }
+checks() { pr "{\"headRef\":{\"target\":{\"statusCheckRollup\":{\"contexts\":{\"nodes\":$1}}}}}"; }
 # thread <resolved> <author-json> <body>: one thread whose only (so last) comment is that.
 thread() {
   pr "$(jq -n --argjson resolved "$1" --argjson author "$2" --arg body "$3" \
@@ -671,7 +673,7 @@ check "three failures, then quiet until the timeout: exit 1" status_is 1
 # A response with GitHub's shape whose text can't be read (a number for a comment body) is a failed poll every time: the failures add up
 # across polls and end the watcher, rather than each one counting as the first.
 new_repo
-echo '{"data":{"repository":{"pullRequest":{"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","commits":{"nodes":[]},"reviewThreads":{"nodes":[]},"reviews":{"nodes":[]},"comments":{"nodes":[{"id":"C_1","author":{"__typename":"User","login":"reviewer"},"body":5}]}}}}}' > "$GH_FIXTURE"
+echo '{"data":{"repository":{"pullRequest":{"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"x","headRef":{"target":{"oid":"x","statusCheckRollup":null}},"reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":[]},"reviews":{"pageInfo":{"hasPreviousPage":false},"nodes":[]},"comments":{"pageInfo":{"hasPreviousPage":false},"nodes":[{"id":"C_1","author":{"__typename":"User","login":"reviewer"},"body":5}]}}}}}' > "$GH_FIXTURE"
 run --interval 60 --timeout 120 7
 check "an unreadable answer five times: exit 2" status_is 2
 check "an unreadable answer is never reported as quiet" out_is_empty
@@ -703,6 +705,26 @@ new_repo
 echo '{"data":{"repository":{"pullRequest":{"state":"OPEN"}}}}' > "$GH_FIXTURE"
 run --once 7
 check "a response missing its lists is not quiet" not status_is 1
+
+# A list GitHub says has more pages, or a head ref that isn't headRefOid, is an incomplete read: a failed poll, never quiet.
+for incomplete in \
+  '{"reviewThreads":{"pageInfo":{"hasNextPage":true}}}' \
+  '{"reviews":{"pageInfo":{"hasPreviousPage":true}}}' \
+  '{"comments":{"pageInfo":{"hasPreviousPage":true}}}' \
+  '{"headRef":{"target":{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true}}}}}}' \
+  '{"headRef":{"target":{"oid":"not-the-head"}}}'; do
+  new_repo
+  pr "$incomplete"
+  run --once 7
+  check "an incomplete read ($incomplete) is not quiet" not status_is 1
+  check "an incomplete read ($incomplete) is a failed poll: exit 2" status_is 2
+done
+
+# A failing check on the head ref is found even though the PR has no commits list at all.
+new_repo
+checks '[{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"FAILURE"}]'
+run --once 7
+check "a failing check on headRef is reported" status_is 0
 
 # ---------------------------------------------------------------------------
 # --would-skip: the classifier alone, reading a comment body on stdin.

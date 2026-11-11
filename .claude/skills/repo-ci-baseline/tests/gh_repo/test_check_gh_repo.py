@@ -2055,3 +2055,28 @@ def test_check_repo_escapes_line_breaks_in_the_name_of_a_symlink_it_refuses(tmp_
 
     # Assert
     assert found == ["scripts/a\\r::error::b: a symlink to nothing"]
+
+
+@pytest.mark.parametrize("text, refused", [
+    ("if false; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [4]),
+    ("if false\nthen\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if true; then\n  :\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if [ -n \"$x\" ]; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if true; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false; then\n  :\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+])
+def test_untold_takes_an_export_only_from_a_branch_that_can_run(tmp_path, text, refused):
+    assert lines_of(untold(tmp_path, text)) == refused
+
+
+def test_tokens_takes_linear_time_for_a_long_unquoted_word():
+    import time
+    start = time.perf_counter()
+    found = check_gh_repo.tokens("a" * 200_000)
+    assert found == [("word", "a" * 200_000, False)]
+    assert time.perf_counter() - start < 2
+
+
+def test_data_heredocs_does_not_tokenize_a_line_without_a_heredoc(monkeypatch):
+    monkeypatch.setattr(check_gh_repo, "tokens", lambda text: pytest.fail("tokenized"))
+    assert check_gh_repo.data_heredocs("echo hi && ls", ["x"]) == []

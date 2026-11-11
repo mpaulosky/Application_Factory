@@ -202,13 +202,15 @@ def tokens(text):
             flush()
             index += 1
         elif char == "\\":
-            word = (word or []) + [text[index + 1:index + 2]]
+            word = [] if word is None else word
+            word.append(text[index + 1:index + 2])
             quoted = True
             index += 2
         elif char == "'":
             end = text.find("'", index + 1)
             end = len(text) if end < 0 else end
-            word = (word or []) + [text[index + 1:end]]
+            word = [] if word is None else word
+            word.append(text[index + 1:end])
             quoted = True
             index = end + 1
         elif char == '"':
@@ -225,7 +227,8 @@ def tokens(text):
                 index += 1
                 if depth == 0:
                     break
-            word = (word or []) + ["0"]
+            word = [] if word is None else word
+            word.append("0")
         elif text.startswith("$(", index):
             flush()
             found.append(("open", "$(", False))
@@ -254,7 +257,9 @@ def tokens(text):
             found.append(("op", operator.group(), False))
             index = operator.end()
         else:
-            word = (word or []) + [char]
+            if word is None:
+                word = []
+            word.append(char)
             index += 1
     flush()
     return found
@@ -307,6 +312,8 @@ def data_heredocs(header, later):
     An unquoted delimiter still lets bash run the $(...) and backticks in a data body. A heredoc whose delimiter never
     comes again is no heredoc.
     """
+    if "<<" not in header:
+        return []
     heredocs, data = heredoc_header(header)
     if not data:
         return []
@@ -421,6 +428,29 @@ def shown(line):
     return for_log(line.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace"))
 
 
+IF_OPEN = re.compile(r"[ \t]*if[ \t]+(.*?)[ \t]*;?[ \t]*(then)?[ \t]*(#.*)?$")
+NEVER = re.compile(r"(false|! *true|\[ +0 +-ne +0 +\]|\[ +1 +-eq +0 +\])$")
+ALWAYS = re.compile(r"(true|:)$")
+
+
+def track_branches(line, branches):
+    """Keep branches, one (runs, always) pair per open if, up to date for this line.
+
+    runs is False while the branch being read can't run. Only a condition that is plainly false (or plainly true,
+    for its else) is judged; any other branch may run.
+    """
+    opened = IF_OPEN.match(line)
+    if opened and not re.search(r"\bfi[ \t]*(;|$)", line):
+        condition = opened.group(1)
+        branches.append((NEVER.match(condition) is None, ALWAYS.match(condition) is not None))
+    elif re.match(r"[ \t]*else\b", line) and branches:
+        branches[-1] = (not branches[-1][1], branches[-1][1])
+    elif re.match(r"[ \t]*elif\b", line) and branches:
+        branches[-1] = (True, False)
+    elif re.match(r"[ \t]*fi\b", line) and branches:
+        branches.pop()
+
+
 def untold(path):
     """Each line of path with a gh command not told its repository, as file:line: text."""
     lines = read_lines(path)
@@ -430,6 +460,7 @@ def untold(path):
     # The first line of the bodies, the last line of the command that opens them, and a substitution a body leaves open.
     body_start = header_end = 0
     pending = None
+    branches = []
     for number, line in enumerate(lines, 1):
         if bodies and number >= body_start:
             delimiter, tabs, quoted = bodies[0]
@@ -450,8 +481,10 @@ def untold(path):
             header_end = number + count - 1
             body_start = header_end + 1
             bodies = data_heredocs(header, lines[header_end:])
+        track_branches(line, branches)
         if EXPORTS.match(line):
-            exported = True
+            # An export in a branch that never runs leaves GH_REPO unset.
+            exported = exported or all(runs for runs, _ in branches)
         elif UNSET.search(line) or any(
                 not PREFIX_OF_GH.match(line, assignment.start()) for assignment in ASSIGNMENT.finditer(line)):
             exported = False

@@ -244,18 +244,14 @@ jobs:
                 report "$path"
               fi
             done < <(git ls-tree -r -z "$BASE_SHA" -- "$entry")
-            # A file the PR adds inside an Owned folder isn't in the base's tree, and the checker
-            # skips the folder: report it, or nothing reads it.
-            case $entry in
-              */)
-                while IFS= read -r -d '' head_entry; do
-                  path=${head_entry#*$'\t'}
-                  if ! git cat-file -e "${BASE_SHA}:${path}" 2>/dev/null; then
-                    report "$path"
-                  fi
-                done < <(git ls-tree -r -z HEAD -- "$entry")
-                ;;
-            esac
+            # A file the PR adds (inside an Owned folder, or as an Owned entry itself) isn't in the base's
+            # tree, and the checker skips it: report it, or nothing reads it.
+            while IFS= read -r -d '' head_entry; do
+              path=${head_entry#*$'\t'}
+              if ! git cat-file -e "${BASE_SHA}:${path}" 2>/dev/null; then
+                report "$path"
+              fi
+            done < <(git ls-tree -r -z HEAD -- "$entry")
           done < "$tmp/owned.txt"
           exit "$status"
 

@@ -101,13 +101,22 @@ common_dir="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
 seen_file="$common_dir/watch-pr-$pr.seen"
 
 # shellcheck disable=SC2016 # GraphQL's $variables are not the shell's
-QUERY='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){state merged mergeable mergeStateStatus headRefOid commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}} reviewThreads(first:100){nodes{isResolved comments(last:1){nodes{author{__typename login} body}}}} reviews(last:50){nodes{id state author{__typename login} body}} comments(last:50){nodes{id author{__typename login} body}}}}}'
+QUERY='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){state merged mergeable mergeStateStatus headRefOid headRef{target{... on Commit{oid statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}} reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved comments(last:1){nodes{author{__typename login} body}}}} reviews(last:100){pageInfo{hasPreviousPage} nodes{id state author{__typename login} body}} comments(last:100){pageInfo{hasPreviousPage} nodes{id author{__typename login} body}}}}}'
 
-# The response must have GitHub's shape, with every list present: anything else is a failed poll, never a quiet one.
+# The response must have GitHub's shape, with every list present and read whole: anything else is a failed poll, never a quiet one.
+# The checks come from the PR's head ref, not the last of its commits (GitHub lists them by date, so the last needn't be the head), and
+# only when that ref is still at headRefOid. A list GitHub says has more pages than the query took is an incomplete read.
 SHAPE_JQ='
   .data.repository.pullRequest
   | type == "object" and (.state | type == "string")
-    and ([.commits.nodes, .reviewThreads.nodes, .reviews.nodes, .comments.nodes] | all(type == "array"))
+    and ([.reviewThreads.nodes, .reviews.nodes, .comments.nodes] | all(type == "array"))
+    and (.reviewThreads.pageInfo.hasNextPage == false)
+    and (.reviews.pageInfo.hasPreviousPage == false)
+    and (.comments.pageInfo.hasPreviousPage == false)
+    and (.state != "OPEN" or (
+      .headRef.target.oid == .headRefOid
+      and ((.headRef.target.statusCheckRollup.contexts // {nodes: [], pageInfo: {hasNextPage: false}})
+           | (.nodes | type == "array") and .pageInfo.hasNextPage == false)))
 '
 
 # One line per reason: code, detail and the node id of a one-shot event (else empty), apart by the unit separator.
@@ -126,7 +135,7 @@ REASONS_JQ="$OURS_JQ"'
       (if $pr.mergeable == "CONFLICTING" then line("conflict"; "the PR conflicts with its base branch"; "")
        elif $pr.mergeStateStatus == "BEHIND" then line("behind"; "the base branch has moved on; merge it into the PR"; "")
        else empty end),
-      ([($pr.commits.nodes[0].commit.statusCheckRollup.contexts.nodes // [])[]
+      ([($pr.headRef.target.statusCheckRollup.contexts.nodes // [])[]
         | select((.conclusion as $c | ["FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"] | index($c))
                  or (.state as $s | ["FAILURE", "ERROR"] | index($s)))
         | (.name // .context)]
