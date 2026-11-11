@@ -18,7 +18,7 @@ mkdir "$work/bin"
 cat > "$work/bin/gh" <<'GH' # gh-repo: ok
 #!/usr/bin/env bash
 # gh issue view <n> --json title|labels --jq ...
-[[ "${GH_REPO:-}" == "o/r" ]] || { echo "fake gh: GH_REPO=${GH_REPO:-}" >&2; exit 2; }
+[[ "${GH_REPO:-}" == "o/r" ]] || { echo "fake gh: GH_REPO=${GH_REPO:-}" >&2; exit 2; } # gh-repo: ok
 n="$3"; what="$5"
 case "$n:$what" in
   54:title) echo "[Feature] Start work in a worktree, review once!" ;;

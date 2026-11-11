@@ -24,8 +24,8 @@ export GH_FIX="$work/fix"; mkdir "$GH_FIX"
 mkdir "$work/bin"
 cat > "$work/bin/gh" <<'GH' # gh-repo: ok
 #!/usr/bin/env bash
-[[ "$*" == *"--state all"* && "$*" == *"--json"* && "${GH_REPO:-}" == "o/r" ]] || { echo "fake gh: bad call: $* (GH_REPO=${GH_REPO:-})" >&2; exit 2; }
-[[ ! -f "$GH_FIX/_fail" ]] || { echo "fake gh: network down" >&2; exit 1; }
+[[ "$*" == *"--state all"* && "$*" == *"--json"* && "${GH_REPO:-}" == "o/r" ]] || { echo "fake gh: bad call: $* (GH_REPO=${GH_REPO:-})" >&2; exit 2; } # gh-repo: ok
+[[ ! -f "$GH_FIX/_fail" ]] || { echo "fake gh: network down" >&2; exit 1; } # gh-repo: ok
 while [[ $# -gt 0 ]]; do [[ "$1" == --head ]] && { b="$2"; break; }; shift; done
 f="$GH_FIX/${b//\//_}"
 if [[ -f "$f.hook" ]]; then bash "$f.hook"; rm -f "$f.hook"; fi
@@ -92,8 +92,8 @@ touch "$GH_FIX/_fail"
 out=$(bash scripts/cleanup.sh 2>&1); st=$?
 rm -f "$GH_FIX/_fail"
 git reset -q --hard "$main_before"
-check "a gh failure fails the run" "[[ $st != 0 ]] && grep -q 'gh pr list failed' <<<\"\$out\""
-check "a gh failure removes nothing" "has_local feature/1-merged && [[ -d $work/wt/feature-1-merged ]] && has_remote chore/remote-only"
+check "a gh failure fails the run" "[[ $st != 0 ]] && grep -q 'gh pr list failed' <<<\"\$out\"" # gh-repo: ok
+check "a gh failure removes nothing" "has_local feature/1-merged && [[ -d $work/wt/feature-1-merged ]] && has_remote chore/remote-only" # gh-repo: ok
 
 # --dry-run
 out=$(bash scripts/cleanup.sh --dry-run 2>&1); st=$?
