@@ -514,8 +514,10 @@ def parenthesis_end(line, position, depth):
     return position
 
 
-def keywords(line, command=True):
-    """The if, fi, else and elif keywords of line, in source order, and whether the line ends where a command may start.
+def keywords(line, command=True, names=("if", "fi", "else", "elif"), where=None):
+    """The if, fi, else and elif keywords of line (or the reserved words in names), in source order, and whether the line ends where a command may start.
+
+    where, a list, gets the index each keyword starts at. Inside [[ ... ]] a word, ||, && and ( ) are operands, never keywords.
 
     A keyword is a reserved word as bash reads one: an unquoted word where a command starts, never an argument
     (grep -q fi), never inside quotes ('; fi'), a ${...} or a comment (# fi). A command starts at the start of the line
@@ -535,6 +537,7 @@ def keywords(line, command=True):
     position = 0
     # What each open ( is: "expansion" ($( <( >( ), "skipped" (( ), name=( ), an extglob group and what nests in them) or "subshell".
     parentheses = []
+    in_test = False
     while position < len(line):
         char = line[position]
         if parentheses and parentheses[-1] == "skipped" and char not in "()":
@@ -558,7 +561,7 @@ def keywords(line, command=True):
             before = line[position - 1] if position else ""
             if before == "$":
                 kind = "expansion"
-            elif line.startswith("((", position) or (parentheses and parentheses[-1] == "skipped") or (before and before in "=(@?*+!"):
+            elif line.startswith("((", position) or (parentheses and parentheses[-1] == "skipped") or in_test or (before and before in "=(@?*+!"):
                 kind = "skipped"
             else:
                 kind = "expansion" if before and before in "<>" else "subshell"
@@ -566,10 +569,11 @@ def keywords(line, command=True):
             command = kind != "skipped"
             position += 1
         elif char == ")":
-            command = (parentheses.pop() if parentheses else "subshell") == "subshell"
+            if not (in_test and not parentheses):
+                command = (parentheses.pop() if parentheses else "subshell") == "subshell"
             position += 1
         elif char in ";&|":
-            command = True
+            command = command if in_test else True
             position += 1
         elif char in "<>":
             command = False
@@ -587,10 +591,31 @@ def keywords(line, command=True):
                 else:
                     position += 1
             word = line[start:position]
-            if command and word in ("if", "fi", "else", "elif"):
+            if command and word in names:
                 found.append(word)
+                if where is not None:
+                    where.append(start)
+            if command and word == "[[":
+                in_test = True
+            elif word == "]]":
+                in_test = False
             command = command and word in BEFORE_COMMAND
     return found, command
+
+
+def split_condition(text):
+    """text cut at its real then (a then where a command starts, never an argument: echo then), without the ; before it, and whether it has one."""
+    where = []
+    keywords(text, True, ("then",), where)
+    if where:
+        return text[:where[0]].strip(" \t").removesuffix(";").strip(" \t"), True
+    return text.strip(" \t").removesuffix(";").strip(" \t"), False
+
+
+def without_comment(line):
+    """line up to its comment."""
+    start = comment_start(line)
+    return line if start < 0 else line[:start]
 
 
 def condition_of(line):
@@ -598,11 +623,7 @@ def condition_of(line):
     text = line.lstrip(" \t")
     if not text.startswith("if") or text[2:3] not in (" ", "\t"):
         return ""
-    text = text[2:].split("#", 1)[0]
-    then = re.search(r"[;\s]then\b", text)
-    if then:
-        text = text[:then.start()]
-    return text.strip(" \t").removesuffix(";").strip(" \t")
+    return split_condition(without_comment(text[2:]))[0]
 
 
 def track_branches(line, branches, command=True):
@@ -617,35 +638,56 @@ def track_branches(line, branches, command=True):
     misjudge a branch, either way: it can pop a branch that never runs, so an export in it counts again, as it did
     before branches were tracked, or flip one.
     """
+    if branches and branches[-1][2] is not None:
+        # The condition of the open if goes on past its first line: it is judged at the real then, from all its lines.
+        condition, ended = split_condition(without_comment(line))
+        branches[-1][2] += "\n" + condition
+        if ended:
+            branches[-1] = judged(branches[-1][2])
     found, command = keywords(line, command)
     for index, word in enumerate(found):
         if word == "if":
             # condition_of reads a line that starts with if; an if that is not the line's first keyword has no condition to judge.
             text = condition_of(line) if index == 0 else ""
-            branches.append((NEVER.match(text) is None, ALWAYS.match(text) is not None))
+            ended = index == 0 and split_condition(without_comment(line.lstrip(" \t")[2:]))[1]
+            branches.append(judged(text) if ended or index else [True, False, text.strip()])
         elif word == "fi":
             if branches:
                 branches.pop()
         elif branches:
-            branches[-1] = (not branches[-1][1], branches[-1][1]) if word == "else" else (True, False)
+            branches[-1] = [not branches[-1][1], branches[-1][1], None] if word == "else" else [True, False, None]
     return command
 
 
+def judged(condition):
+    """The [runs, always, pending] of a branch whose whole condition is known."""
+    condition = condition.strip()
+    return [NEVER.match(condition) is None, ALWAYS.match(condition) is not None, None]
+
+
 def comment_start(line):
-    """The index of the # that starts a comment in line, a # that begins a word outside quotes and ${...}, or -1."""
+    """The index of the # that starts a comment in line, a # that begins a word outside quotes and ${...}, or -1.
+
+    A space or ; & | ( ) < > before the # ends the word only when no backslash escapes it (foo\\ # is one word).
+    """
     position = 0
+    boundary = True
     while position < len(line):
         char = line[position]
         if char == "\\":
             position += 2
+            boundary = False
         elif char in "'\"":
             position = quoted_end(line, position)
+            boundary = False
         elif line.startswith("${", position):
             end = line.find("}", position)
             position = len(line) if end < 0 else end + 1
-        elif char == "#" and (position == 0 or line[position - 1] in " \t;&|()<>"):
+            boundary = False
+        elif char == "#" and boundary:
             return position
         else:
+            boundary = char in " \t;&|()<>"
             position += 1
     return -1
 
@@ -694,7 +736,7 @@ def untold(path):
         starts_command = track_branches(line, branches, starts_command) or not continues(line)
         if EXPORTS.match(line):
             # An export in a branch that never runs leaves GH_REPO unset.
-            exported = exported or all(runs for runs, _ in branches)
+            exported = exported or all(runs for runs, _, _ in branches)
         elif UNSET.search(line) or any(
                 not PREFIX_OF_GH.match(line, assignment.start()) for assignment in ASSIGNMENT.finditer(line)):
             exported = False

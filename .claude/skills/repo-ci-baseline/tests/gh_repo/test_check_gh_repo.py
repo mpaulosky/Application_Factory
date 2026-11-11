@@ -2377,7 +2377,7 @@ def test_quoted_end_follows_nested_quotes_exactly_fifty_deep(monkeypatch):
     assert max(seen) == 50 == check_gh_repo.NESTING_LIMIT
 
 
-@pytest.mark.parametrize("line, condition", [("if true; then :; else", "true"), ("if false;then :; fi", "false"), ("if echo then; then", "echo")])
+@pytest.mark.parametrize("line, condition", [("if true; then :; else", "true"), ("if false;then :; fi", "false"), ("if echo then; then", "echo then"), ("if true then && false; then", "true then && false")])
 def test_condition_of_stops_at_the_first_then(line, condition):
     assert check_gh_repo.condition_of(line) == condition
 
@@ -2481,3 +2481,26 @@ def test_continues_counts_a_trailing_backslash_outside_a_comment(line, joins):
 ])
 def test_untold_reads_a_chain_as_bash_does_and_fails_closed_when_it_is_cut(tmp_path, text, refused):
     assert lines_of(untold(tmp_path, text)) == refused
+
+
+@pytest.mark.parametrize("text, lines", [
+    # An operand inside [[ ... ]] is never a keyword: it can't close or open a branch.
+    ("if false; then\n[[ value == other || fi == value ]]\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if false; then\n[[ value =~ (fi) ]]\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [5]),
+    ("if x; then\n[[ a == if || b ]]\nfi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if true; then\nexport GH_REPO=o/r\nfi\n[[ a == if ]]\ngh pr view 1\n", []),
+    # An escaped space before # is no word boundary, so the comment doesn't hide the wrapper.
+    ("export GH_REPO=o/r\nsudo -p foo\\ # \\\ngh pr view 1\n", [3]),
+    # A then that is an argument doesn't end the condition.
+    ("if true then && false; then\n:\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # A condition of several lines is judged at its real then.
+    ("if false\ntrue\nthen\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if false\n# note\nthen\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+])
+def test_untold_reads_conditions_tests_and_comments_as_bash_does(tmp_path, text, lines):
+    assert lines_of(untold(tmp_path, text)) == lines
+
+
+@pytest.mark.parametrize("line, start", [("sudo -p foo\\ # x", -1), ("echo a\\;# x", -1), ("echo a ;# x", 8)])
+def test_comment_start_ignores_an_escaped_word_boundary(line, start):
+    assert check_gh_repo.comment_start(line) == start
