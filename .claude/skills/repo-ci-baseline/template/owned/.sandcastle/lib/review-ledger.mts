@@ -34,7 +34,7 @@
 // the sandbox's scripts/review.sh; the module lives in .sandcastle/lib/ too.
 
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, closeSync, existsSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
@@ -365,22 +365,28 @@ export const reviewInputSchema = z
     findings: z.array(inputFindingSchema),
   })
   .strict()
-  .superRefine((input, context) => {
-    const ids = input.findings.map((finding) => finding.id);
-    const repeated = ids.filter((id, index) => ids.indexOf(id) !== index);
-    if (repeated.length > 0) {
-      context.addIssue({ code: "custom", message: `finding ids repeat: ${[...new Set(repeated)].join(", ")}` });
-    }
-    const accepted = input.findings.filter((finding) => finding.status === "accepted").map((finding) => finding.id);
-    if (accepted.length > 0) {
-      context.addIssue({
-        code: "custom",
-        message: `${accepted.join(", ")} can't be recorded as accepted: record it open, and the person accepts it with scripts/review.sh accept`,
-      });
-    }
-  });
+  .superRefine((input, context) => checkFindingList(input.findings, context));
+
+function checkFindingList(findings: readonly { id: string; status: string }[], context: z.RefinementCtx): void {
+  const ids = findings.map((finding) => finding.id);
+  const repeated = ids.filter((id, index) => ids.indexOf(id) !== index);
+  if (repeated.length > 0) {
+    context.addIssue({ code: "custom", message: `finding ids repeat: ${[...new Set(repeated)].join(", ")}` });
+  }
+  const accepted = findings.filter((finding) => finding.status === "accepted").map((finding) => finding.id);
+  if (accepted.length > 0) {
+    context.addIssue({
+      code: "custom",
+      message: `${accepted.join(", ")} can't be recorded as accepted: record it open, and the person accepts it with scripts/review.sh accept`,
+    });
+  }
+}
 
 export type ReviewInput = z.infer<typeof reviewInputSchema>;
+
+// What a list of findings must satisfy as a whole: `record` applies it to its input, and `stage` to what it stages and to what is staged already,
+// so a finding `record` would refuse is refused where it enters.
+const findingListSchema = z.array(inputFindingSchema).superRefine((findings, context) => checkFindingList(findings, context));
 
 export const ledgerSchema = z
   .object({
@@ -1424,7 +1430,12 @@ const USAGE = `Usage: scripts/review.sh <command>
                          the key of the whole diff, then HEAD
   key                    print the ledger key of HEAD's diff against origin/main
   check [<base>]         the gate's check: exit 1 unless HEAD's diff was reviewed clean
-  record <file>          record a review from JSON ({ reviewedKey, reviewedHead, rounds, reviewerAgent, pr, findings }); - reads stdin
+  stage <absolute dir> [<file>|-]
+                         add the findings in the JSON array in <file> (stdin by default, or -) to <dir>/findings.json, a finding with an id already there replacing
+                         it, so a round's triage survives a long session; prints how many are staged
+  record <file> [--staged <absolute dir>]
+                         record a review from JSON ({ reviewedKey, reviewedHead, rounds, reviewerAgent, pr, findings }); - reads stdin;
+                         with --staged the findings in <dir>/findings.json come before the file's own
   accept <id> <reason>   accept an open finding on HEAD's review
   report                 print HEAD's review report
   notes                  print the "## Review notes" section for the PR description
@@ -1460,6 +1471,96 @@ function printable(text: string): string {
       (wordBefore("github", offset, whole) && /^\.com\b/i.test(whole.slice(offset + 1, offset + 6)));
     return breaksReference ? character : "";
   });
+}
+
+// The findings a run keeps between its rounds, in the run folder `prepare` writes to: each round's triage is `stage`d as it ends, and
+// `record --staged` reads them, so the record doesn't depend on what the session still remembers of the earlier rounds.
+const STAGED_FILE = "findings.json";
+
+// Why a staging file or folder isn't the run's own, or undefined: it belongs to another user, or others can write to it. `uid` is the
+// current user's (undefined where the platform has none, which skips the check). The findings in it are unpublished, and the file is read back
+// into the record, so a file another user could have written is not trusted.
+export function stagedOwnerProblem(info: { uid: number; mode: number }, uid: number | undefined, what: string): string | undefined {
+  if (uid === undefined) return undefined;
+  if (info.uid !== uid) return `${what} isn't owned by you.`;
+  if ((info.mode & 0o022) !== 0) return `${what} can be written by others: make it owner-only (chmod 700 for a folder, 600 for a file).`;
+  return undefined;
+}
+
+// The findings staged in `directory`, each checked as `record` checks its input. A file that is missing, a symlink or not a regular file,
+// not the current user's or writable by the group or others, unopenable, not JSON, not an array, or holding a finding `record` would refuse
+// stops the command and names the file, so a damaged file fails where it is met. The file is opened once, without following a link and without
+// blocking (a FIFO opens at once and is refused below), and judged by that descriptor, so it can't be swapped between the check and the read.
+function readStaged(directory: string): z.infer<typeof findingListSchema> {
+  const file = join(directory, STAGED_FILE);
+  let handle: number;
+  try {
+    handle = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") throw new Error(`${file} doesn't exist: stage the findings of a round first (scripts/review.sh stage).`, { cause: error });
+    if (code === "ELOOP") throw new Error(`${file} isn't a regular file (it is a symlink).`, { cause: error });
+    throw new Error(`${file} can't be opened: ${(error as Error).message}`, { cause: error });
+  }
+  let text: string;
+  try {
+    const info = fstatSync(handle);
+    if (!info.isFile()) throw new Error(`${file} isn't a regular file.`);
+    const problem = stagedOwnerProblem(info, process.getuid?.(), file);
+    if (problem !== undefined) throw new Error(problem);
+    text = readFileSync(handle, "utf8");
+  } finally {
+    closeSync(handle);
+  }
+  let staged: unknown;
+  try {
+    staged = JSON.parse(text);
+  } catch {
+    throw new Error(`${file} isn't JSON.`);
+  }
+  if (!Array.isArray(staged)) throw new Error(`${file} isn't a JSON array.`);
+  const checked = findingListSchema.safeParse(staged);
+  if (!checked.success) throw new Error(`${file} holds findings the review refuses:\n${z.prettifyError(checked.error)}`);
+  return checked.data;
+}
+
+// Add `findings` (a JSON array, each checked as `record` will check it) to the folder's file; a finding whose id is staged already
+// replaces that one, since a later round may change what became of it. The file holds the run's unpublished findings: it is made
+// owner-only and whole (a temp file renamed over it, never written through a link), in a folder that is the current user's, not a symlink
+// (a trailing slash doesn't hide one: the path is resolved first) and not writable by others, and a second `stage` that runs at the same
+// time is refused by a lock file, since two would each merge into the same old file and one would lose the other's findings.
+// `close` is the descriptor close, a seam for the test that makes it fail.
+export function stageFindings(given: string, findings: unknown, close: (handle: number) => void = closeSync): { added: number; total: number } {
+  const parsed = findingListSchema.parse(findings);
+  const directory = resolve(given);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const folder = lstatSync(directory);
+  if (folder.isSymbolicLink()) throw new Error(`${directory} is a symlink: give the run's own folder.`);
+  const problem = stagedOwnerProblem(folder, process.getuid?.(), directory);
+  if (problem !== undefined) throw new Error(problem);
+  const file = join(directory, STAGED_FILE);
+  const lock = `${file}.lock`;
+  let handle: number;
+  try {
+    handle = openSync(lock, "wx", 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error(`another stage is writing ${file}; try again, or delete ${lock} if none is running.`, { cause: error });
+    throw error;
+  }
+  try {
+    const kept = lstatOrUndefined(file) === undefined ? [] : readStaged(directory);
+    const ids = new Set(parsed.map((finding) => finding.id));
+    const merged = [...kept.filter((finding) => !ids.has(finding.id)), ...parsed];
+    replaceFile(file, `${JSON.stringify(merged, null, 2)}\n`);
+    return { added: parsed.length, total: merged.length };
+  } finally {
+    // The lock goes even when the close fails.
+    try {
+      close(handle);
+    } finally {
+      rmSync(lock, { force: true });
+    }
+  }
 }
 
 // The command line. Returns the exit code: 0 only for a command that did
@@ -1508,9 +1609,27 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         out(result.message);
         return 0;
       }
+      case "stage": {
+        const [directory, source] = rest;
+        if ((rest.length !== 1 && rest.length !== 2) || directory === undefined || !isAbsolute(directory)) return fail(USAGE);
+        const staged = stageFindings(directory, JSON.parse(readFileSync(source === undefined || source === "-" ? 0 : source, "utf8")));
+        out(`Staged ${staged.added} finding(s); ${staged.total} in ${join(directory, STAGED_FILE)}.`);
+        return 0;
+      }
       case "record": {
-        if (rest[0] === undefined) return fail(USAGE);
-        const text = readFileSync(rest[0] === "-" ? 0 : rest[0], "utf8");
+        const flag = rest.indexOf("--staged");
+        const stagedDirectory = flag < 0 ? undefined : rest[flag + 1];
+        if (flag >= 0 && (stagedDirectory === undefined || !isAbsolute(stagedDirectory) || rest.length !== 3 || flag !== 1)) return fail(USAGE);
+        if (rest[0] === undefined || (flag < 0 && rest.length !== 1)) return fail(USAGE);
+        let text = readFileSync(rest[0] === "-" ? 0 : rest[0], "utf8");
+        if (stagedDirectory !== undefined) {
+          // The file's own findings are kept whole (a value that isn't an array is the schema's to refuse, as without --staged).
+          const parsed: unknown = JSON.parse(text);
+          if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return fail("The review input must be a JSON object.");
+          const own = (parsed as { findings?: unknown }).findings;
+          if (own !== undefined && !Array.isArray(own)) return fail("findings in the review input must be an array.");
+          text = JSON.stringify({ ...parsed, findings: [...readStaged(stagedDirectory), ...(own ?? [])] });
+        }
         const note = (message: string) => process.stderr.write(`.security: ${printable(message)}\n`);
         const report = renderReport(
           recordReview(cwd, mergeBase(cwd), JSON.parse(text) as ReviewInput, undefined, undefined, {

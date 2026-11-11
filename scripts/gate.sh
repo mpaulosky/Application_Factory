@@ -6,6 +6,16 @@
 # test.sh. This script is the Factory's own, not a copy of the Template's scripts/gate.sh.
 set -euo pipefail
 
+# scripts/gate.sh --quick: the checks that finish in about a minute (its test, the review tests, the copies' drift, lint), then stop before the local
+# review check and test.sh. It is for iterating, never for pushing: the pre-push hook and CI call this script with no argument.
+quick=0
+case "${1:-}" in
+  "") ;;
+  --quick) quick=1 ;;
+  *) echo "Usage: scripts/gate.sh [--quick]" >&2; exit 2 ;;
+esac
+if (($# > 1)); then echo "Usage: scripts/gate.sh [--quick]" >&2; exit 2; fi
+
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 # Under a hook git sets GIT_DIR (and GIT_INDEX_FILE in a linked worktree), as the Template's gate.sh says. test.sh's tests
@@ -92,6 +102,10 @@ echo -e "\n${CYAN}▶ markdownlint (whole repo, as Lint Markdown)${RESET}"
 markdownlint-cli2 '**/*.md' || { echo -e "${RED}❌ markdownlint${RESET}" >&2; exit 1; }
 echo -e "\n${CYAN}▶ yamllint (whole repo, as Lint YAML)${RESET}"
 yamllint -c .yamllint.yml . || { echo -e "${RED}❌ yamllint${RESET}" >&2; exit 1; }
+if ((quick)); then
+  echo -e "\n${CYAN}quick gate passed${RESET}: the local review check and test.sh did not run. Run scripts/gate.sh, with no argument, before pushing."
+  exit 0
+fi
 # This branch's diff must have passed the local review (/pre-push-review), as an Application's gate checks it (ADR 0010).
 # GATE_SKIP_REVIEW=1 is for gate runs started by hand and for CI, which has no .git/review/ ledger; the pre-push hook removes it.
 echo -e "\n${CYAN}▶ Local review (scripts/review.sh check)${RESET}"

@@ -70,18 +70,43 @@ with tempfile.TemporaryDirectory() as tmp:
     bad.write_bytes(b"# \xa9 2022\ngit clone https://github.com/mpaulosky/dotfiles.git\n")
     check("undecodable bytes do not hide a mention", count_in(read(bad)) == 1)
 
+def is_cache(relative):
+    # What apply.sh never copies (its file list skips these too): a Python cache a local run left in the Template is no Template file.
+    return "__pycache__" in relative.parts or ".pytest_cache" in relative.parts or relative.suffix == ".pyc"
+
+
+def walk(base):
+    """The mentions of mpaulosky/dotfiles per file under base/template/owned and base/template/seed, and how many files were read."""
+    found, files = {}, 0
+    for root in ("template/owned", "template/seed"):
+        for path in sorted((base / root).rglob("*")):
+            relative = path.relative_to(base)
+            if not path.is_file() or ".git" in relative.parts or is_cache(relative):
+                continue
+            files += 1
+            n = count_in(read(path))
+            if n:
+                found[str(relative)] = n
+    return found, files
+
+
+check("a Python cache file is not a Template file", is_cache(Path("template/owned/s/__pycache__/x.cpython-314.pyc")) and is_cache(Path("a/x.pyc")) and is_cache(Path("a/.pytest_cache/v")))
+check("a file inside a cache folder is not a Template file whatever its suffix", is_cache(Path("a/__pycache__/notes.txt")) and is_cache(Path("a/.pytest_cache/README.md")))
+check("a script is a Template file", not is_cache(Path("template/owned/s/check.py")) and not is_cache(Path("template/owned/s/pycache.sh")))
+
+# The walk skips caches and reads the rest, on a throwaway Template.
+with tempfile.TemporaryDirectory() as tmp:
+    fake = Path(tmp)
+    for name in ("template/owned/s/__pycache__/x.txt", "template/seed/.pytest_cache/README.md", "template/owned/s/cached.pyc", "template/owned/s/.git/config",
+                 "template/owned/s/real.sh", "template/seed/docs/real.md"):
+        (fake / name).parent.mkdir(parents=True, exist_ok=True)
+        (fake / name).write_text("see mpaulosky/dotfiles\n")
+    seen, count = walk(fake)
+    check("the walk skips cache files and .git, and reads Owned and Seed files",
+          seen == {"template/owned/s/real.sh": 1, "template/seed/docs/real.md": 1} and count == 2, f"{seen} {count}")
+
 # The Template.
-found = {}
-files = 0
-for root in ("template/owned", "template/seed"):
-    for path in sorted((skill / root).rglob("*")):
-        if not path.is_file() or ".git" in path.relative_to(skill).parts:
-            continue
-        text = read(path)
-        files += 1
-        n = count_in(text)
-        if n:
-            found[str(path.relative_to(skill))] = n
+found, files = walk(skill)
 
 check("the walk read the Template's files", files > 100, f"read {files}")
 for rel in sorted(set(found) | set(KNOWN)):
