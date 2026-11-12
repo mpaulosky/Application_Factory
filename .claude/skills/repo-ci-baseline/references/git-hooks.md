@@ -208,7 +208,7 @@ These are the checks the CI lint workflows run; a gate runs `actionlint` and `zi
   config, so a file in another clone, a nested repository, or a directory whose `.git` file or `commondir` merely names the project's git directory (git reports the project's common directory for it)
   is left alone. A project that is not a git repository lints nothing. A worktree entry git still lists after its directory was removed is trusted until `git worktree prune` removes it.
   `-z` keeps a worktree path with a newline from forging a second entry,
-  and the file's folder and repository root keep a trailing newline in their names (`$(...)` would drop it and lint the sibling folder).
+  and the file's name, folder and repository root keep a trailing newline (`$(...)` would drop it and lint the sibling folder).
   `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_PREFIX`, `GIT_COMMON_DIR` and `CDPATH`,
   inherited from a git hook, are cleared first.
 - The path reaches the linter whole: from the repo root of the file's own repository, as `./<path>`, and for Markdown with `--no-globs`, so a name with `[`, `*` or a leading `-` is not read as a glob

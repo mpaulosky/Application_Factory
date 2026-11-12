@@ -41,22 +41,26 @@ fi
 
 # The file the tool wrote. Edit, Write and MultiEdit all name it file_path. A JSON error is an error, not "nothing to lint".
 # surrogateescape keeps a path with a lone surrogate from failing the write.
+# The sentinel x keeps a trailing newline in the name: "a.md<newline>" is not "a.md".
 if ! file="$(python3 -I -c '
 import json, sys
 data = json.load(sys.stdin)
 tool_input = data.get("tool_input") if isinstance(data, dict) else None
 path = tool_input.get("file_path") if isinstance(tool_input, dict) else None
 sys.stdout.buffer.write(path.encode("utf-8", "surrogateescape") if isinstance(path, str) else b"")
-')"; then
+'; rc=$?; printf x; exit "$rc")"; then
   echo "lint-edited-file.sh: could not read the edited file path from the hook input, so the file was not linted." >&2
   exit 1
 fi
+
+file="${file%x}"
 
 # A symlink can point anywhere, and the linter would print lines of its target.
 [[ -n "$file" && -f "$file" && ! -L "$file" ]] || exit 0
 
 # Lower-case extension: a README.MD is Markdown too.
-lower="$(printf '%s' "$file" | tr '[:upper:]' '[:lower:]')"
+lower="$(printf '%sx' "$file" | tr '[:upper:]' '[:lower:]')"
+lower="${lower%x}"
 kind=
 case "$lower" in
   *.md) kind=markdown ;;
@@ -100,7 +104,7 @@ canon() {
 # Not dirname, which also drops trailing newlines: the file is a regular file, so its folder is what precedes the last slash.
 folder="${file%/*}"
 [[ "$file" == */* ]] || folder=.
-[[ -n "$folder" ]] || folder=/
+# A file directly under / gives an empty folder, which canon cannot enter: nothing is linted, the safe outcome, and no test can create /x.md.
 dir='' root='' # set by canon
 canon "$folder" dir || exit 0
 # The repository the file is in, which in a linked worktree is that worktree: its configs are the ones that apply.

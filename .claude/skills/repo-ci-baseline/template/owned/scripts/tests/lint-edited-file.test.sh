@@ -95,7 +95,7 @@ new_repo() {
 }
 
 # run_hook <json> [path] [project]: the script with the tool call on stdin, from a directory that is no repository, with
-# CLAUDE_PROJECT_DIR=<project> (default $repo; __unset__ removes it) and the assignments in RUN_ENV. Sets STDOUT, STDERR, OUTPUT (both) and STATUS.
+# CLAUDE_PROJECT_DIR=<project> (default $repo; __unset__ removes it) and the assignments in RUN_ENV. RUN_CWD names another working directory. Sets STDOUT, STDERR, OUTPUT (both) and STATUS.
 RUN_ENV=(RUN_ENV_UNUSED=1)
 run_hook() {
   local json="$1" path="${2:-$STUBS:$TOOLS}" project="${3-$repo}"
@@ -106,7 +106,7 @@ run_hook() {
   fi
   : > "$LOG"
   mkdir -p "$WORK/cwd"
-  STDOUT="$(cd "$WORK/cwd" && printf '%s' "$json" | env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX ${project_unset[@]+"${project_unset[@]}"} \
+  STDOUT="$(cd "${RUN_CWD:-$WORK/cwd}" && printf '%s' "$json" | env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX ${project_unset[@]+"${project_unset[@]}"} \
     HOME="$WORK" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_CEILING_DIRECTORIES="$WORK" \
     ${project_set[@]+"${project_set[@]}"} STUB_LOG="$LOG" PATH="$path" "${RUN_ENV[@]}" "$BASH_BIN" "$SCRIPT" 2> "$WORK/stderr")"
   STATUS=$?
@@ -361,6 +361,27 @@ p=()
 log_empty || p+=("a directory named dir.md was linted: $(cat "$LOG")")
 [[ -z "$OUTPUT" ]] || p+=("output: $OUTPUT")
 check "a directory with a Markdown name is left alone" ${p[@]+"${p[@]}"}
+
+# A relative path is resolved against the working directory (Claude Code sends absolute ones).
+RUN_CWD="$repo/docs"
+run_hook "$(edit_json "bad.md")"
+RUN_CWD=
+p=()
+[[ $STATUS -eq 2 ]] || p+=("exit $STATUS, want 2: a path with no slash was not linted")
+log_line "markdownlint-cli2 $repo --no-globs ./docs/bad.md" || p+=("not linted as ./docs/bad.md from the repo root: $(cat "$LOG")")
+check "a relative path with no slash is linted against the working directory" ${p[@]+"${p[@]}"}
+
+# A file whose name ends in a newline is not the file without it, and is not Markdown.
+nlf="$repo/docs/nlf.md"
+printf '# T\n\nBAD\n' > "$nlf"
+printf '# T\n' > "$nlf"$'\n'
+run_hook "$(edit_json "$nlf"$'\n')"
+p=()
+[[ -f "$nlf" && -f "$nlf"$'\n' ]] || p+=("the two files are not distinct, so this case proves nothing")
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+log_empty || p+=("the file without the newline was linted instead: $(cat "$LOG")")
+check "a file name that ends in a newline is not read as the name without it" ${p[@]+"${p[@]}"}
+rm -f "$nlf" "$nlf"$'\n'
 
 # A folder whose name ends in a newline is not the folder without it: $(...) would drop the newline and lint the sibling.
 nl=$'\n'
