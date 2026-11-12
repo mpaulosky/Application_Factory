@@ -96,6 +96,8 @@ in_project() {
 # would turn the folder "docs<newline>" into "docs", a different folder whose file (or symlink) would be linted instead.
 canon() {
   local out
+  # Some bash versions let `cd ""` succeed and stay where they are, which would lint a file in the working directory instead.
+  [[ -n "$1" ]] || return 1
   out="$(cd -P -- "$1" 2> /dev/null && pwd -P && printf x)" || return 1
   out="${out%x}"
   printf -v "$2" '%s' "${out%$'\n'}"
@@ -104,7 +106,7 @@ canon() {
 # Not dirname, which also drops trailing newlines: the file is a regular file, so its folder is what precedes the last slash.
 folder="${file%/*}"
 [[ "$file" == */* ]] || folder=.
-# A file directly under / gives an empty folder, which canon cannot enter: nothing is linted, the safe outcome, and no test can create /x.md.
+# A file directly under / gives an empty folder, which canon refuses: nothing is linted (no test can create /x.md).
 dir='' root='' # set by canon
 canon "$folder" dir || exit 0
 # The repository the file is in, which in a linked worktree is that worktree: its configs are the ones that apply.
