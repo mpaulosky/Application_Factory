@@ -308,10 +308,16 @@ run_checker ansi1
 check "a \\' inside \$'...' does not end the string, so the call after it is found" "[[ $st == 1 ]]"
 fixture ansi2 scripts/a.sh "x=\$'a\\'b'; git status --porcelain --untracked-files=all"
 run_checker ansi2
-check "and with its setting it passes (the line is balanced, no fail-closed pass)" "[[ $st == 0 ]]"
+check "and with its setting it passes" "[[ $st == 0 ]]"
 fixture ansi3 scripts/a.sh "x=\$'a\\'b'; echo 'git status --porcelain'"
 run_checker ansi3
 check "a string after a \$'...' with an escaped quote is still a string, not code" "[[ $st == 0 ]]"
+fixture ansi4 scripts/a.sh "git -c x=\$'a\\'b' status --porcelain"
+run_checker ansi4
+check "a \$'...' argument with an escaped quote does not hide the rest of the call" "[[ $st == 1 ]]"
+fixture ansi5 scripts/a.sh "git -c x=\$'a\\'b' status --porcelain --untracked-files=all"
+run_checker ansi5
+check "and the setting after it is seen" "[[ $st == 0 ]]"
 fixture bt-close scripts/a.sh 'echo `git status --porcelain` x `-u`'
 run_checker bt-close
 check "the second backtick ends a call inside backticks, so a later -u is not its setting" "[[ $st == 1 ]]"

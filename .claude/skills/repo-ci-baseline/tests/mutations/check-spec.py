@@ -101,7 +101,7 @@ def main(argv):
     bad = 0
     for spec in specs:
         for problem in problems(spec, root):
-            print(f"{spec.name}: {problem}")
+            print(f"{spec.name}: {problem}".encode("utf-8", "backslashreplace").decode("utf-8"))  # a lone surrogate in a spec must not crash the report
             bad = 1
     return bad
 

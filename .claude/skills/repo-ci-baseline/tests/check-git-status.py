@@ -174,6 +174,14 @@ def split_words(text):
                 quote = None
             else:
                 word.append(c)
+        elif quote == "ansi":
+            if c == "'":
+                quote = None
+            elif c == "\\" and i + 1 < len(text):
+                i += 1
+                word.append(text[i])
+            else:
+                word.append(c)
         elif quote == '"':
             if c == '"':
                 quote = None
@@ -182,6 +190,9 @@ def split_words(text):
                 word.append(text[i])
             else:
                 word.append(c)
+        elif c == "$" and text[i + 1 : i + 2] == "'":  # $'...': a backslash escapes the next character
+            quote, in_word = "ansi", True
+            i += 1
         elif c in "'\"":
             quote, in_word = c, True
         elif c == "\\" and i + 1 < len(text):
