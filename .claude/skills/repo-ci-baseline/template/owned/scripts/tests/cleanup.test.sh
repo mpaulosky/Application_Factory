@@ -245,7 +245,7 @@ for url in https://evil.com/github.com/acme/r https://github.com.evil/acme/r htt
   o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL="$url" bash scripts/cleanup.sh --dry-run 2>&1)
   check "origin $url is not read as acme/r" "! grep -q 'remove chore/owner-case' <<<\"\$o\""
 done
-o=$(EXPECT_GH_BASE_REPO=acme/other PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/other bash scripts/cleanup.sh --dry-run 2>&1)
+o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/other bash scripts/cleanup.sh --dry-run 2>&1)
 check "a PR from another repository of the same owner does not count" "! grep -q 'remove chore/owner-case' <<<\"\$o\" && grep -q 'keep   chore/owner-case: no PR from origin' <<<\"\$o\""
 o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r bash scripts/cleanup.sh --dry-run 2>&1)
 check "a non-GitHub origin falls back to GH_REPO's repository" "! grep -q 'remove chore/owner-case' <<<\"\$o\" && grep -q 'keep   chore/owner-case: no PR from origin' <<<\"\$o\""

@@ -40,7 +40,7 @@ The Factory carries the git hooks and a gate of its own (ADR 0006), Claude Revie
 ```bash
 scripts/gate.sh --quick                                       # while iterating: the same gate without the local review check and test.sh (about a minute); never for a push
 scripts/gate.sh                                               # the pre-push gate (needs pnpm on the first run): its test, the review's tests, the copies' drift check, lint, the local review check, then test.sh
-.claude/skills/repo-ci-baseline/test.sh                       # all the Template's tests; needs actionlint, zizmor, yamllint, shellcheck, markdownlint-cli2, node, git
+.claude/skills/repo-ci-baseline/test.sh                       # all the Template's tests; needs actionlint, zizmor, yamllint, shellcheck, markdownlint-cli2, node, git, jq
 .claude/skills/repo-ci-baseline/tests/sandcastle-check.test.sh # Sandcastle's type-check and tests on a throwaway Application; needs pnpm and the network
 .claude/skills/repo-ci-baseline/template/owned/.claude/skills/hardening-review/scripts/mutate.py .claude/skills/repo-ci-baseline/tests/gh_repo/mutations.json  # ~1 min, from the repo root, needs uvx: edits check_gh_repo.py one mutation at a time and restores it; commit the scanner change first (a dirty target is refused)
 .claude/skills/repo-ci-baseline/apply.sh --dry-run <repo>      # what Apply would write into an Application; writes nothing
@@ -66,6 +66,6 @@ Branches are `feature/{issue}-{slug}`, `fix/{issue}-{slug}`, `hotfix/{issue}-{sl
 
 Commit in a linked worktree under `../Application_Factory-worktrees/`: `pre-commit` refuses a commit in the primary checkout, and `pre-push` refuses a push
 to `main`, a bad branch name, a dirty tree or a branch behind `origin/main`. In each clone, turn the hooks on once with `git config core.hooksPath .github/hooks`.
-Start a branch with `git worktree add -b <branch> ../Application_Factory-worktrees/<folder> origin/main`, where `<folder>` is the branch with `/` as `-`.
+Start a branch with `git worktree add --no-track -b <branch> ../Application_Factory-worktrees/<folder> origin/main`, where `<folder>` is the branch with `/` as `-`.
 
 Markdown is linted with `.markdownlint-cli2.jsonc` (lines up to 200 characters).
