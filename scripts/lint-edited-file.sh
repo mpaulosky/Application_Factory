@@ -71,7 +71,7 @@ fi
 
 # in_project <project> <root>: 0 when <root> is the project's own checkout or a linked worktree the project's repository
 # lists, 1 when it is not (or the project is no git repository), 2 when git cannot list worktrees (git older than 2.36 has
-# no -z). The list is built from the project's own git directory, so a directory whose .git file or commondir merely names
+# no -z; a damaged repository fails the same way). The list is built from the project's own git directory, so a directory whose .git file or commondir merely names
 # that git directory is not in it. -z gives each path as one field, so a path with a newline in it cannot forge a second
 # "worktree <dir>" line. A stale entry (its directory removed, not yet pruned) is trusted until `git worktree prune`.
 in_project() {
@@ -80,6 +80,8 @@ in_project() {
   git -C "$1" worktree list --porcelain -z > /dev/null 2>&1 || return 2
   while IFS= read -r -d '' field; do
     [[ "$field" == "worktree "* ]] || continue
+    # $(...) below drops trailing newlines, so "X<newline>" would compare equal to a different directory X.
+    [[ "$field" == *$'\n' ]] && continue
     path="$(cd -P -- "${field#worktree }" 2> /dev/null && pwd -P)" || continue
     [[ "$path" == "$2" ]] && return 0
   done < <(git -C "$1" worktree list --porcelain -z 2> /dev/null)
@@ -94,7 +96,7 @@ in_project "$CLAUDE_PROJECT_DIR" "$root"
 case $? in
   0) ;;
   2)
-    echo "lint-edited-file.sh: git cannot list worktrees (git 2.36 or later is needed), so the edited file was not linted." >&2
+    echo "lint-edited-file.sh: git cannot list worktrees (git 2.36 or later is needed, or the repository is damaged), so the edited file was not linted." >&2
     exit 1
     ;;
   *) exit 0 ;;

@@ -505,19 +505,26 @@ check "a file in an outer repository around the project is left alone" ${p[@]+"$
 git -C "$repo" worktree add --quiet --detach "$WORK/stale-a" > /dev/null 2>&1
 git -C "$repo" worktree add --quiet --detach "$WORK/stale-b" > /dev/null 2>&1
 rm -rf "$WORK/stale-a" "$WORK/stale-b"
-git -C "$repo" worktree add --quiet --detach "$WORK/dwt" > /dev/null 2>&1
+dwt_added=0
+git -C "$repo" worktree add --quiet --detach "$WORK/dwt" > /dev/null 2>&1 && dwt_added=1
 listing="$(git -C "$repo" worktree list --porcelain | grep '^worktree ')"
 p=()
-[[ "$listing" == *"stale-b"*"$WORK/wt"* ]] || p+=("the stale entries are not listed before the live worktree, so this case proves nothing: $listing")
 printf '# T\n\nBAD\n' > "$WORK/wt/w.md"
 run_hook "$(edit_json "$WORK/wt/w.md")"
 [[ $STATUS -eq 2 ]] || p+=("exit $STATUS, want 2: a stale entry before the live worktree hid it")
-check "a live linked worktree is linted although stale worktrees are listed before it" ${p[@]+"${p[@]}"}
+# git sorts linked worktrees by path; if a git lists them in another order the case cannot show what it is for, and says so.
+if [[ "$listing" == *"stale-b"*"$WORK/wt"* ]]; then
+  check "a live linked worktree is linted although stale worktrees are listed before it" ${p[@]+"${p[@]}"}
+else
+  echo "skip - this git does not list the stale worktrees before the live one: $(printf '%s' "$listing" | tr '\n' ' ')"
+fi
 
 detached="$(new_repo cwd/detached)"
 attacker_bin "$detached"
 run_hook "$(edit_json "$detached/x.md")"
 p=()
+((dwt_added == 1)) || p+=("the detached worktree was not added, so this case proves nothing")
+git -C "$repo" worktree list --porcelain -z | tr '\0' '\n' | grep -qxF detached || p+=("the list holds no 'detached' field, so this case proves nothing")
 [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
 log_empty || p+=("a repository named like a worktree line reached a linter: $(cat "$LOG")")
 check "a line of the worktree list that is not a path is not resolved against the working directory" ${p[@]+"${p[@]}"}
@@ -535,6 +542,20 @@ if git -C "$repo" worktree add --quiet --detach "$hostile" > /dev/null 2>&1; the
   check "a worktree path with a newline cannot forge a worktree entry" ${p[@]+"${p[@]}"}
 else
   fail "a worktree path with a newline cannot forge a worktree entry" "git worktree add refused the path"
+fi
+
+# A worktree whose path ends in a newline: command substitution would drop it and take the path for a different directory,
+# here a repository of its own that the project does not list.
+trail="$(new_repo trail)"
+attacker_bin "$trail"
+if git -C "$repo" worktree add --quiet --detach "$WORK/trail"$'\n' > /dev/null 2>&1; then
+  run_hook "$(edit_json "$trail/x.md")"
+  p=()
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+  log_empty || p+=("a worktree path ending in a newline let another directory reach a linter: $(cat "$LOG")")
+  check "a worktree path that ends in a newline is not taken for the directory without it" ${p[@]+"${p[@]}"}
+else
+  fail "a worktree path that ends in a newline is not taken for the directory without it" "git worktree add refused the path"
 fi
 
 # Paths with a space, and a linked worktree as the project.
@@ -629,6 +650,7 @@ check "without git, a file that is neither Markdown nor YAML still exits 0 silen
 OLDGIT="$WORK/oldgit"
 mkdir -p "$OLDGIT"
 real_git="$(command -v git)"
+# shellcheck disable=SC2016 # the wrapper's source is text: $@ and $a expand when it runs
 printf '#!/usr/bin/env bash\nfor a in "$@"; do [[ "$a" == -z ]] && exit 129; done\nexec "%s" "$@"\n' "$real_git" > "$OLDGIT/git"
 chmod +x "$OLDGIT/git"
 run_hook "$(edit_json "$repo/docs/bad.md")" "$OLDGIT:$STUBS:$TOOLS"
