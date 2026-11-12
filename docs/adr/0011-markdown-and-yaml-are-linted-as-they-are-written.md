@@ -16,8 +16,9 @@ Factory's gate runs only the first two kinds over the whole repo, and an Applica
 stderr (cut at 6,000 characters per linter), which Claude Code returns to the agent, so it fixes the file in the same turn. The script and its test are Owned; the reference
 ([`git-hooks.md`](../../.claude/skills/repo-ci-baseline/references/git-hooks.md#edit-time-lint)) is the skill's own.
 
-- The hook lints only the project's own repository and its linked worktrees (`CLAUDE_PROJECT_DIR`, matched by git common directory), and never a symlink or a file under `node_modules/`. A linter loads
-  the repository's own config and binaries, and `markdownlint-cli2` runs JavaScript from its config, so a file in another clone must not reach it.
+- The hook lints only the project's own checkout and the linked worktrees `git worktree list` shows for `CLAUDE_PROJECT_DIR` (required; unset is an error), and never a symlink or a file under
+  `node_modules/`. A linter loads the repository's own config and binaries, and `markdownlint-cli2` runs JavaScript from its config, so a file in another clone, or in a directory that only names the
+  project's git directory, must not reach it. Comparing git common directories is not enough: git reports the project's for such a directory.
 - The Factory carries a copy of the script (`scripts/gate.sh` checks the copy) and turns the hook on in its own `.claude/settings.json`. The Factory has no settings file today; this one holds the
   hook and nothing else, so no permission, model or environment setting is decided here. `scripts/tests/gate.test.sh` checks that the file names an executable script.
 - The Template does not carry `.claude/settings.json` (permissions are per user, `SKILL.md`), so an Application adds the hook by hand. Registering it in every Application is a separate decision,
