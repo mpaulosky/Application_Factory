@@ -180,6 +180,14 @@ printf '%b' "$bad_script" >> "$repo5/scripts/old-bad.sh"
 GATE_ARGS=--quick run "$repo5"
 check "the same file fails once the branch changes it" "$([[ $status == 1 ]] && grep -q 'old-bad.sh' "$repo5/out" && echo 0 || echo 1)"
 
+# A tracked symlink replaced by a regular script is a type change in git's diff: its new contents are checked.
+repo5b="$(new_repo quick-shellcheck-typechange)"; stub_review "$repo5b"
+printf 'echo ok\n' > "$repo5b/scripts/real.sh"; ln -s real.sh "$repo5b/scripts/link.sh"
+commit_all "$repo5b" base; git -C "$repo5b" update-ref refs/remotes/origin/main HEAD
+rm "$repo5b/scripts/link.sh"; printf '%b' "$bad_script" > "$repo5b/scripts/link.sh"
+GATE_ARGS=--quick run "$repo5b"
+check "a symlink replaced by a shell script with a finding is checked (a type change)" "$([[ $status == 1 ]] && grep -q 'SC2086' "$repo5b/out" && echo 0 || echo 1)"
+
 # With no origin/main, or one that shares no history with HEAD, every shell file is checked.
 repo6="$(new_repo quick-shellcheck-nomain)"; printf '%b' "$bad_script" > "$repo6/scripts/bad.sh"
 GATE_ARGS=--quick run "$repo6"

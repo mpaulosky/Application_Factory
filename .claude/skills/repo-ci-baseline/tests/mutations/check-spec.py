@@ -31,8 +31,11 @@ def problems(spec_path, root):
         return ["is not a JSON object"]
     out = []
     timeout = spec.get("timeout")
-    if not (isinstance(spec.get("test"), list) and spec["test"] and isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and timeout > 0):
-        out.append("needs a `test` argv and a positive `timeout`")
+    test = spec.get("test")
+    if not (isinstance(test, list) and test and all(isinstance(a, str) and a for a in test)):
+        out.append("needs a `test` argv: a list of non-empty strings")
+    if not (isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and timeout > 0):
+        out.append("needs a positive `timeout`")
     mutations = spec.get("mutations")
     if not isinstance(mutations, list):
         return out + ["needs `mutations` as a list"]

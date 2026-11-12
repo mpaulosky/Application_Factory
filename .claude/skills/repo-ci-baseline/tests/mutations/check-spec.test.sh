@@ -57,7 +57,10 @@ run_checker
 check "a spec that is not a JSON object is found" "[[ $st == 1 ]] && grep -q 'not a JSON object' <<<\"\$out\""
 printf '{"test": ["true"], "timeout": "5", "mutations": null}\n' > "$work/specs/s.json"
 run_checker
-check "a timeout that is not a number and mutations that are not a list are found, without a traceback" "[[ $st == 1 ]] && grep -q 'positive .timeout' <<<\"\$out\" && grep -q 'mutations. as a list' <<<\"\$out\" && ! grep -q Traceback <<<\"\$out\""
+check "a timeout that is not a number and mutations that are not a list are found, without a traceback" "[[ $st == 1 ]] && grep -q 'needs a positive .timeout' <<<\"\$out\" && grep -q 'mutations. as a list' <<<\"\$out\" && ! grep -q Traceback <<<\"\$out\""
+printf '{"test": [42, ""], "timeout": 5, "mutations": [{"path": "scripts/a.sh", "old": "echo one", "new": "echo 1", "why": "w"}]}\n' > "$work/specs/s.json"
+run_checker
+check "a test argv with a non-string or empty element is found (mutate.py would refuse it)" "[[ $st == 1 ]] && grep -q 'non-empty strings' <<<\"\$out\""
 printf '{"test": ["true"], "timeout": 5, "mutations": ["x", 3]}\n' > "$work/specs/s.json"
 run_checker
 check "a mutation that is not an object is found, without a traceback" "[[ $st == 1 ]] && grep -q 'is not an object' <<<\"\$out\" && ! grep -q Traceback <<<\"\$out\""

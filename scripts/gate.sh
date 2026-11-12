@@ -161,7 +161,7 @@ fi
 changed_list="$(mktemp)"
 trap 'command rm -f -- "$changed_list"' EXIT
 if git rev-parse -q --verify refs/remotes/origin/main >/dev/null && merge_base="$(git merge-base origin/main HEAD 2>/dev/null)"; then
-  { git diff -z --name-only --diff-filter=ACMR "$merge_base" && git ls-files -z --others --exclude-standard; } >"$changed_list"
+  { git diff -z --name-only --diff-filter=ACMRT "$merge_base" && git ls-files -z --others --exclude-standard; } >"$changed_list"
 else
   git ls-files -z --cached --others --exclude-standard >"$changed_list"
 fi || { echo -e "${RED}❌ could not list the changed files (git failed): the shell files were not checked.${RESET}" >&2; exit 1; }

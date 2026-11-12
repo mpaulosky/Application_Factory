@@ -237,6 +237,41 @@ mkdir -p "$work/dangling/scripts"; ln -s "$work/dangling/nowhere" "$work/danglin
 run_checker dangling
 check "a dangling symlink named *.sh is exit 2, not skipped" "[[ $st == 2 ]]"
 
+# text that only names git is not a call; an executable substitution inside a string is
+fixture lit-comment scripts/a.sh 'echo ready # git status --porcelain'
+run_checker lit-comment
+check "git status --porcelain in a trailing comment is not a call" "[[ $st == 0 ]]"
+fixture lit-sq scripts/a.sh "printf '%s\n' 'git status --porcelain'"
+run_checker lit-sq
+check "git status --porcelain in a single-quoted string is not a call" "[[ $st == 0 ]]"
+fixture lit-dq scripts/a.sh 'echo "run git status --porcelain later"'
+run_checker lit-dq
+check "git status --porcelain in the text of a double-quoted string is not a call" "[[ $st == 0 ]]"
+fixture lit-dq-sub scripts/a.sh 'echo "dirty: $(git status --porcelain)"'
+run_checker lit-dq-sub
+check "but a command substitution inside a double-quoted string runs, so it is found" "[[ $st == 1 ]]"
+fixture lit-bt scripts/a.sh 'x=`git status --porcelain`'
+run_checker lit-bt
+check "a call inside backticks is found" "[[ $st == 1 ]]"
+fixture lit-bt-ok scripts/a.sh 'x=`git status --porcelain --untracked-files=all`; echo -u'
+run_checker lit-bt-ok
+check "and its setting is seen, the backtick ending the call" "[[ $st == 0 ]]"
+# shell words: quotes are removed, a quoted argument stays whole
+fixture w1 scripts/a.sh 'git -C "a -u b" status --porcelain'
+run_checker w1
+check "a -u inside a quoted argument is not a setting" "[[ $st == 1 ]]"
+fixture w2 scripts/a.sh 'git status "--porcelain"'
+run_checker w2
+check "a quoted --porcelain is still --porcelain" "[[ $st == 1 ]]"
+fixture w3 scripts/a.sh 'git status --porcelain "--untracked-files=all"'
+run_checker w3
+check "a quoted setting is a setting" "[[ $st == 0 ]]"
+fixture w4 scripts/a.sh "git status '--porcelain' '-uall'"
+run_checker w4
+check "single-quoted words are words" "[[ $st == 0 ]]"
+fixture w5 scripts/a.sh 'git status --porcelain --untracked-files\=all'
+run_checker w5
+check "a backslash in a word is removed" "[[ $st == 0 ]]"
 # a scan that crashes is exit 2 (an uncaught exception would exit 1, which means "found")
 fixture crash scripts/a.sh 'echo hi'
 out="$(python3 -I -c '

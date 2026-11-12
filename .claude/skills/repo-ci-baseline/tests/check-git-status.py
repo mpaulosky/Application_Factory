@@ -38,68 +38,138 @@ def logical_lines(text):
         yield start, buf
 
 
-def call_after(line, pos):
-    """The call's own text from `pos`: up to the first unquoted | ; & or # outside any substitution, or to the ) that closes the context the call is in. What is inside a
-    substitution ($( ... ), ( ... ) or backticks, quoted or not) is blanked out: it is another command's words, never the call's `status`, `--porcelain` or setting.
-    A stack of contexts (single quote, double quote, substitution, backtick) says where a character is; a substitution inside double quotes opens a code context again."""
+def advance(stack, line, i, start, in_bt=False):
+    """Step the context stack over line[i]: return (width of what was read, event). A stack of contexts (single quote, double quote, substitution, backtick) says where a character
+    is; a substitution inside double quotes opens a code context again. The event is "close" for a ) or, when in_bt, a backtick that closes the context the scan started in,
+    "sep" for an unquoted | ; or & outside any context, "comment" for an unquoted # that starts a word outside any context (`start` is where the scan began), else None."""
+    c = line[i]
+    nxt = line[i + 1] if i + 1 < len(line) else ""
+    top = stack[-1] if stack else None
+    if top == "sq":
+        if c == "'":
+            stack.pop()
+    elif top == "dq":
+        if c == "\\":
+            return 2, None
+        if c == '"':
+            stack.pop()
+        elif c == "$" and nxt == "(":
+            stack.append("sub")
+            return 2, None
+        elif c == "`":
+            stack.append("bt")
+    elif top == "bt":
+        if c == "\\":
+            return 2, None
+        if c == "`":
+            stack.pop()
+        elif c in "\"'":
+            stack.append("dq" if c == '"' else "sq")
+    else:  # a code context: the call itself (no stack) or the inside of a substitution
+        if c == "\\":
+            return 2, None
+        if c == "'":
+            stack.append("sq")
+        elif c == '"':
+            stack.append("dq")
+        elif c == "`":
+            if in_bt and top is None:
+                return 1, "close"
+            stack.append("bt")
+        elif c == "$" and nxt == "(":
+            stack.append("sub")
+            return 2, None
+        elif c == "(":
+            stack.append("sub")
+        elif c == ")":
+            if top != "sub":
+                return 1, "close"
+            stack.pop()
+        elif not stack and c in "|;&":
+            return 1, "sep"
+        elif not stack and c == "#" and (i == start or line[i - 1].isspace()):
+            return 1, "comment"
+    return 1, None
+
+
+def executable_starts(line):
+    """The positions of `git` that can run: not in a comment, a single-quoted string or the text of a double-quoted one (a $( ... ) in it still runs).
+    Maps each such position to whether it is inside backticks."""
+    stack = []
+    runs = {}
+    i = 0
+    while i < len(line):
+        top = stack[-1] if stack else None
+        if top in (None, "sub", "bt"):
+            runs[i] = top == "bt"
+        width, event = advance(stack, line, i, 0)
+        if event == "comment":
+            break
+        i += width
+    return runs
+
+
+def call_after(line, pos, in_bt=False):
+    """The call's own text from `pos`: up to the first unquoted | ; & or # outside any substitution, or to the ) (or backtick, when the call is inside backticks) that closes the
+    context the call is in. What is inside a substitution ($( ... ), ( ... ) or backticks, quoted or not) is blanked out: it is another command's words, never the call's
+    `status`, `--porcelain` or setting. Quotes stay in the text, for split_words."""
     stack = []
     kept = []
     i = pos
     while i < len(line):
-        c = line[i]
-        nxt = line[i + 1] if i + 1 < len(line) else ""
-        top = stack[-1] if stack else None
         hidden = "sub" in stack or "bt" in stack
-        width = 1
-        if top == "sq":
-            if c == "'":
-                stack.pop()
-        elif top == "dq":
-            if c == "\\":
-                width = 2
-            elif c == '"':
-                stack.pop()
-            elif c == "$" and nxt == "(":
-                stack.append("sub")
-                width = 2
-            elif c == "`":
-                stack.append("bt")
-        elif top == "bt":
-            if c == "\\":
-                width = 2
-            elif c == "`":
-                stack.pop()
-            elif c in "\"'":
-                stack.append("dq" if c == '"' else "sq")
-        else:  # a code context: the call itself (no stack) or the inside of a substitution
-            if c == "\\":
-                width = 2
-            elif c == "'":
-                stack.append("sq")
-            elif c == '"':
-                stack.append("dq")
-            elif c == "`":
-                stack.append("bt")
-            elif c == "$" and nxt == "(":
-                stack.append("sub")
-                width = 2
-            elif c == "(":
-                stack.append("sub")
-            elif c == ")":
-                if top != "sub":
-                    break
-                stack.pop()
-            elif not stack and (c in "|;&" or (c == "#" and (i == pos or line[i - 1].isspace()))):
-                break
+        width, event = advance(stack, line, i, pos, in_bt)
+        if event is not None:
+            break
         blank = hidden or "sub" in stack or "bt" in stack
         kept.append(" " * width if blank else line[i : i + width])
         i += width
     return "".join(kept)
 
 
+def split_words(text):
+    """The shell words of `text`, with quotes and backslashes removed and a quoted argument kept whole: `-C "a -u b"` is two words, `"--porcelain"` is --porcelain."""
+    words, word, quote, in_word, i = [], [], None, False, 0
+    while i < len(text):
+        c = text[i]
+        if quote == "'":
+            if c == "'":
+                quote = None
+            else:
+                word.append(c)
+        elif quote == '"':
+            if c == '"':
+                quote = None
+            elif c == "\\" and i + 1 < len(text) and text[i + 1] in '"\\$`':
+                i += 1
+                word.append(text[i])
+            else:
+                word.append(c)
+        elif c in "'\"":
+            quote, in_word = c, True
+        elif c == "\\" and i + 1 < len(text):
+            i += 1
+            word.append(text[i])
+            in_word = True
+        elif c.isspace():
+            if in_word:
+                words.append("".join(word))
+                word, in_word = [], False
+        else:
+            word.append(c)
+            in_word = True
+        i += 1
+    if in_word:
+        words.append("".join(word))
+    return words
+
+
 def unguarded(line):
+    runs = executable_starts(line)
     for match in GIT.finditer(line):
-        words = call_after(line, match.end()).split()
+        if match.start() not in runs:
+            continue
+        words = split_words(call_after(line, match.end(), runs[match.start()]))
         if "status" in words and any(w.startswith("--porcelain") for w in words) and not any(SETTING.match(w) for w in words):
             return True
     return False
