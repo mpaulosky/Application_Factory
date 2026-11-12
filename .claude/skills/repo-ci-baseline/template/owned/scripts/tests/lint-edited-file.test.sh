@@ -549,8 +549,13 @@ fi
 trail="$(new_repo trail)"
 attacker_bin "$trail"
 if git -C "$repo" worktree add --quiet --detach "$WORK/trail"$'\n' > /dev/null 2>&1; then
-  run_hook "$(edit_json "$trail/x.md")"
   p=()
+  found=0
+  while IFS= read -r -d '' f; do
+    [[ "$f" == "worktree $WORK/trail"$'\n' ]] && found=1
+  done < <(git -C "$repo" worktree list --porcelain -z)
+  ((found == 1)) || p+=("git does not list the worktree path with its trailing newline, so this case proves nothing")
+  run_hook "$(edit_json "$trail/x.md")"
   [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
   log_empty || p+=("a worktree path ending in a newline let another directory reach a linter: $(cat "$LOG")")
   check "a worktree path that ends in a newline is not taken for the directory without it" ${p[@]+"${p[@]}"}
