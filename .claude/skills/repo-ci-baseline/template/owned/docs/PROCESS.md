@@ -14,16 +14,30 @@ git config core.hooksPath .github/hooks
 
 ## Branches and worktrees
 
-Every change is made on its own branch, in its own **worktree** beside the clone. The clone itself stays on `main`, and
-the pre-commit hook refuses a commit made there:
+Every change is made on its own branch, in its own **worktree** beside the clone, made when you start the work, not later. The clone itself stays on `main`, and the pre-commit hook refuses a
+commit made there. For an issue, one command fetches `origin`, makes the branch and worktree from `origin/main` (or reuses the branch the issue already has, even if it was renamed), names
+them from the issue, and prints the path; it needs `gh` logged in, and `GITHUB_REPOSITORY` for an `origin` that is not on github.com. Then do all the work there, and make every follow-up fix
+there too, until the PR merges (a branch it makes from `origin/main` has no upstream: its first push is `git push -u origin HEAD`; one it makes from an existing `origin` branch tracks it):
 
 ```bash
-git fetch origin
-git worktree add -b fix/42-null-children ../<Repo>-worktrees/fix-42-null-children origin/main
+wt="$(scripts/work-issue.sh 42)" && cd "$wt"   # e.g. fix/42-null-children in ../<Repo>-worktrees/fix-42-null-children
 ```
 
-The folder is the branch name with `/` turned into `-`. Remove the worktree once its PR merges:
-`git worktree remove ../<Repo>-worktrees/fix-42-null-children`.
+For work without an issue, make it by hand: `git worktree add --no-track -b chore/upgrade-net10 ../<Repo>-worktrees/chore-upgrade-net10 origin/main`.
+The folder is the branch name with `/` turned into `-`.
+
+**After the PR merges**, go to the clone, on `main` with a clean tree, and run `scripts/cleanup.sh` (`--dry-run` first to see what it would do; it still fetches and prunes the remote-tracking refs).
+It fast-forwards `main` to `origin/main`, then removes every branch named to the standard whose PR merged into `main`, with its worktree (ignored files in it go too) and its `origin` branch. It
+reads the PR's state from GitHub, because a squash merge leaves nothing for `git branch --merged` to see, and counts only a PR whose head repository is the one `origin` points at (a fork's PR of the
+same name doesn't count). It keeps, and says why, a branch with an open PR, an open PR based on it (a stacked PR), no PR, a commit the PR never had or one made while it ran, a branch deleted while
+it ran, 100 or more PRs of that name, a PR merged into another branch, a worktree with uncommitted changes or one whose folder can't be reached, a branch a worktree is rebasing or bisecting, and
+keeps that local branch's `origin` copy too; a branch whose PR closed unmerged goes only with `--include-closed`. It refuses to run unless every push URL of `origin` is its fetch URL's own text or a
+github.com URL for the same owner/name (an https fetch with an ssh push of one github.com repository is fine; any other host needs the same text, or `CLEANUP_PUSH_URL_OK=1` once you have checked the
+push URLs; it warns about each one it lets through). It needs `gh` logged in, and `GITHUB_REPOSITORY` for an `origin` that is not on github.com. Not being on `main` in the clone, a dirty `main`, a
+`gh` failure, a failed fetch of `origin`, or a `main` that can't fast-forward stops it; a removal git refuses, a branch a worktree is rebasing or bisecting (a real run only; a dry run exits 0), a
+check of `origin` that failed, a failed closing fetch, or a commit made (or the branch deleted) after a branch was judged is reported (exit 1) while the rest is done. A worktree whose folder was
+deleted by hand has git's entry for it forgotten (a locked one is kept; a parent folder that is missing, empty, unreadable or unsearchable may be an unmounted drive, so the branch is kept: run
+`git worktree prune` if you deleted it for good, then `scripts/cleanup.sh` again).
 
 | Branch | Use |
 | --- | --- |

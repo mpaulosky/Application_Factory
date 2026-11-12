@@ -231,7 +231,7 @@ expect "a commit in the primary checkout is refused before the lint" refused not
 # pwd -P, as git resolves symlinks in the top level (macOS's /var).
 WORKTREES_ABS="$(cd "$WORK" && pwd -P)/repo-worktrees/<folder>"
 expect_folder() {
-  if [[ "$OUTPUT" == *"git worktree add -b <branch> \"$WORKTREES_ABS\" origin/main"* ]]; then
+  if [[ "$OUTPUT" == *"git worktree add --no-track -b <branch> \"$WORKTREES_ABS\" origin/main"* ]]; then
     pass "$1"
   else
     fail "$1" "expected the absolute folder \"$WORKTREES_ABS\""

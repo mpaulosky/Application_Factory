@@ -1,7 +1,8 @@
 # Git hooks and branch names
 
 Template files (Owned): `.github/hooks/` (`pre-commit`, `pre-push`, `post-checkout`), `.github/hooks/tests/`,
-`scripts/gate.sh`, `scripts/check-branch-name.sh` with its test, and the `branch-name` job in `ci.yml`. History: IssueTracker #182 (the branch standard).
+`scripts/gate.sh`, `scripts/check-branch-name.sh` with its test,
+`scripts/work-issue.sh` and `scripts/cleanup.sh` with their tests, and the `branch-name` job in `ci.yml`. History: IssueTracker #182 (the branch standard).
 
 ## Branch-name standard
 
@@ -50,13 +51,39 @@ for pulls and dry-run surveys. A branch's worktree lives beside the repo, in `..
 branch with `/` turned into `-`:
 
 ```bash
-git fetch origin
-git worktree add -b fix/42-null-children ../<Repo>-worktrees/fix-42-null-children origin/main
+wt="$(scripts/work-issue.sh 42)" && cd "$wt"
 ```
 
-Remove it once the PR merges: `git worktree remove ../<Repo>-worktrees/fix-42-null-children`. `pre-commit` enforces
-the rule. Claude Code's own `.claude/worktrees/` (ignored by the Template's `.gitignore`) also passes the check, since
-any linked worktree does, but people use `../<Repo>-worktrees/`.
+`scripts/work-issue.sh <n>` (exactly one argument) reads issue `n` with `gh`, fetches and prunes `origin`, and makes its branch and worktree, then prints the path. The branch starts from the local
+branch of that name if there is one (checked out as it is, even if it is behind `origin`), else from `origin/<branch>` when that branch is on `origin`, else from `origin/main`. The branch is
+`fix/{n}-{slug}` for an issue labelled `bug` (any case), `feature/{n}-{slug}` for any other; the slug is the title's lowercase `a-z0-9` words (a leading `[tag]` dropped, at most 6 words and 50
+characters, `issue` when none is left). An issue renamed since keeps the branch already named for its number, local or on `origin` (the branch the title gives wins when it exists; else the first in
+name order, local first); a branch with the number that is outside the branch standard, under another prefix, or with leading zeros in the number is skipped. A branch it makes from `origin/main` has
+no upstream (it would track `main`, and a plain `git push` would refuse): the first push is `git push -u origin HEAD`; one made from `origin/<branch>` tracks that branch. It reuses the branch's
+worktree if there is one and its folder is still a worktree of this clone with the branch checked out (a folder recreated or replaced since, or one git can't read, such as a `safe.directory`
+refusal, is refused: fix that, or move the folder away and run `git worktree prune`); git's entry for one whose folder was deleted by hand is forgotten (that one only, and only a real directory
+entry) and the worktree made again. It refuses, with a hint, a locked worktree whose folder is missing, one whose folder can't be reached (its parent folder is missing, empty, unreadable or
+unsearchable, which an unmounted drive also looks like: run `git worktree prune` if it was deleted for good), the primary checkout holding the branch, and a directory of that name that is not a
+worktree of the branch. When `origin` can't be fetched (but `gh` works: the issue is read first) it still prints a worktree the branch already has, with a warning, and stops otherwise. It needs `gh`
+logged in, and for an origin that is not on github.com, `GITHUB_REPOSITORY`. Work without an issue is made by hand:
+`git worktree add --no-track -b chore/upgrade-net10 ../<Repo>-worktrees/chore-upgrade-net10 origin/main`.
+
+Once the PR merges, `scripts/cleanup.sh` (run in the primary checkout, on a clean `main`) fast-forwards `main`, then removes each merged branch with its worktree and its `origin` branch. It decides
+from the PR's state on GitHub (a squash merge leaves no ancestry for `git branch --merged`): the PR must be from the repository `origin` points at (a fork's PR of the same name doesn't count),
+merged into `main`, and the branch's tip must be the PR's last head, so no unpushed commit is lost. It keeps, with the reason, a branch with an open PR, no PR, 100 or more PRs of that name, a PR
+merged elsewhere, a commit made after it was judged, a branch deleted after it was judged, a branch a worktree is rebasing or bisecting, a dirty worktree, or a worktree whose folder can't be reached
+(and that local branch's `origin` copy too), and removes a closed-unmerged one only with `--include-closed`. It also keeps a branch an open PR is based on (a stacked PR, looked up in the repository
+`origin` points at), which deleting would close. It deletes a local branch only if it still holds the tip it judged (compared in the delete itself). It deletes the `origin` branch only if `origin`
+still holds the tip it judged (one GitHub already deleted counts as removed, and so does a local branch that vanishes while its own delete runs), and for a worktree whose folder was deleted by hand
+it forgets git's entry for that one worktree only (a locked one is kept; a parent folder that is missing, empty, unreadable or unsearchable may be an unmounted drive, so the branch is kept with the
+hint to run `git worktree prune`). It needs `gh` logged in, and for an `origin` that is not on github.com, `GITHUB_REPOSITORY`. It exits 1 when it can't run (not on `main`, an `origin` push URL that
+is not shown to be the fetch URL's repository (the same text, or both github.com URLs for the same owner/name; `CLEANUP_PUSH_URL_OK=1` accepts push URLs you have checked, and warns about each), not
+the primary checkout, a dirty `main`, no `gh` or repository, a bad argument), can't fetch `origin`, `main` can't fast-forward or a `gh` lookup fails, and, after doing the rest, when a removal git
+refused, a branch a worktree is rebasing or bisecting (a real run only), a check of `origin` or the closing fetch failed, or a commit was made, or the branch deleted, after a branch was judged.
+`--dry-run` shows the steps. `git worktree remove` alone leaves the local and `origin` branches behind.
+
+`pre-commit` enforces the rule that a change is committed in a linked worktree. Claude Code's own `.claude/worktrees/` (ignored by the Template's
+`.gitignore`) also passes the check, since any linked worktree does, but people use `../<Repo>-worktrees/`.
 
 ## The hooks
 
@@ -67,7 +94,7 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
   `core.hooksPath` already points at `.github/hooks`, so it can't bootstrap a fresh clone: its header comment says this,
   and names the one-time command.
 - **`pre-commit`** first refuses a commit made in the primary checkout (its git dir is the common one), naming the
-  commands to use instead: `git worktree add -b` for a new branch, or, when the primary checkout is already on its
+  commands to use instead: `git worktree add --no-track -b` for a new branch, or, when the primary checkout is already on its
   own branch, `git switch main` and `git worktree add` to move that branch into a worktree. Two cases are exempt: a
   repo with no commits on any branch (an orphan branch in a repo with history is not), so a new repo's Apply can be
   its first commit on `main`, and a clone with `git config baseline.allowPrimaryCommits true`, for a clone that can't
@@ -135,7 +162,8 @@ and `git commit` end to end, which runs the hook with `GIT_DIR` set.
 `scripts/tests/check-branch-name.test.sh` covers the script's `--pr` form, which the CI job uses: the Actions
 branches and any `dependabot/*` allowed only there, a shell-safe `dependabot/*` allowed for a push too, a `claude/...` branch refused, and other `docs/` names refused.
 
-CI's hook-tests job runs this suite, `pre-commit.test.sh`, `check-branch-name.test.sh`, `check-pr-title.test.sh` and `sync-copilot-review.test.sh`.
+CI's hook-tests job runs this suite, `pre-commit.test.sh`, `check-branch-name.test.sh`, `check-pr-title.test.sh`, `sync-copilot-review.test.sh`, `watch-pr.test.sh`, `cleanup.test.sh` and
+`work-issue.test.sh`.
 
 ## Session-start check
 

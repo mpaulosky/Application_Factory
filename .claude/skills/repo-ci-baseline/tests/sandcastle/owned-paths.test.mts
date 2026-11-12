@@ -152,6 +152,8 @@ describe("the files a re-Apply may write without a review", () => {
       ".sandcastle/check.sh",
       "global.json",
       "docs/PROCESS.md",
+      "scripts/cleanup.sh",
+      "scripts/work-issue.sh",
       ...GATE_CHAIN,
       ...ROLE_PROMPTS,
     ]) {
@@ -302,8 +304,10 @@ const EXEMPT_GLOBS_AUDITED: Readonly<Record<string, GlobEntry>> = {
       "scripts/tests/check-branch-name.test.sh",
       "scripts/tests/check-git-hooks.test.sh",
       "scripts/tests/check-pr-title.test.sh",
+      "scripts/tests/cleanup.test.sh",
       "scripts/tests/sync-copilot-review.test.sh",
       "scripts/tests/watch-pr.test.sh",
+      "scripts/tests/work-issue.test.sh",
     ], why: "test.sh runs them" },
 };
 

@@ -25,7 +25,7 @@ A fix made only in a repo is reverted by its next Apply.
 
 | Part | What it guarantees | Reference |
 | --- | --- | --- |
-| Git hooks, branch names and worktrees | One branch-name standard, checked by the hook and by CI; every change is committed in a worktree under `../<Repo>-worktrees/`; pushes are gated on the pushed commit | [git-hooks.md](references/git-hooks.md) |
+| Git hooks, branch names and worktrees | One branch-name standard, checked by the hook and by CI; every change is committed in a worktree under `../<Repo>-worktrees/`, made by `work-issue.sh` and cleaned up by `cleanup.sh`; pushes are gated on the pushed commit | [git-hooks.md](references/git-hooks.md) |
 | Staged-content pre-commit | Commits are linted as they'll be committed | [pre-commit.md](references/pre-commit.md) |
 | Auto-merge after review | A PR merges on its own only once checks pass, Copilot (or Claude, its `review:claude` backup) reviewed its head and every thread is resolved, until three dirty review rounds in a row exhaust the loop (then one comment lists what is open and the PR merges, unless a person's thread is open); Claude reviews only where Copilot can't, so `review:claude` is ignored while Copilot can review; never while handed back with `sandcastle:needs-human` | [automerge.md](references/automerge.md) |
 | Serialized releases | Versions follow merge order, a missed release is retried, one blog PR per run | [release-pipeline.md](references/release-pipeline.md) |
