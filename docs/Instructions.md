@@ -35,7 +35,7 @@ or local review's `gh` commands target the Starter. It also sets the `LICENSE` y
 follow Part B3 before pushing.
 
 ```bash
-git worktree add -b chore/create-application ../[ProjectName]-worktrees/chore-create-application origin/main
+git worktree add --no-track -b chore/create-application ../[ProjectName]-worktrees/chore-create-application origin/main
 cd ../[ProjectName]-worktrees/chore-create-application
 ```
 
@@ -110,7 +110,7 @@ worktree, so the Apply commit is exactly its output:
 
 ```bash
 git fetch origin
-git worktree add -b chore/standardize-baseline ../[Repo]-worktrees/chore-standardize-baseline origin/main
+git worktree add --no-track -b chore/standardize-baseline ../[Repo]-worktrees/chore-standardize-baseline origin/main
 cd ../[Repo]-worktrees/chore-standardize-baseline
 "$BASELINE/apply.sh" .
 git add -A

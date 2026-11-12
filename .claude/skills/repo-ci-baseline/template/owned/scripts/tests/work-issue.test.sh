@@ -65,6 +65,11 @@ issue 77 "Extra arguments"
 issue 78 "Fresh title"
 issue 79 "Fresh title two"
 issue 130 "New title"
+issue 131 "New title"
+issue 132 "Unrelated words"
+issue 133 "Unrelated words"
+issue 134 "Unrelated words"
+issue 135 "Zeros title"
 issue 99 ""
 issue 123456789 "Nine digits"
 
@@ -171,6 +176,20 @@ check "an origin-only branch outside the standard is skipped, and the title's ow
 git branch feature/130-aaa-old origin/main; git branch feature/130-new-title origin/main
 check "when the branch the title gives exists, it wins over another valid branch for the number" "[[ \$(bash scripts/work-issue.sh 130 2>/dev/null) == '$wt/feature-130-new-title' ]]"
 
+# The title's branch on origin only still wins over a valid local branch that sorts before it
+git branch feature/131-aaa-old origin/main; other_push feature/131-new-title n131 origin/main
+p131=$(bash scripts/work-issue.sh 131 2>/dev/null)
+check "the title's branch that exists only on origin wins over a valid local branch for the number, and is built from origin" "[[ '$p131' == '$wt/feature-131-new-title' && -f '$p131/n131' ]]"
+# With no branch of the title's name: the first valid branch in name order, local before origin
+git branch feature/132-b-second origin/main; git branch feature/132-a-first origin/main
+check "of two valid branches for one number, neither the title's, the first in name order is taken" "[[ \$(bash scripts/work-issue.sh 132 2>/dev/null) == '$wt/feature-132-a-first' ]]"
+git branch fix/133-local origin/main; other_push feature/133-origin n133 origin/main
+check "a local branch is taken before an origin one, whatever their names" "[[ \$(bash scripts/work-issue.sh 133 2>/dev/null) == '$wt/fix-133-local' ]]"
+git branch fix/134-x origin/main; git branch feature/134-x origin/main
+check "of local branches for one number, feature/ is taken before fix/ (name order)" "[[ \$(bash scripts/work-issue.sh 134 2>/dev/null) == '$wt/feature-134-x' ]]"
+git branch feature/0135-zeros origin/main
+check "a branch whose number has leading zeros is not the issue's: the title's own branch is made" "[[ \$(bash scripts/work-issue.sh 135 2>/dev/null) == '$wt/feature-135-zeros-title' ]]"
+
 # A directory in the way is an error and is left alone
 mkdir -p "$wt/feature-66-plain-directory-in-the-way"; touch "$wt/feature-66-plain-directory-in-the-way/keep"
 o=$(bash scripts/work-issue.sh 66 2>&1 >/dev/null); st=$?
@@ -187,8 +206,8 @@ check "a renamed issue keeps a fix/ branch" "[[ \$(bash scripts/work-issue.sh 81
 check "a renamed issue keeps a hotfix/ branch" "[[ \$(bash scripts/work-issue.sh 82 2>/dev/null) == '$wt/hotfix-82-old-hot' ]]"
 issue 5 "Five"
 check "issue 5 does not pick up issue 54's branch" "[[ \$(bash scripts/work-issue.sh 5 2>/dev/null) == '$wt/feature-5-five' ]]"
-git branch feature/90-local-name origin/main; other_push fix/90-origin-name n90 origin/main; issue 90 "Anything"
-check "with a local and an origin branch for one number, the local one wins" "[[ \$(bash scripts/work-issue.sh 90 2>/dev/null) == '$wt/feature-90-local-name' ]]"
+git branch fix/90-local-name origin/main; other_push feature/90-origin-name n90 origin/main; issue 90 "Anything"
+check "with a local and an origin branch for one number, the local one wins (it sorts after the origin one by short name, so it is local-first, not name order alone)" "[[ \$(bash scripts/work-issue.sh 90 2>/dev/null) == '$wt/fix-90-local-name' ]]"
 other_push feature/91-gone n91 origin/main; git fetch -q origin; git -C "$other" push -q origin --delete feature/91-gone; issue 91 "Fresh start"
 check "an origin branch deleted since the last fetch is pruned, not reused" "[[ \$(bash scripts/work-issue.sh 91 2>/dev/null) == '$wt/feature-91-fresh-start' && \$(git -C '$wt/feature-91-fresh-start' rev-parse HEAD) == \$(git rev-parse origin/main) ]]"
 issue 83 "From a worktree"

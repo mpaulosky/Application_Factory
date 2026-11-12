@@ -5,8 +5,11 @@
 #   wt="$(scripts/work-issue.sh 54)" && cd "$wt"
 #
 # The branch is fix/{n}-{slug} for an issue labelled bug (any case), feature/{n}-{slug} for any other. The slug is the issue's title in lowercase
-# a-z0-9 words (a leading [tag] dropped, other characters, non-ASCII ones included, read as word breaks, at most 6 words and 50 characters; "issue"
-# when none is left; an issue whose branch already exists locally or on origin keeps that branch's name, unless it is outside the branch standard or under another prefix than feature/, fix/ and hotfix/; when the branch the title gives exists, it wins over the others; a number written with leading zeros in a branch name is not recognised), and the folder is the branch with / as -, under ../<Repo>-worktrees/. A leading-zero number is read as the same number (054 is 54).
+# a-z0-9 words (a leading [tag] dropped, other characters, non-ASCII ones included, read as word breaks, at most 6 words and 50 characters; "issue" when none is left), and the
+# folder is the branch with / as -, under ../<Repo>-worktrees/. A leading-zero number is read as the same number (054 is 54).
+# An issue renamed since its branch was made keeps that branch: when the branch the title gives exists (locally or on origin) it is used; otherwise the first branch already named for the
+# number (feature/{n}-..., fix/{n}-..., hotfix/{n}-...) in name order, local branches before origin's. A branch for the number outside the branch standard, under another prefix, or with leading
+# zeros in its number (feature/054-x) is not the issue's, and is skipped.
 # The branch starts from the local branch when there is one (checked out as it is), else from origin/<branch> when that branch is on origin, else from origin/main; origin is fetched
 # first, so a branch pushed from another machine is seen. A branch made from origin/main has no upstream (it would track main): the first push is git push -u origin HEAD. A worktree the branch already has is reused,
 # wherever it is, if its folder still exists (git's entry for one deleted by hand is forgotten, that one only, and the worktree made again; a locked

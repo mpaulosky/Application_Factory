@@ -9,7 +9,7 @@
 # $SHIM_ORIGIN_URL, to try github.com URL forms, fails `git ls-remote` for the branch in $SHIM_LSREMOTE_FAIL, and fails `git fetch` when SHIM_FETCH_FAIL is set (all: every fetch;
 # closing: the first passes and the later ones fail, counted in the file $SHIM_FETCH_COUNT). The fake gh prints at most 100 rows, as --limit 100 does.
 # It also answers the lookup of open PRs based on a branch, `gh pr list --state open --limit 100 --base <branch> --json number --jq length`, which it requires in exactly that form: with the number
-# in $GH_FIX/_base_<branch with / as _> (0 when there is no file), with GH_REPO equal to $EXPECT_GH_BASE_REPO when that is set (origin's repository, lowercase); $GH_FIX/_fail fails it too, and
+# in $GH_FIX/_base_<branch with / as _> (0 when there is no file), with GH_REPO, compared without regard to case, equal to $EXPECT_GH_BASE_REPO (written in lowercase; o/r when it is not set); $GH_FIX/_fail fails it too, and
 # $GH_FIX/_failbase fails only it.
 # Needs jq (a developer machine without it skips this file; CI fails), bash, git and chmod; the unsearchable-folder check is skipped as root, which can search any folder.
 # shellcheck disable=SC2034 # out and o are read by the eval in check
@@ -42,8 +42,8 @@ cat > "$work/bin/gh" <<'GH' # gh-repo: ok
 #!/usr/bin/env bash
 args="$*"
 if [[ $# == 12 && "$1 $2 $3 $4 $5 $6 $7" == "pr list --state open --limit 100 --base" && -n "$8" && "$9 ${10} ${11} ${12}" == "--json number --jq length" ]]; then
-  # the base lookup asks the repository that holds the branches (origin's), which can differ from GH_REPO for the PRs; checked when EXPECT_GH_BASE_REPO is set
-  [[ -z "${EXPECT_GH_BASE_REPO:-}" || "$(printf %s "${GH_REPO:-}" | tr '[:upper:]' '[:lower:]')" == "$EXPECT_GH_BASE_REPO" ]] || { echo "fake gh: bad base GH_REPO: ${GH_REPO:-}" >&2; exit 2; } # gh-repo: ok
+  # the base lookup asks the repository that holds the branches (origin's), which can differ from GH_REPO for the PRs; o/r unless EXPECT_GH_BASE_REPO says otherwise
+  [[ "$(printf %s "${GH_REPO:-}" | tr '[:upper:]' '[:lower:]')" == "${EXPECT_GH_BASE_REPO:-o/r}" ]] || { echo "fake gh: bad base GH_REPO: ${GH_REPO:-}" >&2; exit 2; } # gh-repo: ok
   [[ ! -f "$GH_FIX/_fail" && ! -f "$GH_FIX/_failbase" ]] || { echo "fake gh: network down" >&2; exit 1; } # gh-repo: ok
   if [[ -f "$GH_FIX/_base_${8//\//_}" ]]; then cat "$GH_FIX/_base_${8//\//_}"; else echo 0; fi # the count of open PRs based on that branch
   exit 0
@@ -245,7 +245,7 @@ for url in https://evil.com/github.com/acme/r https://github.com.evil/acme/r htt
   o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL="$url" bash scripts/cleanup.sh --dry-run 2>&1)
   check "origin $url is not read as acme/r" "! grep -q 'remove chore/owner-case' <<<\"\$o\""
 done
-o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/other bash scripts/cleanup.sh --dry-run 2>&1)
+o=$(EXPECT_GH_BASE_REPO=acme/other PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/other bash scripts/cleanup.sh --dry-run 2>&1)
 check "a PR from another repository of the same owner does not count" "! grep -q 'remove chore/owner-case' <<<\"\$o\" && grep -q 'keep   chore/owner-case: no PR from origin' <<<\"\$o\""
 o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r bash scripts/cleanup.sh --dry-run 2>&1)
 check "a non-GitHub origin falls back to GH_REPO's repository" "! grep -q 'remove chore/owner-case' <<<\"\$o\" && grep -q 'keep   chore/owner-case: no PR from origin' <<<\"\$o\""
