@@ -63,6 +63,9 @@ grep -qxF '        run: bash scripts/tests/cleanup.test.sh' "$owned/.github/work
 grep -qxF '        run: bash scripts/tests/work-issue.test.sh' "$owned/.github/workflows/ci.yml" \
   || fail "the Owned ci.yml's hook-tests job must run scripts/tests/work-issue.test.sh, so every repo tests its copy"
 bash "$owned/scripts/tests/check-git-hooks.test.sh" || fail "check-git-hooks.test.sh"
+bash "$owned/scripts/tests/lint-edited-file.test.sh" || fail "lint-edited-file.test.sh"
+grep -qxF '        run: bash scripts/tests/lint-edited-file.test.sh' "$owned/.github/workflows/ci.yml" \
+  || fail "the Owned ci.yml's hook-tests job must run scripts/tests/lint-edited-file.test.sh, so every repo tests its copy"
 
 step "Auto-merge script tests"
 need node
@@ -131,6 +134,7 @@ shell_files=(
   "$owned/scripts/watch-pr.sh" "$owned/scripts/tests/watch-pr.test.sh"
   "$owned/scripts/cleanup.sh" "$owned/scripts/tests/cleanup.test.sh" "$owned/scripts/work-issue.sh" "$owned/scripts/tests/work-issue.test.sh"
   "$owned/scripts/check-git-hooks.sh" "$owned/scripts/tests/check-git-hooks.test.sh" "$owned/scripts/review.sh"
+  "$owned/scripts/lint-edited-file.sh" "$owned/scripts/tests/lint-edited-file.test.sh"
   "$seed/.github/ci/prepare.sh" "$seed/.github/ci/gate-checks.sh" "$owned/.sandcastle/check.sh"
   "$owned/.github/hooks/pre-commit" "$owned/.github/hooks/pre-push" "$owned/.github/hooks/post-checkout"
   "$owned/.github/hooks/tests/pre-commit.test.sh" "$owned/.github/hooks/tests/pre-push.test.sh"

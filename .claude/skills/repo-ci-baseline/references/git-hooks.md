@@ -162,8 +162,8 @@ and `git commit` end to end, which runs the hook with `GIT_DIR` set.
 `scripts/tests/check-branch-name.test.sh` covers the script's `--pr` form, which the CI job uses: the Actions
 branches and any `dependabot/*` allowed only there, a shell-safe `dependabot/*` allowed for a push too, a `claude/...` branch refused, and other `docs/` names refused.
 
-CI's hook-tests job runs this suite, `pre-commit.test.sh`, `check-branch-name.test.sh`, `check-pr-title.test.sh`, `sync-copilot-review.test.sh`, `watch-pr.test.sh`, `cleanup.test.sh` and
-`work-issue.test.sh`.
+CI's hook-tests job runs this suite, `pre-commit.test.sh`, `check-branch-name.test.sh`, `check-pr-title.test.sh`, `sync-copilot-review.test.sh`, `watch-pr.test.sh`,
+`cleanup.test.sh`, `lint-edited-file.test.sh` and `work-issue.test.sh`.
 
 ## Session-start check
 
@@ -183,6 +183,42 @@ The Template doesn't carry `.claude/settings.json`, so each repo that wants the 
   }
 }
 ```
+
+## Edit-time lint
+
+`scripts/lint-edited-file.sh` (with `scripts/tests/lint-edited-file.test.sh`) is a Claude Code `PostToolUse` hook. After each Edit, Write or MultiEdit
+it lints the file the tool wrote, so an agent fixes a violation in the same turn and the pre-commit hook, the gate, CI and a reviewer never see it
+(ADR 0011). A Markdown file goes through `markdownlint-cli2` with the repo's `.markdownlint-cli2.jsonc`. A YAML file goes through `yamllint` with
+`.yamllint.yml`; a workflow also goes through `actionlint` and `zizmor --offline`, and `.github/dependabot.yml` through `zizmor`, as the gate does.
+
+- Exit 2 with the linters' output on stderr when any linter reports a problem; Claude Code feeds that back to the agent.
+  A linter that crashes counts as a problem, not as clean.
+- Exit 0 and no output for a file that is neither Markdown nor YAML, one outside a git repository, one under `node_modules/`,
+  or one that no longer exists. A linter that is not installed is named on stderr and skipped: the hook only helps, and the
+  pre-commit hook, the gate and CI still check.
+- Exit 1 with a message when its input is not JSON or `python3` is missing, so a broken hook is visible and is not read as a clean file.
+- The path reaches the linter whole: from the repo root of the file's own repository (a linked worktree is its own root), as
+  `./<path>`, and for Markdown with `--no-globs`, so a name with `[`, `*` or a leading `-` is not read as a glob or an option.
+  The config's `ignores` still apply.
+- The tests use stub linters on `PATH` that fail on a marker word and log their arguments and working directory, plus a run
+  against the real `markdownlint-cli2` when it is installed.
+
+The Template doesn't carry `.claude/settings.json`, so each repo adds the hook by hand:
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/lint-edited-file.sh" }]
+      }
+    ]
+  }
+}
+```
+
+A person can instead put the hook in `~/.claude/settings.json` with an absolute path to the script, to lint edits in every repo that carries it.
 
 ## Adapting
 

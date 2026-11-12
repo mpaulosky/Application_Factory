@@ -26,6 +26,8 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   `.markdownlint-cli2.jsonc` are the Factory's own (ADR 0009). Edit the Template's file and run `scripts/gate.sh --sync` to copy it over; `scripts/gate.sh` fails when a copy drifts.
   The review's own, non-copy files are `.sandcastle/lib/repo-config.mts` (`REPO_SLUG`, `NOT_OWNED_BASELINE_PATHS`), `package.json`, `pnpm-workspace.yaml`,
   `pnpm-lock.yaml` and the `.gitignore` lines for `node_modules/` and `.security/`.
+- `.claude/settings.json` and `scripts/lint-edited-file.sh` (a copy of the Template's Owned file): the edit-time lint (ADR 0011). The settings file holds one `PostToolUse` hook
+  that lints each Markdown or YAML file Claude writes; the Template carries the script but not the settings file.
 - `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too; its header lists the steps (its test and the review's three tests, the copies' drift check, the bare-`#N` check,
   the Git-status check, lint, shellcheck of the changed shell files, the local review check, then `test.sh`, which it skips for a tree that already passed it). [ADR
   0006](docs/adr/0006-the-factory-carries-the-git-hooks-and-a-gate.md).
