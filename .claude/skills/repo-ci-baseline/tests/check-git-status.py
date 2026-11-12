@@ -8,9 +8,10 @@ guard, so a "clean tree" check passes on a dirty one. A script's tests, Markdown
 Sandcastle runs `git status` in a fresh sandbox clone. Scanned: *.sh and the three git hooks, in any folder below the one given except a `tests` folder.
 
 A logical line is a line plus the lines a trailing backslash joins to it (a comment line is not joined: bash does not continue a comment). A call is the words after `git`
-up to the first unquoted `|`, `;`, `&` or `#`, or the `)` that closes the context the call is in (a substitution inside the call, `$(...)`, `(...)` or backticks, quoted or not, is part of it but blanked: its words are not the call's), so a `-u` of `sort -u` or `git add -u` after it, or text in a trailing comment, is not the call's setting. The call is
-checked when one of its words is `status` and one starts with `--porcelain`; git's global options (-C <dir>, --no-pager, --git-dir=<dir>) come between and are skipped over
-as words, quoted values with spaces included, since the call is cut by quote parity.
+up to the first unquoted `|`, `;`, `&` or `#`, or the `)` that closes the context the call is in. A substitution inside the call (`$(...)`, `(...)`, backticks, quoted or not)
+is part of it but blanked, since its words are not the call's: so a `-u` of `sort -u` or `git add -u` after the call, or in a substitution, or text in a trailing comment,
+is not the call's setting. The call is checked when one of its words is `status` and one starts with `--porcelain`; git's global options (-C <dir>, --no-pager,
+--git-dir=<dir>) come between and are skipped over as words, quoted values with spaces included, because quotes and substitutions are tracked as nested contexts.
 """
 
 import os

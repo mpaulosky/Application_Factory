@@ -198,12 +198,24 @@ check "a -u in backticks inside double quotes is not the call's setting" "[[ $st
 fixture sub-arith scripts/a.sh 'git status --porcelain $((1+2))'
 run_checker sub-arith
 check "arithmetic expansion after the call leaves it found" "[[ $st == 1 ]]"
-fixture sub-nested scripts/a.sh 'git status --porcelain "$(echo "a)b" -u)"'
+fixture sub-arith-ok scripts/a.sh 'git status --porcelain $((1+2)) --untracked-files=all'
+run_checker sub-arith-ok
+check "the setting after an arithmetic expansion is seen (its second ) is matched)" "[[ $st == 0 ]]"
+fixture sub-proc scripts/a.sh 'git status --porcelain <(sort -u f)'
+run_checker sub-proc
+check "a -u inside a process substitution is not the call's setting" "[[ $st == 1 ]]"
+fixture sub-proc-ok scripts/a.sh 'git status --porcelain <(sort -u f) --untracked-files=all'
+run_checker sub-proc-ok
+check "the setting after a process substitution is seen" "[[ $st == 0 ]]"
+fixture sub-nested scripts/a.sh 'git status --porcelain "$(echo "a)b" -u )"'
 run_checker sub-nested
 check "a ) inside quotes inside a substitution does not close it" "[[ $st == 1 ]]"
 fixture subshell scripts/a.sh '(cd "$d" && git status --porcelain)'
 run_checker subshell
 check "a call inside a subshell is found" "[[ $st == 1 ]]"
+fixture subshell-after scripts/a.sh '(cd "$d" && git status --porcelain); sort -u f'
+run_checker subshell-after
+check "a -u after the subshell's closing ) is not the call's setting" "[[ $st == 1 ]]"
 fixture subshell-ok scripts/a.sh '(cd "$d" && git status --porcelain -uall)'
 run_checker subshell-ok
 check "and its setting is seen" "[[ $st == 0 ]]"
