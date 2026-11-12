@@ -57,8 +57,9 @@ GATE_PART=sandcastle scripts/gate.sh                          # one part alone (
 ```
 
 CI runs `scripts/gate.sh` in parts, so a push from a clone without hooks is gated too, except for the local review check:
-CI has no review ledger, so it sets `GATE_SKIP_REVIEW=1` (ADR 0010). The pre-push hook runs `scripts/gate.sh` on every push, and the gate runs the Sandcastle check when you changed
-`template/**/.sandcastle/` or the Seed `package.json` (the check needs the network and takes a few minutes; its pass is remembered for a clean tree). `GATE_PART=sandcastle scripts/gate.sh` runs it alone.
+CI has no review ledger, so it sets `GATE_SKIP_REVIEW=1` (ADR 0010). The pre-push hook runs `scripts/gate.sh` on every push, and the gate runs the Sandcastle check when
+you changed anything it applies or tests (`template/`, `apply.sh`, `SKILL.md`, `CONTEXT.md`, `references/`, `docs/adr/`, `tests/sandcastle*`,
+`.claude/rules/sandcastle.md`; ADR 0012). The check needs the network and takes a few minutes; its pass is remembered for a clean tree. `GATE_PART=sandcastle scripts/gate.sh` runs it alone.
 
 ## Working on the Template
 

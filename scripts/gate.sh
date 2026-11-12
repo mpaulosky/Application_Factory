@@ -238,7 +238,7 @@ sandcastle_changed() {
     command rm -f -- "$list"
     return 0
   fi
-  grep -zEq '^\.claude/(skills/repo-ci-baseline/(template/|apply\.sh$|SKILL\.md$|CONTEXT\.md$|references/|docs/adr/|tests/sandcastle)|rules/sandcastle\.md$)' "$list" || rc=$?
+  grep -azEq '^\.claude/(skills/repo-ci-baseline/(template/|apply\.sh$|SKILL\.md$|CONTEXT\.md$|references/|docs/adr/|tests/sandcastle)|rules/sandcastle\.md$)' "$list" || rc=$?
   command rm -f -- "$list"
   if ((rc > 1)); then return 0; fi
   return "$rc"

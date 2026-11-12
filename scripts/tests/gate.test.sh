@@ -7,7 +7,7 @@
 # and --quick (and a missing python3 or a broken checker fails closed), that dependabot.yml watches the root package.json, and the review tests' install step (a missing pnpm, a pnpm that leaves no tsx, a pnpm that installs it).
 # It also checks that .claude/settings.json runs the executable scripts/lint-edited-file.sh after Edit, Write and MultiEdit (ADR 0011), and that the check fails on a dropped matcher, another event or hook type,
 # a command without the quotes around CLAUDE_PROJECT_DIR or naming another script, a non-executable script and a file that is not JSON.
-# It also checks GATE_PART (ADR 0012): each part runs alone, a bad value or --quick with a part is refused, the Sandcastle check runs in a full gate only when the branch changed
+# It also checks GATE_PART (ADR 0012): each part runs alone, a bad value, or --quick or --sync with a part, is refused, the Sandcastle check runs in a full gate only when the branch changed
 # a file it reads (and is remembered per clean tree), and the CI workflow has one job per part and a Template tests job that needs them all.
 #
 #   scripts/tests/gate.test.sh
@@ -98,7 +98,7 @@ run() {
   # $GATE_ARGS is the gate's arguments, split on spaces.
   local gate_args=()
   [[ -z "${GATE_ARGS:-}" ]] || read -ra gate_args <<<"$GATE_ARGS"
-  (cd "$1" && env -u GATE_SKIP_REVIEW "${skip[@]+"${skip[@]}"}" GATE_SKIP_SELF_TEST=1 STUB_EXIT="${STUB_EXIT:-0}" STUB_SANDCASTLE_EXIT="${STUB_SANDCASTLE_EXIT:-0}" REVIEW_EXIT="${REVIEW_EXIT:-0}" ${RUN_PART:+GATE_PART="$RUN_PART"} ${RUN_PATH:+PATH="$RUN_PATH"} bash scripts/gate.sh "${gate_args[@]+"${gate_args[@]}"}" >"$1/out" 2>&1) || status=$?
+  (cd "$1" && env -u GATE_SKIP_REVIEW "${skip[@]+"${skip[@]}"}" GATE_SKIP_SELF_TEST=1 STUB_EXIT="${STUB_EXIT:-0}" STUB_SANDCASTLE_EXIT="${STUB_SANDCASTLE_EXIT:-0}" REVIEW_EXIT="${REVIEW_EXIT:-0}" ${RUN_PART:+GATE_PART="$RUN_PART"} bash scripts/gate.sh "${gate_args[@]+"${gate_args[@]}"}" >"$1/out" 2>&1) || status=$?
   [[ -e "$1/$skill/ran" ]] && ran=yes || ran=no
   [[ -e "$1/.git/ran-sandcastle" ]] && ran_sc=yes || ran_sc=no
 }
@@ -475,7 +475,6 @@ done
 headers_static="Copies of Template files|Issue references in Owned files|git status guards in Owned scripts|markdownlint (whole repo|yamllint (whole repo|shellcheck (changed shell files)"
 headers_template="Local review (scripts/review.sh check)|▶ test.sh"
 headers_sandcastle="▶ Sandcastle check"
-mkdir -p "$work/part-files"
 repoP="$(new_repo parts)"; stub_review "$repoP"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoP/.git/info/exclude"
 mkdir -p "$repoP/$skill/references" "$repoP/$skill/template/owned"
 echo "# sandcastle" > "$repoP/$skill/references/sandcastle.md"
@@ -563,6 +562,7 @@ reset_parts; printf '# t\n' > "$repoP/$skill/references/é ü.md"; commit_all "$
 GATE_NO_CACHE=1 run "$repoP"
 check "a file with non-ASCII characters in its name under a folder the check reads makes a full gate run it" "$([[ $status == 0 && $ran_sc == yes ]] && echo 0 || echo 1)"
 reset_parts; touch_path "$skill/SKILL.md"; commit_all "$repoP" "skill"
+rm -rf "$repoP/.git/gate-cache"
 run "$repoP"; run "$repoP"
 check "and the Sandcastle pass is remembered for the clean tree, as test.sh's is" "$([[ $ran_sc == no ]] && grep -q "Sandcastle check already passed on this tree" "$repoP/out" && echo 0 || echo 1)"
 GATE_NO_CACHE=1 STUB_SANDCASTLE_EXIT=1 run "$repoP"
@@ -572,7 +572,7 @@ check "with no origin/main to tell what changed, a full gate runs the Sandcastle
 
 # sandcastle_changed on its own: when it can't tell (a git that fails on diff or ls-files, no merge base) it says "changed", so the check runs.
 sc_changed_rc() { # sc_changed_rc <repo> <PATH>: the function's status, taken out of gate.sh, run in <repo>
-  (cd "$1" && PATH="$2" bash -c 'source <(sed -n "/^sandcastle_changed() {/,/^}/p" "$1"); sandcastle_changed' _ "$here/scripts/gate.sh" > /dev/null 2>&1; echo $?)
+  (cd "$1" && PATH="$2" bash -euo pipefail -c 'source <(sed -n "/^sandcastle_changed() {/,/^}/p" "$1"); sandcastle_changed' _ "$here/scripts/gate.sh" > /dev/null 2>&1; echo $?)
 }
 reset_parts
 check "sandcastle_changed says unchanged for a branch with no change in a watched path" "$([[ "$(sc_changed_rc "$repoP" "$PATH")" == 1 ]] && echo 0 || echo 1)"
@@ -623,6 +623,7 @@ PY
 }
 aggregator_ok() { # aggregator_ok <workflow file>: 0 when the Template tests step passes for four successes and fails for a failure, a cancelled or a skipped job, a missing job and nothing
   local script ok=0 case_json result job
+  command -v jq > /dev/null || { echo "aggregator_ok needs jq" >&2; return 1; }
   script="$(python3 -I -c 'import sys, yaml; j = yaml.safe_load(open(sys.argv[1]))["jobs"]; print([x for x in j.values() if x.get("name") == "Template tests"][0]["steps"][-1]["run"])' "$1")" || return 1
   agg() { NEEDS="$1" bash -e -c "$script" > /dev/null 2>&1; }
   agg '{"self":{"result":"success"},"static":{"result":"success"},"template":{"result":"success"},"sandcastle":{"result":"success"}}' || ok=1
@@ -648,6 +649,7 @@ exec(sys.argv[3])
 yaml.safe_dump(wf, open(sys.argv[2], "w"), sort_keys=False)
 PY
 }
+mutate_wf same 'pass'
 mutate_wf dup 'wf["jobs"]["sandcastle"]["steps"][-1]["env"]["GATE_PART"] = "static"'
 mutate_wf needs 'wf["jobs"]["test"]["needs"].remove("sandcastle")'
 # shellcheck disable=SC2016 # the Python source is text: the ${{ }} is the workflow's expression
@@ -657,6 +659,7 @@ mutate_wf coe 'wf["jobs"]["static"]["continue-on-error"] = True'
 mutate_wf disabled 'wf["jobs"]["template"]["if"] = "false"'
 mutate_wf norun 'wf["jobs"]["static"]["steps"][-1]["run"] = "true"'
 mutate_wf twotests 'wf["jobs"]["self"]["name"] = "Template tests"'
+check "the workflow and aggregator checks pass for the workflow written back unchanged (the control for the mutants)" "$(workflow_ok "$work/wf/same.yml" "$here/scripts/gate.sh" && aggregator_ok "$work/wf/same.yml" && echo 0 || echo 1)"
 for m in dup needs always twice coe disabled norun twotests; do
   check "the workflow check fails for a workflow where $m" "$(workflow_ok "$work/wf/$m.yml" "$here/scripts/gate.sh" && echo 1 || echo 0)"
 done
