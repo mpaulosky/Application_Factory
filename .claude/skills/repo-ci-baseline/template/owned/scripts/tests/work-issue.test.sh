@@ -70,6 +70,8 @@ issue 132 "Unrelated words"
 issue 133 "Unrelated words"
 issue 134 "Unrelated words"
 issue 135 "Zeros title"
+issue 136 "Origin tracking"
+issue 137 "Always tracks"
 issue 99 ""
 issue 123456789 "Nine digits"
 
@@ -165,6 +167,14 @@ git branch feature/76-WIP origin/main; git branch squad/76-legacy origin/main; g
 check "the strays exist (the push of the nested one worked)" "git show-ref --verify --quiet refs/heads/feature/76-WIP && git ls-remote --exit-code origin refs/heads/fix/76-a/b >/dev/null"
 o=$(bash scripts/work-issue.sh 76 2>/dev/null); st=$?
 check "branches for the number that break the standard or use another prefix are skipped" "[[ $st == 0 && '$o' == '$wt/feature-76-real-title' && \$(git -C '$o' branch --show-current) == feature/76-real-title ]]"
+
+# The upstream is set explicitly, whatever branch.autoSetupMerge says
+other_push feature/136-origin-tracking n136 origin/main; git config branch.autoSetupMerge false
+p136=$(bash scripts/work-issue.sh 136 2>/dev/null); git config --unset branch.autoSetupMerge
+check "a branch built from origin/<branch> tracks it even when branch.autoSetupMerge is false" "[[ \"\$(git config --get branch.feature/136-origin-tracking.merge)\" == refs/heads/feature/136-origin-tracking && -f '$p136/n136' ]]"
+git config branch.autoSetupMerge always
+bash scripts/work-issue.sh 137 >/dev/null 2>&1; git config --unset branch.autoSetupMerge
+check "a branch made from origin/main has no upstream even when branch.autoSetupMerge is always" "[[ -z \"\$(git config --get branch.feature/137-always-tracks.merge)\" && -d '$wt/feature-137-always-tracks' ]]"
 
 # A stray before a valid branch is passed over to it; an origin-only stray alone is skipped too
 git branch feature/78-WIP origin/main; git branch feature/78-old-title origin/main

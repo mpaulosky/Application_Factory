@@ -104,7 +104,7 @@ mkdir -p "$(dirname "$dir")"
 if git -C "$primary" show-ref --verify --quiet "refs/heads/$branch"; then
   git -C "$primary" worktree add --quiet "$dir" "$branch" >&2
 elif git -C "$primary" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
-  git -C "$primary" worktree add --quiet -b "$branch" "$dir" "origin/$branch" >&2
+  git -C "$primary" worktree add --quiet --track -b "$branch" "$dir" "origin/$branch" >&2
 else
   git -C "$primary" worktree add --quiet --no-track -b "$branch" "$dir" origin/main >&2
 fi

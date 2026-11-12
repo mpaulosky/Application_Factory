@@ -7,7 +7,8 @@
 # --head, exactly the four --json fields cleanup.sh needs, and GH_REPO. A file $GH_FIX/_fail makes it exit 1. A file $GH_FIX/<branch with / as _>.hook is
 # run once, the first time that branch is asked about (a push that lands after the fetch). A git shim answers `git remote get-url origin` from
 # $SHIM_ORIGIN_URL, to try github.com URL forms, fails `git ls-remote` for the branch in $SHIM_LSREMOTE_FAIL, and fails `git fetch` when SHIM_FETCH_FAIL is set (all: every fetch;
-# closing: the first passes and the later ones fail, counted in the file $SHIM_FETCH_COUNT). The fake gh prints at most 100 rows, as --limit 100 does.
+# closing: the first passes and the later ones fail, counted in the file $SHIM_FETCH_COUNT), answers `git remote get-url --push --all origin` from $SHIM_PUSH_URLS (; between URLs) or else $SHIM_ORIGIN_URL, and
+# lands a commit on the branch named in $SHIM_ADVANCE just before `git update-ref -d` deletes it. The fake gh prints at most 100 rows, as --limit 100 does.
 # It also answers the lookup of open PRs based on a branch, `gh pr list --state open --limit 100 --base <branch> --json number --jq length`, which it requires in exactly that form: with the number
 # in $GH_FIX/_base_<branch with / as _> (0 when there is no file), with GH_REPO, compared without regard to case, equal to $EXPECT_GH_BASE_REPO (written in lowercase; o/r when it is not set); $GH_FIX/_fail fails it too, and
 # $GH_FIX/_failbase fails only it.
@@ -167,6 +168,11 @@ wt_at chore/parent-file "$work/wt-pf/pf"; command rm -rf "$work/wt-pf"; touch "$
 wt_at chore/rebasing "$work/wt/chore-rebasing"
 (cd "$work/wt/chore-rebasing" && GIT_SEQUENCE_EDITOR="sed -i.bak 's/^pick/edit/'" git rebase -q -i -f main >/dev/null 2>&1)
 [[ -d "$repo/.git/worktrees/chore-rebasing/rebase-merge" ]] || { echo "setup failed: the rebase did not stop"; exit 1; }
+# A branch a worktree is bisecting keeps its name in BISECT_START; the worktree list shows nothing for it
+wt_at chore/bisecting "$work/wt/chore-bisecting"; git -C "$work/wt/chore-bisecting" bisect start >/dev/null 2>&1
+[[ -f "$repo/.git/worktrees/chore-bisecting/BISECT_START" ]] || { echo "setup failed: the bisect did not start"; exit 1; }
+# A branch that moves between cleanup's last check and its delete (the shim lands a commit just before update-ref -d)
+tip=$(branch chore/race2 yes) || exit 1; pr chore/race2 MERGED "$tip"; race2_tip="$tip"
 # The verdict, beyond the single-PR cases
 tip=$(branch chore/v-other-main yes) || exit 1;     pr chore/v-other-main MERGED "$tip" feature/9-base; pr chore/v-other-main MERGED "$tip"; remote_only chore/v-other-main
 tip=$(branch chore/v-closed-other yes) || exit 1;   pr chore/v-closed-other CLOSED "$tip"; pr chore/v-closed-other MERGED "$tip" develop; remote_only chore/v-closed-other
@@ -190,6 +196,10 @@ if [[ "\$1 \$2 \$3" == "remote get-url origin" && -n "\${SHIM_ORIGIN_URL:-}" ]];
 if [[ "\$1" == fetch && -n "\${SHIM_FETCH_FAIL:-}" ]]; then # all: every fetch fails; closing: the first passes and the later ones fail
   n=\$(( \$(cat "\$SHIM_FETCH_COUNT" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "\$SHIM_FETCH_COUNT"
   if [[ "\$SHIM_FETCH_FAIL" == all || \$n -ge 2 ]]; then echo "shim: fetch failed" >&2; exit 128; fi
+fi
+if [[ "\$1 \$2 \$3 \$4 \$5" == "remote get-url --push --all origin" && ( -n "\${SHIM_PUSH_URLS:-}" || -n "\${SHIM_ORIGIN_URL:-}" ) ]]; then printf '%s\n' "\${SHIM_PUSH_URLS:-\$SHIM_ORIGIN_URL}" | tr ';' '\n'; exit 0; fi
+if [[ "\$1 \$2" == "update-ref -d" && -n "\${SHIM_ADVANCE:-}" && "\$3" == "refs/heads/\$SHIM_ADVANCE" ]]; then # a commit lands on the branch between cleanup's check and its delete
+  new=\$("$(command -v git)" commit-tree "\$3^{tree}" -p "\$3" -m late) && "$(command -v git)" update-ref "\$3" "\$new"
 fi
 if [[ "\$1" == ls-remote && -n "\${SHIM_LSREMOTE_FAIL:-}" && "\$*" == *"refs/heads/\$SHIM_LSREMOTE_FAIL"* ]]; then echo "shim: ls-remote failed" >&2; exit 128; fi
 exec "$(command -v git)" "\$@"
@@ -223,13 +233,13 @@ check "the dry run's summary says so" "grep -q '^Done: [0-9]* removed, [0-9]* ke
 o2=$(bash scripts/cleanup.sh --dry-run --include-closed 2>&1)
 check "a dry run with --include-closed says it would remove a closed-unmerged branch, and without it keeps it" "grep -q '^remove feature/4-closed ' <<<\"\$o2\" && grep -q 'keep   feature/4-closed: its PR closed unmerged' <<<\"\$out\""
 check "dry run changes nothing" "has_local feature/1-merged && [[ -d $work/wt/feature-1-merged ]] && has_remote chore/remote-only && has_remote feature/1-merged && [[ \$(git rev-parse main) == $main_before ]]"
-check "dry run lists every step" "grep -q 'would: git worktree remove .*feature-1-merged' <<<\"\$out\" && grep -q 'would: git branch -q -D feature/1-merged' <<<\"\$out\" && grep -q 'would: git push .*feature/1-merged' <<<\"\$out\" && grep -q 'would: git merge --ff-only origin/main' <<<\"\$out\""
+check "dry run lists every step" "grep -q 'would: git worktree remove .*feature-1-merged' <<<\"\$out\" && grep -q 'would: git update-ref -d refs/heads/feature/1-merged' <<<\"\$out\" && grep -q 'would: git push .*feature/1-merged' <<<\"\$out\" && grep -q 'would: git merge --ff-only origin/main' <<<\"\$out\""
 
-check "a dry run keeps a locked worktree with a missing folder, as the real run does" "grep -q 'keep   chore/stale-locked: its worktree is locked and its folder is missing' <<<\"\$out\" && ! grep -q 'remove chore/stale-locked' <<<\"\$out\" && ! grep -q 'would: git branch -q -D chore/stale-locked' <<<\"\$out\""
+check "a dry run keeps a locked worktree with a missing folder, as the real run does" "grep -q 'keep   chore/stale-locked: its worktree is locked and its folder is missing' <<<\"\$out\" && ! grep -q 'remove chore/stale-locked' <<<\"\$out\" && ! grep -q 'would: git update-ref -d refs/heads/chore/stale-locked' <<<\"\$out\""
 if [[ "$rel_ok" == true ]]; then check "a dry run finds the entry of a worktree git stored with a relative path" "grep -q 'would: forget the missing worktree .*chore-relative-path' <<<\"\$out\""
 elif [[ -n "${CI:-}" ]]; then bad "this git can't read a worktree stored with a relative path, and CI must test it"; else echo "skip - this git can't read a relative worktree path"; fi
 check "a dry run says it would forget both hand-deleted worktrees, whichever side of the clean ones they sort" "grep -q 'would: forget the missing worktree .*wt-ord/b' <<<\"\$out\" && grep -q 'would: forget the missing worktree .*wt-ord/d' <<<\"\$out\" && ! grep -q 'keep   chore/ord-' <<<\"\$out\""
-check "a dry run forgets no worktree entry, but says it would" "grep -q '^remove chore/stale\$' <<<\"\$out\" && grep -q 'would: forget the missing worktree .*chore-stale\$' <<<\"\$out\" && grep -q 'would: git branch -q -D chore/stale' <<<\"\$out\" && [[ -d $repo/.git/worktrees/chore-stale ]] && has_local chore/stale"
+check "a dry run forgets no worktree entry, but says it would" "grep -q '^remove chore/stale\$' <<<\"\$out\" && grep -q 'would: forget the missing worktree .*chore-stale\$' <<<\"\$out\" && grep -q 'would: git update-ref -d refs/heads/chore/stale ' <<<\"\$out\" && [[ -d $repo/.git/worktrees/chore-stale ]] && has_local chore/stale"
 
 # The owner of origin: github.com URL forms (through the git shim), without regard to case; a PR from "Acme/R" counts for acme/r, not for o/r
 check "a PR from a repository of another name is not counted by default" "! grep -q 'remove chore/owner-case' <<<\"\$out\" && grep -q 'keep   chore/owner-case: no PR from origin' <<<\"\$out\""
@@ -266,6 +276,18 @@ check "an upstream remote, not origin, names the repository gh is asked about" "
 o=$(env -u GITHUB_REPOSITORY PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r bash scripts/cleanup.sh --dry-run 2>&1); st=$?
 check "a non-GitHub origin with no GITHUB_REPOSITORY fails, saying why" "[[ $st != 0 ]] && grep -q \"can't tell which repository\" <<<\"\$o\""
 
+# origin's push URLs: a different repository than the fetch URL's is refused before anything is read or removed; the same repository in another URL form is fine
+git config remote.origin.pushurl https://github.com/evil/fork.git
+o=$(bash scripts/cleanup.sh --dry-run 2>&1); st=$?; git config --unset remote.origin.pushurl
+check "a push URL of another repository is refused, saying so" "[[ $st == 1 ]] && grep -q \"origin's push URL (https://github.com/evil/fork.git)\" <<<\"\$o\" && ! grep -q '^remove ' <<<\"\$o\""
+git config remote.origin.pushurl "$work/origin.git"; git config --add remote.origin.pushurl https://github.com/evil/fork.git
+o=$(bash scripts/cleanup.sh --dry-run 2>&1); st=$?; git config --unset-all remote.origin.pushurl
+check "one of several push URLs naming another repository is refused" "[[ $st == 1 ]] && grep -q 'push URL (https://github.com/evil/fork.git)' <<<\"\$o\""
+o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/Acme/R SHIM_PUSH_URLS="git@github.com:acme/r.git;ssh://git@github.com/ACME/r.git" EXPECT_GH_BASE_REPO=acme/r bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+check "push URLs of the same repository in other forms (and case) are accepted" "[[ $st == 0 ]] && grep -q 'remove chore/owner-case' <<<\"\$o\""
+o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS="https://git.example.com/other/r" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+check "push URLs that differ for a non-GitHub origin are refused" "[[ $st == 1 ]] && grep -q 'push URL (https://git.example.com/other/r)' <<<\"\$o\""
+
 # Refusals (main is behind origin/main here, as it is for the real run below)
 o=$( cd "$work/wt/feature-1-merged" && bash "$repo/scripts/cleanup.sh" 2>&1 ); st=$?
 check "refuses in a linked worktree" "[[ $st != 0 ]] && grep -q 'primary checkout' <<<\"\$o\" && [[ \$(git rev-parse main) == $main_before ]]"
@@ -297,7 +319,7 @@ echo "git -C \"$work/wt/chore-local-race\" commit -q --allow-empty -m late-local
 git fetch -q origin; lease_tip_before=$(git rev-parse origin/chore/lease-race)
 # The real run: several removals are refused (a locked worktree, a ref lock, a moved origin tip, a failed ls-remote), so it exits 1 after doing the rest
 local_before=$(git for-each-ref refs/heads | wc -l | tr -d ' '); origin_before=$(git ls-remote --heads origin | wc -l | tr -d ' ')
-out=$(PATH="$work/shim:$PATH" SHIM_LSREMOTE_FAIL=chore/net-fail bash scripts/cleanup.sh 2>&1); st=$?
+out=$(PATH="$work/shim:$PATH" SHIM_LSREMOTE_FAIL=chore/net-fail SHIM_ADVANCE=chore/race2 bash scripts/cleanup.sh 2>&1); st=$?
 check "exits 1 when git refused a removal, after doing the rest" "[[ $st == 1 ]]"
 local_after=$(git for-each-ref refs/heads | wc -l | tr -d ' '); origin_after=$(git ls-remote --heads origin | wc -l | tr -d ' ')
 removed_n=$(( local_before - local_after + origin_before - origin_after )); kept_n=$(grep -c '^keep ' <<<"$out")
@@ -328,8 +350,10 @@ check "a worktree holding an ignored file is removed with it, as documented" "! 
 check "a worktree whose path has spaces and a non-ASCII letter is removed" "! has_local chore/spaced && ! has_remote chore/spaced && [[ ! -e '$sp' ]]"
 if [[ "$noperm_ok" == true ]]; then check "a worktree whose parent folder can't be searched is kept as out of reach, not forgotten" "has_local chore/noperm && has_remote chore/noperm && grep -q \"keep   chore/noperm: its worktree's folder can't be reached\" <<<\"\$out\" && [[ -d $repo/.git/worktrees/w ]]"; else echo "skip - running as root, or chmod 000 did not make the folder unsearchable, so that arm can't be tried here (the empty and missing parents are tried below)"; fi
 check "a worktree entry that is a symlink is never followed or removed" "has_local chore/symlinked && has_remote chore/symlinked && [[ -f $work/elsewhere-entry/gitdir ]] && grep -q 'keep   chore/symlinked: its worktree' <<<\"\$out\""
-check "a commit made after the branch was judged keeps the branch, and its origin copy" "has_local chore/local-race && has_remote chore/local-race && [[ \$(git log -1 --format=%s chore/local-race) == late-local ]] && grep -q 'keep   chore/local-race: it has a commit that was made after it was judged' <<<\"\$out\" && grep -q 'keep   origin/chore/local-race: its local branch was kept' <<<\"\$out\" && [[ -n \"\$(git config --get-regexp '^branch\\.chore/local-race\\.')\" ]]"
-check "a branch a worktree is rebasing is kept, with its origin copy" "has_local chore/rebasing && has_remote chore/rebasing && grep -q 'keep   chore/rebasing: git could not delete the branch' <<<\"\$out\" && [[ -d $work/wt/chore-rebasing ]]"
+check "a commit made after the branch was judged keeps the branch, and its origin copy" "has_local chore/local-race && has_remote chore/local-race && [[ \$(git log -1 --format=%s chore/local-race) == late-local ]] && [[ -d $work/wt/chore-local-race ]] && grep -q 'keep   chore/local-race: it has a commit that was made after it was judged' <<<\"\$out\" && grep -q 'keep   origin/chore/local-race: its local branch was kept' <<<\"\$out\" && [[ -n \"\$(git config --get-regexp '^branch\\.chore/local-race\\.')\" ]]"
+check "a branch that moves between the last check and the delete is kept with its new commit, and its origin copy" "has_local chore/race2 && has_remote chore/race2 && [[ \$(git rev-parse chore/race2) != $race2_tip ]] && [[ \$(git log -1 --format=%s chore/race2) == late ]] && grep -q 'keep   chore/race2: it has a commit that was made after it was judged' <<<\"\$out\" && grep -q 'keep   origin/chore/race2: its local branch was kept' <<<\"\$out\""
+check "a branch a worktree is bisecting is kept, with its origin copy" "has_local chore/bisecting && has_remote chore/bisecting && grep -q 'keep   chore/bisecting: a worktree is rebasing or bisecting it' <<<\"\$out\" && [[ -d $work/wt/chore-bisecting ]]"
+check "a branch a worktree is rebasing is kept, with its origin copy" "has_local chore/rebasing && has_remote chore/rebasing && grep -q 'keep   chore/rebasing: a worktree is rebasing or bisecting it' <<<\"\$out\" && [[ -d $work/wt/chore-rebasing ]]"
 check "a worktree whose parent folder is empty is kept as maybe out of reach, with the prune hint, and its entry kept" "has_local chore/only-child && has_remote chore/only-child && [[ -d $repo/.git/worktrees/oc ]] && grep -q \"keep   chore/only-child: its worktree's folder can't be reached\" <<<\"\$out\" && grep -q 'git worktree prune' <<<\"\$out\""
 check "hand-deleted worktrees are forgotten the same in the real run, whichever side of the clean ones they sort" "! has_local chore/ord-b-stale && ! has_remote chore/ord-b-stale && ! has_local chore/ord-d-stale && ! has_remote chore/ord-d-stale && ! has_local chore/ord-a-clean && ! has_local chore/ord-c-clean"
 check "a hand-deleted worktree whose folder name ends in a space is forgotten, not kept as out of reach" "! has_local chore/trail-space && ! has_remote chore/trail-space"
@@ -357,7 +381,7 @@ check "an origin branch deleted by GitHub since the fetch counts as removed, not
 check "keeps an origin branch that moved after the fetch" "has_remote chore/lease-race && [[ \$(git rev-parse origin/chore/lease-race) != $lease_tip_before ]] && grep -q 'keep   origin/chore/lease-race: git could not delete it' <<<\"\$out\""
 
 # A later run, once what git refused is out of the way, finishes the job and exits 0
-chmod 755 "$work/wt-np" 2>/dev/null; git -C "$work/wt/chore-rebasing" rebase --abort >/dev/null 2>&1; git worktree prune; git worktree unlock "$work/wt/chore-locked"; command rm -f "$repo/.git/worktrees/chore-unreadable/index"; git -C "$work/wt/chore-unreadable" read-tree HEAD; git worktree unlock "$work/wt/chore-stale-locked"; command rm -f "$repo/.git/refs/heads/chore/delfail.lock"
+chmod 755 "$work/wt-np" 2>/dev/null; git -C "$work/wt/chore-rebasing" rebase --abort >/dev/null 2>&1; git -C "$work/wt/chore-bisecting" bisect reset >/dev/null 2>&1; git worktree prune; git worktree unlock "$work/wt/chore-locked"; command rm -f "$repo/.git/worktrees/chore-unreadable/index"; git -C "$work/wt/chore-unreadable" read-tree HEAD; git worktree unlock "$work/wt/chore-stale-locked"; command rm -f "$repo/.git/refs/heads/chore/delfail.lock"
 bash scripts/cleanup.sh --include-closed >/dev/null 2>&1; st=$?
 check "a later run with nothing refused exits 0" "[[ $st == 0 ]]"
 check "--include-closed removes a closed-unmerged branch" "! has_local feature/4-closed && ! has_remote feature/4-closed"
@@ -365,6 +389,8 @@ check "an unlocked worktree with a missing folder is forgotten by the later run,
 check "a worktree out of reach is removed once it is reachable again" "! has_local chore/noperm && ! has_remote chore/noperm"
 check "after git worktree prune, the branches kept for an empty or missing parent are removed" "! has_local chore/only-child && ! has_remote chore/only-child && ! has_local chore/parent-gone && ! has_remote chore/parent-gone && ! has_local chore/parent-file && ! has_remote chore/parent-file"
 check "a branch whose rebase was aborted is removed by the later run" "! has_local chore/rebasing && ! has_remote chore/rebasing"
+check "a branch whose bisect was reset is removed by the later run" "! has_local chore/bisecting && ! has_remote chore/bisecting"
+check "a branch that moved keeps its new commit for good: no PR has that tip, so the later run keeps it too" "has_local chore/race2 && has_remote chore/race2"
 check "the branches git had refused are removed by the later run" "! has_local chore/locked && ! has_remote chore/locked && ! has_local chore/delfail && ! has_remote chore/delfail && ! has_local chore/unreadable && ! has_remote chore/unreadable"
 
 check "--include-closed still keeps a branch merged elsewhere, and one an open PR is based on" "has_remote chore/rev-other-closed && has_local chore/stack-base && has_remote chore/stack-base && has_remote chore/stack-base-remote"

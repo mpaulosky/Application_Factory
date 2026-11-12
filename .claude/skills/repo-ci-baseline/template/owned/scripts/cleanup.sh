@@ -19,8 +19,9 @@
 # kept, with the hint to run git worktree prune if the folder was deleted for good. --dry-run prints what would happen and changes no branch, worktree or commit (it still
 # fetches and prunes the remote-tracking refs).
 # Exits 1 when it can't run (not main, not the primary checkout, dirty main, main can't fast-forward, origin can't be fetched, no gh, no repository,
-# a gh lookup failed, a bad argument, no scripts/check-branch-name.sh) and, after finishing the rest, when a removal git refused, a check of origin
+# a gh lookup failed, a bad argument, an origin push URL that names another repository than its fetch URL, no scripts/check-branch-name.sh) and, after finishing the rest, when a removal git refused, a check of origin
 # failed, the closing fetch failed or a commit was made after a branch was judged. A branch is judged by its PR, and at most 100 PRs are read per branch name: 100 or more keeps the branch.
+# A local branch is deleted by update-ref -d, which compares and deletes in one step: the tip is also rechecked before its worktree or the worktree's entry is removed, and a branch a worktree is rebasing or bisecting is kept.
 # A worktree on a detached HEAD belongs to no branch and is never touched.
 set -euo pipefail
 
@@ -61,6 +62,13 @@ lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 origin_repo="$(slug_of "$(git remote get-url origin 2>/dev/null || true)")"
 origin_repo="${origin_repo:-$repo}" # where the branches live: a stacked PR is a PR of this repository, whatever GH_REPO is
 origin_slug="$(lc "$origin_repo")"
+# git push origin goes to origin's push URLs, which can name another repository than the fetch URL the PRs are read for: refuse unless every one is the same repository.
+fetch_url="$(git remote get-url origin 2>/dev/null || true)"
+while IFS= read -r pu; do
+  [[ -z "$pu" || "$pu" == "$fetch_url" ]] && continue
+  pa="$(slug_of "$pu")"; pb="$(slug_of "$fetch_url")"
+  [[ -n "$pa" && -n "$pb" && "$(lc "$pa")" == "$(lc "$pb")" ]] || die "origin's push URL ($pu) is not the repository its PRs are read from ($fetch_url): make them the same, then run this again"
+done < <(git remote get-url --push --all origin 2>/dev/null || true)
 
 # resolve_path <dir> <path>: <path> made absolute against <dir>, with . and .. collapsed (text only: the folder may be gone, so no symlinks are followed).
 resolve_path() {
@@ -94,6 +102,21 @@ while IFS= read -r wpath; do
   d="$(dirname "$wpath")"
   if [[ -d "$d" && -x "$d" && -n "$(ls -A "$d" 2>/dev/null)" ]]; then hand_deleted+="$wpath"$'\n'; fi
 done < <(git worktree list --porcelain | awk '/^worktree /{print substr($0,10)}')
+
+# branch_busy <branch>: a worktree is rebasing or bisecting it (the worktree list shows such a worktree as detached, so git branch -D would refuse; update-ref -d would not).
+# A branch checked out in a worktree is that branch's own worktree, which is removed first.
+branch_busy() {
+  local b="$1" d f common
+  common="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"
+  for d in "$common" "$common"/worktrees/*/; do
+    [[ -d "$d" ]] || continue
+    for f in rebase-merge/head-name rebase-apply/head-name; do
+      [[ -f "$d/$f" && "$(<"$d/$f")" == "refs/heads/$b" ]] && return 0
+    done
+    [[ -f "$d/BISECT_START" && "$(<"$d/BISECT_START")" == "$b" ]] && return 0
+  done
+  return 1
+}
 
 run() { if [[ "$dry" == true ]]; then echo "   would: $*"; else "$@"; fi; }
 
@@ -166,6 +189,11 @@ while read -r ref; do
     if ! st="$(git -C "$wt" status --porcelain 2>/dev/null)"; then keep "$b" "its worktree can't be read ($wt)"; kept_local+="$b "; continue; fi
     if [[ -n "$st" ]]; then keep "$b" "its worktree has uncommitted changes"; kept_local+="$b "; continue; fi
   fi
+  if branch_busy "$b"; then keep "$b" "a worktree is rebasing or bisecting it"; kept_local+="$b "; [[ "$dry" == true ]] || failed=1; continue; fi
+  # The branch must still hold the tip that was judged before its worktree or the worktree's entry goes (the GitHub lookup took time).
+  if [[ "$dry" != true && "$(git rev-parse "$ref" 2>/dev/null || true)" != "$tip" ]]; then
+    keep "$b" "it has a commit that was made after it was judged"; kept_local+="$b "; failed=1; continue
+  fi
   if [[ -n "$stale" ]]; then
     if ! entry="$(stale_entry "$stale")"; then keep "$b" "its worktree's folder is missing and git's entry for it was not found ($stale): git worktree prune"; kept_local+="$b "; continue; fi
     if [[ -e "${entry}locked" ]]; then keep "$b" "its worktree is locked and its folder is missing: git worktree unlock '$stale', then run this again"; kept_local+="$b "; continue; fi
@@ -173,12 +201,16 @@ while read -r ref; do
   fi
   echo "remove $b${wt:+ (worktree $wt)}"
   if [[ -n "$wt" ]] && ! run git worktree remove "$wt"; then keep "$b" "git could not remove its worktree"; kept_local+="$b "; failed=1; continue; fi
-  # The branch goes only if it still holds the tip that was judged (a commit made since stays, as the origin branch's lease keeps one), and git branch -D itself
-  # refuses a branch a worktree has checked out or is rebasing or bisecting, which the worktree list shows as detached.
-  if [[ "$dry" != true && "$(git rev-parse "$ref" 2>/dev/null || true)" != "$tip" ]]; then
-    keep "$b" "it has a commit that was made after it was judged"; kept_local+="$b "; failed=1; continue
+  # The branch goes only if it still holds the tip that was judged: update-ref -d compares and deletes in one step (a commit made since stays, as the origin branch's lease keeps one).
+  # The branch's config section goes with it.
+  if [[ "$dry" == true ]]; then
+    echo "   would: git update-ref -d refs/heads/$b $tip"
+  elif ! git update-ref -d "refs/heads/$b" "$tip"; then
+    if [[ "$(git rev-parse "$ref" 2>/dev/null || true)" != "$tip" ]]; then keep "$b" "it has a commit that was made after it was judged"; else keep "$b" "git could not delete the branch"; fi
+    kept_local+="$b "; failed=1; continue
+  else
+    git config --remove-section "branch.$b" 2>/dev/null || true
   fi
-  if ! run git branch -q -D "$b"; then keep "$b" "git could not delete the branch"; kept_local+="$b "; failed=1; continue; fi
   removed=$((removed + 1))
 done < <(git for-each-ref --format='%(refname)' refs/heads)
 
