@@ -32,7 +32,7 @@ skill=".claude/skills/repo-ci-baseline"
 owned="$skill/template/owned"
 
 # The Factory carries these Owned files as copies, for its git hooks, review layer and issue and PR process. Edit the Template's file, then run scripts/gate.sh --sync to copy it over.
-# Keep this list in step with ADR 0006, ADR 0008, ADR 0009, ADR 0010 and CLAUDE.md.
+# Keep this list in step with ADR 0006, ADR 0008, ADR 0009, ADR 0010, ADR 0011 and CLAUDE.md.
 copies=(
   .github/hooks/pre-commit
   .github/hooks/pre-push
@@ -52,6 +52,7 @@ copies=(
   .github/workflows/lint-yaml.yml
   .github/workflows/lint-actions.yml
   scripts/review.sh
+  scripts/lint-edited-file.sh
   .sandcastle/lib/review-ledger.mts
   .sandcastle/lib/security-record.mts
   .sandcastle/lib/errors.mts

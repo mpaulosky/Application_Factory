@@ -68,6 +68,7 @@ const EXEMPT_ON_REAPPLY_AUDITED: readonly string[] = [
   ".sandcastle/.markdownlint-cli2.jsonc",
   "scripts/check-branch-name.sh",
   "scripts/check-git-hooks.sh",
+  "scripts/lint-edited-file.sh",
   "scripts/check-pr-title.sh",
   "scripts/sync-copilot-review.sh",
   "scripts/watch-pr.sh",
@@ -303,6 +304,7 @@ const EXEMPT_GLOBS_AUDITED: Readonly<Record<string, GlobEntry>> = {
   "scripts/tests/**": { files: [
       "scripts/tests/check-branch-name.test.sh",
       "scripts/tests/check-git-hooks.test.sh",
+      "scripts/tests/lint-edited-file.test.sh",
       "scripts/tests/check-pr-title.test.sh",
       "scripts/tests/cleanup.test.sh",
       "scripts/tests/sync-copilot-review.test.sh",

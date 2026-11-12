@@ -121,6 +121,7 @@ export const OWNED_PATHS = [
   "scripts/gate.sh",
   "scripts/check-branch-name.sh",
   "scripts/check-git-hooks.sh",
+  "scripts/lint-edited-file.sh",
   "scripts/check-pr-title.sh",
   "scripts/sync-copilot-review.sh",
   "scripts/review.sh",

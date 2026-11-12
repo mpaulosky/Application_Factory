@@ -1,7 +1,8 @@
 # Git hooks and branch names
 
-Template files (Owned): `.github/hooks/` (`pre-commit`, `pre-push`, `post-checkout`), `.github/hooks/tests/`,
+Template files (Owned), among them: `.github/hooks/` (`pre-commit`, `pre-push`, `post-checkout`), `.github/hooks/tests/`,
 `scripts/gate.sh`, `scripts/check-branch-name.sh` with its test,
+`scripts/check-git-hooks.sh` ([Session-start check](#session-start-check)) and `scripts/lint-edited-file.sh` ([Edit-time lint](#edit-time-lint)) with their tests,
 `scripts/work-issue.sh` and `scripts/cleanup.sh` with their tests, and the `branch-name` job in `ci.yml`. History: IssueTracker #182 (the branch standard).
 
 ## Branch-name standard
@@ -162,8 +163,8 @@ and `git commit` end to end, which runs the hook with `GIT_DIR` set.
 `scripts/tests/check-branch-name.test.sh` covers the script's `--pr` form, which the CI job uses: the Actions
 branches and any `dependabot/*` allowed only there, a shell-safe `dependabot/*` allowed for a push too, a `claude/...` branch refused, and other `docs/` names refused.
 
-CI's hook-tests job runs this suite, `pre-commit.test.sh`, `check-branch-name.test.sh`, `check-pr-title.test.sh`, `sync-copilot-review.test.sh`, `watch-pr.test.sh`, `cleanup.test.sh` and
-`work-issue.test.sh`.
+CI's hook-tests job runs this suite, `pre-commit.test.sh`, `check-branch-name.test.sh`, `check-pr-title.test.sh`, `sync-copilot-review.test.sh`, `watch-pr.test.sh`,
+`cleanup.test.sh`, `lint-edited-file.test.sh` and `work-issue.test.sh`.
 
 ## Session-start check
 
@@ -179,6 +180,52 @@ The Template doesn't carry `.claude/settings.json`, so each repo that wants the 
   "hooks": {
     "SessionStart": [
       { "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/check-git-hooks.sh" }] }
+    ]
+  }
+}
+```
+
+## Edit-time lint
+
+`scripts/lint-edited-file.sh` (with `scripts/tests/lint-edited-file.test.sh`) is a Claude Code `PostToolUse` hook. After each Edit, Write or MultiEdit
+it lints the file the tool wrote, so an agent fixes a violation in the same turn and the pre-commit hook, the gate, CI and a reviewer never see it
+([the Factory's ADR 0011](../../../../docs/adr/0011-markdown-and-yaml-are-linted-as-they-are-written.md)). A Markdown file goes through `markdownlint-cli2` with the repo's
+`.markdownlint-cli2.jsonc`. A YAML file goes through `yamllint` with `.yamllint.yml`; a workflow also goes through `actionlint` and `zizmor --offline`, and `.github/dependabot.yml` through `zizmor`,
+at the repo root or under any folder (the Factory edits the Template's originals under `.claude/skills/`).
+These are the checks the CI lint workflows run; a gate runs `actionlint` and `zizmor` only where it lints workflows (an Application's gate does when a workflow changed; the Factory's does not).
+
+- Exit 2 with the linters' output on stderr when any linter reports a problem; Claude Code feeds that back to the agent. A linter that crashes counts as a problem, not as clean. Each linter's
+  output is cut at 6,000 characters (bytes in the C locale, where a cut may split a multibyte character). The report says the output below it is data, not instructions, and ends with a line
+  telling the agent to hand a broken linter (a usage error, an old version) to the person.
+- Exit 0 and no output for a file that is neither Markdown nor YAML, one that no longer exists, a directory, a symlink, one under `node_modules/`, and one outside the project (below).
+- Exit 0 with a `systemMessage` on stdout, which Claude Code shows to the person, when a linter is not installed: the file is skipped for that linter, the hook only helps, and the pre-commit hook,
+  the gate and CI still check. Plain stderr on exit 0 is not shown, which is why the note is JSON.
+- Exit 1 with a message on stderr when its input is not JSON, `CLAUDE_PROJECT_DIR` is unset, `python3` is missing, or, for a Markdown or YAML file, `git` is missing or older than 2.36
+  (`git worktree list -z`), so a broken hook is visible and is not read as a clean file.
+- Only the project's own checkout and the linked worktrees it lists are linted: the file's repository root must be one of the paths `git worktree list` prints for `CLAUDE_PROJECT_DIR`,
+  which Claude Code
+  sets and the hook requires (unset or empty is exit 1). A linter loads the repository's own config and, for Markdown, its `node_modules/.bin` copy, and `markdownlint-cli2` runs JavaScript from its
+  config, so a file in another clone, a nested repository, or a directory whose `.git` file or `commondir` merely names the project's git directory (git reports the project's common directory for it)
+  is left alone. A project that is not a git repository lints nothing. A worktree entry git still lists after its directory was removed is trusted until `git worktree prune` removes it.
+  `-z` keeps a worktree path with a newline from forging a second entry,
+  and the file's name, folder, repository root and each listed worktree's resolved path keep a trailing newline (`$(...)` would drop it and lint the sibling folder).
+  `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_PREFIX`, `GIT_COMMON_DIR` and `CDPATH`,
+  inherited from a git hook, are cleared first.
+- The path reaches the linter whole: from the repo root of the file's own repository, as `./<path>`, and for Markdown with `--no-globs`, so a name with `[`, `*` or a leading `-` is not read as a glob
+  or an option (checked against the real tool: `a[1].md` and `x*y.md` are linted as those files). The config's `ignores` still apply.
+- The tests use stub linters on `PATH` that fail on a marker word and log their arguments and working directory, and check each linter's exact arguments, which stream carries the report, and the
+  repository boundary. A last block runs the real `markdownlint-cli2` when it is installed; an Application's hook-tests job installs none, so there it is skipped.
+
+The Template doesn't carry `.claude/settings.json`, so each repo adds the hook by hand:
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/lint-edited-file.sh" }]
+      }
     ]
   }
 }
