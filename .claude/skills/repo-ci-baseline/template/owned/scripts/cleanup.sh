@@ -12,7 +12,7 @@
 #     alone is kept when it has moved or its tip is not the PR's last head. The origin branch is deleted only if it still holds the tip that was judged; one already gone by then (GitHub's auto-delete) counts as removed.
 #   - removed with --include-closed only: the PR closed unmerged and the tip is its last head.
 #   - kept, with the reason: a name outside the branch standard, an open PR, no PR or a tip no PR had, 100 or more PRs of that branch name, a PR merged into a branch
-#     other than main, a dirty or unreadable worktree, a worktree whose folder can't be reached, a commit made after it was judged, a step git refused (a branch a worktree
+#     other than main, a branch an open PR is based on, a dirty or unreadable worktree, a worktree whose folder can't be reached, a commit made after it was judged, a step git refused (a branch a worktree
 #     is rebasing or bisecting included), or a closed PR without --include-closed.
 # A worktree whose folder was deleted by hand has git's entry for it forgotten (only that one, and only if it is a real directory in .git/worktrees; a locked one is kept), when its
 # parent folder is still there, searchable and not empty. A parent that is missing, empty, unreadable or unsearchable may be an unmounted drive (its mount point is left empty), so the branch is
@@ -123,16 +123,21 @@ verdict() {
 
 # decide <branch> <tip-sha> -> removable | the reason it is kept
 decide() {
-  local v
+  local v r n
   v="$(verdict "$1" "$2")" || exit 1
   case "$v" in
-    merged) echo removable ;;
-    merged-other:*) echo "its PR merged into ${v#merged-other:}, not main" ;;
-    closed) if [[ "$closed" == true ]]; then echo removable; else echo "its PR closed unmerged (use --include-closed)"; fi ;;
-    open) echo "its PR is open" ;;
-    capped) echo "100 or more PRs share this branch name, so its own can't be told apart" ;;
-    *) echo "no PR from origin's repository has this tip, or no PR" ;;
+    merged) r=removable ;;
+    merged-other:*) r="its PR merged into ${v#merged-other:}, not main" ;;
+    closed) if [[ "$closed" == true ]]; then r=removable; else r="its PR closed unmerged (use --include-closed)"; fi ;;
+    open) r="its PR is open" ;;
+    capped) r="100 or more PRs share this branch name, so its own can't be told apart" ;;
+    *) r="no PR from origin's repository has this tip, or no PR" ;;
   esac
+  if [[ "$r" == removable ]]; then # deleting a branch an open PR is based on (a stacked PR) would close that PR
+    n="$(gh pr list --state open --limit 100 --base "$1" --json number --jq length)" || { echo "❌ gh pr list failed for $1" >&2; exit 1; }
+    [[ "$n" == 0 ]] || r="an open PR is based on it"
+  fi
+  echo "$r"
 }
 
 removed=0; kept=0; failed=0; kept_local=" "

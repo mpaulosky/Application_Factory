@@ -11,10 +11,11 @@
 set -uo pipefail
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
 SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-work="$(mktemp -d)"
+work="$(cd "$(mktemp -d)" && pwd -P)" # the real path: git reports real paths, and /tmp or /var may be a symlink
 trap 'chmod -R u+rwx "$work/np" 2>/dev/null; command rm -rf "$work"' EXIT
 mkdir "$work/no-template"
 export GIT_TEMPLATE_DIR="$work/no-template" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+export HOME="$work" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 # a developer's own git config (signing, hooks, insteadOf) must not reach the throwaway repos
 PASSED=0; FAILED=0
 check() { if eval "$2"; then PASSED=$((PASSED + 1)); echo "ok   - $1"; else FAILED=$((FAILED + 1)); echo "FAIL - $1"; fi; }
 
@@ -57,6 +58,8 @@ issue 70 "$(printf 'a%.0s' $(seq 1 51))"
 issue 71 "Locked and gone"
 issue 73 "Original name"
 issue 74 "Relative path"
+issue 76 "Real title"
+issue 77 "Extra arguments"
 issue 99 ""
 issue 123456789 "Nine digits"
 
@@ -134,7 +137,8 @@ check "an issue renamed since its branch was made keeps the branch and its workt
 git worktree add -q -b feature/74-relative-path "$work/relative-path" origin/main
 printf '%s\n' "../../../../relative-path/.git" > "$work/Repo/.git/worktrees/relative-path/gitdir"
 command rm -rf "$work/relative-path"
-if git worktree list --porcelain | grep -qx "worktree $work/relative-path"; then
+wlist="$(git worktree list --porcelain)" # no pipe: grep -q may close it early and give git SIGPIPE
+if grep -qx "worktree $work/relative-path" <<<"$wlist"; then
   check "a missing worktree stored with a relative path is found, forgotten and made again" "[[ \$(bash scripts/work-issue.sh 74 2>/dev/null) == '$wt/feature-74-relative-path' && -d '$wt/feature-74-relative-path' ]]"
 elif [[ -n "${CI:-}" ]]; then check "this git can't read a worktree stored with a relative path, and CI must test it" "false"
 else echo "skip - this git can't read a relative worktree path"; fi
@@ -143,6 +147,13 @@ else echo "skip - this git can't read a relative worktree path"; fi
 other_push feature/65-started-on-another-machine r origin/main 2>/dev/null
 p65=$(bash scripts/work-issue.sh 65 2>/dev/null)
 check "a branch on origin is built from origin/<branch>" "[[ -f '$p65/r' && \$(git -C '$p65' rev-parse HEAD) == \$(git rev-parse origin/feature/65-started-on-another-machine) ]]"
+check "a branch made from origin/main has no upstream (it would track main, and a plain git push would then refuse)" "[[ -z \"\$(git config --get branch.feature/54-start-work-in-a-worktree-review.merge)\" && -z \"\$(git config --get branch.feature/54-start-work-in-a-worktree-review.remote)\" ]]"
+check "a branch made from origin/<branch> tracks that branch" "[[ \"\$(git config --get branch.feature/65-started-on-another-machine.merge)\" == refs/heads/feature/65-started-on-another-machine ]]"
+
+# A branch for this number outside the branch standard (or under another prefix) is not the issue's branch: it is skipped, local or on origin
+git branch feature/76-WIP origin/main; git branch squad/76-legacy origin/main; git branch dependabot/76-bump origin/main; other_push fix/76-a/b n76 origin/main 2>/dev/null
+o=$(bash scripts/work-issue.sh 76 2>/dev/null); st=$?
+check "branches for the number that break the standard or use another prefix are skipped" "[[ $st == 0 && '$o' == '$wt/feature-76-real-title' && \$(git -C '$o' branch --show-current) == feature/76-real-title ]]"
 
 # A directory in the way is an error and is left alone
 mkdir -p "$wt/feature-66-plain-directory-in-the-way"; touch "$wt/feature-66-plain-directory-in-the-way/keep"
@@ -250,6 +261,12 @@ o=$(bash scripts/work-issue.sh 99 2>&1 >/dev/null); st=$?
 check "refuses an issue with no title" "[[ $st != 0 ]] && grep -q 'has no title' <<<\"\$o\""
 o=$(bash scripts/work-issue.sh abc 2>&1 >/dev/null); st=$?
 check "refuses a non-number" "[[ $st != 0 ]] && grep -q '^usage:' <<<\"\$o\""
+o=$(bash scripts/work-issue.sh 77 78 2>&1 >/dev/null); st=$?
+check "refuses a second argument, and makes nothing" "[[ $st != 0 ]] && grep -q '^usage:' <<<\"\$o\" && [[ ! -e '$wt/feature-77-extra-arguments' ]]"
+o=$(bash scripts/work-issue.sh 77 --dry-run 2>&1 >/dev/null); st=$?
+check "refuses a flag, and makes nothing" "[[ $st != 0 ]] && grep -q '^usage:' <<<\"\$o\" && [[ ! -e '$wt/feature-77-extra-arguments' ]]"
+o=$(bash scripts/work-issue.sh 2>&1 >/dev/null); st=$?
+check "refuses no argument" "[[ $st != 0 ]] && grep -q '^usage:' <<<\"\$o\""
 o=$(bash scripts/work-issue.sh 1234567890 2>&1 >/dev/null); st=$?
 check "refuses a number over 9 digits" "[[ $st != 0 ]] && grep -q '^usage:' <<<\"\$o\""
 o=$(GITHUB_REPOSITORY=nope bash scripts/work-issue.sh 54 2>&1 >/dev/null); st=$?

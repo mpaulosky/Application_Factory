@@ -2,6 +2,8 @@
 # Tests for scripts/cleanup.sh, run in a throwaway clone with a bare origin and a fake `gh`.
 # Usage: scripts/tests/cleanup.test.sh
 #
+# The fake gh also answers `gh pr list --state open --base <branch> ...` with the number in $GH_FIX/_base_<branch with / as _> (0 when there is no file); a file $GH_FIX/_failbase
+# makes only that call fail.
 # The fake gh answers `gh pr list --head <branch> ...` from the file $GH_FIX/<branch with / as _>: one JSON object per PR (state, headRefOid, baseRefName,
 # headRepository), and runs the --jq text cleanup.sh passes it through the real jq, as gh does. It fails unless it is given --state all, --limit 100, a
 # --head, exactly the four --json fields cleanup.sh needs, and GH_REPO. A file $GH_FIX/_fail makes it exit 1. A file $GH_FIX/<branch with / as _>.hook is
@@ -14,10 +16,11 @@ set -uo pipefail
 
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
 SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-work="$(mktemp -d)"
+work="$(cd "$(mktemp -d)" && pwd -P)" # the real path: git reports real paths, and /tmp or /var may be a symlink
 trap 'chmod -R u+rwx "$work/wt-np" 2>/dev/null; command rm -rf "$work"' EXIT
 mkdir "$work/no-template"
 export GIT_TEMPLATE_DIR="$work/no-template" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+export HOME="$work" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 # a developer's own git config (signing, hooks, insteadOf) must not reach the throwaway repos
 
 if ! command -v jq >/dev/null 2>&1; then # gh-repo: ok
   echo "jq is not installed, and the fake gh runs cleanup.sh's jq with it" # gh-repo: ok
@@ -35,6 +38,12 @@ mkdir "$work/bin"
 cat > "$work/bin/gh" <<'GH' # gh-repo: ok
 #!/usr/bin/env bash
 args="$*"
+[[ "${GH_REPO:-}" == "${EXPECT_GH_REPO:-o/r}" ]] || { echo "fake gh: bad GH_REPO: ${GH_REPO:-}" >&2; exit 2; } # gh-repo: ok
+if [[ $# == 12 && "$1 $2 $3 $4 $5 $6 $7" == "pr list --state open --limit 100 --base" && -n "$8" && "$9 ${10} ${11} ${12}" == "--json number --jq length" ]]; then
+  [[ ! -f "$GH_FIX/_fail" && ! -f "$GH_FIX/_failbase" ]] || { echo "fake gh: network down" >&2; exit 1; } # gh-repo: ok
+  if [[ -f "$GH_FIX/_base_${8//\//_}" ]]; then cat "$GH_FIX/_base_${8//\//_}"; else echo 0; fi # the count of open PRs based on that branch
+  exit 0
+fi
 [[ $# == 12 && "$1 $2 $3 $4 $5 $6 $7" == "pr list --state all --limit 100 --head" && -n "$8" && "$9 ${10} ${11}" == "--json state,headRefOid,baseRefName,headRepository --jq" \
   && "${GH_REPO:-}" == "${EXPECT_GH_REPO:-o/r}" ]] || { echo "fake gh: bad call: $args (GH_REPO=${GH_REPO:-})" >&2; exit 2; } # gh-repo: ok
 [[ ! -f "$GH_FIX/_fail" ]] || { echo "fake gh: network down" >&2; exit 1; } # gh-repo: ok
@@ -113,7 +122,7 @@ tip=$(branch chore/net-fail yes) || exit 1;         pr chore/net-fail MERGED "$t
 tip=$(branch chore/relative-path yes) || exit 1; pr chore/relative-path MERGED "$tip"
 printf '%s\n' "../../../../wt/chore-relative-path/.git" > "$repo/.git/worktrees/chore-relative-path/gitdir"
 command rm -rf "$work/wt/chore-relative-path"
-rel_ok=false; git worktree list --porcelain | grep -qx "worktree $work/wt/chore-relative-path" && rel_ok=true
+rel_ok=false; wlist="$(git worktree list --porcelain)"; grep -qx "worktree $work/wt/chore-relative-path" <<<"$wlist" && rel_ok=true # no pipe: grep -q may close it early
 git worktree add -q --detach "$work/wt/detached" main
 tip=$(branch chore/lease-race yes) || exit 1;       pr chore/lease-race MERGED "$tip"; remote_only chore/lease-race
 git push -q origin main:refs/heads/Bad_Name
@@ -162,6 +171,13 @@ tip=$(branch chore/v-open-old yes) || exit 1;       pr chore/v-open-old OPEN "$m
 # gh is asked for 100 PRs at most: 99 rows are all of them, 100 may have cut the branch's own PR off
 tip=$(branch chore/cap99 yes) || exit 1;            pr chore/cap99 MERGED "$tip"; for _ in $(seq 98); do pr chore/cap99 CLOSED "$main_init" main x/y; done; remote_only chore/cap99
 tip=$(branch chore/cap100 yes) || exit 1;           pr chore/cap100 MERGED "$tip"; for _ in $(seq 99); do pr chore/cap100 CLOSED "$main_init" main x/y; done; remote_only chore/cap100
+# The verdict with its rows the other way round (gh lists the newest PR first): the answer must not depend on the order
+tip=$(branch chore/rev-merged-closed yes) || exit 1; pr chore/rev-merged-closed MERGED "$tip"; pr chore/rev-merged-closed CLOSED "$tip"; remote_only chore/rev-merged-closed
+tip=$(branch chore/rev-main-other yes) || exit 1;    pr chore/rev-main-other MERGED "$tip"; pr chore/rev-main-other MERGED "$tip" develop; remote_only chore/rev-main-other
+tip=$(branch chore/rev-other-closed yes) || exit 1;  pr chore/rev-other-closed MERGED "$tip" develop; pr chore/rev-other-closed CLOSED "$tip"; remote_only chore/rev-other-closed
+# A merged branch an open PR is based on (a stacked PR) is kept, local and origin copies alike
+tip=$(branch chore/stack-base yes) || exit 1;        pr chore/stack-base MERGED "$tip"; echo 1 > "$GH_FIX/_base_chore_stack-base"
+tip=$(branch chore/stack-base-remote yes) || exit 1; pr chore/stack-base-remote MERGED "$tip"; echo 2 > "$GH_FIX/_base_chore_stack-base-remote"; remote_only chore/stack-base-remote
 
 mkdir "$work/shim"
 cat > "$work/shim/git" <<SHIM
@@ -189,12 +205,19 @@ rm -f "$GH_FIX/_fail"
 git reset -q --hard "$main_before"
 check "a gh failure fails the run" "[[ $st != 0 ]] && grep -q 'gh pr list failed' <<<\"\$out\"" # gh-repo: ok
 check "the first fetch prunes a branch deleted on origin" "! git show-ref --verify --quiet refs/remotes/origin/chore/preprune"
+touch "$GH_FIX/_failbase"
+out2=$(bash scripts/cleanup.sh 2>&1); st2=$?
+rm -f "$GH_FIX/_failbase"
+git reset -q --hard "$main_before"
+check "a failing lookup of the PRs based on a branch fails the run and removes nothing" "[[ $st2 == 1 ]] && grep -q 'gh pr list failed for' <<<\"\$out2\" && has_local feature/1-merged && [[ -d $work/wt/feature-1-merged ]] && has_remote chore/remote-only" # gh-repo: ok
 check "a gh failure removes nothing" "has_local feature/1-merged && [[ -d $work/wt/feature-1-merged ]] && has_remote chore/remote-only" # gh-repo: ok
 
 # --dry-run
 out=$(bash scripts/cleanup.sh --dry-run 2>&1); st=$?
 check "dry run succeeds" "[[ $st == 0 ]]"
 check "the dry run's summary says so" "grep -q '^Done: [0-9]* removed, [0-9]* kept (dry run)\\.\$' <<<\"\$out\""
+o2=$(bash scripts/cleanup.sh --dry-run --include-closed 2>&1)
+check "a dry run with --include-closed says it would remove a closed-unmerged branch, and without it keeps it" "grep -q '^remove feature/4-closed ' <<<\"\$o2\" && grep -q 'keep   feature/4-closed: its PR closed unmerged' <<<\"\$out\""
 check "dry run changes nothing" "has_local feature/1-merged && [[ -d $work/wt/feature-1-merged ]] && has_remote chore/remote-only && has_remote feature/1-merged && [[ \$(git rev-parse main) == $main_before ]]"
 check "dry run lists every step" "grep -q 'would: git worktree remove .*feature-1-merged' <<<\"\$out\" && grep -q 'would: git branch -q -D feature/1-merged' <<<\"\$out\" && grep -q 'would: git push .*feature/1-merged' <<<\"\$out\" && grep -q 'would: git merge --ff-only origin/main' <<<\"\$out\""
 
@@ -271,7 +294,7 @@ check "exits 1 when git refused a removal, after doing the rest" "[[ $st == 1 ]]
 local_after=$(git for-each-ref refs/heads | wc -l | tr -d ' '); origin_after=$(git ls-remote --heads origin | wc -l | tr -d ' ')
 removed_n=$(( local_before - local_after + origin_before - origin_after )); kept_n=$(grep -c '^keep ' <<<"$out")
 check "the summary counts what was removed and what was kept" "grep -qx 'Done: $removed_n removed, $kept_n kept.' <<<\"\$out\" && [[ $removed_n -gt 5 && $kept_n -gt 5 ]]"
-check "the closing fetch prunes the tracking ref of a branch deleted on origin during the run (a push's own delete does not)" "! git show-ref --verify --quiet refs/remotes/origin/chore/gone-race && ! git show-ref --verify --quiet refs/remotes/origin/feature/1-merged"
+check "the closing fetch prunes the tracking ref of a branch deleted on origin during the run" "! git show-ref --verify --quiet refs/remotes/origin/chore/gone-race"
 check "a worktree folder deleted by hand is forgotten and its branch removed in the same run" "! has_local chore/stale && ! has_remote chore/stale && [[ ! -d $repo/.git/worktrees/chore-stale ]]"
 check "only that worktree's entry is forgotten: a locked one with a missing folder is kept, with a hint" "has_local chore/stale-locked && has_remote chore/stale-locked && [[ -d $repo/.git/worktrees/chore-stale-locked ]] && grep -q 'keep   chore/stale-locked: its worktree is locked and its folder is missing' <<<\"\$out\""
 if [[ "$rel_ok" == true ]]; then check "a worktree stored with a relative path, its folder deleted, is forgotten and its branch removed" "! has_local chore/relative-path && ! has_remote chore/relative-path && [[ ! -d $repo/.git/worktrees/chore-relative-path ]]"; fi
@@ -289,7 +312,7 @@ check "removes a merged branch that is only on origin" "! has_remote chore/remot
 check "keeps a merged branch whose worktree is dirty, and its origin branch" "has_local fix/2-dirty && [[ -d $work/wt/fix-2-dirty ]] && has_remote fix/2-dirty"
 check "keeps a branch with an open PR" "has_local chore/open-one && has_remote chore/open-one"
 check "keeps a branch with a commit the PR never had, and its origin branch" "has_local fix/3-unpushed && has_remote fix/3-unpushed"
-check "keeps a closed-unmerged branch by default" "has_local feature/4-closed && has_remote feature/4-closed"
+check "keeps a closed-unmerged branch by default, and says how to remove it" "has_local feature/4-closed && has_remote feature/4-closed && grep -q 'keep   feature/4-closed: its PR closed unmerged (use --include-closed)' <<<\"\$out\" && grep -q 'keep   origin/feature/4-closed: its local branch was kept' <<<\"\$out\""
 check "keeps a branch with no PR" "has_local chore/nopr"
 check "a non-standard name is kept, local and origin, whatever its PR says" "has_local Bad_Local && has_remote Bad_Name && grep -q 'keep   Bad_Local: not a standard branch name' <<<\"\$out\" && grep -q 'keep   origin/Bad_Name: not a standard branch name' <<<\"\$out\""
 check "a worktree with only an untracked file is dirty" "has_local fix/10-untracked && has_remote fix/10-untracked && grep -q 'keep   fix/10-untracked: its worktree has uncommitted changes' <<<\"\$out\""
@@ -307,10 +330,15 @@ check "a worktree whose parent folder is gone is kept the same way" "has_local c
 check "a PR merged into another base, then one into main, at the same tip: merged" "! has_remote chore/v-other-main"
 check "a closed PR, then one merged into another base: kept, as merged elsewhere" "has_remote chore/v-closed-other && grep -q 'keep   origin/chore/v-closed-other: its PR merged into develop, not main' <<<\"\$out\""
 check "a closed PR at an older tip is not this branch's PR" "has_remote chore/v-closed-old"
+check "MERGED then CLOSED at one tip (newest first): merged, removed without --include-closed" "! has_remote chore/rev-merged-closed"
+check "MERGED into main then MERGED into develop at one tip: merged, removed" "! has_remote chore/rev-main-other"
+check "MERGED into develop then CLOSED at one tip: kept as merged elsewhere" "has_remote chore/rev-other-closed && grep -q 'keep   origin/chore/rev-other-closed: its PR merged into develop, not main' <<<\"\$out\""
+check "a branch an open PR is based on is kept, and so is its origin copy" "has_local chore/stack-base && has_remote chore/stack-base && grep -q 'keep   chore/stack-base: an open PR is based on it' <<<\"\$out\" && grep -q 'keep   origin/chore/stack-base: its local branch was kept' <<<\"\$out\""
+check "an origin-only branch an open PR is based on is kept" "has_remote chore/stack-base-remote && grep -q 'keep   origin/chore/stack-base-remote: an open PR is based on it' <<<\"\$out\""
 check "an open PR keeps the branch whatever tip it has" "has_remote chore/v-open-old && grep -q 'keep   origin/chore/v-open-old: its PR is open' <<<\"\$out\""
 check "99 PRs of that branch name are all of them: the merged one counts" "! has_remote chore/cap99"
 check "100 PRs of that branch name may hide its own: kept" "has_remote chore/cap100 && grep -q 'keep   origin/chore/cap100: 100 or more PRs' <<<\"\$out\""
-check "does not mistake origin/HEAD for a branch" "! grep -q 'origin/origin' <<<\"\$out\""
+check "does not mistake origin/HEAD or main for a branch to judge" "[[ -f $repo/.git/refs/remotes/origin/HEAD ]] && ! grep -q 'origin/HEAD' <<<\"\$out\" && ! grep -q 'origin/main' <<<\"\$out\" && ! grep -q 'keep   main' <<<\"\$out\""
 check "says why it kept one" "grep -q 'keep   fix/2-dirty: its worktree has uncommitted changes' <<<\"\$out\" && grep -q 'keep   origin/fix/2-dirty: its local branch was kept' <<<\"\$out\""
 check "ignores a PR from a fork with the same branch name" "has_remote chore/forked && grep -q 'keep   origin/chore/forked: no PR from origin' <<<\"\$out\""
 check "keeps a branch whose PR merged into another branch" "has_remote chore/stacked && grep -q 'merged into feature/9-base, not main' <<<\"\$out\""
@@ -330,6 +358,40 @@ check "a worktree out of reach is removed once it is reachable again" "! has_loc
 check "after git worktree prune, the branches kept for an empty or missing parent are removed" "! has_local chore/only-child && ! has_remote chore/only-child && ! has_local chore/parent-gone && ! has_remote chore/parent-gone && ! has_local chore/parent-file && ! has_remote chore/parent-file"
 check "a branch whose rebase was aborted is removed by the later run" "! has_local chore/rebasing && ! has_remote chore/rebasing"
 check "the branches git had refused are removed by the later run" "! has_local chore/locked && ! has_remote chore/locked && ! has_local chore/delfail && ! has_remote chore/delfail && ! has_local chore/unreadable && ! has_remote chore/unreadable"
+
+check "--include-closed still keeps a branch merged elsewhere, and one an open PR is based on" "has_remote chore/rev-other-closed && has_local chore/stack-base && has_remote chore/stack-base && has_remote chore/stack-base-remote"
+
+# Each documented cause of exit 1, alone: the run exits 1, and still removes a clean merged branch beside it
+scrub() { # scrub <branch>: undo whatever a scenario left, so the next one starts clean
+  local d="$work/wt/${1//\//-}"
+  git worktree unlock "$d" 2>/dev/null; git worktree remove -f -f "$d" 2>/dev/null; command rm -f "$repo/.git/refs/heads/$1.lock"
+  git branch -q -D "$1" 2>/dev/null; git -C "$work/other" push -q origin --delete "$1" 2>/dev/null; git fetch -q --prune origin
+}
+alone() { # alone <branch> <label>: run once with only that cause, with a clean sibling beside it
+  tip=$(branch chore/x-ok yes) || exit 1; pr chore/x-ok MERGED "$tip"; remote_only chore/x-ok
+  o=$(PATH="$work/shim:$PATH" SHIM_LSREMOTE_FAIL="${3:-}" bash scripts/cleanup.sh 2>&1); st=$?
+  check "$2: exit 1 on its own, and the clean branch beside it is still removed" "[[ $st == 1 ]] && ! has_remote chore/x-ok"
+}
+tip=$(branch chore/x-locked yes) || exit 1; pr chore/x-locked MERGED "$tip"; git worktree lock "$work/wt/chore-x-locked"
+alone chore/x-locked "a worktree git won't remove"; scrub chore/x-locked
+tip=$(branch chore/x-lock yes) || exit 1; pr chore/x-lock MERGED "$tip"; git worktree remove "$work/wt/chore-x-lock"; touch "$repo/.git/refs/heads/chore/x-lock.lock"
+alone chore/x-lock "a branch git won't delete"; scrub chore/x-lock
+tip=$(branch chore/x-late yes) || exit 1; pr chore/x-late MERGED "$tip"; echo "git -C \"$work/wt/chore-x-late\" commit -q --allow-empty -m late" > "$GH_FIX/chore_x-late.hook"
+alone chore/x-late "a commit made after the branch was judged"; scrub chore/x-late
+tip=$(branch chore/x-moved yes) || exit 1; pr chore/x-moved MERGED "$tip"; remote_only chore/x-moved
+cat > "$GH_FIX/chore_x-moved.hook" <<HOOK
+git -C "$work/other" fetch -q origin && git -C "$work/other" checkout -q -B tmp origin/chore/x-moved && echo m > "$work/other/m" \
+  && git -C "$work/other" add m && git -C "$work/other" commit -q -m m && git -C "$work/other" push -q origin tmp:refs/heads/chore/x-moved
+HOOK
+alone chore/x-moved "an origin branch that moved after the fetch"; scrub chore/x-moved
+tip=$(branch chore/x-ls yes) || exit 1; pr chore/x-ls MERGED "$tip"; remote_only chore/x-ls
+cat > "$GH_FIX/chore_x-ls.hook" <<HOOK
+git -C "$work/other" fetch -q origin && git -C "$work/other" checkout -q -B tmp origin/chore/x-ls && echo l > "$work/other/l" \
+  && git -C "$work/other" add l && git -C "$work/other" commit -q -m l && git -C "$work/other" push -q origin tmp:refs/heads/chore/x-ls
+HOOK
+alone chore/x-ls "an origin check that failed" chore/x-ls; scrub chore/x-ls
+o=$(bash scripts/cleanup.sh 2>&1); st=$?
+check "once those are scrubbed, the run exits 0 again" "[[ $st == 0 ]]"
 
 # The fetch of origin failing: the opening one stops the run, the closing one fails it after the rest was done
 tip=$(branch chore/closing yes) || exit 1; pr chore/closing MERGED "$tip"
