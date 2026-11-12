@@ -3,7 +3,7 @@
 # status on; a changed, missing or execute-bit-mismatched copy stops the gate before the stub runs; the local review check (ADR 0010)
 # skips only on GATE_SKIP_REVIEW=1, fails without an origin/main or when origin/main shares no history with HEAD, and passes review.sh check's status on, ahead of test.sh. It also checks
 # that gate.sh names each copied stand-alone test and lists every copy, that repo-config.mts lists the Factory's own files under Owned patterns,
-# that --quick stops after the lint and --sync restores drifted, missing and non-executable copies and then stops, that a bare #N in an Owned file fails the gate
+# that test.sh's pass is remembered per clean tree (skipped the second time, shared by worktrees, cleared before every run, never stored for a tree that changed), that --quick stops after the lint and --sync restores drifted, missing and non-executable copies and then stops, that a bare #N in an Owned file fails the gate
 # and --quick (and a missing python3 or a broken checker fails closed), that dependabot.yml watches the root package.json, and the review tests' install step (a missing pnpm, a pnpm that leaves no tsx, a pnpm that installs it).
 #
 #   scripts/tests/gate.test.sh
@@ -12,7 +12,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH # a caller's GATE_NO_CACHE=1 must not reach the stub gate runs; the tests set it themselves where they need it
 
 pass=0; failed=0
 check() { # check <description> <condition: 0 for ok>
@@ -42,6 +42,7 @@ new_repo() {
   cat > "$repo/$skill/test.sh" <<'STUB'
 #!/usr/bin/env bash
 touch "$(dirname "${BASH_SOURCE[0]}")/ran"
+[[ -z "${STUB_TOUCH:-}" ]] || : > "$STUB_TOUCH"
 exit "${STUB_EXIT:-0}"
 STUB
   chmod +x "$repo/$skill/test.sh"
@@ -382,7 +383,7 @@ for f in "${copies[@]}"; do
   check "gate.sh runs $f" "$(grep -F 'tsx --test' "$here/scripts/gate.sh" | grep -Fq " $f" && echo 0 || echo 1)"
 done
 
-# A forced run (GATE_NO_CACHE=1) that fails clears the remembered pass, so the next ordinary run tests again.
+# Every run that runs test.sh clears the remembered pass first, so a failure (a forced run's, say) leaves nothing for the next ordinary run.
 repo16="$(new_repo cache-forced-failure)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo16/.git/info/exclude"; commit_all "$repo16" base
 run "$repo16"
 GATE_NO_CACHE=1 STUB_EXIT=3 run "$repo16"
@@ -395,6 +396,24 @@ GATE_NO_CACHE=1 run "$repo16"
 check "a forced run that passes keeps the pass remembered" "$([[ $ran == yes ]] && echo 0 || echo 1)"
 run "$repo16"
 check "so the ordinary run after it is skipped" "$([[ $ran == no ]] && echo 0 || echo 1)"
+
+# A pass is never stored for a tree that test.sh left changed, and a pass that can't be cleared fails the gate instead of being trusted later.
+repo17="$(new_repo cache-changed)"; printf 'out\nreview-args\n%s/ran\nmoved\n' "$skill" > "$repo17/.git/info/exclude"; commit_all "$repo17" base
+STUB_TOUCH="$repo17/moved.txt" run "$repo17"
+check "a test.sh that leaves the tree changed passes the gate, saying its pass is not remembered" "$([[ $status == 0 && $ran == yes ]] && grep -q 'the tree changed while test.sh ran' "$repo17/out" && echo 0 || echo 1)"
+command rm -f "$repo17/moved.txt"; run "$repo17"
+check "so the next run on the clean tree tests again" "$([[ $ran == yes ]] && echo 0 || echo 1)"
+repo18="$(new_repo cache-unclearable)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo18/.git/info/exclude"; commit_all "$repo18" base
+run "$repo18"
+if [[ "$(id -u)" != 0 ]]; then
+  chmod 555 "$repo18/.git/gate-cache"
+  GATE_NO_CACHE=1 run "$repo18"
+  check "a remembered pass that can't be cleared fails the gate before test.sh, saying so" "$([[ $status == 1 && $ran == no ]] && grep -q 'could not clear the remembered test.sh pass' "$repo18/out" && echo 0 || echo 1)"
+  chmod 755 "$repo18/.git/gate-cache"
+else
+  echo "skip - the unclearable-pass case needs a user other than root"
+fi
+check "a GATE_NO_CACHE or STUB_TOUCH from the caller does not reach the stub gate runs (the gate runs this test with the caller's environment)" "$([[ -z ${GATE_NO_CACHE+x} && -z ${STUB_TOUCH+x} ]] && echo 0 || echo 1)"
 
 # A git that fails is not read as "nothing to check" or "a clean tree". wrapper_for <name> <git subcommand>: a folder with a git that fails on that subcommand.
 real_git="$(command -v git)"
