@@ -49,11 +49,11 @@ command -v gh >/dev/null || die "gh is needed to read PR states" # gh-repo: ok
 # slug_of <url> -> owner/name of a github.com URL, else nothing. Forms: https://, http://, ssh://, git:// (userinfo, a numeric port, .git and a trailing / allowed) and
 # git@github.com:o/r; the host may be github.com, ssh.github.com or www.github.com, and scheme and host may be in any case (the owner/name keeps its case). Owner and name are
 # [A-Za-z0-9._-] only; the userinfo has no # ? / [ ] or space, and in the scp-style form no : either (git reads everything before that : as the host); a scp-style URL has no scheme.
-# So a lookalike (https://evil.com#@github.com/o/r, evil.com:x@github.com:o/r, github.com:/o/r, a deeper path, file://, an IPv6 host) gives nothing.
+# The function runs in the C locale (local LC_ALL=C for the regex, on tr for the child), so [A-Za-z] means ASCII only. So a lookalike (https://evil.com#@github.com/o/r, evil.com:x@github.com:o/r, github.com:/o/r, a deeper path, file://, an IPv6 host) gives nothing.
 slug_of() {
   local LC_ALL=C u="${1%/}" l out="" ui_url="[A-Za-z0-9._~%!\$&'()*+,;=:-]+@" ui_scp="[A-Za-z0-9._~%!\$&'()*+,;=-]+@" nm="[A-Za-z0-9._-]+" host="(ssh\.|www\.)?github\.com"
   u="${u%.git}"; u="${u%/}"
-  l="$(printf '%s' "$u" | tr '[:upper:]' '[:lower:]')" # the match is on an ASCII-lowercase copy (LC_ALL=C above: bytes only, so no non-ASCII letter folds into an ASCII one or matches a range), so it needs neither nocasematch nor bash 4
+  l="$(printf '%s' "$u" | LC_ALL=C tr '[:upper:]' '[:lower:]')" # the match is on an ASCII-lowercase copy (LC_ALL=C on tr, which is another process and doesn't see the local one: no non-ASCII letter folds into an ASCII one), so it needs neither nocasematch nor bash 4
   if [[ "$l" =~ ^(ssh|https?|git)://(${ui_url})?${host}(:[0-9]+)?/(${nm}/${nm})$ ]]; then out="${BASH_REMATCH[5]}"
   elif [[ "$l" =~ ^(${ui_scp})?${host}:(${nm}/${nm})$ ]]; then out="${BASH_REMATCH[3]}"
   fi
