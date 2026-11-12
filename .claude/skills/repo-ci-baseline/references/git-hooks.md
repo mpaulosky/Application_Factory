@@ -67,18 +67,19 @@ not a worktree of the branch. When `origin` can't be fetched (but `gh` works: th
 It needs `gh` logged in, and for an origin that is not on github.com, `GITHUB_REPOSITORY`. Work without an issue is made by hand:
 `git worktree add --no-track -b chore/upgrade-net10 ../<Repo>-worktrees/chore-upgrade-net10 origin/main`.
 
-Once the PR merges, `scripts/cleanup.sh` (run in the primary checkout, on a clean `main`) fast-forwards `main`, then removes each merged branch with its worktree and its `origin` branch. It
-decides from the PR's state on GitHub (a squash merge leaves no ancestry for `git branch --merged`): the PR must be from the repository `origin` points at (a fork's PR of the same name
-doesn't count), merged into `main`, and the branch's tip must be the PR's last head, so no unpushed commit is lost. It keeps, with the reason, a branch with an open PR, no PR, 100 or more
-PRs of that name, a PR merged elsewhere, a commit made after it was judged, a branch a worktree is rebasing or bisecting, a dirty worktree, or a worktree whose folder can't be reached (and
-that local branch's `origin` copy too), and removes a closed-unmerged one only with `--include-closed`. It also keeps a branch an open PR is based on (a stacked PR, looked up in the
-repository `origin` points at), which deleting would close. It deletes a local branch only if it still holds the tip it judged (compared in the delete itself). It deletes the `origin` branch
-only if `origin` still holds the tip it judged (one GitHub already deleted counts as removed), and for a worktree whose folder was deleted by hand it forgets git's entry for that one
-worktree only (a locked one is kept; a parent folder that is missing, empty, unreadable or unsearchable may be an unmounted drive, so the branch is kept with the hint to run
-`git worktree prune`). It needs `gh` logged in, and for an `origin` that is not on github.com, `GITHUB_REPOSITORY`. It exits 1 when it can't run (not on `main`, an `origin` push URL that is
-not shown to be the fetch URL's repository (the same text, or the same host and owner/name), not the primary checkout, a dirty `main`, no `gh` or repository, a bad argument), can't fetch
-`origin`, `main` can't fast-forward or a `gh` lookup fails, and, after doing the rest, when a removal git refused, a branch a worktree is rebasing or bisecting, a check of `origin` or the
-closing fetch failed, or a commit was made after a branch was judged. `--dry-run` shows the steps. `git worktree remove` alone leaves the local and `origin` branches behind.
+Once the PR merges, `scripts/cleanup.sh` (run in the primary checkout, on a clean `main`) fast-forwards `main`, then removes each merged branch with its worktree and its `origin` branch. It decides
+from the PR's state on GitHub (a squash merge leaves no ancestry for `git branch --merged`): the PR must be from the repository `origin` points at (a fork's PR of the same name doesn't count),
+merged into `main`, and the branch's tip must be the PR's last head, so no unpushed commit is lost. It keeps, with the reason, a branch with an open PR, no PR, 100 or more PRs of that name, a PR
+merged elsewhere, a commit made after it was judged, a branch a worktree is rebasing or bisecting, a dirty worktree, or a worktree whose folder can't be reached (and that local branch's `origin`
+copy too), and removes a closed-unmerged one only with `--include-closed`. It also keeps a branch an open PR is based on (a stacked PR, looked up in the repository `origin` points at), which
+deleting would close. It deletes a local branch only if it still holds the tip it judged (compared in the delete itself). It deletes the `origin` branch only if `origin` still holds the tip it
+judged (one GitHub already deleted counts as removed, and so does a local branch already gone), and for a worktree whose folder was deleted by hand it forgets git's entry for that one worktree only
+(a locked one is kept; a parent folder that is missing, empty, unreadable or unsearchable may be an unmounted drive, so the branch is kept with the hint to run `git worktree prune`). It needs `gh`
+logged in, and for an `origin` that is not on github.com, `GITHUB_REPOSITORY`. It exits 1 when it can't run (not on `main`, an `origin` push URL that is not shown to be the fetch URL's repository
+(the same text, or both github.com URLs for the same owner/name; `CLEANUP_PUSH_URL_OK=1` accepts push URLs you have checked), not the primary checkout, a dirty `main`, no `gh` or repository, a bad
+argument), can't fetch `origin`, `main` can't fast-forward or a `gh` lookup fails, and, after doing the rest, when a removal git refused, a branch a worktree is rebasing or bisecting (a real run
+only), a check of `origin` or the closing fetch failed, or a commit was made after a branch was judged. `--dry-run` shows the steps. `git worktree remove` alone leaves the local and `origin`
+branches behind.
 
 `pre-commit` enforces the rule that a change is committed in a linked worktree. Claude Code's own `.claude/worktrees/` (ignored by the Template's
 `.gitignore`) also passes the check, since any linked worktree does, but people use `../<Repo>-worktrees/`.
@@ -160,7 +161,8 @@ and `git commit` end to end, which runs the hook with `GIT_DIR` set.
 `scripts/tests/check-branch-name.test.sh` covers the script's `--pr` form, which the CI job uses: the Actions
 branches and any `dependabot/*` allowed only there, a shell-safe `dependabot/*` allowed for a push too, a `claude/...` branch refused, and other `docs/` names refused.
 
-CI's hook-tests job runs this suite, `pre-commit.test.sh`, `check-branch-name.test.sh`, `check-pr-title.test.sh`, `sync-copilot-review.test.sh`, `watch-pr.test.sh`, `cleanup.test.sh` and `work-issue.test.sh`.
+CI's hook-tests job runs this suite, `pre-commit.test.sh`, `check-branch-name.test.sh`, `check-pr-title.test.sh`, `sync-copilot-review.test.sh`, `watch-pr.test.sh`, `cleanup.test.sh` and
+`work-issue.test.sh`.
 
 ## Session-start check
 

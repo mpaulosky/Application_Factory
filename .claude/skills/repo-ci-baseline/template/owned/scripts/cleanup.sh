@@ -9,7 +9,7 @@
 # the repository from GITHUB_REPOSITORY or the upstream remote is used, which a GitHub Enterprise origin should set), so a fork's PR of the same name cannot stand in for it:
 #   - removed: the PR merged into main and the branch's tip is the PR's last head, so nothing unpushed is lost. The branch's worktree is removed
 #     first, and only when it is clean (ignored files in it go with it). When the local branch is kept, its origin copy is kept too; an origin branch
-#     alone is kept when it has moved or its tip is not the PR's last head. The origin branch is deleted only if it still holds the tip that was judged; one already gone by then (GitHub's auto-delete) counts as removed.
+#     alone is kept when it has moved or its tip is not the PR's last head. The origin branch is deleted only if it still holds the tip that was judged; one already gone by then (GitHub's auto-delete) counts as removed, and so does a local branch already gone.
 #   - removed with --include-closed only: the PR closed unmerged and the tip is its last head.
 #   - kept, with the reason: a name outside the branch standard, an open PR, no PR or a tip no PR had, 100 or more PRs of that branch name, a PR merged into a branch
 #     other than main, a branch an open PR is based on (asked of origin's repository), a dirty or unreadable worktree, a worktree whose folder can't be reached, a commit made after it was judged, a step git refused (a branch a worktree
@@ -19,7 +19,7 @@
 # kept, with the hint to run git worktree prune if the folder was deleted for good. --dry-run prints what would happen and changes no branch, worktree or commit (it still
 # fetches and prunes the remote-tracking refs).
 # Exits 1 when it can't run (not main, not the primary checkout, dirty main, main can't fast-forward, origin can't be fetched, no gh, no repository,
-# a gh lookup failed, a bad argument, an origin push URL that is not shown to be the fetch URL's repository (same text, or the same host/owner/name), no scripts/check-branch-name.sh) and, after finishing the rest, when a removal git refused, a branch a worktree is rebasing or bisecting, a check of origin
+# a gh lookup failed, a bad argument, an origin push URL that is not shown to be the fetch URL's repository (the same text, or both github.com URLs for the same owner/name; CLEANUP_PUSH_URL_OK=1 accepts the push URLs as they are), no scripts/check-branch-name.sh) and, after finishing the rest, when a removal git refused, a branch a worktree is rebasing or bisecting (a real run only: a dry run exits 0), a check of origin
 # failed, the closing fetch failed or a commit was made after a branch was judged. A branch is judged by its PR, and at most 100 PRs are read per branch name: 100 or more keeps the branch.
 # A local branch is deleted by update-ref --no-deref -d, which compares and deletes in one step: the tip is also rechecked before its worktree or the worktree's entry is removed, and a branch a worktree is rebasing or bisecting is kept.
 # A worktree on a detached HEAD belongs to no branch and is never touched.
@@ -46,11 +46,18 @@ check_name="$root/scripts/check-branch-name.sh"
 [[ -z "$(git status --porcelain)" ]] || die "main has uncommitted changes"
 command -v gh >/dev/null || die "gh is needed to read PR states" # gh-repo: ok
 
-# slug_of <url> -> owner/name of a github.com URL (https, ssh://, git@github.com:o/r, with a port, userinfo, .git and a trailing /), else nothing.
+# slug_of <url> -> owner/name of a github.com URL, else nothing. Forms: https://, http://, ssh://, git:// (userinfo, a numeric port, .git and a trailing / allowed) and
+# git@github.com:o/r; the host may be github.com, ssh.github.com or www.github.com in any case. Owner and name are [A-Za-z0-9._-] only, the userinfo has no # ? / [ ] or space, and a
+# scp-style URL has no scheme, so a lookalike (https://evil.com#@github.com/o/r, github.com:/o/r, a deeper path, file://, an IPv6 host) gives nothing.
 slug_of() {
-  local u="${1%/}"
+  local u="${1%/}" ui="[A-Za-z0-9._~%!\$&'()*+,;=:-]+@" nm="[A-Za-z0-9._-]+" host="(ssh\.|www\.)?github\.com" old out=""
   u="${u%.git}"; u="${u%/}"
-  if [[ "$u" =~ ^((ssh|https?|git)://)?([^@/[:space:]]+@)?github\.com(:[0-9]+)?[:/]([^/[:space:]]+/[^/[:space:]]+)$ ]]; then printf '%s' "${BASH_REMATCH[5]}"; fi
+  old="$(shopt -p nocasematch || true)"; shopt -s nocasematch
+  if [[ "$u" =~ ^(ssh|https?|git)://(${ui})?${host}(:[0-9]+)?/(${nm}/${nm})$ ]]; then out="${BASH_REMATCH[5]}"
+  elif [[ "$u" =~ ^(${ui})?${host}:(${nm}/${nm})$ ]]; then out="${BASH_REMATCH[3]}"
+  fi
+  eval "$old"
+  printf '%s' "$out"
 }
 url="$(git remote get-url upstream 2>/dev/null || git remote get-url origin 2>/dev/null || true)"
 repo="${GITHUB_REPOSITORY:-}"
@@ -62,27 +69,16 @@ lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 origin_repo="$(slug_of "$(git remote get-url origin 2>/dev/null || true)")"
 origin_repo="${origin_repo:-$repo}" # where the branches live: a stacked PR is a PR of this repository, whatever GH_REPO is
 origin_slug="$(lc "$origin_repo")"
-# url_key <url> -> host/owner/name of a remote URL (https://, ssh://, git@host:o/r; lowercase; userinfo, port, .git and a trailing / dropped; ssh.github.com and www.github.com are github.com),
-# or nothing for a local path.
-url_key() {
-  local u="${1%/}" host path
-  u="${u%.git}"; u="${u%/}"
-  if [[ "$u" =~ ^[A-Za-z][A-Za-z0-9+.-]*://([^/@]*@)?([^/:]+)(:[0-9]+)?/(.+)$ ]]; then host="${BASH_REMATCH[2]}"; path="${BASH_REMATCH[4]}"
-  elif [[ "$u" != /* && "$u" =~ ^([^/@:]*@)?([^/:@]+):(.+)$ ]]; then host="${BASH_REMATCH[2]}"; path="${BASH_REMATCH[3]}"
-  else return 0; fi
-  [[ "$path" =~ ([^/]+)/([^/]+)$ ]] || return 0
-  host="$(lc "$host")"
-  case "$host" in ssh.github.com|www.github.com) host=github.com ;; esac
-  printf '%s/%s/%s' "$host" "$(lc "${BASH_REMATCH[1]}")" "$(lc "${BASH_REMATCH[2]}")"
-}
-# git push origin goes to origin's push URLs, which can name another repository than the fetch URL the PRs are read for: refuse unless every one is the fetch URL's text or the same
-# host/owner/name. A push URL that can't be read refuses too.
+# git push origin goes to origin's push URLs, which can name another repository than the fetch URL the PRs are read for. Refuse unless every push URL is the fetch URL's own text, or both
+# are github.com URLs (slug_of) for the same owner/name, in any case. Any other host, or a form slug_of doesn't know, must match the fetch URL's text; CLEANUP_PUSH_URL_OK=1 accepts the
+# push URLs as they are, for a person who has checked them. A push URL that can't be read refuses too.
 fetch_url="$(git remote get-url origin 2>/dev/null || true)"
 push_urls="$(git remote get-url --push --all origin 2>/dev/null)" && [[ -n "$push_urls" ]] || die "can't read origin's push URLs"
+fetch_slug="$(lc "$(slug_of "$fetch_url")")"
 while IFS= read -r pu; do
-  [[ -z "$pu" || "$pu" == "$fetch_url" ]] && continue
-  ka="$(url_key "$pu")"; kb="$(url_key "$fetch_url")"
-  [[ -n "$ka" && "$ka" == "$kb" ]] || die "origin's push URL ($pu) is not shown to be the repository its PRs are read from ($fetch_url): make them the same, then run this again"
+  [[ -z "$pu" || "$pu" == "$fetch_url" || "${CLEANUP_PUSH_URL_OK:-}" == 1 ]] && continue
+  push_slug="$(lc "$(slug_of "$pu")")"
+  [[ -n "$push_slug" && "$push_slug" == "$fetch_slug" ]] || die "origin's push URL ($pu) is not shown to be the repository its PRs are read from ($fetch_url): make them the same, or set CLEANUP_PUSH_URL_OK=1 if you have checked it, then run this again"
 done <<<"$push_urls"
 
 # resolve_path <dir> <path>: <path> made absolute against <dir>, with . and .. collapsed (text only: the folder may be gone, so no symlinks are followed).
@@ -118,7 +114,7 @@ while IFS= read -r wpath; do
   if [[ -d "$d" && -x "$d" && -n "$(ls -A "$d" 2>/dev/null)" ]]; then hand_deleted+="$wpath"$'\n'; fi
 done < <(git worktree list --porcelain | awk '/^worktree /{print substr($0,10)}')
 
-# branch_busy <branch>: a worktree is rebasing or bisecting it (the worktree list shows such a worktree as detached, so git branch -D would refuse; update-ref -d would not).
+# branch_busy <branch>: a worktree is rebasing or bisecting it (the worktree list shows such a worktree as detached, so git branch -D would refuse; update-ref --no-deref -d would not).
 # A branch checked out in a worktree is that branch's own worktree, which is removed first.
 branch_busy() {
   local b="$1" d f common
@@ -206,8 +202,13 @@ while read -r ref; do
   fi
   if branch_busy "$b"; then keep "$b" "a worktree is rebasing or bisecting it"; kept_local+="$b "; [[ "$dry" == true ]] || failed=1; continue; fi
   # The branch must still hold the tip that was judged before its worktree or the worktree's entry goes (the GitHub lookup took time).
-  if [[ "$dry" != true && "$(git rev-parse "$ref" 2>/dev/null || true)" != "$tip" ]]; then
-    keep "$b" "it has a commit that was made after it was judged"; kept_local+="$b "; failed=1; continue
+  if [[ "$dry" != true ]]; then
+    now="$(git rev-parse --verify -q "$ref" 2>/dev/null || true)"
+    if [[ -z "$now" ]] && ! git symbolic-ref -q "$ref" >/dev/null 2>&1; then
+      keep "$b" "it was deleted after it was judged (its worktree, if any, is left)"; kept_local+="$b "; failed=1; continue
+    elif [[ "$now" != "$tip" ]]; then
+      keep "$b" "it has a commit that was made after it was judged"; kept_local+="$b "; failed=1; continue
+    fi
   fi
   if [[ -n "$stale" ]]; then
     if ! entry="$(stale_entry "$stale")"; then keep "$b" "its worktree's folder is missing and git's entry for it was not found ($stale): git worktree prune"; kept_local+="$b "; continue; fi
@@ -222,8 +223,9 @@ while read -r ref; do
     echo "   would: git update-ref --no-deref -d refs/heads/$b $tip"
   elif ! git update-ref --no-deref -d "refs/heads/$b" "$tip"; then
     now="$(git rev-parse --verify -q "$ref" 2>/dev/null || true)"
-    if [[ -z "$now" ]]; then echo "   $b is already gone"
-    elif [[ "$now" != "$tip" ]]; then keep "$b" "it has a commit that was made after it was judged"; kept_local+="$b "; failed=1; continue
+    if [[ -z "$now" ]] && ! git symbolic-ref -q "$ref" >/dev/null 2>&1; then # gone, not an alias that points nowhere
+      echo "   $b is already gone"; git config --remove-section "branch.$b" 2>/dev/null || true
+    elif [[ -n "$now" && "$now" != "$tip" ]]; then keep "$b" "it has a commit that was made after it was judged"; kept_local+="$b "; failed=1; continue
     else keep "$b" "git could not delete the branch"; kept_local+="$b "; failed=1; continue; fi
   else
     git config --remove-section "branch.$b" 2>/dev/null || true

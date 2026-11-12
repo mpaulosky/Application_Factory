@@ -29,11 +29,18 @@ primary="$(git worktree list --porcelain | awk '/^worktree / && !seen {print sub
 repo="$(basename "$primary")"
 [[ -f "$primary/scripts/check-branch-name.sh" ]] || die "scripts/check-branch-name.sh is missing from $primary: Apply the Template first"
 
-# slug_of <url> -> owner/name of a github.com URL (https, ssh://, git@github.com:o/r, with a port, userinfo, .git and a trailing /), else nothing.
+# slug_of <url> -> owner/name of a github.com URL, else nothing. Forms: https://, http://, ssh://, git:// (userinfo, a numeric port, .git and a trailing / allowed) and
+# git@github.com:o/r; the host may be github.com, ssh.github.com or www.github.com in any case. Owner and name are [A-Za-z0-9._-] only, the userinfo has no # ? / [ ] or space, and a
+# scp-style URL has no scheme, so a lookalike (https://evil.com#@github.com/o/r, github.com:/o/r, a deeper path, file://, an IPv6 host) gives nothing.
 slug_of() {
-  local u="${1%/}"
+  local u="${1%/}" ui="[A-Za-z0-9._~%!\$&'()*+,;=:-]+@" nm="[A-Za-z0-9._-]+" host="(ssh\.|www\.)?github\.com" old out=""
   u="${u%.git}"; u="${u%/}"
-  if [[ "$u" =~ ^((ssh|https?|git)://)?([^@/[:space:]]+@)?github\.com(:[0-9]+)?[:/]([^/[:space:]]+/[^/[:space:]]+)$ ]]; then printf '%s' "${BASH_REMATCH[5]}"; fi
+  old="$(shopt -p nocasematch || true)"; shopt -s nocasematch
+  if [[ "$u" =~ ^(ssh|https?|git)://(${ui})?${host}(:[0-9]+)?/(${nm}/${nm})$ ]]; then out="${BASH_REMATCH[5]}"
+  elif [[ "$u" =~ ^(${ui})?${host}:(${nm}/${nm})$ ]]; then out="${BASH_REMATCH[3]}"
+  fi
+  eval "$old"
+  printf '%s' "$out"
 }
 # resolve_path <dir> <path>: <path> made absolute against <dir>, with . and .. collapsed (text only: the folder may be gone, so no symlinks are followed).
 resolve_path() {

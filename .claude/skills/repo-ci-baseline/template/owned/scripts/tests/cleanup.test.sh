@@ -8,8 +8,8 @@
 # run once, the first time that branch is asked about (a push that lands after the fetch). A git shim answers `git remote get-url origin` from
 # $SHIM_ORIGIN_URL, to try github.com URL forms, fails `git ls-remote` for the branch in $SHIM_LSREMOTE_FAIL, and fails `git fetch` when SHIM_FETCH_FAIL is set (all: every fetch;
 # closing: the first passes and the later ones fail, counted in the file $SHIM_FETCH_COUNT), answers `git remote get-url --push --all origin` from $SHIM_PUSH_URLS (; between URLs) or else $SHIM_ORIGIN_URL, and
-# lands a commit on the branch named in $SHIM_ADVANCE (or deletes the branch named in $SHIM_VANISH) just before `git update-ref --no-deref -d` deletes it, and fails
-# `git remote get-url --push` when SHIM_PUSH_FAIL is set. The fake gh prints at most 100 rows, as --limit 100 does.
+# lands a commit on the branch named in $SHIM_ADVANCE (or deletes the branch named in $SHIM_VANISH, leaving an alias to nowhere when SHIM_DANGLE is set) just before `git update-ref --no-deref -d` deletes it, and fails
+# `git remote get-url --push` when SHIM_PUSH_FAIL is set, and prints no push URLs when SHIM_PUSH_EMPTY is set. The fake gh prints at most 100 rows, as --limit 100 does.
 # It also answers the lookup of open PRs based on a branch, `gh pr list --state open --limit 100 --base <branch> --json number --jq length`, which it requires in exactly that form: with the number
 # in $GH_FIX/_base_<branch with / as _> (0 when there is no file), with GH_REPO, compared without regard to case, equal to $EXPECT_GH_BASE_REPO (written in lowercase; o/r when it is not set); $GH_FIX/_fail fails it too, and
 # $GH_FIX/_failbase fails only it.
@@ -173,7 +173,7 @@ wt_at chore/rebasing "$work/wt/chore-rebasing"
 wt_at chore/apply-busy "$work/wt/chore-apply-busy"
 ( cd "$work/wt/chore-apply-busy" && git checkout -q --detach main && echo other > f && git add f && git commit -q -m other && o=$(git rev-parse HEAD) && git checkout -q chore/apply-busy && git rebase --apply "$o" >/dev/null 2>&1 )
 [[ -d "$repo/.git/worktrees/chore-apply-busy/rebase-apply" ]] || { echo "setup failed: the apply rebase did not stop"; exit 1; }
-wt_at chore/rebasing-2 "$work/wt/chore-rebasing-2"; wt_at chore/apply "$work/wt/chore-apply"
+wt_at chore/rebasing-2 "$work/wt/chore-rebasing-2"; wt_at chore/apply "$work/wt/chore-apply"; wt_at chore/bisect "$work/wt/chore-bisect" # clean branches whose names are a prefix of (or extend) a busy one's
 # A bisect that moved HEAD off the branch: the worktree list shows it detached, BISECT_START still holds the branch's name
 { git worktree add -q -b chore/bisecting2 "$work/wt/chore-bisecting2" main && for i in 1 2 3; do echo "$i" > "$work/wt/chore-bisecting2/b$i" && git -C "$work/wt/chore-bisecting2" add . && git -C "$work/wt/chore-bisecting2" commit -q -m "c$i"; done \
   && git -C "$work/wt/chore-bisecting2" push -q origin chore/bisecting2 2>/dev/null; } || exit 1
@@ -213,12 +213,13 @@ if [[ "\$1" == fetch && -n "\${SHIM_FETCH_FAIL:-}" ]]; then # all: every fetch f
   n=\$(( \$(cat "\$SHIM_FETCH_COUNT" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "\$SHIM_FETCH_COUNT"
   if [[ "\$SHIM_FETCH_FAIL" == all || \$n -ge 2 ]]; then echo "shim: fetch failed" >&2; exit 128; fi
 fi
+if [[ "\$1 \$2 \$3 \$4 \$5" == "remote get-url --push --all origin" && -n "\${SHIM_PUSH_EMPTY:-}" ]]; then exit 0; fi
 if [[ "\$1 \$2 \$3 \$4 \$5" == "remote get-url --push --all origin" && ( -n "\${SHIM_PUSH_URLS:-}" || -n "\${SHIM_ORIGIN_URL:-}" ) ]]; then printf '%s\n' "\${SHIM_PUSH_URLS:-\$SHIM_ORIGIN_URL}" | tr ';' '\n'; exit 0; fi
 if [[ "\$1 \$2 \$3" == "remote get-url --push" && -n "\${SHIM_PUSH_FAIL:-}" ]]; then echo "shim: get-url failed" >&2; exit 128; fi
 if [[ "\$1 \$2 \$3" == "update-ref --no-deref -d" && -n "\${SHIM_ADVANCE:-}" && "\$4" == "refs/heads/\$SHIM_ADVANCE" ]]; then # a commit lands on the branch between cleanup's check and its delete
   new=\$("$(command -v git)" commit-tree "\$4^{tree}" -p "\$4" -m late) && "$(command -v git)" update-ref "\$4" "\$new"
 fi
-if [[ "\$1 \$2 \$3" == "update-ref --no-deref -d" && -n "\${SHIM_VANISH:-}" && "\$4" == "refs/heads/\$SHIM_VANISH" ]]; then "$(command -v git)" update-ref -d "\$4"; fi # the branch is deleted by someone else first
+if [[ "\$1 \$2 \$3" == "update-ref --no-deref -d" && -n "\${SHIM_VANISH:-}" && "\$4" == "refs/heads/\$SHIM_VANISH" ]]; then "$(command -v git)" update-ref -d "\$4"; [[ -z "\${SHIM_DANGLE:-}" ]] || "$(command -v git)" symbolic-ref "\$4" refs/heads/nowhere; fi # the branch is deleted by someone else first (SHIM_DANGLE: and an alias that points nowhere left in its place)
 if [[ "\$1" == ls-remote && -n "\${SHIM_LSREMOTE_FAIL:-}" && "\$*" == *"refs/heads/\$SHIM_LSREMOTE_FAIL"* ]]; then echo "shim: ls-remote failed" >&2; exit 128; fi
 exec "$(command -v git)" "\$@"
 SHIM
@@ -251,6 +252,7 @@ check "the dry run's summary says so" "grep -q '^Done: [0-9]* removed, [0-9]* ke
 o2=$(bash scripts/cleanup.sh --dry-run --include-closed 2>&1)
 check "a dry run with --include-closed says it would remove a closed-unmerged branch, and without it keeps it" "grep -q '^remove feature/4-closed ' <<<\"\$o2\" && grep -q 'keep   feature/4-closed: its PR closed unmerged' <<<\"\$out\""
 check "dry run changes nothing" "has_local feature/1-merged && [[ -d $work/wt/feature-1-merged ]] && has_remote chore/remote-only && has_remote feature/1-merged && [[ \$(git rev-parse main) == $main_before ]]"
+check "a dry run keeps the busy branches as the real run does" "grep -q 'keep   chore/rebasing: a worktree is rebasing or bisecting it' <<<\"\$out\" && grep -q 'keep   chore/apply-busy: a worktree is rebasing' <<<\"\$out\" && grep -q 'keep   chore/bisecting2: a worktree is rebasing' <<<\"\$out\" && ! grep -q '^remove chore/rebasing ' <<<\"\$out\" && grep -q '^remove chore/bisect ' <<<\"\$out\""
 check "dry run lists every step" "grep -q 'would: git worktree remove .*feature-1-merged' <<<\"\$out\" && grep -q 'would: git update-ref --no-deref -d refs/heads/feature/1-merged' <<<\"\$out\" && grep -q 'would: git push .*feature/1-merged' <<<\"\$out\" && grep -q 'would: git merge --ff-only origin/main' <<<\"\$out\""
 
 check "a dry run keeps a locked worktree with a missing folder, as the real run does" "grep -q 'keep   chore/stale-locked: its worktree is locked and its folder is missing' <<<\"\$out\" && ! grep -q 'remove chore/stale-locked' <<<\"\$out\" && ! grep -q 'would: git update-ref --no-deref -d refs/heads/chore/stale-locked' <<<\"\$out\""
@@ -310,11 +312,31 @@ for pu in git@github.com:evil/r.git https://github.com/acme/other ssh://git@gith
   check "a github.com push URL ($pu) of another owner or name than the fetch URL's is refused" "[[ $st == 1 ]] && grep -qF \"push URL ($pu)\" <<<\"\$o\""
 done
 o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="git@ghe.example.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
-check "an https fetch URL and an ssh push URL of the same repository on another host are accepted" "[[ $st == 0 ]]"
+check "an ssh push URL for an https fetch URL of a non-github.com host is refused (only the same text is shown to be the same)" "[[ $st == 1 ]] && grep -q 'CLEANUP_PUSH_URL_OK=1' <<<\"\$o\""
+o=$(PATH="$work/shim:$PATH" CLEANUP_PUSH_URL_OK=1 SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="git@ghe.example.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+check "CLEANUP_PUSH_URL_OK=1 accepts it" "[[ $st == 0 ]]"
+o=$(PATH="$work/shim:$PATH" CLEANUP_PUSH_URL_OK=0 SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="git@ghe.example.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+check "only CLEANUP_PUSH_URL_OK=1 does: 0 does not" "[[ $st == 1 ]]"
+o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="https://ghe.example.com/acme/r" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+check "a push URL with the fetch URL's own text is accepted on any host" "[[ $st == 0 ]]"
+for pair in "https://git.example.com/a/team/app|https://git.example.com/b/team/app" "file:///a/acme/r|file:///b/acme/r" "https://[::1]/a/b|https://[::2]/a/b" "/srv/a.git|/srv/b.git" "C:/a/acme/r|C:/b/acme/r"; do
+  o=$(PATH="$work/shim:$PATH" GITHUB_REPOSITORY=acme/r SHIM_ORIGIN_URL="${pair%%|*}" SHIM_PUSH_URLS="${pair##*|}" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+  check "different URLs a parser can't read as github.com (${pair%%|*} vs ${pair##*|}) are refused" "[[ $st == 1 ]] && grep -qF \"push URL (${pair##*|})\" <<<\"\$o\""
+done
 o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="git@other.example.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
 check "the same owner/name on another host is refused" "[[ $st == 1 ]] && grep -q 'push URL (git@other.example.com:acme/r.git)' <<<\"\$o\""
 o=$(EXPECT_GH_BASE_REPO=acme/r PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="ssh://git@ssh.github.com:443/acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
 check "github.com's ssh-over-443 host counts as github.com" "[[ $st == 0 ]]"
+for pu in https://github.com/acme/r/ https://www.github.com/acme/r.git https://GitHub.com/ACME/r HTTPS://github.com/acme/r http://github.com/acme/r github.com:acme/r "https://x:y@github.com/acme/r.git/" ssh://git@SSH.GitHub.com:443/acme/r; do
+  o=$(EXPECT_GH_BASE_REPO=acme/r PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+  check "the push URL $pu is read as github.com's acme/r" "[[ $st == 0 ]]"
+done
+for pu in "https://evil.com#@github.com/acme/r" "https://github.com:/acme/r" "https://github.com/foo/acme/r" "https://github.com/acme/r/extra" "https://github.com/acme/r?x=1" "https://github.com/" "https://ssh.github.com.evil.com/acme/r" "https://user@evil.com/@github.com/acme/r" "file:///github.com/acme/r" "https://[::1]/acme/r" "git@github.com:/acme/r" "https://gitlab.com/a/team/app"; do
+  o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+  check "the push URL $pu is not read as github.com's acme/r" "[[ $st == 1 ]] && grep -qF \"push URL ($pu)\" <<<\"\$o\""
+done
+o=$(PATH="$work/shim:$PATH" SHIM_PUSH_EMPTY=1 bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+check "push URLs that print nothing refuse the run too" "[[ $st == 1 ]] && grep -q \"can't read origin's push URLs\" <<<\"\$o\""
 o=$(PATH="$work/shim:$PATH" SHIM_PUSH_FAIL=1 bash scripts/cleanup.sh --dry-run 2>&1); st=$?
 check "push URLs that can't be read refuse the run" "[[ $st == 1 ]] && grep -q \"can't read origin's push URLs\" <<<\"\$o\""
 o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="git@github.com:evil/r.git" SHIM_FETCH_FAIL=all SHIM_FETCH_COUNT="$work/fc0" bash scripts/cleanup.sh 2>&1); st=$?
@@ -388,7 +410,7 @@ check "a branch that moves between the last check and the delete is kept with it
 check "a hand-deleted worktree's branch that moves while gh is asked keeps git's entry for the worktree, the branch and its origin copy" "[[ -d $repo/.git/worktrees/stale-race ]] && has_local chore/stale-race && has_remote chore/stale-race && grep -q 'keep   chore/stale-race: it has a commit that was made after it was judged' <<<\"\$out\"" # gh-repo: ok
 check "an alias branch (a symbolic ref) is deleted itself, and the branch it points at is left alone" "! has_local chore/sym && has_local fix/2-dirty && grep -q '^remove chore/sym' <<<\"\$out\""
 check "a branch a worktree is rebasing with the apply backend is kept, with its origin copy" "has_local chore/apply-busy && has_remote chore/apply-busy && grep -q 'keep   chore/apply-busy: a worktree is rebasing or bisecting it' <<<\"\$out\" && [[ -d $work/wt/chore-apply-busy ]]"
-check "a branch whose name only starts like a busy branch's, or is a prefix of one, is removed (the match is exact)" "! has_local chore/rebasing-2 && ! has_remote chore/rebasing-2 && ! has_local chore/apply && ! has_remote chore/apply"
+check "a branch whose name only starts like a busy branch's, or is a prefix of one, is removed (the match is exact)" "! has_local chore/rebasing-2 && ! has_remote chore/rebasing-2 && ! has_local chore/apply && ! has_remote chore/apply && ! has_local chore/bisect && ! has_remote chore/bisect"
 check "a branch a worktree is bisecting with HEAD off the branch is kept, with its origin copy" "has_local chore/bisecting2 && has_remote chore/bisecting2 && grep -q 'keep   chore/bisecting2: a worktree is rebasing or bisecting it' <<<\"\$out\""
 check "a branch a worktree is bisecting is kept, with its origin copy" "has_local chore/bisecting && has_remote chore/bisecting && grep -q 'keep   chore/bisecting: a worktree is rebasing or bisecting it' <<<\"\$out\" && [[ -d $work/wt/chore-bisecting ]]"
 check "a branch a worktree is rebasing is kept, with its origin copy" "has_local chore/rebasing && has_remote chore/rebasing && grep -q 'keep   chore/rebasing: a worktree is rebasing or bisecting it' <<<\"\$out\" && [[ -d $work/wt/chore-rebasing ]]"
@@ -471,7 +493,18 @@ check "once those are scrubbed, the run exits 0 again" "[[ $st == 0 ]]"
 # A branch someone else deleted between cleanup's last check and its own delete is gone, which is what was wanted
 tip=$(branch chore/x-gone yes) || exit 1; pr chore/x-gone MERGED "$tip"
 o=$(PATH="$work/shim:$PATH" SHIM_VANISH=chore/x-gone bash scripts/cleanup.sh 2>&1); st=$?
-check "a branch already deleted by someone else counts as removed, not as a late commit" "[[ $st == 0 ]] && ! has_local chore/x-gone && ! has_remote chore/x-gone && grep -q 'chore/x-gone is already gone' <<<\"\$o\" && ! grep -q 'made after it was judged' <<<\"\$o\""
+check "a branch already deleted by someone else counts as removed, not as a late commit" "[[ $st == 0 ]] && ! has_local chore/x-gone && ! has_remote chore/x-gone && grep -q 'chore/x-gone is already gone' <<<\"\$o\" && ! grep -q 'made after it was judged' <<<\"\$o\" && ! git config --get-regexp '^branch\\.chore/x-gone\\.' >/dev/null"
+# ...but an alias left in its place is not "gone": the branch is still there
+tip=$(branch chore/x-dangle yes) || exit 1; pr chore/x-dangle MERGED "$tip"
+o=$(PATH="$work/shim:$PATH" SHIM_VANISH=chore/x-dangle SHIM_DANGLE=1 bash scripts/cleanup.sh 2>&1); st=$?
+check "an alias that points nowhere in a deleted branch's place is kept, not counted as gone" "[[ $st == 1 ]] && grep -q 'keep   chore/x-dangle: git could not delete the branch' <<<\"\$o\" && ! grep -q 'x-dangle is already gone' <<<\"\$o\""
+git update-ref --no-deref -d refs/heads/chore/x-dangle; scrub chore/x-dangle
+# A branch deleted by someone else while gh was being asked is kept, with its worktree
+wt_at chore/x-deleted "$work/wt/x-deleted"; command rm -rf "$work/wt/x-deleted" # a hand-deleted worktree: only git's entry is left
+echo "git -C \"$repo\" update-ref -d refs/heads/chore/x-deleted" > "$GH_FIX/chore_x-deleted.hook"
+o=$(bash scripts/cleanup.sh 2>&1); st=$?
+check "a branch deleted while it was being judged is kept with git's entry for its worktree, saying so, and fails the run" "[[ $st == 1 ]] && grep -q 'keep   chore/x-deleted: it was deleted after it was judged' <<<\"\$o\" && [[ -d $repo/.git/worktrees/x-deleted ]]"
+scrub chore/x-deleted
 
 # The fetch of origin failing: the opening one stops the run, the closing one fails it after the rest was done
 tip=$(branch chore/closing yes) || exit 1; pr chore/closing MERGED "$tip"
