@@ -317,6 +317,10 @@ o=$(PATH="$work/shim:$PATH" CLEANUP_PUSH_URL_OK=1 SHIM_ORIGIN_URL=https://ghe.ex
 check "CLEANUP_PUSH_URL_OK=1 accepts it" "[[ $st == 0 ]]"
 o=$(PATH="$work/shim:$PATH" CLEANUP_PUSH_URL_OK=0 SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="git@ghe.example.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
 check "only CLEANUP_PUSH_URL_OK=1 does: 0 does not" "[[ $st == 1 ]]"
+o=$(PATH="$work/shim:$PATH" CLEANUP_PUSH_URL_OK=1 SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="git@ghe.example.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1)
+check "CLEANUP_PUSH_URL_OK=1 says which push URL it let through unchecked" "grep -qF 'CLEANUP_PUSH_URL_OK=1: origin'\"'\"'s push URL (git@ghe.example.com:acme/r.git)' <<<\"\$o\""
+o=$(EXPECT_GH_BASE_REPO=acme/r PATH="$work/shim:$PATH" CLEANUP_PUSH_URL_OK=1 SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="git@github.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1)
+check "and says nothing for a push URL that is shown to match" "! grep -q 'CLEANUP_PUSH_URL_OK' <<<\"\$o\"" 
 o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="https://ghe.example.com/acme/r" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
 check "a push URL with the fetch URL's own text is accepted on any host" "[[ $st == 0 ]]"
 for pair in "https://git.example.com/a/team/app|https://git.example.com/b/team/app" "file:///a/acme/r|file:///b/acme/r" "https://[::1]/a/b|https://[::2]/a/b" "/srv/a.git|/srv/b.git" "C:/a/acme/r|C:/b/acme/r"; do
@@ -327,11 +331,11 @@ o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_
 check "the same owner/name on another host is refused" "[[ $st == 1 ]] && grep -q 'push URL (git@other.example.com:acme/r.git)' <<<\"\$o\""
 o=$(EXPECT_GH_BASE_REPO=acme/r PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="ssh://git@ssh.github.com:443/acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
 check "github.com's ssh-over-443 host counts as github.com" "[[ $st == 0 ]]"
-for pu in https://github.com/acme/r/ https://www.github.com/acme/r.git https://GitHub.com/ACME/r HTTPS://github.com/acme/r http://github.com/acme/r github.com:acme/r "https://x:y@github.com/acme/r.git/" ssh://git@SSH.GitHub.com:443/acme/r; do
+for pu in https://github.com/acme/r/ https://www.github.com/acme/r.git https://GitHub.com/ACME/r HTTPS://github.com/acme/r http://github.com/acme/r github.com:acme/r "https://x:y@github.com/acme/r.git/" ssh://git@SSH.GitHub.com:443/acme/r git://github.com/acme/r.git www.github.com:acme/r "https://us%40er:p~w@github.com/acme/r"; do
   o=$(EXPECT_GH_BASE_REPO=acme/r PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
   check "the push URL $pu is read as github.com's acme/r" "[[ $st == 0 ]]"
 done
-for pu in "https://evil.com#@github.com/acme/r" "https://github.com:/acme/r" "https://github.com/foo/acme/r" "https://github.com/acme/r/extra" "https://github.com/acme/r?x=1" "https://github.com/" "https://ssh.github.com.evil.com/acme/r" "https://user@evil.com/@github.com/acme/r" "file:///github.com/acme/r" "https://[::1]/acme/r" "git@github.com:/acme/r" "https://gitlab.com/a/team/app"; do
+for pu in "https://evil.com#@github.com/acme/r" "https://github.com:/acme/r" "https://github.com/foo/acme/r" "https://github.com/acme/r/extra" "https://github.com/acme/r?x=1" "https://github.com/" "https://ssh.github.com.evil.com/acme/r" "https://user@evil.com/@github.com/acme/r" "file:///github.com/acme/r" "https://[::1]/acme/r" "git@github.com:/acme/r" "https://gitlab.com/a/team/app" "evil.com:x@github.com:acme/r" "x:@github.com:acme/r" "https://github.com/acme /r"; do
   o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
   check "the push URL $pu is not read as github.com's acme/r" "[[ $st == 1 ]] && grep -qF \"push URL ($pu)\" <<<\"\$o\""
 done
@@ -504,7 +508,13 @@ wt_at chore/x-deleted "$work/wt/x-deleted"; command rm -rf "$work/wt/x-deleted" 
 echo "git -C \"$repo\" update-ref -d refs/heads/chore/x-deleted" > "$GH_FIX/chore_x-deleted.hook"
 o=$(bash scripts/cleanup.sh 2>&1); st=$?
 check "a branch deleted while it was being judged is kept with git's entry for its worktree, saying so, and fails the run" "[[ $st == 1 ]] && grep -q 'keep   chore/x-deleted: it was deleted after it was judged' <<<\"\$o\" && [[ -d $repo/.git/worktrees/x-deleted ]]"
-scrub chore/x-deleted
+git worktree prune; scrub chore/x-deleted
+# ...and one that became an alias pointing nowhere in the meantime says so, not "a commit"
+wt_at chore/x-alias "$work/wt/x-alias"; command rm -rf "$work/wt/x-alias"
+echo "git -C \"$repo\" update-ref -d refs/heads/chore/x-alias && git -C \"$repo\" symbolic-ref refs/heads/chore/x-alias refs/heads/nowhere" > "$GH_FIX/chore_x-alias.hook"
+o=$(bash scripts/cleanup.sh 2>&1); st=$?
+check "a branch that became an alias to nowhere while it was being judged is kept, saying so, and fails the run" "[[ $st == 1 ]] && grep -q 'keep   chore/x-alias: its ref became an alias that points nowhere' <<<\"\$o\" && ! grep -q 'x-alias: it has a commit' <<<\"\$o\""
+git update-ref --no-deref -d refs/heads/chore/x-alias; git worktree prune; scrub chore/x-alias
 
 # The fetch of origin failing: the opening one stops the run, the closing one fails it after the rest was done
 tip=$(branch chore/closing yes) || exit 1; pr chore/closing MERGED "$tip"

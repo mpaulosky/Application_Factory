@@ -30,17 +30,17 @@ repo="$(basename "$primary")"
 [[ -f "$primary/scripts/check-branch-name.sh" ]] || die "scripts/check-branch-name.sh is missing from $primary: Apply the Template first"
 
 # slug_of <url> -> owner/name of a github.com URL, else nothing. Forms: https://, http://, ssh://, git:// (userinfo, a numeric port, .git and a trailing / allowed) and
-# git@github.com:o/r; the host may be github.com, ssh.github.com or www.github.com in any case. Owner and name are [A-Za-z0-9._-] only, the userinfo has no # ? / [ ] or space, and a
-# scp-style URL has no scheme, so a lookalike (https://evil.com#@github.com/o/r, github.com:/o/r, a deeper path, file://, an IPv6 host) gives nothing.
+# git@github.com:o/r; the host may be github.com, ssh.github.com or www.github.com, and scheme and host may be in any case (the owner/name keeps its case). Owner and name are
+# [A-Za-z0-9._-] only; the userinfo has no # ? / [ ] or space, and in the scp-style form no : either (git reads everything before that : as the host); a scp-style URL has no scheme.
+# So a lookalike (https://evil.com#@github.com/o/r, evil.com:x@github.com:o/r, github.com:/o/r, a deeper path, file://, an IPv6 host) gives nothing.
 slug_of() {
-  local u="${1%/}" ui="[A-Za-z0-9._~%!\$&'()*+,;=:-]+@" nm="[A-Za-z0-9._-]+" host="(ssh\.|www\.)?github\.com" old out=""
+  local u="${1%/}" l out="" ui_url="[A-Za-z0-9._~%!\$&'()*+,;=:-]+@" ui_scp="[A-Za-z0-9._~%!\$&'()*+,;=-]+@" nm="[A-Za-z0-9._-]+" host="(ssh\.|www\.)?github\.com"
   u="${u%.git}"; u="${u%/}"
-  old="$(shopt -p nocasematch || true)"; shopt -s nocasematch
-  if [[ "$u" =~ ^(ssh|https?|git)://(${ui})?${host}(:[0-9]+)?/(${nm}/${nm})$ ]]; then out="${BASH_REMATCH[5]}"
-  elif [[ "$u" =~ ^(${ui})?${host}:(${nm}/${nm})$ ]]; then out="${BASH_REMATCH[3]}"
+  l="$(printf '%s' "$u" | tr '[:upper:]' '[:lower:]')" # the match is on a lowercase copy, so it needs neither nocasematch nor bash 4
+  if [[ "$l" =~ ^(ssh|https?|git)://(${ui_url})?${host}(:[0-9]+)?/(${nm}/${nm})$ ]]; then out="${BASH_REMATCH[5]}"
+  elif [[ "$l" =~ ^(${ui_scp})?${host}:(${nm}/${nm})$ ]]; then out="${BASH_REMATCH[3]}"
   fi
-  eval "$old"
-  printf '%s' "$out"
+  if [[ -n "$out" ]]; then printf '%s' "${u: -${#out}}"; fi # the owner/name ends the URL: take it from the original, case kept
 }
 # resolve_path <dir> <path>: <path> made absolute against <dir>, with . and .. collapsed (text only: the folder may be gone, so no symlinks are followed).
 resolve_path() {

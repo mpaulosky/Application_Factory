@@ -9,10 +9,10 @@
 # the repository from GITHUB_REPOSITORY or the upstream remote is used, which a GitHub Enterprise origin should set), so a fork's PR of the same name cannot stand in for it:
 #   - removed: the PR merged into main and the branch's tip is the PR's last head, so nothing unpushed is lost. The branch's worktree is removed
 #     first, and only when it is clean (ignored files in it go with it). When the local branch is kept, its origin copy is kept too; an origin branch
-#     alone is kept when it has moved or its tip is not the PR's last head. The origin branch is deleted only if it still holds the tip that was judged; one already gone by then (GitHub's auto-delete) counts as removed, and so does a local branch already gone.
+#     alone is kept when it has moved or its tip is not the PR's last head. The origin branch is deleted only if it still holds the tip that was judged; one already gone by then (GitHub's auto-delete) counts as removed, and so does a local branch that vanishes while its own delete runs (one found gone earlier, at the recheck before its worktree is removed, is kept and fails the run).
 #   - removed with --include-closed only: the PR closed unmerged and the tip is its last head.
 #   - kept, with the reason: a name outside the branch standard, an open PR, no PR or a tip no PR had, 100 or more PRs of that branch name, a PR merged into a branch
-#     other than main, a branch an open PR is based on (asked of origin's repository), a dirty or unreadable worktree, a worktree whose folder can't be reached, a commit made after it was judged, a step git refused (a branch a worktree
+#     other than main, a branch an open PR is based on (asked of origin's repository), a dirty or unreadable worktree, a worktree whose folder can't be reached, a commit made after it was judged, a branch deleted (or turned into an alias that points nowhere) after it was judged (its worktree, if any, is left), a step git refused (a branch a worktree
 #     is rebasing or bisecting included), or a closed PR without --include-closed.
 # A worktree whose folder was deleted by hand has git's entry for it forgotten (only that one, and only if it is a real directory in .git/worktrees; a locked one is kept), when its
 # parent folder is still there, searchable and not empty. A parent that is missing, empty, unreadable or unsearchable may be an unmounted drive (its mount point is left empty), so the branch is
@@ -20,7 +20,7 @@
 # fetches and prunes the remote-tracking refs).
 # Exits 1 when it can't run (not main, not the primary checkout, dirty main, main can't fast-forward, origin can't be fetched, no gh, no repository,
 # a gh lookup failed, a bad argument, an origin push URL that is not shown to be the fetch URL's repository (the same text, or both github.com URLs for the same owner/name; CLEANUP_PUSH_URL_OK=1 accepts the push URLs as they are), no scripts/check-branch-name.sh) and, after finishing the rest, when a removal git refused, a branch a worktree is rebasing or bisecting (a real run only: a dry run exits 0), a check of origin
-# failed, the closing fetch failed or a commit was made after a branch was judged. A branch is judged by its PR, and at most 100 PRs are read per branch name: 100 or more keeps the branch.
+# failed, the closing fetch failed or a commit was made, or the branch deleted, after a branch was judged. CLEANUP_PUSH_URL_OK=1 prints a warning for each push URL it lets through unchecked. A branch is judged by its PR, and at most 100 PRs are read per branch name: 100 or more keeps the branch.
 # A local branch is deleted by update-ref --no-deref -d, which compares and deletes in one step: the tip is also rechecked before its worktree or the worktree's entry is removed, and a branch a worktree is rebasing or bisecting is kept.
 # A worktree on a detached HEAD belongs to no branch and is never touched.
 set -euo pipefail
@@ -47,17 +47,17 @@ check_name="$root/scripts/check-branch-name.sh"
 command -v gh >/dev/null || die "gh is needed to read PR states" # gh-repo: ok
 
 # slug_of <url> -> owner/name of a github.com URL, else nothing. Forms: https://, http://, ssh://, git:// (userinfo, a numeric port, .git and a trailing / allowed) and
-# git@github.com:o/r; the host may be github.com, ssh.github.com or www.github.com in any case. Owner and name are [A-Za-z0-9._-] only, the userinfo has no # ? / [ ] or space, and a
-# scp-style URL has no scheme, so a lookalike (https://evil.com#@github.com/o/r, github.com:/o/r, a deeper path, file://, an IPv6 host) gives nothing.
+# git@github.com:o/r; the host may be github.com, ssh.github.com or www.github.com, and scheme and host may be in any case (the owner/name keeps its case). Owner and name are
+# [A-Za-z0-9._-] only; the userinfo has no # ? / [ ] or space, and in the scp-style form no : either (git reads everything before that : as the host); a scp-style URL has no scheme.
+# So a lookalike (https://evil.com#@github.com/o/r, evil.com:x@github.com:o/r, github.com:/o/r, a deeper path, file://, an IPv6 host) gives nothing.
 slug_of() {
-  local u="${1%/}" ui="[A-Za-z0-9._~%!\$&'()*+,;=:-]+@" nm="[A-Za-z0-9._-]+" host="(ssh\.|www\.)?github\.com" old out=""
+  local u="${1%/}" l out="" ui_url="[A-Za-z0-9._~%!\$&'()*+,;=:-]+@" ui_scp="[A-Za-z0-9._~%!\$&'()*+,;=-]+@" nm="[A-Za-z0-9._-]+" host="(ssh\.|www\.)?github\.com"
   u="${u%.git}"; u="${u%/}"
-  old="$(shopt -p nocasematch || true)"; shopt -s nocasematch
-  if [[ "$u" =~ ^(ssh|https?|git)://(${ui})?${host}(:[0-9]+)?/(${nm}/${nm})$ ]]; then out="${BASH_REMATCH[5]}"
-  elif [[ "$u" =~ ^(${ui})?${host}:(${nm}/${nm})$ ]]; then out="${BASH_REMATCH[3]}"
+  l="$(printf '%s' "$u" | tr '[:upper:]' '[:lower:]')" # the match is on a lowercase copy, so it needs neither nocasematch nor bash 4
+  if [[ "$l" =~ ^(ssh|https?|git)://(${ui_url})?${host}(:[0-9]+)?/(${nm}/${nm})$ ]]; then out="${BASH_REMATCH[5]}"
+  elif [[ "$l" =~ ^(${ui_scp})?${host}:(${nm}/${nm})$ ]]; then out="${BASH_REMATCH[3]}"
   fi
-  eval "$old"
-  printf '%s' "$out"
+  if [[ -n "$out" ]]; then printf '%s' "${u: -${#out}}"; fi # the owner/name ends the URL: take it from the original, case kept
 }
 url="$(git remote get-url upstream 2>/dev/null || git remote get-url origin 2>/dev/null || true)"
 repo="${GITHUB_REPOSITORY:-}"
@@ -76,9 +76,11 @@ fetch_url="$(git remote get-url origin 2>/dev/null || true)"
 push_urls="$(git remote get-url --push --all origin 2>/dev/null)" && [[ -n "$push_urls" ]] || die "can't read origin's push URLs"
 fetch_slug="$(lc "$(slug_of "$fetch_url")")"
 while IFS= read -r pu; do
-  [[ -z "$pu" || "$pu" == "$fetch_url" || "${CLEANUP_PUSH_URL_OK:-}" == 1 ]] && continue
+  [[ -z "$pu" || "$pu" == "$fetch_url" ]] && continue
   push_slug="$(lc "$(slug_of "$pu")")"
-  [[ -n "$push_slug" && "$push_slug" == "$fetch_slug" ]] || die "origin's push URL ($pu) is not shown to be the repository its PRs are read from ($fetch_url): make them the same, or set CLEANUP_PUSH_URL_OK=1 if you have checked it, then run this again"
+  if [[ -n "$push_slug" && "$push_slug" == "$fetch_slug" ]]; then continue; fi
+  if [[ "${CLEANUP_PUSH_URL_OK:-}" == 1 ]]; then echo "⚠ CLEANUP_PUSH_URL_OK=1: origin's push URL ($pu) is not shown to be the repository its PRs are read from ($fetch_url), and is used as it is" >&2; continue; fi
+  die "origin's push URL ($pu) is not shown to be the repository its PRs are read from ($fetch_url): make them the same, or set CLEANUP_PUSH_URL_OK=1 if you have checked it, then run this again"
 done <<<"$push_urls"
 
 # resolve_path <dir> <path>: <path> made absolute against <dir>, with . and .. collapsed (text only: the folder may be gone, so no symlinks are followed).
@@ -206,6 +208,8 @@ while read -r ref; do
     now="$(git rev-parse --verify -q "$ref" 2>/dev/null || true)"
     if [[ -z "$now" ]] && ! git symbolic-ref -q "$ref" >/dev/null 2>&1; then
       keep "$b" "it was deleted after it was judged (its worktree, if any, is left)"; kept_local+="$b "; failed=1; continue
+    elif [[ -z "$now" ]]; then
+      keep "$b" "its ref became an alias that points nowhere after it was judged"; kept_local+="$b "; failed=1; continue
     elif [[ "$now" != "$tip" ]]; then
       keep "$b" "it has a commit that was made after it was judged"; kept_local+="$b "; failed=1; continue
     fi
