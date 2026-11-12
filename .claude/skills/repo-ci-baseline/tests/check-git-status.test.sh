@@ -213,7 +213,7 @@ check "a ) inside quotes inside a substitution does not close it" "[[ $st == 1 ]
 fixture subshell scripts/a.sh '(cd "$d" && git status --porcelain)'
 run_checker subshell
 check "a call inside a subshell is found" "[[ $st == 1 ]]"
-fixture subshell-after scripts/a.sh '(cd "$d" && git status --porcelain); sort -u f'
+fixture subshell-after scripts/a.sh '(cd "$d" && git status --porcelain) sort -u f'
 run_checker subshell-after
 check "a -u after the subshell's closing ) is not the call's setting" "[[ $st == 1 ]]"
 fixture subshell-ok scripts/a.sh '(cd "$d" && git status --porcelain -uall)'
