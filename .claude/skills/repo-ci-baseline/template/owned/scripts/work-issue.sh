@@ -12,9 +12,9 @@
 # zeros in its number (feature/054-x) is not the issue's, and is skipped.
 # The branch starts from the local branch when there is one (checked out as it is), else from origin/<branch> when that branch is on origin, else from origin/main; origin is fetched
 # first, so a branch pushed from another machine is seen. A branch made from origin/main has no upstream (it would track main): the first push is git push -u origin HEAD; one made from origin/<branch> tracks that branch. A worktree the branch already has is reused,
-# wherever it is, if its folder still exists and is that worktree (a folder recreated or replaced since is an error), and git's entry for one deleted by hand is forgotten, that one only, and the worktree made again; a locked
-# one is an error, and so is one whose folder can't be reached (its parent folder is missing, empty, unreadable or unsearchable: it may be on an unmounted drive; run git worktree prune if it was
-# deleted for good), or the primary checkout when it has the branch checked out); a directory in the way that is not that worktree is an error. It needs gh logged in, and for an origin
+# wherever it is, if its folder still exists and is that worktree of this clone with the branch checked out; git's entry for one deleted by hand is forgotten, that one only, and the worktree made again.
+# These are errors: a folder recreated or replaced since, or one git can't read (a safe.directory refusal); a locked worktree; one whose folder can't be reached (its parent folder is missing, empty, unreadable
+# or unsearchable: it may be on an unmounted drive; run git worktree prune if it was deleted for good); the primary checkout when it has the branch checked out; a directory in the way that is not that worktree is an error. It needs gh logged in, and for an origin
 # that is not on github.com, GITHUB_REPOSITORY. When origin can't be fetched (but gh works: the issue is read first) it still prints a worktree it already has, with a warning, and stops otherwise. An issue number has at most 9 digits. Run it from the primary checkout or any worktree.
 # Everything but the path goes to stderr.
 set -euo pipefail
