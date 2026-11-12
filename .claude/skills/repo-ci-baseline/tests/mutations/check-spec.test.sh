@@ -57,10 +57,35 @@ run_checker
 check "a spec that is not a JSON object is found" "[[ $st == 1 ]] && grep -q 'not a JSON object' <<<\"\$out\""
 printf '{"test": ["true"], "timeout": "5", "mutations": null}\n' > "$work/specs/s.json"
 run_checker
-check "a timeout that is not a number and mutations that are not a list are found, without a traceback" "[[ $st == 1 ]] && grep -q 'needs a positive .timeout' <<<\"\$out\" && grep -q 'mutations. as a list' <<<\"\$out\" && ! grep -q Traceback <<<\"\$out\""
-printf '{"test": [42, ""], "timeout": 5, "mutations": [{"path": "scripts/a.sh", "old": "echo one", "new": "echo 1", "why": "w"}]}\n' > "$work/specs/s.json"
+check "a timeout that is not a number and mutations that are not a list are found, without a traceback" "[[ $st == 1 ]] && grep -q 'timeout. above 0' <<<\"\$out\" && grep -q 'mutations. as a list' <<<\"\$out\" && ! grep -q Traceback <<<\"\$out\""
+printf '{"test": [42], "timeout": 5, "mutations": [{"path": "scripts/a.sh", "old": "echo one", "new": "echo 1", "why": "w"}]}\n' > "$work/specs/s.json"
 run_checker
-check "a test argv with a non-string or empty element is found (mutate.py would refuse it)" "[[ $st == 1 ]] && grep -q 'non-empty strings' <<<\"\$out\""
+check "a test argv with a non-string element is found (mutate.py would refuse it)" "[[ $st == 1 ]] && grep -q 'non-empty strings' <<<\"\$out\""
+printf '{"test": [""], "timeout": 5, "mutations": [{"path": "scripts/a.sh", "old": "echo one", "new": "echo 1", "why": "w"}]}\n' > "$work/specs/s.json"
+run_checker
+check "a test argv with an empty element is found (mutate.py would refuse it)" "[[ $st == 1 ]] && grep -q 'non-empty strings' <<<\"\$out\""
+printf '{"test": "true", "timeout": 5, "mutations": [{"path": "scripts/a.sh", "old": "echo one", "new": "echo 1", "why": "w"}]}\n' > "$work/specs/s.json"
+run_checker
+check "a test argv with a test that is not a list is found (mutate.py would refuse it)" "[[ $st == 1 ]] && grep -q 'non-empty strings' <<<\"\$out\""
+printf '{"test": ["a\\u0000b"], "timeout": 5, "mutations": [{"path": "scripts/a.sh", "old": "echo one", "new": "echo 1", "why": "w"}]}\n' > "$work/specs/s.json"
+run_checker
+check "a test argv with a NUL byte in an element is found (mutate.py would refuse it)" "[[ $st == 1 ]] && grep -q 'non-empty strings' <<<\"\$out\""
+printf '{"test": ["true"], "timeout": 86401, "mutations": [{"path": "scripts/a.sh", "old": "echo one", "new": "echo 1", "why": "w"}]}\n' > "$work/specs/s.json"
+run_checker
+check "a timeout above mutate.py's cap is found" "[[ $st == 1 ]] && grep -q 'at most 86400' <<<\"\$out\""
+printf '{"test": ["true"], "timeout": 86400, "mutations": [{"path": "scripts/a.sh", "old": "echo one", "new": "echo 1", "why": "w"}]}\n' > "$work/specs/s.json"
+run_checker
+check "and a timeout at the cap passes" "[[ $st == 0 ]]"
+printf '{"test": ["true"], "timeout": 5, "mutations": [{"path": "scripts/a.sh", "old": "echo one", "new": "echo 1", "why": "w", "equivalent": " "}]}\n' > "$work/specs/s.json"
+run_checker
+check "a blank equivalent is found" "[[ $st == 1 ]] && grep -q 'equivalent' <<<\"\$out\""
+printf '{"test": ["true"], "timeout": 5, "mutations": [{"path": "scripts/a.sh", "old": "echo one", "new": "echo \\ud800", "why": "w"}]}\n' > "$work/specs/s.json"
+run_checker
+check "a lone surrogate in a mutation is found" "[[ $st == 1 ]] && grep -q 'without a NUL byte' <<<\"\$out\""
+printf '{"test": ["true"], "timeout": 5, "mutations": [{"path": "scripts/a.sh", "old": "echo one", "new": "echo 1\\u0000", "why": "w"}]}\n' > "$work/specs/s.json"
+run_checker
+check "a NUL byte in a mutation is found" "[[ $st == 1 ]] && grep -q 'without a NUL byte' <<<\"\$out\""
+check "the timeout cap is the one mutate.py has" "[[ \"\$(grep -o 'MAX_TIMEOUT = [0-9]*' \"\$checker\")\" == \"\$(grep -o 'MAX_TIMEOUT = [0-9]*' \"\$here/../../template/owned/.claude/skills/hardening-review/scripts/mutate.py\")\" ]]"
 printf '{"test": ["true"], "timeout": 5, "mutations": ["x", 3]}\n' > "$work/specs/s.json"
 run_checker
 check "a mutation that is not an object is found, without a traceback" "[[ $st == 1 ]] && grep -q 'is not an object' <<<\"\$out\" && ! grep -q Traceback <<<\"\$out\""

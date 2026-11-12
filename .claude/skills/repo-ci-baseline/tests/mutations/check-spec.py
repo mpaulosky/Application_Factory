@@ -8,7 +8,7 @@ for the scanner's Python spec.
     python3 -I tests/mutations/check-spec.py [<repo root> <folder of specs>]
 
 The two arguments (the repository the specs' paths are relative to, and the folder to read *.json from) default to this checkout and this file's folder; tests/mutations/check-spec.test.sh
-gives them a throwaway tree. A spec needs a `test` argv, a positive `timeout` and at least one mutation, each with path, old, new and a reason; no mutation repeats another.
+gives them a throwaway tree. A spec needs a `test` argv (a non-empty list of non-empty strings), a `timeout` above 0 and at most mutate.py's cap, and at least one mutation, each with path, old, new and a reason (and `equivalent`, when given, a reason); text has no NUL byte; no mutation repeats another. These are the checks of mutate.py's load_spec that a spec can fail on its own.
 Exit 0: every spec fits. Exit 1: one doesn't (printed). Exit 2: there is no spec to check, or the arguments are not none or both of <repo root> and <folder of specs>.
 """
 
@@ -20,6 +20,16 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[4]
 FIELDS = ("path", "old", "new", "why")
+MAX_TIMEOUT = 86400  # the same as mutate.py's; check-spec.test.sh fails when they differ
+
+
+def plain(value):
+    """Text mutate.py accepts: no NUL byte, and it encodes (a lone surrogate from a \\ud800 escape does not)."""
+    try:
+        value.encode("utf-8")
+    except UnicodeError:
+        return False
+    return "\x00" not in value
 
 
 def problems(spec_path, root):
@@ -32,10 +42,10 @@ def problems(spec_path, root):
     out = []
     timeout = spec.get("timeout")
     test = spec.get("test")
-    if not (isinstance(test, list) and test and all(isinstance(a, str) and a for a in test)):
-        out.append("needs a `test` argv: a list of non-empty strings")
-    if not (isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and timeout > 0):
-        out.append("needs a positive `timeout`")
+    if not (isinstance(test, list) and test and all(isinstance(a, str) and a and plain(a) for a in test)):
+        out.append("needs a `test` argv: a list of non-empty strings without a NUL byte")
+    if not (isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and 0 < timeout <= MAX_TIMEOUT):
+        out.append(f"needs a `timeout` above 0 and at most {MAX_TIMEOUT} seconds")
     mutations = spec.get("mutations")
     if not isinstance(mutations, list):
         return out + ["needs `mutations` as a list"]
@@ -49,6 +59,11 @@ def problems(spec_path, root):
         if missing:
             out.append(f"{name}: needs {', '.join(missing)} as text")
             continue
+        if not all(plain(m[f]) for f in FIELDS) or not m["path"] or not m["old"]:
+            out.append(f"{name}: path, old, new and why must be text without a NUL byte, and path and old not empty")
+            continue
+        if m.get("equivalent") is not None and not (isinstance(m["equivalent"], str) and m["equivalent"].strip()):
+            out.append(f"{name}: `equivalent` must be a reason")
         path = root / m["path"]
         if not path.is_file():
             out.append(f"{name}: {m['path']} does not exist")

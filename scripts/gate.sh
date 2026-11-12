@@ -149,8 +149,8 @@ echo -e "\n${CYAN}▶ markdownlint (whole repo, as Lint Markdown)${RESET}"
 markdownlint-cli2 '**/*.md' || { echo -e "${RED}❌ markdownlint${RESET}" >&2; exit 1; }
 echo -e "\n${CYAN}▶ yamllint (whole repo, as Lint YAML)${RESET}"
 yamllint -c .yamllint.yml . || { echo -e "${RED}❌ yamllint${RESET}" >&2; exit 1; }
-# Lint with ShellCheck the shell files this branch changes (committed or not, against its merge base with origin/main; every tracked and untracked shell file when there is no origin/main), so --quick
-# finds what test.sh's shellcheck step would fail on at the end of the full gate. A shell file is a *.sh or one of the three git hooks.
+# Lint with ShellCheck the shell files this branch changes (added, copied, modified, renamed or type-changed, committed or not, against its merge base with origin/main; every tracked and untracked
+# shell file when there is no origin/main or no merge base), so --quick finds what test.sh's shellcheck step would fail on at the end of the full gate. A shell file is a *.sh or one of the three git hooks.
 echo -e "\n${CYAN}▶ shellcheck (changed shell files)${RESET}"
 if ! command -v shellcheck >/dev/null 2>&1; then
   echo -e "${RED}❌ shellcheck not found: the gate needs it (test.sh runs it too).${RESET}" >&2

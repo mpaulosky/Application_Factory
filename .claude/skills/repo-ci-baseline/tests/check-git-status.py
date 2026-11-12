@@ -7,11 +7,16 @@ Without --untracked-files=<mode> or -u[<mode>] (=all, or =no when ignoring them 
 guard, so a "clean tree" check passes on a dirty one. A script's tests, Markdown and Sandcastle's TypeScript are not scanned: a test sets its own repo's config, and
 Sandcastle runs `git status` in a fresh sandbox clone. Scanned: *.sh and the three git hooks, in any folder below the one given except a `tests` folder.
 
-A logical line is a line plus the lines a trailing backslash joins to it (a comment line is not joined: bash does not continue a comment). A call is the words after `git`
-up to the first unquoted `|`, `;`, `&` or `#`, or the `)` that closes the context the call is in. A substitution inside the call (`$(...)`, `(...)`, backticks, quoted or not)
-is part of it but blanked, since its words are not the call's: so a `-u` of `sort -u` or `git add -u` after the call, or in a substitution, or text in a trailing comment,
-is not the call's setting. The call is checked when one of its words is `status` and one starts with `--porcelain`; git's global options (-C <dir>, --no-pager,
---git-dir=<dir>) come between and are skipped over as words, quoted values with spaces included, because quotes and substitutions are tracked as nested contexts.
+A logical line is a line plus the lines a trailing backslash joins to it (not when the line ends in a comment: bash ends a comment at the newline). Only a `git` that can run
+is a call: not one in a comment, in a single-quoted string or in the text of a double-quoted one, but yes one in a `$(...)` or backticks inside a double-quoted string; `git`,
+a backslash-escaped or quoted `git` (`"git"`, `'git'`) is the same command. A call is the words after `git` up to the first unquoted `|`, `;`, `&` or word-starting `#`, or the `)` (or backtick) that closes the
+context the call is in. A substitution inside the call (`$(...)`, `(...)`, backticks, quoted or not) is part of it but blanked, since its words are not the call's: so a `-u` of
+`sort -u` or `git add -u` after the call, or in a substitution, or text in a trailing comment, is not the call's setting. The call's text is split into shell words (quotes and
+backslashes removed, a quoted argument kept whole, see split_words); the call is checked when one of its words is `status` and one starts with `--porcelain`, and git's global
+options (-C <dir>, --no-pager, --git-dir=<dir>) come between as ordinary words.
+
+Limits, all on the safe side: quote state is kept per logical line, so a heredoc or multi-line string is scanned as code, and a line that ends inside an open quote (an apostrophe in
+heredoc text, say) is checked again with its quotes ignored, which can flag text that only names a call. A command held in a variable (`"$GIT" status --porcelain`) is not seen.
 """
 
 import os
@@ -20,7 +25,7 @@ import sys
 
 HOOKS = {"pre-commit", "pre-push", "post-checkout"}
 SETTING = re.compile(r"^(--untracked-files(=.*)?|-u(all|no|normal)?)$")
-GIT = re.compile(r"(?<![\w-])git(?=\s)")
+GIT = re.compile(r"(?<![\w-])(?:\"git\"|'git'|\\?git)(?=\s)")
 
 
 def logical_lines(text):
@@ -29,7 +34,7 @@ def logical_lines(text):
     for number, line in enumerate(text.split("\n"), 1):
         if not buf:
             start = number
-        if line.rstrip().endswith("\\") and not (not buf and line.lstrip().startswith("#")):
+        if line.rstrip().endswith("\\") and not has_comment(buf + line):
             buf += line.rstrip()[:-1] + " "
             continue
         yield start, buf + line
@@ -46,6 +51,11 @@ def advance(stack, line, i, start, in_bt=False):
     nxt = line[i + 1] if i + 1 < len(line) else ""
     top = stack[-1] if stack else None
     if top == "sq":
+        if c == "'":
+            stack.pop()
+    elif top == "ansi":  # $'...': a backslash escapes the next character, so \' does not end it
+        if c == "\\":
+            return 2, None
         if c == "'":
             stack.pop()
     elif top == "dq":
@@ -67,6 +77,9 @@ def advance(stack, line, i, start, in_bt=False):
             stack.append("dq" if c == '"' else "sq")
     else:  # a code context: the call itself (no stack) or the inside of a substitution
         if c == "\\":
+            return 2, None
+        if c == "$" and nxt == "'":
+            stack.append("ansi")
             return 2, None
         if c == "'":
             stack.append("sq")
@@ -90,6 +103,30 @@ def advance(stack, line, i, start, in_bt=False):
         elif not stack and c == "#" and (i == start or line[i - 1].isspace()):
             return 1, "comment"
     return 1, None
+
+
+def has_comment(line):
+    """Whether `line` has a comment (an unquoted # that starts a word) outside any quote."""
+    stack = []
+    i = 0
+    while i < len(line):
+        width, event = advance(stack, line, i, 0)
+        if event == "comment":
+            return True
+        i += width
+    return False
+
+
+def ends_open(line):
+    """Whether `line`, up to its comment if it has one, ends inside a quote: the quote state of the lines after it is then unknown."""
+    stack = []
+    i = 0
+    while i < len(line):
+        width, event = advance(stack, line, i, 0)
+        if event == "comment":
+            break
+        i += width
+    return any(context in ("sq", "dq", "ansi") for context in stack)
 
 
 def executable_starts(line):
@@ -164,14 +201,19 @@ def split_words(text):
     return words
 
 
+def bare(words):
+    return "status" in words and any(w.startswith("--porcelain") for w in words) and not any(SETTING.match(w) for w in words)
+
+
 def unguarded(line):
     runs = executable_starts(line)
     for match in GIT.finditer(line):
-        if match.start() not in runs:
-            continue
-        words = split_words(call_after(line, match.end(), runs[match.start()]))
-        if "status" in words and any(w.startswith("--porcelain") for w in words) and not any(SETTING.match(w) for w in words):
+        if match.start() in runs and bare(split_words(call_after(line, match.end(), runs[match.start()]))):
             return True
+    if ends_open(line):  # fail closed: with the quote state unknown, every `git` on the line counts, up to the next | ; & ) or #
+        for match in GIT.finditer(line):
+            if bare(split_words(re.split(r"[|;&)#]", line[match.end() :], maxsplit=1)[0])):
+                return True
     return False
 
 

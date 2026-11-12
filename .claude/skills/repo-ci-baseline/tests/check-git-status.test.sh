@@ -266,12 +266,55 @@ check "a quoted --porcelain is still --porcelain" "[[ $st == 1 ]]"
 fixture w3 scripts/a.sh 'git status --porcelain "--untracked-files=all"'
 run_checker w3
 check "a quoted setting is a setting" "[[ $st == 0 ]]"
-fixture w4 scripts/a.sh "git status '--porcelain' '-uall'"
+fixture w4 scripts/a.sh "git status '--porcelain'"
 run_checker w4
-check "single-quoted words are words" "[[ $st == 0 ]]"
+check "a single-quoted --porcelain is still --porcelain" "[[ $st == 1 ]]"
+fixture w4b scripts/a.sh "git status --porcelain '-uall'"
+run_checker w4b
+check "a single-quoted setting is a setting" "[[ $st == 0 ]]"
 fixture w5 scripts/a.sh 'git status --porcelain --untracked-files\=all'
 run_checker w5
 check "a backslash in a word is removed" "[[ $st == 0 ]]"
+# the same command spelled with a backslash or quotes; a variable command is out of scope
+fixture name1 scripts/a.sh '"git" status --porcelain'
+run_checker name1
+check "a double-quoted command name is found" "[[ $st == 1 ]]"
+fixture name2 scripts/a.sh "'git' -C d status --porcelain"
+run_checker name2
+check "a single-quoted command name is found" "[[ $st == 1 ]]"
+fixture name3 scripts/a.sh '\git status --porcelain'
+run_checker name3
+check "a backslash-escaped command name is found" "[[ $st == 1 ]]"
+fixture name4 scripts/a.sh '"git" status --porcelain --untracked-files=all'
+run_checker name4
+check "and its setting is seen" "[[ $st == 0 ]]"
+fixture name5 scripts/a.sh 'echo "git status --porcelain"'
+run_checker name5
+check "a string that begins with git is text, not a quoted command name" "[[ $st == 0 ]]"
+# a comment ending in a backslash does not continue
+fixture cmt-cont scripts/a.sh 'echo hi # note \
+git status --porcelain'
+run_checker cmt-cont
+check "a trailing comment ending in a backslash does not swallow the next line" "[[ $st == 1 ]] && grep -q 'scripts/a.sh:2:' <<<\"\$out\""
+# quote state is per line: an open quote on a line fails closed; $'...' is parsed
+fixture open1 scripts/a.sh "can't be done: \$(git status --porcelain)"
+run_checker open1
+check "a line that ends inside an open quote is checked with its quotes ignored" "[[ $st == 1 ]]"
+fixture open2 scripts/a.sh "can't be done: \$(git status --porcelain --untracked-files=all)"
+run_checker open2
+check "and a setting on that line is still seen" "[[ $st == 0 ]]"
+fixture ansi1 scripts/a.sh "x=\$'a\\'b'; git status --porcelain"
+run_checker ansi1
+check "a \\' inside \$'...' does not end the string, so the call after it is found" "[[ $st == 1 ]]"
+fixture ansi2 scripts/a.sh "x=\$'a\\'b'; git status --porcelain --untracked-files=all"
+run_checker ansi2
+check "and with its setting it passes (the line is balanced, no fail-closed pass)" "[[ $st == 0 ]]"
+fixture ansi3 scripts/a.sh "x=\$'a\\'b'; echo 'git status --porcelain'"
+run_checker ansi3
+check "a string after a \$'...' with an escaped quote is still a string, not code" "[[ $st == 0 ]]"
+fixture bt-close scripts/a.sh 'echo `git status --porcelain` x `-u`'
+run_checker bt-close
+check "the second backtick ends a call inside backticks, so a later -u is not its setting" "[[ $st == 1 ]]"
 # a scan that crashes is exit 2 (an uncaught exception would exit 1, which means "found")
 fixture crash scripts/a.sh 'echo hi'
 out="$(python3 -I -c '
