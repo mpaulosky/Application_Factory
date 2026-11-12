@@ -315,9 +315,18 @@ check "a string after a \$'...' with an escaped quote is still a string, not cod
 fixture ansi4 scripts/a.sh "git -c x=\$'a\\'b' status --porcelain"
 run_checker ansi4
 check "a \$'...' argument with an escaped quote does not hide the rest of the call" "[[ $st == 1 ]]"
-fixture ansi5 scripts/a.sh "git -c x=\$'a\\'b' status --porcelain --untracked-files=all"
+fixture ansi5 scripts/a.sh "git status --porcelain \$'\\'' -u"
 run_checker ansi5
-check "and the setting after it is seen" "[[ $st == 0 ]]"
+check "a \$'\\'' word is one word, so the -u after it is the setting" "[[ $st == 0 ]]"
+fixture dollar-dq1 scripts/a.sh 'git status $"--porcelain"'
+run_checker dollar-dq1
+check "a \$\"...\" word is the same as \"...\"" "[[ $st == 1 ]]"
+fixture dollar-dq2 scripts/a.sh 'git status $"--porcelain" $"-u"'
+run_checker dollar-dq2
+check "and a \$\"-u\" is a setting" "[[ $st == 0 ]]"
+fixture dollar-end scripts/a.sh 'git status --porcelain $'
+run_checker dollar-end
+check "a lone \$ at the end of the call changes nothing" "[[ $st == 1 ]]"
 fixture bt-close scripts/a.sh 'echo `git status --porcelain` x `-u`'
 run_checker bt-close
 check "the second backtick ends a call inside backticks, so a later -u is not its setting" "[[ $st == 1 ]]"

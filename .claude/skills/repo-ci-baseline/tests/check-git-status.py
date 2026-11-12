@@ -190,6 +190,9 @@ def split_words(text):
                 word.append(text[i])
             else:
                 word.append(c)
+        elif c == "$" and text[i + 1 : i + 2] == '"':  # $"...": the same as "..." (a translated string)
+            quote, in_word = '"', True
+            i += 1
         elif c == "$" and text[i + 1 : i + 2] == "'":  # $'...': a backslash escapes the next character
             quote, in_word = "ansi", True
             i += 1

@@ -87,7 +87,7 @@ run_checker
 check "a NUL byte in a mutation is found" "[[ $st == 1 ]] && grep -q 'without a NUL byte' <<<\"\$out\""
 printf '{"test": ["true"], "timeout": 5, "mutations": [{"path": "scripts/a.sh", "old": "echo one", "new": "echo 1", "why": "bad \\ud800 why"}]}\n' > "$work/specs/s.json"
 run_checker
-check "a lone surrogate in a reason is reported, not a traceback" "[[ $st == 1 ]] && grep -q 'without a NUL byte' <<<\"\$out\" && ! grep -q Traceback <<<\"\$out\""
+check "a lone surrogate in a reason is reported, escaped, not a traceback" "[[ $st == 1 ]] && grep -q 'without a NUL byte' <<<\"\$out\" && grep -q 'ud800' <<<\"\$out\" && ! grep -q Traceback <<<\"\$out\""
 check "the timeout cap is the one mutate.py has" "[[ \"\$(grep -o 'MAX_TIMEOUT = [0-9]*' \"\$checker\")\" == \"\$(grep -o 'MAX_TIMEOUT = [0-9]*' \"\$here/../../template/owned/.claude/skills/hardening-review/scripts/mutate.py\")\" ]]"
 printf '{"test": ["true"], "timeout": 5, "mutations": ["x", 3]}\n' > "$work/specs/s.json"
 run_checker
