@@ -250,7 +250,7 @@ for loc in C C.utf8 en_US.utf8; do
   SLUG_LOCALE=$loc
   for script in work-issue cleanup; do
     # shellcheck disable=SC2016 # the bash -c text is expanded by the inner bash, on purpose
-    slug_of_run() { env -u LC_ALL -u LC_CTYPE LANG="$SLUG_LOCALE" bash -c 'set -euo pipefail; eval "$1"; slug_of "$2"' _ "$(slug_fn "$SCRIPTS/$script.sh")" "$1"; }
+    slug_of_run() { env -u LC_ALL -u LC_CTYPE -u LC_COLLATE -u LC_NUMERIC -u LC_MESSAGES LANG="$SLUG_LOCALE" bash -c 'set -euo pipefail; eval "$1"; slug_of "$2"' _ "$(slug_fn "$SCRIPTS/$script.sh")" "$1"; }
     for pair in "https://GitHub.com/Acme/r|Acme/r" "HTTPS://github.com/acme/r.git/|acme/r" "ssh://git@SSH.GitHub.com:443/acme/r|acme/r" "https://www.github.com/acme/r/|acme/r" "https://x:y@github.com/acme/r.git/|acme/r" \
       "https://us%40er:p~w@github.com/ac-me/r_1.x|ac-me/r_1.x" "git://github.com/acme/r|acme/r" "git@github.com:Acme/R.git|Acme/R" "github.com:acme/r|acme/r" "www.github.com:acme/r|acme/r" "x@ssh.github.com:acme/r|acme/r"; do
       check "$script [$loc]: slug_of reads ${pair%%|*} as ${pair##*|}" "[[ \"\$(slug_of_run '${pair%%|*}')\" == '${pair##*|}' ]]"
@@ -263,6 +263,11 @@ for loc in C C.utf8 en_US.utf8; do
   done
 done
 
+# The C-locale lines are pinned in the text too, so a runner without a UTF-8 locale still fails when one is dropped
+for script in work-issue cleanup; do
+  check "$script: slug_of declares local LC_ALL=C (the regex ranges are ASCII only)" "slug_fn $SCRIPTS/$script.sh | grep -q 'local LC_ALL=C '"
+  check "$script: slug_of's tr is started as LC_ALL=C tr" "slug_fn $SCRIPTS/$script.sh | grep -q 'LC_ALL=C tr '"
+done
 # slug_of's tr runs with LC_ALL=C whatever locale the caller has: a tr shim logs the LC_ALL it is started with (GNU tr is byte-wise, so only the environment can be pinned)
 real_tr="$(command -v tr)"; mkdir "$work/trshim"
 # shellcheck disable=SC2016 # the shim's own text: ${LC_ALL-unset} is expanded when the shim runs
@@ -272,8 +277,8 @@ for script in work-issue cleanup; do
     : > "$work/tr.log"
     lc_env=(-u LC_ALL); [[ "$loc" == unset ]] || lc_env=(LC_ALL=C.utf8)
     # shellcheck disable=SC2016 # the bash -c text is expanded by the inner bash, on purpose
-    env -u LC_CTYPE "${lc_env[@]}" TR_LOG="$work/tr.log" PATH="$work/trshim:$PATH" LANG=C.utf8 bash -c 'eval "$1"; slug_of https://GitHub.com/Acme/r >/dev/null' _ "$(slug_fn "$SCRIPTS/$script.sh")"
-    check "$script: slug_of starts tr with LC_ALL=C (the caller's LC_ALL: $loc)" "[[ -s $work/tr.log && \"\$(sort -u $work/tr.log)\" == C ]]"
+    env -u LC_CTYPE -u LC_COLLATE -u LC_NUMERIC -u LC_MESSAGES "${lc_env[@]}" TR_LOG="$work/tr.log" PATH="$work/trshim:$PATH" LANG=C.utf8 bash -c 'eval "$1"; slug_of https://GitHub.com/Acme/r >/dev/null' _ "$(slug_fn "$SCRIPTS/$script.sh")"
+    check "$script: slug_of starts tr with LC_ALL=C (the caller's LC_ALL: $loc)" "[[ -s '$work/tr.log' && \"\$(sort -u '$work/tr.log')\" == C ]]"
   done
 done
 
