@@ -46,8 +46,9 @@ Don't add more without an ADR.
 
 ```bash
 scripts/gate.sh --sync                                        # copy the Template's files over the Factory's copies of them (after editing the Template)
-scripts/gate.sh --quick                                       # while iterating: the gate up to and including shellcheck of the shell files the branch changed, without the local review check and test.sh (about a minute); never for a push
-scripts/gate.sh                                               # the pre-push gate (needs pnpm on the first run); GATE_NO_CACHE=1 runs test.sh again on a tree that already passed it
+scripts/gate.sh --quick                                       # while iterating: the gate up to and including shellcheck of the shell files the branch changed, without the local review check, test.sh and the Sandcastle check (about a minute); never for a push
+scripts/gate.sh                                               # the pre-push gate (needs pnpm on the first run); GATE_NO_CACHE=1 runs test.sh and the Sandcastle check again on a tree that already passed them
+GATE_PART=sandcastle scripts/gate.sh                          # one part alone (self, static, template, sandcastle), as a CI job runs it; the Sandcastle check needs pnpm and the network
 .claude/skills/repo-ci-baseline/test.sh                       # all the Template's tests; needs actionlint, zizmor, yamllint, shellcheck, markdownlint-cli2, node, git, jq
 .claude/skills/repo-ci-baseline/tests/sandcastle-check.test.sh # Sandcastle's type-check and tests on a throwaway Application; needs pnpm and the network
 .claude/skills/repo-ci-baseline/template/owned/.claude/skills/hardening-review/scripts/mutate.py .claude/skills/repo-ci-baseline/tests/gh_repo/mutations.json  # ~1 min, from the repo root, needs uvx: edits check_gh_repo.py one mutation at a time and restores it; commit the scanner change first (a dirty target is refused)

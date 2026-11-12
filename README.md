@@ -15,7 +15,8 @@ the Fleet registry, and the scripts that Apply the Baseline, find Drift and roll
 | `starting-points/` | Optional app-stack files to copy into an Application: `.aspire/`, `.github/instructions/`, the `beast` agent, the `code-review` skill |
 | `docs/adr/` | The decisions behind the Factory |
 | `docs/Instructions.md` | Setting up a new Application, or standardizing an existing one |
-| `.github/workflows/template-tests.yml` | CI: runs the Template's tests on every PR |
+| `.github/workflows/template-tests.yml` | CI: runs the gate (`scripts/gate.sh`) one part per job in parallel; the required check is `Template tests`, which needs every part (ADR 0012) |
+| `.github/actions/template-tools/` | The local action that installs the tools each part of that workflow needs |
 | `.github/workflows/{claude-review,pr-automerge,pr-review-submitted}.yml` | Claude Review and PR Auto-Merge, copies of the Template's |
 
 ## Using it

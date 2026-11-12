@@ -9,7 +9,8 @@
 #
 # The install is not frozen. A new repo starts with no lockfile and takes the newest versions the Seed's ranges allow,
 # so this is the check a new repo would meet; a range that lets in a release the code can't build with fails here first.
-# test.sh does not run this (it needs pnpm and the network); the Template tests workflow does, as its own step.
+# test.sh does not run this (it needs pnpm and the network); the Template tests workflow does, as the sandcastle part of scripts/gate.sh
+# (GATE_PART=sandcastle, its own job, ADR 0012), and a full gate runs it when the branch changed a file it reads.
 set -euo pipefail
 
 skill_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

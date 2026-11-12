@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # scripts/gate.sh --quick: the checks that finish in about a minute (its test, the review tests, the copies' drift, the bare-#N check, the git status guard check, lint, shellcheck of the shell files the branch changes), then stop before the local
-# review check and test.sh. It is for iterating, never for pushing: the pre-push hook and CI call this script with no argument.
+# review check, test.sh and the Sandcastle check. It is for iterating, never for pushing: the pre-push hook and CI call this script with no argument.
 # scripts/gate.sh --sync: copies every Template file the Factory carries over its copy (cp -p keeps the execute bit), prints the ones that changed,
 # and stops. A copy edited by hand is overwritten, so edit the Template's file. Run it after editing the Template's file; the drift check below is what finds a copy you forgot.
 quick=0
@@ -29,7 +29,7 @@ case "$part" in
   "" | self | static | template | sandcastle) ;;
   *) echo "GATE_PART must be self, static, template or sandcastle, not '$part'." >&2; exit 2 ;;
 esac
-if ((quick)) && [[ -n "$part" ]]; then echo "scripts/gate.sh --quick runs no single part: unset GATE_PART." >&2; exit 2; fi
+if ((quick || sync)) && [[ -n "$part" ]]; then echo "scripts/gate.sh --quick and --sync run no single part: unset GATE_PART." >&2; exit 2; fi
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
@@ -130,7 +130,7 @@ run_static() {
   fi
   echo "${#copies[@]} copies match the Template."
 
-  # test.sh's issue-reference rule (a bare #N in an Owned file), run here too so --quick catches it and not only the full gate's last step.
+  # test.sh's issue-reference rule (a bare #N in an Owned file), run here too so --quick catches it and not only the template part (test.sh).
   echo -e "\n${CYAN}▶ Issue references in Owned files${RESET}"
   # Exit 1 is a bare #N (the checker printed it); anything else (2: a folder, file or directory it could not check) is the check itself failing, and fails the gate too. An uncaught Python error also exits 1, with its traceback above.
   if ! command -v python3 >/dev/null 2>&1; then
@@ -166,7 +166,7 @@ run_static() {
   echo -e "\n${CYAN}▶ yamllint (whole repo, as Lint YAML)${RESET}"
   yamllint -c .yamllint.yml . || { echo -e "${RED}❌ yamllint${RESET}" >&2; exit 1; }
   # Lint with ShellCheck the shell files this branch changes (added, copied, modified, renamed or type-changed, committed or not, against its merge base with origin/main; every tracked and untracked
-  # shell file when there is no origin/main or no merge base), so --quick finds what test.sh's shellcheck step would fail on at the end of the full gate. A shell file is a *.sh or one of the three git hooks.
+  # shell file when there is no origin/main or no merge base), so --quick finds what test.sh's shellcheck step would fail in the template part. A shell file is a *.sh or one of the three git hooks.
   echo -e "\n${CYAN}▶ shellcheck (changed shell files)${RESET}"
   if ! command -v shellcheck >/dev/null 2>&1; then
     echo -e "${RED}❌ shellcheck not found: the gate needs it (test.sh runs it too).${RESET}" >&2
@@ -226,14 +226,22 @@ run_cached() {
   fi
 }
 
-# sandcastle_changed: 0 when the branch changed a file Sandcastle's check reads (the Template's .sandcastle/ code, the Seed's package files, the check and its tests), or when
-# that can't be told (no origin/main or merge base, a git failure): then the check runs, as the shellcheck step does for every shell file.
+# sandcastle_changed: 0 when the branch changed a file Sandcastle's check reads, 1 when it did not, and 0 too when that can't be told (no origin/main or merge base, a git or grep failure):
+# then the check runs, as the shellcheck step does for every shell file. The check applies the whole Template to a throwaway repo and runs the tests in tests/sandcastle/, which read the
+# Template's Owned and Seed files, the skill's references/ and docs/adr/, SKILL.md, CONTEXT.md and .claude/rules/sandcastle.md. -z and --no-renames: git would quote a name with a
+# non-ASCII byte, and show only the new name of a rename, hiding a file moved out of a watched folder.
 sandcastle_changed() {
-  local base files others
+  local base list rc=0
   git rev-parse -q --verify refs/remotes/origin/main >/dev/null && base="$(git merge-base origin/main HEAD 2>/dev/null)" || return 0
-  files="$(git diff --name-only "$base")" || return 0
-  others="$(git ls-files --others --exclude-standard)" || return 0
-  grep -Eq "^\.claude/skills/repo-ci-baseline/(template/[^/]+/\.sandcastle/|template/seed/(package\.json|pnpm)|tests/sandcastle)" <<<"$files"$'\n'"$others"
+  list="$(mktemp)" || return 0
+  if ! { git diff -z --name-only --no-renames "$base" && git ls-files -z --others --exclude-standard; } >"$list" 2>/dev/null; then
+    command rm -f -- "$list"
+    return 0
+  fi
+  grep -zEq '^\.claude/(skills/repo-ci-baseline/(template/|apply\.sh$|SKILL\.md$|CONTEXT\.md$|references/|docs/adr/|tests/sandcastle)|rules/sandcastle\.md$)' "$list" || rc=$?
+  command rm -f -- "$list"
+  if ((rc > 1)); then return 0; fi
+  return "$rc"
 }
 
 run_sandcastle() {

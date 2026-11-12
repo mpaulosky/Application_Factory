@@ -39,6 +39,8 @@ runs:
         # The renderer oracle's kramdown, at the versions the github-pages gem pins.
         sudo gem install --no-document kramdown:2.4.0 kramdown-parser-gfm:1.1.0
         pnpm add -g "markdownlint-cli2@${MARKDOWNLINT_CLI2_VERSION}"
+        # In the runner's temp folder: the workspace is the repo, and a downloaded archive there would show as an untracked file.
+        cd "$RUNNER_TEMP"
         archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
         curl -fsSLO "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
         echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum -c -
