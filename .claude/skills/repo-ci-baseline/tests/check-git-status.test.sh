@@ -237,5 +237,13 @@ mkdir -p "$work/dangling/scripts"; ln -s "$work/dangling/nowhere" "$work/danglin
 run_checker dangling
 check "a dangling symlink named *.sh is exit 2, not skipped" "[[ $st == 2 ]]"
 
+# a scan that crashes is exit 2 (an uncaught exception would exit 1, which means "found")
+fixture crash scripts/a.sh 'echo hi'
+out="$(python3 -I -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("cgs", sys.argv[1]); mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+mod.scan = lambda root: 1 / 0
+sys.exit(mod.guarded_main(["x", sys.argv[2]]))' "$here/check-git-status.py" "$work/crash" 2>&1)"; st=$?
+check "a crash in the scan is exit 2, saying it did not check" "[[ $st == 2 ]] && grep -q 'failed without checking' <<<\"\$out\""
 echo "$PASSED passed, $FAILED failed"
 [[ $FAILED == 0 ]]

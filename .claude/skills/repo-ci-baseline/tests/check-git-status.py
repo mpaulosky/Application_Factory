@@ -2,7 +2,7 @@
 
     python3 -I check-git-status.py <the Template's owned/ folder>      (tests/check-git-status.sh runs this)
 
-Exit 0: none found. Exit 1: found, printed as file:line:text. Exit 2: the folder is missing, or the folder or a file in it could not be read (nothing was fully checked).
+Exit 0: none found. Exit 1: found, printed as file:line:text. Exit 2: the folder is missing, the folder or a file in it could not be read, or the scan itself failed (nothing was fully checked).
 Without --untracked-files=<mode> or -u[<mode>] (=all, or =no when ignoring them is the point), a user's status.showUntrackedFiles=no hides an untracked file from the
 guard, so a "clean tree" check passes on a dirty one. A script's tests, Markdown and Sandcastle's TypeScript are not scanned: a test sets its own repo's config, and
 Sandcastle runs `git status` in a fresh sandbox clone. Scanned: *.sh and the three git hooks, in any folder below the one given except a `tests` folder.
@@ -142,5 +142,14 @@ def main(argv):
     return 0
 
 
+def guarded_main(argv):
+    """main(), with a crash reported as exit 2: an uncaught exception would exit 1, the status for "found", and a broken scan would pass for a finding."""
+    try:
+        return main(argv)
+    except Exception as error:  # noqa: BLE001 - any failure means nothing was fully checked
+        print(f"check-git-status.py failed without checking: {type(error).__name__}: {error}", file=sys.stderr)
+        return 2
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    sys.exit(guarded_main(sys.argv))
