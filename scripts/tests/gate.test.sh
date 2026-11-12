@@ -584,9 +584,31 @@ done
 mkdir -p "$work/sc-grep"; printf '#!/usr/bin/env bash\nexit 2\n' > "$work/sc-grep/grep"; chmod +x "$work/sc-grep/grep"
 check "sandcastle_changed says changed when grep itself fails (exit 2), so the check is not skipped on a guess" "$([[ "$(sc_changed_rc "$repoP" "$work/sc-grep:$PATH")" == 0 ]] && echo 0 || echo 1)"
 
+# The workflow checks read YAML. PyYAML may be only in a user site or in yamllint's own environment, which python3 -I does not see, so pick an
+# interpreter the way test.sh does: python3 -I when it imports yaml, else uvx with pyyaml.
+yaml_python() { # yaml_python: prints the command that runs Python with PyYAML, one word per line; fails when there is none
+  if python3 -I -c 'import yaml' &> /dev/null; then
+    printf '%s\n' python3 -I
+  elif command -v uvx > /dev/null; then
+    printf '%s\n' uvx --with pyyaml python -I
+  else
+    echo "the workflow checks need PyYAML for python3, or uvx" >&2
+    return 1
+  fi
+}
+mkdir -p "$work/noyaml"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$work/noyaml/python3"
+printf '#!/usr/bin/env bash\necho "uvx $*"\n' > "$work/noyaml/uvx"
+chmod +x "$work/noyaml/python3" "$work/noyaml/uvx"
+check "the workflow checks use uvx with pyyaml when python3 cannot import yaml" "$([[ "$(PATH="$work/noyaml:$PATH" yaml_python | tr '\n' ' ')" == "uvx --with pyyaml python -I " ]] && echo 0 || echo 1)"
+rm "$work/noyaml/uvx"
+check "the workflow checks fail, not pass, when there is no Python with PyYAML and no uvx" "$(PATH="$work/noyaml" yaml_python 2> /dev/null && echo 1 || echo 0)"
+mapfile -t yaml_py < <(yaml_python)
+[[ ${#yaml_py[@]} -gt 0 ]] || { echo "gate.test.sh: no Python with PyYAML and no uvx for the workflow checks" >&2; exit 1; }
+
 # The CI workflow: one job per part, and the job the ruleset requires needs them all, so a part cannot go missing from CI without this test failing.
 workflow_ok() { # workflow_ok <workflow file> <gate.sh>: 0 when its jobs run each GATE_PART once, through scripts/gate.sh, and "Template tests" always runs and needs every one of them
-  python3 -I - "$1" "$2" <<'PY'
+  "${yaml_py[@]}" - "$1" "$2" <<'PY'
 import re, sys, yaml
 wf = yaml.safe_load(open(sys.argv[1]))
 gate = open(sys.argv[2]).read()
@@ -624,7 +646,7 @@ PY
 aggregator_ok() { # aggregator_ok <workflow file>: 0 when the Template tests step passes for four successes and fails for a failure, a cancelled or a skipped job, a missing job and nothing
   local script ok=0 case_json result job
   command -v jq > /dev/null || { echo "aggregator_ok needs jq" >&2; return 1; }
-  script="$(python3 -I -c 'import sys, yaml; j = yaml.safe_load(open(sys.argv[1]))["jobs"]; print([x for x in j.values() if x.get("name") == "Template tests"][0]["steps"][-1]["run"])' "$1")" || return 1
+  script="$("${yaml_py[@]}" -c 'import sys, yaml; j = yaml.safe_load(open(sys.argv[1]))["jobs"]; print([x for x in j.values() if x.get("name") == "Template tests"][0]["steps"][-1]["run"])' "$1")" || return 1
   agg() { NEEDS="$1" bash -e -c "$script" > /dev/null 2>&1; }
   agg '{"self":{"result":"success"},"static":{"result":"success"},"template":{"result":"success"},"sandcastle":{"result":"success"}}' || ok=1
   for result in failure cancelled skipped; do
@@ -642,7 +664,7 @@ check "the CI workflow has one job per GATE_PART, run through gate.sh, and a Tem
 check "the Template tests step passes for four successes and fails for a failed, cancelled or skipped part, a missing part and no parts" "$(aggregator_ok "$wf" && echo 0 || echo 1)"
 mkdir -p "$work/wf"
 mutate_wf() { # mutate_wf <name> <python statement on the loaded workflow `wf`>: writes $work/wf/<name>.yml
-  python3 -I - "$wf" "$work/wf/$1.yml" "$2" <<'PY'
+  "${yaml_py[@]}" - "$wf" "$work/wf/$1.yml" "$2" <<'PY'
 import sys, yaml
 wf = yaml.safe_load(open(sys.argv[1]))
 exec(sys.argv[3])
