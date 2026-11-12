@@ -424,6 +424,15 @@ if [[ "$(id -u)" != 0 ]]; then
   GATE_NO_CACHE=1 run "$repo18"
   check "a remembered pass that can't be cleared fails the gate before test.sh, saying so" "$([[ $status == 1 && $ran == no ]] && grep -q 'could not clear the remembered test.sh pass' "$repo18/out" && echo 0 || echo 1)"
   chmod 755 "$repo18/.git/gate-cache"
+  # The same in a linked worktree of a clone whose path holds glob characters (there the cache folder's path is absolute): the leftover pass is found by its
+  # literal name, not read as a pattern.
+  repo18b="$(new_repo 'cache-[x]-unclearable')"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo18b/.git/info/exclude"; commit_all "$repo18b" base
+  wt18b="$work/cache-[x]-worktree"; git -C "$repo18b" worktree add -q --detach "$wt18b"
+  run "$wt18b"
+  chmod 555 "$repo18b/.git/gate-cache"
+  GATE_NO_CACHE=1 run "$wt18b"
+  check "a pass that can't be cleared fails the gate in a worktree of a clone whose path holds [ and ]" "$([[ $status == 1 && $ran == no ]] && grep -q 'could not clear the remembered test.sh pass' "$wt18b/out" && echo 0 || echo 1)"
+  chmod 755 "$repo18b/.git/gate-cache"
 else
   echo "skip - the unclearable-pass case needs a user other than root"
 fi
@@ -558,15 +567,16 @@ rm -rf "$repoP/.git/gate-cache"
 STUB_EXIT=1 RUN_PART=template RUN_SHARD=checks run "$repoP"
 check "a failing shard fails the template part" "$([[ $status == 1 && "$(shards_seen)" == checks ]] && echo 0 || echo 1)"
 
-# A failing run of test.sh, whole or one shard, clears every remembered test.sh pass for the tree: the whole run's and each shard's (Copilot's review of PR 65).
+# A run of test.sh clears the remembered passes it overlaps for the tree: a whole run clears every shard's, a shard the whole run's (Copilot's review of PR 65).
+# Shards don't overlap each other, so one shard's failure leaves another's pass.
 rm -rf "$repoP/.git/gate-cache" "$repoP/.git/test-sh-shards"
 run "$repoP"; RUN_PART=template RUN_SHARD=scripts run "$repoP"
 GATE_NO_CACHE=1 STUB_EXIT=1 RUN_PART=template RUN_SHARD=hooks run "$repoP"
 check "a forced shard that fails fails the template part" "$([[ $status == 1 && "$(shards_seen)" == hooks ]] && echo 0 || echo 1)"
+RUN_PART=template RUN_SHARD=scripts run "$repoP"
+check "another shard's pass still stands: one shard's failure says nothing about it" "$([[ $status == 0 && "$(shards_seen)" == hooks ]] && grep -q "test.sh (scripts shard) already passed" "$repoP/out" && echo 0 || echo 1)"
 rm -f "$repoP/$skill/ran"; run "$repoP"
 check "and the next full gate runs all of test.sh instead of trusting the whole run's old pass" "$([[ $status == 0 && $ran == yes && "$(shards_seen)" == unset ]] && echo 0 || echo 1)"
-RUN_PART=template RUN_SHARD=scripts run "$repoP"
-check "and another shard runs again too, its old pass cleared with the rest" "$([[ $status == 0 && "$(shards_seen)" == scripts ]] && echo 0 || echo 1)"
 RUN_PART=template RUN_SHARD=hooks run "$repoP"
 GATE_NO_CACHE=1 STUB_EXIT=1 run "$repoP"
 check "a forced full gate whose test.sh fails fails the gate" "$([[ $status == 1 && "$(shards_seen)" == unset ]] && echo 0 || echo 1)"

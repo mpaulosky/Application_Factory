@@ -204,10 +204,10 @@ run_static() {
 # uncommitted or untracked (ignored files don't count), in the common git directory so every worktree of the clone shares it: the same tree is not checked twice. Only a pass is stored, and
 # only when the tree is still that clean tree after the command ran. GATE_NO_CACHE=1 always runs it. Any run that goes on to run the command clears the old pass first (and fails if it can't),
 # so a failure leaves nothing remembered for the next run. A git that fails here (a broken index, a lock) leaves the tree unproven clean, so the command runs and nothing is stored.
-# A name such as test-sh.hooks is one part of the family before the dot (test-sh, ADR 0013): a run of any member clears the whole family's passes for the tree, since a
-# failing shard or whole run proves the other members' passes stale too.
+# A name such as test-sh.hooks is one part of the whole named before the dot (test-sh, ADR 0013). The whole and its parts overlap, so a run of the whole clears every
+# part's pass for the tree too, and a run of a part clears the whole's: a failure leaves no pass standing that covers what failed. Parts don't overlap each other.
 run_cached() {
-  local name="$1" label="$2" cache="" dirty tree common after family stale
+  local name="$1" label="$2" cache="" dirty tree common after whole f stale
   shift 2
   if dirty="$(git status --porcelain --untracked-files=all)" && [[ -z "$dirty" ]] \
     && tree="$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" && common="$(git rev-parse --git-common-dir)"; then
@@ -218,10 +218,15 @@ run_cached() {
     return 0
   fi
   if [[ -n "$cache" ]]; then
-    family="${name%%.*}"
-    command rm -f -- "${cache%/*}/$family-$tree" "${cache%/*}/$family."*"-$tree" 2>/dev/null || true
-    if stale="$(compgen -G "${cache%/*}/$family-$tree" || compgen -G "${cache%/*}/$family.*-$tree")"; then
-      echo -e "${RED}❌ could not clear the remembered $label pass (${stale%%$'\n'*}): a failure now would leave it for the next run. Remove it by hand.${RESET}" >&2
+    whole="${name%%.*}"
+    # Only the * is a pattern: the folder and names are quoted, so a clone path holding [, ] or ? is matched literally, and an unmatched * stays literal and fails -e.
+    local overlapping=("${cache%/*}/$whole-$tree" "$cache")
+    [[ "$name" != "$whole" ]] || overlapping+=("${cache%/*}/$whole."*"-$tree")
+    command rm -f -- "${overlapping[@]}" 2>/dev/null || true
+    stale=""
+    for f in "${overlapping[@]}"; do if [[ -e "$f" ]]; then stale="$f"; break; fi; done
+    if [[ -n "$stale" ]]; then
+      echo -e "${RED}❌ could not clear the remembered $label pass ($stale): a failure now would leave it for the next run. Remove it by hand.${RESET}" >&2
       exit 1
     fi
   fi
