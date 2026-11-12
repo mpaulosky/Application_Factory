@@ -204,8 +204,10 @@ run_static() {
 # uncommitted or untracked (ignored files don't count), in the common git directory so every worktree of the clone shares it: the same tree is not checked twice. Only a pass is stored, and
 # only when the tree is still that clean tree after the command ran. GATE_NO_CACHE=1 always runs it. Any run that goes on to run the command clears the old pass first (and fails if it can't),
 # so a failure leaves nothing remembered for the next run. A git that fails here (a broken index, a lock) leaves the tree unproven clean, so the command runs and nothing is stored.
+# A name such as test-sh.hooks is one part of the family before the dot (test-sh, ADR 0013): a run of any member clears the whole family's passes for the tree, since a
+# failing shard or whole run proves the other members' passes stale too.
 run_cached() {
-  local name="$1" label="$2" cache="" dirty tree common after
+  local name="$1" label="$2" cache="" dirty tree common after family stale
   shift 2
   if dirty="$(git status --porcelain --untracked-files=all)" && [[ -z "$dirty" ]] \
     && tree="$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" && common="$(git rev-parse --git-common-dir)"; then
@@ -216,9 +218,10 @@ run_cached() {
     return 0
   fi
   if [[ -n "$cache" ]]; then
-    command rm -f -- "$cache" 2>/dev/null || true
-    if [[ -e "$cache" ]]; then
-      echo -e "${RED}❌ could not clear the remembered $label pass ($cache): a failure now would leave it for the next run. Remove it by hand.${RESET}" >&2
+    family="${name%%.*}"
+    command rm -f -- "${cache%/*}/$family-$tree" "${cache%/*}/$family."*"-$tree" 2>/dev/null || true
+    if stale="$(compgen -G "${cache%/*}/$family-$tree" || compgen -G "${cache%/*}/$family.*-$tree")"; then
+      echo -e "${RED}❌ could not clear the remembered $label pass (${stale%%$'\n'*}): a failure now would leave it for the next run. Remove it by hand.${RESET}" >&2
       exit 1
     fi
   fi
@@ -275,7 +278,7 @@ run_template() {
 
   local shard="${TEST_SH_SHARD:-}"
   echo -e "\n${CYAN}▶ test.sh${shard:+ ($shard shard)}${RESET}"
-  run_cached "test-sh${shard:+-$shard}" "test.sh${shard:+ ($shard shard)}" "$ROOT/$skill/test.sh"
+  run_cached "test-sh${shard:+.$shard}" "test.sh${shard:+ ($shard shard)}" "$ROOT/$skill/test.sh"
 }
 
 case "$part" in

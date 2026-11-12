@@ -558,6 +558,21 @@ rm -rf "$repoP/.git/gate-cache"
 STUB_EXIT=1 RUN_PART=template RUN_SHARD=checks run "$repoP"
 check "a failing shard fails the template part" "$([[ $status == 1 && "$(shards_seen)" == checks ]] && echo 0 || echo 1)"
 
+# A failing run of test.sh, whole or one shard, clears every remembered test.sh pass for the tree: the whole run's and each shard's (Copilot's review of PR 65).
+rm -rf "$repoP/.git/gate-cache" "$repoP/.git/test-sh-shards"
+run "$repoP"; RUN_PART=template RUN_SHARD=scripts run "$repoP"
+GATE_NO_CACHE=1 STUB_EXIT=1 RUN_PART=template RUN_SHARD=hooks run "$repoP"
+check "a forced shard that fails fails the template part" "$([[ $status == 1 && "$(shards_seen)" == hooks ]] && echo 0 || echo 1)"
+rm -f "$repoP/$skill/ran"; run "$repoP"
+check "and the next full gate runs all of test.sh instead of trusting the whole run's old pass" "$([[ $status == 0 && $ran == yes && "$(shards_seen)" == unset ]] && echo 0 || echo 1)"
+RUN_PART=template RUN_SHARD=scripts run "$repoP"
+check "and another shard runs again too, its old pass cleared with the rest" "$([[ $status == 0 && "$(shards_seen)" == scripts ]] && echo 0 || echo 1)"
+RUN_PART=template RUN_SHARD=hooks run "$repoP"
+GATE_NO_CACHE=1 STUB_EXIT=1 run "$repoP"
+check "a forced full gate whose test.sh fails fails the gate" "$([[ $status == 1 && "$(shards_seen)" == unset ]] && echo 0 || echo 1)"
+RUN_PART=template RUN_SHARD=hooks run "$repoP"
+check "and the next run of a shard tests again instead of trusting its old pass" "$([[ $status == 0 && "$(shards_seen)" == hooks ]] && ! grep -q "already passed" "$repoP/out" && echo 0 || echo 1)"
+
 # test.sh's shards: every step sits in exactly one shard block, the blocks are the declared shards in order, and a bad shard is refused.
 testsh_shards_ok() { # testsh_shards_ok <test.sh>: 0 when its steps are split into the shards it declares, each block once, nothing outside
   python3 -I - "$1" <<'PY'
