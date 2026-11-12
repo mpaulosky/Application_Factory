@@ -11,7 +11,7 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+trap 'chmod -R u+w "$work" 2>/dev/null; rm -rf "$work"' EXIT # a case that makes a folder read-only is cleaned up even when it is interrupted
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH # a caller's GATE_NO_CACHE=1 must not reach the stub gate runs; the tests set it themselves where they need it
 
 pass=0; failed=0
@@ -398,7 +398,8 @@ run "$repo16"
 check "so the ordinary run after it is skipped" "$([[ $ran == no ]] && echo 0 || echo 1)"
 
 # A pass is never stored for a tree that test.sh left changed, and a pass that can't be cleared fails the gate instead of being trusted later.
-repo17="$(new_repo cache-changed)"; printf 'out\nreview-args\n%s/ran\nmoved\n' "$skill" > "$repo17/.git/info/exclude"; commit_all "$repo17" base
+# moved.txt, the file the stub adds, stays visible to git (it is not in the exclude file): that is what makes the tree changed.
+repo17="$(new_repo cache-changed)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo17/.git/info/exclude"; commit_all "$repo17" base
 STUB_TOUCH="$repo17/moved.txt" run "$repo17"
 check "a test.sh that leaves the tree changed passes the gate, saying its pass is not remembered" "$([[ $status == 0 && $ran == yes ]] && grep -q 'the tree changed while test.sh ran' "$repo17/out" && echo 0 || echo 1)"
 command rm -f "$repo17/moved.txt"; run "$repo17"
