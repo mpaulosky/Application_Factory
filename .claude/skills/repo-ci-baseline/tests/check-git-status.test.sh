@@ -192,6 +192,9 @@ check "a -u in a substitution inside double quotes is not the call's setting" "[
 fixture sub-bt scripts/a.sh 'git status --porcelain `sort -u f`'
 run_checker sub-bt
 check "a -u in backticks is not the call's setting" "[[ $st == 1 ]]"
+fixture sub-bt-dq scripts/a.sh 'git status --porcelain "`sort -u f`"'
+run_checker sub-bt-dq
+check "a -u in backticks inside double quotes is not the call's setting" "[[ $st == 1 ]]"
 fixture sub-arith scripts/a.sh 'git status --porcelain $((1+2))'
 run_checker sub-arith
 check "arithmetic expansion after the call leaves it found" "[[ $st == 1 ]]"
