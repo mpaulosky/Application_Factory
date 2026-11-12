@@ -17,6 +17,7 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   (`owned-paths`, `template`, `seed-config` and `template-prompts`) are in the skill's `tests/sandcastle/`; `tests/sandcastle-check.test.sh` copies them into a repo the Template was
   Applied to and runs them there. They ran in `dotfiles` before the Template moved.
 - `docs/adr/`: the Factory's decisions. `docs/Instructions.md`: the steps for setting up a new Application or standardizing an existing one.
+- `docs/research/`: dated research notes that the ADRs cite as evidence; they decide nothing, an ADR does.
 - `docs/SECURITY.md`: how to report a vulnerability, and where an accepted security finding's reason goes (ADR 0009).
 - `.github/workflows/template-tests.yml`: the Factory's own workflow (named `repo-ci-baseline Template`, job `Template tests`). It runs `test.sh` and the Sandcastle check on every PR.
 - `.github/hooks/` (`pre-commit`, `pre-push`, `post-checkout`), `scripts/check-branch-name.sh`, `.github/workflows/{claude-review,pr-automerge,pr-review-submitted}.yml` and
@@ -33,8 +34,9 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   0006](docs/adr/0006-the-factory-carries-the-git-hooks-and-a-gate.md).
 - `~/.claude/skills/repo-ci-baseline` is a symlink to the skill here, so editing it changes what `apply.sh` copies everywhere.
 
-The Factory carries the git hooks and a gate of its own (ADR 0006), Claude Review with PR Auto-Merge (ADR 0008), the issue and PR process (ADR 0009) and the local review
-(ADR 0010), not the rest of the Baseline: no other `.sandcastle/` code, .NET workflows or release workflows; its `package.json` holds only `tsx` and `zod`. Don't add more without an ADR.
+The Factory carries the git hooks and a gate of its own (ADR 0006), Claude Review with PR Auto-Merge (ADR 0008), the issue and PR process (ADR 0009), the local review
+(ADR 0010) and the edit-time lint (ADR 0011), not the rest of the Baseline: no other `.sandcastle/` code, .NET workflows or release workflows; its `package.json` holds only `tsx` and `zod`.
+Don't add more without an ADR.
 
 ## Commands
 

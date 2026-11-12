@@ -128,13 +128,14 @@ Rows marked "after review" are PRs whose body records a clean local review.
 | Category | Total | PRs 8 to 42 (39, no local review) | #43 (3) | #49, #59, #60, #61 (19, after a recorded review) |
 | --- | --- | --- | --- | --- |
 | Docs, ADR or skill text vs repo reality | 23 | 23 | 0 | 0 |
-| Parser and input-class edge cases in code | 15 | 4 | 0 | 11 (#49 seven, #59 one, #61 three) |
+| Parser and input-class edge cases in code | 14 | 4 | 0 | 10 (#49 seven, #61 three) |
 | Environment, git-config, quoting variance, stale state | 7 | 2 | 0 | 5 (#60 four, #61 one) |
 | Cross-file contract, copy drift, CI coverage | 5 | 4 | 1 | 0 |
 | Races and check-then-act | 4 | 2 | 0 | 2 (#60) |
 | Test gaps and masked tests | 4 | 3 | 0 | 1 (#60) |
 | Security text handling | 2 | 0 | 2 | 0 |
 | Workflow logic (substring bot match) | 1 | 1 | 0 | 0 |
+| Error handling, fail-open | 1 | 0 | 0 | 1 (#59) |
 
 No Copilot comment on this repo concerned workflow permissions, secrets exposure in a workflow, or markdown style. The deterministic linters (actionlint, zizmor, shellcheck, markdownlint,
 yamllint) already cover those; Copilot's value was reasoning about behaviour.

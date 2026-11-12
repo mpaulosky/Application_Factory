@@ -2,6 +2,7 @@
 
 Template files (Owned): `.github/hooks/` (`pre-commit`, `pre-push`, `post-checkout`), `.github/hooks/tests/`,
 `scripts/gate.sh`, `scripts/check-branch-name.sh` with its test,
+`scripts/check-git-hooks.sh` ([Session-start check](#session-start-check)) and `scripts/lint-edited-file.sh` ([Edit-time lint](#edit-time-lint)) with their tests,
 `scripts/work-issue.sh` and `scripts/cleanup.sh` with their tests, and the `branch-name` job in `ci.yml`. History: IssueTracker #182 (the branch standard).
 
 ## Branch-name standard
@@ -188,20 +189,23 @@ The Template doesn't carry `.claude/settings.json`, so each repo that wants the 
 
 `scripts/lint-edited-file.sh` (with `scripts/tests/lint-edited-file.test.sh`) is a Claude Code `PostToolUse` hook. After each Edit, Write or MultiEdit
 it lints the file the tool wrote, so an agent fixes a violation in the same turn and the pre-commit hook, the gate, CI and a reviewer never see it
-(ADR 0011). A Markdown file goes through `markdownlint-cli2` with the repo's `.markdownlint-cli2.jsonc`. A YAML file goes through `yamllint` with
-`.yamllint.yml`; a workflow also goes through `actionlint` and `zizmor --offline`, and `.github/dependabot.yml` through `zizmor`, as the gate does.
+([the Factory's ADR 0011](../../../../docs/adr/0011-markdown-and-yaml-are-linted-as-they-are-written.md)). A Markdown file goes through `markdownlint-cli2` with the repo's
+`.markdownlint-cli2.jsonc`. A YAML file goes through `yamllint` with `.yamllint.yml`; a workflow also goes through `actionlint` and `zizmor --offline`, and `.github/dependabot.yml` through `zizmor`.
+These are the checks the CI lint workflows run; a gate runs `actionlint` and `zizmor` only where it lints workflows (an Application's gate does when a workflow changed; the Factory's does not).
 
-- Exit 2 with the linters' output on stderr when any linter reports a problem; Claude Code feeds that back to the agent.
-  A linter that crashes counts as a problem, not as clean.
-- Exit 0 and no output for a file that is neither Markdown nor YAML, one outside a git repository, one under `node_modules/`,
-  or one that no longer exists. A linter that is not installed is named on stderr and skipped: the hook only helps, and the
-  pre-commit hook, the gate and CI still check.
-- Exit 1 with a message when its input is not JSON or `python3` is missing, so a broken hook is visible and is not read as a clean file.
-- The path reaches the linter whole: from the repo root of the file's own repository (a linked worktree is its own root), as
-  `./<path>`, and for Markdown with `--no-globs`, so a name with `[`, `*` or a leading `-` is not read as a glob or an option.
-  The config's `ignores` still apply.
-- The tests use stub linters on `PATH` that fail on a marker word and log their arguments and working directory, plus a run
-  against the real `markdownlint-cli2` when it is installed.
+- Exit 2 with the linters' output on stderr when any linter reports a problem; Claude Code feeds that back to the agent. A linter that crashes counts as a problem, not as clean. Each linter's
+  output is cut at 6,000 characters, and the report ends with a line telling the agent to hand a broken linter (a usage error, an old version) to the person.
+- Exit 0 and no output for a file that is neither Markdown nor YAML, one that no longer exists, a directory, a symlink, one under `node_modules/`, and one outside the project (below).
+- Exit 0 with a `systemMessage` on stdout, which Claude Code shows to the person, when a linter is not installed: the file is skipped for that linter, the hook only helps, and the pre-commit hook,
+  the gate and CI still check. Plain stderr on exit 0 is not shown, which is why the note is JSON.
+- Exit 1 with a message on stderr when its input is not JSON or `python3` is missing, so a broken hook is visible and is not read as a clean file.
+- Only the project's own repository and its linked worktrees are linted: the file's git common directory must equal that of `CLAUDE_PROJECT_DIR` (else the working directory). A linter loads the
+  repository's own config and, for Markdown, its `node_modules/.bin` copy, and `markdownlint-cli2` runs JavaScript from its config, so a file in another clone, or a nested repository, is left alone.
+  A `GIT_DIR`, `GIT_WORK_TREE` or `CDPATH` inherited from a git hook is cleared first.
+- The path reaches the linter whole: from the repo root of the file's own repository, as `./<path>`, and for Markdown with `--no-globs`, so a name with `[`, `*` or a leading `-` is not read as a glob
+  or an option (checked against the real tool: `a[1].md` and `x*y.md` are linted as those files). The config's `ignores` still apply.
+- The tests use stub linters on `PATH` that fail on a marker word and log their arguments and working directory, and check each linter's exact arguments, which stream carries the report, and the
+  repository boundary. A last block runs the real `markdownlint-cli2` when it is installed; an Application's hook-tests job installs none, so there it is skipped.
 
 The Template doesn't carry `.claude/settings.json`, so each repo adds the hook by hand:
 
@@ -217,8 +221,6 @@ The Template doesn't carry `.claude/settings.json`, so each repo adds the hook b
   }
 }
 ```
-
-A person can instead put the hook in `~/.claude/settings.json` with an absolute path to the script, to lint edits in every repo that carries it.
 
 ## Adapting
 

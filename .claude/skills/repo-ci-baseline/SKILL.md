@@ -46,7 +46,8 @@ Claude Code settings (`.claude/settings.json`) are not part of the Template: per
 The one rule worth adding to it, denying Claude Code the local review's ledgers and credential files, is in [pre-push-review.md](references/pre-push-review.md#adapting).
 The hooks worth adding by hand are `scripts/check-git-hooks.sh` ([git-hooks.md](references/git-hooks.md#session-start-check))
 and `scripts/lint-edited-file.sh`, which lints a Markdown or YAML file as Claude writes it ([git-hooks.md](references/git-hooks.md#edit-time-lint)).
-A repo that got it from an earlier Apply deletes it by hand, since `apply.sh` never deletes.
+A repo that got a `.claude/settings.json` from an earlier Apply deletes it by hand, since `apply.sh` never deletes.
+The Factory has a `.claude/settings.json` of its own for the edit-time lint hook (ADR 0011); an Application does not receive it.
 
 ## Standardize a repo
 
