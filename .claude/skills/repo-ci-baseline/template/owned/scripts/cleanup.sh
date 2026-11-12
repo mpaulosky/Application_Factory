@@ -49,7 +49,7 @@ command -v gh >/dev/null || die "gh is needed to read PR states" # gh-repo: ok
 # slug_of <url> -> owner/name of a github.com URL, else nothing. Forms: https://, http://, ssh://, git:// (userinfo, a numeric port, .git and a trailing / allowed) and
 # git@github.com:o/r; the host may be github.com, ssh.github.com or www.github.com, and scheme and host may be in any case (the owner/name keeps its case). Owner and name are
 # [A-Za-z0-9._-] only; the userinfo has no # ? / [ ] or space, and in the scp-style form no : either (git reads everything before that : as the host); a scp-style URL has no scheme.
-# The function runs in the C locale (local LC_ALL=C for the regex, on tr for the child), so [A-Za-z] means ASCII only. So a lookalike (https://evil.com#@github.com/o/r, evil.com:x@github.com:o/r, github.com:/o/r, a deeper path, file://, an IPv6 host) gives nothing.
+# It runs in the C locale (LC_ALL=C is local for the regex, and set on tr, a separate process), so [A-Za-z] means ASCII only. So a lookalike (https://evil.com#@github.com/o/r, evil.com:x@github.com:o/r, github.com:/o/r, a deeper path, file://, an IPv6 host) gives nothing.
 slug_of() {
   local LC_ALL=C u="${1%/}" l out="" ui_url="[A-Za-z0-9._~%!\$&'()*+,;=:-]+@" ui_scp="[A-Za-z0-9._~%!\$&'()*+,;=-]+@" nm="[A-Za-z0-9._-]+" host="(ssh\.|www\.)?github\.com"
   u="${u%.git}"; u="${u%/}"

@@ -244,22 +244,37 @@ check "a non-GitHub origin with no GITHUB_REPOSITORY fails, saying why" "[[ $st 
 slug_fn() { awk '/^slug_of\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$1"; }
 check "slug_of is the same function in work-issue.sh and cleanup.sh" "[[ -n \"\$(slug_fn $SCRIPTS/work-issue.sh)\" && \"\$(slug_fn $SCRIPTS/work-issue.sh)\" == \"\$(slug_fn $SCRIPTS/cleanup.sh)\" ]]"
 for loc in C C.utf8 en_US.utf8; do
- if [[ "$loc" != C ]] && ! locale -a 2>/dev/null | grep -qix "$loc"; then
-  if [[ -n "${CI:-}" ]]; then FAILED=$((FAILED + 1)); echo "FAIL - locale $loc is missing, and CI must test slug_of in it"; else echo "skip - locale $loc is not installed"; fi; continue
- fi
- SLUG_LOCALE=$loc
- for script in work-issue cleanup; do
-  slug_of_run() { ( set -euo pipefail; export LANG="${SLUG_LOCALE:-C}"; unset LC_ALL LC_CTYPE; eval "$(slug_fn "$SCRIPTS/$script.sh")"; slug_of "$1" ); }
-  for pair in "https://GitHub.com/Acme/r|Acme/r" "HTTPS://github.com/acme/r.git/|acme/r" "ssh://git@SSH.GitHub.com:443/acme/r|acme/r" "https://www.github.com/acme/r/|acme/r" "https://x:y@github.com/acme/r.git/|acme/r" \
-    "https://us%40er:p~w@github.com/ac-me/r_1.x|ac-me/r_1.x" "git://github.com/acme/r|acme/r" "git@github.com:Acme/R.git|Acme/R" "github.com:acme/r|acme/r" "www.github.com:acme/r|acme/r" "x@ssh.github.com:acme/r|acme/r"; do
-    check "$script [$loc]: slug_of reads ${pair%%|*} as ${pair##*|}" "[[ \"\$(slug_of_run '${pair%%|*}')\" == '${pair##*|}' ]]"
+  if [[ "$loc" != C ]] && [[ "$(LC_ALL=$loc locale charmap 2>/dev/null)" != UTF-8 ]]; then
+    if [[ -n "${CI:-}" && "$loc" == C.utf8 ]]; then FAILED=$((FAILED + 1)); echo "FAIL - locale C.utf8 is missing, and CI must test slug_of in a UTF-8 locale"; else echo "skip - locale $loc is not installed"; fi; continue
+  fi
+  SLUG_LOCALE=$loc
+  for script in work-issue cleanup; do
+    # shellcheck disable=SC2016 # the bash -c text is expanded by the inner bash, on purpose
+    slug_of_run() { env -u LC_ALL -u LC_CTYPE LANG="$SLUG_LOCALE" bash -c 'set -euo pipefail; eval "$1"; slug_of "$2"' _ "$(slug_fn "$SCRIPTS/$script.sh")" "$1"; }
+    for pair in "https://GitHub.com/Acme/r|Acme/r" "HTTPS://github.com/acme/r.git/|acme/r" "ssh://git@SSH.GitHub.com:443/acme/r|acme/r" "https://www.github.com/acme/r/|acme/r" "https://x:y@github.com/acme/r.git/|acme/r" \
+      "https://us%40er:p~w@github.com/ac-me/r_1.x|ac-me/r_1.x" "git://github.com/acme/r|acme/r" "git@github.com:Acme/R.git|Acme/R" "github.com:acme/r|acme/r" "www.github.com:acme/r|acme/r" "x@ssh.github.com:acme/r|acme/r"; do
+      check "$script [$loc]: slug_of reads ${pair%%|*} as ${pair##*|}" "[[ \"\$(slug_of_run '${pair%%|*}')\" == '${pair##*|}' ]]"
+    done
+    check "$script [$loc]: slug_of exits 0 on a URL it does not read (the scripts run under set -e)" "slug_of_run https://gitlab.com/acme/r >/dev/null"
+    for bad in "https://evil.com#@github.com/acme/r" "https://evil.com?@github.com/acme/r" "evil.com:x@github.com:acme/r" "x:@github.com:acme/r" "https://github.com:/acme/r" "https://github.com/foo/acme/r" "https://github.com/acme/r/extra" "https://github.com/acme/r?x=1" \
+      "https://github.com/" "https://ssh.github.com.evil.com/acme/r" "https://evil.com/github.com/acme/r" "file:///github.com/acme/r" "https://[::1]/acme/r" "git@github.com:/acme/r" "git@github.com:acme" "https://github.com/acme /r" "https://github.com/acme/r x" "https://github.com:22x/acme/r" "https://gitlab.com/acme/r" "/srv/acme/r" "https://gİthub.com/acme/r" "https://github.com/acmé/r" ""; do
+      check "$script [$loc]: slug_of reads nothing from '$bad'" "[[ -z \"\$(slug_of_run '$bad')\" ]]"
+    done
   done
-  check "$script [$loc]: slug_of exits 0 on a URL it does not read (the scripts run under set -e)" "slug_of_run https://gitlab.com/acme/r >/dev/null"
-  for bad in "https://evil.com#@github.com/acme/r" "https://evil.com?@github.com/acme/r" "evil.com:x@github.com:acme/r" "x:@github.com:acme/r" "https://github.com:/acme/r" "https://github.com/foo/acme/r" "https://github.com/acme/r/extra" "https://github.com/acme/r?x=1" \
-    "https://github.com/" "https://ssh.github.com.evil.com/acme/r" "https://evil.com/github.com/acme/r" "file:///github.com/acme/r" "https://[::1]/acme/r" "git@github.com:/acme/r" "git@github.com:acme" "https://github.com/acme /r" "https://github.com/acme/r x" "https://github.com:22x/acme/r" "https://gitlab.com/acme/r" "/srv/acme/r" "https://gİthub.com/acme/r" "https://github.com/acmé/r" ""; do
-    check "$script [$loc]: slug_of reads nothing from '$bad'" "[[ -z \"\$(slug_of_run '$bad')\" ]]"
+done
+
+# slug_of's tr runs with LC_ALL=C whatever locale the caller has: a tr shim logs the LC_ALL it is started with (GNU tr is byte-wise, so only the environment can be pinned)
+real_tr="$(command -v tr)"; mkdir "$work/trshim"
+# shellcheck disable=SC2016 # the shim's own text: ${LC_ALL-unset} is expanded when the shim runs
+printf '#!/usr/bin/env bash\necho "${LC_ALL-unset}" >> "$TR_LOG"\nexec %q "$@"\n' "$real_tr" > "$work/trshim/tr"; chmod +x "$work/trshim/tr"
+for script in work-issue cleanup; do
+  for loc in unset C.utf8; do
+    : > "$work/tr.log"
+    lc_env=(-u LC_ALL); [[ "$loc" == unset ]] || lc_env=(LC_ALL=C.utf8)
+    # shellcheck disable=SC2016 # the bash -c text is expanded by the inner bash, on purpose
+    env -u LC_CTYPE "${lc_env[@]}" TR_LOG="$work/tr.log" PATH="$work/trshim:$PATH" LANG=C.utf8 bash -c 'eval "$1"; slug_of https://GitHub.com/Acme/r >/dev/null' _ "$(slug_fn "$SCRIPTS/$script.sh")"
+    check "$script: slug_of starts tr with LC_ALL=C (the caller's LC_ALL: $loc)" "[[ -s $work/tr.log && \"\$(sort -u $work/tr.log)\" == C ]]"
   done
- done
 done
 
 # The branch checked out in the primary checkout is not a place to work
