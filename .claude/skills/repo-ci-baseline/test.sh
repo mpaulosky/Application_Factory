@@ -43,22 +43,27 @@ fail() { echo "FAIL: $1" >&2; failures=$((failures + 1)); }
 need() {
   command -v "$1" &>/dev/null || { echo "test.sh: $1 is required" >&2; exit 2; }
 }
-for tool in actionlint zizmor yamllint shellcheck markdownlint-cli2 git; do need "$tool"; done
-
+# The shard is checked first, before the tools, and must be exactly one of the declared names: a value such as "hooks scripts" would match no block and run nothing.
 shards=(hooks scripts checks)
 shard="${TEST_SH_SHARD:-}"
-if [[ -n "$shard" && " ${shards[*]} " != *" $shard "* ]]; then
-  echo "test.sh: TEST_SH_SHARD must be ${shards[*]}, not '$shard'." >&2
+known=0
+for s in "${shards[@]}"; do [[ "$shard" != "$s" ]] || known=1; done
+if [[ -n "$shard" ]] && ((known == 0)); then
+  echo "test.sh: TEST_SH_SHARD must be one of ${shards[*]}, not '$shard'." >&2
   exit 2
 fi
 in_shard() { [[ -z "$shard" || "$shard" == "$1" ]]; }
 
-# pytest is used in the scripts and checks shards, so it's chosen before either runs.
-if python3 -c 'import pytest' &>/dev/null; then
-  pytest_cmd=(python3 -m pytest)
-else
-  need uvx
-  pytest_cmd=(uvx pytest)
+for tool in actionlint zizmor yamllint shellcheck markdownlint-cli2 git; do need "$tool"; done
+
+# pytest is used in the scripts and checks shards, so it's chosen before either runs, and only when one of them does.
+if in_shard scripts || in_shard checks; then
+  if python3 -c 'import pytest' &>/dev/null; then
+    pytest_cmd=(python3 -m pytest)
+  else
+    need uvx
+    pytest_cmd=(uvx pytest)
+  fi
 fi
 
 if in_shard hooks; then

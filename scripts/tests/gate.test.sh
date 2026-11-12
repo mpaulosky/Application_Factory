@@ -550,7 +550,9 @@ check "another shard is not skipped by the first shard's pass" "$([[ $status == 
 RUN_SHARD=hooks run "$repoP"
 check "a full gate ignores TEST_SH_SHARD and runs all of test.sh, not skipped by a shard's pass" "$([[ $status == 0 && "$(shards_seen)" == unset ]] && ! grep -q "shard" "$repoP/out" && echo 0 || echo 1)"
 RUN_PART=template run "$repoP"
-check "the template part with no TEST_SH_SHARD runs all of test.sh (or its remembered whole pass)" "$([[ $status == 0 ]] && grep -q "test.sh already passed on this tree" "$repoP/out" && echo 0 || echo 1)"
+check "the template part with no TEST_SH_SHARD shares the whole run's remembered pass, not a shard's" "$([[ $status == 0 ]] && grep -q "test.sh already passed on this tree" "$repoP/out" && echo 0 || echo 1)"
+GATE_NO_CACHE=1 RUN_PART=template run "$repoP"
+check "the template part with no TEST_SH_SHARD runs all of test.sh" "$([[ $status == 0 && "$(shards_seen)" == unset ]] && ! grep -q "shard" "$repoP/out" && echo 0 || echo 1)"
 rm -rf "$repoP/.git/gate-cache"
 STUB_EXIT=1 RUN_PART=template RUN_SHARD=checks run "$repoP"
 check "a failing shard fails the template part" "$([[ $status == 1 && "$(shards_seen)" == checks ]] && echo 0 || echo 1)"
@@ -589,15 +591,37 @@ PY
 testsh="$here/$skill/test.sh"
 check "test.sh's steps are split into the shards it declares, each once, in order, none outside" "$(testsh_shards_ok "$testsh" && echo 0 || echo 1)"
 mkdir -p "$work/testsh"
-sed '0,/^step "actionlint"$/s//fi # the scripts shard\nstep "actionlint"\nif in_shard scripts; then/' "$testsh" > "$work/testsh/outside.sh"
+awk '{ print } /^fi # the checks shard$/ { print "step \"stray\"" }' "$testsh" > "$work/testsh/outside.sh"
+awk '{ print } /^fi # the hooks shard$/ { print "step \"between\"" }' "$testsh" > "$work/testsh/between.sh"
+sed '/^fi # the checks shard$/d' "$testsh" > "$work/testsh/open.sh"
+sed '/^fi # the hooks shard$/d' "$testsh" > "$work/testsh/nested.sh"
+sed 's/^fi # the hooks shard$/fi # the scripts shard/' "$testsh" > "$work/testsh/label.sh"
 sed 's/^if in_shard checks; then$/if in_shard scripts; then/; s/^fi # the checks shard$/fi # the scripts shard/' "$testsh" > "$work/testsh/twice.sh"
 sed 's/^shards=(hooks scripts checks)$/shards=(hooks scripts)/' "$testsh" > "$work/testsh/undeclared.sh"
-for m in outside twice undeclared; do
-  check "the shard check fails for a test.sh where $m" "$(testsh_shards_ok "$work/testsh/$m.sh" && echo 1 || echo 0)"
+for m in outside between open nested label twice undeclared; do
+  check "the shard check fails for a test.sh where $m (the mutant differs from test.sh)" "$(! cmp -s "$testsh" "$work/testsh/$m.sh" && ! testsh_shards_ok "$work/testsh/$m.sh" && echo 0 || echo 1)"
 done
-status=0
-TEST_SH_SHARD=bogus "$testsh" > "$work/testsh/bogus.out" 2>&1 || status=$?
-check "test.sh refuses an unknown TEST_SH_SHARD with exit 2 and runs no step" "$([[ $status == 2 ]] && grep -q "TEST_SH_SHARD must be" "$work/testsh/bogus.out" && ! grep -q "^── " "$work/testsh/bogus.out" && echo 0 || echo 1)"
+
+# in_shard, taken out of test.sh: with no shard every block runs; with one, only its own.
+inshard_rc() { # inshard_rc <shard> <block>: in_shard's status for <block> when TEST_SH_SHARD is <shard>
+  bash -euo pipefail -c 'eval "$(grep -E "^in_shard\(\) " "$1")"; shard="$2"; in_shard "$3"' _ "$testsh" "$1" "$2" > /dev/null 2>&1 && echo 0 || echo 1
+}
+inshard_problems=()
+for block in hooks scripts checks; do
+  [[ "$(inshard_rc "" "$block")" == 0 ]] || inshard_problems+=("no shard skips $block")
+  for s in hooks scripts checks; do
+    want=1; [[ "$s" != "$block" ]] || want=0
+    [[ "$(inshard_rc "$s" "$block")" == "$want" ]] || inshard_problems+=("shard $s on block $block")
+  done
+done
+((${#inshard_problems[@]} == 0)) || printf '       | %s\n' "${inshard_problems[@]}"
+check "in_shard runs every block with no shard, and only the named shard's block with one" "$((${#inshard_problems[@]} == 0 ? 0 : 1))"
+mkdir -p "$work/testsh-bin"; for tool in dirname mktemp rm; do ln -sf "$(command -v "$tool")" "$work/testsh-bin/$tool"; done
+for value in bogus "hooks scripts" "scripts checks" "hooks scripts checks" " hooks" "hooks " "*"; do
+  status=0
+  (PATH="$work/testsh-bin" TEST_SH_SHARD="$value" "$(command -v bash)" "$testsh") > "$work/testsh/bogus.out" 2>&1 || status=$?
+  check "test.sh refuses TEST_SH_SHARD='$value' with exit 2, before checking its tools, and runs no step" "$([[ $status == 2 ]] && grep -q "TEST_SH_SHARD must be" "$work/testsh/bogus.out" && ! grep -q "^── " "$work/testsh/bogus.out" && echo 0 || echo 1)"
+done
 
 # A full gate runs the Sandcastle check only when the branch changed a file it reads (everything it applies and tests: the Template, the skill's references and ADRs, its rule).
 sc_paths_yes=(
@@ -718,6 +742,8 @@ for key, job in jobs.items():
                     sys.exit(1)
                 if str(env.get("TEST_SH_SHARD", "")).replace(" ", "") != "${{matrix.shard}}":
                     sys.exit(1)
+                if strategy.get("fail-fast") is not False:
+                    sys.exit(1)
             elif strategy or "TEST_SH_SHARD" in env:
                 sys.exit(1)
 if sorted(used) != parts or sorted(part_jobs) != sorted(set(part_jobs)):
@@ -778,8 +804,10 @@ mutate_wf include 'wf["jobs"]["template"]["strategy"]["matrix"]["include"] = [{"
 mutate_wf othershard 'wf["jobs"]["static"]["steps"][-1]["env"]["TEST_SH_SHARD"] = "hooks"'
 mutate_wf nomatrix 'del wf["jobs"]["template"]["strategy"]'
 mutate_wf noreview 'del wf["jobs"]["review"]; wf["jobs"]["test"]["needs"].remove("review")'
+mutate_wf failfast 'del wf["jobs"]["template"]["strategy"]["fail-fast"]'
+mutate_wf shardstr 'wf["jobs"]["template"]["strategy"]["matrix"]["shard"] = "hooks"'
 check "the workflow and aggregator checks pass for the workflow written back unchanged (the control for the mutants)" "$(workflow_ok "$work/wf/same.yml" "$here/scripts/gate.sh" "$here/$skill/test.sh" && aggregator_ok "$work/wf/same.yml" && echo 0 || echo 1)"
-for m in dup needs always twice coe disabled norun twotests noshard dupshard fixedshard include othershard nomatrix noreview; do
+for m in dup needs always twice coe disabled norun twotests noshard dupshard fixedshard include othershard nomatrix noreview failfast shardstr; do
   check "the workflow check fails for a workflow where $m" "$(workflow_ok "$work/wf/$m.yml" "$here/scripts/gate.sh" "$here/$skill/test.sh" && echo 1 || echo 0)"
 done
 mutate_wf noe 'wf["jobs"]["test"]["steps"][-1]["run"] = wf["jobs"]["test"]["steps"][-1]["run"].replace("jq -e", "jq")'
