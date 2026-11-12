@@ -135,7 +135,7 @@ decide() {
     *) r="no PR from origin's repository has this tip, or no PR" ;;
   esac
   if [[ "$r" == removable ]]; then # deleting a branch an open PR is based on (a stacked PR) would close that PR
-    n="$(GH_REPO="$origin_repo" gh pr list --state open --limit 100 --base "$1" --json number --jq length)" || { echo "❌ gh pr list --base failed for $1" >&2; exit 1; }
+    n="$(GH_REPO="${origin_repo:?}" gh pr list --state open --limit 100 --base "$1" --json number --jq length)" || { echo "❌ gh pr list --base failed for $1" >&2; exit 1; }
     [[ "$n" == 0 ]] || r="an open PR is based on it"
   fi
   echo "$r"
