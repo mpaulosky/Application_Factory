@@ -11,7 +11,7 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 work="$(mktemp -d)"
-trap 'chmod -R u+w "$work" 2>/dev/null; rm -rf "$work"' EXIT # a case that makes a folder read-only is cleaned up even when it is interrupted
+trap 'chmod -R u+w "$work" 2>/dev/null || true; rm -rf "$work"' EXIT # a case that makes a folder read-only is cleaned up even when it is interrupted
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH # a caller's GATE_NO_CACHE=1 must not reach the stub gate runs; the tests set it themselves where they need it
 
 pass=0; failed=0
