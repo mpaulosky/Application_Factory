@@ -621,6 +621,22 @@ else
   fail "a worktree path that ends in a newline is not taken for the directory without it" "git worktree add refused the path"
 fi
 
+# A listed worktree whose directory was replaced by a symlink to "oth<newline>": resolving it must keep the newline, or the
+# path becomes the unregistered repository oth, whose node_modules binary would run.
+oth="$(new_repo oth)"
+attacker_bin "$oth"
+git -C "$repo" worktree add --quiet --detach "$WORK/lnk" > /dev/null 2>&1
+rm -rf "$WORK/lnk"
+mkdir -p "$oth$nl"
+ln -s "$oth$nl" "$WORK/lnk"
+p=()
+git -C "$repo" worktree list --porcelain -z | tr '\0' '\n' | grep -qxF "worktree $WORK/lnk" || p+=("the symlinked worktree is not listed, so this case proves nothing")
+[[ -L "$WORK/lnk" && -d "$WORK/lnk" ]] || p+=("the symlink does not lead to the directory, so this case proves nothing")
+run_hook "$(edit_json "$oth/x.md")"
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+log_empty || p+=("a symlinked worktree entry authorised another repository: $(cat "$LOG")")
+check "a worktree entry replaced by a symlink to a path ending in a newline does not authorise the path without it" ${p[@]+"${p[@]}"}
+
 # Paths with a space, and a linked worktree as the project.
 spaced="$(new_repo "sp ace")"
 printf '# T\n\nBAD\n' > "$spaced/s.md"

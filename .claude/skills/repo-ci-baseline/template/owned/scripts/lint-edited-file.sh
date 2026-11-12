@@ -73,25 +73,6 @@ if ! command -v git > /dev/null 2>&1; then
   exit 1
 fi
 
-# in_project <project> <root>: 0 when <root> is the project's own checkout or a linked worktree the project's repository
-# lists, 1 when it is not (or the project is no git repository), 2 when git cannot list worktrees (git older than 2.36 has
-# no -z; a damaged repository fails the same way). The list is built from the project's own git directory, so a directory whose .git file or commondir merely names
-# that git directory is not in it. -z gives each path as one field, so a path with a newline in it cannot forge a second
-# "worktree <dir>" line. A stale entry (its directory removed, not yet pruned) is trusted until `git worktree prune`.
-in_project() {
-  local field path
-  git -C "$1" rev-parse --git-dir > /dev/null 2>&1 || return 1
-  git -C "$1" worktree list --porcelain -z > /dev/null 2>&1 || return 2
-  while IFS= read -r -d '' field; do
-    [[ "$field" == "worktree "* ]] || continue
-    # $(...) below drops trailing newlines, so "X<newline>" would compare equal to a different directory X.
-    [[ "$field" == *$'\n' ]] && continue
-    path="$(cd -P -- "${field#worktree }" 2> /dev/null && pwd -P)" || continue
-    [[ "$path" == "$2" ]] && return 0
-  done < <(git -C "$1" worktree list --porcelain -z 2> /dev/null)
-  return 1
-}
-
 # canon <dir> <variable>: sets <variable> to the canonical path of <dir>, keeping trailing newlines in it. $(...) drops them, which
 # would turn the folder "docs<newline>" into "docs", a different folder whose file (or symlink) would be linted instead.
 canon() {
@@ -101,6 +82,24 @@ canon() {
   out="$(cd -P -- "$1" 2> /dev/null && pwd -P && printf x)" || return 1
   out="${out%x}"
   printf -v "$2" '%s' "${out%$'\n'}"
+}
+
+# in_project <project> <root>: 0 when <root> is the project's own checkout or a linked worktree the project's repository
+# lists, 1 when it is not (or the project is no git repository), 2 when git cannot list worktrees (git older than 2.36 has
+# no -z; a damaged repository fails the same way). The list is built from the project's own git directory, so a directory whose .git file or commondir merely names
+# that git directory is not in it. -z gives each path as one field, so a path with a newline in it cannot forge a second
+# "worktree <dir>" line, and canon keeps a trailing newline in the resolved path. A stale entry (its directory removed, not yet pruned) is trusted until `git worktree prune`.
+in_project() {
+  local field path=''
+  git -C "$1" rev-parse --git-dir > /dev/null 2>&1 || return 1
+  git -C "$1" worktree list --porcelain -z > /dev/null 2>&1 || return 2
+  while IFS= read -r -d '' field; do
+    [[ "$field" == "worktree "* ]] || continue
+    # canon keeps a trailing newline in the resolved path, which a symlinked entry can have: "X<newline>" is not the directory X.
+    canon "${field#worktree }" path || continue
+    [[ "$path" == "$2" ]] && return 0
+  done < <(git -C "$1" worktree list --porcelain -z 2> /dev/null)
+  return 1
 }
 
 # Not dirname, which also drops trailing newlines: the file is a regular file, so its folder is what precedes the last slash.
