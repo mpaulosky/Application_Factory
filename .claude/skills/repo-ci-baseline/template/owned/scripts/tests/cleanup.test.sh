@@ -95,6 +95,11 @@ branch() {
   git -C "$dir" config "branch.$1.remote" origin; git -C "$dir" config "branch.$1.merge" "refs/heads/$1" # the branch's own config section, which deleting the branch must take with it
   git -C "$dir" rev-parse HEAD
 }
+scrub() { # scrub <branch>: undo whatever a scenario left, so the next one starts clean
+  local d="$work/wt/${1//\//-}"
+  git worktree unlock "$d" 2>/dev/null; git worktree remove -f -f "$d" 2>/dev/null; command rm -f "$repo/.git/refs/heads/$1.lock"
+  git branch -q -D "$1" 2>/dev/null; git -C "$work/other" push -q origin --delete "$1" 2>/dev/null; git fetch -q --prune origin
+}
 pr() { # pr <branch> <STATE> <oid> [base] [head repository, owner/name; - for none, as for a deleted fork]
   jq -nc --arg s "$2" --arg o "$3" --arg b "${4:-main}" --arg r "${5:-o/r}" \
     '{state: $s, headRefOid: $o, baseRefName: $b, headRepository: (if $r == "-" then null else {name: ($r | split("/")[1]), nameWithOwner: $r} end)}' >> "$GH_FIX/${1//\//_}"
@@ -359,6 +364,7 @@ wt_at chore/x-untracked "$work/wt/chore-x-untracked"; echo x > "$work/wt/chore-x
 git config status.showUntrackedFiles no; o=$(bash scripts/cleanup.sh --dry-run 2>&1); git config --unset status.showUntrackedFiles
 check "keeps a worktree with an untracked file even when status.showUntrackedFiles is no" "grep -q 'keep   chore/x-untracked: its worktree has uncommitted changes' <<<\"\$o\""
 scrub chore/x-untracked
+check "the untracked-file scenario is cleaned up before the next one" "! has_local chore/x-untracked && ! has_remote chore/x-untracked && [[ ! -e $work/wt/chore-x-untracked ]]"
 o=$(bash scripts/cleanup.sh --bogus 2>&1); st=$?
 check "refuses an unknown flag" "[[ $st != 0 ]] && grep -q '^usage:' <<<\"\$o\" && has_local feature/1-merged && [[ \$(git rev-parse main) == $main_before ]]"
 mv scripts/check-branch-name.sh "$work/cbn.sh"; o=$(bash scripts/cleanup.sh 2>&1); st=$?; mv "$work/cbn.sh" scripts/check-branch-name.sh
@@ -466,11 +472,6 @@ check "the branches git had refused are removed by the later run" "! has_local c
 check "--include-closed still keeps a branch merged elsewhere, and one an open PR is based on" "has_remote chore/rev-other-closed && has_local chore/stack-base && has_remote chore/stack-base && has_remote chore/stack-base-remote"
 
 # Each documented cause of exit 1, alone: the run exits 1, and still removes a clean merged branch beside it
-scrub() { # scrub <branch>: undo whatever a scenario left, so the next one starts clean
-  local d="$work/wt/${1//\//-}"
-  git worktree unlock "$d" 2>/dev/null; git worktree remove -f -f "$d" 2>/dev/null; command rm -f "$repo/.git/refs/heads/$1.lock"
-  git branch -q -D "$1" 2>/dev/null; git -C "$work/other" push -q origin --delete "$1" 2>/dev/null; git fetch -q --prune origin
-}
 alone() { # alone <label> <the keep line it must print> [<branch ls-remote fails for>]: run once with only that cause, with a clean sibling beside it
   tip=$(branch chore/x-ok yes) || exit 1; pr chore/x-ok MERGED "$tip"; remote_only chore/x-ok
   o=$(PATH="$work/shim:$PATH" SHIM_LSREMOTE_FAIL="${3:-}" bash scripts/cleanup.sh 2>&1); st=$?
