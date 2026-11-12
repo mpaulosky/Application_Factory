@@ -206,6 +206,11 @@ elif ((status_rc != 0)); then
   fail "check-git-status.sh failed (exit $status_rc) without checking: see its output above"
 fi
 
+step "the mutation specs still fit the code"
+# tests/mutations/*.json are specs for the hardening-review skill's mutate.py (a run takes tens of minutes, by hand: see CLAUDE.md). This only checks that each mutation's old text
+# still occurs once, differs from the new, and leaves a shell file that parses, so a script edit that outdates a spec shows here and not in the next run.
+python3 -I "$skill_dir/tests/mutations/check-spec.py" || fail "a mutation spec no longer fits the code: update tests/mutations/*.json"
+
 step "gh commands in Owned scripts are told their repository"
 # A Baseline repo's gate refuses a gh command under scripts/ that reaches gh's
 # default repository, a fork in a fork's clone (auth0-management-app's

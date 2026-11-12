@@ -161,7 +161,7 @@ check "a hook without the .sh suffix is checked" "$([[ $status == 1 ]] && grep -
 cp -p "$here/.github/hooks/pre-push" "$repo3/.github/hooks/pre-push"; cp -p "$here/.github/hooks/pre-push" "$repo3/$skill/template/owned/.github/hooks/pre-push"
 printf '%b' "$bad_script" > "$repo3/notes.txt"
 GATE_ARGS=--quick run "$repo3"
-check "a deleted shell file is not checked, nor a file that is not a shell file, and clean ones pass" "$([[ $status == 0 ]] && grep -q 'changed shell file(s) checked' "$repo3/out" && echo 0 || echo 1)"
+check "a deleted shell file is not checked, nor a file that is not a shell file, and clean ones pass" "$([[ $status == 0 ]] && grep -q '[1-9][0-9]* changed shell file(s) checked' "$repo3/out" && echo 0 || echo 1)"
 
 # A file with a non-ASCII name is found (git quotes it without -z).
 repo4="$(new_repo quick-shellcheck-name)"; stub_review "$repo4"; with_origin "$repo4"
@@ -191,7 +191,7 @@ check "with an origin/main that shares no history every shell file is checked" "
 
 # A missing shellcheck fails the gate and says so.
 repo8="$(new_repo quick-no-shellcheck)"; mkdir -p "$work/noshellcheck"
-for tool in bash git python3 markdownlint-cli2 yamllint node pnpm env sh cat grep sed awk sort dirname basename mktemp rm cp mv ls tr head tail wc cmp mkdir touch uname date; do
+for tool in bash git python3 markdownlint-cli2 yamllint node pnpm env sh cat grep sed awk sort dirname basename mktemp rm cp mv ls tr head tail wc cmp mkdir touch uname date find; do
   tool_path="$(command -v "$tool" 2>/dev/null || true)"; [[ -z $tool_path ]] || ln -sf "$tool_path" "$work/noshellcheck/$tool"
 done
 status=0
@@ -373,6 +373,34 @@ for f in "${copies[@]}"; do
   [[ "$f" == *.test.mts ]] || continue
   check "gate.sh runs $f" "$(grep -F 'tsx --test' "$here/scripts/gate.sh" | grep -Fq " $f" && echo 0 || echo 1)"
 done
+
+# A git that fails is not read as "nothing to check" or "a clean tree". wrapper_for <name> <git subcommand>: a folder with a git that fails on that subcommand.
+real_git="$(command -v git)"
+wrapper_for() {
+  mkdir -p "$work/$1"
+  # shellcheck disable=SC2016 # the wrapper script is text: $@ and $a must not expand here
+  printf '#!/usr/bin/env bash\nfor a in "$@"; do [[ "$a" == %q ]] && exit 1; done\nexec %q "$@"\n' "$2" "$real_git" > "$work/$1/git"
+  chmod +x "$work/$1/git"
+}
+repo12="$(new_repo git-fails-diff)"; stub_review "$repo12"; with_origin "$repo12"; wrapper_for gitdiff diff
+PATH="$work/gitdiff:$PATH" GATE_ARGS=--quick run "$repo12"
+check "a git that fails listing the changed files fails the gate, saying so" "$([[ $status == 1 ]] && grep -q 'could not list the changed files' "$repo12/out" && echo 0 || echo 1)"
+repo13="$(new_repo git-fails-status)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo13/.git/info/exclude"; commit_all "$repo13" base; wrapper_for gitstatus status
+PATH="$work/gitstatus:$PATH" run "$repo13"
+check "a git status that fails is not a clean tree: test.sh runs" "$([[ $ran == yes ]] && echo 0 || echo 1)"
+run "$repo13"
+check "and nothing was remembered from that run" "$([[ $ran == yes ]] && echo 0 || echo 1)"
+# the cache is shared by the worktrees of the clone, and a cache folder that can't be written does not fail a passing test.sh
+repo14="$(new_repo cache-worktree)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo14/.git/info/exclude"; commit_all "$repo14" base
+run "$repo14"
+git -C "$repo14" worktree add -q --detach "$work/cache-worktree-2" HEAD
+printf 'out\nreview-args\n%s/ran\n' "$skill" >> "$repo14/.git/info/exclude"
+run "$work/cache-worktree-2"
+check "a linked worktree of the clone shares the remembered pass" "$([[ $status == 0 && $ran == no ]] && grep -q 'already passed on this tree' "$work/cache-worktree-2/out" && echo 0 || echo 1)"
+repo15="$(new_repo cache-readonly)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo15/.git/info/exclude"; commit_all "$repo15" base
+: > "$repo15/.git/gate-cache"
+run "$repo15"
+check "a cache folder that can't be made leaves a passing test.sh passing, with a note" "$([[ $status == 0 && $ran == yes ]] && grep -q 'could not record the test.sh pass' "$repo15/out" && echo 0 || echo 1)"
 
 # The Factory's own files under an Owned pattern are listed in .sandcastle/lib/repo-config.mts, so a branch named chore/reapply-baseline that
 # changes only them still needs a review (the ledger treats a change to only Owned files as a re-Apply). Dropping one from the list shows here.

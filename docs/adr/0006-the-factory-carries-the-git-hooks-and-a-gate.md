@@ -10,7 +10,8 @@ Baseline; that stays true.
 
 The gate runs two things: a test of the gate itself (`scripts/tests/gate.test.sh`), a check that each copy matches the Template's file, and the skill's `test.sh`. CI runs the same gate. Edit the
 Template's file, then run `scripts/gate.sh --sync` to copy it over; the gate fails on a
-copy that has drifted. Later records added to the gate the Markdown and YAML lint, the bare-`#N` issue-reference check (also in `--quick`) and the local review check.
+copy that has drifted. Later records added to the gate the Markdown and YAML lint,
+the bare-`#N` issue-reference check and the `git status --porcelain` guard check (`tests/check-git-status.sh`), both also in `--quick`, and the local review check.
 
 ## Considered Options
 

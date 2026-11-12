@@ -269,8 +269,8 @@ that only reviews: anything it finds new stays open for a person (an Advisory on
 
 **A person who said to fix every finding** (a standing "fix all") replaces that review-only round: the findings it would leave open (an Advisory one, and any other it raises) are
 fixed like the rest, in further rounds, and the review ends when a round fixes nothing (it returns `[]`, or only findings that triage dismisses). A finding that needs a person
-(`needsPerson`) still stays open, and a change the Rules name (the gate, the ledger, the reviewer agent, `.claude/settings.json`,
-a workflow's permissions) is made only when the person asked for that change. Keep each further round cheap:
+(`needsPerson`) still stays open, and so does one whose fix changes something the Rules name (the gate, the ledger, the reviewer agent, `.claude/settings.json`,
+a workflow's permissions): a standing "fix all" is not a request for that change, so it stays `needsPerson`, as the Rules say. Keep each further round cheap:
 
 - From the fourth round on, one reviewer (the bar reviewer's questions included) reads `<run>/fixes.patch` for every lens its files need, not one reviewer per lens.
 - Start `GATE_SKIP_REVIEW=1 scripts/gate.sh` and that reviewer together on the same commit, since neither changes the worktree. When the gate fails, fix it and discard that

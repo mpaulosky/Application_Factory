@@ -637,7 +637,7 @@ describe("the pre-push-review skill's fewer-rounds rules", () => {
     assert.match(flat, /\*\*A person who said to fix every finding\*\* \(a standing "fix all"\) replaces that review-only round/);
     assert.match(flat, /the review ends when a round fixes nothing \(it returns `\[\]`, or only findings that triage dismisses\)/);
     assert.match(flat, /A finding that needs a person \(`needsPerson`\) still stays open/);
-    assert.match(flat, /is made only when the person asked for that change/);
+    assert.match(flat, /a standing "fix all" is not a request for that change, so it stays `needsPerson`, as the Rules say/);
     assert.match(flat, /From the fourth round on, one reviewer \(the bar reviewer's questions included\)/);
     assert.match(flat, /Start `GATE_SKIP_REVIEW=1 scripts\/gate\.sh` and that reviewer together on the same commit/);
     assert.match(flat, /where its gate has that option; the full gate still runs once per round/);

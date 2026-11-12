@@ -38,12 +38,12 @@ The Factory carries the git hooks and a gate of its own (ADR 0006), Claude Revie
 
 ```bash
 scripts/gate.sh --sync                                        # copy the Template's files over the Factory's copies of them (after editing the Template)
-scripts/gate.sh --quick                                       # while iterating: the same gate without the local review check and test.sh, plus shellcheck on the shell files the branch changed (about a minute); never for a push
+scripts/gate.sh --quick                                       # while iterating: the gate up to and including shellcheck of the shell files the branch changed, without the local review check and test.sh (about a minute); never for a push
 scripts/gate.sh                                               # the pre-push gate (needs pnpm on the first run); GATE_NO_CACHE=1 runs test.sh again on a tree that already passed it
 .claude/skills/repo-ci-baseline/test.sh                       # all the Template's tests; needs actionlint, zizmor, yamllint, shellcheck, markdownlint-cli2, node, git, jq
 .claude/skills/repo-ci-baseline/tests/sandcastle-check.test.sh # Sandcastle's type-check and tests on a throwaway Application; needs pnpm and the network
 .claude/skills/repo-ci-baseline/template/owned/.claude/skills/hardening-review/scripts/mutate.py .claude/skills/repo-ci-baseline/tests/gh_repo/mutations.json  # ~1 min, from the repo root, needs uvx: edits check_gh_repo.py one mutation at a time and restores it; commit the scanner change first (a dirty target is refused)
-.claude/skills/repo-ci-baseline/template/owned/.claude/skills/hardening-review/scripts/mutate.py .claude/skills/repo-ci-baseline/tests/mutations/cleanup-work-issue.json  # same, for cleanup.sh and work-issue.sh; ~30 min, run in the background after committing
+.claude/skills/repo-ci-baseline/template/owned/.claude/skills/hardening-review/scripts/mutate.py .claude/skills/repo-ci-baseline/tests/mutations/cleanup-work-issue.json  # same, for cleanup.sh and work-issue.sh; ~30 min, run in the background after committing (test.sh checks that the spec still fits the code)
 .claude/skills/repo-ci-baseline/apply.sh --dry-run <repo>      # what Apply would write into an Application; writes nothing
 ```
 

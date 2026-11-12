@@ -24,6 +24,10 @@ check() { if eval "$2"; then PASSED=$((PASSED + 1)); echo "ok   - $1"; else FAIL
 # function, so the name goes to a file; a child bash does not, which is what the scenarios that run the script with a bare PATH rely on.
 not_found="$work/.command-not-found"
 command_not_found_handle() { echo "FAIL - command not found: $1" >&2; echo "$1" >> "$not_found"; return 127; }
+# The guard itself: a missing command in a subshell is recorded (then forgotten, so the end of the suite doesn't fail on this one).
+( no-such-command-for-the-guard ) 2>/dev/null || true
+check "the not-found guard records a command that does not exist" "[[ -s \"\$not_found\" ]] && grep -qx no-such-command-for-the-guard \"\$not_found\""
+: > "$not_found"
 
 if ! command -v jq >/dev/null 2>&1; then # gh-repo: ok
   echo "jq is not installed, and the fake gh runs work-issue.sh's jq with it" # gh-repo: ok
