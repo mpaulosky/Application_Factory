@@ -124,7 +124,7 @@ shell_files=(
   "$skill_dir/tests/seed-check.test.sh" "$skill_dir/tests/seed-dependabot.test.sh"
   "$skill_dir/tests/seed-dockerfile.test.sh" "$skill_dir/tests/doc-single-source.test.sh" "$skill_dir/tests/no-dotfiles-dependency.test.sh"
   "$skill_dir/tests/sandcastle-check.test.sh" "$skill_dir/tests/repos-scope.test.sh"
-  "$skill_dir/tests/check-git-status.sh" "$skill_dir/tests/check-git-status.test.sh"
+  "$skill_dir/tests/check-git-status.sh" "$skill_dir/tests/check-git-status.test.sh" "$skill_dir/tests/mutations/check-spec.test.sh"
   "$owned/scripts/gate.sh" "$owned/scripts/check-branch-name.sh" "$owned/scripts/tests/check-branch-name.test.sh"
   "$owned/scripts/check-pr-title.sh" "$owned/scripts/tests/check-pr-title.test.sh"
   "$owned/scripts/sync-copilot-review.sh" "$owned/scripts/tests/sync-copilot-review.test.sh"
@@ -207,8 +207,9 @@ elif ((status_rc != 0)); then
 fi
 
 step "the mutation specs still fit the code"
-# tests/mutations/*.json are specs for the hardening-review skill's mutate.py (a run takes tens of minutes, by hand: see CLAUDE.md). This only checks that each mutation's old text
-# still occurs once, differs from the new, and leaves a shell file that parses, so a script edit that outdates a spec shows here and not in the next run.
+# tests/mutations/*.json are specs for the hardening-review skill's mutate.py (a run edits the tree one mutation at a time: see CLAUDE.md for each spec's time). This only checks that each
+# mutation's old text still occurs once, differs from the new, and leaves a shell file that parses, so a script edit that outdates a spec shows here and not in the next run.
+bash "$skill_dir/tests/mutations/check-spec.test.sh" || fail "check-spec.test.sh"
 python3 -I "$skill_dir/tests/mutations/check-spec.py" || fail "a mutation spec no longer fits the code: update tests/mutations/*.json"
 
 step "gh commands in Owned scripts are told their repository"

@@ -38,7 +38,7 @@ new_repo() {
   cp -p "$here/.yamllint.yml" "$here/.markdownlint-cli2.jsonc" "$repo/"
   cp -p "$here/$skill/template/owned/.markdownlint-cli2.jsonc" "$repo/$skill/template/owned/"
   mkdir -p "$repo/$skill/tests"
-  cp -p "$here/$skill/tests/check-issue-refs.py" "$here/$skill/tests/check-git-status.sh" "$repo/$skill/tests/"
+  cp -p "$here/$skill/tests/check-issue-refs.py" "$here/$skill/tests/check-git-status.sh" "$here/$skill/tests/check-git-status.py" "$repo/$skill/tests/"
   cat > "$repo/$skill/test.sh" <<'STUB'
 #!/usr/bin/env bash
 touch "$(dirname "${BASH_SOURCE[0]}")/ran"
@@ -387,9 +387,9 @@ PATH="$work/gitdiff:$PATH" GATE_ARGS=--quick run "$repo12"
 check "a git that fails listing the changed files fails the gate, saying so" "$([[ $status == 1 ]] && grep -q 'could not list the changed files' "$repo12/out" && echo 0 || echo 1)"
 repo13="$(new_repo git-fails-status)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo13/.git/info/exclude"; commit_all "$repo13" base; wrapper_for gitstatus status
 PATH="$work/gitstatus:$PATH" run "$repo13"
-check "a git status that fails is not a clean tree: test.sh runs" "$([[ $ran == yes ]] && echo 0 || echo 1)"
+check "a git status that fails is not a clean tree: test.sh runs and no pass is stored" "$([[ $ran == yes && ! -e $repo13/.git/gate-cache ]] && echo 0 || echo 1)"
 run "$repo13"
-check "and nothing was remembered from that run" "$([[ $ran == yes ]] && echo 0 || echo 1)"
+check "so the next run, with a working git, runs test.sh again" "$([[ $ran == yes ]] && echo 0 || echo 1)"
 # the cache is shared by the worktrees of the clone, and a cache folder that can't be written does not fail a passing test.sh
 repo14="$(new_repo cache-worktree)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo14/.git/info/exclude"; commit_all "$repo14" base
 run "$repo14"

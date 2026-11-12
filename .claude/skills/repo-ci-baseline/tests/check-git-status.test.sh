@@ -105,5 +105,62 @@ fi
 chmod 600 "$work/unreadable/scripts/a.sh"
 
 
+# The setting counts only in the call's own words: not another command's -u, nor a comment's text
+fixture u-sort scripts/a.sh '[[ -z "$(git status --porcelain | sort -u)" ]]'
+run_checker u-sort
+check "a sort -u after the call is not its setting" "[[ $st == 1 ]]"
+fixture u-add scripts/a.sh 'git add -u && [[ -z "$(git status --porcelain)" ]]'
+run_checker u-add
+check "a git add -u before the call is not its setting" "[[ $st == 1 ]]"
+fixture u-comment scripts/a.sh 'git status --porcelain # --untracked-files=all'
+run_checker u-comment
+check "a setting named in a trailing comment is not a setting" "[[ $st == 1 ]]"
+fixture u-bare scripts/a.sh 'git status --porcelain -u'
+run_checker u-bare
+check "-u alone is a setting (it means all)" "[[ $st == 0 ]]"
+fixture u-normal scripts/a.sh 'git status --porcelain -unormal'
+run_checker u-normal
+check "-unormal is a setting" "[[ $st == 0 ]]"
+fixture u-long-x scripts/a.sh 'git status --porcelain --untracked-files-x'
+run_checker u-long-x
+check "--untracked-files-x is not git's option" "[[ $st == 1 ]]"
+fixture u-space scripts/a.sh 'git status --porcelain --untracked-files all'
+run_checker u-space
+check "--untracked-files all (with a space) is a setting" "[[ $st == 0 ]]"
+fixture porcelain-v2 scripts/a.sh 'git status --porcelain=v2'
+run_checker porcelain-v2
+check "--porcelain=v2 is found" "[[ $st == 1 ]]"
+# global options in any form
+fixture g1 scripts/a.sh 'git -C "$(dirname "$x")" status --porcelain'
+run_checker g1
+check "git -C with a nested quote and command substitution is found" "[[ $st == 1 ]]"
+fixture g2 scripts/a.sh 'git --git-dir x --work-tree y status --porcelain'
+run_checker g2
+check "long global options with a space-separated value are found" "[[ $st == 1 ]]"
+fixture g3 scripts/a.sh 'git -c a=b -p status --porcelain'
+run_checker g3
+check "git -c k=v and -p before status are found" "[[ $st == 1 ]]"
+fixture g4 scripts/a.sh 'git -C"$d" status --porcelain'
+run_checker g4
+check "git -C\"\$d\" without a space is found" "[[ $st == 1 ]]"
+fixture status-word scripts/a.sh 'git log --oneline | grep status --porcelain'
+run_checker status-word
+check "a status after a pipe is not git's" "[[ $st == 0 ]]"
+# a comment line is not joined to the next line
+fixture comment-cont scripts/a.sh '# a note \
+git status --porcelain'
+run_checker comment-cont
+check "a comment ending in a backslash does not hide the next line" "[[ $st == 1 ]] && grep -q 'scripts/a.sh:2:' <<<\"\$out\""
+# a folder that can't be listed
+fixture nolist scripts/sub/a.sh 'echo hi'
+chmod 000 "$work/nolist/scripts/sub"
+if [[ "$(id -u)" != 0 ]]; then
+  run_checker nolist
+  check "a folder that can't be listed is exit 2, not a pass" "[[ $st == 2 ]] && grep -q 'could not list' <<<\"\$out\""
+else
+  echo "skip - the unreadable file and folder cases need a user other than root"
+fi
+chmod 755 "$work/nolist/scripts/sub"
+
 echo "$PASSED passed, $FAILED failed"
 [[ $FAILED == 0 ]]

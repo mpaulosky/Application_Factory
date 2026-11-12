@@ -1,12 +1,14 @@
 """Checks that each mutation spec next to this file (*.json, for the hardening-review skill's mutate.py) still fits the code it mutates.
 
-A full mutate.py run takes tens of minutes and edits the tree, so test.sh runs this instead: each mutation's `old` occurs exactly once in its
+A full mutate.py run edits the tree one mutation at a time and can take tens of minutes, so test.sh runs this instead: each mutation's `old` occurs exactly once in its
 file (mutate.py reports NOT FOUND or AMBIGUOUS otherwise, and only when somebody runs it), differs from `new`, has a reason, and leaves a shell
 file that still parses (`bash -n`): a mutant that doesn't parse would be "caught" by every test. tests/gh_repo/test_mutation_spec.py does the same
 for the scanner's Python spec.
 
-    python3 -I tests/mutations/check-spec.py
+    python3 -I tests/mutations/check-spec.py [<repo root> <folder of specs>]
 
+The two arguments (the repository the specs' paths are relative to, and the folder to read *.json from) default to this checkout and this file's folder; tests/mutations/check-spec.test.sh
+gives them a throwaway tree. A spec needs a `test` argv, a positive `timeout` and at least one mutation, each with path, old, new and a reason; no mutation repeats another.
 Exit 0: every spec fits. Exit 1: one doesn't (printed). Exit 2: there is no spec to check.
 """
 
@@ -17,17 +19,27 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[4]
+FIELDS = ("path", "old", "new", "why")
 
 
-def problems(spec_path):
-    spec = json.loads(spec_path.read_text())
+def problems(spec_path, root):
+    try:
+        spec = json.loads(spec_path.read_text())
+    except ValueError as error:
+        return [f"is not valid JSON: {error}"]
+    if not isinstance(spec, dict):
+        return ["is not a JSON object"]
     out = []
     if not (isinstance(spec.get("test"), list) and spec["test"] and spec.get("timeout", 0) > 0):
         out.append("needs a `test` argv and a positive `timeout`")
     seen = set()
     for i, m in enumerate(spec.get("mutations", [])):
-        name = f"mutation {i + 1} ({m.get('why', '?')[:50]})"
-        path = ROOT / m["path"]
+        name = f"mutation {i + 1} ({str(m.get('why', '?'))[:50]})"
+        missing = [f for f in FIELDS if not isinstance(m.get(f), str)]
+        if missing:
+            out.append(f"{name}: needs {', '.join(missing)} as text")
+            continue
+        path = root / m["path"]
         if not path.is_file():
             out.append(f"{name}: {m['path']} does not exist")
             continue
@@ -52,18 +64,19 @@ def problems(spec_path):
     return out
 
 
-def main():
-    specs = sorted(HERE.glob("*.json"))
+def main(argv):
+    root, folder = (Path(argv[1]), Path(argv[2])) if len(argv) == 3 else (ROOT, HERE)
+    specs = sorted(folder.glob("*.json"))
     if not specs:
-        print("no mutation spec found next to check-spec.py", file=sys.stderr)
+        print(f"no mutation spec found in {folder}", file=sys.stderr)
         return 2
     bad = 0
     for spec in specs:
-        for problem in problems(spec):
+        for problem in problems(spec, root):
             print(f"{spec.name}: {problem}")
             bad = 1
     return bad
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv))
