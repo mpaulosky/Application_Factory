@@ -319,8 +319,8 @@ o=$(PATH="$work/shim:$PATH" CLEANUP_PUSH_URL_OK=0 SHIM_ORIGIN_URL=https://ghe.ex
 check "only CLEANUP_PUSH_URL_OK=1 does: 0 does not" "[[ $st == 1 ]]"
 o=$(PATH="$work/shim:$PATH" CLEANUP_PUSH_URL_OK=1 SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="git@ghe.example.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1)
 check "CLEANUP_PUSH_URL_OK=1 says which push URL it let through unchecked" "grep -qF 'CLEANUP_PUSH_URL_OK=1: origin'\"'\"'s push URL (git@ghe.example.com:acme/r.git)' <<<\"\$o\""
-o=$(EXPECT_GH_BASE_REPO=acme/r PATH="$work/shim:$PATH" CLEANUP_PUSH_URL_OK=1 SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="git@github.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1)
-check "and says nothing for a push URL that is shown to match" "! grep -q 'CLEANUP_PUSH_URL_OK' <<<\"\$o\"" 
+o=$(EXPECT_GH_BASE_REPO=acme/r PATH="$work/shim:$PATH" CLEANUP_PUSH_URL_OK=1 SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="git@github.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+check "and says nothing for a push URL that is shown to match" "[[ $st == 0 ]] && ! grep -q 'CLEANUP_PUSH_URL_OK' <<<\"\$o\""
 o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="https://ghe.example.com/acme/r" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
 check "a push URL with the fetch URL's own text is accepted on any host" "[[ $st == 0 ]]"
 for pair in "https://git.example.com/a/team/app|https://git.example.com/b/team/app" "file:///a/acme/r|file:///b/acme/r" "https://[::1]/a/b|https://[::2]/a/b" "/srv/a.git|/srv/b.git" "C:/a/acme/r|C:/b/acme/r"; do

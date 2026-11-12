@@ -244,13 +244,14 @@ check "a non-GitHub origin with no GITHUB_REPOSITORY fails, saying why" "[[ $st 
 slug_fn() { awk '/^slug_of\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$1"; }
 check "slug_of is the same function in work-issue.sh and cleanup.sh" "[[ -n \"\$(slug_fn $SCRIPTS/work-issue.sh)\" && \"\$(slug_fn $SCRIPTS/work-issue.sh)\" == \"\$(slug_fn $SCRIPTS/cleanup.sh)\" ]]"
 for script in work-issue cleanup; do
-  slug_of_run() { ( eval "$(slug_fn "$SCRIPTS/$script.sh")"; slug_of "$1" ); }
+  slug_of_run() { ( set -euo pipefail; eval "$(slug_fn "$SCRIPTS/$script.sh")"; slug_of "$1" ); }
   for pair in "https://GitHub.com/Acme/r|Acme/r" "HTTPS://github.com/acme/r.git/|acme/r" "ssh://git@SSH.GitHub.com:443/acme/r|acme/r" "https://www.github.com/acme/r/|acme/r" "https://x:y@github.com/acme/r.git/|acme/r" \
     "https://us%40er:p~w@github.com/ac-me/r_1.x|ac-me/r_1.x" "git://github.com/acme/r|acme/r" "git@github.com:Acme/R.git|Acme/R" "github.com:acme/r|acme/r" "www.github.com:acme/r|acme/r" "x@ssh.github.com:acme/r|acme/r"; do
     check "$script: slug_of reads ${pair%%|*} as ${pair##*|}" "[[ \"\$(slug_of_run '${pair%%|*}')\" == '${pair##*|}' ]]"
   done
+  check "$script: slug_of exits 0 on a URL it does not read (the scripts run under set -e)" "slug_of_run https://gitlab.com/acme/r >/dev/null"
   for bad in "https://evil.com#@github.com/acme/r" "https://evil.com?@github.com/acme/r" "evil.com:x@github.com:acme/r" "x:@github.com:acme/r" "https://github.com:/acme/r" "https://github.com/foo/acme/r" "https://github.com/acme/r/extra" "https://github.com/acme/r?x=1" \
-    "https://github.com/" "https://ssh.github.com.evil.com/acme/r" "https://evil.com/github.com/acme/r" "file:///github.com/acme/r" "https://[::1]/acme/r" "git@github.com:/acme/r" "git@github.com:acme" "https://github.com/acme /r" "https://github.com/acme/r x" "https://github.com:22x/acme/r" "https://gitlab.com/acme/r" "/srv/acme/r" ""; do
+    "https://github.com/" "https://ssh.github.com.evil.com/acme/r" "https://evil.com/github.com/acme/r" "file:///github.com/acme/r" "https://[::1]/acme/r" "git@github.com:/acme/r" "git@github.com:acme" "https://github.com/acme /r" "https://github.com/acme/r x" "https://github.com:22x/acme/r" "https://gitlab.com/acme/r" "/srv/acme/r" "https://gİthub.com/acme/r" "https://github.com/acmé/r" ""; do
     check "$script: slug_of reads nothing from '$bad'" "[[ -z \"\$(slug_of_run '$bad')\" ]]"
   done
 done

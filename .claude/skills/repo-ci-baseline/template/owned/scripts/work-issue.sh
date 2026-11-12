@@ -34,9 +34,9 @@ repo="$(basename "$primary")"
 # [A-Za-z0-9._-] only; the userinfo has no # ? / [ ] or space, and in the scp-style form no : either (git reads everything before that : as the host); a scp-style URL has no scheme.
 # So a lookalike (https://evil.com#@github.com/o/r, evil.com:x@github.com:o/r, github.com:/o/r, a deeper path, file://, an IPv6 host) gives nothing.
 slug_of() {
-  local u="${1%/}" l out="" ui_url="[A-Za-z0-9._~%!\$&'()*+,;=:-]+@" ui_scp="[A-Za-z0-9._~%!\$&'()*+,;=-]+@" nm="[A-Za-z0-9._-]+" host="(ssh\.|www\.)?github\.com"
+  local LC_ALL=C u="${1%/}" l out="" ui_url="[A-Za-z0-9._~%!\$&'()*+,;=:-]+@" ui_scp="[A-Za-z0-9._~%!\$&'()*+,;=-]+@" nm="[A-Za-z0-9._-]+" host="(ssh\.|www\.)?github\.com"
   u="${u%.git}"; u="${u%/}"
-  l="$(printf '%s' "$u" | tr '[:upper:]' '[:lower:]')" # the match is on a lowercase copy, so it needs neither nocasematch nor bash 4
+  l="$(printf '%s' "$u" | tr 'A-Z' 'a-z')" # the match is on an ASCII-lowercase copy (LC_ALL=C above: bytes only, so no non-ASCII letter folds into an ASCII one or matches a range), so it needs neither nocasematch nor bash 4
   if [[ "$l" =~ ^(ssh|https?|git)://(${ui_url})?${host}(:[0-9]+)?/(${nm}/${nm})$ ]]; then out="${BASH_REMATCH[5]}"
   elif [[ "$l" =~ ^(${ui_scp})?${host}:(${nm}/${nm})$ ]]; then out="${BASH_REMATCH[3]}"
   fi
