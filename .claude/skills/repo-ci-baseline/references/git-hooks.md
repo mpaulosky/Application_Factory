@@ -199,11 +199,15 @@ These are the checks the CI lint workflows run; a gate runs `actionlint` and `zi
 - Exit 0 and no output for a file that is neither Markdown nor YAML, one that no longer exists, a directory, a symlink, one under `node_modules/`, and one outside the project (below).
 - Exit 0 with a `systemMessage` on stdout, which Claude Code shows to the person, when a linter is not installed: the file is skipped for that linter, the hook only helps, and the pre-commit hook,
   the gate and CI still check. Plain stderr on exit 0 is not shown, which is why the note is JSON.
-- Exit 1 with a message on stderr when its input is not JSON, `CLAUDE_PROJECT_DIR` is unset, or `python3` or `git` is missing, so a broken hook is visible and is not read as a clean file.
-- Only the project's own checkout and the linked worktrees it lists are linted: the file's repository root must be one of the paths `git worktree list` prints for `CLAUDE_PROJECT_DIR`, which Claude Code
+- Exit 1 with a message on stderr when its input is not JSON, `CLAUDE_PROJECT_DIR` is unset, `python3` is missing, or, for a Markdown or YAML file, `git` is missing or older than 2.36
+  (`git worktree list -z`), so a broken hook is visible and is not read as a clean file.
+- Only the project's own checkout and the linked worktrees it lists are linted: the file's repository root must be one of the paths `git worktree list` prints for `CLAUDE_PROJECT_DIR`,
+  which Claude Code
   sets and the hook requires (unset or empty is exit 1). A linter loads the repository's own config and, for Markdown, its `node_modules/.bin` copy, and `markdownlint-cli2` runs JavaScript from its
   config, so a file in another clone, a nested repository, or a directory whose `.git` file or `commondir` merely names the project's git directory (git reports the project's common directory for it)
-  is left alone. A project that is not a git repository lints nothing. A `GIT_DIR`, `GIT_WORK_TREE` or `CDPATH` inherited from a git hook is cleared first.
+  is left alone. A project that is not a git repository lints nothing. A worktree entry git still lists after its directory was removed is trusted until `git worktree prune` removes it.
+  `-z` keeps a worktree path with a newline from forging a second entry. `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_PREFIX`, `GIT_COMMON_DIR` and `CDPATH`,
+  inherited from a git hook, are cleared first.
 - The path reaches the linter whole: from the repo root of the file's own repository, as `./<path>`, and for Markdown with `--no-globs`, so a name with `[`, `*` or a leading `-` is not read as a glob
   or an option (checked against the real tool: `a[1].md` and `x*y.md` are linted as those files). The config's `ignores` still apply.
 - The tests use stub linters on `PATH` that fail on a marker word and log their arguments and working directory, and check each linter's exact arguments, which stream carries the report, and the

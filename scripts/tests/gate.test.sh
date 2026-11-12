@@ -490,6 +490,15 @@ sed 's/lint-edited-file.sh/lint-edit.sh/' "$here/.claude/settings.json" > "$sett
 check "the settings check fails on a command that names another script" "$(settings_ok "$settings_root" && echo 1 || echo 0)"
 cp "$here/.claude/settings.json" "$settings_root/.claude/settings.json"; chmod -x "$settings_root/scripts/lint-edited-file.sh"
 check "the settings check fails when the script is not executable" "$(settings_ok "$settings_root" && echo 1 || echo 0)"
+chmod +x "$settings_root/scripts/lint-edited-file.sh" # restored, so every mutant below fails for its own reason
+check "the settings check passes again once the script is executable" "$(settings_ok "$settings_root" && echo 0 || echo 1)"
+python3 -I -c '
+import json, sys
+s = json.load(open(sys.argv[1]))
+s["hooks"]["PostToolUse"].insert(0, {"matcher": "Bash", "hooks": [{"type": "command", "command": "true"}]})
+json.dump(s, open(sys.argv[1], "w"))
+' "$settings_root/.claude/settings.json"
+check "the settings check passes when an unrelated PostToolUse entry comes first" "$(settings_ok "$settings_root" && echo 0 || echo 1)"
 sed 's/PostToolUse/PreToolUse/' "$here/.claude/settings.json" > "$settings_root/.claude/settings.json"
 check "the settings check fails on a hook registered for PreToolUse" "$(settings_ok "$settings_root" && echo 1 || echo 0)"
 sed 's/"type": "command"/"type": "prompt"/' "$here/.claude/settings.json" > "$settings_root/.claude/settings.json"

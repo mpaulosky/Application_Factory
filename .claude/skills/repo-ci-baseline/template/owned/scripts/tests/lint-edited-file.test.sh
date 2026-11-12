@@ -5,7 +5,8 @@
 # The linters are stubs on PATH, so the suite needs none of them: each stub fails when the file it is given holds the word BAD
 # (CRASH: exit 3), and logs its arguments and working directory, which is how the cases tell which linter ran, on which path,
 # with which config. A last block runs the real markdownlint-cli2 when it is installed; an Application's hook-tests job has none,
-# so there that block is skipped.
+# so there that block is skipped. A self-test runs the suite once more with a TMPDIR that does not exist (LINT_TEST_NESTED=1 keeps
+# that run from starting another).
 # Usage: scripts/tests/lint-edited-file.test.sh
 set -uo pipefail
 
@@ -200,6 +201,7 @@ run_hook "$(edit_json "$repo/packages/a/node_modules/x/README.md")"
 p=()
 [[ $STATUS -eq 0 ]] || p+=("exit $STATUS, want 0")
 log_empty || p+=("a nested node_modules file was linted: $(cat "$LOG")")
+[[ -z "$OUTPUT" ]] || p+=("output: $OUTPUT")
 check "a file under a nested node_modules is not linted" ${p[@]+"${p[@]}"}
 run_hook "$(edit_json "$repo/docs/my_node_modules/n.md")"
 p=()
@@ -333,7 +335,6 @@ run_hook "$(edit_json "$repo/docs/missing.md")"
 p=()
 [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
 log_empty || p+=("a linter ran on a file that does not exist: $(cat "$LOG")")
-[[ -z "$OUTPUT" ]] || p+=("output: $OUTPUT")
 check "a file that no longer exists is left alone" ${p[@]+"${p[@]}"}
 
 mkdir -p "$repo/docs/dir.md"
@@ -453,30 +454,110 @@ EOF
   chmod +x "$1/node_modules/.bin/markdownlint-cli2"
   printf '# T\n\nBAD\n' > "$1/x.md"
 }
+# claim_problems <dir> <git dir>: sets p to what is wrong with the premise that git itself reports <dir> as a repository of its
+# own whose common dir is <git dir>; without it these cases would pass just because git rejected the directory.
+claim_problems() {
+  local top common line
+  p=()
+  top="$(git -C "$1" rev-parse --show-toplevel 2>&1)"
+  common="$(cd "$1" && cd -P -- "$(git rev-parse --git-common-dir 2>&1)" 2>&1 && pwd -P)"
+  [[ "$(cd -P -- "$top" 2> /dev/null && pwd -P)" == "$1" ]] || p+=("git reports the top level of $1 as: $top")
+  [[ "$common" == "$2" ]] || p+=("git reports the common dir of $1 as: $common, not $2")
+}
 mkdir -p "$WORK/sibling"
 printf 'gitdir: %s/.git\n' "$repo" > "$WORK/sibling/.git"
 attacker_bin "$WORK/sibling"
+claim_problems "$WORK/sibling" "$repo/.git"
 run_hook "$(edit_json "$WORK/sibling/x.md")"
-p=()
 [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
 log_empty || p+=("a sibling directory with a gitdir file reached a linter: $(cat "$LOG")")
 check "a sibling directory whose .git file names the project's git directory is left alone" ${p[@]+"${p[@]}"}
 mkdir -p "$repo/nested-claim"
 printf 'gitdir: %s/.git\n' "$repo" > "$repo/nested-claim/.git"
 attacker_bin "$repo/nested-claim"
+claim_problems "$repo/nested-claim" "$repo/.git"
 run_hook "$(edit_json "$repo/nested-claim/x.md")"
-p=()
 [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
 log_empty || p+=("a directory inside the project with a gitdir file reached a linter: $(cat "$LOG")")
 check "a directory inside the project whose .git file names the project's git directory is left alone" ${p[@]+"${p[@]}"}
 claim="$(new_repo claim)"
 printf '%s/.git\n' "$repo" > "$claim/.git/commondir"
 attacker_bin "$claim"
+claim_problems "$claim" "$repo/.git"
 run_hook "$(edit_json "$claim/x.md")"
-p=()
 [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
 log_empty || p+=("a repository whose commondir names the project's reached a linter: $(cat "$LOG")")
 check "a repository whose commondir file names the project's git directory is left alone" ${p[@]+"${p[@]}"}
+
+# The project is a repository nested in an outer one, and the file is in the outer one: its root is a proper prefix of the
+# project's path, so a comparison that only checks the start of the path would let it through.
+outer="$(new_repo outer)"
+attacker_bin "$outer"
+proj="$(new_repo outer/proj)"
+run_hook "$(edit_json "$outer/x.md")" "$STUBS:$TOOLS" "$proj"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+log_empty || p+=("the outer repository's file reached a linter: $(cat "$LOG")")
+check "a file in an outer repository around the project is left alone" ${p[@]+"${p[@]}"}
+
+# Stale linked worktrees (directory gone, not pruned) listed before a live one must not hide it, and a detached worktree
+# prints a line that is not "worktree <dir>": it must not be read as a path relative to the hook's working directory.
+git -C "$repo" worktree add --quiet --detach "$WORK/stale-a" > /dev/null 2>&1
+git -C "$repo" worktree add --quiet --detach "$WORK/stale-b" > /dev/null 2>&1
+rm -rf "$WORK/stale-a" "$WORK/stale-b"
+git -C "$repo" worktree add --quiet --detach "$WORK/dwt" > /dev/null 2>&1
+listing="$(git -C "$repo" worktree list --porcelain | grep '^worktree ')"
+p=()
+[[ "$listing" == *"stale-b"*"$WORK/wt"* ]] || p+=("the stale entries are not listed before the live worktree, so this case proves nothing: $listing")
+printf '# T\n\nBAD\n' > "$WORK/wt/w.md"
+run_hook "$(edit_json "$WORK/wt/w.md")"
+[[ $STATUS -eq 2 ]] || p+=("exit $STATUS, want 2: a stale entry before the live worktree hid it")
+check "a live linked worktree is linted although stale worktrees are listed before it" ${p[@]+"${p[@]}"}
+
+detached="$(new_repo cwd/detached)"
+attacker_bin "$detached"
+run_hook "$(edit_json "$detached/x.md")"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+log_empty || p+=("a repository named like a worktree line reached a linter: $(cat "$LOG")")
+check "a line of the worktree list that is not a path is not resolved against the working directory" ${p[@]+"${p[@]}"}
+
+# A worktree registered at a path holding a newline and a second "worktree <dir>" line, which a parser reading git's
+# output line by line would take for the list's own entry for $other.
+hostile="$WORK/ev"$'\nworktree '"$other"
+mkdir -p "$hostile/.."
+if git -C "$repo" worktree add --quiet --detach "$hostile" > /dev/null 2>&1; then
+  p=()
+  git -C "$repo" worktree list --porcelain | grep -qxF "worktree $other" || p+=("the plain listing does not hold the forged line, so this case proves nothing")
+  run_hook "$(edit_json "$other/x.md")"
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+  log_empty || p+=("a forged worktree line let another repository reach a linter: $(cat "$LOG")")
+  check "a worktree path with a newline cannot forge a worktree entry" ${p[@]+"${p[@]}"}
+else
+  fail "a worktree path with a newline cannot forge a worktree entry" "git worktree add refused the path"
+fi
+
+# Paths with a space, and a linked worktree as the project.
+spaced="$(new_repo "sp ace")"
+printf '# T\n\nBAD\n' > "$spaced/s.md"
+run_hook "$(edit_json "$spaced/s.md")" "$STUBS:$TOOLS" "$spaced"
+p=()
+[[ $STATUS -eq 2 ]] || p+=("exit $STATUS, want 2")
+log_has "markdownlint-cli2 $spaced " || p+=("not run from the project root: $(cat "$LOG")")
+check "a project whose path has a space is linted" ${p[@]+"${p[@]}"}
+git -C "$spaced" -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --quiet --allow-empty -m init
+git -C "$spaced" worktree add --quiet --detach "$WORK/wt sp" > /dev/null 2>&1
+printf '# T\n\nBAD\n' > "$WORK/wt sp/w.md"
+run_hook "$(edit_json "$WORK/wt sp/w.md")" "$STUBS:$TOOLS" "$spaced"
+p=()
+[[ $STATUS -eq 2 ]] || p+=("exit $STATUS, want 2")
+log_has "markdownlint-cli2 $WORK/wt sp " || p+=("not run from the worktree's root: $(cat "$LOG")")
+check "a linked worktree whose path has a space is linted" ${p[@]+"${p[@]}"}
+run_hook "$(edit_json "$repo/docs/bad.md")" "$STUBS:$TOOLS" "$WORK/wt"
+p=()
+[[ $STATUS -eq 2 ]] || p+=("exit $STATUS, want 2")
+log_has "markdownlint-cli2 $repo " || p+=("not run from the main checkout: $(cat "$LOG")")
+check "with a linked worktree as the project, a file in the main checkout is linted" ${p[@]+"${p[@]}"}
 
 # --- Input that is not a file edit ----------------------------------------
 for json in '{}' '{"tool_input": {}}' '{"tool_input": {"file_path": 5}}' '{"tool_input": {"file_path": ""}}' '{"tool_input": {"file_path": null}}' '[]' '{"tool_input": "x"}'; do
@@ -539,6 +620,23 @@ p=()
 log_empty || p+=("a linter ran without git: $(cat "$LOG")")
 check "without git, the hook exits 1 with a message" ${p[@]+"${p[@]}"}
 
+run_hook "$(edit_json "$repo/script.sh")" "$STUBS:$NOGIT"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT: a file that is not Markdown or YAML needs no git")
+check "without git, a file that is neither Markdown nor YAML still exits 0 silently" ${p[@]+"${p[@]}"}
+
+# A git that cannot list worktrees with -z (before 2.36): the hook says so and does not lint, instead of silently skipping.
+OLDGIT="$WORK/oldgit"
+mkdir -p "$OLDGIT"
+real_git="$(command -v git)"
+printf '#!/usr/bin/env bash\nfor a in "$@"; do [[ "$a" == -z ]] && exit 129; done\nexec "%s" "$@"\n' "$real_git" > "$OLDGIT/git"
+chmod +x "$OLDGIT/git"
+run_hook "$(edit_json "$repo/docs/bad.md")" "$OLDGIT:$STUBS:$TOOLS"
+p=()
+[[ $STATUS -eq 1 && "$STDERR" == *"git 2.36 or later"* && -z "$STDOUT" ]] || p+=("exit $STATUS, stderr: $STDERR")
+log_empty || p+=("a linter ran although the worktrees could not be listed: $(cat "$LOG")")
+check "a git that cannot list worktrees with -z makes the hook exit 1 with a message" ${p[@]+"${p[@]}"}
+
 NOPY="$WORK/nopy"
 mkdir -p "$NOPY"
 run_hook "$(edit_json "$repo/docs/bad.md")" "$NOPY"
@@ -548,15 +646,18 @@ check "without python3, the hook exits 1 with a message" ${p[@]+"${p[@]}"}
 
 # --- The suite's own temp folder ---------------------------------------------
 # A failing mktemp (a bad TMPDIR) must stop the suite before anything is removed, not leave WORK as the current directory.
-mkdir -p "$WORK/guard"
-: > "$WORK/guard/sentinel"
-guard_out="$(cd "$WORK/guard" && TMPDIR="$WORK/no-such-folder" "$BASH_BIN" "$ROOT/scripts/tests/lint-edited-file.test.sh" 2>&1)"
-guard_rc=$?
-p=()
-[[ $guard_rc -ne 0 ]] || p+=("the suite ran with a TMPDIR that does not exist")
-[[ "$guard_out" == *"mktemp -d failed"* ]] || p+=("no message: $guard_out")
-[[ -e "$WORK/guard/sentinel" ]] || p+=("the suite removed the folder it was started in")
-check "a failing mktemp stops the suite and removes nothing" ${p[@]+"${p[@]}"}
+# LINT_TEST_NESTED stops that run from starting this self-test again, which would never end if the guard were missing.
+if [[ -z "${LINT_TEST_NESTED:-}" ]]; then
+  mkdir -p "$WORK/guard"
+  : > "$WORK/guard/sentinel"
+  guard_out="$(cd "$WORK/guard" && LINT_TEST_NESTED=1 TMPDIR="$WORK/no-such-folder" "$BASH_BIN" "$ROOT/scripts/tests/lint-edited-file.test.sh" 2>&1)"
+  guard_rc=$?
+  p=()
+  [[ $guard_rc -ne 0 ]] || p+=("the suite ran with a TMPDIR that does not exist")
+  [[ "$guard_out" == *"mktemp -d failed"* ]] || p+=("no message: $guard_out")
+  [[ -e "$WORK/guard/sentinel" ]] || p+=("the suite removed the folder it was started in")
+  check "a failing mktemp stops the suite and removes nothing" ${p[@]+"${p[@]}"}
+fi
 
 # --- The real markdownlint-cli2, when installed ----------------------------
 REAL_PATH="$TOOLS:$PATH"

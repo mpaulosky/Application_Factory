@@ -18,7 +18,7 @@
 # Exit 0: the file is clean, is not Markdown or YAML, is not in the project, or no linter for it is installed (this hook
 # only helps; the commit hook and the gate still check). A skipped linter is reported as a systemMessage on stdout, which
 # Claude Code shows to the person. Exit 2: a linter reported a violation; its output goes to stderr, which Claude Code feeds
-# back to the agent. Exit 1: the hook could not run (python3 or git missing, CLAUDE_PROJECT_DIR unset, bad JSON); Claude Code shows that to the
+# back to the agent. Exit 1: the hook could not run (python3 missing, CLAUDE_PROJECT_DIR unset, bad JSON, or, for a Markdown or YAML file, git missing or older than 2.36); Claude Code shows that to the
 # person and carries on. A linter that is installed but crashes counts as a violation, not as clean.
 set -uo pipefail
 
@@ -70,16 +70,19 @@ if ! command -v git > /dev/null 2>&1; then
 fi
 
 # in_project <project> <root>: 0 when <root> is the project's own checkout or a linked worktree the project's repository
-# lists. The list is built from the project's own git directory, so a directory whose .git file or commondir merely names
-# that git directory is not in it. A path with a newline in it never matches, which skips the file.
+# lists, 1 when it is not (or the project is no git repository), 2 when git cannot list worktrees (git older than 2.36 has
+# no -z). The list is built from the project's own git directory, so a directory whose .git file or commondir merely names
+# that git directory is not in it. -z gives each path as one field, so a path with a newline in it cannot forge a second
+# "worktree <dir>" line. A stale entry (its directory removed, not yet pruned) is trusted until `git worktree prune`.
 in_project() {
-  local listed line path
-  listed="$(git -C "$1" worktree list --porcelain 2> /dev/null)" || return 1
-  while IFS= read -r line; do
-    [[ "$line" == "worktree "* ]] || continue
-    path="$(cd -P -- "${line#worktree }" 2> /dev/null && pwd -P)" || continue
+  local field path
+  git -C "$1" rev-parse --git-dir > /dev/null 2>&1 || return 1
+  git -C "$1" worktree list --porcelain -z > /dev/null 2>&1 || return 2
+  while IFS= read -r -d '' field; do
+    [[ "$field" == "worktree "* ]] || continue
+    path="$(cd -P -- "${field#worktree }" 2> /dev/null && pwd -P)" || continue
     [[ "$path" == "$2" ]] && return 0
-  done <<< "$listed"
+  done < <(git -C "$1" worktree list --porcelain -z 2> /dev/null)
   return 1
 }
 
@@ -87,7 +90,15 @@ dir="$(cd -P -- "$(dirname -- "$file")" 2> /dev/null && pwd -P)" || exit 0
 # The repository the file is in, which in a linked worktree is that worktree: its configs are the ones that apply.
 root="$(git -C "$dir" rev-parse --show-toplevel 2> /dev/null)" || exit 0
 root="$(cd -P -- "$root" 2> /dev/null && pwd -P)" || exit 0
-in_project "$CLAUDE_PROJECT_DIR" "$root" || exit 0
+in_project "$CLAUDE_PROJECT_DIR" "$root"
+case $? in
+  0) ;;
+  2)
+    echo "lint-edited-file.sh: git cannot list worktrees (git 2.36 or later is needed), so the edited file was not linted." >&2
+    exit 1
+    ;;
+  *) exit 0 ;;
+esac
 
 # Defensive: dir is inside root by construction, and Claude Code sends absolute paths, so neither this arm nor the
 # `--` after dirname and basename can be reached by a test.
