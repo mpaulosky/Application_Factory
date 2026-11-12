@@ -54,18 +54,18 @@ branch with `/` turned into `-`:
 wt="$(scripts/work-issue.sh 42)" && cd "$wt"
 ```
 
-`scripts/work-issue.sh <n>` (exactly one argument) reads issue `n` with `gh`, fetches and prunes `origin`, and makes its branch and worktree, then prints the path. The branch starts from the
-local branch of that name if there is one (checked out as it is, even if it is behind `origin`), else from `origin/<branch>` when that branch is on `origin`, else from `origin/main`. The
-branch is `fix/{n}-{slug}` for an issue labelled `bug` (any case), `feature/{n}-{slug}` for any other; the slug is the title's lowercase `a-z0-9` words (a leading `[tag]` dropped, at most 6
-words and 50 characters, `issue` when none is left). An issue renamed since keeps the branch already named for its number, local or on `origin` (the branch the title gives wins when it
-exists; else the first in name order, local first); a branch with the number that is outside the branch standard, under another prefix, or with leading zeros in the number is skipped. A
-branch it makes from `origin/main` has no upstream (it would track `main`, and a plain `git push` would refuse): the first push is `git push -u origin HEAD`; one made from `origin/<branch>`
-tracks that branch. It reuses the branch's worktree if there is one; git's entry for one whose folder was deleted by hand is forgotten (that one only, and only a real directory entry) and
-the worktree made again. It refuses, with a hint, a locked worktree whose folder is missing, one whose folder can't be reached (its parent folder is missing, empty, unreadable or
-unsearchable, which an unmounted drive also looks like: run `git worktree prune` if it was deleted for good), the primary checkout holding the branch, and a directory of that name that is
-not a worktree of the branch. When `origin` can't be fetched (but `gh` works: the issue is read first) it still prints a worktree the branch already has, with a warning, and stops otherwise.
-It needs `gh` logged in, and for an origin that is not on github.com, `GITHUB_REPOSITORY`. Work without an issue is made by hand:
-`git worktree add --no-track -b chore/upgrade-net10 ../<Repo>-worktrees/chore-upgrade-net10 origin/main`.
+`scripts/work-issue.sh <n>` (exactly one argument) reads issue `n` with `gh`, fetches and prunes `origin`, and makes its branch and worktree, then prints the path. The branch starts from the local
+branch of that name if there is one (checked out as it is, even if it is behind `origin`), else from `origin/<branch>` when that branch is on `origin`, else from `origin/main`. The branch is
+`fix/{n}-{slug}` for an issue labelled `bug` (any case), `feature/{n}-{slug}` for any other; the slug is the title's lowercase `a-z0-9` words (a leading `[tag]` dropped, at most 6 words and 50
+characters, `issue` when none is left). An issue renamed since keeps the branch already named for its number, local or on `origin` (the branch the title gives wins when it exists; else the first in
+name order, local first); a branch with the number that is outside the branch standard, under another prefix, or with leading zeros in the number is skipped. A branch it makes from `origin/main` has
+no upstream (it would track `main`, and a plain `git push` would refuse): the first push is `git push -u origin HEAD`; one made from `origin/<branch>` tracks that branch. It reuses the branch's
+worktree if there is one and its folder is still a worktree of this clone with the branch checked out (a folder recreated or replaced since is refused, with the hint to move it away and run
+`git worktree prune`); git's entry for one whose folder was deleted by hand is forgotten (that one only, and only a real directory entry) and the worktree made again. It refuses, with a hint, a
+locked worktree whose folder is missing, one whose folder can't be reached (its parent folder is missing, empty, unreadable or unsearchable, which an unmounted drive also looks like: run
+`git worktree prune` if it was deleted for good), the primary checkout holding the branch, and a directory of that name that is not a worktree of the branch. When `origin` can't be fetched (but `gh`
+works: the issue is read first) it still prints a worktree the branch already has, with a warning, and stops otherwise. It needs `gh` logged in, and for an origin that is not on github.com,
+`GITHUB_REPOSITORY`. Work without an issue is made by hand: `git worktree add --no-track -b chore/upgrade-net10 ../<Repo>-worktrees/chore-upgrade-net10 origin/main`.
 
 Once the PR merges, `scripts/cleanup.sh` (run in the primary checkout, on a clean `main`) fast-forwards `main`, then removes each merged branch with its worktree and its `origin` branch. It decides
 from the PR's state on GitHub (a squash merge leaves no ancestry for `git branch --merged`): the PR must be from the repository `origin` points at (a fork's PR of the same name doesn't count),

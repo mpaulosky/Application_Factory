@@ -96,18 +96,19 @@ check "checks the branch out in it" "[[ \$(git -C '$p' branch --show-current) ==
 check "branches from origin/main" "[[ \$(git -C '$p' rev-parse HEAD) == \$(git rev-parse origin/main) ]]"
 p2=$(cd "$p" && bash "$work/Repo/scripts/work-issue.sh" 54 2>/dev/null)
 check "reuses it, also when run from the worktree" "[[ '$p2' == '$p' ]]"
-# A worktree folder recreated or replaced after the worktree was deleted is not reused
+p3=$(bash scripts/work-issue.sh 55 2>/dev/null)
+check "a Bug label (any case) gets fix/ and a squeezed slug" "[[ '$p3' == '$wt/fix-55-null-children-crash-the-grid' ]]"
+# A worktree folder recreated or replaced after the worktree was deleted is not reused: one fixture for each way worktree_ok refuses
+refused() { local o st; o=$(bash scripts/work-issue.sh 54 2>&1 >/dev/null); st=$?; check "$1" "[[ $st == 1 ]] && grep -q 'is not one now' <<<\"\$o\""; }
 mv "$p/.git" "$work/saved-git"
-o=$(bash scripts/work-issue.sh 54 2>&1 >/dev/null); st=$?
-check "a registered worktree folder that lost its .git file is refused, not reused" "[[ $st == 1 ]] && grep -q 'is not one now' <<<\"\$o\""
-git init -q "$p" >/dev/null 2>&1
-o=$(bash scripts/work-issue.sh 54 2>&1 >/dev/null); st=$?
-check "a registered worktree folder replaced by another repository is refused" "[[ $st == 1 ]] && grep -q 'is not one now' <<<\"\$o\""
+refused "a registered worktree folder that lost its .git file is refused, not reused"
+git init -q "$p" >/dev/null 2>&1; git -C "$p" symbolic-ref HEAD refs/heads/feature/54-start-work-in-a-worktree-review
+refused "a folder replaced by another repository with the branch's name checked out is refused (only the common-dir check can)"
+command rm -rf "$p/.git"; cp "$p3/.git" "$p/.git"
+refused "a folder whose .git file points at another worktree of this clone is refused (only the HEAD check can)"
 command rm -rf "$p/.git"; mv "$work/saved-git" "$p/.git"
 p2=$(bash scripts/work-issue.sh 54 2>/dev/null)
 check "once the folder is the worktree again it is reused" "[[ '$p2' == '$p' ]]"
-p3=$(bash scripts/work-issue.sh 55 2>/dev/null)
-check "a Bug label (any case) gets fix/ and a squeezed slug" "[[ '$p3' == '$wt/fix-55-null-children-crash-the-grid' ]]"
 p4=$(bash scripts/work-issue.sh 056 2>/dev/null)
 check "a label that only contains bug is not bug" "[[ '$p4' == '$wt/feature-56-bugfix' ]]"
 check "a leading-zero number is the same number" "[[ \$(bash scripts/work-issue.sh 054 2>/dev/null) == '$p' ]]"
