@@ -52,6 +52,19 @@ check "a spec without a test, a timeout or mutations is found" "[[ $st == 1 ]] &
 printf '{not json\n' > "$work/specs/s.json"
 run_checker
 check "a spec that is not JSON is found" "[[ $st == 1 ]] && grep -q 'not valid JSON' <<<\"\$out\""
+printf '[1]\n' > "$work/specs/s.json"
+run_checker
+check "a spec that is not a JSON object is found" "[[ $st == 1 ]] && grep -q 'not a JSON object' <<<\"\$out\""
+printf '{"test": ["true"], "timeout": "5", "mutations": null}\n' > "$work/specs/s.json"
+run_checker
+check "a timeout that is not a number and mutations that are not a list are found, without a traceback" "[[ $st == 1 ]] && grep -q 'positive .timeout' <<<\"\$out\" && grep -q 'mutations. as a list' <<<\"\$out\" && ! grep -q Traceback <<<\"\$out\""
+printf '{"test": ["true"], "timeout": 5, "mutations": ["x", 3]}\n' > "$work/specs/s.json"
+run_checker
+check "a mutation that is not an object is found, without a traceback" "[[ $st == 1 ]] && grep -q 'is not an object' <<<\"\$out\" && ! grep -q Traceback <<<\"\$out\""
+python3 -I "$checker" "$work/root" >/dev/null 2>&1; st=$?
+check "one argument is exit 2, not a check of this checkout" "[[ $st == 2 ]]"
+python3 -I "$checker" "$work/root" "$work/specs" extra >/dev/null 2>&1; st=$?
+check "three arguments are exit 2 too" "[[ $st == 2 ]]"
 command rm -f "$work/specs/s.json"
 run_checker
 check "a folder with no spec is exit 2, not a pass" "[[ $st == 2 ]]"

@@ -30,10 +30,17 @@ def problems(spec_path, root):
     if not isinstance(spec, dict):
         return ["is not a JSON object"]
     out = []
-    if not (isinstance(spec.get("test"), list) and spec["test"] and spec.get("timeout", 0) > 0):
+    timeout = spec.get("timeout")
+    if not (isinstance(spec.get("test"), list) and spec["test"] and isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and timeout > 0):
         out.append("needs a `test` argv and a positive `timeout`")
+    mutations = spec.get("mutations")
+    if not isinstance(mutations, list):
+        return out + ["needs `mutations` as a list"]
     seen = set()
-    for i, m in enumerate(spec.get("mutations", [])):
+    for i, m in enumerate(mutations):
+        if not isinstance(m, dict):
+            out.append(f"mutation {i + 1}: is not an object")
+            continue
         name = f"mutation {i + 1} ({str(m.get('why', '?'))[:50]})"
         missing = [f for f in FIELDS if not isinstance(m.get(f), str)]
         if missing:
@@ -59,12 +66,15 @@ def problems(spec_path, root):
             parsed = subprocess.run(["bash", "-n"], input=mutant, text=True, capture_output=True, check=False)
             if parsed.returncode != 0:
                 out.append(f"{name}: the mutant does not parse: {parsed.stderr.strip()}")
-    if not spec.get("mutations"):
+    if not mutations:
         out.append("has no mutations")
     return out
 
 
 def main(argv):
+    if len(argv) not in (1, 3):
+        print("usage: check-spec.py [<repo root> <folder of specs>]", file=sys.stderr)
+        return 2
     root, folder = (Path(argv[1]), Path(argv[2])) if len(argv) == 3 else (ROOT, HERE)
     specs = sorted(folder.glob("*.json"))
     if not specs:

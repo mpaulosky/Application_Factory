@@ -162,5 +162,38 @@ else
 fi
 chmod 755 "$work/nolist/scripts/sub"
 
+# each terminator of the call is pinned by a -u after it that must not count
+for form in 'git status --porcelain; sort -u' 'git status --porcelain && git add -u' 'x="$(git status --porcelain)"; foo -u' 'git status --porcelain 2>&1; foo -u' 'git status --porcelain & foo -u' 'if (git status --porcelain) && foo -u; then :; fi'; do
+  fixture term scripts/a.sh "$form"
+  run_checker term
+  check "a -u after the call's end is not its setting: $form" "[[ $st == 1 ]]"
+done
+fixture sub1 scripts/a.sh 'git -C $(dirname "$d") status --porcelain'
+run_checker sub1
+check "an unquoted command substitution inside the call does not hide it" "[[ $st == 1 ]]"
+fixture sub2 scripts/a.sh 'git status --porcelain $(sort -u f)'
+run_checker sub2
+check "a -u inside a command substitution is not the call's setting" "[[ $st == 1 ]]"
+fixture sub3 scripts/a.sh 'git status --porcelain $(echo --untracked-files=all)'
+run_checker sub3
+check "and a setting that is only text inside one is not either" "[[ $st == 1 ]]"
+fixture quoted-term scripts/a.sh 'git -C "a;b" status --porcelain'
+run_checker quoted-term
+check "a ; inside quotes does not end the call early" "[[ $st == 1 ]]"
+fixture quoted-term-ok scripts/a.sh 'git -C "a;b" status --porcelain --untracked-files=all'
+run_checker quoted-term-ok
+check "and the setting after it is still seen" "[[ $st == 0 ]]"
+# a file that can't be read at all
+fixture ro-dir scripts/a.sh 'git status --porcelain'
+chmod 444 "$work/ro-dir/scripts"
+if [[ "$(id -u)" != 0 ]]; then
+  run_checker ro-dir
+  check "a file in a folder that can't be searched is exit 2, not skipped" "[[ $st == 2 ]]"
+fi
+chmod 755 "$work/ro-dir/scripts"
+mkdir -p "$work/dangling/scripts"; ln -s "$work/dangling/nowhere" "$work/dangling/scripts/a.sh"
+run_checker dangling
+check "a dangling symlink named *.sh is exit 2, not skipped" "[[ $st == 2 ]]"
+
 echo "$PASSED passed, $FAILED failed"
 [[ $FAILED == 0 ]]

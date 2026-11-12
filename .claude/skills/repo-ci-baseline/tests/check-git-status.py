@@ -8,7 +8,7 @@ guard, so a "clean tree" check passes on a dirty one. A script's tests, Markdown
 Sandcastle runs `git status` in a fresh sandbox clone. Scanned: *.sh and the three git hooks, in any folder below the one given except a `tests` folder.
 
 A logical line is a line plus the lines a trailing backslash joins to it (a comment line is not joined: bash does not continue a comment). A call is the words after `git`
-up to the first unquoted `|`, `;`, `&`, `)` or `#`, so a `-u` of `sort -u` or `git add -u`, or text in a trailing comment, is not the call's setting. The call is
+up to the first unquoted `|`, `;`, `&` or `#`, or the `)` that closes the context the call is in (a `$(...)` or `(...)` inside the call is part of it), so a `-u` of `sort -u` or `git add -u` after it, or text in a trailing comment, is not the call's setting. The call is
 checked when one of its words is `status` and one starts with `--porcelain`; git's global options (-C <dir>, --no-pager, --git-dir=<dir>) come between and are skipped over
 as words, quoted values with spaces included, since the call is cut by quote parity.
 """
@@ -38,8 +38,11 @@ def logical_lines(text):
 
 
 def call_after(line, pos):
-    """The text from `pos` to the first unquoted | ; & ) or #."""
+    """The call's own text from `pos`: up to the first unquoted | ; & or #, or to the ) that closes the context the call is in. What is inside a $( ... ) or ( ... ) in
+    the call is blanked out: it is another command's words, never the call's setting (and never its `status` or `--porcelain`)."""
     quote = None
+    depth = 0
+    kept = []
     for i in range(pos, len(line)):
         c = line[i]
         if quote:
@@ -47,9 +50,18 @@ def call_after(line, pos):
                 quote = None
         elif c in "\"'":
             quote = c
-        elif c in "|;&)" or (c == "#" and (i == 0 or line[i - 1].isspace())):
-            return line[pos:i]
-    return line[pos:]
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            if depth == 0:
+                break
+            depth -= 1
+            kept.append(" ")
+            continue
+        elif c in "|;&" or (c == "#" and (i == 0 or line[i - 1].isspace())):
+            break
+        kept.append(" " if depth else c)
+    return "".join(kept)
 
 
 def unguarded(line):
@@ -70,8 +82,6 @@ def scan(root):
             if not (name.endswith(".sh") or name in HOOKS):
                 continue
             path = os.path.join(folder, name)
-            if not os.path.isfile(path):
-                continue
             try:
                 with open(path, encoding="utf-8", errors="replace") as handle:
                     text = handle.read()
