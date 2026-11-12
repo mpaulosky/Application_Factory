@@ -4,15 +4,27 @@
 #
 #   scripts/lint-edited-file.sh            (Claude Code passes the tool call as JSON on stdin)
 #
-# Markdown: markdownlint-cli2 with the repo's .markdownlint-cli2.jsonc, which is what the pre-commit hook, the gate and CI run.
-# YAML: yamllint with the repo's .yamllint.yml. A workflow (.github/workflows/*.yml) also goes through actionlint and zizmor,
-# and .github/dependabot.yml through zizmor, as the gate does.
+# Markdown: markdownlint-cli2 with the repo's .markdownlint-cli2.jsonc, which the pre-commit hook, the gate and CI use too.
+# YAML: yamllint with the repo's .yamllint.yml. A workflow (.github/workflows/*.yml) also goes through actionlint and zizmor
+# (offline), and .github/dependabot.yml through zizmor: the checks the Lint Actions workflow runs, which a gate runs only
+# where it lints workflows.
 #
-# Exit 0: the file is clean, is not Markdown or YAML, is outside the repo, or no linter for it is installed (this hook only
-# helps; the commit hook and the gate still check). Exit 2: a linter reported a violation; its output goes to stderr, which
-# Claude Code feeds back to the agent. Exit 1: the hook could not read its input (python3 missing, bad JSON); Claude Code shows
-# that to the person and carries on. A linter that is installed but crashes counts as a violation, not as clean.
+# Only the project's own repository and its linked worktrees are linted (CLAUDE_PROJECT_DIR, else the working directory):
+# a file in another clone, a symlink, or anything under node_modules is left alone, because the linters would load that
+# repository's own config and binaries, and markdownlint-cli2 runs JavaScript from its config.
+#
+# Exit 0: the file is clean, is not Markdown or YAML, is not in the project, or no linter for it is installed (this hook
+# only helps; the commit hook and the gate still check). A skipped linter is reported as a systemMessage on stdout, which
+# Claude Code shows to the person. Exit 2: a linter reported a violation; its output goes to stderr, which Claude Code feeds
+# back to the agent. Exit 1: the hook could not read its input (python3 missing, bad JSON); Claude Code shows that to the
+# person and carries on. A linter that is installed but crashes counts as a violation, not as clean.
 set -uo pipefail
+
+# Started from a git hook these point at another repository, and CDPATH makes cd print a path.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR CDPATH
+
+# The most a linter's output may add to the message the agent reads; a generated file can have thousands of violations.
+MAX_OUTPUT=6000
 
 if ! command -v python3 > /dev/null 2>&1; then
   echo "lint-edited-file.sh: python3 not found, so the edited file was not linted." >&2
@@ -20,18 +32,20 @@ if ! command -v python3 > /dev/null 2>&1; then
 fi
 
 # The file the tool wrote. Edit, Write and MultiEdit all name it file_path. A JSON error is an error, not "nothing to lint".
+# surrogateescape keeps a path with a lone surrogate from failing the write.
 if ! file="$(python3 -I -c '
 import json, sys
 data = json.load(sys.stdin)
 tool_input = data.get("tool_input") if isinstance(data, dict) else None
 path = tool_input.get("file_path") if isinstance(tool_input, dict) else None
-sys.stdout.write(path if isinstance(path, str) else "")
+sys.stdout.buffer.write(path.encode("utf-8", "surrogateescape") if isinstance(path, str) else b"")
 ')"; then
-  echo "lint-edited-file.sh: the hook input was not JSON, so the edited file was not linted." >&2
+  echo "lint-edited-file.sh: could not read the edited file path from the hook input, so the file was not linted." >&2
   exit 1
 fi
 
-[[ -n "$file" && -f "$file" ]] || exit 0
+# A symlink can point anywhere, and the linter would print lines of its target.
+[[ -n "$file" && -f "$file" && ! -L "$file" ]] || exit 0
 
 # Lower-case extension: a README.MD is Markdown too.
 lower="$(printf '%s' "$file" | tr '[:upper:]' '[:lower:]')"
@@ -43,10 +57,23 @@ esac
 [[ -n "$kind" ]] || exit 0
 
 command -v git > /dev/null 2>&1 || exit 0
+
+# common_dir <dir>: the absolute git common directory of the repository <dir> is in, which a repository and its linked
+# worktrees share.
+common_dir() {
+  local c
+  c="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2> /dev/null)" || return 1
+  (cd -P -- "$c" 2> /dev/null && pwd -P)
+}
+
 dir="$(cd -P -- "$(dirname -- "$file")" 2> /dev/null && pwd -P)" || exit 0
 # The repository the file is in, which in a linked worktree is that worktree: its configs are the ones that apply.
 root="$(git -C "$dir" rev-parse --show-toplevel 2> /dev/null)" || exit 0
 root="$(cd -P -- "$root" 2> /dev/null && pwd -P)" || exit 0
+want="$(common_dir "${CLAUDE_PROJECT_DIR:-$PWD}")" || exit 0
+have="$(common_dir "$root")" || exit 0
+[[ -n "$want" && "$have" == "$want" ]] || exit 0
+
 abs="$dir/$(basename -- "$file")"
 case "$abs" in
   "$root"/*) rel="${abs#"$root"/}" ;;
@@ -67,11 +94,15 @@ run_linter() {
   shift
   output="$(cd "$root" && "$@" 2>&1)" || rc=$?
   if ((rc != 0)); then
+    if ((${#output} > MAX_OUTPUT)); then
+      output="${output:0:MAX_OUTPUT}"$'\n'"... output cut at $MAX_OUTPUT of ${#output} characters"
+    fi
     failures+=("$name (exit $rc):"$'\n'"$output")
   fi
 }
 
-# local_bin <name>: the repo's own node_modules/.bin copy first, as the pre-commit hook probes it, then PATH.
+# local_bin <name>: the repo's own node_modules/.bin copy first, as the pre-commit hook probes it, then PATH. The repo is
+# the project's own by now, so its binary is as trusted as this script.
 local_bin() {
   if [[ -x "$root/node_modules/.bin/$1" ]]; then
     printf '%s' "$root/node_modules/.bin/$1"
@@ -105,7 +136,7 @@ else
         skipped+=("actionlint")
       fi
       if command -v zizmor > /dev/null 2>&1; then
-        # --offline: no GitHub token needed, as in the gate. CI also runs the online audits.
+        # --offline: no GitHub token needed. CI also runs the online audits.
         run_linter zizmor zizmor --offline --min-severity medium -- "$target"
       else
         skipped+=("zizmor")
@@ -123,13 +154,15 @@ fi
 
 if ((${#failures[@]} > 0)); then
   {
-    echo "Lint found problems in $rel. Fix them now; the commit hook, the gate and CI run the same checks:"
+    echo "Lint found problems in $rel. Fix them now; the commit hook, the gate and CI check the same file:"
     printf '%s\n' "${failures[@]}"
+    echo "If this output is not about the content of $rel (a usage error, a missing library), a linter is too old or misconfigured: tell the person instead of retrying."
   } >&2
   exit 2
 fi
 
 if ((${#skipped[@]} > 0)); then
-  echo "lint-edited-file.sh: $rel was not fully linted: ${skipped[*]} not installed (the gate and CI still check it)." >&2
+  python3 -I -c 'import json, sys; print(json.dumps({"systemMessage": sys.argv[1]}))' \
+    "lint-edited-file.sh: $rel was not fully linted: ${skipped[*]} not installed (the gate and CI still check it)."
 fi
 exit 0

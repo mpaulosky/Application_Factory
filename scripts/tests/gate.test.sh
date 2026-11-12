@@ -458,6 +458,40 @@ for f in "${copies[@]}"; do
   check "gate.sh lists $f" "$(grep -q "^  $f\$" "$here/scripts/gate.sh" && echo 0 || echo 1)"
 done
 
+# The edit-time lint (ADR 0011) is wired only by .claude/settings.json, and a typo in its matcher or command path disables the hook without a word.
+settings_ok() { # settings_ok <repo root>: 0 when a PostToolUse hook for Edit|Write|MultiEdit runs the repo's executable scripts/lint-edited-file.sh
+  # shellcheck disable=SC2016 # the Python source is text: $CLAUDE_PROJECT_DIR must not expand here
+  python3 -I -c '
+import json, os, sys
+root = sys.argv[1]
+try:
+    settings = json.load(open(os.path.join(root, ".claude", "settings.json")))
+    entries = settings["hooks"]["PostToolUse"]
+except (OSError, ValueError, KeyError, TypeError):
+    sys.exit(1)
+want = "\"$CLAUDE_PROJECT_DIR\"/scripts/lint-edited-file.sh"
+for entry in entries:
+    if isinstance(entry, dict) and entry.get("matcher") == "Edit|Write|MultiEdit":
+        for hook in entry.get("hooks", []):
+            if isinstance(hook, dict) and hook.get("type") == "command" and hook.get("command") == want:
+                sys.exit(0 if os.access(os.path.join(root, "scripts", "lint-edited-file.sh"), os.X_OK) else 1)
+sys.exit(1)
+' "$1"
+}
+check ".claude/settings.json runs scripts/lint-edited-file.sh after Edit, Write and MultiEdit" "$(settings_ok "$here" && echo 0 || echo 1)"
+settings_root="$(mktemp -d)"; mkdir -p "$settings_root/.claude" "$settings_root/scripts"; touch "$settings_root/scripts/lint-edited-file.sh"; chmod +x "$settings_root/scripts/lint-edited-file.sh"
+cp "$here/.claude/settings.json" "$settings_root/.claude/settings.json"
+check "the settings check passes on a good file" "$(settings_ok "$settings_root" && echo 0 || echo 1)"
+sed 's/Edit|Write|MultiEdit/Edit|Write/' "$here/.claude/settings.json" > "$settings_root/.claude/settings.json"
+check "the settings check fails on a matcher that drops MultiEdit" "$(settings_ok "$settings_root" && echo 1 || echo 0)"
+sed 's/lint-edited-file.sh/lint-edit.sh/' "$here/.claude/settings.json" > "$settings_root/.claude/settings.json"
+check "the settings check fails on a command that names another script" "$(settings_ok "$settings_root" && echo 1 || echo 0)"
+cp "$here/.claude/settings.json" "$settings_root/.claude/settings.json"; chmod -x "$settings_root/scripts/lint-edited-file.sh"
+check "the settings check fails when the script is not executable" "$(settings_ok "$settings_root" && echo 1 || echo 0)"
+printf '{' > "$settings_root/.claude/settings.json"
+check "the settings check fails on a file that is not JSON" "$(settings_ok "$settings_root" && echo 1 || echo 0)"
+rm -rf "$settings_root"
+
 echo
 echo "gate.test.sh: $pass passed, $failed failed"
 [[ $failed == 0 ]]
