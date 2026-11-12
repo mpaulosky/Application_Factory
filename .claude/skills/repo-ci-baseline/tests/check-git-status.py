@@ -11,7 +11,7 @@ A logical line is a line plus the lines a trailing backslash joins to it (not wh
 is a call: not one in a comment, in a single-quoted string or in the text of a double-quoted one, but yes one in a `$(...)` or backticks inside a double-quoted string; `git`,
 a backslash-escaped or quoted `git` (`"git"`, `'git'`) is the same command. A call is the words after `git` up to the first unquoted `|`, `;`, `&` or word-starting `#`, or the `)` (or backtick) that closes the
 context the call is in. A substitution inside the call (`$(...)`, `(...)`, backticks, quoted or not) is part of it but blanked, since its words are not the call's: so a `-u` of
-`sort -u` or `git add -u` after the call, or in a substitution, or text in a trailing comment, is not the call's setting. The call's text is split into shell words (quotes and
+`sort -u` or `git add -u` after the call, or in a substitution, or text in a trailing comment, is not the call's setting. The call's text is split into shell words (quotes, including $'...' and $"...", and
 backslashes removed, a quoted argument kept whole, see split_words); the call is checked when one of its words is `status` and one starts with `--porcelain`, and git's global
 options (-C <dir>, --no-pager, --git-dir=<dir>) come between as ordinary words.
 
@@ -165,7 +165,8 @@ def call_after(line, pos, in_bt=False):
 
 
 def split_words(text):
-    """The shell words of `text`, with quotes and backslashes removed and a quoted argument kept whole: `-C "a -u b"` is two words, `"--porcelain"` is --porcelain."""
+    """The shell words of `text`, with quotes ('...', "...", $'...', $"...") and backslashes removed and a quoted argument kept whole: `-C "a -u b"` is two words,
+    `"--porcelain"` and `$"--porcelain"` are --porcelain. In $'...' a backslash escapes the next character, as advance reads it."""
     words, word, quote, in_word, i = [], [], None, False, 0
     while i < len(text):
         c = text[i]
