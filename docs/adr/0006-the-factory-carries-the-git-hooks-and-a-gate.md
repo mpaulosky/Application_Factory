@@ -11,7 +11,8 @@ Baseline; that stays true.
 The gate runs two things: a test of the gate itself (`scripts/tests/gate.test.sh`), a check that each copy matches the Template's file, and the skill's `test.sh`. CI runs the same gate. Edit the
 Template's file, then run `scripts/gate.sh --sync` to copy it over; the gate fails on a
 copy that has drifted. Later records added to the gate the Markdown and YAML lint,
-the bare-`#N` issue-reference check and the `git status --porcelain` guard check (`tests/check-git-status.sh`), both also in `--quick`, and the local review check.
+the bare-`#N` issue-reference check and the `git status --porcelain` guard check (`tests/check-git-status.sh`), both also in `--quick`, and the local review check. ADR 0012 splits the gate into
+parts that CI runs in parallel, and adds the Sandcastle check, which a full gate runs when the branch changed a file it reads.
 
 ## Considered Options
 
@@ -26,7 +27,7 @@ the bare-`#N` issue-reference check and the `git status --porcelain` guard check
   in each clone; the setting is required, because git doesn't run any hook until it is on. `post-checkout` can only repair the setting and the execute bits after that; it can't bootstrap a fresh
 clone, so CI runs the same gate for a push from a clone without hooks.
 - A push is gated by `scripts/gate.sh`, so it runs `test.sh` and needs its tools (`actionlint`, `zizmor`, `yamllint`, `shellcheck`, `markdownlint-cli2`, `node`, `git`, and
-  `pnpm` on the first run, for the review's tests).
+  `pnpm` on the first run, for the review's tests). A push that changes what Sandcastle's check reads also runs that check, which needs the network (ADR 0012).
 - The gate also runs ShellCheck on the shell files the branch changed (so `--quick` catches what the full gate's `test.sh` would), and skips `test.sh` for a clean tree that already passed it
   (`GATE_NO_CACHE=1` runs it again). These are the gate's own conveniences: they add no Baseline file.
 - `scripts/gate.sh` is the Factory's own and is not overwritten by any Apply. The hooks and `check-branch-name.sh` are copies, kept in sync by the gate, as `dotfiles` does.

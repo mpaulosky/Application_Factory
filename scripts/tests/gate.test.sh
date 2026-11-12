@@ -7,6 +7,8 @@
 # and --quick (and a missing python3 or a broken checker fails closed), that dependabot.yml watches the root package.json, and the review tests' install step (a missing pnpm, a pnpm that leaves no tsx, a pnpm that installs it).
 # It also checks that .claude/settings.json runs the executable scripts/lint-edited-file.sh after Edit, Write and MultiEdit (ADR 0011), and that the check fails on a dropped matcher, another event or hook type,
 # a command without the quotes around CLAUDE_PROJECT_DIR or naming another script, a non-executable script and a file that is not JSON.
+# It also checks GATE_PART (ADR 0012): each part runs alone, a bad value, or --quick or --sync with a part, is refused, the Sandcastle check runs in a full gate only when the branch changed
+# a file it reads (and is remembered per clean tree), and the CI workflow has one job per part and a Template tests job that needs them all.
 #
 #   scripts/tests/gate.test.sh
 set -euo pipefail
@@ -14,7 +16,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 work="$(mktemp -d)"
 trap 'chmod -R u+w "$work" 2>/dev/null || true; rm -rf "$work"' EXIT # a case that makes a folder read-only is cleaned up even when it is interrupted
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH # a caller's GATE_NO_CACHE=1 must not reach the stub gate runs; the tests set it themselves where they need it
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH GATE_PART STUB_SANDCASTLE_EXIT RUN_PART # a caller's GATE_NO_CACHE=1 must not reach the stub gate runs; the tests set it themselves where they need it
 
 pass=0; failed=0
 check() { # check <description> <condition: 0 for ok>
@@ -48,6 +50,13 @@ touch "$(dirname "${BASH_SOURCE[0]}")/ran"
 exit "${STUB_EXIT:-0}"
 STUB
   chmod +x "$repo/$skill/test.sh"
+  # The Sandcastle check's stub marks that it ran inside .git, so it never makes the tree look changed (the cache cases need a clean tree).
+  cat > "$repo/$skill/tests/sandcastle-check.test.sh" <<'STUB'
+#!/usr/bin/env bash
+touch "$(dirname "${BASH_SOURCE[0]}")/../../../../.git/ran-sandcastle"
+exit "${STUB_SANDCASTLE_EXIT:-0}"
+STUB
+  chmod +x "$repo/$skill/tests/sandcastle-check.test.sh"
   echo "$repo"
 }
 
@@ -82,15 +91,16 @@ with_origin() {
 # run <repo>: the gate's exit status in $status, and whether the stub ran in $ran. GATE_SKIP_REVIEW is 1 unless $REVIEW_SKIP is set:
 # to a value, which is passed as it is, or to nothing, which leaves GATE_SKIP_REVIEW unset.
 run() {
-  rm -f "$1/$skill/ran" "$1/review-args"
+  rm -f "$1/$skill/ran" "$1/review-args" "$1/.git/ran-sandcastle"
   status=0
   local skip=(GATE_SKIP_REVIEW=1)
   if [[ -n "${REVIEW_SKIP+x}" ]]; then skip=(); [[ -z "$REVIEW_SKIP" ]] || skip=(GATE_SKIP_REVIEW="$REVIEW_SKIP"); fi
   # $GATE_ARGS is the gate's arguments, split on spaces.
   local gate_args=()
   [[ -z "${GATE_ARGS:-}" ]] || read -ra gate_args <<<"$GATE_ARGS"
-  (cd "$1" && env -u GATE_SKIP_REVIEW "${skip[@]+"${skip[@]}"}" GATE_SKIP_SELF_TEST=1 STUB_EXIT="${STUB_EXIT:-0}" REVIEW_EXIT="${REVIEW_EXIT:-0}" bash scripts/gate.sh "${gate_args[@]+"${gate_args[@]}"}" >"$1/out" 2>&1) || status=$?
+  (cd "$1" && env -u GATE_SKIP_REVIEW "${skip[@]+"${skip[@]}"}" GATE_SKIP_SELF_TEST=1 STUB_EXIT="${STUB_EXIT:-0}" STUB_SANDCASTLE_EXIT="${STUB_SANDCASTLE_EXIT:-0}" REVIEW_EXIT="${REVIEW_EXIT:-0}" ${RUN_PART:+GATE_PART="$RUN_PART"} bash scripts/gate.sh "${gate_args[@]+"${gate_args[@]}"}" >"$1/out" 2>&1) || status=$?
   [[ -e "$1/$skill/ran" ]] && ran=yes || ran=no
+  [[ -e "$1/.git/ran-sandcastle" ]] && ran_sc=yes || ran_sc=no
 }
 
 repo="$(new_repo match)"
@@ -416,7 +426,7 @@ if [[ "$(id -u)" != 0 ]]; then
 else
   echo "skip - the unclearable-pass case needs a user other than root"
 fi
-check "a GATE_NO_CACHE or STUB_TOUCH from the caller does not reach the stub gate runs (the gate runs this test with the caller's environment)" "$([[ -z ${GATE_NO_CACHE+x} && -z ${STUB_TOUCH+x} ]] && echo 0 || echo 1)"
+check "a GATE_NO_CACHE or STUB_TOUCH from the caller does not reach the stub gate runs (the gate runs this test with the caller's environment)" "$([[ -z ${GATE_NO_CACHE+x} && -z ${STUB_TOUCH+x} && -z ${GATE_PART+x} ]] && echo 0 || echo 1)"
 
 # A git that fails is not read as "nothing to check" or "a clean tree". wrapper_for <name> <git subcommand>: a folder with a git that fails on that subcommand.
 real_git="$(command -v git)"
@@ -458,6 +468,229 @@ check "dependabot.yml has an npm block for the root package.json" "$(grep -Fxq '
 # The list in gate.sh is the one the docs name: every copy the test builds is checked, so a file dropped from the list shows here.
 for f in "${copies[@]}"; do
   check "gate.sh lists $f" "$(grep -q "^  $f\$" "$here/scripts/gate.sh" && echo 0 || echo 1)"
+done
+
+# --- GATE_PART (ADR 0012): CI runs one part of the gate per job; a full gate runs them all -------------------------------------------------------------------
+# The step headers of each part. A part prints its own and no other part's, so a step that moves to another part, or is dropped, is found here.
+headers_static="Copies of Template files|Issue references in Owned files|git status guards in Owned scripts|markdownlint (whole repo|yamllint (whole repo|shellcheck (changed shell files)"
+headers_template="Local review (scripts/review.sh check)|▶ test.sh"
+headers_sandcastle="▶ Sandcastle check"
+repoP="$(new_repo parts)"; stub_review "$repoP"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoP/.git/info/exclude"
+mkdir -p "$repoP/$skill/references" "$repoP/$skill/template/owned"
+echo "# sandcastle" > "$repoP/$skill/references/sandcastle.md"
+commit_all "$repoP" files; with_origin "$repoP"
+tipP="$(git -C "$repoP" rev-parse HEAD)"
+touch_path() { # touch_path <path>: adds a line to the file (made if missing), valid for the linters the gate runs over it
+  mkdir -p "$repoP/$(dirname "$1")"
+  [[ "$1" != *.sh || -s "$repoP/$1" ]] || printf '#!/usr/bin/env bash\n' > "$repoP/$1"
+  [[ "$1" != *.md || -s "$repoP/$1" ]] || printf '# T\n' > "$repoP/$1"
+  case "$1" in *.md) printf '\n%s\n' "text for $1" >> "$repoP/$1" ;; *.sh) echo "# $1" >> "$repoP/$1" ;; *) echo "$1" >> "$repoP/$1" ;; esac
+}
+reset_parts() { git -C "$repoP" reset -q --hard "$tipP"; git -C "$repoP" clean -fdq; }
+part_check() { # part_check <part> <test.sh ran> <sandcastle ran>: GATE_PART=<part> passes, runs its own steps and no other part's
+  local part="$1" group headers h problems=()
+  GATE_NO_CACHE=1 REVIEW_SKIP="" RUN_PART="$part" run "$repoP"
+  [[ $status == 0 && $ran == "$2" && $ran_sc == "$3" ]] || problems+=("status $status, test.sh ran: $ran, Sandcastle ran: $ran_sc")
+  for group in static template sandcastle; do
+    case "$group" in static) headers="$headers_static" ;; template) headers="$headers_template" ;; sandcastle) headers="$headers_sandcastle" ;; esac
+    local IFS='|'
+    for h in $headers; do
+      if [[ "$group" == "$part" ]]; then grep -qF "$h" "$repoP/out" || problems+=("part $part did not print '$h'")
+      else ! grep -qF "$h" "$repoP/out" || problems+=("part $part printed '$h', a step of the $group part"); fi
+    done
+  done
+  if [[ "$part" == template ]]; then [[ "$(cat "$repoP/review-args" 2>/dev/null)" == "check $base" ]] || problems+=("the template part did not call review.sh check <merge base>")
+  else [[ ! -e "$repoP/review-args" ]] || problems+=("part $part called review.sh"); fi
+  ((${#problems[@]} == 0)) || printf '       | %s\n' "${problems[@]}"
+  check "GATE_PART=$part runs exactly the $part steps" "$((${#problems[@]} == 0 ? 0 : 1))"
+}
+part_check static no no
+part_check template yes no
+part_check sandcastle no yes
+part_check self no no
+RUN_PART=bogus run "$repoP"
+check "an unknown GATE_PART is refused with exit 2 and runs nothing" "$([[ $status == 2 && $ran == no && $ran_sc == no ]] && grep -q "GATE_PART must be" "$repoP/out" && echo 0 || echo 1)"
+for arg in --quick --sync; do
+  RUN_PART=static GATE_ARGS=$arg run "$repoP"
+  check "$arg with a GATE_PART is refused with exit 2" "$([[ $status == 2 ]] && grep -q "run no single part" "$repoP/out" && echo 0 || echo 1)"
+done
+GATE_NO_CACHE=1 STUB_SANDCASTLE_EXIT=1 RUN_PART=sandcastle run "$repoP"
+check "a failing Sandcastle check fails the sandcastle part" "$([[ $status == 1 && $ran_sc == yes ]] && echo 0 || echo 1)"
+GATE_NO_CACHE=1 STUB_EXIT=1 RUN_PART=template run "$repoP"
+check "a failing test.sh fails the template part" "$([[ $status == 1 && $ran == yes ]] && echo 0 || echo 1)"
+
+# The self part runs the gate's own test and the review's tests, which the other cases skip with GATE_SKIP_SELF_TEST=1.
+repoS="$(new_repo parts-self)"; mkdir -p "$repoS/scripts/tests" "$repoS/node_modules/.bin"
+printf '#!/usr/bin/env bash\ntouch "%s/.git/ran-self-test"\n' "$repoS" > "$repoS/scripts/tests/gate.test.sh"
+printf '#!/usr/bin/env bash\necho "tsx $*" >> "%s/.git/tsx-args"\n' "$repoS" > "$repoS/node_modules/.bin/tsx"
+chmod +x "$repoS/scripts/tests/gate.test.sh" "$repoS/node_modules/.bin/tsx"
+status=0
+(cd "$repoS" && env -u GATE_SKIP_SELF_TEST GATE_PART=self bash scripts/gate.sh >"$repoS/out" 2>&1) || status=$?
+check "GATE_PART=self runs the gate's own test and the review's tests, and no other part" "$([[ $status == 0 && -e $repoS/.git/ran-self-test ]] && grep -q "review-ledger.test.mts" "$repoS/.git/tsx-args" && ! grep -q "Copies of Template files" "$repoS/out" && [[ ! -e $repoS/$skill/ran && ! -e $repoS/.git/ran-sandcastle ]] && echo 0 || echo 1)"
+
+# A full gate runs the Sandcastle check only when the branch changed a file it reads (everything it applies and tests: the Template, the skill's references and ADRs, its rule).
+sc_paths_yes=(
+  "$skill/template/owned/.sandcastle/lib/x.mts" "$skill/template/owned/.github/workflows/x.yml" "$skill/template/seed/package.json" "$skill/template/seed/pnpm-lock.yaml"
+  "$skill/apply.sh" "$skill/SKILL.md" "$skill/CONTEXT.md" "$skill/references/other.md" "$skill/docs/adr/0010-x.md" "$skill/tests/sandcastle/x.test.mts"
+  "$skill/tests/sandcastle-check.test.sh" ".claude/rules/sandcastle.md"
+)
+sc_paths_no=("$skill/test.sh" "$skill/tests/other.sh" "$skill/github/repos.txt" "$skill/rollout.sh" ".claude/rules/other.md" "docs/other.md" "scripts/x.sh" "README.md")
+reset_parts
+GATE_NO_CACHE=1 run "$repoP"
+check "a full gate on a branch that changed nothing skips the Sandcastle check, saying so" "$([[ $status == 0 && $ran == yes && $ran_sc == no ]] && grep -q "changed nothing Sandcastle's check reads" "$repoP/out" && echo 0 || echo 1)"
+for changed in "${sc_paths_yes[@]}"; do
+  reset_parts; touch_path "$changed"; commit_all "$repoP" "touch $changed"
+  GATE_NO_CACHE=1 run "$repoP"
+  check "a full gate runs the Sandcastle check when the branch changed ${changed#"$skill"/}" "$([[ $status == 0 && $ran_sc == yes ]] && echo 0 || echo 1)"
+done
+for changed in "${sc_paths_no[@]}"; do
+  reset_parts; touch_path "$changed"; commit_all "$repoP" "touch $changed"
+  GATE_NO_CACHE=1 run "$repoP"
+  check "a full gate skips the Sandcastle check when the branch changed only ${changed#"$skill"/}, which it does not read" "$([[ $status == 0 && $ran_sc == no ]] && echo 0 || echo 1)"
+done
+# Changes git sees in other ways than a commit on the branch.
+reset_parts; touch_path "$skill/references/sandcastle.md"
+GATE_NO_CACHE=1 run "$repoP"
+check "an uncommitted edit of a tracked file the check reads makes a full gate run it" "$([[ $status == 0 && $ran_sc == yes ]] && echo 0 || echo 1)"
+reset_parts; echo "# new" > "$repoP/$skill/template/owned/new.txt"
+GATE_NO_CACHE=1 run "$repoP"
+check "an untracked file the check reads makes a full gate run it" "$([[ $status == 0 && $ran_sc == yes ]] && echo 0 || echo 1)"
+reset_parts; mkdir -p "$repoP/docs"; git -C "$repoP" mv "$skill/references/sandcastle.md" docs/moved.md; commit_all "$repoP" "move it out"
+GATE_NO_CACHE=1 run "$repoP"
+check "a file moved out of a folder the check reads makes a full gate run it (the old path counts)" "$([[ $status == 0 && $ran_sc == yes ]] && echo 0 || echo 1)"
+reset_parts; printf '# t\n' > "$repoP/$skill/references/é ü.md"; commit_all "$repoP" "non-ASCII name"
+GATE_NO_CACHE=1 run "$repoP"
+check "a file with non-ASCII characters in its name under a folder the check reads makes a full gate run it" "$([[ $status == 0 && $ran_sc == yes ]] && echo 0 || echo 1)"
+reset_parts; touch_path "$skill/SKILL.md"; commit_all "$repoP" "skill"
+rm -rf "$repoP/.git/gate-cache"
+run "$repoP"; run "$repoP"
+check "and the Sandcastle pass is remembered for the clean tree, as test.sh's is" "$([[ $ran_sc == no ]] && grep -q "Sandcastle check already passed on this tree" "$repoP/out" && echo 0 || echo 1)"
+GATE_NO_CACHE=1 STUB_SANDCASTLE_EXIT=1 run "$repoP"
+check "a failing Sandcastle check fails the full gate when it runs" "$([[ $status == 1 ]] && echo 0 || echo 1)"
+repoQ="$(new_repo parts-noorigin)"; stub_review "$repoQ"; run "$repoQ"
+check "with no origin/main to tell what changed, a full gate runs the Sandcastle check" "$([[ $status == 0 && $ran_sc == yes ]] && echo 0 || echo 1)"
+
+# sandcastle_changed on its own: when it can't tell (a git that fails on diff or ls-files, no merge base) it says "changed", so the check runs.
+sc_changed_rc() { # sc_changed_rc <repo> <PATH>: the function's status, taken out of gate.sh, run in <repo>
+  (cd "$1" && PATH="$2" bash -euo pipefail -c 'source <(sed -n "/^sandcastle_changed() {/,/^}/p" "$1"); sandcastle_changed' _ "$here/scripts/gate.sh" > /dev/null 2>&1; echo $?)
+}
+reset_parts
+check "sandcastle_changed says unchanged for a branch with no change in a watched path" "$([[ "$(sc_changed_rc "$repoP" "$PATH")" == 1 ]] && echo 0 || echo 1)"
+wrapper_for sc-diff diff; wrapper_for sc-lsfiles ls-files; wrapper_for sc-mergebase merge-base
+for pair in "sc-diff:git diff" "sc-lsfiles:git ls-files" "sc-mergebase:git merge-base"; do
+  check "sandcastle_changed says changed when ${pair#*:} fails, so the check is not skipped on a guess" "$([[ "$(sc_changed_rc "$repoP" "$work/${pair%%:*}:$PATH")" == 0 ]] && echo 0 || echo 1)"
+done
+
+mkdir -p "$work/sc-grep"; printf '#!/usr/bin/env bash\nexit 2\n' > "$work/sc-grep/grep"; chmod +x "$work/sc-grep/grep"
+check "sandcastle_changed says changed when grep itself fails (exit 2), so the check is not skipped on a guess" "$([[ "$(sc_changed_rc "$repoP" "$work/sc-grep:$PATH")" == 0 ]] && echo 0 || echo 1)"
+
+# The workflow checks read YAML. PyYAML may be only in a user site or in yamllint's own environment, which python3 -I does not see, so pick an
+# interpreter the way test.sh does: python3 -I when it imports yaml, else uvx with pyyaml.
+yaml_python() { # yaml_python: prints the command that runs Python with PyYAML, one word per line; fails when there is none
+  if python3 -I -c 'import yaml' &> /dev/null; then
+    printf '%s\n' python3 -I
+  elif command -v uvx > /dev/null; then
+    printf '%s\n' uvx --with pyyaml python -I
+  else
+    echo "the workflow checks need PyYAML for python3, or uvx" >&2
+    return 1
+  fi
+}
+mkdir -p "$work/noyaml"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$work/noyaml/python3"
+printf '#!/usr/bin/env bash\necho "uvx $*"\n' > "$work/noyaml/uvx"
+chmod +x "$work/noyaml/python3" "$work/noyaml/uvx"
+check "the workflow checks use uvx with pyyaml when python3 cannot import yaml" "$([[ "$(PATH="$work/noyaml:$PATH" yaml_python | tr '\n' ' ')" == "uvx --with pyyaml python -I " ]] && echo 0 || echo 1)"
+rm "$work/noyaml/uvx"
+check "the workflow checks fail, not pass, when there is no Python with PyYAML and no uvx" "$(PATH="$work/noyaml" yaml_python 2> /dev/null && echo 1 || echo 0)"
+mapfile -t yaml_py < <(yaml_python)
+[[ ${#yaml_py[@]} -gt 0 ]] || { echo "gate.test.sh: no Python with PyYAML and no uvx for the workflow checks" >&2; exit 1; }
+
+# The CI workflow: one job per part, and the job the ruleset requires needs them all, so a part cannot go missing from CI without this test failing.
+workflow_ok() { # workflow_ok <workflow file> <gate.sh>: 0 when its jobs run each GATE_PART once, through scripts/gate.sh, and "Template tests" always runs and needs every one of them
+  "${yaml_py[@]}" - "$1" "$2" <<'PY'
+import re, sys, yaml
+wf = yaml.safe_load(open(sys.argv[1]))
+gate = open(sys.argv[2]).read()
+declared = re.search(r'"" \| ([a-z |]+)\) ;;', gate)
+if not declared:
+    sys.exit(1)
+parts = sorted(declared.group(1).replace("|", " ").split())
+jobs = wf["jobs"]
+finals = [(k, j) for k, j in jobs.items() if j.get("name") == "Template tests"]
+if len(finals) != 1:
+    sys.exit(1)
+final_key, final = finals[0]
+used, part_jobs = [], []
+for key, job in jobs.items():
+    if key == final_key:
+        continue
+    if "if" in job or job.get("continue-on-error"):
+        sys.exit(1)
+    for step in job.get("steps", []):
+        part = (step.get("env") or {}).get("GATE_PART")
+        if part:
+            if "scripts/gate.sh" not in str(step.get("run", "")) or "if" in step or step.get("continue-on-error"):
+                sys.exit(1)
+            used.append(part)
+            part_jobs.append(key)
+if sorted(used) != parts or sorted(part_jobs) != sorted(set(part_jobs)):
+    sys.exit(1)
+needs = final.get("needs")
+if not isinstance(needs, list) or sorted(needs) != sorted(part_jobs):
+    sys.exit(1)
+if str(final.get("if", "")).strip() != "${{ always() }}" or final.get("continue-on-error"):
+    sys.exit(1)
+PY
+}
+aggregator_ok() { # aggregator_ok <workflow file>: 0 when the Template tests step passes for four successes and fails for a failure, a cancelled or a skipped job, a missing job and nothing
+  local script ok=0 case_json result job
+  command -v jq > /dev/null || { echo "aggregator_ok needs jq" >&2; return 1; }
+  script="$("${yaml_py[@]}" -c 'import sys, yaml; j = yaml.safe_load(open(sys.argv[1]))["jobs"]; print([x for x in j.values() if x.get("name") == "Template tests"][0]["steps"][-1]["run"])' "$1")" || return 1
+  agg() { NEEDS="$1" bash -e -c "$script" > /dev/null 2>&1; }
+  agg '{"self":{"result":"success"},"static":{"result":"success"},"template":{"result":"success"},"sandcastle":{"result":"success"}}' || ok=1
+  for result in failure cancelled skipped; do
+    for job in self static template sandcastle; do
+      case_json="$(python3 -I -c 'import json, sys; d = {k: {"result": "success"} for k in ("self", "static", "template", "sandcastle")}; d[sys.argv[1]]["result"] = sys.argv[2]; print(json.dumps(d))' "$job" "$result")"
+      ! agg "$case_json" || ok=1
+    done
+  done
+  ! agg '{"self":{"result":"success"},"static":{"result":"success"},"template":{"result":"success"}}' || ok=1
+  ! agg '{}' || ok=1
+  return "$ok"
+}
+wf="$here/.github/workflows/template-tests.yml"
+check "the CI workflow has one job per GATE_PART, run through gate.sh, and a Template tests job that always runs and needs them all" "$(workflow_ok "$wf" "$here/scripts/gate.sh" && echo 0 || echo 1)"
+check "the Template tests step passes for four successes and fails for a failed, cancelled or skipped part, a missing part and no parts" "$(aggregator_ok "$wf" && echo 0 || echo 1)"
+mkdir -p "$work/wf"
+mutate_wf() { # mutate_wf <name> <python statement on the loaded workflow `wf`>: writes $work/wf/<name>.yml
+  "${yaml_py[@]}" - "$wf" "$work/wf/$1.yml" "$2" <<'PY'
+import sys, yaml
+wf = yaml.safe_load(open(sys.argv[1]))
+exec(sys.argv[3])
+yaml.safe_dump(wf, open(sys.argv[2], "w"), sort_keys=False)
+PY
+}
+mutate_wf same 'pass'
+mutate_wf dup 'wf["jobs"]["sandcastle"]["steps"][-1]["env"]["GATE_PART"] = "static"'
+mutate_wf needs 'wf["jobs"]["test"]["needs"].remove("sandcastle")'
+# shellcheck disable=SC2016 # the Python source is text: the ${{ }} is the workflow's expression
+mutate_wf always 'wf["jobs"]["test"]["if"] = "${{ success() }}"'
+mutate_wf twice 'wf["jobs"]["self"]["steps"].append(dict(wf["jobs"]["self"]["steps"][-1]))'
+mutate_wf coe 'wf["jobs"]["static"]["continue-on-error"] = True'
+mutate_wf disabled 'wf["jobs"]["template"]["if"] = "false"'
+mutate_wf norun 'wf["jobs"]["static"]["steps"][-1]["run"] = "true"'
+mutate_wf twotests 'wf["jobs"]["self"]["name"] = "Template tests"'
+check "the workflow and aggregator checks pass for the workflow written back unchanged (the control for the mutants)" "$(workflow_ok "$work/wf/same.yml" "$here/scripts/gate.sh" && aggregator_ok "$work/wf/same.yml" && echo 0 || echo 1)"
+for m in dup needs always twice coe disabled norun twotests; do
+  check "the workflow check fails for a workflow where $m" "$(workflow_ok "$work/wf/$m.yml" "$here/scripts/gate.sh" && echo 1 || echo 0)"
+done
+mutate_wf noe 'wf["jobs"]["test"]["steps"][-1]["run"] = wf["jobs"]["test"]["steps"][-1]["run"].replace("jq -e", "jq")'
+mutate_wf any 'wf["jobs"]["test"]["steps"][-1]["run"] = wf["jobs"]["test"]["steps"][-1]["run"].replace("all(", "any(")'
+mutate_wf skipped 'wf["jobs"]["test"]["steps"][-1]["run"] = wf["jobs"]["test"]["steps"][-1]["run"].replace(".result == \"success\"", ".result != \"failure\"")'
+mutate_wf length 'wf["jobs"]["test"]["steps"][-1]["run"] = wf["jobs"]["test"]["steps"][-1]["run"].replace("length == 4", "length >= 0")'
+for m in noe any skipped length; do
+  check "the aggregator check fails for a Template tests step where $m" "$(aggregator_ok "$work/wf/$m.yml" && echo 1 || echo 0)"
 done
 
 # The edit-time lint (ADR 0011) is wired only by .claude/settings.json, and a typo in its matcher or command path disables the hook without a word.
