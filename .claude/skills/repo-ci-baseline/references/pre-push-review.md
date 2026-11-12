@@ -28,7 +28,9 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
 - `/pre-push-review` reviews the branch's whole diff against `origin/main` with parallel reviewers (the bar, plus one per matching lens),
   grades each finding **Critical** (a bug in code that runs, or behaviour with no test), **Warning** (a security weakness, whatever the file) or
   **Advisory** (docs, comments, conventions), fixes all three kinds in the review (Critical and Warning ones behind a regression test, Advisory ones with a gate check when one can pin it),
-  reviews the fixes again until a round fixes nothing, and records the result. The fixer checks its own fix before it commits (boundary tests, a mutation check, the edge-case
+  reviews the fixes again until a round fixes nothing, and records the result.
+  Where a person said to fix every finding, the review-only round gives way to further rounds, each cheaper (one reviewer, the gate started beside it, `prepare <run> last`) and ending the same way.
+  The fixer checks its own fix before it commits (boundary tests, a mutation check, the edge-case
   checklist), and replaces a function that two rounds in a row fixed instead of patching it again. A branch past 30 files or 3,000 lines (a file and its Template mirror
   counting once) gets a warning in round 1 to consider splitting it; the review goes on.
 - The reviewers read less than the key covers. `prepare` leaves out of `diff.patch` and `fixes.patch` a Template mirror that is a verbatim copy of a root file in the same

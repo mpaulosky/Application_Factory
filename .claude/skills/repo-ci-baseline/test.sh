@@ -124,6 +124,7 @@ shell_files=(
   "$skill_dir/tests/seed-check.test.sh" "$skill_dir/tests/seed-dependabot.test.sh"
   "$skill_dir/tests/seed-dockerfile.test.sh" "$skill_dir/tests/doc-single-source.test.sh" "$skill_dir/tests/no-dotfiles-dependency.test.sh"
   "$skill_dir/tests/sandcastle-check.test.sh" "$skill_dir/tests/repos-scope.test.sh"
+  "$skill_dir/tests/check-git-status.sh" "$skill_dir/tests/check-git-status.test.sh"
   "$owned/scripts/gate.sh" "$owned/scripts/check-branch-name.sh" "$owned/scripts/tests/check-branch-name.test.sh"
   "$owned/scripts/check-pr-title.sh" "$owned/scripts/tests/check-pr-title.test.sh"
   "$owned/scripts/sync-copilot-review.sh" "$owned/scripts/tests/sync-copilot-review.test.sh"
@@ -191,6 +192,18 @@ if ((refs_rc == 1)); then
   fail "write issue references in Owned files as mpaulosky/dotfiles#N (or <Repo>#N), not a bare #N"
 elif ((refs_rc != 0)); then
   fail "check-issue-refs.py failed (exit $refs_rc) without checking: see its output above"
+fi
+
+step "git status guards in Owned scripts name their untracked-files setting"
+# A guard that reads git status --porcelain without --untracked-files is weakened by a user's status.showUntrackedFiles=no. The rule is tests/check-git-status.sh (its own tests are
+# tests/check-git-status.test.sh); the Factory's scripts/gate.sh runs it too, so --quick catches it before this step does.
+bash "$skill_dir/tests/check-git-status.test.sh" || fail "check-git-status.test.sh"
+status_rc=0
+bash "$skill_dir/tests/check-git-status.sh" "$owned" || status_rc=$?
+if ((status_rc == 1)); then
+  fail "give each git status --porcelain in an Owned script --untracked-files=all"
+elif ((status_rc != 0)); then
+  fail "check-git-status.sh failed (exit $status_rc) without checking: see its output above"
 fi
 
 step "gh commands in Owned scripts are told their repository"

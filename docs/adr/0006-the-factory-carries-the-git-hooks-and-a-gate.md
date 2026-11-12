@@ -26,6 +26,8 @@ copy that has drifted. Later records added to the gate the Markdown and YAML lin
 clone, so CI runs the same gate for a push from a clone without hooks.
 - A push is gated by `scripts/gate.sh`, so it runs `test.sh` and needs its tools (`actionlint`, `zizmor`, `yamllint`, `shellcheck`, `markdownlint-cli2`, `node`, `git`, and
   `pnpm` on the first run, for the review's tests).
+- The gate also runs ShellCheck on the shell files the branch changed (so `--quick` catches what the full gate's `test.sh` would), and skips `test.sh` for a clean tree that already passed it
+  (`GATE_NO_CACHE=1` runs it again). These are the gate's own conveniences: they add no Baseline file.
 - `scripts/gate.sh` is the Factory's own and is not overwritten by any Apply. The hooks and `check-branch-name.sh` are copies, kept in sync by the gate, as `dotfiles` does.
 - Not carried yet: Sandcastle, `scripts/watch-pr.sh`, `scripts/work-issue.sh` and `scripts/cleanup.sh` (Owned Template files that reach the Fleet by a Rollout). Each needs its own decision.
   Claude Review and PR Auto-Merge: ADR 0008. The local review: ADR 0010.

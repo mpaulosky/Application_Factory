@@ -125,7 +125,8 @@ Run `scripts/review.sh prepare <run>`. It writes the branch's diff against its m
 a copy drifts, so reading both doubles the reading; a mirror that differs from its root copy, or has none, stays; for a path git writes two sections for, such as a symlink that becomes a file,
 the sections must match in order), and prints two lines on stdout, the diff's
 key and HEAD: keep both, since they name exactly the code this round reviews. The key is that of the whole diff, mirrors included, so a change in a
-mirror alone still needs a new review. In a later round, run `scripts/review.sh prepare <run> <HEAD the round before printed>`: it also writes the
+mirror alone still needs a new review. In a later round, run `scripts/review.sh prepare <run> last`
+(`last` is the HEAD the round before printed, which `prepare` keeps in `<run>/head`; that HEAD, given as the argument, does the same): it also writes the
 diff of that round's fixes to `<run>/fixes.patch`, filtered the same way. Write to `<run>/decisions.md`, with the Write tool and not a shell heredoc (the text quotes code such as `$(...)`,
 which a safety check may block), the earlier decisions from step 3 and every finding this run's earlier rounds
 raised, each with its id, outcome and reason, so no round raises again what an earlier one dismissed. A fixed item stays settled only until
@@ -266,14 +267,16 @@ recorded. A round that fixed nothing ends the review: go to step 8. Otherwise ru
 again, then go back to step 4 for a round that reviews the fixes. After 3 rounds that fixed something, run one more round
 that only reviews: anything it finds new stays open for a person (an Advisory one for the follow-up issue).
 
-**A person who said to fix every finding** (a standing "fix all") has those open ones fixed too, so rounds go on until one returns `[]`
-(the findings of the extra rounds are recorded `fixed` like the others). Keep each extra round cheap:
+**A person who said to fix every finding** (a standing "fix all") replaces that review-only round: the findings it would leave open (an Advisory one, and any other it raises) are
+fixed like the rest, in further rounds, and the review ends when a round fixes nothing (it returns `[]`, or only findings that triage dismisses). A finding that needs a person
+(`needsPerson`) still stays open, and a change the Rules name (the gate, the ledger, the reviewer agent, `.claude/settings.json`,
+a workflow's permissions) is made only when the person asked for that change. Keep each further round cheap:
 
-- From the fourth round on, one reviewer reads `<run>/fixes.patch` for every lens its files need, not one reviewer per lens.
-- Start `GATE_SKIP_REVIEW=1 scripts/gate.sh` and that reviewer together on the same commit: neither changes the worktree.
-- Put a comment or doc correction into the commit of the next code fix when one is due, so it shares that round; a correction alone still gets its round, because the record
-  needs the final code reviewed.
-- Between rounds, `scripts/gate.sh --quick` (about a minute) runs the tests, the copies' drift check, the lint and shellcheck on the shell files the branch changed.
+- From the fourth round on, one reviewer (the bar reviewer's questions included) reads `<run>/fixes.patch` for every lens its files need, not one reviewer per lens.
+- Start `GATE_SKIP_REVIEW=1 scripts/gate.sh` and that reviewer together on the same commit, since neither changes the worktree. When the gate fails, fix it and discard that
+  reviewer's answers if the fix touches lines it read.
+- A round's doc correction goes into that round with its code fixes, as step 6 says. A correction alone is committed alone and gets its round, because the record needs the final code reviewed.
+- While fixing, `scripts/gate.sh --quick` runs the repository's quick checks where its gate has that option; the full gate still runs once per round.
 
 ### 8. Record
 

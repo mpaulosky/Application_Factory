@@ -38,7 +38,7 @@ new_repo() {
   cp -p "$here/.yamllint.yml" "$here/.markdownlint-cli2.jsonc" "$repo/"
   cp -p "$here/$skill/template/owned/.markdownlint-cli2.jsonc" "$repo/$skill/template/owned/"
   mkdir -p "$repo/$skill/tests"
-  cp -p "$here/$skill/tests/check-issue-refs.py" "$repo/$skill/tests/"
+  cp -p "$here/$skill/tests/check-issue-refs.py" "$here/$skill/tests/check-git-status.sh" "$repo/$skill/tests/"
   cat > "$repo/$skill/test.sh" <<'STUB'
 #!/usr/bin/env bash
 touch "$(dirname "${BASH_SOURCE[0]}")/ran"
@@ -139,26 +139,99 @@ check "--quick fails on a Markdown lint error" "$([[ $status == 1 ]] && grep -q 
 rm "$repo2/bad.md"; printf 'a: [\n' > "$repo2/bad.yml"
 GATE_ARGS=--quick run "$repo2"
 check "--quick fails on a YAML lint error" "$([[ $status == 1 && $ran == no ]] && grep -q 'bad.yml' "$repo2/out" && grep -q 'syntax error' "$repo2/out" && echo 0 || echo 1)"
-# The ShellCheck step over the shell files the branch changes stops --quick and the full gate: an uncommitted one, a committed one, and a hook without the .sh suffix; a clean one and a file that
-# is not a shell file pass.
-# shellcheck disable=SC2016 # the scripts' own text: $unquoted must reach the file as written
+# The ShellCheck step over the shell files the branch changes. The scripts' own text: $unquoted must reach the file as written (SC2086 is what shellcheck then says).
+# shellcheck disable=SC2016
 bad_script='#!/usr/bin/env bash\necho $unquoted\n'
+commit_all() { git -C "$1" add -A; git -C "$1" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m "$2"; }
+
+# An uncommitted file, a committed one and a hook without the .sh suffix stop --quick and the full gate; the full gate fails in this step, before test.sh.
 repo3="$(new_repo quick-shellcheck)"; stub_review "$repo3"; with_origin "$repo3"
 printf '%b' "$bad_script" > "$repo3/scripts/bad.sh"
 GATE_ARGS=--quick run "$repo3"
 check "--quick fails on a shellcheck finding in an uncommitted shell file" "$([[ $status == 1 && $ran == no ]] && grep -q 'SC2086' "$repo3/out" && echo 0 || echo 1)"
 run "$repo3"
-check "the full gate fails on it too, before test.sh" "$([[ $status == 1 && $ran == no ]] && echo 0 || echo 1)"
-git -C "$repo3" add scripts/bad.sh; git -C "$repo3" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m bad
+check "the full gate fails in the shellcheck step too, before test.sh" "$([[ $status == 1 && $ran == no ]] && grep -q 'SC2086' "$repo3/out" && echo 0 || echo 1)"
+commit_all "$repo3" bad
 GATE_ARGS=--quick run "$repo3"
 check "a committed shell file with a finding fails too" "$([[ $status == 1 ]] && grep -q 'SC2086' "$repo3/out" && echo 0 || echo 1)"
-git -C "$repo3" rm -q -f scripts/bad.sh; printf '%b' "$bad_script" > "$repo3/.github/hooks/pre-push"; printf '%b' "$bad_script" > "$repo3/$skill/template/owned/.github/hooks/pre-push"
+git -C "$repo3" rm -q -f scripts/bad.sh
+printf '%b' "$bad_script" > "$repo3/.github/hooks/pre-push"; printf '%b' "$bad_script" > "$repo3/$skill/template/owned/.github/hooks/pre-push"
 GATE_ARGS=--quick run "$repo3"
-check "a hook without the .sh suffix is checked" "$([[ $status == 1 ]] && grep -q '.github/hooks/pre-push' "$repo3/out" && grep -q 'SC2086' "$repo3/out" && echo 0 || echo 1)"
-git -C "$repo3" checkout -q -- .github/hooks/pre-push "$skill/template/owned/.github/hooks/pre-push" 2>/dev/null || { cp -p "$here/.github/hooks/pre-push" "$repo3/.github/hooks/pre-push"; cp -p "$here/.github/hooks/pre-push" "$repo3/$skill/template/owned/.github/hooks/pre-push"; }
+check "a hook without the .sh suffix is checked" "$([[ $status == 1 ]] && grep -qF 'In .github/hooks/pre-push' "$repo3/out" && grep -q 'SC2086' "$repo3/out" && echo 0 || echo 1)"
+cp -p "$here/.github/hooks/pre-push" "$repo3/.github/hooks/pre-push"; cp -p "$here/.github/hooks/pre-push" "$repo3/$skill/template/owned/.github/hooks/pre-push"
 printf '%b' "$bad_script" > "$repo3/notes.txt"
 GATE_ARGS=--quick run "$repo3"
-check "a file that is not a shell file is not checked, and clean ones pass" "$([[ $status == 0 ]] && grep -q 'changed shell file(s) checked' "$repo3/out" && echo 0 || echo 1)"
+check "a deleted shell file is not checked, nor a file that is not a shell file, and clean ones pass" "$([[ $status == 0 ]] && grep -q 'changed shell file(s) checked' "$repo3/out" && echo 0 || echo 1)"
+
+# A file with a non-ASCII name is found (git quotes it without -z).
+repo4="$(new_repo quick-shellcheck-name)"; stub_review "$repo4"; with_origin "$repo4"
+printf '%b' "$bad_script" > "$repo4/scripts/"$'caf\303\251 bad.sh'
+GATE_ARGS=--quick run "$repo4"
+check "a shell file with a non-ASCII name and a space is checked" "$([[ $status == 1 ]] && grep -q 'SC2086' "$repo4/out" && echo 0 || echo 1)"
+
+# The scope is what the branch changes: a file with a finding that is already in origin/main's history, and a deleted one, are left alone.
+repo5="$(new_repo quick-shellcheck-scope)"; stub_review "$repo5"
+printf '%b' "$bad_script" > "$repo5/scripts/old-bad.sh"; printf '%b' "$bad_script" > "$repo5/scripts/deleted-bad.sh"
+commit_all "$repo5" base; git -C "$repo5" update-ref refs/remotes/origin/main HEAD
+git -C "$repo5" rm -q -f scripts/deleted-bad.sh; commit_all "$repo5" "branch: a deletion"
+GATE_ARGS=--quick run "$repo5"
+check "a finding in a file the branch did not change, and a deleted file, are not reported" "$([[ $status == 0 ]] && grep -q '0 changed shell file(s) checked' "$repo5/out" && echo 0 || echo 1)"
+printf '%b' "$bad_script" >> "$repo5/scripts/old-bad.sh"
+GATE_ARGS=--quick run "$repo5"
+check "the same file fails once the branch changes it" "$([[ $status == 1 ]] && grep -q 'old-bad.sh' "$repo5/out" && echo 0 || echo 1)"
+
+# With no origin/main, or one that shares no history with HEAD, every shell file is checked.
+repo6="$(new_repo quick-shellcheck-nomain)"; printf '%b' "$bad_script" > "$repo6/scripts/bad.sh"
+GATE_ARGS=--quick run "$repo6"
+check "with no origin/main every shell file is checked" "$([[ $status == 1 ]] && grep -q 'SC2086' "$repo6/out" && echo 0 || echo 1)"
+repo7="$(new_repo quick-shellcheck-unrelated)"; printf '%b' "$bad_script" > "$repo7/scripts/bad.sh"; tcommit "$repo7" base
+git -C "$repo7" update-ref refs/remotes/origin/main "$(git -C "$repo7" -c user.name=t -c user.email=t@example.com commit-tree -m other "$(git -C "$repo7" hash-object -t tree -w /dev/null)")"
+GATE_ARGS=--quick run "$repo7"
+check "with an origin/main that shares no history every shell file is checked" "$([[ $status == 1 ]] && grep -q 'SC2086' "$repo7/out" && echo 0 || echo 1)"
+
+# A missing shellcheck fails the gate and says so.
+repo8="$(new_repo quick-no-shellcheck)"; mkdir -p "$work/noshellcheck"
+for tool in bash git python3 markdownlint-cli2 yamllint node pnpm env sh cat grep sed awk sort dirname basename mktemp rm cp mv ls tr head tail wc cmp mkdir touch uname date; do
+  tool_path="$(command -v "$tool" 2>/dev/null || true)"; [[ -z $tool_path ]] || ln -sf "$tool_path" "$work/noshellcheck/$tool"
+done
+status=0
+(cd "$repo8" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/noshellcheck" bash scripts/gate.sh --quick >"$repo8/out" 2>&1) || status=$?
+check "a missing shellcheck fails the gate and says so" "$([[ $status == 1 ]] && grep -q 'shellcheck not found' "$repo8/out" && echo 0 || echo 1)"
+
+# test.sh's pass is remembered for a clean tree: the same tree is not tested twice; a new commit, an uncommitted or untracked file, GATE_NO_CACHE=1 and a failure all run it.
+repo9="$(new_repo cache)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo9/.git/info/exclude"; commit_all "$repo9" base
+run "$repo9"
+check "test.sh runs on a clean tree it has not passed on" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
+run "$repo9"
+check "and is skipped the second time, saying so, with the same exit status" "$([[ $status == 0 && $ran == no ]] && grep -q 'already passed on this tree' "$repo9/out" && echo 0 || echo 1)"
+GATE_NO_CACHE=1 run "$repo9"
+check "GATE_NO_CACHE=1 runs it again" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
+echo more > "$repo9/extra.txt"; run "$repo9"
+check "an untracked file makes the tree dirty, so test.sh runs" "$([[ $ran == yes ]] && echo 0 || echo 1)"
+rm "$repo9/extra.txt"; run "$repo9"
+check "the pass of the clean tree is still remembered after that" "$([[ $ran == no ]] && echo 0 || echo 1)"
+echo more > "$repo9/extra.txt"; commit_all "$repo9" "a new tree"
+STUB_EXIT=3 run "$repo9"
+check "a new commit's tree runs test.sh, and a failure is the gate's status" "$([[ $status == 3 && $ran == yes ]] && echo 0 || echo 1)"
+run "$repo9"
+check "a failure was not remembered: the next run runs test.sh again" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
+repo10="$(new_repo cache-nocommit)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo10/.git/info/exclude"
+run "$repo10"; run "$repo10"
+check "a repo with no commit has no tree to remember, so test.sh runs every time" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
+
+# A bare git status --porcelain in an Owned script fails the full gate and --quick, before test.sh.
+repo11="$(new_repo git-status)"; mkdir -p "$repo11/$skill/tests" "$repo11/$skill/template/owned/scripts"
+cp -p "$here/$skill/tests/check-git-status.sh" "$repo11/$skill/tests/"
+# shellcheck disable=SC2016 # the script's own text
+printf '%s\n' '[[ -z "$(git status --porcelain)" ]] || exit 1' > "$repo11/$skill/template/owned/scripts/guard.sh"
+GATE_ARGS=--quick run "$repo11"
+check "--quick fails on a git status --porcelain without --untracked-files" "$([[ $status == 1 && $ran == no ]] && grep -q 'guard.sh:1:' "$repo11/out" && echo 0 || echo 1)"
+run "$repo11"
+check "the full gate fails on it too, before test.sh" "$([[ $status == 1 && $ran == no ]] && echo 0 || echo 1)"
+rm "$repo11/$skill/tests/check-git-status.sh"
+GATE_ARGS=--quick run "$repo11"
+check "a missing checker fails the gate, not passes it" "$([[ $status == 1 ]] && echo 0 || echo 1)"
+
 echo changed >> "$repo/scripts/check-pr-title.sh"
 GATE_ARGS=--quick run "$repo"
 check "--quick still fails a copy that drifted" "$([[ $status == 1 ]] && echo 0 || echo 1)"

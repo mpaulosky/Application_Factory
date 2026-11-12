@@ -3,7 +3,7 @@
 # The Factory isn't a .NET repo, so its gate is what its CI runs: first this script's own test and the review's three stand-alone tests (they install
 # the packages with pnpm), then that its copies of Template files haven't drifted from the Template (ADR 0006), then that no Owned file has a bare #N,
 # then the Markdown and YAML lint, then shellcheck of the shell files the branch changes, then that the branch passed the local review (scripts/review.sh check, ADR 0010; GATE_SKIP_REVIEW=1 skips it),
-# then the repo-ci-baseline skill's test.sh. This script is the Factory's own, not a copy of the Template's scripts/gate.sh.
+# then the repo-ci-baseline skill's test.sh (skipped when it already passed on the same clean tree; GATE_NO_CACHE=1 runs it). This script is the Factory's own, not a copy of the Template's scripts/gate.sh.
 set -euo pipefail
 
 # scripts/gate.sh --quick: the checks that finish in about a minute (its test, the review tests, the copies' drift, the bare-#N check, lint, shellcheck of the shell files the branch changes), then stop before the local
@@ -131,6 +131,18 @@ elif ((refs_rc != 0)); then
   exit 1
 fi
 
+# test.sh's git status rule (a guard reading git status --porcelain names --untracked-files), run here too so --quick catches it. Same exit codes as the issue-reference check.
+echo -e "\n${CYAN}▶ git status guards in Owned scripts${RESET}"
+status_rc=0
+bash "$skill/tests/check-git-status.sh" "$owned" || status_rc=$?
+if ((status_rc == 1)); then
+  echo -e "${RED}❌ Give each git status --porcelain in an Owned script --untracked-files=all.${RESET}" >&2
+  exit 1
+elif ((status_rc != 0)); then
+  echo -e "${RED}❌ check-git-status.sh failed (exit $status_rc) without checking: see its output above.${RESET}" >&2
+  exit 1
+fi
+
 # What the Lint Markdown and Lint YAML workflows run over the whole repo, so a failure shows here and not first on GitHub (ADR 0009).
 # The pre-commit hook lints staged Markdown only; test.sh lints the Template's files only.
 echo -e "\n${CYAN}▶ markdownlint (whole repo, as Lint Markdown)${RESET}"
@@ -144,16 +156,18 @@ if ! command -v shellcheck >/dev/null 2>&1; then
   echo -e "${RED}❌ shellcheck not found: the gate needs it (test.sh runs it too).${RESET}" >&2
   exit 1
 fi
-if git rev-parse -q --verify refs/remotes/origin/main >/dev/null && merge_base="$(git merge-base origin/main HEAD 2>/dev/null)"; then
-  changed_files="$(git diff --name-only --diff-filter=ACMR "$merge_base"; git ls-files --others --exclude-standard)"
-else
-  changed_files="$(git ls-files --cached --others --exclude-standard)"
-fi
+# NUL-separated names (-z): git quotes a name with a non-ASCII byte, a tab or a quote otherwise, and the file would never be found.
 shell_changed=()
-while IFS= read -r f; do
+while IFS= read -r -d '' f; do
   [[ -f "$f" ]] || continue
   case "${f##*/}" in *.sh | pre-commit | pre-push | post-checkout) shell_changed+=("$f") ;; esac
-done <<<"$changed_files"
+done < <(
+  if git rev-parse -q --verify refs/remotes/origin/main >/dev/null && merge_base="$(git merge-base origin/main HEAD 2>/dev/null)"; then
+    git diff -z --name-only --diff-filter=ACMR "$merge_base"; git ls-files -z --others --exclude-standard
+  else
+    git ls-files -z --cached --others --exclude-standard
+  fi
+)
 if ((${#shell_changed[@]})); then
   shellcheck "${shell_changed[@]}" || { echo -e "${RED}❌ shellcheck${RESET}" >&2; exit 1; }
 fi
@@ -179,4 +193,15 @@ else
 fi
 
 echo -e "\n${CYAN}▶ test.sh${RESET}"
+# test.sh takes minutes, and the pre-push hook runs this script after the one started by hand. A pass is remembered for the tree HEAD points at, when nothing is uncommitted or untracked
+# (ignored files don't count), in the common git directory so every worktree of the clone shares it: the same tree is not tested twice. Only a pass is stored. GATE_NO_CACHE=1 always runs test.sh.
+cache=""
+if [[ "${GATE_NO_CACHE:-}" != "1" && -z "$(git status --porcelain --untracked-files=all)" ]] && tree="$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)"; then
+  cache="$(git rev-parse --git-common-dir)/gate-cache/test-sh-$tree"
+fi
+if [[ -n "$cache" && -e "$cache" ]]; then
+  echo "test.sh already passed on this tree (${cache##*-}): skipped. GATE_NO_CACHE=1 runs it again."
+  exit 0
+fi
 "$ROOT/$skill/test.sh"
+if [[ -n "$cache" ]]; then mkdir -p "${cache%/*}" && : >"$cache"; fi

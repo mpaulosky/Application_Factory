@@ -20,6 +20,10 @@ export GIT_TEMPLATE_DIR="$work/no-template" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t
 export HOME="$work" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 # a developer's own git config (signing, hooks, insteadOf) must not reach the throwaway repos
 PASSED=0; FAILED=0
 check() { if eval "$2"; then PASSED=$((PASSED + 1)); echo "ok   - $1"; else FAILED=$((FAILED + 1)); echo "FAIL - $1"; fi; }
+# A command the suite calls that does not exist (a helper called before it is defined, say) would print one line and let the check go on: it fails the suite. A subshell inherits this
+# function, so the name goes to a file; a child bash does not, which is what the scenarios that run the script with a bare PATH rely on.
+not_found="$work/.command-not-found"
+command_not_found_handle() { echo "FAIL - command not found: $1" >&2; echo "$1" >> "$not_found"; return 127; }
 
 if ! command -v jq >/dev/null 2>&1; then # gh-repo: ok
   echo "jq is not installed, and the fake gh runs work-issue.sh's jq with it" # gh-repo: ok
@@ -372,5 +376,6 @@ check "refuses when it can't tell the repository" "[[ $st != 0 ]] && grep -q \"c
 mv scripts/check-branch-name.sh "$work/cbn.sh"; o=$(bash scripts/work-issue.sh 54 2>&1 >/dev/null); st=$?; mv "$work/cbn.sh" scripts/check-branch-name.sh
 check "refuses without check-branch-name.sh" "[[ $st != 0 ]] && grep -q 'check-branch-name.sh is missing' <<<\"\$o\""
 
+if [[ -s "$not_found" ]]; then FAILED=$((FAILED + 1)); echo "FAIL - the suite called commands that do not exist: $(sort -u "$not_found" | tr '\n' ' ')"; fi
 echo "$PASSED passed, $FAILED failed"
 [[ $FAILED == 0 ]]
