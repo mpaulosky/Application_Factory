@@ -3,7 +3,8 @@
 # status on; a changed, missing or execute-bit-mismatched copy stops the gate before the stub runs; the local review check (ADR 0010)
 # skips only on GATE_SKIP_REVIEW=1, fails without an origin/main or when origin/main shares no history with HEAD, and passes review.sh check's status on, ahead of test.sh. It also checks
 # that gate.sh names each copied stand-alone test and lists every copy, that repo-config.mts lists the Factory's own files under Owned patterns,
-# that dependabot.yml watches the root package.json, and the review tests' install step (a missing pnpm, a pnpm that leaves no tsx, a pnpm that installs it).
+# that --quick stops after the lint and --sync restores drifted, missing and non-executable copies and then stops, that a bare #N in an Owned file fails the gate
+# and --quick (and a missing python3 or a broken checker fails closed), that dependabot.yml watches the root package.json, and the review tests' install step (a missing pnpm, a pnpm that leaves no tsx, a pnpm that installs it).
 #
 #   scripts/tests/gate.test.sh
 set -euo pipefail
@@ -36,6 +37,8 @@ new_repo() {
   done
   cp -p "$here/.yamllint.yml" "$here/.markdownlint-cli2.jsonc" "$repo/"
   cp -p "$here/$skill/template/owned/.markdownlint-cli2.jsonc" "$repo/$skill/template/owned/"
+  mkdir -p "$repo/$skill/tests"
+  cp -p "$here/$skill/tests/check-issue-refs.py" "$repo/$skill/tests/"
   cat > "$repo/$skill/test.sh" <<'STUB'
 #!/usr/bin/env bash
 touch "$(dirname "${BASH_SOURCE[0]}")/ran"
@@ -144,12 +147,66 @@ check "an unknown argument is refused" "$([[ $status == 2 && $ran == no ]] && ec
 GATE_ARGS="--quick --quick" run "$repo"
 check "a second argument is refused" "$([[ $status == 2 ]] && echo 0 || echo 1)"
 
-# What gates a push never passes --quick: the pre-push hook and the Factory's CI call the gate with no argument.
+# A bare #N in an Owned file fails the full gate and --quick, before test.sh.
+repo="$(new_repo bare-ref)"
+echo "See #5 for why." > "$repo/$skill/template/owned/NOTES.txt"
+run "$repo"
+check "a bare #N in an Owned file fails the gate" "$([[ $status == 1 && $ran == no ]] && grep -q 'NOTES.txt:1' "$repo/out" && echo 0 || echo 1)"
+GATE_ARGS=--quick run "$repo"
+check "--quick fails on a bare #N in an Owned file" "$([[ $status == 1 ]] && grep -q 'NOTES.txt:1' "$repo/out" && echo 0 || echo 1)"
+echo "See mpaulosky/Application_Factory#5 for why." > "$repo/$skill/template/owned/NOTES.txt"
+run "$repo"
+check "a repo-qualified issue reference passes" "$([[ $status == 0 ]] && echo 0 || echo 1)"
+
+# --sync copies the Template's file over a drifted, missing or non-executable copy, then stops without the rest of the gate.
+repo="$(new_repo sync)"
+echo "# local edit" >> "$repo/.github/hooks/pre-push"
+rm "$repo/scripts/check-branch-name.sh"
+chmod -x "$repo/.github/hooks/pre-commit"
+GATE_ARGS=--sync run "$repo"
+check "--sync exits 0 and doesn't run test.sh" "$([[ $status == 0 && $ran == no ]] && echo 0 || echo 1)"
+check "--sync names what it synced" "$(grep -q 'synced .github/hooks/pre-push' "$repo/out" && grep -q 'synced scripts/check-branch-name.sh' "$repo/out" && grep -q 'synced .github/hooks/pre-commit' "$repo/out" && echo 0 || echo 1)"
+check "--sync restores the content and the execute bit" "$(cmp -s "$repo/.github/hooks/pre-push" "$here/.github/hooks/pre-push" && [[ -x $repo/scripts/check-branch-name.sh && -x $repo/.github/hooks/pre-commit ]] && echo 0 || echo 1)"
+GATE_ARGS=--sync run "$repo"
+check "--sync on matching copies syncs nothing" "$([[ $status == 0 ]] && grep -q '^0 copies synced' "$repo/out" && echo 0 || echo 1)"
+GATE_ARGS="--sync --quick" run "$repo"
+check "--sync takes no other argument" "$([[ $status == 2 ]] && echo 0 || echo 1)"
+repo="$(new_repo drift-message)"
+echo "# local edit" >> "$repo/scripts/review.sh"
+run "$repo"
+check "the drift message points at --sync" "$([[ $status == 1 ]] && grep -q 'gate.sh --sync' "$repo/out" && echo 0 || echo 1)"
+# The workflow the message describes: after --sync the next full gate passes.
+GATE_ARGS=--sync run "$repo"
+run "$repo"
+check "the gate passes after --sync" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
+# A copy whose Template original lacks the execute bit is made non-executable too.
+repo="$(new_repo sync-execbit)"
+chmod -x "$repo/$skill/template/owned/.github/hooks/post-checkout"
+GATE_ARGS=--sync run "$repo"
+check "--sync drops the execute bit where the Template's original lacks it" "$([[ $status == 0 && ! -x $repo/.github/hooks/post-checkout ]] && echo 0 || echo 1)"
+run "$repo"
+check "the gate passes after that --sync" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
+
+# The issue-reference step fails closed: no python3, or a checker that can't check, fails the gate with its own message and doesn't read as a pass.
+repo="$(new_repo no-python)"
+mkdir -p "$work/nopy"
+for tool in bash cat cmp dirname env git markdownlint-cli2 node pnpm rm yamllint; do
+  tool_path="$(command -v "$tool" 2>/dev/null || true)"; [[ -z $tool_path ]] || ln -sf "$tool_path" "$work/nopy/$tool"
+done
+status=0
+(cd "$repo" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/nopy" bash scripts/gate.sh >"$repo/out" 2>&1) || status=$?
+check "a missing python3 fails the gate and says so" "$([[ $status == 1 ]] && grep -q 'python3 not found' "$repo/out" && echo 0 || echo 1)"
+repo="$(new_repo broken-checker)"
+printf 'import sys\nsys.exit(2)\n' > "$repo/$skill/tests/check-issue-refs.py"
+run "$repo"
+check "a checker that fails without checking fails the gate with its own message" "$([[ $status == 1 && $ran == no ]] && grep -q 'failed (exit 2) without checking' "$repo/out" && echo 0 || echo 1)"
+
+# What gates a push never passes --quick or --sync (--sync runs no check at all): the pre-push hook and the Factory's CI call the gate with no argument.
 check "the pre-push hook runs the gate with no argument" "$(grep -E 'scripts/gate\.sh' "$here/.github/hooks/pre-push" | grep -vE '^#' | grep -qE 'gate\.sh"?$' && echo 0 || echo 1)"
 # grep exits 1 for no match and 2 for an error (a moved folder): only 1 passes, so the guard can't go quiet when its paths move.
 quick_rc=0
-grep -rqE -e '--quick' "$here/.github/hooks" "$here/.github/workflows" 2>/dev/null && quick_rc=0 || quick_rc=$?
-check "no hook or workflow passes --quick" "$([[ -d $here/.github/hooks && -d $here/.github/workflows && $quick_rc == 1 ]] && echo 0 || echo 1)"
+grep -rqE -e '--(quick|sync)' "$here/.github/hooks" "$here/.github/workflows" 2>/dev/null && quick_rc=0 || quick_rc=$?
+check "no hook or workflow passes --quick or --sync" "$([[ -d $here/.github/hooks && -d $here/.github/workflows && $quick_rc == 1 ]] && echo 0 || echo 1)"
 check "the Factory's CI runs the gate with no argument" "$(grep -E 'run: bash "scripts/gate\.sh"$' "$here/.github/workflows/template-tests.yml" >/dev/null && echo 0 || echo 1)"
 
 # The local review check (ADR 0010). The stub review.sh stands for scripts/review.sh; GATE_SKIP_REVIEW=1 skips it, anything else doesn't.
