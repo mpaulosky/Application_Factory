@@ -59,12 +59,13 @@ local branch of that name if there is one (checked out as it is, even if it is b
 branch is `fix/{n}-{slug}` for an issue labelled `bug` (any case), `feature/{n}-{slug}` for any other; the slug is the title's lowercase `a-z0-9` words (a leading `[tag]` dropped, at most 6
 words and 50 characters, `issue` when none is left). An issue renamed since keeps the branch already named for its number, local or on `origin` (the branch the title gives wins when it
 exists; else the first in name order, local first); a branch with the number that is outside the branch standard, under another prefix, or with leading zeros in the number is skipped. A
-branch it makes from `origin/main` has no upstream (it would track `main`, and a plain `git push` would refuse): the first push is `git push -u origin HEAD`. It reuses the branch's worktree
-if there is one; git's entry for one whose folder was deleted by hand is forgotten (that one only, and only a real directory entry) and the worktree made again. It refuses, with a hint, a
-locked worktree whose folder is missing, one whose folder can't be reached (its parent folder is missing, empty, unreadable or unsearchable, which an unmounted drive also looks like: run
-`git worktree prune` if it was deleted for good), the primary checkout holding the branch, and a directory of that name that is not a worktree of the branch. When `origin` can't be fetched
-(but `gh` works: the issue is read first) it still prints a worktree the branch already has, with a warning, and stops otherwise. It needs `gh` logged in, and for an origin that is not on
-github.com, `GITHUB_REPOSITORY`. Work without an issue is made by hand: `git worktree add --no-track -b chore/upgrade-net10 ../<Repo>-worktrees/chore-upgrade-net10 origin/main`.
+branch it makes from `origin/main` has no upstream (it would track `main`, and a plain `git push` would refuse): the first push is `git push -u origin HEAD`; one made from `origin/<branch>`
+tracks that branch. It reuses the branch's worktree if there is one; git's entry for one whose folder was deleted by hand is forgotten (that one only, and only a real directory entry) and
+the worktree made again. It refuses, with a hint, a locked worktree whose folder is missing, one whose folder can't be reached (its parent folder is missing, empty, unreadable or
+unsearchable, which an unmounted drive also looks like: run `git worktree prune` if it was deleted for good), the primary checkout holding the branch, and a directory of that name that is
+not a worktree of the branch. When `origin` can't be fetched (but `gh` works: the issue is read first) it still prints a worktree the branch already has, with a warning, and stops otherwise.
+It needs `gh` logged in, and for an origin that is not on github.com, `GITHUB_REPOSITORY`. Work without an issue is made by hand:
+`git worktree add --no-track -b chore/upgrade-net10 ../<Repo>-worktrees/chore-upgrade-net10 origin/main`.
 
 Once the PR merges, `scripts/cleanup.sh` (run in the primary checkout, on a clean `main`) fast-forwards `main`, then removes each merged branch with its worktree and its `origin` branch. It
 decides from the PR's state on GitHub (a squash merge leaves no ancestry for `git branch --merged`): the PR must be from the repository `origin` points at (a fork's PR of the same name
@@ -74,10 +75,10 @@ that local branch's `origin` copy too), and removes a closed-unmerged one only w
 repository `origin` points at), which deleting would close. It deletes a local branch only if it still holds the tip it judged (compared in the delete itself). It deletes the `origin` branch
 only if `origin` still holds the tip it judged (one GitHub already deleted counts as removed), and for a worktree whose folder was deleted by hand it forgets git's entry for that one
 worktree only (a locked one is kept; a parent folder that is missing, empty, unreadable or unsearchable may be an unmounted drive, so the branch is kept with the hint to run
-`git worktree prune`). It needs `gh` logged in, and for an `origin` that is not on github.com, `GITHUB_REPOSITORY`. It exits 1 when it can't run (not on `main`, an `origin` push URL that
-names another repository than its fetch URL, not the primary checkout, a dirty `main`, no `gh` or repository, a bad argument), can't fetch `origin`, `main` can't fast-forward or a `gh`
-lookup fails, and, after doing the rest, when a removal git refused, a check of `origin` or the closing fetch failed, or a commit was made after a branch was judged. `--dry-run` shows the
-steps. `git worktree remove` alone leaves the local and `origin` branches behind.
+`git worktree prune`). It needs `gh` logged in, and for an `origin` that is not on github.com, `GITHUB_REPOSITORY`. It exits 1 when it can't run (not on `main`, an `origin` push URL that is
+not shown to be the fetch URL's repository (the same text, or the same host and owner/name), not the primary checkout, a dirty `main`, no `gh` or repository, a bad argument), can't fetch
+`origin`, `main` can't fast-forward or a `gh` lookup fails, and, after doing the rest, when a removal git refused, a branch a worktree is rebasing or bisecting, a check of `origin` or the
+closing fetch failed, or a commit was made after a branch was judged. `--dry-run` shows the steps. `git worktree remove` alone leaves the local and `origin` branches behind.
 
 `pre-commit` enforces the rule that a change is committed in a linked worktree. Claude Code's own `.claude/worktrees/` (ignored by the Template's
 `.gitignore`) also passes the check, since any linked worktree does, but people use `../<Repo>-worktrees/`.

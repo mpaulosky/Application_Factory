@@ -11,7 +11,7 @@
 # number (feature/{n}-..., fix/{n}-..., hotfix/{n}-...) in name order, local branches before origin's. A branch for the number outside the branch standard, under another prefix, or with leading
 # zeros in its number (feature/054-x) is not the issue's, and is skipped.
 # The branch starts from the local branch when there is one (checked out as it is), else from origin/<branch> when that branch is on origin, else from origin/main; origin is fetched
-# first, so a branch pushed from another machine is seen. A branch made from origin/main has no upstream (it would track main): the first push is git push -u origin HEAD. A worktree the branch already has is reused,
+# first, so a branch pushed from another machine is seen. A branch made from origin/main has no upstream (it would track main): the first push is git push -u origin HEAD; one made from origin/<branch> tracks that branch. A worktree the branch already has is reused,
 # wherever it is, if its folder still exists (git's entry for one deleted by hand is forgotten, that one only, and the worktree made again; a locked
 # one is an error, and so is one whose folder can't be reached (its parent folder is missing, empty, unreadable or unsearchable: it may be on an unmounted drive; run git worktree prune if it was
 # deleted for good), or the primary checkout when it has the branch checked out); a directory in the way that is not that worktree is an error. It needs gh logged in, and for an origin
