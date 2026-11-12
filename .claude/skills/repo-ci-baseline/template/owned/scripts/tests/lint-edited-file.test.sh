@@ -289,6 +289,23 @@ log_line "actionlint $repo -- ./.github/workflows/other.yaml" || p+=("actionlint
 log_line "zizmor $repo --offline --min-severity medium -- ./.github/workflows/other.yaml" || p+=("zizmor did not get the .yaml workflow")
 check "a workflow named .yaml goes through actionlint and zizmor" ${p[@]+"${p[@]}"}
 
+# The Factory edits the Template's originals, which sit under a folder: the same linters apply there.
+tw=".claude/skills/s/template/owned/.github"
+mkdir -p "$repo/$tw/workflows"
+printf 'name: ci\n' > "$repo/$tw/workflows/ci.yml"
+printf 'version: 2\n' > "$repo/$tw/dependabot.yml"
+run_hook "$(edit_json "$repo/$tw/workflows/ci.yml")"
+p=()
+[[ $STATUS -eq 0 ]] || p+=("exit $STATUS, want 0")
+log_line "actionlint $repo -- ./$tw/workflows/ci.yml" || p+=("actionlint did not run on a nested workflow: $(cat "$LOG")")
+log_line "zizmor $repo --offline --min-severity medium -- ./$tw/workflows/ci.yml" || p+=("zizmor did not run on a nested workflow: $(cat "$LOG")")
+check "a workflow under a folder such as the Template's goes through actionlint and zizmor" ${p[@]+"${p[@]}"}
+run_hook "$(edit_json "$repo/$tw/dependabot.yml")"
+p=()
+log_line "zizmor $repo --offline --min-severity medium -- ./$tw/dependabot.yml" || p+=("zizmor did not run on a nested dependabot.yml: $(cat "$LOG")")
+! log_has "actionlint" || p+=("actionlint ran on dependabot.yml")
+check "a dependabot.yml under a folder goes through zizmor only" ${p[@]+"${p[@]}"}
+
 run_hook "$(edit_json "$repo/.github/workflows/bad.yml")"
 p=()
 [[ $STATUS -eq 2 ]] || p+=("exit $STATUS, want 2")
@@ -344,6 +361,26 @@ p=()
 log_empty || p+=("a directory named dir.md was linted: $(cat "$LOG")")
 [[ -z "$OUTPUT" ]] || p+=("output: $OUTPUT")
 check "a directory with a Markdown name is left alone" ${p[@]+"${p[@]}"}
+
+# A folder whose name ends in a newline is not the folder without it: $(...) would drop the newline and lint the sibling.
+nl=$'\n'
+mkdir -p "$repo/nl$nl" "$repo/nl"
+printf '# T\n\nBAD\n' > "$repo/nl$nl/a.md"
+printf '# T\n' > "$repo/nl/a.md"
+p=()
+[[ -d "$repo/nl$nl" && -d "$repo/nl" && "$repo/nl$nl" != "$repo/nl" ]] || p+=("the two folders are not distinct, so this case proves nothing")
+run_hook "$(edit_json "$repo/nl$nl/a.md")"
+[[ $STATUS -eq 2 ]] || p+=("exit $STATUS, want 2: the clean sibling folder was linted instead")
+check "a file in a folder whose name ends in a newline is linted, not the file in the folder without it" ${p[@]+"${p[@]}"}
+printf '# T\n' > "$repo/nl$nl/a.md"
+rm -f "$repo/nl/a.md"
+printf '# T\n\nBAD\n' > "$WORK/outside.md"
+ln -s "$WORK/outside.md" "$repo/nl/a.md"
+run_hook "$(edit_json "$repo/nl$nl/a.md")"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT: the sibling's symlink to a file outside the repo was linted")
+check "a folder whose name ends in a newline cannot make the hook lint its sibling's symlink" ${p[@]+"${p[@]}"}
+rm -rf "$repo/nl$nl" "$repo/nl"
 
 printf '# T\n\nBAD\n' > "$WORK/outside.md"
 ln -s "$WORK/outside.md" "$repo/docs/link.md"

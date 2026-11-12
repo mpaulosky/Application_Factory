@@ -5,8 +5,8 @@
 #   scripts/lint-edited-file.sh            (Claude Code passes the tool call as JSON on stdin)
 #
 # Markdown: markdownlint-cli2 with the repo's .markdownlint-cli2.jsonc, which the pre-commit hook, the gate and CI use too.
-# YAML: yamllint with the repo's .yamllint.yml. A workflow (.github/workflows/*.yml) also goes through actionlint and zizmor
-# (offline), and .github/dependabot.yml through zizmor: the checks the Lint Actions workflow runs, which a gate runs only
+# YAML: yamllint with the repo's .yamllint.yml. A workflow (.github/workflows/*.yml, at the repo root or under any folder, such as the Factory's Template
+# copies) also goes through actionlint and zizmor (offline), and .github/dependabot.yml (same) through zizmor: the checks the Lint Actions workflow runs, which a gate runs only
 # where it lints workflows.
 #
 # Only files in the project's own checkout, or in a linked worktree that checkout lists in `git worktree list`, are linted
@@ -88,10 +88,27 @@ in_project() {
   return 1
 }
 
-dir="$(cd -P -- "$(dirname -- "$file")" 2> /dev/null && pwd -P)" || exit 0
+# canon <dir> <variable>: sets <variable> to the canonical path of <dir>, keeping trailing newlines in it. $(...) drops them, which
+# would turn the folder "docs<newline>" into "docs", a different folder whose file (or symlink) would be linted instead.
+canon() {
+  local out
+  out="$(cd -P -- "$1" 2> /dev/null && pwd -P && printf x)" || return 1
+  out="${out%x}"
+  printf -v "$2" '%s' "${out%$'\n'}"
+}
+
+# Not dirname, which also drops trailing newlines: the file is a regular file, so its folder is what precedes the last slash.
+folder="${file%/*}"
+[[ "$file" == */* ]] || folder=.
+[[ -n "$folder" ]] || folder=/
+dir='' root='' # set by canon
+canon "$folder" dir || exit 0
 # The repository the file is in, which in a linked worktree is that worktree: its configs are the ones that apply.
-root="$(git -C "$dir" rev-parse --show-toplevel 2> /dev/null)" || exit 0
-root="$(cd -P -- "$root" 2> /dev/null && pwd -P)" || exit 0
+top="$(git -C "$dir" rev-parse --show-toplevel 2> /dev/null; printf x)"
+top="${top%x}"
+top="${top%$'\n'}"
+[[ -n "$top" ]] || exit 0
+canon "$top" root || exit 0
 in_project "$CLAUDE_PROJECT_DIR" "$root"
 case $? in
   0) ;;
@@ -102,9 +119,8 @@ case $? in
   *) exit 0 ;;
 esac
 
-# Defensive: dir is inside root by construction, and Claude Code sends absolute paths, so neither this arm nor the
-# `--` after dirname and basename can be reached by a test.
-abs="$dir/$(basename -- "$file")"
+# Defensive: dir is inside root by construction, so the outside-root arm cannot be reached by a test.
+abs="$dir/${file##*/}"
 case "$abs" in
   "$root"/*) rel="${abs#"$root"/}" ;;
   *) exit 0 ;;
@@ -159,7 +175,7 @@ else
   fi
 
   case "$rel" in
-    .github/workflows/*.yml | .github/workflows/*.yaml)
+    .github/workflows/*.yml | .github/workflows/*.yaml | */.github/workflows/*.yml | */.github/workflows/*.yaml)
       if command -v actionlint > /dev/null 2>&1; then
         run_linter actionlint actionlint -- "$target"
       else
@@ -172,7 +188,7 @@ else
         skipped+=("zizmor")
       fi
       ;;
-    .github/dependabot.yml | .github/dependabot.yaml)
+    .github/dependabot.yml | .github/dependabot.yaml | */.github/dependabot.yml | */.github/dependabot.yaml)
       if command -v zizmor > /dev/null 2>&1; then
         run_linter zizmor zizmor --offline --min-severity medium -- "$target"
       else

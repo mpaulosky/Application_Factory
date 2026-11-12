@@ -190,7 +190,8 @@ The Template doesn't carry `.claude/settings.json`, so each repo that wants the 
 `scripts/lint-edited-file.sh` (with `scripts/tests/lint-edited-file.test.sh`) is a Claude Code `PostToolUse` hook. After each Edit, Write or MultiEdit
 it lints the file the tool wrote, so an agent fixes a violation in the same turn and the pre-commit hook, the gate, CI and a reviewer never see it
 ([the Factory's ADR 0011](../../../../docs/adr/0011-markdown-and-yaml-are-linted-as-they-are-written.md)). A Markdown file goes through `markdownlint-cli2` with the repo's
-`.markdownlint-cli2.jsonc`. A YAML file goes through `yamllint` with `.yamllint.yml`; a workflow also goes through `actionlint` and `zizmor --offline`, and `.github/dependabot.yml` through `zizmor`.
+`.markdownlint-cli2.jsonc`. A YAML file goes through `yamllint` with `.yamllint.yml`; a workflow also goes through `actionlint` and `zizmor --offline`, and `.github/dependabot.yml` through `zizmor`,
+at the repo root or under any folder (the Factory edits the Template's originals under `.claude/skills/`).
 These are the checks the CI lint workflows run; a gate runs `actionlint` and `zizmor` only where it lints workflows (an Application's gate does when a workflow changed; the Factory's does not).
 
 - Exit 2 with the linters' output on stderr when any linter reports a problem; Claude Code feeds that back to the agent. A linter that crashes counts as a problem, not as clean. Each linter's
@@ -206,7 +207,9 @@ These are the checks the CI lint workflows run; a gate runs `actionlint` and `zi
   sets and the hook requires (unset or empty is exit 1). A linter loads the repository's own config and, for Markdown, its `node_modules/.bin` copy, and `markdownlint-cli2` runs JavaScript from its
   config, so a file in another clone, a nested repository, or a directory whose `.git` file or `commondir` merely names the project's git directory (git reports the project's common directory for it)
   is left alone. A project that is not a git repository lints nothing. A worktree entry git still lists after its directory was removed is trusted until `git worktree prune` removes it.
-  `-z` keeps a worktree path with a newline from forging a second entry. `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_PREFIX`, `GIT_COMMON_DIR` and `CDPATH`,
+  `-z` keeps a worktree path with a newline from forging a second entry,
+  and the file's folder and repository root keep a trailing newline in their names (`$(...)` would drop it and lint the sibling folder).
+  `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_PREFIX`, `GIT_COMMON_DIR` and `CDPATH`,
   inherited from a git hook, are cleared first.
 - The path reaches the linter whole: from the repo root of the file's own repository, as `./<path>`, and for Markdown with `--no-globs`, so a name with `[`, `*` or a leading `-` is not read as a glob
   or an option (checked against the real tool: `a[1].md` and `x*y.md` are linted as those files). The config's `ignores` still apply.
