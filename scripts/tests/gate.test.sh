@@ -3,7 +3,7 @@
 # status on; a changed, missing or execute-bit-mismatched copy stops the gate before the stub runs; the local review check (ADR 0010)
 # skips only on GATE_SKIP_REVIEW=1, fails without an origin/main or when origin/main shares no history with HEAD, and passes review.sh check's status on, ahead of test.sh. It also checks
 # that gate.sh names each copied stand-alone test and lists every copy, that repo-config.mts lists the Factory's own files under Owned patterns,
-# that --quick stops after the lint and --sync restores drifted, missing and non-executable copies and then stops, that a bare #N in an Owned file fails the gate
+# that test.sh's pass is remembered per clean tree (skipped the second time, shared by worktrees, cleared before every run, never stored for a tree that changed), that --quick stops after the lint and --sync restores drifted, missing and non-executable copies and then stops, that a bare #N in an Owned file fails the gate
 # and --quick (and a missing python3 or a broken checker fails closed), that dependabot.yml watches the root package.json, and the review tests' install step (a missing pnpm, a pnpm that leaves no tsx, a pnpm that installs it).
 #
 #   scripts/tests/gate.test.sh
@@ -11,8 +11,8 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
+trap 'chmod -R u+w "$work" 2>/dev/null || true; rm -rf "$work"' EXIT # a case that makes a folder read-only is cleaned up even when it is interrupted
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH # a caller's GATE_NO_CACHE=1 must not reach the stub gate runs; the tests set it themselves where they need it
 
 pass=0; failed=0
 check() { # check <description> <condition: 0 for ok>
@@ -38,10 +38,11 @@ new_repo() {
   cp -p "$here/.yamllint.yml" "$here/.markdownlint-cli2.jsonc" "$repo/"
   cp -p "$here/$skill/template/owned/.markdownlint-cli2.jsonc" "$repo/$skill/template/owned/"
   mkdir -p "$repo/$skill/tests"
-  cp -p "$here/$skill/tests/check-issue-refs.py" "$repo/$skill/tests/"
+  cp -p "$here/$skill/tests/check-issue-refs.py" "$here/$skill/tests/check-git-status.sh" "$here/$skill/tests/check-git-status.py" "$repo/$skill/tests/"
   cat > "$repo/$skill/test.sh" <<'STUB'
 #!/usr/bin/env bash
 touch "$(dirname "${BASH_SOURCE[0]}")/ran"
+[[ -z "${STUB_TOUCH:-}" ]] || : > "$STUB_TOUCH"
 exit "${STUB_EXIT:-0}"
 STUB
   chmod +x "$repo/$skill/test.sh"
@@ -139,6 +140,107 @@ check "--quick fails on a Markdown lint error" "$([[ $status == 1 ]] && grep -q 
 rm "$repo2/bad.md"; printf 'a: [\n' > "$repo2/bad.yml"
 GATE_ARGS=--quick run "$repo2"
 check "--quick fails on a YAML lint error" "$([[ $status == 1 && $ran == no ]] && grep -q 'bad.yml' "$repo2/out" && grep -q 'syntax error' "$repo2/out" && echo 0 || echo 1)"
+# The ShellCheck step over the shell files the branch changes. The scripts' own text: $unquoted must reach the file as written (SC2086 is what shellcheck then says).
+# shellcheck disable=SC2016
+bad_script='#!/usr/bin/env bash\necho $unquoted\n'
+commit_all() { git -C "$1" add -A; git -C "$1" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m "$2"; }
+
+# An uncommitted file, a committed one and a hook without the .sh suffix stop --quick and the full gate; the full gate fails in this step, before test.sh.
+repo3="$(new_repo quick-shellcheck)"; stub_review "$repo3"; with_origin "$repo3"
+printf '%b' "$bad_script" > "$repo3/scripts/bad.sh"
+GATE_ARGS=--quick run "$repo3"
+check "--quick fails on a shellcheck finding in an uncommitted shell file" "$([[ $status == 1 && $ran == no ]] && grep -q 'SC2086' "$repo3/out" && echo 0 || echo 1)"
+run "$repo3"
+check "the full gate fails in the shellcheck step too, before test.sh" "$([[ $status == 1 && $ran == no ]] && grep -q 'SC2086' "$repo3/out" && echo 0 || echo 1)"
+commit_all "$repo3" bad
+GATE_ARGS=--quick run "$repo3"
+check "a committed shell file with a finding fails too" "$([[ $status == 1 ]] && grep -q 'SC2086' "$repo3/out" && echo 0 || echo 1)"
+git -C "$repo3" rm -q -f scripts/bad.sh
+printf '%b' "$bad_script" > "$repo3/.github/hooks/pre-push"; printf '%b' "$bad_script" > "$repo3/$skill/template/owned/.github/hooks/pre-push"
+GATE_ARGS=--quick run "$repo3"
+check "a hook without the .sh suffix is checked" "$([[ $status == 1 ]] && grep -qF 'In .github/hooks/pre-push' "$repo3/out" && grep -q 'SC2086' "$repo3/out" && echo 0 || echo 1)"
+cp -p "$here/.github/hooks/pre-push" "$repo3/.github/hooks/pre-push"; cp -p "$here/.github/hooks/pre-push" "$repo3/$skill/template/owned/.github/hooks/pre-push"
+printf '%b' "$bad_script" > "$repo3/notes.txt"
+GATE_ARGS=--quick run "$repo3"
+check "a deleted shell file is not checked, nor a file that is not a shell file, and clean ones pass" "$([[ $status == 0 ]] && grep -q '[1-9][0-9]* changed shell file(s) checked' "$repo3/out" && echo 0 || echo 1)"
+
+# A file with a non-ASCII name is found (git quotes it without -z).
+repo4="$(new_repo quick-shellcheck-name)"; stub_review "$repo4"; with_origin "$repo4"
+printf '%b' "$bad_script" > "$repo4/scripts/"$'caf\303\251 bad.sh'
+GATE_ARGS=--quick run "$repo4"
+check "a shell file with a non-ASCII name and a space is checked" "$([[ $status == 1 ]] && grep -q 'SC2086' "$repo4/out" && echo 0 || echo 1)"
+
+# The scope is what the branch changes: a file with a finding that is already in origin/main's history, and a deleted one, are left alone.
+repo5="$(new_repo quick-shellcheck-scope)"; stub_review "$repo5"
+printf '%b' "$bad_script" > "$repo5/scripts/old-bad.sh"; printf '%b' "$bad_script" > "$repo5/scripts/deleted-bad.sh"
+commit_all "$repo5" base; git -C "$repo5" update-ref refs/remotes/origin/main HEAD
+git -C "$repo5" rm -q -f scripts/deleted-bad.sh; commit_all "$repo5" "branch: a deletion"
+GATE_ARGS=--quick run "$repo5"
+check "a finding in a file the branch did not change, and a deleted file, are not reported" "$([[ $status == 0 ]] && grep -q '0 changed shell file(s) checked' "$repo5/out" && echo 0 || echo 1)"
+printf '%b' "$bad_script" >> "$repo5/scripts/old-bad.sh"
+GATE_ARGS=--quick run "$repo5"
+check "the same file fails once the branch changes it" "$([[ $status == 1 ]] && grep -q 'old-bad.sh' "$repo5/out" && echo 0 || echo 1)"
+
+# A tracked symlink replaced by a regular script is a type change in git's diff: its new contents are checked.
+repo5b="$(new_repo quick-shellcheck-typechange)"; stub_review "$repo5b"
+printf 'echo ok\n' > "$repo5b/scripts/real.sh"; ln -s real.sh "$repo5b/scripts/link.sh"
+commit_all "$repo5b" base; git -C "$repo5b" update-ref refs/remotes/origin/main HEAD
+rm "$repo5b/scripts/link.sh"; printf '%b' "$bad_script" > "$repo5b/scripts/link.sh"
+GATE_ARGS=--quick run "$repo5b"
+check "a symlink replaced by a shell script with a finding is checked (a type change)" "$([[ $status == 1 ]] && grep -q 'SC2086' "$repo5b/out" && echo 0 || echo 1)"
+
+# With no origin/main, or one that shares no history with HEAD, every shell file is checked.
+repo6="$(new_repo quick-shellcheck-nomain)"; printf '%b' "$bad_script" > "$repo6/scripts/bad.sh"
+GATE_ARGS=--quick run "$repo6"
+check "with no origin/main every shell file is checked" "$([[ $status == 1 ]] && grep -q 'SC2086' "$repo6/out" && echo 0 || echo 1)"
+repo7="$(new_repo quick-shellcheck-unrelated)"; printf '%b' "$bad_script" > "$repo7/scripts/bad.sh"; tcommit "$repo7" base
+git -C "$repo7" update-ref refs/remotes/origin/main "$(git -C "$repo7" -c user.name=t -c user.email=t@example.com commit-tree -m other "$(git -C "$repo7" hash-object -t tree -w /dev/null)")"
+GATE_ARGS=--quick run "$repo7"
+check "with an origin/main that shares no history every shell file is checked" "$([[ $status == 1 ]] && grep -q 'SC2086' "$repo7/out" && echo 0 || echo 1)"
+
+# A missing shellcheck fails the gate and says so.
+repo8="$(new_repo quick-no-shellcheck)"; mkdir -p "$work/noshellcheck"
+for tool in bash git python3 markdownlint-cli2 yamllint node pnpm env sh cat grep sed awk sort dirname basename mktemp rm cp mv ls tr head tail wc cmp mkdir touch uname date find; do
+  tool_path="$(command -v "$tool" 2>/dev/null || true)"; [[ -z $tool_path ]] || ln -sf "$tool_path" "$work/noshellcheck/$tool"
+done
+status=0
+(cd "$repo8" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/noshellcheck" bash scripts/gate.sh --quick >"$repo8/out" 2>&1) || status=$?
+check "a missing shellcheck fails the gate and says so" "$([[ $status == 1 ]] && grep -q 'shellcheck not found' "$repo8/out" && echo 0 || echo 1)"
+
+# test.sh's pass is remembered for a clean tree: the same tree is not tested twice; a new commit, an uncommitted or untracked file, GATE_NO_CACHE=1 and a failure all run it.
+repo9="$(new_repo cache)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo9/.git/info/exclude"; commit_all "$repo9" base
+run "$repo9"
+check "test.sh runs on a clean tree it has not passed on" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
+run "$repo9"
+check "and is skipped the second time, saying so, with the same exit status" "$([[ $status == 0 && $ran == no ]] && grep -q 'already passed on this tree' "$repo9/out" && echo 0 || echo 1)"
+GATE_NO_CACHE=1 run "$repo9"
+check "GATE_NO_CACHE=1 runs it again" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
+echo more > "$repo9/extra.txt"; run "$repo9"
+check "an untracked file makes the tree dirty, so test.sh runs" "$([[ $ran == yes ]] && echo 0 || echo 1)"
+rm "$repo9/extra.txt"; run "$repo9"
+check "the pass of the clean tree is still remembered after that" "$([[ $ran == no ]] && echo 0 || echo 1)"
+echo more > "$repo9/extra.txt"; commit_all "$repo9" "a new tree"
+STUB_EXIT=3 run "$repo9"
+check "a new commit's tree runs test.sh, and a failure is the gate's status" "$([[ $status == 3 && $ran == yes ]] && echo 0 || echo 1)"
+run "$repo9"
+check "a failure was not remembered: the next run runs test.sh again" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
+repo10="$(new_repo cache-nocommit)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo10/.git/info/exclude"
+run "$repo10"; run "$repo10"
+check "a repo with no commit has no tree to remember, so test.sh runs every time" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
+
+# A bare git status --porcelain in an Owned script fails the full gate and --quick, before test.sh.
+repo11="$(new_repo git-status)"; mkdir -p "$repo11/$skill/tests" "$repo11/$skill/template/owned/scripts"
+cp -p "$here/$skill/tests/check-git-status.sh" "$repo11/$skill/tests/"
+# shellcheck disable=SC2016 # the script's own text
+printf '%s\n' '[[ -z "$(git status --porcelain)" ]] || exit 1' > "$repo11/$skill/template/owned/scripts/guard.sh"
+GATE_ARGS=--quick run "$repo11"
+check "--quick fails on a git status --porcelain without --untracked-files" "$([[ $status == 1 && $ran == no ]] && grep -q 'guard.sh:1:' "$repo11/out" && echo 0 || echo 1)"
+run "$repo11"
+check "the full gate fails on it too, before test.sh" "$([[ $status == 1 && $ran == no ]] && echo 0 || echo 1)"
+rm "$repo11/$skill/tests/check-git-status.sh"
+GATE_ARGS=--quick run "$repo11"
+check "a missing checker fails the gate, not passes it" "$([[ $status == 1 ]] && echo 0 || echo 1)"
+
 echo changed >> "$repo/scripts/check-pr-title.sh"
 GATE_ARGS=--quick run "$repo"
 check "--quick still fails a copy that drifted" "$([[ $status == 1 ]] && echo 0 || echo 1)"
@@ -280,6 +382,67 @@ for f in "${copies[@]}"; do
   [[ "$f" == *.test.mts ]] || continue
   check "gate.sh runs $f" "$(grep -F 'tsx --test' "$here/scripts/gate.sh" | grep -Fq " $f" && echo 0 || echo 1)"
 done
+
+# Every run that runs test.sh clears the remembered pass first, so a failure (a forced run's, say) leaves nothing for the next ordinary run.
+repo16="$(new_repo cache-forced-failure)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo16/.git/info/exclude"; commit_all "$repo16" base
+run "$repo16"
+GATE_NO_CACHE=1 STUB_EXIT=3 run "$repo16"
+check "a forced run that fails is the gate's status" "$([[ $status == 3 && $ran == yes ]] && echo 0 || echo 1)"
+run "$repo16"
+check "and the next ordinary run tests again instead of trusting the old pass" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
+run "$repo16"
+check "and that pass is remembered again" "$([[ $ran == no ]] && grep -q 'already passed on this tree' "$repo16/out" && echo 0 || echo 1)"
+GATE_NO_CACHE=1 run "$repo16"
+check "a forced run that passes keeps the pass remembered" "$([[ $ran == yes ]] && echo 0 || echo 1)"
+run "$repo16"
+check "so the ordinary run after it is skipped" "$([[ $ran == no ]] && echo 0 || echo 1)"
+
+# A pass is never stored for a tree that test.sh left changed, and a pass that can't be cleared fails the gate instead of being trusted later.
+# moved.txt, the file the stub adds, stays visible to git (it is not in the exclude file): that is what makes the tree changed.
+repo17="$(new_repo cache-changed)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo17/.git/info/exclude"; commit_all "$repo17" base
+STUB_TOUCH="$repo17/moved.txt" run "$repo17"
+check "a test.sh that leaves the tree changed passes the gate, saying its pass is not remembered" "$([[ $status == 0 && $ran == yes ]] && grep -q 'the tree changed while test.sh ran' "$repo17/out" && echo 0 || echo 1)"
+command rm -f "$repo17/moved.txt"; run "$repo17"
+check "so the next run on the clean tree tests again" "$([[ $ran == yes ]] && echo 0 || echo 1)"
+repo18="$(new_repo cache-unclearable)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo18/.git/info/exclude"; commit_all "$repo18" base
+run "$repo18"
+if [[ "$(id -u)" != 0 ]]; then
+  chmod 555 "$repo18/.git/gate-cache"
+  GATE_NO_CACHE=1 run "$repo18"
+  check "a remembered pass that can't be cleared fails the gate before test.sh, saying so" "$([[ $status == 1 && $ran == no ]] && grep -q 'could not clear the remembered test.sh pass' "$repo18/out" && echo 0 || echo 1)"
+  chmod 755 "$repo18/.git/gate-cache"
+else
+  echo "skip - the unclearable-pass case needs a user other than root"
+fi
+check "a GATE_NO_CACHE or STUB_TOUCH from the caller does not reach the stub gate runs (the gate runs this test with the caller's environment)" "$([[ -z ${GATE_NO_CACHE+x} && -z ${STUB_TOUCH+x} ]] && echo 0 || echo 1)"
+
+# A git that fails is not read as "nothing to check" or "a clean tree". wrapper_for <name> <git subcommand>: a folder with a git that fails on that subcommand.
+real_git="$(command -v git)"
+wrapper_for() {
+  mkdir -p "$work/$1"
+  # shellcheck disable=SC2016 # the wrapper script is text: $@ and $a must not expand here
+  printf '#!/usr/bin/env bash\nfor a in "$@"; do [[ "$a" == %q ]] && exit 1; done\nexec %q "$@"\n' "$2" "$real_git" > "$work/$1/git"
+  chmod +x "$work/$1/git"
+}
+repo12="$(new_repo git-fails-diff)"; stub_review "$repo12"; with_origin "$repo12"; wrapper_for gitdiff diff
+PATH="$work/gitdiff:$PATH" GATE_ARGS=--quick run "$repo12"
+check "a git that fails listing the changed files fails the gate, saying so" "$([[ $status == 1 ]] && grep -q 'could not list the changed files' "$repo12/out" && echo 0 || echo 1)"
+repo13="$(new_repo git-fails-status)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo13/.git/info/exclude"; commit_all "$repo13" base; wrapper_for gitstatus status
+PATH="$work/gitstatus:$PATH" run "$repo13"
+check "a git status that fails is not a clean tree: test.sh runs and no pass is stored" "$([[ $ran == yes && ! -e $repo13/.git/gate-cache ]] && echo 0 || echo 1)"
+run "$repo13"
+check "so the next run, with a working git, runs test.sh again" "$([[ $ran == yes ]] && echo 0 || echo 1)"
+# the cache is shared by the worktrees of the clone, and a cache folder that can't be written does not fail a passing test.sh
+repo14="$(new_repo cache-worktree)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo14/.git/info/exclude"; commit_all "$repo14" base
+run "$repo14"
+git -C "$repo14" worktree add -q --detach "$work/cache-worktree-2" HEAD
+printf 'out\nreview-args\n%s/ran\n' "$skill" >> "$repo14/.git/info/exclude"
+run "$work/cache-worktree-2"
+check "a linked worktree of the clone shares the remembered pass" "$([[ $status == 0 && $ran == no ]] && grep -q 'already passed on this tree' "$work/cache-worktree-2/out" && echo 0 || echo 1)"
+repo15="$(new_repo cache-readonly)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo15/.git/info/exclude"; commit_all "$repo15" base
+: > "$repo15/.git/gate-cache"
+run "$repo15"
+check "a cache folder that can't be made leaves a passing test.sh passing, with a note" "$([[ $status == 0 && $ran == yes ]] && grep -q 'could not record the test.sh pass' "$repo15/out" && echo 0 || echo 1)"
 
 # The Factory's own files under an Owned pattern are listed in .sandcastle/lib/repo-config.mts, so a branch named chore/reapply-baseline that
 # changes only them still needs a review (the ledger treats a change to only Owned files as a re-Apply). Dropping one from the list shows here.

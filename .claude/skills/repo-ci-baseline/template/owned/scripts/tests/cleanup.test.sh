@@ -37,6 +37,14 @@ PASSED=0; FAILED=0
 ok() { PASSED=$((PASSED + 1)); echo "ok   - $1"; }
 bad() { FAILED=$((FAILED + 1)); echo "FAIL - $1"; }
 check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
+# A command the suite calls that does not exist (a helper called before it is defined, say) would print one line and let the check go on: it fails the suite. A subshell inherits this
+# function, so the name goes to a file; a child bash does not, which is what the scenarios that run the script with a bare PATH rely on.
+not_found="$work/.command-not-found"
+command_not_found_handle() { echo "FAIL - command not found: $1" >&2; echo "$1" >> "$not_found"; return 127; }
+# The guard itself: a missing command in a subshell is recorded (then forgotten, so the end of the suite doesn't fail on this one).
+( no-such-command-for-the-guard ) 2>/dev/null || true
+check "the not-found guard records a command that does not exist" "[[ -s \"\$not_found\" ]] && grep -qx no-such-command-for-the-guard \"\$not_found\""
+: > "$not_found"
 
 export GH_FIX="$work/fix"; mkdir "$GH_FIX"
 mkdir "$work/bin"
@@ -530,5 +538,6 @@ check "refuses when origin can't be fetched, and removes nothing" "[[ $st != 0 ]
 o=$(PATH="$work/shim:$PATH" SHIM_FETCH_FAIL=closing SHIM_FETCH_COUNT="$work/fc2" bash scripts/cleanup.sh 2>&1); st=$?
 check "a failed closing fetch is reported and fails the run, after the rest was done" "[[ $st == 1 ]] && grep -q 'the closing fetch of origin failed' <<<\"\$o\" && ! has_local chore/closing && ! has_remote chore/closing && grep -q '^Done: ' <<<\"\$o\""
 
+if [[ -s "$not_found" ]]; then FAILED=$((FAILED + 1)); echo "FAIL - the suite called commands that do not exist: $(sort -u "$not_found" | tr '\n' ' ')"; fi
 echo "$PASSED passed, $FAILED failed"
 [[ $FAILED == 0 ]]

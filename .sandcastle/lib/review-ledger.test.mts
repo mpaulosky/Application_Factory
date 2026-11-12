@@ -2313,6 +2313,43 @@ describe("main", () => {
     assert.deepEqual(result.out.trim().split("\n"), [diffKey(repo, mergeBase(repo)), run(repo, "rev-parse", "HEAD")]);
   });
 
+  it("prepare <dir> last reads the HEAD the round before printed from the folder, and writes the same fixes as when it is given", () => {
+    const dir = join(root, "run");
+    cli(["prepare", dir]);
+    commit(repo, "other.cs", "fixed\n", "fix");
+
+    const result = cli(["prepare", dir, "last"]);
+
+    assert.equal(result.code, 0, result.err);
+    const fixes = readFileSync(join(dir, "fixes.patch"), "utf8");
+    assert.match(fixes, /^\+fixed$/m);
+    assert.doesNotMatch(fixes, /^\+changed$/m);
+    assert.deepEqual(result.out.trim().split("\n"), [diffKey(repo, mergeBase(repo)), run(repo, "rev-parse", "HEAD")]);
+    assert.equal(readFileSync(join(dir, "head"), "utf8").trim(), run(repo, "rev-parse", "HEAD"));
+  });
+
+  it("prepare <dir> last in a folder with no earlier round says so, and writes nothing", () => {
+    const dir = join(root, "run");
+
+    const result = cli(["prepare", dir, "last"]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /no round was prepared in this folder yet/);
+    assert.equal(existsSync(join(dir, "diff.patch")), false);
+  });
+
+  it("prepare <dir> last twice, with nothing committed between, refuses like the HEAD it printed does", () => {
+    const dir = join(root, "run");
+    cli(["prepare", dir]);
+    commit(repo, "other.cs", "fixed\n", "fix");
+    cli(["prepare", dir, "last"]);
+
+    const result = cli(["prepare", dir, "last"]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /no fixes since/);
+  });
+
   it("prepare refuses an earlier HEAD that isn't one of HEAD's commits, whose diff would hold more than the fixes", () => {
     run(repo, "switch", "--quiet", "-c", "elsewhere", "origin/main");
     commit(repo, "other.cs", "elsewhere\n", "elsewhere");

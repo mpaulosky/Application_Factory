@@ -1428,9 +1428,9 @@ function sameFile(cwd: string, a: string, b: string): boolean {
 }
 
 const USAGE = `Usage: scripts/review.sh <command>
-  prepare <absolute dir> [<since>]
+  prepare <absolute dir> [<since>|last]
                          write HEAD's diff to <dir>/diff.patch for the reviewers, and with <since> (the HEAD
-                         the round before printed) the fixes since to <dir>/fixes.patch, both without the
+                         the round before printed, which "last" reads from <dir>/head) the fixes since to <dir>/fixes.patch, both without the
                          Template mirrors that are verbatim copies of a root file in the same patch; print
                          the key of the whole diff, then HEAD
   key                    print the ledger key of HEAD's diff against origin/main
@@ -1595,7 +1595,10 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         rmSync(join(rest[0], "fixes.patch"), { force: true });
         const headFile = join(rest[0], "head");
         const preparedHead = existsSync(headFile) ? readFileSync(headFile, "utf8").trim() : undefined;
-        const round = prepareRound(cwd, rest[1] === undefined ? {} : { since: { commit: rest[1], preparedHead } });
+        // `last` is the HEAD the round before printed, which this folder's `head` file holds: no HEAD to copy from the last round's output.
+        if (rest[1] === "last" && preparedHead === undefined) return fail("prepare <dir> last: no round was prepared in this folder yet, so there is no HEAD to read the fixes since. Run prepare <dir> first.");
+        const sinceCommit = rest[1] === "last" ? preparedHead : rest[1];
+        const round = prepareRound(cwd, sinceCommit === undefined ? {} : { since: { commit: sinceCommit, preparedHead } });
         mkdirSync(rest[0], { recursive: true });
         // What the reviewers read, without the verbatim Template mirrors; the key printed below is that of the whole diff.
         writeFileSync(join(rest[0], "diff.patch"), round.readPatch);
@@ -1603,7 +1606,7 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         // The HEAD this round reads, for the next round's fixesPatch.
         writeFileSync(join(rest[0], "head"), `${round.head}\n`);
         // On stderr, since callers read the two lines on stdout. Round 1 only: a later round is the same branch.
-        const size = rest[1] === undefined ? sizeWarning(round.patch) : undefined;
+        const size = sinceCommit === undefined ? sizeWarning(round.patch) : undefined;
         if (size !== undefined) process.stderr.write(`⚠ ${size}\n`);
         out(`${round.key}\n${round.head}`);
         return 0;

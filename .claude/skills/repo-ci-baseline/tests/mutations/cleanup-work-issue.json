@@ -1,0 +1,70 @@
+{
+  "test": [
+    "bash",
+    "-c",
+    "bash .claude/skills/repo-ci-baseline/template/owned/scripts/tests/cleanup.test.sh >/dev/null && bash .claude/skills/repo-ci-baseline/template/owned/scripts/tests/work-issue.test.sh >/dev/null"
+  ],
+  "timeout": 900,
+  "mutations": [
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/scripts/cleanup.sh",
+      "old": "[[ -z \"$(git status --porcelain --untracked-files=all)\" ]] ||",
+      "new": "[[ -z \"$(git status --porcelain)\" ]] ||",
+      "why": "status.showUntrackedFiles=no hides an untracked file from the clean-main check"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/scripts/cleanup.sh",
+      "old": "git update-ref --no-deref -d \"refs/heads/$b\" \"$tip\"; then",
+      "new": "git update-ref --no-deref -d \"refs/heads/$b\"; then",
+      "why": "the branch is deleted without comparing its tip, so a commit that landed since is lost"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/scripts/cleanup.sh",
+      "old": "[[ -n \"$push_slug\" && \"$push_slug\" == \"$fetch_slug\" ]]",
+      "new": "[[ \"$push_slug\" == \"$fetch_slug\" ]]",
+      "why": "two push URLs slug_of cannot read compare equal (empty == empty)"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/scripts/cleanup.sh",
+      "old": "[[ \"${CLEANUP_PUSH_URL_OK:-}\" == 1 ]]",
+      "new": "[[ -n \"${CLEANUP_PUSH_URL_OK:-}\" ]]",
+      "why": "any value of CLEANUP_PUSH_URL_OK turns the push-URL guard off"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/scripts/cleanup.sh",
+      "old": "ui_scp=\"[A-Za-z0-9._~%!\\$&'()*+,;=-]+@\"",
+      "new": "ui_scp=\"[A-Za-z0-9._~%!\\$&'()*+,;=:-]+@\"",
+      "why": "a colon in scp-style userinfo makes evil.com:x@github.com:o/r read as github.com"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/scripts/cleanup.sh",
+      "old": "local LC_ALL=C u=",
+      "new": "local u=",
+      "why": "the regex ranges follow the caller's locale and accept non-ASCII letters"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/scripts/cleanup.sh",
+      "old": "[[ -f \"$d/BISECT_START\" && \"$(<\"$d/BISECT_START\")\" == \"$b\" ]]",
+      "new": "[[ -f \"$d/BISECT_START\" && \"$(<\"$d/BISECT_START\")\" == \"$b\"* ]]",
+      "why": "a branch whose name is a prefix of a bisecting branch's is kept"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/scripts/work-issue.sh",
+      "old": "worktree_ok \"$existing\" || die",
+      "new": "true || die",
+      "why": "a recreated or replaced folder is reused as the worktree"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/scripts/work-issue.sh",
+      "old": "[[ \"$c1\" == \"$c2\" && ",
+      "new": "[[ ",
+      "why": "a folder that belongs to another repository is reused"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/scripts/work-issue.sh",
+      "old": "worktree add --quiet --no-track -b \"$branch\" \"$dir\" origin/main",
+      "new": "worktree add --quiet --track -b \"$branch\" \"$dir\" origin/main",
+      "why": "a branch made from origin/main tracks main"
+    }
+  ]
+}
