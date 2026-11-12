@@ -9,7 +9,7 @@ for the scanner's Python spec.
 
 The two arguments (the repository the specs' paths are relative to, and the folder to read *.json from) default to this checkout and this file's folder; tests/mutations/check-spec.test.sh
 gives them a throwaway tree. A spec needs a `test` argv, a positive `timeout` and at least one mutation, each with path, old, new and a reason; no mutation repeats another.
-Exit 0: every spec fits. Exit 1: one doesn't (printed). Exit 2: there is no spec to check.
+Exit 0: every spec fits. Exit 1: one doesn't (printed). Exit 2: there is no spec to check, or the arguments are not none or both of <repo root> and <folder of specs>.
 """
 
 import json

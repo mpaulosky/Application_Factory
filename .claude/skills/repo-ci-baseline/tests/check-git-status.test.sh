@@ -177,6 +177,33 @@ check "a -u inside a command substitution is not the call's setting" "[[ $st == 
 fixture sub3 scripts/a.sh 'git status --porcelain $(echo --untracked-files=all)'
 run_checker sub3
 check "and a setting that is only text inside one is not either" "[[ $st == 1 ]]"
+fixture sub-and scripts/a.sh 'git -C $(cd x && pwd) status --porcelain'
+run_checker sub-and
+check "a && inside a substitution does not end the call" "[[ $st == 1 ]]"
+fixture sub-pipe scripts/a.sh 'git -C $(dirname "$d" | head -1) status --porcelain'
+run_checker sub-pipe
+check "a | inside a substitution does not end the call" "[[ $st == 1 ]]"
+fixture sub-pipe-ok scripts/a.sh 'git status --porcelain $(a | b) --untracked-files=all'
+run_checker sub-pipe-ok
+check "and the setting after a substitution with a | in it is still seen" "[[ $st == 0 ]]"
+fixture sub-dq scripts/a.sh 'git status --porcelain "$(sort -u f)"'
+run_checker sub-dq
+check "a -u in a substitution inside double quotes is not the call's setting" "[[ $st == 1 ]]"
+fixture sub-bt scripts/a.sh 'git status --porcelain `sort -u f`'
+run_checker sub-bt
+check "a -u in backticks is not the call's setting" "[[ $st == 1 ]]"
+fixture sub-arith scripts/a.sh 'git status --porcelain $((1+2))'
+run_checker sub-arith
+check "arithmetic expansion after the call leaves it found" "[[ $st == 1 ]]"
+fixture sub-nested scripts/a.sh 'git status --porcelain "$(echo "a)b" -u)"'
+run_checker sub-nested
+check "a ) inside quotes inside a substitution does not close it" "[[ $st == 1 ]]"
+fixture subshell scripts/a.sh '(cd "$d" && git status --porcelain)'
+run_checker subshell
+check "a call inside a subshell is found" "[[ $st == 1 ]]"
+fixture subshell-ok scripts/a.sh '(cd "$d" && git status --porcelain -uall)'
+run_checker subshell-ok
+check "and its setting is seen" "[[ $st == 0 ]]"
 fixture quoted-term scripts/a.sh 'git -C "a;b" status --porcelain'
 run_checker quoted-term
 check "a ; inside quotes does not end the call early" "[[ $st == 1 ]]"
