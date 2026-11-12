@@ -196,17 +196,19 @@ fi
 
 echo -e "\n${CYAN}▶ test.sh${RESET}"
 # test.sh takes minutes, and the pre-push hook runs this script after the one started by hand. A pass is remembered for the tree HEAD points at, when nothing is uncommitted or untracked
-# (ignored files don't count), in the common git directory so every worktree of the clone shares it: the same tree is not tested twice. Only a pass is stored. GATE_NO_CACHE=1 always runs test.sh.
+# (ignored files don't count), in the common git directory so every worktree of the clone shares it: the same tree is not tested twice. Only a pass is stored.
+# GATE_NO_CACHE=1 always runs test.sh, and so does any run that starts from a remembered pass: the old pass is cleared first, so a failure leaves nothing remembered for the next run.
 # A git that fails here (a broken index, a lock) leaves the tree unproven clean, so test.sh runs and nothing is stored.
 cache=""
-if [[ "${GATE_NO_CACHE:-}" != "1" ]] && dirty="$(git status --porcelain --untracked-files=all)" && [[ -z "$dirty" ]] \
+if dirty="$(git status --porcelain --untracked-files=all)" && [[ -z "$dirty" ]] \
   && tree="$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" && common="$(git rev-parse --git-common-dir)"; then
   cache="$common/gate-cache/test-sh-$tree"
 fi
-if [[ -n "$cache" && -e "$cache" ]]; then
+if [[ -n "$cache" && -e "$cache" && "${GATE_NO_CACHE:-}" != "1" ]]; then
   echo "test.sh already passed on this tree (${cache##*-}): skipped. GATE_NO_CACHE=1 runs it again."
   exit 0
 fi
+if [[ -n "$cache" ]]; then command rm -f -- "$cache" 2>/dev/null || true; fi
 "$ROOT/$skill/test.sh"
 # Remembering the pass is best effort: a folder that can't be written to must not turn a passing test.sh into a failing gate.
 if [[ -n "$cache" ]]; then { mkdir -p "${cache%/*}" && : >"$cache"; } 2>/dev/null || echo "could not record the test.sh pass in ${cache%/*}: it will run again next time." >&2; fi

@@ -382,6 +382,20 @@ for f in "${copies[@]}"; do
   check "gate.sh runs $f" "$(grep -F 'tsx --test' "$here/scripts/gate.sh" | grep -Fq " $f" && echo 0 || echo 1)"
 done
 
+# A forced run (GATE_NO_CACHE=1) that fails clears the remembered pass, so the next ordinary run tests again.
+repo16="$(new_repo cache-forced-failure)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo16/.git/info/exclude"; commit_all "$repo16" base
+run "$repo16"
+GATE_NO_CACHE=1 STUB_EXIT=3 run "$repo16"
+check "a forced run that fails is the gate's status" "$([[ $status == 3 && $ran == yes ]] && echo 0 || echo 1)"
+run "$repo16"
+check "and the next ordinary run tests again instead of trusting the old pass" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
+run "$repo16"
+check "and that pass is remembered again" "$([[ $ran == no ]] && grep -q 'already passed on this tree' "$repo16/out" && echo 0 || echo 1)"
+GATE_NO_CACHE=1 run "$repo16"
+check "a forced run that passes keeps the pass remembered" "$([[ $ran == yes ]] && echo 0 || echo 1)"
+run "$repo16"
+check "so the ordinary run after it is skipped" "$([[ $ran == no ]] && echo 0 || echo 1)"
+
 # A git that fails is not read as "nothing to check" or "a clean tree". wrapper_for <name> <git subcommand>: a folder with a git that fails on that subcommand.
 real_git="$(command -v git)"
 wrapper_for() {
