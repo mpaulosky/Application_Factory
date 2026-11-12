@@ -139,6 +139,26 @@ check "--quick fails on a Markdown lint error" "$([[ $status == 1 ]] && grep -q 
 rm "$repo2/bad.md"; printf 'a: [\n' > "$repo2/bad.yml"
 GATE_ARGS=--quick run "$repo2"
 check "--quick fails on a YAML lint error" "$([[ $status == 1 && $ran == no ]] && grep -q 'bad.yml' "$repo2/out" && grep -q 'syntax error' "$repo2/out" && echo 0 || echo 1)"
+# The ShellCheck step over the shell files the branch changes stops --quick and the full gate: an uncommitted one, a committed one, and a hook without the .sh suffix; a clean one and a file that
+# is not a shell file pass.
+# shellcheck disable=SC2016 # the scripts' own text: $unquoted must reach the file as written
+bad_script='#!/usr/bin/env bash\necho $unquoted\n'
+repo3="$(new_repo quick-shellcheck)"; stub_review "$repo3"; with_origin "$repo3"
+printf '%b' "$bad_script" > "$repo3/scripts/bad.sh"
+GATE_ARGS=--quick run "$repo3"
+check "--quick fails on a shellcheck finding in an uncommitted shell file" "$([[ $status == 1 && $ran == no ]] && grep -q 'SC2086' "$repo3/out" && echo 0 || echo 1)"
+run "$repo3"
+check "the full gate fails on it too, before test.sh" "$([[ $status == 1 && $ran == no ]] && echo 0 || echo 1)"
+git -C "$repo3" add scripts/bad.sh; git -C "$repo3" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m bad
+GATE_ARGS=--quick run "$repo3"
+check "a committed shell file with a finding fails too" "$([[ $status == 1 ]] && grep -q 'SC2086' "$repo3/out" && echo 0 || echo 1)"
+git -C "$repo3" rm -q -f scripts/bad.sh; printf '%b' "$bad_script" > "$repo3/.github/hooks/pre-push"; printf '%b' "$bad_script" > "$repo3/$skill/template/owned/.github/hooks/pre-push"
+GATE_ARGS=--quick run "$repo3"
+check "a hook without the .sh suffix is checked" "$([[ $status == 1 ]] && grep -q '.github/hooks/pre-push' "$repo3/out" && grep -q 'SC2086' "$repo3/out" && echo 0 || echo 1)"
+git -C "$repo3" checkout -q -- .github/hooks/pre-push "$skill/template/owned/.github/hooks/pre-push" 2>/dev/null || { cp -p "$here/.github/hooks/pre-push" "$repo3/.github/hooks/pre-push"; cp -p "$here/.github/hooks/pre-push" "$repo3/$skill/template/owned/.github/hooks/pre-push"; }
+printf '%b' "$bad_script" > "$repo3/notes.txt"
+GATE_ARGS=--quick run "$repo3"
+check "a file that is not a shell file is not checked, and clean ones pass" "$([[ $status == 0 ]] && grep -q 'changed shell file(s) checked' "$repo3/out" && echo 0 || echo 1)"
 echo changed >> "$repo/scripts/check-pr-title.sh"
 GATE_ARGS=--quick run "$repo"
 check "--quick still fails a copy that drifted" "$([[ $status == 1 ]] && echo 0 || echo 1)"

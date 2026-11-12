@@ -2,11 +2,11 @@
 # The Application Factory's pre-push gate, run by .github/hooks/pre-push (a copy of the Template's) and safe to run by hand.
 # The Factory isn't a .NET repo, so its gate is what its CI runs: first this script's own test and the review's three stand-alone tests (they install
 # the packages with pnpm), then that its copies of Template files haven't drifted from the Template (ADR 0006), then that no Owned file has a bare #N,
-# then the Markdown and YAML lint, then that the branch passed the local review (scripts/review.sh check, ADR 0010; GATE_SKIP_REVIEW=1 skips it),
+# then the Markdown and YAML lint, then shellcheck of the shell files the branch changes, then that the branch passed the local review (scripts/review.sh check, ADR 0010; GATE_SKIP_REVIEW=1 skips it),
 # then the repo-ci-baseline skill's test.sh. This script is the Factory's own, not a copy of the Template's scripts/gate.sh.
 set -euo pipefail
 
-# scripts/gate.sh --quick: the checks that finish in about a minute (its test, the review tests, the copies' drift, the bare-#N check, lint), then stop before the local
+# scripts/gate.sh --quick: the checks that finish in about a minute (its test, the review tests, the copies' drift, the bare-#N check, lint, shellcheck of the shell files the branch changes), then stop before the local
 # review check and test.sh. It is for iterating, never for pushing: the pre-push hook and CI call this script with no argument.
 # scripts/gate.sh --sync: copies every Template file the Factory carries over its copy (cp -p keeps the execute bit), prints the ones that changed,
 # and stops. A copy edited by hand is overwritten, so edit the Template's file. Run it after editing the Template's file; the drift check below is what finds a copy you forgot.
@@ -137,6 +137,28 @@ echo -e "\n${CYAN}▶ markdownlint (whole repo, as Lint Markdown)${RESET}"
 markdownlint-cli2 '**/*.md' || { echo -e "${RED}❌ markdownlint${RESET}" >&2; exit 1; }
 echo -e "\n${CYAN}▶ yamllint (whole repo, as Lint YAML)${RESET}"
 yamllint -c .yamllint.yml . || { echo -e "${RED}❌ yamllint${RESET}" >&2; exit 1; }
+# Lint with ShellCheck the shell files this branch changes (committed or not, against its merge base with origin/main; every tracked and untracked shell file when there is no origin/main), so --quick
+# finds what test.sh's shellcheck step would fail on at the end of the full gate. A shell file is a *.sh or one of the three git hooks.
+echo -e "\n${CYAN}▶ shellcheck (changed shell files)${RESET}"
+if ! command -v shellcheck >/dev/null 2>&1; then
+  echo -e "${RED}❌ shellcheck not found: the gate needs it (test.sh runs it too).${RESET}" >&2
+  exit 1
+fi
+if git rev-parse -q --verify refs/remotes/origin/main >/dev/null && merge_base="$(git merge-base origin/main HEAD 2>/dev/null)"; then
+  changed_files="$(git diff --name-only --diff-filter=ACMR "$merge_base"; git ls-files --others --exclude-standard)"
+else
+  changed_files="$(git ls-files --cached --others --exclude-standard)"
+fi
+shell_changed=()
+while IFS= read -r f; do
+  [[ -f "$f" ]] || continue
+  case "${f##*/}" in *.sh | pre-commit | pre-push | post-checkout) shell_changed+=("$f") ;; esac
+done <<<"$changed_files"
+if ((${#shell_changed[@]})); then
+  shellcheck "${shell_changed[@]}" || { echo -e "${RED}❌ shellcheck${RESET}" >&2; exit 1; }
+fi
+echo "${#shell_changed[@]} changed shell file(s) checked."
+
 if ((quick)); then
   echo -e "\n${CYAN}quick gate passed${RESET}: the local review check and test.sh did not run. Run scripts/gate.sh, with no argument, before pushing."
   exit 0

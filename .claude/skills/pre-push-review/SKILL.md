@@ -266,6 +266,15 @@ recorded. A round that fixed nothing ends the review: go to step 8. Otherwise ru
 again, then go back to step 4 for a round that reviews the fixes. After 3 rounds that fixed something, run one more round
 that only reviews: anything it finds new stays open for a person (an Advisory one for the follow-up issue).
 
+**A person who said to fix every finding** (a standing "fix all") has those open ones fixed too, so rounds go on until one returns `[]`
+(the findings of the extra rounds are recorded `fixed` like the others). Keep each extra round cheap:
+
+- From the fourth round on, one reviewer reads `<run>/fixes.patch` for every lens its files need, not one reviewer per lens.
+- Start `GATE_SKIP_REVIEW=1 scripts/gate.sh` and that reviewer together on the same commit: neither changes the worktree.
+- Put a comment or doc correction into the commit of the next code fix when one is due, so it shares that round; a correction alone still gets its round, because the record
+  needs the final code reviewed.
+- Between rounds, `scripts/gate.sh --quick` (about a minute) runs the tests, the copies' drift check, the lint and shellcheck on the shell files the branch changed.
+
 ### 8. Record
 
 Record the outcome with the key and HEAD `prepare` printed when the last round started. The findings staged in `<run>/findings.json`
