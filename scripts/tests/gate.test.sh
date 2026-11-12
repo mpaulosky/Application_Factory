@@ -551,8 +551,9 @@ RUN_SHARD=hooks run "$repoP"
 check "a full gate ignores TEST_SH_SHARD and runs all of test.sh, not skipped by a shard's pass" "$([[ $status == 0 && "$(shards_seen)" == unset ]] && ! grep -q "shard" "$repoP/out" && echo 0 || echo 1)"
 RUN_PART=template run "$repoP"
 check "the template part with no TEST_SH_SHARD shares the whole run's remembered pass, not a shard's" "$([[ $status == 0 ]] && grep -q "test.sh already passed on this tree" "$repoP/out" && echo 0 || echo 1)"
+rm -f "$repoP/.git/test-sh-shards" "$repoP/$skill/ran"
 GATE_NO_CACHE=1 RUN_PART=template run "$repoP"
-check "the template part with no TEST_SH_SHARD runs all of test.sh" "$([[ $status == 0 && "$(shards_seen)" == unset ]] && ! grep -q "shard" "$repoP/out" && echo 0 || echo 1)"
+check "the template part with no TEST_SH_SHARD runs all of test.sh" "$([[ $status == 0 && $ran == yes && "$(cat "$repoP/.git/test-sh-shards" 2>/dev/null)" == unset ]] && ! grep -q "shard" "$repoP/out" && echo 0 || echo 1)"
 rm -rf "$repoP/.git/gate-cache"
 STUB_EXIT=1 RUN_PART=template RUN_SHARD=checks run "$repoP"
 check "a failing shard fails the template part" "$([[ $status == 1 && "$(shards_seen)" == checks ]] && echo 0 || echo 1)"
@@ -805,9 +806,9 @@ mutate_wf othershard 'wf["jobs"]["static"]["steps"][-1]["env"]["TEST_SH_SHARD"] 
 mutate_wf nomatrix 'del wf["jobs"]["template"]["strategy"]'
 mutate_wf noreview 'del wf["jobs"]["review"]; wf["jobs"]["test"]["needs"].remove("review")'
 mutate_wf failfast 'del wf["jobs"]["template"]["strategy"]["fail-fast"]'
-mutate_wf shardstr 'wf["jobs"]["template"]["strategy"]["matrix"]["shard"] = "hooks"'
+mutate_wf shardmap 'wf["jobs"]["template"]["strategy"]["matrix"]["shard"] = {"hooks": 1, "scripts": 1, "checks": 1}'
 check "the workflow and aggregator checks pass for the workflow written back unchanged (the control for the mutants)" "$(workflow_ok "$work/wf/same.yml" "$here/scripts/gate.sh" "$here/$skill/test.sh" && aggregator_ok "$work/wf/same.yml" && echo 0 || echo 1)"
-for m in dup needs always twice coe disabled norun twotests noshard dupshard fixedshard include othershard nomatrix noreview failfast shardstr; do
+for m in dup needs always twice coe disabled norun twotests noshard dupshard fixedshard include othershard nomatrix noreview failfast shardmap; do
   check "the workflow check fails for a workflow where $m" "$(workflow_ok "$work/wf/$m.yml" "$here/scripts/gate.sh" "$here/$skill/test.sh" && echo 1 || echo 0)"
 done
 mutate_wf noe 'wf["jobs"]["test"]["steps"][-1]["run"] = wf["jobs"]["test"]["steps"][-1]["run"].replace("jq -e", "jq")'
