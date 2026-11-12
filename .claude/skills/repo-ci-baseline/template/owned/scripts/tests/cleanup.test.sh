@@ -353,6 +353,12 @@ git checkout -q -b chore/elsewhere; o=$(bash scripts/cleanup.sh 2>&1); st=$?; gi
 check "refuses off main" "[[ $st != 0 ]] && grep -q 'run this on main' <<<\"\$o\" && has_local feature/1-merged && [[ \$(git rev-parse main) == $main_before ]]"
 echo dirt >> scripts/check-branch-name.sh; o=$(bash scripts/cleanup.sh 2>&1); st=$?; git checkout -q -- scripts
 check "refuses a dirty main" "[[ $st != 0 ]] && grep -q 'uncommitted changes' <<<\"\$o\" && has_local feature/1-merged"
+echo x > untracked-file; git config status.showUntrackedFiles no; o=$(bash scripts/cleanup.sh 2>&1); st=$?; git config --unset status.showUntrackedFiles; command rm -f untracked-file
+check "refuses a main with an untracked file even when status.showUntrackedFiles is no" "[[ $st != 0 ]] && grep -q 'uncommitted changes' <<<\"\$o\" && has_local feature/1-merged"
+wt_at chore/x-untracked "$work/wt/chore-x-untracked"; echo x > "$work/wt/chore-x-untracked/new-file"
+git config status.showUntrackedFiles no; o=$(bash scripts/cleanup.sh --dry-run 2>&1); git config --unset status.showUntrackedFiles
+check "keeps a worktree with an untracked file even when status.showUntrackedFiles is no" "grep -q 'keep   chore/x-untracked: its worktree has uncommitted changes' <<<\"\$o\""
+scrub chore/x-untracked
 o=$(bash scripts/cleanup.sh --bogus 2>&1); st=$?
 check "refuses an unknown flag" "[[ $st != 0 ]] && grep -q '^usage:' <<<\"\$o\" && has_local feature/1-merged && [[ \$(git rev-parse main) == $main_before ]]"
 mv scripts/check-branch-name.sh "$work/cbn.sh"; o=$(bash scripts/cleanup.sh 2>&1); st=$?; mv "$work/cbn.sh" scripts/check-branch-name.sh

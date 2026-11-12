@@ -43,7 +43,7 @@ check_name="$root/scripts/check-branch-name.sh"
 [[ -f "$check_name" ]] || die "scripts/check-branch-name.sh is missing: Apply the Template first"
 [[ "$(git rev-parse --git-dir)" == "$(git rev-parse --git-common-dir)" ]] || die "run this in the primary checkout, not a linked worktree"
 [[ "$(git branch --show-current)" == "main" ]] || die "run this on main"
-[[ -z "$(git status --porcelain)" ]] || die "main has uncommitted changes"
+[[ -z "$(git status --porcelain --untracked-files=all)" ]] || die "main has uncommitted changes"
 command -v gh >/dev/null || die "gh is needed to read PR states" # gh-repo: ok
 
 # slug_of <url> -> owner/name of a github.com URL, else nothing. Forms: https://, http://, ssh://, git:// (userinfo, a numeric port, .git and a trailing / allowed) and
@@ -199,7 +199,7 @@ while read -r ref; do
     stale="$wt"; wt="" # only git's stale entry for it is left
   fi
   if [[ -n "$wt" ]]; then
-    if ! st="$(git -C "$wt" status --porcelain 2>/dev/null)"; then keep "$b" "its worktree can't be read ($wt)"; kept_local+="$b "; continue; fi
+    if ! st="$(git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null)"; then keep "$b" "its worktree can't be read ($wt)"; kept_local+="$b "; continue; fi
     if [[ -n "$st" ]]; then keep "$b" "its worktree has uncommitted changes"; kept_local+="$b "; continue; fi
   fi
   if branch_busy "$b"; then keep "$b" "a worktree is rebasing or bisecting it"; kept_local+="$b "; [[ "$dry" == true ]] || failed=1; continue; fi

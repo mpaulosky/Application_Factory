@@ -12,7 +12,7 @@
 # zeros in its number (feature/054-x) is not the issue's, and is skipped.
 # The branch starts from the local branch when there is one (checked out as it is), else from origin/<branch> when that branch is on origin, else from origin/main; origin is fetched
 # first, so a branch pushed from another machine is seen. A branch made from origin/main has no upstream (it would track main): the first push is git push -u origin HEAD; one made from origin/<branch> tracks that branch. A worktree the branch already has is reused,
-# wherever it is, if its folder still exists (git's entry for one deleted by hand is forgotten, that one only, and the worktree made again; a locked
+# wherever it is, if its folder still exists and is that worktree (a folder recreated or replaced since is an error) (git's entry for one deleted by hand is forgotten, that one only, and the worktree made again; a locked
 # one is an error, and so is one whose folder can't be reached (its parent folder is missing, empty, unreadable or unsearchable: it may be on an unmounted drive; run git worktree prune if it was
 # deleted for good), or the primary checkout when it has the branch checked out); a directory in the way that is not that worktree is an error. It needs gh logged in, and for an origin
 # that is not on github.com, GITHUB_REPOSITORY. When origin can't be fetched (but gh works: the issue is read first) it still prints a worktree it already has, with a warning, and stops otherwise. An issue number has at most 9 digits. Run it from the primary checkout or any worktree.
@@ -83,7 +83,17 @@ bash "$primary/scripts/check-branch-name.sh" "$branch" >&2 || die "$branch is no
 dir="$(dirname "$primary")/$repo-worktrees/${branch//\//-}"
 existing="$(git -C "$primary" worktree list --porcelain | awk -v ref="refs/heads/$branch" '/^worktree /{p=substr($0,10)} $0=="branch " ref{print p}')"
 if [[ -n "$existing" && "$existing" == "$primary" ]]; then die "$branch is checked out in the primary checkout: run git switch main there, then try again"; fi
+# worktree_ok <dir>: <dir> is a worktree of this clone with <branch> checked out (a folder recreated or replaced after the worktree was deleted is not).
+worktree_ok() {
+  local top c1 c2
+  top="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [[ "$(cd "$top" && pwd -P)" == "$(cd "$1" && pwd -P)" ]] || return 1
+  c1="$(cd "$1" && cd "$(git rev-parse --git-common-dir)" && pwd -P)" || return 1
+  c2="$(cd "$primary" && cd "$(git rev-parse --git-common-dir)" && pwd -P)" || return 1
+  [[ "$c1" == "$c2" && "$(git -C "$1" symbolic-ref -q HEAD 2>/dev/null)" == "refs/heads/$branch" ]]
+}
 if [[ -n "$existing" && -d "$existing" ]]; then
+  worktree_ok "$existing" || die "$existing is registered as the worktree of $branch, but the folder is not one now (it was recreated or replaced): move it away, run git worktree prune, then try again"
   [[ "$fetched" == true ]] || echo "⚠ can't fetch origin: using what was fetched last" >&2
   echo "reusing $existing" >&2
   echo "$existing"
