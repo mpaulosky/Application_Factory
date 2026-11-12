@@ -104,7 +104,8 @@ else
 fi
 
 # A push never skips the review: GATE_SKIP_REVIEW=1 is for gate runs started by hand, and GATE_SKIP_SELF_TEST=1 (a gate that tests itself, as the
-# Application Factory's does) is for the gate's own test, so a push drops both.
-env -u GATE_SKIP_REVIEW -u GATE_SKIP_SELF_TEST "$ROOT/scripts/gate.sh"
+# Application Factory's does) is for the gate's own test, so a push drops both. GATE_PART (the Factory's gate runs one part of itself per CI job)
+# would make a push run part of the gate, so a push drops that too.
+env -u GATE_SKIP_REVIEW -u GATE_SKIP_SELF_TEST -u GATE_PART "$ROOT/scripts/gate.sh"
 
 echo -e "\n${GREEN}━━━ All gates passed — pushing ✅ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}\n"

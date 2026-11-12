@@ -1,9 +1,9 @@
 ---
 name: repo-ci-baseline Template
 
-# The workflow is named as the Template's PR Auto-Merge lists it under workflow_run; the job below is the "Template tests" check.
-# Runs the repo-ci-baseline skill's test.sh on every change, so a broken Template
-# is caught here before apply.sh copies it into other repos.
+# The workflow is named as the Template's PR Auto-Merge lists it under workflow_run; the job named "Template tests" is the check the ruleset requires.
+# It runs the Factory's gate (scripts/gate.sh) one part per job, in parallel, then a last job that passes only when every part did (ADR 0012).
+# Every part is the same code the pre-push hook runs locally: CI has no review ledger, so the template part skips the local review check (ADR 0010).
 # This workflow belongs to the Application Factory; it isn't part of the Template.
 
 "on":
@@ -21,65 +21,96 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Template tests
+  self:
+    name: Gate - self-tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      # The versions scripts/gate.sh in the Template pins.
-      ACTIONLINT_VERSION: "1.7.12"
-      ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
-      MARKDOWNLINT_CLI2_VERSION: "0.24.0"
-      YAMLLINT_VERSION: "1.38.0"
-      ZIZMOR_VERSION: "1.30.1"
-      CMARKGFM_VERSION: "2025.10.22"
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Setup Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.12"
+      - name: Install the tools
+        uses: ./.github/actions/template-tools
 
-      # The Template's repos use pnpm, never npm, so markdownlint-cli2 comes from pnpm too.
-      # The version is given here, the one package.json and the Template's Seed package.json pin.
-      - name: Setup pnpm
-        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-        with:
-          version: "12.6.0"
-
-      - name: Setup Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: "22"
-
-      # shellcheck, git, node and Ruby come with the runner image.
-      - name: Install lint tools
-        run: |
-          python -m pip install pytest "yamllint==${YAMLLINT_VERSION}" "zizmor==${ZIZMOR_VERSION}" "cmarkgfm==${CMARKGFM_VERSION}"
-          # The renderer oracle's kramdown, at the versions the github-pages gem pins.
-          sudo gem install --no-document kramdown:2.4.0 kramdown-parser-gfm:1.1.0
-          pnpm add -g "markdownlint-cli2@${MARKDOWNLINT_CLI2_VERSION}"
-          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-          curl -fsSLO "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
-          echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum -c -
-          mkdir -p "$HOME/.local/bin"
-          tar -xzf "$archive" -C "$HOME/.local/bin" actionlint
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      # The same gate the pre-push hook runs: scripts/gate.sh's own test and the review's tests, the check that the Factory's copies of Template files
-      # match the Template's, the lint, then test.sh. A push from a clone without active hooks is still held to the copies.
-      # The gate installs the review's packages (tsx, zod) itself. CI has no .git/review/ ledger, so it skips the local review check
-      # (ADR 0010); the pre-push hook removes the variable, so a push never skips the review.
-      - name: Run the gate
+      # scripts/gate.sh's own test and the review's stand-alone tests (the gate installs the review's packages, tsx and zod, itself).
+      - name: Run the gate part
         env:
+          GATE_PART: self
+        run: bash "scripts/gate.sh"
+
+  static:
+    name: Gate - copies, lint, shellcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the tools
+        uses: ./.github/actions/template-tools
+
+      # The Factory's copies of Template files, the issue-reference and git status checks, the Markdown and YAML lint, shellcheck of the shell files.
+      - name: Run the gate part
+        env:
+          GATE_PART: static
+        run: bash "scripts/gate.sh"
+
+  template:
+    name: Gate - test.sh
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the tools
+        uses: ./.github/actions/template-tools
+
+      # The repo-ci-baseline skill's test.sh. CI has no .git/review/ ledger, so the local review check is skipped (ADR 0010); the pre-push hook removes the variable, so a push never skips it.
+      - name: Run the gate part
+        env:
+          GATE_PART: template
           GATE_SKIP_REVIEW: "1"
         run: bash "scripts/gate.sh"
 
-      # Sandcastle's type-check and tests (.sandcastle/), on a throwaway repo the Template was Applied to. test.sh doesn't run
-      # it: it needs the network and takes the newest packages the Seed's ranges allow, as a new repo does.
-      - name: Check Sandcastle
-        run: bash ".claude/skills/repo-ci-baseline/tests/sandcastle-check.test.sh"
+  sandcastle:
+    name: Gate - Sandcastle check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the tools
+        uses: ./.github/actions/template-tools
+
+      # Sandcastle's type-check and tests (.sandcastle/), on a throwaway repo the Template was Applied to. It needs the network and takes the newest
+      # packages the Seed's ranges allow, as a new repo does.
+      - name: Run the gate part
+        env:
+          GATE_PART: sandcastle
+        run: bash "scripts/gate.sh"
+
+  # The one check the ruleset requires, PR Auto-Merge waits for and the Sandcastle host reads by name. It passes only when every part passed; always() so a
+  # failed or skipped part fails it, not leaves it skipped (a skipped required check counts as passing).
+  test:
+    name: Template tests
+    if: ${{ always() }}
+    needs: [self, static, template, sandcastle]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every part of the gate passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$NEEDS" | jq -e 'length == 4 and all(.[]; .result == "success")' > /dev/null

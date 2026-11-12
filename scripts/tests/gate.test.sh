@@ -7,6 +7,8 @@
 # and --quick (and a missing python3 or a broken checker fails closed), that dependabot.yml watches the root package.json, and the review tests' install step (a missing pnpm, a pnpm that leaves no tsx, a pnpm that installs it).
 # It also checks that .claude/settings.json runs the executable scripts/lint-edited-file.sh after Edit, Write and MultiEdit (ADR 0011), and that the check fails on a dropped matcher, another event or hook type,
 # a command without the quotes around CLAUDE_PROJECT_DIR or naming another script, a non-executable script and a file that is not JSON.
+# It also checks GATE_PART (ADR 0012): each part runs alone, a bad value or --quick with a part is refused, the Sandcastle check runs in a full gate only when the branch changed
+# a file it reads (and is remembered per clean tree), and the CI workflow has one job per part and a Template tests job that needs them all.
 #
 #   scripts/tests/gate.test.sh
 set -euo pipefail
@@ -14,7 +16,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 work="$(mktemp -d)"
 trap 'chmod -R u+w "$work" 2>/dev/null || true; rm -rf "$work"' EXIT # a case that makes a folder read-only is cleaned up even when it is interrupted
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH # a caller's GATE_NO_CACHE=1 must not reach the stub gate runs; the tests set it themselves where they need it
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH GATE_PART STUB_SANDCASTLE_EXIT RUN_PART # a caller's GATE_NO_CACHE=1 must not reach the stub gate runs; the tests set it themselves where they need it
 
 pass=0; failed=0
 check() { # check <description> <condition: 0 for ok>
@@ -48,6 +50,13 @@ touch "$(dirname "${BASH_SOURCE[0]}")/ran"
 exit "${STUB_EXIT:-0}"
 STUB
   chmod +x "$repo/$skill/test.sh"
+  # The Sandcastle check's stub marks that it ran inside .git, so it never makes the tree look changed (the cache cases need a clean tree).
+  cat > "$repo/$skill/tests/sandcastle-check.test.sh" <<'STUB'
+#!/usr/bin/env bash
+touch "$(dirname "${BASH_SOURCE[0]}")/../../../../.git/ran-sandcastle"
+exit "${STUB_SANDCASTLE_EXIT:-0}"
+STUB
+  chmod +x "$repo/$skill/tests/sandcastle-check.test.sh"
   echo "$repo"
 }
 
@@ -82,15 +91,16 @@ with_origin() {
 # run <repo>: the gate's exit status in $status, and whether the stub ran in $ran. GATE_SKIP_REVIEW is 1 unless $REVIEW_SKIP is set:
 # to a value, which is passed as it is, or to nothing, which leaves GATE_SKIP_REVIEW unset.
 run() {
-  rm -f "$1/$skill/ran" "$1/review-args"
+  rm -f "$1/$skill/ran" "$1/review-args" "$1/.git/ran-sandcastle"
   status=0
   local skip=(GATE_SKIP_REVIEW=1)
   if [[ -n "${REVIEW_SKIP+x}" ]]; then skip=(); [[ -z "$REVIEW_SKIP" ]] || skip=(GATE_SKIP_REVIEW="$REVIEW_SKIP"); fi
   # $GATE_ARGS is the gate's arguments, split on spaces.
   local gate_args=()
   [[ -z "${GATE_ARGS:-}" ]] || read -ra gate_args <<<"$GATE_ARGS"
-  (cd "$1" && env -u GATE_SKIP_REVIEW "${skip[@]+"${skip[@]}"}" GATE_SKIP_SELF_TEST=1 STUB_EXIT="${STUB_EXIT:-0}" REVIEW_EXIT="${REVIEW_EXIT:-0}" bash scripts/gate.sh "${gate_args[@]+"${gate_args[@]}"}" >"$1/out" 2>&1) || status=$?
+  (cd "$1" && env -u GATE_SKIP_REVIEW "${skip[@]+"${skip[@]}"}" GATE_SKIP_SELF_TEST=1 STUB_EXIT="${STUB_EXIT:-0}" STUB_SANDCASTLE_EXIT="${STUB_SANDCASTLE_EXIT:-0}" REVIEW_EXIT="${REVIEW_EXIT:-0}" ${RUN_PART:+GATE_PART="$RUN_PART"} bash scripts/gate.sh "${gate_args[@]+"${gate_args[@]}"}" >"$1/out" 2>&1) || status=$?
   [[ -e "$1/$skill/ran" ]] && ran=yes || ran=no
+  [[ -e "$1/.git/ran-sandcastle" ]] && ran_sc=yes || ran_sc=no
 }
 
 repo="$(new_repo match)"
@@ -416,7 +426,7 @@ if [[ "$(id -u)" != 0 ]]; then
 else
   echo "skip - the unclearable-pass case needs a user other than root"
 fi
-check "a GATE_NO_CACHE or STUB_TOUCH from the caller does not reach the stub gate runs (the gate runs this test with the caller's environment)" "$([[ -z ${GATE_NO_CACHE+x} && -z ${STUB_TOUCH+x} ]] && echo 0 || echo 1)"
+check "a GATE_NO_CACHE or STUB_TOUCH from the caller does not reach the stub gate runs (the gate runs this test with the caller's environment)" "$([[ -z ${GATE_NO_CACHE+x} && -z ${STUB_TOUCH+x} && -z ${GATE_PART+x} ]] && echo 0 || echo 1)"
 
 # A git that fails is not read as "nothing to check" or "a clean tree". wrapper_for <name> <git subcommand>: a folder with a git that fails on that subcommand.
 real_git="$(command -v git)"
@@ -459,6 +469,80 @@ check "dependabot.yml has an npm block for the root package.json" "$(grep -Fxq '
 for f in "${copies[@]}"; do
   check "gate.sh lists $f" "$(grep -q "^  $f\$" "$here/scripts/gate.sh" && echo 0 || echo 1)"
 done
+
+# --- GATE_PART (ADR 0012): CI runs one part of the gate per job; a full gate runs them all -------------------------------------------------------------------
+repoP="$(new_repo parts)"; stub_review "$repoP"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoP/.git/info/exclude"; commit_all "$repoP" files; with_origin "$repoP"
+part_check() { # part_check <part> <test.sh ran> <sandcastle ran> <static ran>
+  RUN_PART="$1" run "$repoP"
+  local static=no; grep -q "Copies of Template files" "$repoP/out" && static=yes
+  check "GATE_PART=$1 passes and runs exactly its part (test.sh $2, Sandcastle $3, static checks $4)" "$([[ $status == 0 && $ran == "$2" && $ran_sc == "$3" && $static == "$4" ]] && echo 0 || echo 1)"
+}
+part_check static no no yes
+part_check template yes no no
+part_check sandcastle no yes no
+part_check self no no no
+RUN_PART=bogus run "$repoP"
+check "an unknown GATE_PART is refused with exit 2 and runs nothing" "$([[ $status == 2 && $ran == no && $ran_sc == no ]] && grep -q "GATE_PART must be" "$repoP/out" && echo 0 || echo 1)"
+RUN_PART=static GATE_ARGS=--quick run "$repoP"
+check "--quick with a GATE_PART is refused with exit 2" "$([[ $status == 2 ]] && grep -q "runs no single part" "$repoP/out" && echo 0 || echo 1)"
+GATE_NO_CACHE=1 STUB_SANDCASTLE_EXIT=1 RUN_PART=sandcastle run "$repoP" # GATE_NO_CACHE: the passing run above is remembered for this tree
+check "a failing Sandcastle check fails the sandcastle part" "$([[ $status == 1 && $ran_sc == yes ]] && echo 0 || echo 1)"
+GATE_NO_CACHE=1 STUB_EXIT=1 RUN_PART=template run "$repoP"
+check "a failing test.sh fails the template part" "$([[ $status == 1 && $ran == yes ]] && echo 0 || echo 1)"
+
+# A full gate runs the Sandcastle check only when the branch changed a file it reads.
+GATE_NO_CACHE=1 run "$repoP"
+check "a full gate on a branch that changed nothing Sandcastle reads skips its check, saying so" "$([[ $status == 0 && $ran == yes && $ran_sc == no ]] && grep -q "changed nothing Sandcastle's check reads" "$repoP/out" && echo 0 || echo 1)"
+for changed in "$skill/template/owned/.sandcastle/lib/x.mts" "$skill/template/seed/package.json" "$skill/tests/sandcastle-check.test.sh"; do
+  mkdir -p "$repoP/$(dirname "$changed")"; echo "# $changed" >> "$repoP/$changed"; commit_all "$repoP" "touch $changed"
+  run "$repoP"
+  check "a full gate runs the Sandcastle check when the branch changed ${changed#"$skill"/}" "$([[ $status == 0 && $ran_sc == yes ]] && echo 0 || echo 1)"
+done
+run "$repoP"
+check "and the Sandcastle pass is remembered for the clean tree, as test.sh's is" "$([[ $ran_sc == no ]] && grep -q "Sandcastle check already passed on this tree" "$repoP/out" && echo 0 || echo 1)"
+GATE_NO_CACHE=1 STUB_SANDCASTLE_EXIT=1 run "$repoP"
+check "a failing Sandcastle check fails the full gate when it runs" "$([[ $status == 1 ]] && echo 0 || echo 1)"
+repoQ="$(new_repo parts-noorigin)"; stub_review "$repoQ"; run "$repoQ"
+check "with no origin/main to tell what changed, a full gate runs the Sandcastle check" "$([[ $status == 0 && $ran_sc == yes ]] && echo 0 || echo 1)"
+
+# The CI workflow: one job per part, and the job the ruleset requires needs them all, so a part cannot go missing from CI without this test failing.
+workflow_ok() { # workflow_ok <workflow file> <gate.sh>: 0 when its jobs run each GATE_PART exactly once and "Template tests" needs every one of them
+  python3 -I - "$1" "$2" <<'PY'
+import re, sys, yaml
+wf = yaml.safe_load(open(sys.argv[1]))
+gate = open(sys.argv[2]).read()
+declared = re.search(r'"" \| ([a-z |]+)\) ;;', gate)
+if not declared:
+    sys.exit(1)
+parts = sorted(declared.group(1).replace("|", " ").split())
+jobs = wf["jobs"]
+used, part_jobs, final = [], [], None
+for key, job in jobs.items():
+    if job.get("name") == "Template tests":
+        final = (key, job)
+        continue
+    for step in job.get("steps", []):
+        part = (step.get("env") or {}).get("GATE_PART")
+        if part:
+            used.append(part)
+            part_jobs.append(key)
+if final is None or sorted(used) != parts or sorted(part_jobs) != sorted(set(part_jobs)):
+    sys.exit(1)
+needs = final[1].get("needs")
+if not isinstance(needs, list) or sorted(needs) != sorted(part_jobs):
+    sys.exit(1)
+if "always()" not in str(final[1].get("if", "")):
+    sys.exit(1)
+PY
+}
+check "the CI workflow has one job per GATE_PART and a Template tests job that always runs and needs them all" "$(workflow_ok "$here/.github/workflows/template-tests.yml" "$here/scripts/gate.sh" && echo 0 || echo 1)"
+mkdir -p "$work/wf"
+sed 's/GATE_PART: sandcastle/GATE_PART: static/' "$here/.github/workflows/template-tests.yml" > "$work/wf/dup.yml"
+check "the workflow check fails when a part is run twice and another not at all" "$(workflow_ok "$work/wf/dup.yml" "$here/scripts/gate.sh" && echo 1 || echo 0)"
+sed 's/needs: \[self, static, template, sandcastle\]/needs: [self, static, template]/' "$here/.github/workflows/template-tests.yml" > "$work/wf/needs.yml"
+check "the workflow check fails when Template tests does not need every part job" "$(workflow_ok "$work/wf/needs.yml" "$here/scripts/gate.sh" && echo 1 || echo 0)"
+sed 's/if: \${{ always() }}/if: ${{ success() }}/' "$here/.github/workflows/template-tests.yml" > "$work/wf/always.yml"
+check "the workflow check fails when Template tests would be skipped after a failed part" "$(workflow_ok "$work/wf/always.yml" "$here/scripts/gate.sh" && echo 1 || echo 0)"
 
 # The edit-time lint (ADR 0011) is wired only by .claude/settings.json, and a typo in its matcher or command path disables the hook without a word.
 settings_ok() { # settings_ok <repo root>: 0 when a PostToolUse hook for Edit|Write|MultiEdit runs the repo's executable scripts/lint-edited-file.sh

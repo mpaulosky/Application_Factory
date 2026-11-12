@@ -19,7 +19,9 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
 - `docs/adr/`: the Factory's decisions. `docs/Instructions.md`: the steps for setting up a new Application or standardizing an existing one.
 - `docs/research/`: dated research notes that the ADRs cite as evidence; they decide nothing, an ADR does.
 - `docs/SECURITY.md`: how to report a vulnerability, and where an accepted security finding's reason goes (ADR 0009).
-- `.github/workflows/template-tests.yml`: the Factory's own workflow (named `repo-ci-baseline Template`, job `Template tests`). It runs `test.sh` and the Sandcastle check on every PR.
+- `.github/workflows/template-tests.yml`: the Factory's own workflow (named `repo-ci-baseline Template`, the required job `Template tests`). It runs the gate one part per job in parallel
+  (`GATE_PART`: `self`, `static`, `template`, `sandcastle`, ADR 0012), and
+  `Template tests` passes only when every part did. `.github/actions/template-tools/` installs the tools each job needs.
 - `.github/hooks/` (`pre-commit`, `pre-push`, `post-checkout`), `scripts/check-branch-name.sh`, `.github/workflows/{claude-review,pr-automerge,pr-review-submitted}.yml` and
   `.github/scripts/post_claude_review.py`, and the issue and PR process (ADR 0009): `.github/ISSUE_TEMPLATE/*`, `.github/pull_request_template.md`, `.github/workflows/pr-title.yml` and
   `scripts/check-pr-title.sh`, and `.github/workflows/lint-{markdown,yaml,actions}.yml`, and the local review (ADR 0010): `scripts/review.sh`, five `.sandcastle/lib/` modules with three tests,
@@ -30,8 +32,10 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
 - `.claude/settings.json` and `scripts/lint-edited-file.sh` (a copy of the Template's Owned file): the edit-time lint (ADR 0011). The settings file holds one `PostToolUse` hook
   that lints each Markdown or YAML file Claude writes; the Template carries the script but not the settings file.
 - `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too; its header lists the steps (its test and the review's three tests, the copies' drift check, the bare-`#N` check,
-  the Git-status check, lint, shellcheck of the changed shell files, the local review check, then `test.sh`, which it skips for a tree that already passed it). [ADR
-  0006](docs/adr/0006-the-factory-carries-the-git-hooks-and-a-gate.md).
+  the Git-status check, lint, shellcheck of the changed shell files, the local review check, then `test.sh`, which it skips for a tree that already passed it,
+  then the Sandcastle check when the branch changed a file it reads).
+  `GATE_PART=<part>` runs one part (CI's jobs; the pre-push hook drops it). [ADR 0006](docs/adr/0006-the-factory-carries-the-git-hooks-and-a-gate.md), [ADR
+  0012](docs/adr/0012-the-template-tests-workflow-runs-the-gate-in-parallel-parts.md).
 - `~/.claude/skills/repo-ci-baseline` is a symlink to the skill here, so editing it changes what `apply.sh` copies everywhere.
 
 The Factory carries the git hooks and a gate of its own (ADR 0006), Claude Review with PR Auto-Merge (ADR 0008), the issue and PR process (ADR 0009), the local review
@@ -51,10 +55,9 @@ scripts/gate.sh                                               # the pre-push gat
 .claude/skills/repo-ci-baseline/apply.sh --dry-run <repo>      # what Apply would write into an Application; writes nothing
 ```
 
-CI runs `scripts/gate.sh` and the Sandcastle check, so a push from a clone without hooks is gated too, except for the local review check:
-CI has no review ledger, so it sets `GATE_SKIP_REVIEW=1` (ADR 0010). The pre-push hook runs `scripts/gate.sh` on every push; the Sandcastle check is slower, so run it when
-you changed `template/**/.sandcastle/`
-or the Seed `package.json`.
+CI runs `scripts/gate.sh` in parts, so a push from a clone without hooks is gated too, except for the local review check:
+CI has no review ledger, so it sets `GATE_SKIP_REVIEW=1` (ADR 0010). The pre-push hook runs `scripts/gate.sh` on every push, and the gate runs the Sandcastle check when you changed
+`template/**/.sandcastle/` or the Seed `package.json` (the check needs the network and takes a few minutes; its pass is remembered for a clean tree). `GATE_PART=sandcastle scripts/gate.sh` runs it alone.
 
 ## Working on the Template
 
