@@ -5,6 +5,8 @@
 # that gate.sh names each copied stand-alone test and lists every copy, that repo-config.mts lists the Factory's own files under Owned patterns,
 # that test.sh's pass is remembered per clean tree (skipped the second time, shared by worktrees, cleared before every run, never stored for a tree that changed), that --quick stops after the lint and --sync restores drifted, missing and non-executable copies and then stops, that a bare #N in an Owned file fails the gate
 # and --quick (and a missing python3 or a broken checker fails closed), that dependabot.yml watches the root package.json, and the review tests' install step (a missing pnpm, a pnpm that leaves no tsx, a pnpm that installs it).
+# It also checks that .claude/settings.json runs the executable scripts/lint-edited-file.sh after Edit, Write and MultiEdit (ADR 0011), and that the check fails on a dropped matcher, another event or hook type,
+# a command without the quotes around CLAUDE_PROJECT_DIR or naming another script, a non-executable script and a file that is not JSON.
 #
 #   scripts/tests/gate.test.sh
 set -euo pipefail
@@ -479,7 +481,7 @@ sys.exit(1)
 ' "$1"
 }
 check ".claude/settings.json runs scripts/lint-edited-file.sh after Edit, Write and MultiEdit" "$(settings_ok "$here" && echo 0 || echo 1)"
-settings_root="$(mktemp -d)"; mkdir -p "$settings_root/.claude" "$settings_root/scripts"; touch "$settings_root/scripts/lint-edited-file.sh"; chmod +x "$settings_root/scripts/lint-edited-file.sh"
+settings_root="$work/settings"; mkdir -p "$settings_root/.claude" "$settings_root/scripts"; touch "$settings_root/scripts/lint-edited-file.sh"; chmod +x "$settings_root/scripts/lint-edited-file.sh"
 cp "$here/.claude/settings.json" "$settings_root/.claude/settings.json"
 check "the settings check passes on a good file" "$(settings_ok "$settings_root" && echo 0 || echo 1)"
 sed 's/Edit|Write|MultiEdit/Edit|Write/' "$here/.claude/settings.json" > "$settings_root/.claude/settings.json"
@@ -488,9 +490,15 @@ sed 's/lint-edited-file.sh/lint-edit.sh/' "$here/.claude/settings.json" > "$sett
 check "the settings check fails on a command that names another script" "$(settings_ok "$settings_root" && echo 1 || echo 0)"
 cp "$here/.claude/settings.json" "$settings_root/.claude/settings.json"; chmod -x "$settings_root/scripts/lint-edited-file.sh"
 check "the settings check fails when the script is not executable" "$(settings_ok "$settings_root" && echo 1 || echo 0)"
+sed 's/PostToolUse/PreToolUse/' "$here/.claude/settings.json" > "$settings_root/.claude/settings.json"
+check "the settings check fails on a hook registered for PreToolUse" "$(settings_ok "$settings_root" && echo 1 || echo 0)"
+sed 's/"type": "command"/"type": "prompt"/' "$here/.claude/settings.json" > "$settings_root/.claude/settings.json"
+check "the settings check fails on a hook that is not a command" "$(settings_ok "$settings_root" && echo 1 || echo 0)"
+# shellcheck disable=SC2016 # sed's pattern is text: the $ must not expand
+sed 's/\\"\$CLAUDE_PROJECT_DIR\\"/$CLAUDE_PROJECT_DIR/' "$here/.claude/settings.json" > "$settings_root/.claude/settings.json"
+check "the settings check fails on a command without the quotes around CLAUDE_PROJECT_DIR" "$(settings_ok "$settings_root" && echo 1 || echo 0)"
 printf '{' > "$settings_root/.claude/settings.json"
 check "the settings check fails on a file that is not JSON" "$(settings_ok "$settings_root" && echo 1 || echo 0)"
-rm -rf "$settings_root"
 
 echo
 echo "gate.test.sh: $pass passed, $failed failed"
