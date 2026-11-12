@@ -11,7 +11,9 @@
 set -uo pipefail
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
 SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-work="$(cd "$(mktemp -d)" && pwd -P)" # the real path: git reports real paths, and /tmp or /var may be a symlink
+work="$(mktemp -d)" || exit 1
+work="$(cd "$work" && pwd -P)" || exit 1 # the real path: git reports real paths, and /tmp or /var may be a symlink
+[[ -n "$work" && -d "$work" ]] || exit 1
 trap 'chmod -R u+rwx "$work/np" 2>/dev/null; command rm -rf "$work"' EXIT
 mkdir "$work/no-template"
 export GIT_TEMPLATE_DIR="$work/no-template" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
@@ -60,6 +62,9 @@ issue 73 "Original name"
 issue 74 "Relative path"
 issue 76 "Real title"
 issue 77 "Extra arguments"
+issue 78 "Fresh title"
+issue 79 "Fresh title two"
+issue 130 "New title"
 issue 99 ""
 issue 123456789 "Nine digits"
 
@@ -152,8 +157,19 @@ check "a branch made from origin/<branch> tracks that branch" "[[ \"\$(git confi
 
 # A branch for this number outside the branch standard (or under another prefix) is not the issue's branch: it is skipped, local or on origin
 git branch feature/76-WIP origin/main; git branch squad/76-legacy origin/main; git branch dependabot/76-bump origin/main; other_push fix/76-a/b n76 origin/main 2>/dev/null
+check "the strays exist (the push of the nested one worked)" "git show-ref --verify --quiet refs/heads/feature/76-WIP && git ls-remote --exit-code origin refs/heads/fix/76-a/b >/dev/null"
 o=$(bash scripts/work-issue.sh 76 2>/dev/null); st=$?
 check "branches for the number that break the standard or use another prefix are skipped" "[[ $st == 0 && '$o' == '$wt/feature-76-real-title' && \$(git -C '$o' branch --show-current) == feature/76-real-title ]]"
+
+# A stray before a valid branch is passed over to it; an origin-only stray alone is skipped too
+git branch feature/78-WIP origin/main; git branch feature/78-old-title origin/main
+check "the search goes on past a stray branch to a valid one that sorts after it" "[[ \$(bash scripts/work-issue.sh 78 2>/dev/null) == '$wt/feature-78-old-title' ]]"
+other_push fix/79-a/b n79 origin/main
+check "the origin-only stray exists" "git ls-remote --exit-code origin refs/heads/fix/79-a/b >/dev/null"
+check "an origin-only branch outside the standard is skipped, and the title's own branch is made" "[[ \$(bash scripts/work-issue.sh 79 2>/dev/null) == '$wt/feature-79-fresh-title-two' ]]"
+# Two valid branches for one number: the one the title gives wins, wherever it sorts
+git branch feature/130-aaa-old origin/main; git branch feature/130-new-title origin/main
+check "when the branch the title gives exists, it wins over another valid branch for the number" "[[ \$(bash scripts/work-issue.sh 130 2>/dev/null) == '$wt/feature-130-new-title' ]]"
 
 # A directory in the way is an error and is left alone
 mkdir -p "$wt/feature-66-plain-directory-in-the-way"; touch "$wt/feature-66-plain-directory-in-the-way/keep"

@@ -12,7 +12,7 @@
 #     alone is kept when it has moved or its tip is not the PR's last head. The origin branch is deleted only if it still holds the tip that was judged; one already gone by then (GitHub's auto-delete) counts as removed.
 #   - removed with --include-closed only: the PR closed unmerged and the tip is its last head.
 #   - kept, with the reason: a name outside the branch standard, an open PR, no PR or a tip no PR had, 100 or more PRs of that branch name, a PR merged into a branch
-#     other than main, a branch an open PR is based on, a dirty or unreadable worktree, a worktree whose folder can't be reached, a commit made after it was judged, a step git refused (a branch a worktree
+#     other than main, a branch an open PR is based on (asked of origin's repository), a dirty or unreadable worktree, a worktree whose folder can't be reached, a commit made after it was judged, a step git refused (a branch a worktree
 #     is rebasing or bisecting included), or a closed PR without --include-closed.
 # A worktree whose folder was deleted by hand has git's entry for it forgotten (only that one, and only if it is a real directory in .git/worktrees; a locked one is kept), when its
 # parent folder is still there, searchable and not empty. A parent that is missing, empty, unreadable or unsearchable may be an unmounted drive (its mount point is left empty), so the branch is
@@ -58,8 +58,9 @@ if [[ -z "$repo" ]]; then repo="$(slug_of "$url")"; fi
 export GH_REPO="${repo:?}"
 # A PR counts only when its head repository is the one origin points at: origin's owner/name when it is a github.com URL, else GH_REPO's.
 lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
-origin_slug="$(slug_of "$(git remote get-url origin 2>/dev/null || true)")"
-origin_slug="$(lc "${origin_slug:-$repo}")"
+origin_repo="$(slug_of "$(git remote get-url origin 2>/dev/null || true)")"
+origin_repo="${origin_repo:-$repo}" # where the branches live: a stacked PR is a PR of this repository, whatever GH_REPO is
+origin_slug="$(lc "$origin_repo")"
 
 # resolve_path <dir> <path>: <path> made absolute against <dir>, with . and .. collapsed (text only: the folder may be gone, so no symlinks are followed).
 resolve_path() {
@@ -134,7 +135,7 @@ decide() {
     *) r="no PR from origin's repository has this tip, or no PR" ;;
   esac
   if [[ "$r" == removable ]]; then # deleting a branch an open PR is based on (a stacked PR) would close that PR
-    n="$(gh pr list --state open --limit 100 --base "$1" --json number --jq length)" || { echo "❌ gh pr list failed for $1" >&2; exit 1; }
+    n="$(GH_REPO="$origin_repo" gh pr list --state open --limit 100 --base "$1" --json number --jq length)" || { echo "❌ gh pr list --base failed for $1" >&2; exit 1; }
     [[ "$n" == 0 ]] || r="an open PR is based on it"
   fi
   echo "$r"

@@ -2,21 +2,24 @@
 # Tests for scripts/cleanup.sh, run in a throwaway clone with a bare origin and a fake `gh`.
 # Usage: scripts/tests/cleanup.test.sh
 #
-# The fake gh also answers `gh pr list --state open --base <branch> ...` with the number in $GH_FIX/_base_<branch with / as _> (0 when there is no file); a file $GH_FIX/_failbase
-# makes only that call fail.
 # The fake gh answers `gh pr list --head <branch> ...` from the file $GH_FIX/<branch with / as _>: one JSON object per PR (state, headRefOid, baseRefName,
 # headRepository), and runs the --jq text cleanup.sh passes it through the real jq, as gh does. It fails unless it is given --state all, --limit 100, a
 # --head, exactly the four --json fields cleanup.sh needs, and GH_REPO. A file $GH_FIX/_fail makes it exit 1. A file $GH_FIX/<branch with / as _>.hook is
 # run once, the first time that branch is asked about (a push that lands after the fetch). A git shim answers `git remote get-url origin` from
 # $SHIM_ORIGIN_URL, to try github.com URL forms, fails `git ls-remote` for the branch in $SHIM_LSREMOTE_FAIL, and fails `git fetch` when SHIM_FETCH_FAIL is set (all: every fetch;
 # closing: the first passes and the later ones fail, counted in the file $SHIM_FETCH_COUNT). The fake gh prints at most 100 rows, as --limit 100 does.
+# It also answers the lookup of open PRs based on a branch, `gh pr list --state open --limit 100 --base <branch> --json number --jq length`, which it requires in exactly that form: with the number
+# in $GH_FIX/_base_<branch with / as _> (0 when there is no file), with GH_REPO equal to $EXPECT_GH_BASE_REPO when that is set (origin's repository, lowercase); $GH_FIX/_fail fails it too, and
+# $GH_FIX/_failbase fails only it.
 # Needs jq (a developer machine without it skips this file; CI fails), bash, git and chmod; the unsearchable-folder check is skipped as root, which can search any folder.
 # shellcheck disable=SC2034 # out and o are read by the eval in check
 set -uo pipefail
 
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
 SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-work="$(cd "$(mktemp -d)" && pwd -P)" # the real path: git reports real paths, and /tmp or /var may be a symlink
+work="$(mktemp -d)" || exit 1
+work="$(cd "$work" && pwd -P)" || exit 1 # the real path: git reports real paths, and /tmp or /var may be a symlink
+[[ -n "$work" && -d "$work" ]] || exit 1
 trap 'chmod -R u+rwx "$work/wt-np" 2>/dev/null; command rm -rf "$work"' EXIT
 mkdir "$work/no-template"
 export GIT_TEMPLATE_DIR="$work/no-template" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
@@ -38,8 +41,9 @@ mkdir "$work/bin"
 cat > "$work/bin/gh" <<'GH' # gh-repo: ok
 #!/usr/bin/env bash
 args="$*"
-[[ "${GH_REPO:-}" == "${EXPECT_GH_REPO:-o/r}" ]] || { echo "fake gh: bad GH_REPO: ${GH_REPO:-}" >&2; exit 2; } # gh-repo: ok
 if [[ $# == 12 && "$1 $2 $3 $4 $5 $6 $7" == "pr list --state open --limit 100 --base" && -n "$8" && "$9 ${10} ${11} ${12}" == "--json number --jq length" ]]; then
+  # the base lookup asks the repository that holds the branches (origin's), which can differ from GH_REPO for the PRs; checked when EXPECT_GH_BASE_REPO is set
+  [[ -z "${EXPECT_GH_BASE_REPO:-}" || "$(printf %s "${GH_REPO:-}" | tr '[:upper:]' '[:lower:]')" == "$EXPECT_GH_BASE_REPO" ]] || { echo "fake gh: bad base GH_REPO: ${GH_REPO:-}" >&2; exit 2; } # gh-repo: ok
   [[ ! -f "$GH_FIX/_fail" && ! -f "$GH_FIX/_failbase" ]] || { echo "fake gh: network down" >&2; exit 1; } # gh-repo: ok
   if [[ -f "$GH_FIX/_base_${8//\//_}" ]]; then cat "$GH_FIX/_base_${8//\//_}"; else echo 0; fi # the count of open PRs based on that branch
   exit 0
@@ -209,7 +213,7 @@ touch "$GH_FIX/_failbase"
 out2=$(bash scripts/cleanup.sh 2>&1); st2=$?
 rm -f "$GH_FIX/_failbase"
 git reset -q --hard "$main_before"
-check "a failing lookup of the PRs based on a branch fails the run and removes nothing" "[[ $st2 == 1 ]] && grep -q 'gh pr list failed for' <<<\"\$out2\" && has_local feature/1-merged && [[ -d $work/wt/feature-1-merged ]] && has_remote chore/remote-only" # gh-repo: ok
+check "a failing lookup of the PRs based on a branch fails the run and removes nothing" "[[ $st2 == 1 ]] && grep -q 'gh pr list --base failed for' <<<\"\$out2\" && has_local feature/1-merged && [[ -d $work/wt/feature-1-merged ]] && has_remote chore/remote-only" # gh-repo: ok
 check "a gh failure removes nothing" "has_local feature/1-merged && [[ -d $work/wt/feature-1-merged ]] && has_remote chore/remote-only" # gh-repo: ok
 
 # --dry-run
@@ -230,11 +234,11 @@ check "a dry run forgets no worktree entry, but says it would" "grep -q '^remove
 # The owner of origin: github.com URL forms (through the git shim), without regard to case; a PR from "Acme/R" counts for acme/r, not for o/r
 check "a PR from a repository of another name is not counted by default" "! grep -q 'remove chore/owner-case' <<<\"\$out\" && grep -q 'keep   chore/owner-case: no PR from origin' <<<\"\$out\""
 for url in git@github.com:acme/r.git https://github.com/Acme/R https://tok@github.com/acme/r.git ssh://git@github.com/acme/r https://github.com/acme/r/; do
-  o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL="$url" bash scripts/cleanup.sh --dry-run 2>&1)
+  o=$(EXPECT_GH_BASE_REPO=acme/r PATH="$work/shim:$PATH" SHIM_ORIGIN_URL="$url" bash scripts/cleanup.sh --dry-run 2>&1)
   check "origin $url: a PR from Acme/R counts" "grep -q 'remove chore/owner-case' <<<\"\$o\""
 done
 for url in ssh://git@github.com:22/acme/r.git https://github.com:443/Acme/R.git/; do
-  o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL="$url" bash scripts/cleanup.sh --dry-run 2>&1)
+  o=$(EXPECT_GH_BASE_REPO=acme/r PATH="$work/shim:$PATH" SHIM_ORIGIN_URL="$url" bash scripts/cleanup.sh --dry-run 2>&1)
   check "origin $url: a PR from Acme/R counts" "grep -q 'remove chore/owner-case' <<<\"\$o\""
 done
 for url in https://evil.com/github.com/acme/r https://github.com.evil/acme/r https://x:y@evil.com/github.com/acme/r; do
@@ -245,14 +249,18 @@ o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/other bash s
 check "a PR from another repository of the same owner does not count" "! grep -q 'remove chore/owner-case' <<<\"\$o\" && grep -q 'keep   chore/owner-case: no PR from origin' <<<\"\$o\""
 o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r bash scripts/cleanup.sh --dry-run 2>&1)
 check "a non-GitHub origin falls back to GH_REPO's repository" "! grep -q 'remove chore/owner-case' <<<\"\$o\" && grep -q 'keep   chore/owner-case: no PR from origin' <<<\"\$o\""
-o=$(EXPECT_GH_REPO=up/r GITHUB_REPOSITORY=up/r PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=git@github.com:acme/r.git bash scripts/cleanup.sh --dry-run 2>&1)
+o=$(EXPECT_GH_BASE_REPO=acme/r EXPECT_GH_REPO=up/r GITHUB_REPOSITORY=up/r PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=git@github.com:acme/r.git bash scripts/cleanup.sh --dry-run 2>&1)
 check "a fork workflow (GH_REPO the upstream, origin the fork) counts the fork's own PR" "grep -q 'remove chore/owner-case' <<<\"\$o\""
+echo 1 > "$GH_FIX/_base_chore_owner-case"
+o=$(EXPECT_GH_BASE_REPO=acme/r EXPECT_GH_REPO=up/r GITHUB_REPOSITORY=up/r PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=git@github.com:acme/r.git bash scripts/cleanup.sh --dry-run 2>&1)
+command rm -f "$GH_FIX/_base_chore_owner-case"
+check "a fork workflow asks origin's repository, not the upstream, for the PRs based on a branch" "grep -q 'keep   chore/owner-case: an open PR is based on it' <<<\"\$o\""
 
 # The repository when GITHUB_REPOSITORY is not set (the usual case on a developer machine): upstream's URL, else origin's
-o=$(env -u GITHUB_REPOSITORY EXPECT_GH_REPO=acme/r PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=git@github.com:acme/r.git bash scripts/cleanup.sh --dry-run 2>&1)
+o=$(env -u GITHUB_REPOSITORY EXPECT_GH_REPO=acme/r EXPECT_GH_BASE_REPO=acme/r PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=git@github.com:acme/r.git bash scripts/cleanup.sh --dry-run 2>&1)
 check "with no GITHUB_REPOSITORY, the repository is read from origin's URL" "grep -q 'remove chore/owner-case' <<<\"\$o\""
 git remote add upstream https://github.com/up/r.git
-o=$(env -u GITHUB_REPOSITORY EXPECT_GH_REPO=up/r PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=git@github.com:acme/r.git bash scripts/cleanup.sh --dry-run 2>&1)
+o=$(env -u GITHUB_REPOSITORY EXPECT_GH_REPO=up/r EXPECT_GH_BASE_REPO=acme/r PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=git@github.com:acme/r.git bash scripts/cleanup.sh --dry-run 2>&1)
 git remote remove upstream
 check "an upstream remote, not origin, names the repository gh is asked about" "grep -q 'remove chore/owner-case' <<<\"\$o\"" # gh-repo: ok
 o=$(env -u GITHUB_REPOSITORY PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r bash scripts/cleanup.sh --dry-run 2>&1); st=$?
@@ -367,29 +375,29 @@ scrub() { # scrub <branch>: undo whatever a scenario left, so the next one start
   git worktree unlock "$d" 2>/dev/null; git worktree remove -f -f "$d" 2>/dev/null; command rm -f "$repo/.git/refs/heads/$1.lock"
   git branch -q -D "$1" 2>/dev/null; git -C "$work/other" push -q origin --delete "$1" 2>/dev/null; git fetch -q --prune origin
 }
-alone() { # alone <branch> <label>: run once with only that cause, with a clean sibling beside it
+alone() { # alone <label> <the keep line it must print> [<branch ls-remote fails for>]: run once with only that cause, with a clean sibling beside it
   tip=$(branch chore/x-ok yes) || exit 1; pr chore/x-ok MERGED "$tip"; remote_only chore/x-ok
   o=$(PATH="$work/shim:$PATH" SHIM_LSREMOTE_FAIL="${3:-}" bash scripts/cleanup.sh 2>&1); st=$?
-  check "$2: exit 1 on its own, and the clean branch beside it is still removed" "[[ $st == 1 ]] && ! has_remote chore/x-ok"
+  check "$1: exit 1 for that cause, and the clean branch beside it is still removed" "[[ $st == 1 ]] && grep -qF -- '$2' <<<\"\$o\" && ! has_remote chore/x-ok"
 }
 tip=$(branch chore/x-locked yes) || exit 1; pr chore/x-locked MERGED "$tip"; git worktree lock "$work/wt/chore-x-locked"
-alone chore/x-locked "a worktree git won't remove"; scrub chore/x-locked
+alone "a worktree git won't remove" 'keep   chore/x-locked: git could not remove its worktree'; scrub chore/x-locked
 tip=$(branch chore/x-lock yes) || exit 1; pr chore/x-lock MERGED "$tip"; git worktree remove "$work/wt/chore-x-lock"; touch "$repo/.git/refs/heads/chore/x-lock.lock"
-alone chore/x-lock "a branch git won't delete"; scrub chore/x-lock
+alone "a branch git won't delete" 'keep   chore/x-lock: git could not delete the branch'; scrub chore/x-lock
 tip=$(branch chore/x-late yes) || exit 1; pr chore/x-late MERGED "$tip"; echo "git -C \"$work/wt/chore-x-late\" commit -q --allow-empty -m late" > "$GH_FIX/chore_x-late.hook"
-alone chore/x-late "a commit made after the branch was judged"; scrub chore/x-late
+alone "a commit made after the branch was judged" 'keep   chore/x-late: it has a commit that was made after it was judged'; scrub chore/x-late
 tip=$(branch chore/x-moved yes) || exit 1; pr chore/x-moved MERGED "$tip"; remote_only chore/x-moved
 cat > "$GH_FIX/chore_x-moved.hook" <<HOOK
 git -C "$work/other" fetch -q origin && git -C "$work/other" checkout -q -B tmp origin/chore/x-moved && echo m > "$work/other/m" \
   && git -C "$work/other" add m && git -C "$work/other" commit -q -m m && git -C "$work/other" push -q origin tmp:refs/heads/chore/x-moved
 HOOK
-alone chore/x-moved "an origin branch that moved after the fetch"; scrub chore/x-moved
+alone "an origin branch that moved after the fetch" 'keep   origin/chore/x-moved: git could not delete it (it may have moved'; scrub chore/x-moved
 tip=$(branch chore/x-ls yes) || exit 1; pr chore/x-ls MERGED "$tip"; remote_only chore/x-ls
 cat > "$GH_FIX/chore_x-ls.hook" <<HOOK
 git -C "$work/other" fetch -q origin && git -C "$work/other" checkout -q -B tmp origin/chore/x-ls && echo l > "$work/other/l" \
   && git -C "$work/other" add l && git -C "$work/other" commit -q -m l && git -C "$work/other" push -q origin tmp:refs/heads/chore/x-ls
 HOOK
-alone chore/x-ls "an origin check that failed" chore/x-ls; scrub chore/x-ls
+alone "an origin check that failed" 'keep   origin/chore/x-ls: git could not delete it, and origin could not be checked' chore/x-ls; scrub chore/x-ls
 o=$(bash scripts/cleanup.sh 2>&1); st=$?
 check "once those are scrubbed, the run exits 0 again" "[[ $st == 0 ]]"
 

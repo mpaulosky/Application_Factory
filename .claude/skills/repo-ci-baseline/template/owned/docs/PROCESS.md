@@ -14,22 +14,22 @@ git config core.hooksPath .github/hooks
 
 ## Branches and worktrees
 
-Every change is made on its own branch, in its own **worktree** beside the clone, made when you start the work, not later. The clone
-itself stays on `main`, and the pre-commit hook refuses a commit made there. For an issue, one command fetches `origin`, makes the branch and worktree from
-`origin/main` (or reuses the branch the issue already has, even if it was renamed), names them from the issue, and prints the path; it needs `gh` logged in, and `GITHUB_REPOSITORY` for an
-`origin` that is not on github.com. Then do all the work there, and make every follow-up fix there too, until the PR merges (the branch has no upstream yet: its first push is `git push -u origin HEAD`):
+Every change is made on its own branch, in its own **worktree** beside the clone, made when you start the work, not later. The clone itself stays on `main`, and the pre-commit hook refuses a
+commit made there. For an issue, one command fetches `origin`, makes the branch and worktree from `origin/main` (or reuses the branch the issue already has, even if it was renamed), names
+them from the issue, and prints the path; it needs `gh` logged in, and `GITHUB_REPOSITORY` for an `origin` that is not on github.com. Then do all the work there, and make every follow-up fix
+there too, until the PR merges (a branch it makes new has no upstream: its first push is `git push -u origin HEAD`):
 
 ```bash
 wt="$(scripts/work-issue.sh 42)" && cd "$wt"   # e.g. fix/42-null-children in ../<Repo>-worktrees/fix-42-null-children
 ```
 
-For work without an issue, make it by hand: `git worktree add -b chore/upgrade-net10 ../<Repo>-worktrees/chore-upgrade-net10 origin/main`.
+For work without an issue, make it by hand: `git worktree add --no-track -b chore/upgrade-net10 ../<Repo>-worktrees/chore-upgrade-net10 origin/main`.
 The folder is the branch name with `/` turned into `-`.
 
 **After the PR merges**, go to the clone, on `main` with a clean tree, and run `scripts/cleanup.sh` (`--dry-run` first to see what it would do; it still fetches and prunes the
 remote-tracking refs). It fast-forwards `main` to `origin/main`, then removes every branch named to the standard whose PR merged into `main`, with its worktree (ignored files in it go too)
 and its `origin` branch. It reads the PR's state from GitHub, because a squash merge leaves nothing for `git branch --merged` to see, and counts only a PR whose head repository is the one
-`origin` points at (a fork's PR of the same name doesn't count). It keeps, and says why, a branch with an open PR, a PR based on it (a stacked PR), no PR, a commit the PR never had or one
+`origin` points at (a fork's PR of the same name doesn't count). It keeps, and says why, a branch with an open PR, an open PR based on it (a stacked PR), no PR, a commit the PR never had or one
 made while it ran, 100 or more PRs of that name, a PR merged into another branch, a worktree with uncommitted changes or one whose folder can't be reached, and keeps that local branch's
 `origin` copy too; a branch whose PR closed unmerged goes only with `--include-closed`. It needs `gh` logged in, and `GITHUB_REPOSITORY` for an `origin` that is not on github.com. Not being
 on `main` in the clone, a dirty `main`, a `gh` failure, a failed fetch of `origin`, or a `main` that can't fast-forward stops it; a removal git refuses, a check of `origin` that failed, a
