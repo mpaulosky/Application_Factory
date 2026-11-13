@@ -213,6 +213,24 @@
       "old": "                joins[number - 1] = False\n",
       "new": "                pass\n",
       "why": "the line that closes a heredoc body joins the next line"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "            distrust = distrust or None in joins[number - 1:header_end - 1]\n",
+      "new": "            pass\n",
+      "why": "an export after a chain with an unjudged line tells a gh"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "(not distrust and all(runs for runs, _, _ in branches))",
+      "new": "all(runs for runs, _, _ in branches)",
+      "why": "an export is trusted after a chain with an unjudged line"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "distrust = distrust or None in joins[number - 1:header_end - 1]",
+      "new": "distrust = None in joins[number - 1:header_end - 1]",
+      "why": "a later chain without an unjudged line restores the trust in exports"
     }
   ]
 }

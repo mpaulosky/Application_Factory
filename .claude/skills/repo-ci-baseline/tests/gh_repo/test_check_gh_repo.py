@@ -2592,6 +2592,22 @@ def test_untold_refuses_a_gh_after_a_past_limit_line_whose_hash_it_cannot_judge(
     assert lines_of(check_gh_repo.untold(path)) == [len(lines)]
 
 
+@pytest.mark.parametrize("lines, refused_last", [
+    # A real comment ending in a backslash past the limit hides the heredoc header after it: the body's export must not tell the gh (an export after such a chain is not trusted).
+    (["echo a \\"] + ["x \\"] * check_gh_repo.CONTINUATION_LIMIT + ["# c \\", "cat <<EOF", "export GH_REPO=o/r", "EOF", "gh pr view 1"], True),
+    # The same with a quoted # in a string that the first line opened.
+    (["echo \"a \\"] + ["x \\"] * check_gh_repo.CONTINUATION_LIMIT + ["y '#' \\", "z\"", "export GH_REPO=o/r", "gh pr view 1"], True),
+    # An export before the chain still tells a gh after it, as bash does.
+    (["export GH_REPO=o/r", "echo a \\"] + ["x \\"] * check_gh_repo.CONTINUATION_LIMIT + ["# c \\", "echo b", "gh pr view 1"], False),
+    # A chain without an unjudged line leaves the export after it as it was.
+    (["echo a \\"] + ["x \\"] * check_gh_repo.CONTINUATION_LIMIT + ["echo b", "export GH_REPO=o/r", "gh pr view 1"], False),
+])
+def test_untold_does_not_trust_an_export_after_a_chain_with_an_unjudged_line(tmp_path, lines, refused_last):
+    path = tmp_path / "script.sh"
+    path.write_text("\n".join(lines) + "\n")
+    assert lines_of(check_gh_repo.untold(path)) == ([len(lines)] if refused_last else [])
+
+
 def test_untold_does_not_join_the_line_after_a_heredoc_delimiter_that_ends_in_a_backslash(tmp_path):
     # A quoted delimiter can be `GH_REPO=o/r \\`: the line that closes the body joins nothing, so its text is no assignment for the gh after it.
     lines = ["cat <<'GH_REPO=o/r \\'", "x", "GH_REPO=o/r \\", "gh pr view 1"]
