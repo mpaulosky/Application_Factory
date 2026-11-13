@@ -130,7 +130,7 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     that spans lines: the next line is read as code), a `[[ ... ]]` that spans lines (the next line is read as code), a backtick substitution, a `${...}` that holds a quote, a `}` or a `)`
     (it ends at the first `}`), double quotes
     nested more than 50 deep in `"$(...)"`, and a line of a multi-line string or of a heredoc body read as code that starts like `fi` or `else` can still misjudge a branch.
-    A backslash-continued chain is read back at most 100 lines. The joins after the first 100 lines of a chain are judged on the chain whole (a trailing backslash inside a comment joins
+    A backslash-continued chain is read back at most 100 lines. The join after each of the first 100 lines of a chain is judged on the chain whole (a trailing backslash inside a comment joins
     nothing, and a `#` inside a string an earlier line opened is no comment), so the text read back and the line that starts a command follow the chain (`joined_lines`): a string that
     spans lines and closes before a comment ending in a backslash (`b" # c \`) joins nothing, and a `GH_REPO=` in that comment tells no later gh. The join after a later line uses the
     backslash alone for a heredoc header, so a real comment ending in a backslash past line 100 hides a `<<` on the line after it (that heredoc's body is read as code; #52 replaces the

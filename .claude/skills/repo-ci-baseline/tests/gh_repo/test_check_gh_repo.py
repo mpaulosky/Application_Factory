@@ -2600,12 +2600,15 @@ def test_untold_does_not_join_the_line_after_a_heredoc_delimiter_that_ends_in_a_
     assert lines_of(check_gh_repo.untold(path)) == [4]
 
 
-def test_untold_reads_a_very_long_chain_in_linear_time(tmp_path):
-    # Building the logical line must not copy the text so far on every line: 400,000 lines of one chain take seconds, not minutes.
+def test_logical_line_builds_a_very_long_chain_in_linear_time():
+    # The text so far must not be copied on every line: 400,000 lines take 0.1 s, the version that copied it took 11 s (the bound is far from both, on any runner).
+    lines = ["x \\"] * 400_000 + ["gh pr view 1"]
     start = time.perf_counter()
-    found = untold(tmp_path, "x \\\n" * 400_000 + "gh pr view 1\n")
-    assert lines_of(found) == [400_001]
-    assert time.perf_counter() - start < 15
+    text, count = check_gh_repo.logical_line(lines, 1)
+    assert time.perf_counter() - start < 3
+    assert count == 400_001
+    assert text == "x " * 400_000 + "gh pr view 1"
+
 
 
 def test_untold_does_not_read_the_line_after_an_unjudged_line_as_a_command_start(tmp_path):
@@ -2617,14 +2620,19 @@ def test_untold_does_not_read_the_line_after_an_unjudged_line_as_a_command_start
 
 
 def test_untold_scans_a_chain_for_a_comment_a_bounded_number_of_times_per_line(tmp_path, monkeypatch):
-    # Each line of a chain that holds a # is judged on the chain so far once per pass over the file: counting the scans (not timing them) fails when a chain is walked from every line.
+    # Each line of a chain that holds a # is judged on the chain so far once per pass over the file: 200 chains of 100 lines scan 99 times each in each of the two passes (joined_lines,
+    # then the heredoc header in untold). A chain walked from every line scans about 980,000 times; the count stops the run as soon as it passes the bound (10% over the expected 39,600).
+    bound = 2 * 200 * 99 * 11 // 10
     calls = []
     real = check_gh_repo.continues
-    monkeypatch.setattr(check_gh_repo, "continues", lambda text: calls.append(1) or real(text))
-    text = ("echo '#' \\\n" * 99 + "x\n") * 200 + "gh pr view 1\n"
-    found = untold(tmp_path, text)
+
+    def counting(text):
+        calls.append(1)
+        assert len(calls) <= bound, "a chain is walked from more lines than it holds"
+        return real(text)
+    monkeypatch.setattr(check_gh_repo, "continues", counting)
+    found = untold(tmp_path, ("echo '#' \\\n" * 99 + "x\n") * 200 + "gh pr view 1\n")
     assert lines_of(found) == [20_001]
-    assert len(calls) <= 2 * 20_000
 
 
 
