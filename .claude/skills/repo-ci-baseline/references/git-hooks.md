@@ -42,7 +42,8 @@ script and of `ci.yml`, so a PR can change either, as it can for `Build Solution
 
 The CI job also accepts the branches that only Actions and Dependabot create, which no hook sees:
 `docs/release-notes` (`release.yml`), `docs/backfill-blog-posts` (`backfill-blog-posts.yml`) and any `dependabot/*`, whatever its characters, since CI quotes the name.
-The hook accepts a `dependabot/*` branch too, in shell-safe characters only (`A-Za-z0-9._@+-` per segment), so a person can push a fix to a Dependabot PR.
+The hook accepts a `dependabot/*` branch too, in shell-safe characters only (`A-Za-z0-9._@+-` per segment; in a UTF-8 locale `[A-Za-z]` may also take an accented letter,
+which is shell-safe too), so a person can push a fix to a Dependabot PR.
 Fork PRs skip the job, which a required check counts as passing.
 
 ## Worktree standard
@@ -161,7 +162,7 @@ checkout and from a subfolder of it (refused, before the lint), the opt-out, a l
 and `git commit` end to end, which runs the hook with `GIT_DIR` set.
 
 `scripts/tests/check-branch-name.test.sh` covers the script's push form and its `--pr` form, which the CI job uses: the Actions
-branches (`docs/release-notes`, `docs/backfill-blog-posts`) and any `dependabot/*` allowed with `--pr`, only a shell-safe `dependabot/*` allowed for a push
+branches (`docs/release-notes`, `docs/backfill-blog-posts`, refused for a push) and any `dependabot/*` allowed with `--pr`, only a shell-safe `dependabot/*` allowed for a push
 (a backtick, quote, `|` or `&` refused, and a non-ASCII letter refused under `LC_ALL=C`, where a UTF-8 locale's `[A-Za-z]` may take an accented one),
 a `claude/...` branch refused, and other `docs/` names refused.
 
