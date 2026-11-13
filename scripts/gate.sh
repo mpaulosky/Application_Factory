@@ -213,7 +213,7 @@ cache_lock() {
       cache_locked="$1"
       for sig in INT TERM HUP; do
         # shellcheck disable=SC2064 # $sig is meant to expand now, once per signal; \$BASHPID when the signal comes
-        trap "cache_unlock; trap - $sig; kill -s $sig \$BASHPID" "$sig"
+        trap "cache_unlock; kill -s $sig \$BASHPID" "$sig"
       done
       return 0
     fi
@@ -269,7 +269,8 @@ run_cached() {
     mkdir -p "$dir" 2>/dev/null || true
     if ! cache_lock "$dir/lock-$tree"; then
       token=""
-      if [[ -e "$dir/lock-$tree" ]]; then
+      # Only a writable cache folder waited for the lock; a read-only one gave up at once and is reported by the stamps or "could not record".
+      if [[ -e "$dir/lock-$tree" && -w "$dir" ]]; then
         echo "the cache lock $dir/lock-$tree has been held for over 2 seconds: $label runs and its pass is not remembered. If no gate is running, remove it." >&2
       fi
     fi

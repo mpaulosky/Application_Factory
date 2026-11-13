@@ -716,11 +716,14 @@ RUN_PART=template PATH="$mkdir_shim:$PATH" MKDIR_LOG="$work/mkdir-tries" run "$r
 check "a lock that stays held is tried 20 times before the run goes on without it" "$([[ $status == 0 && $ran == yes && "$(tries)" == 20 ]] && lock_held "$repoL" && echo 0 || echo 1)"
 rmdir "$cacheL/lock-$treeL"
 if [[ "$(id -u)" != 0 ]]; then
-  # A cache folder that can't hold a lock gives up after one try, saying nothing about a held lock.
+  # A cache folder that can't hold a lock gives up after one try, saying nothing about a held lock, even with an old lock left in it (it didn't wait for one).
   run "$repoL"; chmod 555 "$cacheL"; command rm -f "$work/mkdir-tries"
   RUN_PART=template PATH="$mkdir_shim:$PATH" MKDIR_LOG="$work/mkdir-tries" run "$repoL"
   check "a lock that can't be made in a read-only cache folder is given up at once: test.sh runs, saying nothing of a held lock" "$([[ $status == 0 && $ran == yes && "$(tries)" == 1 ]] && ! grep -q "the cache lock" "$repoL/out" && echo 0 || echo 1)"
-  chmod 755 "$cacheL"
+  chmod 755 "$cacheL"; mkdir "$cacheL/lock-$treeL"; chmod 555 "$cacheL"; command rm -f "$work/mkdir-tries"
+  RUN_PART=template PATH="$mkdir_shim:$PATH" MKDIR_LOG="$work/mkdir-tries" run "$repoL"
+  check "and one holding an old lock gives up at once too, without saying it waited for it" "$([[ $status == 0 && $ran == yes && "$(tries)" == 1 ]] && ! grep -q "the cache lock" "$repoL/out" && echo 0 || echo 1)"
+  chmod 755 "$cacheL"; rmdir "$cacheL/lock-$treeL"
   # A pass file that can't be written after the lock and stamps were: the run passes and says the pass isn't recorded, and the next run tests again.
   # shellcheck disable=SC2016 # run later by the stub, in the repo
   STUB_DURING='chmod 555 "$(git rev-parse --git-common-dir)/gate-cache"' run "$repoL"
@@ -729,10 +732,16 @@ if [[ "$(id -u)" != 0 ]]; then
   run "$repoL"
   check "so the next run tests again" "$([[ $ran == yes ]] && echo 0 || echo 1)"
 fi
-# A gate given INT, TERM or HUP while it holds the lock releases it and ends by that signal; one given TERM after it released the lock ends by it too, at once.
+# A cache folder path that is a file, not a folder, can't hold a lock either: one try.
+mv "$cacheL" "$cacheL.aside"; : > "$cacheL"; command rm -f "$work/mkdir-tries"
+RUN_PART=template PATH="$mkdir_shim:$PATH" MKDIR_LOG="$work/mkdir-tries" run "$repoL"
+check "a cache folder path that is a file gives the lock up at once" "$([[ $status == 0 && $ran == yes && "$(tries)" == 1 ]] && ! grep -q "the cache lock" "$repoL/out" && echo 0 || echo 1)"
+command rm -f "$cacheL"; mv "$cacheL.aside" "$cacheL"
+# A gate given INT, TERM or HUP while it holds the lock releases it and ends by that signal; one given any of them after it released the lock ends by it too, at once.
 # signal_gate <repo> <signal> <marker> [VAR=value...]: runs the template part in <repo> with those variables, sends <signal> once <marker> exists, and prints how the gate
-# ended: "signal N" or "exit N", then "prompt" or "late" (1.5 seconds or more after the signal), or "hung" when it hadn't ended 20 seconds later. Python starts it with the three signals at their default (a shell's background job
-# would ignore INT, which bash then can't trap), and tells an end by a signal from an exit.
+# ended: "signal N" or "exit N", then "prompt" or "late" (1.5 seconds or more after the signal), or "hung" when it hadn't ended 20 seconds later. Python starts it in its
+# own process group with the three signals at their default (a shell's background job would ignore INT, which bash then can't trap), sends the signal to the whole group
+# as a terminal's Ctrl-C does (bash waiting on a child goes on after an INT the child didn't die of), and tells an end by a signal from an exit.
 signal_gate() {
   python3 -I - "$@" <<'PY'
 import os, signal, subprocess, sys, time
@@ -743,29 +752,34 @@ def defaults():
     for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(s, signal.SIG_DFL)
 with open(os.path.join(repo, "out"), "w") as out:
-    p = subprocess.Popen(["bash", "scripts/gate.sh"], cwd=repo, env=env, stdout=out, stderr=subprocess.STDOUT, preexec_fn=defaults)
+    p = subprocess.Popen(["bash", "scripts/gate.sh"], cwd=repo, env=env, stdout=out, stderr=subprocess.STDOUT, preexec_fn=defaults, start_new_session=True)
     for _ in range(400):
         if os.path.exists(marker) or p.poll() is not None:
             break
         time.sleep(0.05)
     sent = time.monotonic()
     if p.poll() is None:
-        p.send_signal(getattr(signal, "SIG" + sig))
+        os.killpg(p.pid, getattr(signal, "SIG" + sig))
     try:
         rc = p.wait(timeout=20)
     except subprocess.TimeoutExpired:
-        p.kill()
+        os.killpg(p.pid, signal.SIGKILL)
         p.wait()
         print("hung")
         sys.exit(0)
 print((f"signal {-rc}" if rc < 0 else f"exit {rc}") + (" late" if time.monotonic() - sent >= 1.5 else " prompt"))
 PY
 }
-# A cat on PATH stands in for the hit check's read of the pass: it marks that it runs, under the lock, and waits, so the signal comes while the lock is held.
+# A cat on PATH stands in for the hit check's read of the pass: it writes to its mark whether the lock is held as it runs, and waits, so the signal comes while it is.
 cat_shim="$work/cat-shim"; mkdir -p "$cat_shim"; real_cat="$(command -v cat)"
 cat > "$cat_shim/cat" <<EOF
 #!/usr/bin/env bash
-if [[ "\${!#}" == */gate-cache/test-sh-* && -n "\${CAT_MARK:-}" ]]; then : > "\$CAT_MARK"; sleep 2; fi
+last="\${!#}"
+if [[ "\$last" == */gate-cache/test-sh-* && -n "\${CAT_MARK:-}" ]]; then
+  lock="\${last%/*}/lock-\${last##*-}"
+  if [[ -d "\$lock" ]]; then echo held > "\$CAT_MARK"; else echo free > "\$CAT_MARK"; fi
+  sleep 2
+fi
 exec "$real_cat" "\$@"
 EOF
 chmod +x "$cat_shim/cat"
@@ -773,12 +787,15 @@ run "$repoL"
 for sig in INT TERM HUP; do
   command rm -f "$work/cat-marked"
   ended="$(signal_gate "$repoL" "$sig" "$work/cat-marked" PATH="$cat_shim:$PATH" CAT_MARK="$work/cat-marked" GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 GATE_PART=template)"
-  check "a gate given $sig while it holds the cache lock releases it and ends by that signal" "$([[ -e $work/cat-marked && ${ended% *} == "signal $(kill -l "$sig")" && ! -e $cacheL/lock-$treeL ]] && echo 0 || echo 1)"
+  check "a gate given $sig while it holds the cache lock releases it and ends by that signal" "$([[ "$(cat "$work/cat-marked" 2>/dev/null)" == held && ${ended% *} == "signal $(kill -l "$sig")" && ! -e $cacheL/lock-$treeL ]] && echo 0 || echo 1)"
 done
-# The stub test.sh runs after the lock is released: it marks that it runs and waits 3 seconds, so TERM comes then. A trap left set would hold the gate until the stub ended.
-command rm -f "$work/stub-running"
-ended="$(signal_gate "$repoL" TERM "$work/stub-running" STUB_DURING=": > '$work/stub-running'; sleep 3" GATE_NO_CACHE=1 GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 GATE_PART=template)"
-check "a gate given TERM while test.sh runs, after it released the lock, ends by that signal" "$([[ -e $work/stub-running && $ended == "signal 15 prompt" && ! -e $cacheL/lock-$treeL ]] && echo 0 || echo 1)"
+# The stub test.sh runs after the lock is released: it marks that it runs and waits 3 seconds, so the signal comes then. A trap left set would hold the gate until the
+# stub ended.
+for sig in INT TERM HUP; do
+  command rm -f "$work/stub-running"
+  ended="$(signal_gate "$repoL" "$sig" "$work/stub-running" STUB_DURING=": > '$work/stub-running'; sleep 3" GATE_NO_CACHE=1 GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 GATE_PART=template)"
+  check "a gate given $sig while test.sh runs, after it released the lock, ends by that signal at once" "$([[ -e $work/stub-running && $ended == "signal $(kill -l "$sig") prompt" && ! -e $cacheL/lock-$treeL ]] && echo 0 || echo 1)"
+done
 # A stamp stuck as a folder can be neither written nor removed, even in a writable cache folder: the gate fails, and releases the lock it took.
 command rm -f "$cacheL/started.test-sh-$treeL"; mkdir -p "$cacheL/started.test-sh-$treeL/stuck"
 RUN_PART=template run "$repoL"
