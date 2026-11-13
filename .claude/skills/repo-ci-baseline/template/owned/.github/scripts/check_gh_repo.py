@@ -375,7 +375,7 @@ def joined_lines(lines):
     Past CONTINUATION_LIMIT lines of a chain logical_line joins on the backslash alone, so a heredoc header after a string that holds a # is still seen (one after a real comment ending
     in a backslash is hidden, so untold trusts no export after a chain that holds an unjudged line: references/gotchas.md). A line there is not judged whole, so one that holds a #
     is None: it may be a comment or sit in a string an earlier line opened, and either way the read-back stops at it and reports the chain as cut (continued_text), so a
-    GH_REPO= in it tells nothing and an export before it is not trusted. The line after it is not forced to start a command (it may be text of a string): untold keeps what track_branches
+    GH_REPO= in it tells nothing and an export before it is not trusted for a gh in the chain after it. The line after it is not forced to start a command (it may be text of a string): untold keeps what track_branches
     returned, so a real comment on the unjudged line still ends the command there. A line without a # joins as logical_line says.
     """
     joins = [False] * len(lines)
@@ -759,7 +759,7 @@ def untold(path):
     found = []
     exported = False
     bodies = []
-    # Whether a chain holds a line that can't be judged (joined_lines None): a heredoc header after it may be hidden, so no export after it is trusted.
+    # Whether a chain read so far holds a line that can't be judged (joined_lines None): a heredoc header after it may be hidden, so no export from the chain on, to the end of the file, is trusted.
     distrust = False
     # The first line of the bodies, the last line of the command that opens them, and a substitution a body leaves open.
     body_start = header_end = 0
@@ -794,8 +794,10 @@ def untold(path):
             if last is None and "<<" in header:
                 last = last_lines(lines)
             bodies = data_heredocs(header, lines, header_end, last)
+        starts_here = starts_command
         starts_command = track_branches(line, branches, starts_command) or joins[number - 1] is False
-        if EXPORTS.match(line):
+        # An export counts only when its line starts a command: one that continues an earlier line is that command's argument.
+        if starts_here and EXPORTS.match(line):
             # An export in a branch that never runs leaves GH_REPO unset.
             exported = exported or (not distrust and all(runs for runs, _, _ in branches))
         elif UNSET.search(line) or any(

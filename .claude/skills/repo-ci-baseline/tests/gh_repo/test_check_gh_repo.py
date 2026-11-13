@@ -2593,9 +2593,9 @@ def test_untold_refuses_a_gh_after_a_past_limit_line_whose_hash_it_cannot_judge(
 
 
 @pytest.mark.parametrize("lines, refused_last", [
-    # A real comment ending in a backslash past the limit hides the heredoc header after it: the body's export must not tell the gh (an export after such a chain is not trusted).
+    # A real comment ending in a backslash past the limit hides the heredoc header after it: the body's export must not tell the gh (an export from such a chain on is not trusted).
     (["echo a \\"] + ["x \\"] * check_gh_repo.CONTINUATION_LIMIT + ["# c \\", "cat <<EOF", "export GH_REPO=o/r", "EOF", "gh pr view 1"], True),
-    # The same with a quoted # in a string that the first line opened.
+    # A past-limit line that holds a # in a string the first line opened is unjudged too: an export after the chain is not trusted (no hidden heredoc here, only the fail-closed side).
     (["echo \"a \\"] + ["x \\"] * check_gh_repo.CONTINUATION_LIMIT + ["y '#' \\", "z\"", "export GH_REPO=o/r", "gh pr view 1"], True),
     # An export before the chain still tells a gh after it, as bash does.
     (["export GH_REPO=o/r", "echo a \\"] + ["x \\"] * check_gh_repo.CONTINUATION_LIMIT + ["# c \\", "echo b", "gh pr view 1"], False),
@@ -2606,6 +2606,23 @@ def test_untold_does_not_trust_an_export_after_a_chain_with_an_unjudged_line(tmp
     path = tmp_path / "script.sh"
     path.write_text("\n".join(lines) + "\n")
     assert lines_of(check_gh_repo.untold(path)) == ([len(lines)] if refused_last else [])
+
+
+@pytest.mark.parametrize("text, refused", [
+    # An export that only continues an earlier line is an argument of that command: bash runs `echo a export GH_REPO=o/r`, which exports nothing.
+    ("echo a \\\nexport GH_REPO=o/r\ngh pr view 1\n", [3]),
+    ("echo a \\\n  \\\nexport GH_REPO=o/r\ngh pr view 1\n", [4]),
+    # An export that starts a command still tells the gh: first line, after a complete command, a comment, a blank line, `then` and a closed branch.
+    ("export GH_REPO=o/r\ngh pr view 1\n", []),
+    ("echo a\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("echo a \\\n  b\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("# note \\\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("echo a\n\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if true; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if true; then\n  :\nfi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+])
+def test_untold_counts_an_export_only_when_its_line_starts_a_command(tmp_path, text, refused):
+    assert lines_of(untold(tmp_path, text)) == refused
 
 
 def test_untold_does_not_join_the_line_after_a_heredoc_delimiter_that_ends_in_a_backslash(tmp_path):
@@ -2626,7 +2643,6 @@ def test_logical_line_builds_a_very_long_chain_in_linear_time():
     assert text == "x " * 400_000 + "gh pr view 1"
 
 
-
 def test_untold_does_not_read_the_line_after_an_unjudged_line_as_a_command_start(tmp_path):
     # A line past the limit that holds a # (None) may sit inside a string, so the next line may be string text: a `fi` in it must not pop the `if false` branch, or the export after it counts.
     lines = ["if false; then", "echo \"a \\"] + ["x \\"] * check_gh_repo.CONTINUATION_LIMIT + ["y '#' \\", "fi ok\"", "export GH_REPO=o/r", "fi", "gh pr view 1"]
@@ -2637,7 +2653,7 @@ def test_untold_does_not_read_the_line_after_an_unjudged_line_as_a_command_start
 
 def test_untold_scans_a_chain_for_a_comment_a_bounded_number_of_times_per_line(tmp_path, monkeypatch):
     # Each line of a chain that holds a # is judged on the chain so far once per pass over the file: 200 chains of 100 lines scan 99 times each in each of the two passes (joined_lines,
-    # then the heredoc header in untold). A chain walked from every line scans about 980,000 times; the count stops the run as soon as it passes the bound (10% over the expected 39,600).
+    # then the heredoc header in untold). A chain walked from every line scans about 990,000 times per pass; the count stops the run as soon as it passes the bound (10% over the expected 39,600).
     bound = 2 * 200 * 99 * 11 // 10
     calls = []
     real = check_gh_repo.continues
@@ -2649,7 +2665,6 @@ def test_untold_scans_a_chain_for_a_comment_a_bounded_number_of_times_per_line(t
     monkeypatch.setattr(check_gh_repo, "continues", counting)
     found = untold(tmp_path, ("echo '#' \\\n" * 99 + "x\n") * 200 + "gh pr view 1\n")
     assert lines_of(found) == [20_001]
-
 
 
 @pytest.mark.parametrize("lines, number, expected", [

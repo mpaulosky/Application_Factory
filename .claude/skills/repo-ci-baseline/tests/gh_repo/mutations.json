@@ -231,6 +231,18 @@
       "old": "distrust = distrust or None in joins[number - 1:header_end - 1]",
       "new": "distrust = None in joins[number - 1:header_end - 1]",
       "why": "a later chain without an unjudged line restores the trust in exports"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "        if starts_here and EXPORTS.match(line):\n",
+      "new": "        if EXPORTS.match(line):\n",
+      "why": "an export that continues an earlier line tells a gh"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "        starts_here = starts_command\n",
+      "new": "        starts_here = True\n",
+      "why": "every line is read as the start of a command for an export"
     }
   ]
 }
