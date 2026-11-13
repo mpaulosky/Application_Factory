@@ -4509,15 +4509,20 @@ describe("staging findings between rounds", () => {
     assert.deepEqual(ids(), ["R1"]);
   });
 
-  it("refuses a staging file that is a FIFO at once, and leaves no lock", { timeout: 150000 }, () => {
+  it("refuses a staging file that is a FIFO at once, and leaves no lock", { timeout: 150000 }, (context) => {
     // The timeouts below only catch a blocking open of the FIFO, which would never return. They must outlast tsx starting this module on
     // a loaded machine (several suites at once took over 10 s), or a slow start looks like a hang (it showed as status 143 in mpaulosky/Application_Factory#57). Two children at 60 s are 120 s, inside the 150 s test timeout.
     makeFolder();
-    execFileSync("mkfifo", [join(folder(), "findings.json")]);
+    if (spawnSync("mkfifo", [join(folder(), "findings.json")]).status !== 0) return context.skip("mkfifo is not available");
 
     const staging = spawnSync("bash", [reviewScript, "stage", folder(), array("a.json", [finding()])], { cwd: repo, encoding: "utf8", env: childEnv, timeout: 60000 });
     const recording = spawnSync("bash", [reviewScript, "record", inputFile(), "--staged", folder()], { cwd: repo, encoding: "utf8", env: childEnv, timeout: 60000 });
 
+    // A spawn error or a kill by the timeout is a hang or a failed start, so these say so before the status assertions would report a bare null.
+    assert.equal(staging.error, undefined, `stage did not finish (signal ${staging.signal}): ${staging.error?.message}`);
+    assert.equal(recording.error, undefined, `record did not finish (signal ${recording.signal}): ${recording.error?.message}`);
+    assert.equal(staging.signal, null, `stage was killed by ${staging.signal}`);
+    assert.equal(recording.signal, null, `record was killed by ${recording.signal}`);
     assert.equal(staging.status, 1, staging.stderr);
     assert.match(staging.stderr, /isn't a regular file\./);
     assert.equal(recording.status, 1, recording.stderr);
