@@ -596,6 +596,33 @@ check "and the next full gate runs test.sh instead of trusting that pass" "$([[ 
 RUN_PART=template RUN_SHARD=hooks run "$repoP"
 STUB_DURING="${overlap/STUB_EXIT=1/STUB_EXIT=0}" RUN_PART=template RUN_SHARD=scripts run "$repoP"
 check "a shard run that another shard run overlapped keeps no pass either" "$([[ $status == 0 ]] && grep -q "another run of test.sh (scripts shard), or of a part it overlaps" "$repoP/out" && echo 0 || echo 1)"
+if [[ "$(id -u)" != 0 ]]; then
+  # A later run that can't write its start stamp removes it, so the earlier run finds no token of its own and keeps nothing.
+  rm -rf "$repoP/.git/gate-cache"
+  # shellcheck disable=SC2016 # run later by the stub, in the repo
+  STUB_DURING='chmod 444 "$(git rev-parse --git-common-dir)/gate-cache/"started.test-sh-*; '"$overlap" run "$repoP"
+  check "a whole run overlapped by a failing shard run that could not write its stamp keeps no pass" "$([[ $status == 0 ]] && grep -q "this pass is not remembered" "$repoP/out" && ! compgen -G "$repoP/.git/gate-cache/test-sh-*" > /dev/null && echo 0 || echo 1)"
+else
+  echo "skip - the unwritable-stamp case needs a user other than root"
+fi
+# The re-check after the pass is written: a run that starts between the first check and the write still takes the pass away. A cat that rewrites the stamp after the
+# gate's first read of it stands in for that run.
+repoR="$(new_repo cache-recheck)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoR/.git/info/exclude"; commit_all "$repoR" base
+mkdir -p "$work/recheck-bin"
+cat > "$work/recheck-bin/cat" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  case "\$a" in */started.test-sh-*) if [[ ! -e "$repoR/.git/recheck-done" ]]; then : > "$repoR/.git/recheck-done"; "$(command -v cat)" "\$a"; printf 'other\\n' > "\$a"; exit 0; fi ;; esac
+done
+exec "$(command -v cat)" "\$@"
+SHIM
+chmod +x "$work/recheck-bin/cat"
+status=0
+(cd "$repoR" && env GATE_PART=template GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/recheck-bin:$PATH" bash scripts/gate.sh > "$repoR/out" 2>&1) || status=$?
+check "a run that starts after the first check but before the re-check takes the stored pass away" "$([[ $status == 0 && -e $repoR/.git/recheck-done ]] && grep -q "this pass is not remembered" "$repoR/out" && ! compgen -G "$repoR/.git/gate-cache/test-sh-*" > /dev/null && echo 0 || echo 1)"
+# The stamp is written before the old passes are cleared; the other order leaves a moment in which an earlier run stores a pass a later failing run never clears.
+stamp_first="$(awk '/^run_cached\(\) \{/ { in_f = 1 } in_f && /printf .* >"\$stamp"/ && !s { s = NR } in_f && /command rm -f -- "\$\{overlapping\[@\]\}"/ && !r { r = NR } in_f && /^\}/ { in_f = 0 } END { print (s && r && s < r) ? 0 : 1 }' "$here/scripts/gate.sh")"
+check "run_cached writes the start stamp before it clears the overlapping passes" "$stamp_first"
 
 # test.sh's shards: every step sits in exactly one shard block, the blocks are the declared shards in order, and a bad shard is refused.
 testsh_shards_ok() { # testsh_shards_ok <test.sh>: 0 when its steps are split into the shards it declares, each block once, nothing outside

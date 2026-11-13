@@ -226,7 +226,15 @@ run_cached() {
     # the clear, which removes it.
     stamp="${cache%/*}/started.$whole-$tree"
     token="$$.$RANDOM$RANDOM.$(date +%s)"
-    { mkdir -p "${cache%/*}" && printf '%s\n' "$token" >"$stamp"; } 2>/dev/null || token=""
+    # A stamp that can't be written is removed instead, so an earlier run doesn't still find its own token; one that can't be removed either fails the gate.
+    if ! { mkdir -p "${cache%/*}" && printf '%s\n' "$token" >"$stamp"; } 2>/dev/null; then
+      token=""
+      command rm -f -- "$stamp" 2>/dev/null || true
+      if [[ -e "$stamp" ]]; then
+        echo -e "${RED}❌ could not write or remove the $label start stamp ($stamp): an earlier run could keep a pass this run disproves. Remove it by hand.${RESET}" >&2
+        exit 1
+      fi
+    fi
     # Only the * is a pattern: the folder and names are quoted, so a clone path holding [, ] or ? is matched literally, and an unmatched * stays literal and fails -e.
     local overlapping=("${cache%/*}/$whole-$tree" "$cache")
     [[ "$name" != "$whole" ]] || overlapping+=("${cache%/*}/$whole."*"-$tree")
@@ -249,7 +257,11 @@ run_cached() {
       elif ! { : >"$cache"; } 2>/dev/null; then
         echo "could not record the $label pass in ${cache%/*}: it will run again next time." >&2
       elif [[ "$(cat "$stamp" 2>/dev/null)" != "$token" ]]; then
-        command rm -f -- "$cache"
+        command rm -f -- "$cache" 2>/dev/null || true
+        if [[ -e "$cache" ]]; then
+          echo -e "${RED}❌ another run of $label started on this tree while it ran, and its pass ($cache) could not be removed. Remove it by hand.${RESET}" >&2
+          exit 1
+        fi
         echo "another run of $label, or of a part it overlaps, started on this tree while it ran: this pass is not remembered." >&2
       fi
     else
