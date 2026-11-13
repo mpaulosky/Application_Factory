@@ -371,12 +371,13 @@ CONTINUATION_LIMIT = 100
 def joined_lines(lines):
     """For each line of lines, whether bash joins the next line to it (a trailing backslash outside a comment): True, False, or None for a line that can't be judged.
 
-    Each chain is judged whole by logical_line, from its first line, so a string that spans lines decides whether the # after it starts a comment: a line is not judged alone.
-    Past CONTINUATION_LIMIT lines of a chain logical_line joins on the backslash alone, so a heredoc header after a string that holds a # is still seen (one after a real comment ending
-    in a backslash is hidden, so untold trusts no export after a chain that holds an unjudged line: references/gotchas.md). A line there is not judged whole, so one that holds a #
-    is None: it may be a comment or sit in a string an earlier line opened, and either way the read-back stops at it and reports the chain as cut (continued_text), so a
-    GH_REPO= in it tells nothing and an export before it is not trusted for a gh in the chain after it. The line after it is not forced to start a command (it may be text of a string): untold keeps what track_branches
-    returned, so a real comment on the unjudged line still ends the command there. A line without a # joins as logical_line says.
+    Each chain is judged whole by logical_line, from its first line, so a string that spans lines decides whether the # after it starts a comment: a line is not judged
+    alone. Past CONTINUATION_LIMIT lines of a chain logical_line joins on the backslash alone, so a heredoc header after a string that holds a # is still seen (one after
+    a real comment ending in a backslash is hidden, so untold trusts no export from a chain that holds an unjudged line on, to the end of the file:
+    references/gotchas.md). A line there is not judged whole, so one that ends in a backslash and holds a # is None: it may be a comment or sit in a string an earlier
+    line opened, and either way the read-back stops at it and reports the chain as cut (continued_text), so a GH_REPO= in it tells nothing and an export before it is not
+    trusted for a gh in the chain after it. The line after it is not forced to start a command (it may be text of a string): untold keeps what track_branches returned, so
+    a real comment on the unjudged line still ends the command there. A line without a # joins as logical_line says.
     """
     joins = [False] * len(lines)
     number = 1

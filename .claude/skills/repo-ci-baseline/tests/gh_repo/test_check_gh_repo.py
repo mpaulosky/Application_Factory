@@ -2620,6 +2620,17 @@ def test_untold_does_not_trust_an_export_after_a_chain_with_an_unjudged_line(tmp
     ("echo a\n\nexport GH_REPO=o/r\ngh pr view 1\n", []),
     ("if true; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
     ("if true; then\n  :\nfi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    # A line that continues an earlier one but starts a command (after && ; then | at the end of that line) still counts.
+    ("echo a && \\\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("echo a; \\\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if true; then \\\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # After the end of a heredoc body, a case arm, a loop and a group.
+    ("cat <<EOF\nx\nEOF\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("case $x in\na)\nexport GH_REPO=o/r\n;;\nesac\ngh pr view 1\n", []),
+    ("for i in 1; do\n:\ndone\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("{\n:\n}\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    # An export line that only continues an earlier one, like any other GH_REPO= assignment, clears an export already set (fail closed: bash would keep it).
+    ("export GH_REPO=a/b\necho a \\\nexport GH_REPO=o/r\ngh pr view 1\n", [4]),
 ])
 def test_untold_counts_an_export_only_when_its_line_starts_a_command(tmp_path, text, refused):
     assert lines_of(untold(tmp_path, text)) == refused

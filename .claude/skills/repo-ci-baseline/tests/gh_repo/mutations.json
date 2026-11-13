@@ -243,6 +243,12 @@
       "old": "        starts_here = starts_command\n",
       "new": "        starts_here = True\n",
       "why": "every line is read as the start of a command for an export"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "starts_command = track_branches(line, branches, starts_command) or joins[number - 1] is False",
+      "new": "starts_command = joins[number - 1] is False",
+      "why": "a line after one that ends in && or ; and a backslash is not read as the start of a command"
     }
   ]
 }
