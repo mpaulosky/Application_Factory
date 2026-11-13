@@ -687,7 +687,7 @@ mkdir "$cacheL/lock-$treeL"; RUN_PART=template RUN_SHARD=hooks run "$repoL"
 check "a shard run doesn't trust its pass while a whole run holds the lock between its stamp writes: test.sh runs and stores no pass" "$([[ $status == 0 && $ran == yes && -d $cacheL/lock-$treeL ]] && lock_held "$repoL" && ! grep -q "test.sh (hooks shard) already passed" "$repoL/out" && echo 0 || echo 1)"
 rmdir "$cacheL/lock-$treeL"
 # The lock's tries, counted by a mkdir on PATH: it logs each try on a lock folder to $MKDIR_LOG and, with $MKDIR_FAIL_ONCE naming a file that doesn't exist yet, fails the
-# first try without making the folder (a lock released between the failed mkdir and the test that follows); with $MKDIR_RELEASE naming a file that doesn't exist yet, it
+# first try without making the folder (a lock released just after a failed try); with $MKDIR_RELEASE naming a file that doesn't exist yet, it
 # removes the lock folder 0.5 seconds after the first try (a holder that releases the lock while the run waits).
 mkdir_shim="$work/mkdir-shim"; mkdir -p "$mkdir_shim"; real_mkdir="$(command -v mkdir)"
 cat > "$mkdir_shim/mkdir" <<EOF
@@ -707,7 +707,7 @@ tries() { if [[ -f "$work/mkdir-tries" ]]; then wc -l < "$work/mkdir-tries" | tr
 run "$repoL"; run "$repoL"
 command rm -f "$work/mkdir-tries" "$work/mkdir-failed"
 RUN_PART=template PATH="$mkdir_shim:$PATH" MKDIR_LOG="$work/mkdir-tries" MKDIR_FAIL_ONCE="$work/mkdir-failed" run "$repoL"
-check "a lock released between a failed mkdir and the test after it is tried again at once and taken: the pass is trusted" "$([[ $status == 0 && $ran == no && "$(tries)" == 2 && ! -e $cacheL/lock-$treeL ]] && grep -q "test.sh already passed" "$repoL/out" && ! grep -q "the cache lock" "$repoL/out" && echo 0 || echo 1)"
+check "a lock released just after a failed try is tried again and taken: the pass is trusted" "$([[ $status == 0 && $ran == no && "$(tries)" == 2 && ! -e $cacheL/lock-$treeL ]] && grep -q "test.sh already passed" "$repoL/out" && ! grep -q "the cache lock" "$repoL/out" && echo 0 || echo 1)"
 mkdir "$cacheL/lock-$treeL"; command rm -f "$work/mkdir-released"
 RUN_PART=template PATH="$mkdir_shim:$PATH" MKDIR_RELEASE="$work/mkdir-released" run "$repoL"
 check "a lock released while a run waits for it is taken: the pass is trusted and no lock is left" "$([[ $status == 0 && $ran == no && ! -e $cacheL/lock-$treeL ]] && grep -q "test.sh already passed" "$repoL/out" && ! grep -q "the cache lock" "$repoL/out" && echo 0 || echo 1)"
@@ -716,10 +716,10 @@ RUN_PART=template PATH="$mkdir_shim:$PATH" MKDIR_LOG="$work/mkdir-tries" run "$r
 check "a lock that stays held is tried 20 times before the run goes on without it" "$([[ $status == 0 && $ran == yes && "$(tries)" == 20 ]] && lock_held "$repoL" && echo 0 || echo 1)"
 rmdir "$cacheL/lock-$treeL"
 if [[ "$(id -u)" != 0 ]]; then
-  # A cache folder that can't hold a lock gives up at once (one try and one more, since the lock isn't there), saying nothing about a held lock.
+  # A cache folder that can't hold a lock gives up after one try, saying nothing about a held lock.
   run "$repoL"; chmod 555 "$cacheL"; command rm -f "$work/mkdir-tries"
   RUN_PART=template PATH="$mkdir_shim:$PATH" MKDIR_LOG="$work/mkdir-tries" run "$repoL"
-  check "a lock that can't be made in a read-only cache folder is given up at once: test.sh runs, saying nothing of a held lock" "$([[ $status == 0 && $ran == yes && "$(tries)" == 2 ]] && ! grep -q "the cache lock" "$repoL/out" && echo 0 || echo 1)"
+  check "a lock that can't be made in a read-only cache folder is given up at once: test.sh runs, saying nothing of a held lock" "$([[ $status == 0 && $ran == yes && "$(tries)" == 1 ]] && ! grep -q "the cache lock" "$repoL/out" && echo 0 || echo 1)"
   chmod 755 "$cacheL"
   # A pass file that can't be written after the lock and stamps were: the run passes and says the pass isn't recorded, and the next run tests again.
   # shellcheck disable=SC2016 # run later by the stub, in the repo
@@ -729,8 +729,39 @@ if [[ "$(id -u)" != 0 ]]; then
   run "$repoL"
   check "so the next run tests again" "$([[ $ran == yes ]] && echo 0 || echo 1)"
 fi
-# A gate that gets TERM while it holds the lock releases it and ends by that signal. A cat on PATH stands in for the hit check's read of the pass: it marks that it runs, under
-# the lock, and waits, so the signal comes while the lock is held.
+# A gate given INT, TERM or HUP while it holds the lock releases it and ends by that signal; one given TERM after it released the lock ends by it too, at once.
+# signal_gate <repo> <signal> <marker> [VAR=value...]: runs the template part in <repo> with those variables, sends <signal> once <marker> exists, and prints how the gate
+# ended: "signal N" or "exit N", then "prompt" or "late" (1.5 seconds or more after the signal), or "hung" when it hadn't ended 20 seconds later. Python starts it with the three signals at their default (a shell's background job
+# would ignore INT, which bash then can't trap), and tells an end by a signal from an exit.
+signal_gate() {
+  python3 -I - "$@" <<'PY'
+import os, signal, subprocess, sys, time
+repo, sig, marker, *pairs = sys.argv[1:]
+env = dict(os.environ)
+env.update(pair.split("=", 1) for pair in pairs)
+def defaults():
+    for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(s, signal.SIG_DFL)
+with open(os.path.join(repo, "out"), "w") as out:
+    p = subprocess.Popen(["bash", "scripts/gate.sh"], cwd=repo, env=env, stdout=out, stderr=subprocess.STDOUT, preexec_fn=defaults)
+    for _ in range(400):
+        if os.path.exists(marker) or p.poll() is not None:
+            break
+        time.sleep(0.05)
+    sent = time.monotonic()
+    if p.poll() is None:
+        p.send_signal(getattr(signal, "SIG" + sig))
+    try:
+        rc = p.wait(timeout=20)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        p.wait()
+        print("hung")
+        sys.exit(0)
+print((f"signal {-rc}" if rc < 0 else f"exit {rc}") + (" late" if time.monotonic() - sent >= 1.5 else " prompt"))
+PY
+}
+# A cat on PATH stands in for the hit check's read of the pass: it marks that it runs, under the lock, and waits, so the signal comes while the lock is held.
 cat_shim="$work/cat-shim"; mkdir -p "$cat_shim"; real_cat="$(command -v cat)"
 cat > "$cat_shim/cat" <<EOF
 #!/usr/bin/env bash
@@ -738,13 +769,16 @@ if [[ "\${!#}" == */gate-cache/test-sh-* && -n "\${CAT_MARK:-}" ]]; then : > "\$
 exec "$real_cat" "\$@"
 EOF
 chmod +x "$cat_shim/cat"
-run "$repoL"; command rm -f "$work/cat-marked"
-(cd "$repoL" && exec env PATH="$cat_shim:$PATH" CAT_MARK="$work/cat-marked" GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 GATE_PART=template bash scripts/gate.sh >"$repoL/out" 2>&1) &
-signalled=$!
-for _ in $(seq 100); do [[ ! -e "$work/cat-marked" ]] || break; sleep 0.1; done
-held_then="$([[ -d $cacheL/lock-$treeL ]] && echo yes || echo no)"
-kill -s TERM "$signalled"; status=0; wait "$signalled" || status=$?
-check "a gate given TERM while it holds the cache lock releases it and ends by the signal" "$([[ -e $work/cat-marked && $held_then == yes && $status == 143 && ! -e $cacheL/lock-$treeL ]] && echo 0 || echo 1)"
+run "$repoL"
+for sig in INT TERM HUP; do
+  command rm -f "$work/cat-marked"
+  ended="$(signal_gate "$repoL" "$sig" "$work/cat-marked" PATH="$cat_shim:$PATH" CAT_MARK="$work/cat-marked" GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 GATE_PART=template)"
+  check "a gate given $sig while it holds the cache lock releases it and ends by that signal" "$([[ -e $work/cat-marked && ${ended% *} == "signal $(kill -l "$sig")" && ! -e $cacheL/lock-$treeL ]] && echo 0 || echo 1)"
+done
+# The stub test.sh runs after the lock is released: it marks that it runs and waits 3 seconds, so TERM comes then. A trap left set would hold the gate until the stub ended.
+command rm -f "$work/stub-running"
+ended="$(signal_gate "$repoL" TERM "$work/stub-running" STUB_DURING=": > '$work/stub-running'; sleep 3" GATE_NO_CACHE=1 GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 GATE_PART=template)"
+check "a gate given TERM while test.sh runs, after it released the lock, ends by that signal" "$([[ -e $work/stub-running && $ended == "signal 15 prompt" && ! -e $cacheL/lock-$treeL ]] && echo 0 || echo 1)"
 # A stamp stuck as a folder can be neither written nor removed, even in a writable cache folder: the gate fails, and releases the lock it took.
 command rm -f "$cacheL/started.test-sh-$treeL"; mkdir -p "$cacheL/started.test-sh-$treeL/stuck"
 RUN_PART=template run "$repoL"

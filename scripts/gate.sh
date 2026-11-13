@@ -201,23 +201,23 @@ run_static() {
 }
 
 # cache_lock <lock>: takes the per-tree cache lock, a folder (mkdir is atomic), trying 20 times 0.1 seconds apart (about 2 seconds); 1 when it can't. A cache-hit check and a
-# run's stamp writes hold it, so a check never reads a run's stamps half written (its own written, the ones it overlaps not yet). A lock released between a failed mkdir and
-# the test that follows is tried again at once; one that can't be made and isn't there (a read-only cache folder) gives up at once. It's held only for a few file writes, so
-# a lock still there after 2 seconds belongs to a paused gate, or to one killed by SIGKILL while holding it, and stays until a person removes it. While it's held, INT, TERM
-# and HUP release it and then end the gate as the signal would have. cache_unlock releases the lock this shell holds, if any, and restores those signals.
+# run's stamp writes hold it, so a check never reads a run's stamps half written (its own written, the ones it overlaps not yet). Only a cache folder that isn't a writable
+# folder (read-only, say) gives up at once: a lock seen held, or one released just after a failed try, is tried again. It's held only for a few file writes, so a lock still
+# there after 2 seconds belongs to a paused gate, or to one ended by a signal the lock doesn't catch (KILL, QUIT) or by a crash, and stays until a person removes it. While
+# it's held, INT, TERM and HUP release it and then end the gate by that signal. cache_unlock releases the lock this shell holds, if any, and sets those signals back to their default.
 cache_locked=""
 cache_lock() {
   local i sig
   for ((i = 0; i < 20; i++)); do
-    if mkdir -- "$1" 2>/dev/null || { [[ ! -e "$1" ]] && mkdir -- "$1" 2>/dev/null; }; then
+    if mkdir -- "$1" 2>/dev/null; then
       cache_locked="$1"
       for sig in INT TERM HUP; do
         # shellcheck disable=SC2064 # $sig is meant to expand now, once per signal; \$BASHPID when the signal comes
-        trap "cache_unlock; kill -s $sig \$BASHPID" "$sig"
+        trap "cache_unlock; trap - $sig; kill -s $sig \$BASHPID" "$sig"
       done
       return 0
     fi
-    [[ -e "$1" ]] || return 1
+    [[ -d "${1%/*}" && -w "${1%/*}" ]] || return 1
     sleep 0.1
   done
   return 1
