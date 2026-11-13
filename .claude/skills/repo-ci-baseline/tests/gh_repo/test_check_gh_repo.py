@@ -23,6 +23,20 @@ import check_gh_repo  # noqa: E402
 OWNED_SCRIPTS = TEMPLATE_OWNED / "scripts"
 
 
+@pytest.fixture(autouse=True)
+def stop_a_test_that_hangs():
+    """Fail a test that has not finished after 120 s (the slowest takes a few seconds): a scanner loop that stopped advancing fails here, not at the runner's own timeout."""
+    def stop(*_):
+        raise TimeoutError("the test did not finish in 120 s (a hang in the scanner?)")
+    previous = signal.signal(signal.SIGALRM, stop)
+    signal.alarm(120)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
 def lines_of(found):
     """The line numbers of found, whose entries are path:line: text."""
     return [int(re.match(r".*?:([0-9]+): ", entry).group(1)) for entry in found]
@@ -2478,7 +2492,7 @@ def test_untold_reads_a_chain_as_bash_does_and_fails_closed_when_it_is_cut(tmp_p
 
 
 @pytest.mark.parametrize("text, refused", [
-    # A comment that ends in a backslash joins no line, so the heredoc after it is read as data.
+    # A comment that ends in a backslash joins no line, so the heredoc after it is read as data (a regression guard: the refusal held before joined_lines too).
     ("echo hi # c \\\ncat <<EOF\nexport GH_REPO=o/r\nEOF\ngh pr view 1\n", [5]),
     # The same for a heredoc header that carries the comment.
     ("cat <<EOF # c \\\nexport GH_REPO=o/r\nEOF\ngh pr view 1\n", [4]),
@@ -2578,6 +2592,22 @@ def test_untold_refuses_a_gh_after_a_past_limit_line_whose_hash_it_cannot_judge(
     assert lines_of(check_gh_repo.untold(path)) == [len(lines)]
 
 
+def test_untold_does_not_join_the_line_after_a_heredoc_delimiter_that_ends_in_a_backslash(tmp_path):
+    # A quoted delimiter can be `GH_REPO=o/r \\`: the line that closes the body joins nothing, so its text is no assignment for the gh after it.
+    lines = ["cat <<'GH_REPO=o/r \\'", "x", "GH_REPO=o/r \\", "gh pr view 1"]
+    path = tmp_path / "script.sh"
+    path.write_text("\n".join(lines) + "\n")
+    assert lines_of(check_gh_repo.untold(path)) == [4]
+
+
+def test_untold_reads_a_very_long_chain_in_linear_time(tmp_path):
+    # Building the logical line must not copy the text so far on every line: 400,000 lines of one chain take seconds, not minutes.
+    start = time.perf_counter()
+    found = untold(tmp_path, "x \\\n" * 400_000 + "gh pr view 1\n")
+    assert lines_of(found) == [400_001]
+    assert time.perf_counter() - start < 15
+
+
 def test_untold_does_not_read_the_line_after_an_unjudged_line_as_a_command_start(tmp_path):
     # A line past the limit that holds a # (None) may sit inside a string, so the next line may be string text: a `fi` in it must not pop the `if false` branch, or the export after it counts.
     lines = ["if false; then", "echo \"a \\"] + ["x \\"] * check_gh_repo.CONTINUATION_LIMIT + ["y '#' \\", "fi ok\"", "export GH_REPO=o/r", "fi", "gh pr view 1"]
@@ -2586,12 +2616,16 @@ def test_untold_does_not_read_the_line_after_an_unjudged_line_as_a_command_start
     assert lines_of(check_gh_repo.untold(path)) == [len(lines)]
 
 
-def test_untold_costs_a_bounded_amount_per_line_for_many_chains_that_hold_a_hash(tmp_path):
-    # Each line of a chain with a # re-scans the chain so far, up to the limit: 20,000 lines in chains of 100 stay far under the bound.
-    start = time.perf_counter()
-    found = untold(tmp_path, ("echo '#' \\\n" * 99 + "x\n") * 200 + "gh pr view 1\n")
+def test_untold_scans_a_chain_for_a_comment_a_bounded_number_of_times_per_line(tmp_path, monkeypatch):
+    # Each line of a chain that holds a # is judged on the chain so far once per pass over the file: counting the scans (not timing them) fails when a chain is walked from every line.
+    calls = []
+    real = check_gh_repo.continues
+    monkeypatch.setattr(check_gh_repo, "continues", lambda text: calls.append(1) or real(text))
+    text = ("echo '#' \\\n" * 99 + "x\n") * 200 + "gh pr view 1\n"
+    found = untold(tmp_path, text)
     assert lines_of(found) == [20_001]
-    assert time.perf_counter() - start < 20
+    assert len(calls) <= 2 * 20_000
+
 
 
 @pytest.mark.parametrize("lines, number, expected", [

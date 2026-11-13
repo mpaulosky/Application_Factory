@@ -90,7 +90,7 @@
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "            joins = continues(text)\n",
+      "old": "            joins = continues(\"\".join(parts))\n",
       "new": "            joins = continues(last)\n",
       "why": "a # inside a string that an earlier line of the chain opened is read as a comment"
     },
@@ -156,14 +156,14 @@
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "        joins = (len(text) - len(text.rstrip(\"\\\\\"))) % 2 == 1\n",
-      "new": "        joins = (len(text) - len(text.rstrip(\"\\\\\"))) % 2 == 0\n",
+      "old": "        joins = tail % 2 == 1\n",
+      "new": "        joins = tail % 2 == 0\n",
       "why": "an even run of backslashes joins and an odd one does not"
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "        text = text[:-1] + lines[number - 1 + count]\n",
-      "new": "        text = text + lines[number - 1 + count]\n",
+      "old": "        parts[-1] = parts[-1][:-1]\n",
+      "new": "        parts[-1] = parts[-1]\n",
       "why": "the joining backslash stays in the text"
     },
     {
@@ -201,6 +201,18 @@
       "old": "or joins[number - 1] is False",
       "new": "or not joins[number - 1]",
       "why": "the line after an unjudged line is read as the start of a command"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "        tail = len(parts[-1]) - len(parts[-1].rstrip(\"\\\\\"))\n",
+      "new": "        pass\n",
+      "why": "the trailing backslashes of the newest part are not counted, so the first line decides every join"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "                joins[number - 1] = False\n",
+      "new": "                pass\n",
+      "why": "the line that closes a heredoc body joins the next line"
     }
   ]
 }
