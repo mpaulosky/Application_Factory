@@ -1483,13 +1483,13 @@ function printable(text: string): string {
 // `record --staged` reads them, so the record doesn't depend on what the session still remembers of the earlier rounds.
 const STAGED_FILE = "findings.json";
 
-// Why a staging file or folder isn't the run's own, or undefined: it belongs to another user, or others can write to it. `uid` is the
+// Why a staging file or folder isn't the run's own, or undefined: it belongs to another user, or the group or others can write to it. `uid` is the
 // current user's (undefined where the platform has none, which skips the check). The findings in it are unpublished, and the file is read back
 // into the record, so a file another user could have written is not trusted.
 export function stagedOwnerProblem(info: { uid: number; mode: number }, uid: number | undefined, what: string): string | undefined {
   if (uid === undefined) return undefined;
   if (info.uid !== uid) return `${what} isn't owned by you.`;
-  if ((info.mode & 0o022) !== 0) return `${what} can be written by others: make it owner-only (chmod 700 for a folder, 600 for a file).`;
+  if ((info.mode & 0o022) !== 0) return `${what} can be written by the group or others: make it owner-only (chmod 700 for a folder, 600 for a file).`;
   return undefined;
 }
 
