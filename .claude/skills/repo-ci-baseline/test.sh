@@ -2,6 +2,7 @@
 # Validate the repo-ci-baseline Template before it's Applied anywhere.
 #
 #   test.sh
+#   TEST_SH_SHARD=hooks|scripts|checks test.sh
 #
 # Runs the Template's own tests (hook suites, auto-merge script tests,
 # release-script pytest), the hardening-review scripts' tests, the renderer oracle and the GitHub scripts' tests
@@ -13,6 +14,10 @@
 # reapply.sh against throwaway repos. The Application Factory's CI runs this on every change
 # under the skill, and it's the check to run before committing a Template
 # change. A repo's copies of Owned files are checked by status.sh and apply.sh --dry-run, not here.
+#
+# TEST_SH_SHARD runs one of its three shards, which is how the Factory's CI runs it in parallel jobs (ADR 0013): hooks is the hook and Owned script
+# tests, scripts the auto-merge, release, hardening-review, renderer, GitHub script and benchmark tests, checks everything from actionlint on. With
+# no TEST_SH_SHARD every shard runs, in that order. Every step sits in exactly one shard; scripts/tests/gate.test.sh checks that.
 set -euo pipefail
 # The step headers carry SECONDS: count from here, whatever SECONDS a caller exported (mpaulosky/dotfiles#417).
 SECONDS=0
@@ -38,8 +43,30 @@ fail() { echo "FAIL: $1" >&2; failures=$((failures + 1)); }
 need() {
   command -v "$1" &>/dev/null || { echo "test.sh: $1 is required" >&2; exit 2; }
 }
+# The shard is checked first, before the tools, and must be exactly one of the declared names: a value such as "hooks scripts" would match no block and run nothing.
+shards=(hooks scripts checks)
+shard="${TEST_SH_SHARD:-}"
+known=0
+for s in "${shards[@]}"; do [[ "$shard" != "$s" ]] || known=1; done
+if [[ -n "$shard" ]] && ((known == 0)); then
+  echo "test.sh: TEST_SH_SHARD must be one of ${shards[*]}, not '$shard'." >&2
+  exit 2
+fi
+in_shard() { [[ -z "$shard" || "$shard" == "$1" ]]; }
+
 for tool in actionlint zizmor yamllint shellcheck markdownlint-cli2 git; do need "$tool"; done
 
+# pytest is used in the scripts and checks shards, so it's chosen before either runs, and only when one of them does.
+if in_shard scripts || in_shard checks; then
+  if python3 -c 'import pytest' &>/dev/null; then
+    pytest_cmd=(python3 -m pytest)
+  else
+    need uvx
+    pytest_cmd=(uvx pytest)
+  fi
+fi
+
+if in_shard hooks; then
 step "Hook tests"
 bash "$owned/.github/hooks/tests/pre-push.test.sh" || fail "pre-push.test.sh"
 bash "$owned/.github/hooks/tests/pre-commit.test.sh" || fail "pre-commit.test.sh"
@@ -66,18 +93,14 @@ bash "$owned/scripts/tests/check-git-hooks.test.sh" || fail "check-git-hooks.tes
 bash "$owned/scripts/tests/lint-edited-file.test.sh" || fail "lint-edited-file.test.sh"
 grep -qxF '        run: bash scripts/tests/lint-edited-file.test.sh' "$owned/.github/workflows/ci.yml" \
   || fail "the Owned ci.yml's hook-tests job must run scripts/tests/lint-edited-file.test.sh, so every repo tests its copy"
+fi # the hooks shard
 
+if in_shard scripts; then
 step "Auto-merge script tests"
 need node
 node --test "$owned/.github/scripts/tests/pr-automerge.test.mjs" || fail "pr-automerge.test.mjs"
 
 step "Release script tests"
-if python3 -c 'import pytest' &>/dev/null; then
-  pytest_cmd=(python3 -m pytest)
-else
-  need uvx
-  pytest_cmd=(uvx pytest)
-fi
 (cd "$owned" && "${pytest_cmd[@]}" -q -p no:cacheprovider .github/scripts/tests) || fail "pytest"
 
 step "Hardening review script tests"
@@ -107,7 +130,9 @@ else
   bench_cmd=(uvx --with pyyaml pytest)
 fi
 (cd "$skill_dir" && "${bench_cmd[@]}" -q -p no:cacheprovider -rs bench/tests) || fail "benchmark pytest"
+fi # the scripts shard
 
+if in_shard checks; then
 step "actionlint"
 mapfile -t workflows < <(find "$owned/.github/workflows" -name '*.yml' | sort)
 actionlint "${workflows[@]}" || fail "actionlint"
@@ -939,10 +964,11 @@ step "apply.sh smoke test"
 
 step "reapply.sh smoke test"
 "$skill_dir/tests/reapply.test.sh" || fail "reapply.test.sh"
+fi # the checks shard
 
 echo
 if [[ $failures -gt 0 ]]; then
-  echo "test.sh: $failures check(s) failed [+${SECONDS}s]"
+  echo "test.sh${shard:+ ($shard shard)}: $failures check(s) failed [+${SECONDS}s]"
   exit 1
 fi
-echo "test.sh: all checks passed [+${SECONDS}s]"
+echo "test.sh${shard:+ ($shard shard)}: all checks passed [+${SECONDS}s]"

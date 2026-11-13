@@ -7,7 +7,7 @@
 # and --quick (and a missing python3 or a broken checker fails closed), that dependabot.yml watches the root package.json, and the review tests' install step (a missing pnpm, a pnpm that leaves no tsx, a pnpm that installs it).
 # It also checks that .claude/settings.json runs the executable scripts/lint-edited-file.sh after Edit, Write and MultiEdit (ADR 0011), and that the check fails on a dropped matcher, another event or hook type,
 # a command without the quotes around CLAUDE_PROJECT_DIR or naming another script, a non-executable script and a file that is not JSON.
-# It also checks GATE_PART (ADR 0012): each part runs alone, a bad value, or --quick or --sync with a part, is refused, the Sandcastle check runs in a full gate only when the branch changed
+# It also checks GATE_PART (ADR 0012) and TEST_SH_SHARD (ADR 0013, only the template part runs a shard; test.sh's steps each sit in one shard; the workflow's matrix lists them all): each part runs alone, a bad value, or --quick or --sync with a part, is refused, the Sandcastle check runs in a full gate only when the branch changed
 # a file it reads (and is remembered per clean tree), and the CI workflow has one job per part and a Template tests job that needs them all.
 #
 #   scripts/tests/gate.test.sh
@@ -16,7 +16,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 work="$(mktemp -d)"
 trap 'chmod -R u+w "$work" 2>/dev/null || true; rm -rf "$work"' EXIT # a case that makes a folder read-only is cleaned up even when it is interrupted
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH GATE_PART STUB_SANDCASTLE_EXIT RUN_PART # a caller's GATE_NO_CACHE=1 must not reach the stub gate runs; the tests set it themselves where they need it
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH GATE_PART STUB_SANDCASTLE_EXIT RUN_PART TEST_SH_SHARD RUN_SHARD STUB_DURING # a caller's GATE_NO_CACHE=1 must not reach the stub gate runs; the tests set it themselves where they need it
 
 pass=0; failed=0
 check() { # check <description> <condition: 0 for ok>
@@ -46,6 +46,9 @@ new_repo() {
   cat > "$repo/$skill/test.sh" <<'STUB'
 #!/usr/bin/env bash
 touch "$(dirname "${BASH_SOURCE[0]}")/ran"
+printf '%s\n' "${TEST_SH_SHARD-unset}" >> "$(git rev-parse --git-common-dir)/test-sh-shards"
+# STUB_DURING: a command run while this test.sh runs (once: the runs it starts don't see it), standing in for another gate run on the same tree.
+if [[ -n "${STUB_DURING:-}" ]]; then during="$STUB_DURING"; (unset STUB_DURING; eval "$during") || true; fi
 [[ -z "${STUB_TOUCH:-}" ]] || : > "$STUB_TOUCH"
 exit "${STUB_EXIT:-0}"
 STUB
@@ -98,7 +101,7 @@ run() {
   # $GATE_ARGS is the gate's arguments, split on spaces.
   local gate_args=()
   [[ -z "${GATE_ARGS:-}" ]] || read -ra gate_args <<<"$GATE_ARGS"
-  (cd "$1" && env -u GATE_SKIP_REVIEW "${skip[@]+"${skip[@]}"}" GATE_SKIP_SELF_TEST=1 STUB_EXIT="${STUB_EXIT:-0}" STUB_SANDCASTLE_EXIT="${STUB_SANDCASTLE_EXIT:-0}" REVIEW_EXIT="${REVIEW_EXIT:-0}" ${RUN_PART:+GATE_PART="$RUN_PART"} bash scripts/gate.sh "${gate_args[@]+"${gate_args[@]}"}" >"$1/out" 2>&1) || status=$?
+  (cd "$1" && env -u GATE_SKIP_REVIEW "${skip[@]+"${skip[@]}"}" GATE_SKIP_SELF_TEST=1 STUB_EXIT="${STUB_EXIT:-0}" STUB_SANDCASTLE_EXIT="${STUB_SANDCASTLE_EXIT:-0}" REVIEW_EXIT="${REVIEW_EXIT:-0}" ${RUN_PART:+GATE_PART="$RUN_PART"} ${RUN_SHARD:+TEST_SH_SHARD="$RUN_SHARD"} bash scripts/gate.sh "${gate_args[@]+"${gate_args[@]}"}" >"$1/out" 2>&1) || status=$?
   [[ -e "$1/$skill/ran" ]] && ran=yes || ran=no
   [[ -e "$1/.git/ran-sandcastle" ]] && ran_sc=yes || ran_sc=no
 }
@@ -423,6 +426,15 @@ if [[ "$(id -u)" != 0 ]]; then
   GATE_NO_CACHE=1 run "$repo18"
   check "a remembered pass that can't be cleared fails the gate before test.sh, saying so" "$([[ $status == 1 && $ran == no ]] && grep -q 'could not clear the remembered test.sh pass' "$repo18/out" && echo 0 || echo 1)"
   chmod 755 "$repo18/.git/gate-cache"
+  # The same in a linked worktree of a clone whose path holds glob characters (there the cache folder's path is absolute): the leftover pass is found by its
+  # literal name, not read as a pattern.
+  repo18b="$(new_repo 'cache-[x]-unclearable')"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo18b/.git/info/exclude"; commit_all "$repo18b" base
+  wt18b="$work/cache-[x]-worktree"; git -C "$repo18b" worktree add -q --detach "$wt18b"
+  run "$wt18b"
+  chmod 555 "$repo18b/.git/gate-cache"
+  GATE_NO_CACHE=1 run "$wt18b"
+  check "a pass that can't be cleared fails the gate in a worktree of a clone whose path holds [ and ]" "$([[ $status == 1 && $ran == no ]] && grep -q 'could not clear the remembered test.sh pass' "$wt18b/out" && echo 0 || echo 1)"
+  chmod 755 "$repo18b/.git/gate-cache"
 else
   echo "skip - the unclearable-pass case needs a user other than root"
 fi
@@ -508,6 +520,7 @@ part_check static no no
 part_check template yes no
 part_check sandcastle no yes
 part_check self no no
+part_check review no no
 RUN_PART=bogus run "$repoP"
 check "an unknown GATE_PART is refused with exit 2 and runs nothing" "$([[ $status == 2 && $ran == no && $ran_sc == no ]] && grep -q "GATE_PART must be" "$repoP/out" && echo 0 || echo 1)"
 for arg in --quick --sync; do
@@ -526,7 +539,185 @@ printf '#!/usr/bin/env bash\necho "tsx $*" >> "%s/.git/tsx-args"\n' "$repoS" > "
 chmod +x "$repoS/scripts/tests/gate.test.sh" "$repoS/node_modules/.bin/tsx"
 status=0
 (cd "$repoS" && env -u GATE_SKIP_SELF_TEST GATE_PART=self bash scripts/gate.sh >"$repoS/out" 2>&1) || status=$?
-check "GATE_PART=self runs the gate's own test and the review's tests, and no other part" "$([[ $status == 0 && -e $repoS/.git/ran-self-test ]] && grep -q "review-ledger.test.mts" "$repoS/.git/tsx-args" && ! grep -q "Copies of Template files" "$repoS/out" && [[ ! -e $repoS/$skill/ran && ! -e $repoS/.git/ran-sandcastle ]] && echo 0 || echo 1)"
+check "GATE_PART=self runs the gate's own test, and not the review's tests or any other part" "$([[ $status == 0 && -e $repoS/.git/ran-self-test && ! -e $repoS/.git/tsx-args ]] && ! grep -q "Copies of Template files" "$repoS/out" && [[ ! -e $repoS/$skill/ran && ! -e $repoS/.git/ran-sandcastle ]] && echo 0 || echo 1)"
+rm -f "$repoS/.git/ran-self-test"
+status=0
+(cd "$repoS" && env -u GATE_SKIP_SELF_TEST GATE_PART=review bash scripts/gate.sh >"$repoS/out" 2>&1) || status=$?
+check "GATE_PART=review runs the review's tests, and not the gate's own test or any other part" "$([[ $status == 0 && ! -e $repoS/.git/ran-self-test ]] && grep -q "review-ledger.test.mts" "$repoS/.git/tsx-args" && ! grep -q "Copies of Template files" "$repoS/out" && [[ ! -e $repoS/$skill/ran && ! -e $repoS/.git/ran-sandcastle ]] && echo 0 || echo 1)"
+rm -f "$repoS/.git/tsx-args"
+status=0
+(cd "$repoS" && env -u GATE_SKIP_SELF_TEST GATE_SKIP_REVIEW=1 bash scripts/gate.sh --quick >"$repoS/out" 2>&1) || status=$?
+check "a quick gate still runs both the gate's own test and the review's tests" "$([[ -e $repoS/.git/ran-self-test ]] && grep -q "review-ledger.test.mts" "$repoS/.git/tsx-args" 2>/dev/null && echo 0 || echo 1)"
+
+# TEST_SH_SHARD (ADR 0013): only the template part, run by name, runs one shard of test.sh; a full gate runs all of it. Each shard's pass is remembered on its own.
+shards_seen() { tail -n 1 "$repoP/.git/test-sh-shards" 2>/dev/null; }
+reset_parts; rm -rf "$repoP/.git/gate-cache" "$repoP/.git/test-sh-shards"
+RUN_PART=template RUN_SHARD=hooks run "$repoP"
+check "GATE_PART=template with TEST_SH_SHARD runs that shard of test.sh" "$([[ $status == 0 && $ran == yes && "$(shards_seen)" == hooks ]] && grep -qF "test.sh (hooks shard)" "$repoP/out" && echo 0 || echo 1)"
+RUN_PART=template RUN_SHARD=hooks run "$repoP"
+check "a shard's pass is remembered for the clean tree" "$(grep -q "test.sh (hooks shard) already passed on this tree" "$repoP/out" && [[ "$(wc -l < "$repoP/.git/test-sh-shards")" == 1 ]] && echo 0 || echo 1)"
+RUN_PART=template RUN_SHARD=scripts run "$repoP"
+check "another shard is not skipped by the first shard's pass" "$([[ $status == 0 && "$(shards_seen)" == scripts ]] && echo 0 || echo 1)"
+RUN_SHARD=hooks run "$repoP"
+check "a full gate ignores TEST_SH_SHARD and runs all of test.sh, not skipped by a shard's pass" "$([[ $status == 0 && "$(shards_seen)" == unset ]] && ! grep -q "shard" "$repoP/out" && echo 0 || echo 1)"
+RUN_PART=template run "$repoP"
+check "the template part with no TEST_SH_SHARD shares the whole run's remembered pass, not a shard's" "$([[ $status == 0 ]] && grep -q "test.sh already passed on this tree" "$repoP/out" && echo 0 || echo 1)"
+rm -f "$repoP/.git/test-sh-shards" "$repoP/$skill/ran"
+GATE_NO_CACHE=1 RUN_PART=template run "$repoP"
+check "the template part with no TEST_SH_SHARD runs all of test.sh" "$([[ $status == 0 && $ran == yes && "$(cat "$repoP/.git/test-sh-shards" 2>/dev/null)" == unset ]] && ! grep -q "shard" "$repoP/out" && echo 0 || echo 1)"
+rm -rf "$repoP/.git/gate-cache"
+STUB_EXIT=1 RUN_PART=template RUN_SHARD=checks run "$repoP"
+check "a failing shard fails the template part" "$([[ $status == 1 && "$(shards_seen)" == checks ]] && echo 0 || echo 1)"
+
+# A run of test.sh clears the remembered passes it overlaps for the tree: a whole run clears every shard's, a shard the whole run's (Copilot's review of PR 65).
+# Shards don't overlap each other, so one shard's failure leaves another's pass.
+rm -rf "$repoP/.git/gate-cache" "$repoP/.git/test-sh-shards"
+run "$repoP"; RUN_PART=template RUN_SHARD=scripts run "$repoP"
+GATE_NO_CACHE=1 STUB_EXIT=1 RUN_PART=template RUN_SHARD=hooks run "$repoP"
+check "a forced shard that fails fails the template part" "$([[ $status == 1 && "$(shards_seen)" == hooks ]] && echo 0 || echo 1)"
+RUN_PART=template RUN_SHARD=scripts run "$repoP"
+check "another shard's pass still stands: one shard's failure says nothing about it" "$([[ $status == 0 && "$(shards_seen)" == hooks ]] && grep -q "test.sh (scripts shard) already passed" "$repoP/out" && echo 0 || echo 1)"
+rm -f "$repoP/$skill/ran"; run "$repoP"
+check "and the next full gate runs all of test.sh instead of trusting the whole run's old pass" "$([[ $status == 0 && $ran == yes && "$(shards_seen)" == unset ]] && echo 0 || echo 1)"
+RUN_PART=template RUN_SHARD=hooks run "$repoP"
+GATE_NO_CACHE=1 STUB_EXIT=1 run "$repoP"
+check "a forced full gate whose test.sh fails fails the gate" "$([[ $status == 1 && "$(shards_seen)" == unset ]] && echo 0 || echo 1)"
+RUN_PART=template RUN_SHARD=hooks run "$repoP"
+check "and the next run of a shard tests again instead of trusting its old pass" "$([[ $status == 0 && "$(shards_seen)" == hooks ]] && ! grep -q "already passed" "$repoP/out" && echo 0 || echo 1)"
+
+# Two runs on one tree that overlap in time (Copilot's review of PR 65): a whole run that passes while a shard run, started after it, fails keeps no pass.
+rm -rf "$repoP/.git/gate-cache" "$repoP/.git/test-sh-shards"
+# shellcheck disable=SC2016 # the command is run later by the stub, in the repo: its \$(...) must not expand here
+overlap='GATE_PART=template TEST_SH_SHARD=hooks STUB_EXIT=1 GATE_NO_CACHE=1 bash scripts/gate.sh > "$(git rev-parse --git-common-dir)/overlap-out" 2>&1'
+STUB_DURING="$overlap" run "$repoP"
+check "a whole run that a failing shard run overlapped passes, saying its pass is not remembered" "$([[ $status == 0 && "$(sed -n 2p "$repoP/.git/test-sh-shards")" == hooks ]] && grep -q "test.sh (hooks shard)" "$repoP/.git/overlap-out" && grep -q "another run of test.sh, or of a part it overlaps, started on this tree" "$repoP/out" && echo 0 || echo 1)"
+rm -f "$repoP/$skill/ran"; run "$repoP"
+check "and the next full gate runs test.sh instead of trusting that pass" "$([[ $status == 0 && $ran == yes && "$(shards_seen)" == unset ]] && ! grep -q "already passed" "$repoP/out" && echo 0 || echo 1)"
+RUN_PART=template RUN_SHARD=hooks run "$repoP"
+STUB_DURING="${overlap/STUB_EXIT=1/STUB_EXIT=0}" RUN_PART=template RUN_SHARD=scripts run "$repoP"
+check "a shard run that another shard run overlapped keeps no pass either" "$([[ $status == 0 ]] && grep -q "another run of test.sh (scripts shard), or of a part it overlaps" "$repoP/out" && echo 0 || echo 1)"
+if [[ "$(id -u)" != 0 ]]; then
+  # A later run that can't write its start stamp removes it, so the earlier run finds no token of its own and keeps nothing.
+  rm -rf "$repoP/.git/gate-cache"
+  # shellcheck disable=SC2016 # run later by the stub, in the repo
+  STUB_DURING='chmod 444 "$(git rev-parse --git-common-dir)/gate-cache/"started.test-sh-*; '"$overlap" run "$repoP"
+  check "a whole run overlapped by a failing shard run that could not write its stamp keeps no pass" "$([[ $status == 0 ]] && grep -q "this pass is not remembered" "$repoP/out" && ! compgen -G "$repoP/.git/gate-cache/test-sh-*" > /dev/null && echo 0 || echo 1)"
+else
+  echo "skip - the unwritable-stamp case needs a user other than root"
+fi
+# The re-check after the pass is written: a run that starts between the first check and the write still takes the pass away. A cat that rewrites the stamp after the
+# gate's first read of it stands in for that run.
+repoR="$(new_repo cache-recheck)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoR/.git/info/exclude"; commit_all "$repoR" base
+mkdir -p "$work/recheck-bin"
+cat > "$work/recheck-bin/cat" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  case "\$a" in */started.test-sh-*) if [[ ! -e "$repoR/.git/recheck-done" ]]; then : > "$repoR/.git/recheck-done"; "$(command -v cat)" "\$a"; printf 'other\\n' > "\$a"; exit 0; fi ;; esac
+done
+exec "$(command -v cat)" "\$@"
+SHIM
+chmod +x "$work/recheck-bin/cat"
+status=0
+(cd "$repoR" && env GATE_PART=template GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/recheck-bin:$PATH" bash scripts/gate.sh > "$repoR/out" 2>&1) || status=$?
+check "a run that starts after the first check but before the re-check takes the stored pass away" "$([[ $status == 0 && -e $repoR/.git/recheck-done ]] && grep -q "this pass is not remembered" "$repoR/out" && ! compgen -G "$repoR/.git/gate-cache/test-sh-*" > /dev/null && echo 0 || echo 1)"
+if [[ "$(id -u)" != 0 ]]; then
+  # A start stamp that can be neither written nor removed fails the gate before test.sh: an earlier run could otherwise keep its token and a pass this run disproves.
+  repoW="$(new_repo cache-stamp-stuck)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoW/.git/info/exclude"; commit_all "$repoW" base
+  mkdir -p "$repoW/.git/gate-cache"; echo earlier > "$repoW/.git/gate-cache/started.test-sh-$(git -C "$repoW" rev-parse 'HEAD^{tree}')"
+  chmod 444 "$repoW/.git/gate-cache/"started.*; chmod 555 "$repoW/.git/gate-cache"
+  RUN_PART=template run "$repoW"
+  check "a start stamp that can be neither written nor removed fails the gate before test.sh, saying so" "$([[ $status == 1 && $ran == no ]] && grep -q "could not write or remove the test.sh start stamp" "$repoW/out" && echo 0 || echo 1)"
+  chmod 755 "$repoW/.git/gate-cache"
+  # A pass the re-check finds disproved but can't remove fails the gate: a cat that, on the re-check's read, rewrites the stamp and makes the folder read-only.
+  repoX="$(new_repo cache-recheck-stuck)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoX/.git/info/exclude"; commit_all "$repoX" base
+  mkdir -p "$work/recheck-stuck-bin"
+  cat > "$work/recheck-stuck-bin/cat" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  case "\$a" in */started.test-sh-*)
+    n=\$(( \$("$(command -v cat)" "$repoX/.git/reads" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "$repoX/.git/reads"
+    if [[ \$n == 2 ]]; then printf 'other\\n' > "\$a"; chmod 555 "\${a%/*}"; echo other; exit 0; fi ;;
+  esac
+done
+exec "$(command -v cat)" "\$@"
+SHIM
+  chmod +x "$work/recheck-stuck-bin/cat"
+  status=0
+  (cd "$repoX" && env GATE_PART=template GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/recheck-stuck-bin:$PATH" bash scripts/gate.sh > "$repoX/out" 2>&1) || status=$?
+  check "a pass the re-check finds disproved but can't remove fails the gate, saying so" "$([[ $status == 1 && "$(cat "$repoX/.git/reads" 2>/dev/null)" == 2 ]] && grep -q "its pass (.*) could not be removed" "$repoX/out" && echo 0 || echo 1)"
+  chmod 755 "$repoX/.git/gate-cache"
+else
+  echo "skip - the stuck-stamp and stuck-pass cases need a user other than root"
+fi
+# The stamp is written before the old passes are cleared; the other order leaves a moment in which an earlier run stores a pass a later failing run never clears.
+stamp_first="$(awk '/^run_cached\(\) \{/ { in_f = 1 } in_f && /printf .* >"\$stamp"/ && !s { s = NR } in_f && /command rm -f -- "\$\{overlapping\[@\]\}"/ && !r { r = NR } in_f && /^\}/ { in_f = 0 } END { print (s && r && s < r) ? 0 : 1 }' "$here/scripts/gate.sh")"
+check "run_cached writes the start stamp before it clears the overlapping passes" "$stamp_first"
+
+# test.sh's shards: every step sits in exactly one shard block, the blocks are the declared shards in order, and a bad shard is refused.
+testsh_shards_ok() { # testsh_shards_ok <test.sh>: 0 when its steps are split into the shards it declares, each block once, nothing outside
+  python3 -I - "$1" <<'PY'
+import re, sys
+lines = open(sys.argv[1]).read().split("\n")
+declared = [m.group(1).split() for l in lines if (m := re.fullmatch(r"shards=\(([a-z ]+)\)", l))]
+if len(declared) != 1:
+    sys.exit(1)
+order, current, steps = [], None, 0
+for l in lines:
+    m = re.fullmatch(r"if in_shard ([a-z]+); then", l)
+    if m:
+        if current is not None:
+            sys.exit(1)
+        current = m.group(1)
+        order.append(current)
+        continue
+    m = re.fullmatch(r"fi # the ([a-z]+) shard", l)
+    if m:
+        if m.group(1) != current:
+            sys.exit(1)
+        current = None
+        continue
+    if l.startswith("step "):
+        if current is None:
+            sys.exit(1)
+        steps += 1
+if current is not None or order != declared[0] or steps == 0:
+    sys.exit(1)
+PY
+}
+testsh="$here/$skill/test.sh"
+check "test.sh's steps are split into the shards it declares, each once, in order, none outside" "$(testsh_shards_ok "$testsh" && echo 0 || echo 1)"
+mkdir -p "$work/testsh"
+awk '{ print } /^fi # the checks shard$/ { print "step \"stray\"" }' "$testsh" > "$work/testsh/outside.sh"
+awk '{ print } /^fi # the hooks shard$/ { print "step \"between\"" }' "$testsh" > "$work/testsh/between.sh"
+sed '/^fi # the checks shard$/d' "$testsh" > "$work/testsh/open.sh"
+sed '/^fi # the hooks shard$/d' "$testsh" > "$work/testsh/nested.sh"
+sed 's/^fi # the hooks shard$/fi # the scripts shard/' "$testsh" > "$work/testsh/label.sh"
+sed 's/^if in_shard checks; then$/if in_shard scripts; then/; s/^fi # the checks shard$/fi # the scripts shard/' "$testsh" > "$work/testsh/twice.sh"
+sed 's/^shards=(hooks scripts checks)$/shards=(hooks scripts)/' "$testsh" > "$work/testsh/undeclared.sh"
+for m in outside between open nested label twice undeclared; do
+  check "the shard check fails for a test.sh where $m (the mutant differs from test.sh)" "$(! cmp -s "$testsh" "$work/testsh/$m.sh" && ! testsh_shards_ok "$work/testsh/$m.sh" && echo 0 || echo 1)"
+done
+
+# in_shard, taken out of test.sh: with no shard every block runs; with one, only its own.
+inshard_rc() { # inshard_rc <shard> <block>: in_shard's status for <block> when TEST_SH_SHARD is <shard>
+  bash -euo pipefail -c 'eval "$(grep -E "^in_shard\(\) " "$1")"; shard="$2"; in_shard "$3"' _ "$testsh" "$1" "$2" > /dev/null 2>&1 && echo 0 || echo 1
+}
+inshard_problems=()
+for block in hooks scripts checks; do
+  [[ "$(inshard_rc "" "$block")" == 0 ]] || inshard_problems+=("no shard skips $block")
+  for s in hooks scripts checks; do
+    want=1; [[ "$s" != "$block" ]] || want=0
+    [[ "$(inshard_rc "$s" "$block")" == "$want" ]] || inshard_problems+=("shard $s on block $block")
+  done
+done
+((${#inshard_problems[@]} == 0)) || printf '       | %s\n' "${inshard_problems[@]}"
+check "in_shard runs every block with no shard, and only the named shard's block with one" "$((${#inshard_problems[@]} == 0 ? 0 : 1))"
+mkdir -p "$work/testsh-bin"; for tool in dirname mktemp rm; do ln -sf "$(command -v "$tool")" "$work/testsh-bin/$tool"; done
+for value in bogus "hooks scripts" "scripts checks" "hooks scripts checks" " hooks" "hooks " "*"; do
+  status=0
+  (PATH="$work/testsh-bin" TEST_SH_SHARD="$value" "$(command -v bash)" "$testsh") > "$work/testsh/bogus.out" 2>&1 || status=$?
+  check "test.sh refuses TEST_SH_SHARD='$value' with exit 2, before checking its tools, and runs no step" "$([[ $status == 2 ]] && grep -q "TEST_SH_SHARD must be" "$work/testsh/bogus.out" && ! grep -q "^── " "$work/testsh/bogus.out" && echo 0 || echo 1)"
+done
 
 # A full gate runs the Sandcastle check only when the branch changed a file it reads (everything it applies and tests: the Template, the skill's references and ADRs, its rule).
 sc_paths_yes=(
@@ -607,11 +798,16 @@ mapfile -t yaml_py < <(yaml_python)
 [[ ${#yaml_py[@]} -gt 0 ]] || { echo "gate.test.sh: no Python with PyYAML and no uvx for the workflow checks" >&2; exit 1; }
 
 # The CI workflow: one job per part, and the job the ruleset requires needs them all, so a part cannot go missing from CI without this test failing.
-workflow_ok() { # workflow_ok <workflow file> <gate.sh>: 0 when its jobs run each GATE_PART once, through scripts/gate.sh, and "Template tests" always runs and needs every one of them
-  "${yaml_py[@]}" - "$1" "$2" <<'PY'
+workflow_ok() { # workflow_ok <workflow file> <gate.sh> <test.sh>: 0 when its jobs run each GATE_PART once, through scripts/gate.sh, the template job every test.sh shard once,
+  # and "Template tests" always runs and needs every one of them
+  "${yaml_py[@]}" - "$1" "$2" "$3" <<'PY'
 import re, sys, yaml
 wf = yaml.safe_load(open(sys.argv[1]))
 gate = open(sys.argv[2]).read()
+shards = re.search(r'^shards=\(([a-z ]+)\)$', open(sys.argv[3]).read(), re.M)
+if not shards:
+    sys.exit(1)
+shards = sorted(shards.group(1).split())
 declared = re.search(r'"" \| ([a-z |]+)\) ;;', gate)
 if not declared:
     sys.exit(1)
@@ -634,6 +830,18 @@ for key, job in jobs.items():
                 sys.exit(1)
             used.append(part)
             part_jobs.append(key)
+            env = step.get("env") or {}
+            strategy = job.get("strategy") or {}
+            if part == "template":
+                matrix = strategy.get("matrix") or {}
+                if set(matrix) != {"shard"} or not isinstance(matrix["shard"], list) or sorted(matrix["shard"]) != shards:
+                    sys.exit(1)
+                if str(env.get("TEST_SH_SHARD", "")).replace(" ", "") != "${{matrix.shard}}":
+                    sys.exit(1)
+                if strategy.get("fail-fast") is not False:
+                    sys.exit(1)
+            elif strategy or "TEST_SH_SHARD" in env:
+                sys.exit(1)
 if sorted(used) != parts or sorted(part_jobs) != sorted(set(part_jobs)):
     sys.exit(1)
 needs = final.get("needs")
@@ -643,25 +851,29 @@ if str(final.get("if", "")).strip() != "${{ always() }}" or final.get("continue-
     sys.exit(1)
 PY
 }
-aggregator_ok() { # aggregator_ok <workflow file>: 0 when the Template tests step passes for four successes and fails for a failure, a cancelled or a skipped job, a missing job and nothing
+aggregator_ok() { # aggregator_ok <workflow file>: 0 when the Template tests step passes for five successes and fails for a failure, a cancelled or a skipped job, a missing job and nothing
   local script ok=0 case_json result job
   command -v jq > /dev/null || { echo "aggregator_ok needs jq" >&2; return 1; }
   script="$("${yaml_py[@]}" -c 'import sys, yaml; j = yaml.safe_load(open(sys.argv[1]))["jobs"]; print([x for x in j.values() if x.get("name") == "Template tests"][0]["steps"][-1]["run"])' "$1")" || return 1
   agg() { NEEDS="$1" bash -e -c "$script" > /dev/null 2>&1; }
-  agg '{"self":{"result":"success"},"static":{"result":"success"},"template":{"result":"success"},"sandcastle":{"result":"success"}}' || ok=1
+  local all='{"self":{"result":"success"},"review":{"result":"success"},"static":{"result":"success"},"template":{"result":"success"},"sandcastle":{"result":"success"}}'
+  agg "$all" || ok=1
   for result in failure cancelled skipped; do
-    for job in self static template sandcastle; do
-      case_json="$(python3 -I -c 'import json, sys; d = {k: {"result": "success"} for k in ("self", "static", "template", "sandcastle")}; d[sys.argv[1]]["result"] = sys.argv[2]; print(json.dumps(d))' "$job" "$result")"
+    for job in self review static template sandcastle; do
+      case_json="$(python3 -I -c 'import json, sys; d = json.loads(sys.argv[3]); d[sys.argv[1]]["result"] = sys.argv[2]; print(json.dumps(d))' "$job" "$result" "$all")"
       ! agg "$case_json" || ok=1
     done
   done
-  ! agg '{"self":{"result":"success"},"static":{"result":"success"},"template":{"result":"success"}}' || ok=1
+  for job in self review static template sandcastle; do
+    case_json="$(python3 -I -c 'import json, sys; d = json.loads(sys.argv[1]); del d[sys.argv[2]]; print(json.dumps(d))' "$all" "$job")"
+    ! agg "$case_json" || ok=1
+  done
   ! agg '{}' || ok=1
   return "$ok"
 }
 wf="$here/.github/workflows/template-tests.yml"
-check "the CI workflow has one job per GATE_PART, run through gate.sh, and a Template tests job that always runs and needs them all" "$(workflow_ok "$wf" "$here/scripts/gate.sh" && echo 0 || echo 1)"
-check "the Template tests step passes for four successes and fails for a failed, cancelled or skipped part, a missing part and no parts" "$(aggregator_ok "$wf" && echo 0 || echo 1)"
+check "the CI workflow has one job per GATE_PART, run through gate.sh, and a Template tests job that always runs and needs them all" "$(workflow_ok "$wf" "$here/scripts/gate.sh" "$here/$skill/test.sh" && echo 0 || echo 1)"
+check "the Template tests step passes for five successes and fails for a failed, cancelled or skipped part, a missing part and no parts" "$(aggregator_ok "$wf" && echo 0 || echo 1)"
 mkdir -p "$work/wf"
 mutate_wf() { # mutate_wf <name> <python statement on the loaded workflow `wf`>: writes $work/wf/<name>.yml
   "${yaml_py[@]}" - "$wf" "$work/wf/$1.yml" "$2" <<'PY'
@@ -681,14 +893,23 @@ mutate_wf coe 'wf["jobs"]["static"]["continue-on-error"] = True'
 mutate_wf disabled 'wf["jobs"]["template"]["if"] = "false"'
 mutate_wf norun 'wf["jobs"]["static"]["steps"][-1]["run"] = "true"'
 mutate_wf twotests 'wf["jobs"]["self"]["name"] = "Template tests"'
-check "the workflow and aggregator checks pass for the workflow written back unchanged (the control for the mutants)" "$(workflow_ok "$work/wf/same.yml" "$here/scripts/gate.sh" && aggregator_ok "$work/wf/same.yml" && echo 0 || echo 1)"
-for m in dup needs always twice coe disabled norun twotests; do
-  check "the workflow check fails for a workflow where $m" "$(workflow_ok "$work/wf/$m.yml" "$here/scripts/gate.sh" && echo 1 || echo 0)"
+mutate_wf noshard 'wf["jobs"]["template"]["strategy"]["matrix"]["shard"].remove("checks")'
+mutate_wf dupshard 'wf["jobs"]["template"]["strategy"]["matrix"]["shard"].append("hooks")'
+mutate_wf fixedshard 'wf["jobs"]["template"]["steps"][-1]["env"]["TEST_SH_SHARD"] = "hooks"'
+mutate_wf include 'wf["jobs"]["template"]["strategy"]["matrix"]["include"] = [{"shard": "hooks"}]'
+mutate_wf othershard 'wf["jobs"]["static"]["steps"][-1]["env"]["TEST_SH_SHARD"] = "hooks"'
+mutate_wf nomatrix 'del wf["jobs"]["template"]["strategy"]'
+mutate_wf noreview 'del wf["jobs"]["review"]; wf["jobs"]["test"]["needs"].remove("review")'
+mutate_wf failfast 'del wf["jobs"]["template"]["strategy"]["fail-fast"]'
+mutate_wf shardmap 'wf["jobs"]["template"]["strategy"]["matrix"]["shard"] = {"hooks": 1, "scripts": 1, "checks": 1}'
+check "the workflow and aggregator checks pass for the workflow written back unchanged (the control for the mutants)" "$(workflow_ok "$work/wf/same.yml" "$here/scripts/gate.sh" "$here/$skill/test.sh" && aggregator_ok "$work/wf/same.yml" && echo 0 || echo 1)"
+for m in dup needs always twice coe disabled norun twotests noshard dupshard fixedshard include othershard nomatrix noreview failfast shardmap; do
+  check "the workflow check fails for a workflow where $m" "$(workflow_ok "$work/wf/$m.yml" "$here/scripts/gate.sh" "$here/$skill/test.sh" && echo 1 || echo 0)"
 done
 mutate_wf noe 'wf["jobs"]["test"]["steps"][-1]["run"] = wf["jobs"]["test"]["steps"][-1]["run"].replace("jq -e", "jq")'
 mutate_wf any 'wf["jobs"]["test"]["steps"][-1]["run"] = wf["jobs"]["test"]["steps"][-1]["run"].replace("all(", "any(")'
 mutate_wf skipped 'wf["jobs"]["test"]["steps"][-1]["run"] = wf["jobs"]["test"]["steps"][-1]["run"].replace(".result == \"success\"", ".result != \"failure\"")'
-mutate_wf length 'wf["jobs"]["test"]["steps"][-1]["run"] = wf["jobs"]["test"]["steps"][-1]["run"].replace("length == 4", "length >= 0")'
+mutate_wf length 'wf["jobs"]["test"]["steps"][-1]["run"] = wf["jobs"]["test"]["steps"][-1]["run"].replace("length == 5", "length >= 0")'
 for m in noe any skipped length; do
   check "the aggregator check fails for a Template tests step where $m" "$(aggregator_ok "$work/wf/$m.yml" && echo 1 || echo 0)"
 done

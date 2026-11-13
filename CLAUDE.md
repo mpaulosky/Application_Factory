@@ -20,7 +20,7 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
 - `docs/research/`: dated research notes that the ADRs cite as evidence; they decide nothing, an ADR does.
 - `docs/SECURITY.md`: how to report a vulnerability, and where an accepted security finding's reason goes (ADR 0009).
 - `.github/workflows/template-tests.yml`: the Factory's own workflow (named `repo-ci-baseline Template`, the required job `Template tests`). It runs the gate one part per job in parallel
-  (`GATE_PART`: `self`, `static`, `template`, `sandcastle`, ADR 0012), and
+  (`GATE_PART`: `self`, `review`, `static`, `template`, `sandcastle`, ADR 0012), with `test.sh` in three shards (`TEST_SH_SHARD`, ADR 0013), and
   `Template tests` passes only when every part did. `.github/actions/template-tools/` installs the tools each job needs.
 - `.github/hooks/` (`pre-commit`, `pre-push`, `post-checkout`), `scripts/check-branch-name.sh`, `.github/workflows/{claude-review,pr-automerge,pr-review-submitted}.yml` and
   `.github/scripts/post_claude_review.py`, and the issue and PR process (ADR 0009): `.github/ISSUE_TEMPLATE/*`, `.github/pull_request_template.md`, `.github/workflows/pr-title.yml` and
@@ -34,8 +34,9 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
 - `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too; its header lists the steps (its test and the review's three tests, the copies' drift check, the bare-`#N` check,
   the Git-status check, lint, shellcheck of the changed shell files, the local review check, then `test.sh`, which it skips for a tree that already passed it,
   then the Sandcastle check when the branch changed a file it reads).
-  `GATE_PART=<part>` runs one part (CI's jobs; the pre-push hook drops it). [ADR 0006](docs/adr/0006-the-factory-carries-the-git-hooks-and-a-gate.md), [ADR
-  0012](docs/adr/0012-the-template-tests-workflow-runs-the-gate-in-parallel-parts.md).
+  `GATE_PART=<part>` runs one part (CI's jobs; the pre-push hook drops it), and `TEST_SH_SHARD` one shard of `test.sh` in the `template` part only.
+  [ADR 0006](docs/adr/0006-the-factory-carries-the-git-hooks-and-a-gate.md), [ADR
+  0012](docs/adr/0012-the-template-tests-workflow-runs-the-gate-in-parallel-parts.md), [ADR 0013](docs/adr/0013-ci-runs-test-sh-in-shards-and-the-review-tests-as-their-own-part.md).
 - `~/.claude/skills/repo-ci-baseline` is a symlink to the skill here, so editing it changes what `apply.sh` copies everywhere.
 
 The Factory carries the git hooks and a gate of its own (ADR 0006), Claude Review with PR Auto-Merge (ADR 0008), the issue and PR process (ADR 0009), the local review
@@ -48,8 +49,8 @@ Don't add more without an ADR.
 scripts/gate.sh --sync                                        # copy the Template's files over the Factory's copies of them (after editing the Template)
 scripts/gate.sh --quick                                       # while iterating: the gate up to and including shellcheck of the shell files the branch changed, without the local review check, test.sh and the Sandcastle check (about a minute); never for a push
 scripts/gate.sh                                               # the pre-push gate (needs pnpm on the first run); GATE_NO_CACHE=1 runs test.sh and the Sandcastle check again on a tree that already passed them
-GATE_PART=sandcastle scripts/gate.sh                          # one part alone (self, static, template, sandcastle), as a CI job runs it; the Sandcastle check needs pnpm and the network
-.claude/skills/repo-ci-baseline/test.sh                       # all the Template's tests; needs actionlint, zizmor, yamllint, shellcheck, markdownlint-cli2, node, git, jq
+GATE_PART=sandcastle scripts/gate.sh                          # one part alone (self, review, static, template, sandcastle), as a CI job runs it; the Sandcastle check needs pnpm and the network
+.claude/skills/repo-ci-baseline/test.sh                       # all the Template's tests (TEST_SH_SHARD=hooks|scripts|checks runs one shard); needs actionlint, zizmor, yamllint, shellcheck, markdownlint-cli2, node, git, jq
 .claude/skills/repo-ci-baseline/tests/sandcastle-check.test.sh # Sandcastle's type-check and tests on a throwaway Application; needs pnpm and the network
 .claude/skills/repo-ci-baseline/template/owned/.claude/skills/hardening-review/scripts/mutate.py .claude/skills/repo-ci-baseline/tests/gh_repo/mutations.json  # ~1 min, from the repo root, needs uvx: edits check_gh_repo.py one mutation at a time and restores it; commit the scanner change first (a dirty target is refused)
 .claude/skills/repo-ci-baseline/template/owned/.claude/skills/hardening-review/scripts/mutate.py .claude/skills/repo-ci-baseline/tests/mutations/cleanup-work-issue.json  # same, for cleanup.sh and work-issue.sh; ~30 min, run in the background after committing (test.sh checks that the spec still fits the code)

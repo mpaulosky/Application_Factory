@@ -5,9 +5,10 @@
 # then that no Owned script reads git status --porcelain without --untracked-files (tests/check-git-status.sh), then the Markdown and YAML lint, then shellcheck of the shell files the branch changes, then that the branch passed the local review (scripts/review.sh check, ADR 0010; GATE_SKIP_REVIEW=1 skips it),
 # then the repo-ci-baseline skill's test.sh (skipped when it already passed on the same clean tree; GATE_NO_CACHE=1 runs it). This script is the Factory's own, not a copy of the Template's scripts/gate.sh.
 
-# GATE_PART=self|static|template|sandcastle runs one part of this gate, which is how CI runs a part per job (ADR 0012): self is this script's own test and the review's tests,
-# static the copies, the issue references, the git status guards, the lint and shellcheck, template the review check and test.sh, sandcastle the Template's Sandcastle check.
+# GATE_PART=self|review|static|template|sandcastle runs one part of this gate, which is how CI runs a part per job (ADR 0012, ADR 0013): self is this script's own test, review the
+# review's stand-alone tests, static the copies, the issue references, the git status guards, the lint and shellcheck, template the review check and test.sh, sandcastle the Template's Sandcastle check.
 # With no GATE_PART every part runs, in that order, except that sandcastle runs only when the branch changed a file it reads (a part run by name always runs). The pre-push hook drops GATE_PART.
+# TEST_SH_SHARD=hooks|scripts|checks, with GATE_PART=template, runs one shard of test.sh (ADR 0013); any other run of the gate ignores it and runs the whole of test.sh.
 set -euo pipefail
 
 # scripts/gate.sh --quick: the checks that finish in about a minute (its test, the review tests, the copies' drift, the bare-#N check, the git status guard check, lint, shellcheck of the shell files the branch changes), then stop before the local
@@ -26,9 +27,11 @@ if (($# > 1)); then echo "Usage: scripts/gate.sh [--quick|--sync]" >&2; exit 2; 
 
 part="${GATE_PART:-}"
 case "$part" in
-  "" | self | static | template | sandcastle) ;;
-  *) echo "GATE_PART must be self, static, template or sandcastle, not '$part'." >&2; exit 2 ;;
+  "" | self | review | static | template | sandcastle) ;;
+  *) echo "GATE_PART must be self, review, static, template or sandcastle, not '$part'." >&2; exit 2 ;;
 esac
+# A push, a full gate and every other part run all of test.sh: only the template part, run by name, runs a shard.
+if [[ "$part" != template ]]; then unset TEST_SH_SHARD; fi
 if ((quick || sync)) && [[ -n "$part" ]]; then echo "scripts/gate.sh --quick and --sync run no single part: unset GATE_PART." >&2; exit 2; fi
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -98,7 +101,11 @@ run_self() {
   if [[ "${GATE_SKIP_SELF_TEST:-}" != "1" ]]; then
     echo -e "\n${CYAN}▶ scripts/tests/gate.test.sh${RESET}"
     "$ROOT/scripts/tests/gate.test.sh"
+  fi
+}
 
+run_review() {
+  if [[ "${GATE_SKIP_SELF_TEST:-}" != "1" ]]; then
     # The three copied tests that stand alone (ADR 0010); the Template's Sandcastle check runs the rest.
     echo -e "\n${CYAN}▶ Local review tests${RESET}"
     if [[ ! -x node_modules/.bin/tsx ]]; then
@@ -197,8 +204,13 @@ run_static() {
 # uncommitted or untracked (ignored files don't count), in the common git directory so every worktree of the clone shares it: the same tree is not checked twice. Only a pass is stored, and
 # only when the tree is still that clean tree after the command ran. GATE_NO_CACHE=1 always runs it. Any run that goes on to run the command clears the old pass first (and fails if it can't),
 # so a failure leaves nothing remembered for the next run. A git that fails here (a broken index, a lock) leaves the tree unproven clean, so the command runs and nothing is stored.
+# A name such as test-sh.hooks is one part of the whole named before the dot (test-sh, ADR 0013). The whole and its parts overlap, so a run of the whole clears every
+# part's pass for the tree too, and a run of a part clears the whole's: a failure leaves no pass standing that covers what failed. Parts don't overlap each other.
+# Two runs on one tree can overlap in time too (two worktrees of a clone): each run writes its own token to the tree's start stamp, and stores its pass only while the stamp still
+# holds its token, checking again after writing it. A run that started later (a part, a whole, or another part) may yet fail, so the earlier run's pass is not kept; the cost is a
+# re-run after two runs that overlapped.
 run_cached() {
-  local name="$1" label="$2" cache="" dirty tree common after
+  local name="$1" label="$2" cache="" dirty tree common after whole f stale stamp="" token=""
   shift 2
   if dirty="$(git status --porcelain --untracked-files=all)" && [[ -z "$dirty" ]] \
     && tree="$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" && common="$(git rev-parse --git-common-dir)"; then
@@ -209,17 +221,50 @@ run_cached() {
     return 0
   fi
   if [[ -n "$cache" ]]; then
-    command rm -f -- "$cache" 2>/dev/null || true
-    if [[ -e "$cache" ]]; then
-      echo -e "${RED}❌ could not clear the remembered $label pass ($cache): a failure now would leave it for the next run. Remove it by hand.${RESET}" >&2
+    whole="${name%%.*}"
+    # The stamp is written before the old passes are cleared: a run that is storing its pass meanwhile then either sees the new token and stores nothing, or stored before
+    # the clear, which removes it.
+    stamp="${cache%/*}/started.$whole-$tree"
+    token="$$.$RANDOM$RANDOM.$(date +%s)"
+    # A stamp that can't be written is removed instead, so an earlier run doesn't still find its own token; one that can't be removed either fails the gate.
+    if ! { mkdir -p "${cache%/*}" && printf '%s\n' "$token" >"$stamp"; } 2>/dev/null; then
+      token=""
+      command rm -f -- "$stamp" 2>/dev/null || true
+      if [[ -e "$stamp" ]]; then
+        echo -e "${RED}❌ could not write or remove the $label start stamp ($stamp): an earlier run could keep a pass this run disproves. Remove it by hand.${RESET}" >&2
+        exit 1
+      fi
+    fi
+    # Only the * is a pattern: the folder and names are quoted, so a clone path holding [, ] or ? is matched literally, and an unmatched * stays literal and fails -e.
+    local overlapping=("${cache%/*}/$whole-$tree" "$cache")
+    [[ "$name" != "$whole" ]] || overlapping+=("${cache%/*}/$whole."*"-$tree")
+    command rm -f -- "${overlapping[@]}" 2>/dev/null || true
+    stale=""
+    for f in "${overlapping[@]}"; do if [[ -e "$f" ]]; then stale="$f"; break; fi; done
+    if [[ -n "$stale" ]]; then
+      echo -e "${RED}❌ could not clear the remembered $label pass ($stale): a failure now would leave it for the next run. Remove it by hand.${RESET}" >&2
       exit 1
     fi
   fi
   "$@"
-  # Remembering the pass is best effort: a folder that can't be written to must not turn a passing command into a failing gate.
+  # Remembering the pass is best effort: a folder that can't be written to must not turn a passing command into a failing gate. The one exception: a pass that another run
+  # started meanwhile disproved, and that can't be removed, fails the gate, since the next run would trust it.
   if [[ -n "$cache" ]]; then
     if after="$(git status --porcelain --untracked-files=all)" && [[ -z "$after" && "$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" == "$tree" ]]; then
-      { mkdir -p "${cache%/*}" && : >"$cache"; } 2>/dev/null || echo "could not record the $label pass in ${cache%/*}: it will run again next time." >&2
+      if [[ -z "$token" ]]; then
+        echo "could not record the $label pass in ${cache%/*}: it will run again next time." >&2
+      elif [[ "$(cat "$stamp" 2>/dev/null)" != "$token" ]]; then
+        echo "another run of $label, or of a part it overlaps, started on this tree while it ran: this pass is not remembered." >&2
+      elif ! { : >"$cache"; } 2>/dev/null; then
+        echo "could not record the $label pass in ${cache%/*}: it will run again next time." >&2
+      elif [[ "$(cat "$stamp" 2>/dev/null)" != "$token" ]]; then
+        command rm -f -- "$cache" 2>/dev/null || true
+        if [[ -e "$cache" ]]; then
+          echo -e "${RED}❌ another run of $label started on this tree while it ran, and its pass ($cache) could not be removed. Remove it by hand.${RESET}" >&2
+          exit 1
+        fi
+        echo "another run of $label, or of a part it overlaps, started on this tree while it ran: this pass is not remembered." >&2
+      fi
     else
       echo "the tree changed while $label ran: this pass is not remembered." >&2
     fi
@@ -266,17 +311,20 @@ run_template() {
   fi
 
 
-  echo -e "\n${CYAN}▶ test.sh${RESET}"
-  run_cached test-sh "test.sh" "$ROOT/$skill/test.sh"
+  local shard="${TEST_SH_SHARD:-}"
+  echo -e "\n${CYAN}▶ test.sh${shard:+ ($shard shard)}${RESET}"
+  run_cached "test-sh${shard:+.$shard}" "test.sh${shard:+ ($shard shard)}" "$ROOT/$skill/test.sh"
 }
 
 case "$part" in
   self) run_self ;;
+  review) run_review ;;
   static) run_static ;;
   template) run_template ;;
   sandcastle) run_sandcastle ;;
   *)
     run_self
+    run_review
     run_static
     if ((quick)); then
       echo -e "\n${CYAN}quick gate passed${RESET}: the local review check, test.sh and the Sandcastle check did not run. Run scripts/gate.sh, with no argument, before pushing."
