@@ -21,7 +21,9 @@ finishes before `test.sh`, saves no time when skipped.
   from the whole run's. The whole run and a shard overlap; shards don't overlap each other. Every run starts by writing a fresh token to its own start stamp
   and to the stamps of the runs it overlaps, and a pass holds its run's token. A pass is trusted only while its token is still in its stamp, so a later
   overlapping run takes the trust away as it starts, whether it then fails, is still running (from another worktree of the clone) or is killed: no gate
-  trusts a pass that a later failing run disproves. The pre-push hook, a Template Owned file, doesn't change.
+  trusts a pass that a later failing run disproves. The check of a pass and a run's stamp writes hold a per-tree lock, so no check reads a run's own stamp
+  written and the stamps it overlaps not yet. A run that can't take the lock within about 2 seconds checks no pass and stores none.
+  The pre-push hook, a Template Owned file, doesn't change.
 - **The workflow's `template` job is a matrix over the shards.** `Gate - test.sh (<shard>)` runs once per shard with `fail-fast: false`. The aggregator still needs one
   `template` result, which GitHub reports as `failure` when any shard failed, so `Template tests` still fails unless every shard passed. The gate test checks that the
   matrix lists every shard `test.sh` declares, once, and that the step passes the matrix's shard.

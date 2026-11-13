@@ -426,9 +426,10 @@ if [[ "$(id -u)" != 0 ]]; then
   chmod 555 "$repo18/.git/gate-cache"
   GATE_NO_CACHE=1 STUB_EXIT=3 run "$repo18"
   check "a forced run in a read-only cache folder runs test.sh and fails with its status" "$([[ $status == 3 && $ran == yes ]] && ! grep -q "could not write or remove" "$repo18/out" && echo 0 || echo 1)"
+  # The folder is writable again before the check, so the stamp's token, not a lock that can't be taken in a read-only folder, is what stops the old pass being trusted.
+  chmod 755 "$repo18/.git/gate-cache"
   run "$repo18"
   check "a remembered pass that can't be removed is not trusted after a forced run that failed: test.sh runs" "$([[ $ran == yes ]] && ! grep -q "test.sh already passed" "$repo18/out" && echo 0 || echo 1)"
-  chmod 755 "$repo18/.git/gate-cache"
   # The same in a linked worktree of a clone whose path holds glob characters (there the cache folder's path is absolute): files are named literally, not read as patterns.
   repo18b="$(new_repo 'cache-[x]-unclearable')"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo18b/.git/info/exclude"; commit_all "$repo18b" base
   wt18b="$work/cache-[x]-worktree"; git -C "$repo18b" worktree add -q --detach "$wt18b"
@@ -437,9 +438,9 @@ if [[ "$(id -u)" != 0 ]]; then
   chmod 555 "$repo18b/.git/gate-cache"
   GATE_NO_CACHE=1 STUB_EXIT=3 run "$wt18b"
   check "and there too a forced run runs test.sh and fails with its status" "$([[ $status == 3 && $ran == yes ]] && echo 0 || echo 1)"
+  chmod 755 "$repo18b/.git/gate-cache"
   run "$wt18b"
   check "and a pass that can't be removed there is not trusted after a forced run that failed" "$([[ $ran == yes ]] && ! grep -q "test.sh already passed" "$wt18b/out" && echo 0 || echo 1)"
-  chmod 755 "$repo18b/.git/gate-cache"
 else
   echo "skip - the unclearable-pass case needs a user other than root"
 fi
@@ -651,17 +652,46 @@ if [[ "$(id -u)" != 0 ]]; then
   chmod 555 "$repoT/.git/gate-cache"
   GATE_NO_CACHE=1 STUB_EXIT=1 run "$repoT"
   check "a forced whole run in a read-only cache folder holding a shard pass runs test.sh and fails with its status" "$([[ $status == 1 && $ran == yes && "$(tail -n 1 "$repoT/.git/test-sh-shards")" == unset ]] && ! grep -q "could not" "$repoT/out" && echo 0 || echo 1)"
+  chmod 755 "$repoT/.git/gate-cache"
   RUN_PART=template RUN_SHARD=hooks run "$repoT"
   check "a forced whole run that failed takes the trust from a shard's pass it could not remove" "$([[ $ran == yes ]] && ! grep -q "already passed" "$repoT/out" && echo 0 || echo 1)"
-  chmod 755 "$repoT/.git/gate-cache"
   run "$repoT"
   chmod 555 "$repoT/.git/gate-cache"
   GATE_NO_CACHE=1 STUB_EXIT=1 RUN_PART=template RUN_SHARD=scripts run "$repoT"
   check "a forced shard run in a read-only cache folder holding the whole run's pass runs test.sh and fails with its status" "$([[ $status == 1 && $ran == yes && "$(tail -n 1 "$repoT/.git/test-sh-shards")" == scripts ]] && ! grep -q "could not" "$repoT/out" && echo 0 || echo 1)"
+  chmod 755 "$repoT/.git/gate-cache"
   run "$repoT"
   check "a forced shard run that failed takes the trust from the whole run's pass it could not remove" "$([[ $ran == yes ]] && ! grep -q "test.sh already passed" "$repoT/out" && echo 0 || echo 1)"
-  chmod 755 "$repoT/.git/gate-cache"
 fi
+# The cache lock: the hit check and a run's stamp writes hold it, so no check reads a run's own stamp written and the stamps it overlaps not yet. lock_held <repo>: the
+# messages a run gives when it can't take the lock (each such run waits about 2 seconds for it first).
+repoL="$(new_repo cache-lock)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoL/.git/info/exclude"; commit_all "$repoL" base
+treeL="$(git -C "$repoL" rev-parse 'HEAD^{tree}')"; cacheL="$repoL/.git/gate-cache"
+lock_held() { grep -q "the cache lock .*lock-$treeL has been held for over 2 seconds" "$1/out" && grep -q "could not record the test.sh\( (hooks shard)\)\? pass" "$1/out"; }
+run "$repoL"; run "$repoL"
+check "a run and a cache hit leave no cache lock behind" "$([[ $ran == no && ! -e $cacheL/lock-$treeL ]] && echo 0 || echo 1)"
+# A shard run paused after writing its own stamp, before the whole run's: the whole pass's token is still in its stamp, so only the lock it holds keeps the pass untrusted.
+echo shard-token > "$cacheL/started.test-sh.hooks-$treeL"
+run "$repoL"
+check "(a shard's own stamp alone leaves the whole pass trusted: the window the lock closes)" "$([[ $ran == no ]] && echo 0 || echo 1)"
+mkdir "$cacheL/lock-$treeL"; run "$repoL"
+check "a whole run doesn't trust its pass while a shard run holds the lock between its stamp writes: test.sh runs, stores no pass, and leaves the lock" "$([[ $status == 0 && $ran == yes && -d $cacheL/lock-$treeL ]] && lock_held "$repoL" && ! grep -q "test.sh already passed" "$repoL/out" && echo 0 || echo 1)"
+rmdir "$cacheL/lock-$treeL"
+# A whole run paused after writing its own stamp, before the shards': the shard pass's token is still in its stamp.
+run "$repoL"; RUN_PART=template RUN_SHARD=hooks run "$repoL"
+echo whole-token > "$cacheL/started.test-sh-$treeL"
+RUN_PART=template RUN_SHARD=hooks run "$repoL"
+check "(the whole run's own stamp alone leaves a shard pass trusted)" "$([[ $ran == no ]] && echo 0 || echo 1)"
+mkdir "$cacheL/lock-$treeL"; RUN_PART=template RUN_SHARD=hooks run "$repoL"
+check "a shard run doesn't trust its pass while a whole run holds the lock between its stamp writes: test.sh runs and stores no pass" "$([[ $status == 0 && $ran == yes && -d $cacheL/lock-$treeL ]] && lock_held "$repoL" && ! grep -q "test.sh (hooks shard) already passed" "$repoL/out" && echo 0 || echo 1)"
+rmdir "$cacheL/lock-$treeL"
+# A stamp stuck as a folder can be neither written nor removed, even in a writable cache folder: the gate fails, and releases the lock it took.
+command rm -f "$cacheL/started.test-sh-$treeL"; mkdir -p "$cacheL/started.test-sh-$treeL/stuck"
+RUN_PART=template run "$repoL"
+check "a run whose start stamp is stuck fails the gate and leaves no cache lock" "$([[ $status == 1 && $ran == no && ! -e $cacheL/lock-$treeL ]] && grep -q "could not write or remove the test.sh start stamp" "$repoL/out" && echo 0 || echo 1)"
+command rm -rf "$cacheL/started.test-sh-$treeL"
+locked_order="$(awk '/^run_cached\(\) \{/ { f = 1 } f && /cache_lock "\$dir\/lock-\$tree"/ && !l { l = NR } f && /\[\[ -n "\$cache_locked" && -f "\$cache"/ && !h { h = NR } f && /stamp_write "\$label"/ { w = NR } f && /^    cache_unlock$/ && !u { u = NR } f && /^  "\$@"$/ && !r { r = NR } f && /^\}/ { f = 0 } END { print (l && h && w && u && r && l < h && h < w && w < u && u < r) ? 0 : 1 }' "$here/scripts/gate.sh")"
+check "run_cached takes the lock before the hit check, which needs it, and releases it after the last stamp write and before the command runs" "$locked_order"
 if [[ "$(id -u)" != 0 ]]; then
   # A start stamp that can be neither written nor removed fails the gate before test.sh: an earlier run could otherwise keep its token and a pass this run disproves.
   repoW="$(new_repo cache-stamp-stuck)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoW/.git/info/exclude"; commit_all "$repoW" base

@@ -200,6 +200,23 @@ run_static() {
 
 }
 
+# cache_lock <lock>: takes the per-tree cache lock, a folder (mkdir is atomic), waiting up to about 2 seconds; 1 when it can't. A cache-hit check and a run's stamp writes hold it, so
+# a check never reads a run's stamps half written (its own written, the ones it overlaps not yet). It's held only for those few file writes, so a lock still there after 2 seconds
+# belongs to a paused gate, or to one killed while holding it, and stays until a person removes it. cache_unlock releases the lock this shell holds, if any.
+cache_locked=""
+cache_lock() {
+  local i
+  for ((i = 0; i < 20; i++)); do
+    if mkdir -- "$1" 2>/dev/null; then cache_locked="$1"; return 0; fi
+    [[ -e "$1" ]] || return 1
+    sleep 0.1
+  done
+  return 1
+}
+cache_unlock() {
+  if [[ -n "$cache_locked" ]]; then rmdir -- "$cache_locked" 2>/dev/null || true; cache_locked=""; fi
+}
+
 # stamp_write <label> <stamp> <token>: writes the token to the start stamp; 1 when it couldn't, having removed the stamp so it vouches for nothing. A stamp that can be neither
 # written nor removed fails the gate, since it would keep vouching for an old pass.
 stamp_write() {
@@ -207,6 +224,7 @@ stamp_write() {
   command rm -f -- "$2" 2>/dev/null || true
   if [[ -e "$2" ]]; then
     echo -e "${RED}❌ could not write or remove the $1 start stamp ($2): it would keep vouching for a pass this run may disprove. Remove it by hand.${RESET}" >&2
+    cache_unlock
     exit 1
   fi
   return 1
@@ -220,6 +238,8 @@ stamp_write() {
 # writes a fresh token to its own start stamp and to the stamps of the runs it overlaps (a part: the whole's; the whole: every part's there is), and a pass holds its run's token.
 # A pass is trusted only while its token is still in its own stamp: a run that overlaps it and started later, whether it then failed, is still running or was killed, takes the
 # trust away as it starts. So no gate trusts a pass that a later failing run disproves, even one read before anything removed it, or one whose writer died before it could.
+# The hit check and the stamp writes run under the tree's cache lock (cache_lock), so no check sees one stamp of a run written and the other not yet. A run that can't take the lock
+# (a read-only cache folder, or a lock left by a paused or killed gate) checks no pass, still writes its stamps, and stores no pass.
 # A stamp that can be neither written nor removed fails the gate (stamp_write). Clearing the old pass files is only tidying.
 run_cached() {
   local name="$1" label="$2" cache="" dirty tree common after dir whole token="" mark held s
@@ -230,15 +250,22 @@ run_cached() {
     dir="${cache%/*}"
     whole="${name%%.*}"
   fi
-  if [[ -n "$cache" && -f "$cache" && "${GATE_NO_CACHE:-}" != "1" ]] && held="$(cat -- "$cache" 2>/dev/null)" \
-    && [[ -n "$held" && "$held" == "$(cat -- "$dir/started.$name-$tree" 2>/dev/null)" ]]; then
-    echo "$label already passed on this tree (${cache##*-}): skipped. GATE_NO_CACHE=1 runs it again."
-    return 0
-  fi
   if [[ -n "$cache" ]]; then
     mark="$$.$RANDOM$RANDOM.$(date +%s)"
     token="$mark"
     mkdir -p "$dir" 2>/dev/null || true
+    if ! cache_lock "$dir/lock-$tree"; then
+      token=""
+      if [[ -e "$dir/lock-$tree" ]]; then
+        echo "the cache lock $dir/lock-$tree has been held for over 2 seconds: $label runs and its pass is not remembered. If no gate is running, remove it." >&2
+      fi
+    fi
+    if [[ -n "$cache_locked" && -f "$cache" && "${GATE_NO_CACHE:-}" != "1" ]] && held="$(cat -- "$cache" 2>/dev/null)" \
+      && [[ -n "$held" && "$held" == "$(cat -- "$dir/started.$name-$tree" 2>/dev/null)" ]]; then
+      cache_unlock
+      echo "$label already passed on this tree (${cache##*-}): skipped. GATE_NO_CACHE=1 runs it again."
+      return 0
+    fi
     # The run's own stamp first, then the ones it overlaps. A whole run lists the shard stamps only after writing its own: a shard run that stamps after the list
     # writes the whole's stamp after this run did, so this run's pass is not trusted either way.
     stamp_write "$label" "$dir/started.$name-$tree" "$mark" || token=""
@@ -248,7 +275,8 @@ run_cached() {
     else
       stamp_write "$label" "$dir/started.$whole-$tree" "$mark" || true
     fi
-    # Without its own stamp this run's pass could never be trusted, so it isn't stored (token is empty). Removing old pass files is only tidying.
+    cache_unlock
+    # Without its own stamp, or without the lock, this run's pass is not stored (token is empty). Removing old pass files is only tidying.
     command rm -f -- "$cache" "$dir/$whole-$tree" 2>/dev/null || true
     if [[ "$name" == "$whole" ]]; then command rm -f -- "$dir/$whole."*"-$tree" 2>/dev/null || true; fi
   fi
