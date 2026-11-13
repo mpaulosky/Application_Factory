@@ -200,70 +200,110 @@ run_static() {
 
 }
 
+# cache_lock <lock>: takes the per-tree cache lock, a folder (mkdir is atomic), trying 20 times 0.1 seconds apart (about 2 seconds); 1 when it can't. A cache-hit check and a
+# run's stamp writes hold it, so a check never reads a run's stamps half written (its own written, the ones it overlaps not yet). Only a cache folder that isn't a writable
+# folder (read-only, say) gives up at once: a lock seen held, or one released just after a failed try, is tried again. It's held only for a few file writes, so a lock still
+# there after 2 seconds belongs to a paused gate, or to one ended by a signal the lock doesn't catch (KILL, QUIT, or any in the instant between the mkdir and the traps) or
+# by a crash, and stays until a person removes it. While it's held, INT, TERM and HUP release it and then end the gate by that signal. cache_unlock releases the lock this
+# shell holds, if any, and sets those signals back to their default.
+cache_locked=""
+cache_lock() {
+  local i sig
+  for ((i = 0; i < 20; i++)); do
+    if mkdir -- "$1" 2>/dev/null; then
+      cache_locked="$1"
+      for sig in INT TERM HUP; do
+        # shellcheck disable=SC2064 # $sig is meant to expand now, once per signal; \$BASHPID when the signal comes
+        trap "cache_unlock; kill -s $sig \$BASHPID" "$sig"
+      done
+      return 0
+    fi
+    [[ -d "${1%/*}" && -w "${1%/*}" ]] || return 1
+    sleep 0.1
+  done
+  return 1
+}
+cache_unlock() {
+  if [[ -n "$cache_locked" ]]; then
+    rmdir -- "$cache_locked" 2>/dev/null || true
+    # The signals first: a signal before this runs the handler with the lock still named, and one after it ends the gate as by default, the lock already gone.
+    trap - INT TERM HUP
+    cache_locked=""
+  fi
+}
+
+# stamp_write <label> <stamp> <token>: writes the token to the start stamp; 1 when it couldn't, having removed the stamp so it vouches for nothing. A stamp that can be neither
+# written nor removed fails the gate, since it would keep vouching for an old pass.
+stamp_write() {
+  if { printf '%s\n' "$3" >"$2"; } 2>/dev/null; then return 0; fi
+  command rm -f -- "$2" 2>/dev/null || true
+  if [[ -e "$2" ]]; then
+    echo -e "${RED}❌ could not write or remove the $1 start stamp ($2): it would keep vouching for a pass this run may disprove. Remove it by hand.${RESET}" >&2
+    cache_unlock
+    exit 1
+  fi
+  return 1
+}
+
 # run_cached <name> <label> <command...>: runs the command (minutes long), unless it already passed on this tree. A pass is remembered for the tree HEAD points at, when nothing is
 # uncommitted or untracked (ignored files don't count), in the common git directory so every worktree of the clone shares it: the same tree is not checked twice. Only a pass is stored, and
-# only when the tree is still that clean tree after the command ran. GATE_NO_CACHE=1 always runs it. Any run that goes on to run the command clears the old pass first (and fails if it can't),
-# so a failure leaves nothing remembered for the next run. A git that fails here (a broken index, a lock) leaves the tree unproven clean, so the command runs and nothing is stored.
-# A name such as test-sh.hooks is one part of the whole named before the dot (test-sh, ADR 0013). The whole and its parts overlap, so a run of the whole clears every
-# part's pass for the tree too, and a run of a part clears the whole's: a failure leaves no pass standing that covers what failed. Parts don't overlap each other.
-# Two runs on one tree can overlap in time too (two worktrees of a clone): each run writes its own token to the tree's start stamp, and stores its pass only while the stamp still
-# holds its token, checking again after writing it. A run that started later (a part, a whole, or another part) may yet fail, so the earlier run's pass is not kept; the cost is a
-# re-run after two runs that overlapped.
+# only when the tree is still that clean tree after the command ran. GATE_NO_CACHE=1 always runs it. A git that fails here (a broken index, a lock) leaves the tree unproven clean, so the
+# command runs and nothing is stored.
+# A name such as test-sh.hooks is one part of the whole named before the dot (test-sh, ADR 0013); the whole and each part overlap, parts don't overlap each other. Every run first
+# writes a fresh token to its own start stamp and to the stamps of the runs it overlaps (a part: the whole's; the whole: every part's there is), and a pass holds its run's token.
+# A pass is trusted only while its token is still in its own stamp: a run that overlaps it and started later, whether it then failed, is still running or was killed, takes the
+# trust away as it starts. So no gate trusts a pass that a later failing run disproves, even one read before anything removed it, or one whose writer died before it could.
+# The hit check and the stamp writes run under the tree's cache lock (cache_lock), so no check sees one stamp of a run written and the other not yet. A run that can't take the lock
+# (a read-only cache folder, or a lock left by a paused or killed gate) checks no pass, still writes its stamps, and stores no pass.
+# A stamp that can be neither written nor removed fails the gate (stamp_write). Clearing the old pass files is only tidying.
 run_cached() {
-  local name="$1" label="$2" cache="" dirty tree common after whole f stale stamp="" token=""
+  local name="$1" label="$2" cache="" dirty tree common after dir whole token="" mark held s
   shift 2
   if dirty="$(git status --porcelain --untracked-files=all)" && [[ -z "$dirty" ]] \
     && tree="$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" && common="$(git rev-parse --git-common-dir)"; then
     cache="$common/gate-cache/$name-$tree"
-  fi
-  if [[ -n "$cache" && -f "$cache" && "${GATE_NO_CACHE:-}" != "1" ]]; then
-    echo "$label already passed on this tree (${cache##*-}): skipped. GATE_NO_CACHE=1 runs it again."
-    return 0
+    dir="${cache%/*}"
+    whole="${name%%.*}"
   fi
   if [[ -n "$cache" ]]; then
-    whole="${name%%.*}"
-    # The stamp is written before the old passes are cleared: a run that is storing its pass meanwhile then either sees the new token and stores nothing, or stored before
-    # the clear, which removes it.
-    stamp="${cache%/*}/started.$whole-$tree"
-    token="$$.$RANDOM$RANDOM.$(date +%s)"
-    # A stamp that can't be written is removed instead, so an earlier run doesn't still find its own token; one that can't be removed either fails the gate.
-    if ! { mkdir -p "${cache%/*}" && printf '%s\n' "$token" >"$stamp"; } 2>/dev/null; then
+    mark="$$.$RANDOM$RANDOM.$(date +%s)"
+    token="$mark"
+    mkdir -p "$dir" 2>/dev/null || true
+    if ! cache_lock "$dir/lock-$tree"; then
       token=""
-      command rm -f -- "$stamp" 2>/dev/null || true
-      if [[ -e "$stamp" ]]; then
-        echo -e "${RED}❌ could not write or remove the $label start stamp ($stamp): an earlier run could keep a pass this run disproves. Remove it by hand.${RESET}" >&2
-        exit 1
+      # Only a writable cache folder waited for the lock; a read-only one gave up at once and is reported by the stamps or "could not record".
+      if [[ -e "$dir/lock-$tree" && -w "$dir" ]]; then
+        echo "the cache lock $dir/lock-$tree has been held for over 2 seconds: $label runs and its pass is not remembered. If no gate is running, remove it." >&2
       fi
     fi
-    # Only the * is a pattern: the folder and names are quoted, so a clone path holding [, ] or ? is matched literally, and an unmatched * stays literal and fails -e.
-    local overlapping=("${cache%/*}/$whole-$tree" "$cache")
-    [[ "$name" != "$whole" ]] || overlapping+=("${cache%/*}/$whole."*"-$tree")
-    command rm -f -- "${overlapping[@]}" 2>/dev/null || true
-    stale=""
-    for f in "${overlapping[@]}"; do if [[ -e "$f" ]]; then stale="$f"; break; fi; done
-    if [[ -n "$stale" ]]; then
-      echo -e "${RED}❌ could not clear the remembered $label pass ($stale): a failure now would leave it for the next run. Remove it by hand.${RESET}" >&2
-      exit 1
+    if [[ -n "$cache_locked" && -f "$cache" && "${GATE_NO_CACHE:-}" != "1" ]] && held="$(cat -- "$cache" 2>/dev/null)" \
+      && [[ -n "$held" && "$held" == "$(cat -- "$dir/started.$name-$tree" 2>/dev/null)" ]]; then
+      cache_unlock
+      echo "$label already passed on this tree (${cache##*-}): skipped. GATE_NO_CACHE=1 runs it again."
+      return 0
     fi
+    # The run's own stamp first, then the ones it overlaps. A whole run lists the shard stamps only after writing its own: a shard run that stamps after the list
+    # writes the whole's stamp after this run did, so this run's pass is not trusted either way.
+    stamp_write "$label" "$dir/started.$name-$tree" "$mark" || token=""
+    if [[ "$name" == "$whole" ]]; then
+      # Only the * is a pattern: the folder and names are quoted, so a clone path holding [, ] or ? is matched literally; an unmatched * stays literal and fails -e.
+      for s in "$dir/started.$whole."*"-$tree"; do [[ ! -e "$s" ]] || stamp_write "$label" "$s" "$mark" || true; done
+    else
+      stamp_write "$label" "$dir/started.$whole-$tree" "$mark" || true
+    fi
+    cache_unlock
+    # Without its own stamp, or without the lock, this run's pass is not stored (token is empty). Removing old pass files is only tidying.
+    command rm -f -- "$cache" "$dir/$whole-$tree" 2>/dev/null || true
+    if [[ "$name" == "$whole" ]]; then command rm -f -- "$dir/$whole."*"-$tree" 2>/dev/null || true; fi
   fi
   "$@"
-  # Remembering the pass is best effort: a folder that can't be written to must not turn a passing command into a failing gate. The one exception: a pass that another run
-  # started meanwhile disproved, and that can't be removed, fails the gate, since the next run would trust it.
+  # Remembering the pass is best effort: a folder that can't be written to must not turn a passing command into a failing gate.
   if [[ -n "$cache" ]]; then
     if after="$(git status --porcelain --untracked-files=all)" && [[ -z "$after" && "$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" == "$tree" ]]; then
-      if [[ -z "$token" ]]; then
-        echo "could not record the $label pass in ${cache%/*}: it will run again next time." >&2
-      elif [[ "$(cat "$stamp" 2>/dev/null)" != "$token" ]]; then
-        echo "another run of $label, or of a part it overlaps, started on this tree while it ran: this pass is not remembered." >&2
-      elif ! { : >"$cache"; } 2>/dev/null; then
-        echo "could not record the $label pass in ${cache%/*}: it will run again next time." >&2
-      elif [[ "$(cat "$stamp" 2>/dev/null)" != "$token" ]]; then
-        command rm -f -- "$cache" 2>/dev/null || true
-        if [[ -e "$cache" ]]; then
-          echo -e "${RED}❌ another run of $label started on this tree while it ran, and its pass ($cache) could not be removed. Remove it by hand.${RESET}" >&2
-          exit 1
-        fi
-        echo "another run of $label, or of a part it overlaps, started on this tree while it ran: this pass is not remembered." >&2
+      if [[ -z "$token" ]] || ! { printf '%s\n' "$token" >"$cache"; } 2>/dev/null; then
+        echo "could not record the $label pass in $dir: it will run again next time." >&2
+      elif [[ "$(cat -- "$dir/started.$name-$tree" 2>/dev/null)" != "$token" ]]; then
+        echo "another run of $label, or of a part it overlaps, started on this tree while it ran: this pass will not be trusted." >&2
       fi
     else
       echo "the tree changed while $label ran: this pass is not remembered." >&2

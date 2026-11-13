@@ -18,10 +18,12 @@ finishes before `test.sh`, saves no time when skipped.
   `scripts/tests/gate.test.sh` fails when a step falls outside them, a shard appears twice, or the declared list and the blocks disagree.
 - **Only the `template` part, run by name, runs a shard.** `scripts/gate.sh` passes `TEST_SH_SHARD` to `test.sh` when `GATE_PART=template`, and unsets it for every other
   run, so a push, a full gate and `--quick` run the whole of `test.sh` whatever the environment holds. Each shard's pass is remembered for a clean tree on its own, apart
-  from the whole run's. The whole run and a shard overlap, so a whole run first clears every shard's pass for the tree and a shard run clears the whole
-  run's: a failure leaves no pass standing that covers what failed. Shards don't overlap, so one shard's run leaves another's pass. Two runs
-  on one tree can also overlap in time, from two worktrees of a clone: a run writes a start stamp for the tree and keeps its pass only if no other run
-  of `test.sh` started after it, so a later run that fails can't leave the earlier one's pass behind. The pre-push hook, a Template Owned file, doesn't change.
+  from the whole run's. The whole run and a shard overlap; shards don't overlap each other. Every run starts by writing a fresh token to its own start stamp
+  and to the stamps of the runs it overlaps, and a pass holds its run's token. A pass is trusted only while its token is still in its stamp, so a later
+  overlapping run takes the trust away as it starts, whether it then fails, is still running (from another worktree of the clone) or is killed: no gate
+  trusts a pass that a later failing run disproves. The check of a pass and a run's stamp writes hold a per-tree lock, so no check reads a run's own stamp
+  written and the stamps it overlaps not yet. A run that can't take the lock within about 2 seconds checks no pass and stores none.
+  The pre-push hook, a Template Owned file, doesn't change.
 - **The workflow's `template` job is a matrix over the shards.** `Gate - test.sh (<shard>)` runs once per shard with `fail-fast: false`. The aggregator still needs one
   `template` result, which GitHub reports as `failure` when any shard failed, so `Template tests` still fails unless every shard passed. The gate test checks that the
   matrix lists every shard `test.sh` declares, once, and that the step passes the matrix's shard.
