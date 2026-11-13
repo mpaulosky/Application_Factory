@@ -346,8 +346,9 @@ def logical_line(lines, number):
         # An odd number of trailing backslashes continues the line; an even number is escaped backslashes.
         joins = (len(text) - len(text.rstrip("\\"))) % 2 == 1
         # Only a line with a # can start a comment (an earlier # was judged when it was joined), so only it is scanned: the whole chain so far, which the string an earlier
-        # line opened decides. This is a saving of cost and changes no result. Past the limit nothing is scanned and nothing is cut, so a long chain costs linear time and
-        # the fail-closed side of a # in a string an earlier line opened still holds.
+        # line opened decides. The guard saves cost and changes no result: a line with a # costs one scan of at most CONTINUATION_LIMIT lines, so a file costs at most that many
+        # line scans per line (measured in the timing tests), not a linear amount. Past the limit nothing is scanned and nothing is cut, so the fail-closed side of a # in a
+        # string an earlier line opened still holds.
         if joins and "#" in last and count <= CONTINUATION_LIMIT:
             joins = continues(text)
         if not joins:
@@ -366,26 +367,27 @@ def joined_lines(lines):
     """For each line of lines, whether bash joins the next line to it (a trailing backslash outside a comment).
 
     Each chain is judged whole by logical_line, from its first line, so a string that spans lines decides whether the # after it starts a comment: a line is not judged alone.
+    Past CONTINUATION_LIMIT lines of a chain logical_line joins on the backslash alone (a header must fail closed), so there a line that holds a comment joins nothing here:
+    its text is read back and a GH_REPO= in a comment ending in a backslash would tell a later gh.
     """
     joins = [False] * len(lines)
     number = 1
     while number <= len(lines):
         _, count = logical_line(lines, number)
         for index in range(number - 1, number + count - 2):
-            joins[index] = True
+            joins[index] = index - number + 2 <= CONTINUATION_LIMIT or comment_start(lines[index]) < 0
         number += count
     return joins
 
 
-def continued_text(lines, number, joins=None):
+def continued_text(lines, number, joins):
     """The text of the physical lines right before lines[number - 1] that a trailing backslash joins to it, backslashes removed,
     and whether the chain goes on past the CONTINUATION_LIMIT lines read (a file of many continued lines costs a bounded amount per line).
     `joins` is joined_lines(lines), which the caller computes once for the file.
     """
-    joins = joined_lines(lines) if joins is None else joins
-    # The last entry of `joins` is always False (no line follows the last), so index -1 stops the walk even without the `index >= 0` test, which is for the reader.
     text = ""
     index = number - 2
+    # The last entry of `joins` is always False (no line follows the last), so index -1 of a non-empty file stops the walk; the `index >= 0` test is for an empty one.
     while index >= 0 and number - 2 - index < CONTINUATION_LIMIT and joins[index]:
         text = lines[index][:-1] + text
         index -= 1
