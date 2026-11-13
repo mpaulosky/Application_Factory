@@ -30,7 +30,8 @@ if [[ "$branch" =~ ^(feature|fix|hotfix)/[0-9]+-[a-z0-9]+(-[a-z0-9]+)*$ ]] \
 fi
 
 # Dependabot's branches can't be renamed, and a person pushes to one to fix its PR (mirroring a bump into the Template's file, say),
-# so the hook allows them too, in shell-safe characters only ('@' and '+' included, which a scoped package or a version can carry).
+# so the hook allows them too, in shell-safe characters only ('@' and '+' included, which a scoped package or a version can carry;
+# in a UTF-8 locale bash's [A-Za-z] can also match an accented letter, which is shell-safe too).
 # Sandcastle hands off no such branch (lib/branches.mts#isHandOffBranch). The --pr form below takes any dependabot/* name, as it did
 # before the hook did: CI quotes the name, and refusing a Dependabot branch for a character would block its PR.
 if [[ "$branch" =~ ^dependabot/[A-Za-z0-9._@+-]+(/[A-Za-z0-9._@+-]+)*$ ]]; then

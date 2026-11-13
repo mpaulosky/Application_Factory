@@ -67,7 +67,8 @@ expect refused "dependabot/a'b"
 expect refused 'dependabot/a"b'
 expect refused 'dependabot/a|b'
 expect refused 'dependabot/a&b'
-# LC_ALL=C: in a UTF-8 locale bash's [A-Za-z] can match an accented letter, and the hook would take it (it is shell-safe anyway).
+# LC_ALL=C: in a UTF-8 locale bash's [A-Za-z] can match an accented letter, and the hook would take it (it is shell-safe anyway). This guards the
+# ASCII-only class against a widening to any character; it does not catch a locale-aware class such as [[:alpha:]] (outside this test).
 LC_ALL=C expect refused 'dependabot/aé'
 # The --pr form still takes them: CI quotes the name.
 expect allowed --pr 'dependabot/a|b'

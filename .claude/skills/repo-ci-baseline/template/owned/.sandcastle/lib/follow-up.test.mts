@@ -1895,7 +1895,7 @@ describe("sweepSubject", () => {
     });
 
     for (const branch of ["docs/release-notes", "dependabot/npm_and_yarn/x", "claude/fix-it", "chore/1-x", "Feature/5-x", "fix/4-$(x)"]) {
-      it(`is skipped on the branch ${branch}, which scripts/check-branch-name.sh refuses`, () => {
+      it(`is skipped on the branch ${branch}, which isn't a hand-off branch`, () => {
         const { result, approvalReads } = subjectOf(handOffPr({ headRefName: branch }));
 
         assert.match("skip" in result ? result.skip : "", /isn't a hand-off branch \(feature\/, fix\/, hotfix\/ or chore\/\)/);

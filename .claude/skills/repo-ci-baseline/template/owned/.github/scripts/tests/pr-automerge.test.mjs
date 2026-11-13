@@ -1731,7 +1731,8 @@ for (const [name, options] of [
     assert.equal(result.addedLabelAt.length, 1);
     // askCopilotOnce held the run until the record was 30 seconds old.
     assert.ok(finishedAt - result.askedAt[0] >= 30 * 1000, `the run ended ${(finishedAt - result.askedAt[0]) / 1000} s after the record`);
-    // And no longer: the wait is what is left of the window, not a flat 30 s on top of the time already spent (a second of slack).
+    // And no longer: the wait is what is left of the window, not a flat 30 s on top of the time already spent (a second of slack). The bound
+    // holds on this mocked clock, where every read takes no time; it catches a flat extra 30 s, and is no real-time guarantee.
     assert.ok(finishedAt - result.askedAt[0] <= 30 * 1000 + 1000, `the run ended ${(finishedAt - result.askedAt[0]) / 1000} s after the record`);
     for (const labelAt of result.addedLabelAt) {
       assert.ok(labelAt - result.askedAt[0] >= 30 * 1000, `review:claude was added ${(labelAt - result.askedAt[0]) / 1000} s after the record`);
@@ -1740,7 +1741,8 @@ for (const [name, options] of [
 }
 
 // A read-back that finds no PR counts as a head that moved: the record still settles, but the caller reads the PR again, finds
-// it gone and adds nothing.
+// it gone and adds nothing. This pins that guard (`!seen`), not a state GitHub is known to return: a lookup of a deleted PR
+// normally throws, which takes the read-back-error path above.
 test("holds a read-back that finds no PR until the record has settled, and calls in no Claude (mpaulosky/Application_Factory#53)", async () => {
   mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.parse("2026-01-02T00:00:00Z") });
   let result;
@@ -1753,6 +1755,11 @@ test("holds a read-back that finds no PR until the record has settled, and calls
   }
   assert.equal(result.requests.length, 1);
   assert.deepEqual(result.addedLabels, [], result.logs.join("\n"));
+  // The null took the head-moved path (nothing registered), not the catch: a TypeError on it would log the warning instead.
+  assert.ok(result.logs.some((line) => line.includes("didn't register")), result.logs.join("\n"));
+  assert.ok(!result.logs.some((line) => line.includes("back after requesting Copilot's review")), result.logs.join("\n"));
+  // And the caller, reading the PR again, found it gone.
+  assert.ok(result.logs.some((line) => line.includes("not an open, non-draft, same-repo PR into main")), result.logs.join("\n"));
   assert.ok(finishedAt - result.askedAt[0] >= 30 * 1000, `the run ended ${(finishedAt - result.askedAt[0]) / 1000} s after the record`);
   assert.ok(finishedAt - result.askedAt[0] <= 30 * 1000 + 1000, `the run ended ${(finishedAt - result.askedAt[0]) / 1000} s after the record`);
 });

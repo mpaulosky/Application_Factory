@@ -153,7 +153,7 @@ function looksLikeSecret(view: string, secrets: readonly string[]): boolean {
 export const REVIEWER_LOG_INDEX = "index.txt";
 
 // The name Sandcastle gives a reviewer's log for a build's branch: the branch with the characters a file name can't hold replaced by a
-// hyphen, then `-reviewer.log` (its buildLogFilename). A name that no longer matches this means the log is not copied at all (copyReviewerLogs copies only the logs a BuildLogs record knows).
+// hyphen, then `-reviewer.log` (its buildLogFilename; role-logs.test.mts checks this against the installed Sandcastle). A name that no longer matches this means the log is not copied at all (copyReviewerLogs copies only the logs a BuildLogs record knows).
 export function reviewerLogFileName(branch: string): string {
   return `${branch.replace(/[/\\:*?"<>|]/g, "-")}-reviewer.log`;
 }
