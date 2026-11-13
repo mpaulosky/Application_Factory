@@ -383,6 +383,7 @@ def continued_text(lines, number, joins=None):
     `joins` is joined_lines(lines), which the caller computes once for the file.
     """
     joins = joined_lines(lines) if joins is None else joins
+    # The last entry of `joins` is always False (no line follows the last), so index -1 stops the walk even without the `index >= 0` test, which is for the reader.
     text = ""
     index = number - 2
     while index >= 0 and number - 2 - index < CONTINUATION_LIMIT and joins[index]:

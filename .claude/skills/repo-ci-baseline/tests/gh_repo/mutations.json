@@ -29,18 +29,6 @@
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "return text, index >= 0 and joins[index]",
-      "new": "return text, joins[index]",
-      "why": "the first line of the file is read as a chain"
-    },
-    {
-      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "while index >= 0 and number - 2 - index < CONTINUATION_LIMIT and joins[index]:",
-      "new": "while number - 2 - index < CONTINUATION_LIMIT and joins[index]:",
-      "why": "the walk back may run past the start of the file"
-    },
-    {
-      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
       "old": "and comment_start(line) < 0",
       "new": "",
       "why": "a backslash inside a comment joins the next line"
