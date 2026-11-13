@@ -334,11 +334,22 @@ def data_heredocs(header, lines, start, last=None):
 
 
 def logical_line(lines, number):
-    """The logical line that starts at lines[number - 1], with its backslash continuations joined, and how many physical lines it takes."""
+    """The logical line that starts at lines[number - 1], with the continuations bash joins (a trailing backslash outside a comment), and how many physical lines it takes.
+
+    A backslash at the end of a comment joins nothing, and a # inside a string that an earlier line of the chain opened is no comment, so the joined text is judged.
+    """
     text = lines[number - 1]
     count = 1
-    # A physical line that continues (see continues) is joined to the next; each is judged alone, as continued_text does, so a long chain costs linear time.
-    while continues(lines[number - 2 + count]) and number - 1 + count < len(lines):
+    while number - 1 + count < len(lines):
+        last = lines[number - 2 + count]
+        # An odd number of trailing backslashes continues the line; an even number is escaped backslashes.
+        joins = (len(text) - len(text.rstrip("\\"))) % 2 == 1
+        # A line without a # can't start a comment, and an earlier # was judged when it was joined, so only a line with one is scanned (the whole chain, which the
+        # string an earlier line opened decides; past CONTINUATION_LIMIT lines the line alone, so a long chain costs linear time).
+        if joins and "#" in last:
+            joins = continues(text if count <= CONTINUATION_LIMIT else last)
+        if not joins:
+            break
         text = text[:-1] + lines[number - 1 + count]
         count += 1
     return text, count
@@ -680,7 +691,8 @@ def track_branches(line, branches, command=True):
 def comment_start(line):
     """The index of the # that starts a comment in line, a # that begins a word outside quotes and ${...}, or -1.
 
-    A space or ; & | ( ) < > before the # ends the word only when no backslash escapes it (foo\\ # is one word).
+    A space, tab or ; & | ( ) < > before the # ends the word only when no backslash escapes it (foo\\ # is one word).
+    A ${ that never closes holds the rest of the line.
     """
     position = 0
     boundary = True

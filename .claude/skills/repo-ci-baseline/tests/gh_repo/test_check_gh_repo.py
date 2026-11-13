@@ -2343,6 +2343,8 @@ def test_keywords_takes_every_character_that_ends_a_word(char):
 @pytest.mark.parametrize("text, expected", [
     ("$'a'", True), ("a$'a'", True), ("'a'", False), ("\\$'a'", False), ("$$'a'", False), ("$$$'a'", True), ("\\\\$'a'", True),
     ("\\$$'a'", True), ("\\\\$$'a'", False), ("\\$$$'a'", False), ("\"$'a'\"", True),
+    # a line that ends right after the quote: the bound checks in live_dollar stop the walk at the start of the line (mutations.json)
+    ("$'a'$", True), ("$'a'\\", True), ("$$$'a'\\", True),
 ])
 def test_live_dollar_takes_a_dollar_that_is_live_before_the_quote(text, expected):
     assert check_gh_repo.live_dollar(text, text.index("'") - 1) is expected
@@ -2439,6 +2441,8 @@ def test_continued_text_stops_at_the_first_line_of_the_file():
     ("echo x\t# c", 7), ("echo x&# c", 7), ("echo x|# c", 7), ("echo (# c", 6), ("echo x)# c", 7), ("echo x<# c", 7), ("echo x># c", 7),
     # an escaped quote opens no string; a ${ that never closes holds the rest of the line
     ("echo \\'x # c", 9), ("echo ${x #y", -1),
+    # a backslash skips exactly the next character: the second space is the word boundary
+    ("echo a\\  # c", 9),
 ])
 def test_comment_start_finds_a_hash_that_begins_a_word_outside_quotes(line, start):
     assert check_gh_repo.comment_start(line) == start
@@ -2446,7 +2450,7 @@ def test_comment_start_finds_a_hash_that_begins_a_word_outside_quotes(line, star
 
 @pytest.mark.parametrize("line, joins", [
     ("x \\", True), ("x \\\\", False), ("x \\\\\\", True), ("# x \\", False), ("echo x # y \\", False), ("echo '#' \\", True), ("", False),
-    ("echo ${x \\", True),
+    ("echo ${x \\", True), ("echo ${x # y \\", True),
 ])
 def test_continues_counts_a_trailing_backslash_outside_a_comment(line, joins):
     assert check_gh_repo.continues(line) is joins
@@ -2475,6 +2479,60 @@ def test_untold_reads_a_chain_as_bash_does_and_fails_closed_when_it_is_cut(tmp_p
 ])
 def test_untold_reads_a_heredoc_next_to_a_comment_that_ends_in_a_backslash_as_data(tmp_path, text, refused):
     assert lines_of(untold(tmp_path, text)) == refused
+
+
+@pytest.mark.parametrize("text, refused", [
+    # A # inside a string that spans lines is no comment: the chain goes on to the heredoc header, whose body is data (the gh is refused).
+    ("echo \"a \\\n # b \\\nc\" ; cat <<EOF\nexport GH_REPO=o/r\nEOF\ngh pr view 1\n", [6]),
+    # The same with a CRLF file.
+    ("echo \"a \\\r\n # b \\\r\nc\" ; cat <<EOF\r\nexport GH_REPO=o/r\r\nEOF\r\ngh pr view 1\r\n", [6]),
+])
+def test_untold_joins_a_line_through_a_hash_inside_a_string_that_spans_lines(tmp_path, text, refused):
+    path = tmp_path / "script.sh"
+    path.write_bytes(text.encode())
+    assert lines_of(check_gh_repo.untold(path)) == refused
+
+
+@pytest.mark.parametrize("lines, number, expected", [
+    # the last line of the file ends in a backslash: nothing follows it to join
+    (["a \\"], 1, ("a \\", 1)),
+    (["x", "a \\"], 2, ("a \\", 1)),
+    # a chain that ends at the last line
+    (["a \\", "b \\"], 1, ("a b \\", 2)),
+    (["a \\", "b"], 1, ("a b", 2)),
+    # a comment in the middle of a chain ends it; an even run of backslashes does not continue
+    (["a \\", "# c \\", "d"], 1, ("a # c \\", 2)),
+    (["a \\\\", "b"], 1, ("a \\\\", 1)),
+    # a # inside a string opened on an earlier line is no comment
+    (["echo \"a \\", " # b \\", "c\" ; d"], 1, ("echo \"a  # b c\" ; d", 3)),
+])
+def test_logical_line_joins_what_continues_and_stops_at_the_end_of_the_file(lines, number, expected):
+    assert check_gh_repo.logical_line(lines, number) == expected
+
+
+@pytest.mark.parametrize("extra", [-1, 0, 1])
+def test_logical_line_joins_a_chain_across_the_continuation_limit(extra):
+    # Past CONTINUATION_LIMIT lines a line is judged alone (linear time); a quoted # on every line still continues the chain at n-1, n and n+1.
+    chain = check_gh_repo.CONTINUATION_LIMIT + extra
+    lines = ["echo '#' \\"] * chain + ["end"]
+    text, count = check_gh_repo.logical_line(lines, 1)
+    assert count == chain + 1
+    assert text == "echo '#' " * chain + "end"
+
+
+@pytest.mark.parametrize("line", ["echo ${x #y", "echo ${x # y \\", "echo \\'x # c", "echo a\\  # c", "echo x\t# c"])
+def test_comment_start_and_continues_end_on_an_unfinished_construct(line):
+    # A branch that stopped advancing would hang: fail after 5 s instead.
+    def stop(*_):
+        raise TimeoutError(f"comment_start() did not finish on {line!r}")
+    previous = signal.signal(signal.SIGALRM, stop)
+    signal.alarm(5)
+    try:
+        assert isinstance(check_gh_repo.comment_start(line), int)
+        assert isinstance(check_gh_repo.continues(line), bool)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 @pytest.mark.parametrize("text, lines", [
