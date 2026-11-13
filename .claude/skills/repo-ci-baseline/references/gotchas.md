@@ -130,10 +130,10 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     that spans lines: the next line is read as code), a `[[ ... ]]` that spans lines (the next line is read as code), a backtick substitution, a `${...}` that holds a quote, a `}` or a `)`
     (it ends at the first `}`), double quotes
     nested more than 50 deep in `"$(...)"`, and a line of a multi-line string or of a heredoc body read as code that starts like `fi` or `else` can still misjudge a branch.
-    A backslash-continued chain is read back at most 100 lines (a trailing backslash inside a comment joins nothing, and the first 100 lines of a chain are scanned whole,
-    so a `#` inside a string an earlier line opened is no comment; a longer chain joins on the backslash alone, so a real comment ending in a backslash past line 100 still joins
-    the next line). The text read back and the line that starts a command are judged on the chain whole (`joined_lines`), so a string that spans lines and closes before a comment ending
-    in a backslash (`b" # c \`) joins nothing, and a `GH_REPO=` in that comment tells no later gh.
+    A backslash-continued chain is read back at most 100 lines. The first 100 lines of a chain are scanned whole (a trailing backslash inside a comment joins nothing, and a `#` inside
+    a string an earlier line opened is no comment), so the text read back and the line that starts a command follow the chain (`joined_lines`): a string that spans lines and closes before
+    a comment ending in a backslash (`b" # c \`) joins nothing, and a `GH_REPO=` in that comment tells no later gh. A longer chain joins on the backslash alone for a heredoc header, and for
+    the read-back a line past line 100 that holds a `#` (a comment, or a `#` in a string an earlier line opened) ends the read and counts as a chain cut, so a gh after it needs its own `--repo` or `GH_REPO=`.
     An export no longer tells a gh after a longer chain, since a `sudo` that drops `GH_REPO` may have started before the part read, so only that gh's own `--repo` or a `GH_REPO=` right before it does.
   - A file with a NUL byte is checked with the NULs removed, as bash reads it, not skipped. `--repo` reads a suffix in
     lower case (`up.SH`) and `.zsh`, treats every extensionless file under `scripts/` and `.github/ci/` as shell

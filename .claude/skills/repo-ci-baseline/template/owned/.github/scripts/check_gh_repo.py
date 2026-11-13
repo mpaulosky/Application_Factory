@@ -364,26 +364,27 @@ CONTINUATION_LIMIT = 100
 
 
 def joined_lines(lines):
-    """For each line of lines, whether bash joins the next line to it (a trailing backslash outside a comment).
+    """For each line of lines, whether bash joins the next line to it (a trailing backslash outside a comment): True, False, or None for a line that can't be judged.
 
     Each chain is judged whole by logical_line, from its first line, so a string that spans lines decides whether the # after it starts a comment: a line is not judged alone.
-    Past CONTINUATION_LIMIT lines of a chain logical_line joins on the backslash alone (a header must fail closed), so there a line that holds a comment joins nothing here:
-    its text is read back and a GH_REPO= in a comment ending in a backslash would tell a later gh.
+    Past CONTINUATION_LIMIT lines of a chain logical_line joins on the backslash alone (a header must fail closed) and a line is not judged whole, so a line there that holds a #
+    is None: it may be a comment or sit in a string an earlier line opened, and either way the read-back stops at it and reports the chain as cut (continued_text), so a
+    GH_REPO= in it tells nothing and an export before it is not trusted. A line without a # joins as logical_line says.
     """
     joins = [False] * len(lines)
     number = 1
     while number <= len(lines):
         _, count = logical_line(lines, number)
         for index in range(number - 1, number + count - 2):
-            joins[index] = index - number + 2 <= CONTINUATION_LIMIT or comment_start(lines[index]) < 0
+            joins[index] = True if index - number + 2 <= CONTINUATION_LIMIT or "#" not in lines[index] else None
         number += count
     return joins
 
 
 def continued_text(lines, number, joins):
     """The text of the physical lines right before lines[number - 1] that a trailing backslash joins to it, backslashes removed,
-    and whether the chain goes on past the CONTINUATION_LIMIT lines read (a file of many continued lines costs a bounded amount per line).
-    `joins` is joined_lines(lines), which the caller computes once for the file.
+    and whether the chain goes on past what was read: past the CONTINUATION_LIMIT lines read (a file of many continued lines costs a bounded amount per line),
+    or at a line that joined_lines can't judge (None). `joins` is joined_lines(lines), which the caller computes once for the file.
     """
     text = ""
     index = number - 2
@@ -391,7 +392,7 @@ def continued_text(lines, number, joins):
     while index >= 0 and number - 2 - index < CONTINUATION_LIMIT and joins[index]:
         text = lines[index][:-1] + text
         index -= 1
-    return text, index >= 0 and joins[index]
+    return text, index >= 0 and joins[index] is not False
 
 
 def close_parenthesis(line, start, depth):

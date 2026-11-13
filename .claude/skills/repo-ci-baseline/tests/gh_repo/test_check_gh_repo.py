@@ -2536,11 +2536,11 @@ def test_joined_lines_says_which_lines_join_the_next(lines, expected):
 
 
 @pytest.mark.parametrize("hash_line, joins", [
-    # A real comment ending in a backslash: at the limit and before it the chain ends there; past it logical_line joins on the backslash alone but the read-back does not.
+    # A real comment ending in a backslash: at the limit and before it the chain ends there (False); past it logical_line joins on the backslash alone and the line can't be judged (None).
     (check_gh_repo.CONTINUATION_LIMIT - 2, False), (check_gh_repo.CONTINUATION_LIMIT - 1, False),
-    (check_gh_repo.CONTINUATION_LIMIT, False), (check_gh_repo.CONTINUATION_LIMIT + 1, False),
+    (check_gh_repo.CONTINUATION_LIMIT, None), (check_gh_repo.CONTINUATION_LIMIT + 1, None),
 ])
-def test_joined_lines_joins_nothing_for_a_real_comment_whatever_its_place_in_the_chain(hash_line, joins):
+def test_joined_lines_cuts_at_a_real_comment_and_marks_one_past_the_limit_as_unjudged(hash_line, joins):
     lines = ["echo a \\"] + ["x \\"] * (hash_line - 1) + [" # b \\", "tail"]
     found = check_gh_repo.joined_lines(lines)
     assert found[hash_line] is joins
@@ -2561,6 +2561,18 @@ def test_joined_lines_judges_the_line_at_the_limit_on_the_chain_whole():
 def test_untold_refuses_a_gh_after_a_comment_with_a_gh_repo_at_any_place_in_a_long_chain(tmp_path, hash_line):
     # The comment ends its line in bash, so its GH_REPO= tells nothing: the gh on the line after it is refused, wherever in the chain the comment is.
     lines = ["echo a \\"] + ["x \\"] * (hash_line - 1) + ["# GH_REPO=o/r \\", "gh pr view 1"]
+    path = tmp_path / "script.sh"
+    path.write_text("\n".join(lines) + "\n")
+    assert lines_of(check_gh_repo.untold(path)) == [len(lines)]
+
+
+@pytest.mark.parametrize("lines", [
+    # A string opened on the first line closes past the limit on a line that ends in a comment: the # is a comment, its GH_REPO= tells no later gh (the line is judged alone there).
+    ["echo \"a \\"] + ["x \\"] * check_gh_repo.CONTINUATION_LIMIT + ["y\" # GH_REPO=o/r \\", "gh pr view 1"],
+    # A # inside a string opened on the first line, past the limit, is no comment: the chain goes on to a gh that runs under a sudo that drops the export.
+    ["export GH_REPO=o/r", "sudo env \"a \\"] + ["x \\"] * check_gh_repo.CONTINUATION_LIMIT + [" # b \\", "\" gh pr view 1"],
+])
+def test_untold_refuses_a_gh_after_a_past_limit_line_whose_hash_it_cannot_judge(tmp_path, lines):
     path = tmp_path / "script.sh"
     path.write_text("\n".join(lines) + "\n")
     assert lines_of(check_gh_repo.untold(path)) == [len(lines)]
