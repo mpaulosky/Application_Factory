@@ -195,7 +195,8 @@ The sweep follows up a pull request Sandcastle didn't open when the repository o
 red checks or falling behind `main`, and PR Auto-Merge holds it on every unresolved thread.
 
 - **Which.** `sweepSubject` in `lib/follow-up.mts` accepts a labelled pull request that isn't a Sandcastle issue's (host-authored, marked, on an issue's branch, in this run's scope or not) when it is
-  from the same repository, into `main`, not a draft, and its branch name passes `scripts/check-branch-name.sh` (`isHandOffBranch` in `lib/branches.mts`).
+  from the same repository, into `main`, not a draft, and its branch is a hand-off branch: `feature/`, `fix/` or `hotfix/{n}-{slug}`, or `chore/{slug}`
+  (what `scripts/check-branch-name.sh` accepts without `--pr`, except `dependabot/*`; `isHandOffBranch` in `lib/branches.mts`).
   A PR the host-side review holds as a draft ([pre-push-review.md](pre-push-review.md#sandcastle-runs-the-review-on-the-host))
   is not swept until a person marks it ready, so CI failures and review feedback on it need a person.
   A Sandcastle pull request carrying the label is never a hand-off:
