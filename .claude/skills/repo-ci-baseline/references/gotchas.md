@@ -134,8 +134,7 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     a string an earlier line opened is no comment), so the text read back and the line that starts a command follow the chain (`joined_lines`): a string that spans lines and closes before
     a comment ending in a backslash (`b" # c \`) joins nothing, and a `GH_REPO=` in that comment tells no later gh. A longer chain joins on the backslash alone for a heredoc header, and for
     the read-back a line past line 100 that holds a `#` (a comment, or a `#` in a string an earlier line opened) ends the read and counts as a chain
-    cut, so a gh after it needs its own `--repo` or `GH_REPO=`;
-    the line after it is not read as the start of a command.
+    cut, so a gh after it needs its own `--repo` or `GH_REPO=`. The line after it is not forced to start a command: a real comment on the unjudged line still ends the command there.
     An export no longer tells a gh after a longer chain, since a `sudo` that drops `GH_REPO` may have started before the part read, so only that gh's own `--repo` or a `GH_REPO=` right before it does.
   - A file with a NUL byte is checked with the NULs removed, as bash reads it, not skipped. `--repo` reads a suffix in
     lower case (`up.SH`) and `.zsh`, treats every extensionless file under `scripts/` and `.github/ci/` as shell
