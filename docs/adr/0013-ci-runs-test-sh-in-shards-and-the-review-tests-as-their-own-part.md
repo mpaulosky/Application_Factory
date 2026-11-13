@@ -19,7 +19,9 @@ finishes before `test.sh`, saves no time when skipped.
 - **Only the `template` part, run by name, runs a shard.** `scripts/gate.sh` passes `TEST_SH_SHARD` to `test.sh` when `GATE_PART=template`, and unsets it for every other
   run, so a push, a full gate and `--quick` run the whole of `test.sh` whatever the environment holds. Each shard's pass is remembered for a clean tree on its own, apart
   from the whole run's. The whole run and a shard overlap, so a whole run first clears every shard's pass for the tree and a shard run clears the whole
-  run's: a failure leaves no pass standing that covers what failed. Shards don't overlap, so one shard's run leaves another's pass. The pre-push hook, a Template Owned file, doesn't change.
+  run's: a failure leaves no pass standing that covers what failed. Shards don't overlap, so one shard's run leaves another's pass. Two runs
+  on one tree can also overlap in time, from two worktrees of a clone: a run writes a start stamp for the tree and keeps its pass only if no other run
+  of `test.sh` started after it, so a later run that fails can't leave the earlier one's pass behind. The pre-push hook, a Template Owned file, doesn't change.
 - **The workflow's `template` job is a matrix over the shards.** `Gate - test.sh (<shard>)` runs once per shard with `fail-fast: false`. The aggregator still needs one
   `template` result, which GitHub reports as `failure` when any shard failed, so `Template tests` still fails unless every shard passed. The gate test checks that the
   matrix lists every shard `test.sh` declares, once, and that the step passes the matrix's shard.

@@ -16,7 +16,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 work="$(mktemp -d)"
 trap 'chmod -R u+w "$work" 2>/dev/null || true; rm -rf "$work"' EXIT # a case that makes a folder read-only is cleaned up even when it is interrupted
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH GATE_PART STUB_SANDCASTLE_EXIT RUN_PART TEST_SH_SHARD RUN_SHARD # a caller's GATE_NO_CACHE=1 must not reach the stub gate runs; the tests set it themselves where they need it
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH GATE_PART STUB_SANDCASTLE_EXIT RUN_PART TEST_SH_SHARD RUN_SHARD STUB_DURING # a caller's GATE_NO_CACHE=1 must not reach the stub gate runs; the tests set it themselves where they need it
 
 pass=0; failed=0
 check() { # check <description> <condition: 0 for ok>
@@ -47,6 +47,8 @@ new_repo() {
 #!/usr/bin/env bash
 touch "$(dirname "${BASH_SOURCE[0]}")/ran"
 printf '%s\n' "${TEST_SH_SHARD-unset}" >> "$(git rev-parse --git-common-dir)/test-sh-shards"
+# STUB_DURING: a command run while this test.sh runs (once: the runs it starts don't see it), standing in for another gate run on the same tree.
+if [[ -n "${STUB_DURING:-}" ]]; then during="$STUB_DURING"; (unset STUB_DURING; eval "$during") || true; fi
 [[ -z "${STUB_TOUCH:-}" ]] || : > "$STUB_TOUCH"
 exit "${STUB_EXIT:-0}"
 STUB
@@ -582,6 +584,18 @@ GATE_NO_CACHE=1 STUB_EXIT=1 run "$repoP"
 check "a forced full gate whose test.sh fails fails the gate" "$([[ $status == 1 && "$(shards_seen)" == unset ]] && echo 0 || echo 1)"
 RUN_PART=template RUN_SHARD=hooks run "$repoP"
 check "and the next run of a shard tests again instead of trusting its old pass" "$([[ $status == 0 && "$(shards_seen)" == hooks ]] && ! grep -q "already passed" "$repoP/out" && echo 0 || echo 1)"
+
+# Two runs on one tree that overlap in time (Copilot's review of PR 65): a whole run that passes while a shard run, started after it, fails keeps no pass.
+rm -rf "$repoP/.git/gate-cache" "$repoP/.git/test-sh-shards"
+# shellcheck disable=SC2016 # the command is run later by the stub, in the repo: its \$(...) must not expand here
+overlap='GATE_PART=template TEST_SH_SHARD=hooks STUB_EXIT=1 GATE_NO_CACHE=1 bash scripts/gate.sh > "$(git rev-parse --git-common-dir)/overlap-out" 2>&1'
+STUB_DURING="$overlap" run "$repoP"
+check "a whole run that a failing shard run overlapped passes, saying its pass is not remembered" "$([[ $status == 0 && "$(sed -n 2p "$repoP/.git/test-sh-shards")" == hooks ]] && grep -q "test.sh (hooks shard)" "$repoP/.git/overlap-out" && grep -q "another run of test.sh, or of a part it overlaps, started on this tree" "$repoP/out" && echo 0 || echo 1)"
+rm -f "$repoP/$skill/ran"; run "$repoP"
+check "and the next full gate runs test.sh instead of trusting that pass" "$([[ $status == 0 && $ran == yes && "$(shards_seen)" == unset ]] && ! grep -q "already passed" "$repoP/out" && echo 0 || echo 1)"
+RUN_PART=template RUN_SHARD=hooks run "$repoP"
+STUB_DURING="${overlap/STUB_EXIT=1/STUB_EXIT=0}" RUN_PART=template RUN_SHARD=scripts run "$repoP"
+check "a shard run that another shard run overlapped keeps no pass either" "$([[ $status == 0 ]] && grep -q "another run of test.sh (scripts shard), or of a part it overlaps" "$repoP/out" && echo 0 || echo 1)"
 
 # test.sh's shards: every step sits in exactly one shard block, the blocks are the declared shards in order, and a bad shard is refused.
 testsh_shards_ok() { # testsh_shards_ok <test.sh>: 0 when its steps are split into the shards it declares, each block once, nothing outside

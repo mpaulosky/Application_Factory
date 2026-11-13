@@ -206,8 +206,11 @@ run_static() {
 # so a failure leaves nothing remembered for the next run. A git that fails here (a broken index, a lock) leaves the tree unproven clean, so the command runs and nothing is stored.
 # A name such as test-sh.hooks is one part of the whole named before the dot (test-sh, ADR 0013). The whole and its parts overlap, so a run of the whole clears every
 # part's pass for the tree too, and a run of a part clears the whole's: a failure leaves no pass standing that covers what failed. Parts don't overlap each other.
+# Two runs on one tree can overlap in time too (two worktrees of a clone): each run writes its own token to the tree's start stamp, and stores its pass only while the stamp still
+# holds its token, checking again after writing it. A run that started later (a part, a whole, or another part) may yet fail, so the earlier run's pass is not kept; the cost is a
+# re-run after two runs that overlapped.
 run_cached() {
-  local name="$1" label="$2" cache="" dirty tree common after whole f stale
+  local name="$1" label="$2" cache="" dirty tree common after whole f stale stamp="" token=""
   shift 2
   if dirty="$(git status --porcelain --untracked-files=all)" && [[ -z "$dirty" ]] \
     && tree="$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" && common="$(git rev-parse --git-common-dir)"; then
@@ -219,6 +222,11 @@ run_cached() {
   fi
   if [[ -n "$cache" ]]; then
     whole="${name%%.*}"
+    # The stamp is written before the old passes are cleared: a run that is storing its pass meanwhile then either sees the new token and stores nothing, or stored before
+    # the clear, which removes it.
+    stamp="${cache%/*}/started.$whole-$tree"
+    token="$$.$RANDOM$RANDOM.$(date +%s)"
+    { mkdir -p "${cache%/*}" && printf '%s\n' "$token" >"$stamp"; } 2>/dev/null || token=""
     # Only the * is a pattern: the folder and names are quoted, so a clone path holding [, ] or ? is matched literally, and an unmatched * stays literal and fails -e.
     local overlapping=("${cache%/*}/$whole-$tree" "$cache")
     [[ "$name" != "$whole" ]] || overlapping+=("${cache%/*}/$whole."*"-$tree")
@@ -234,7 +242,16 @@ run_cached() {
   # Remembering the pass is best effort: a folder that can't be written to must not turn a passing command into a failing gate.
   if [[ -n "$cache" ]]; then
     if after="$(git status --porcelain --untracked-files=all)" && [[ -z "$after" && "$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" == "$tree" ]]; then
-      { mkdir -p "${cache%/*}" && : >"$cache"; } 2>/dev/null || echo "could not record the $label pass in ${cache%/*}: it will run again next time." >&2
+      if [[ -z "$token" ]]; then
+        echo "could not record the $label pass in ${cache%/*}: it will run again next time." >&2
+      elif [[ "$(cat "$stamp" 2>/dev/null)" != "$token" ]]; then
+        echo "another run of $label, or of a part it overlaps, started on this tree while it ran: this pass is not remembered." >&2
+      elif ! { : >"$cache"; } 2>/dev/null; then
+        echo "could not record the $label pass in ${cache%/*}: it will run again next time." >&2
+      elif [[ "$(cat "$stamp" 2>/dev/null)" != "$token" ]]; then
+        command rm -f -- "$cache"
+        echo "another run of $label, or of a part it overlaps, started on this tree while it ran: this pass is not remembered." >&2
+      fi
     else
       echo "the tree changed while $label ran: this pass is not remembered." >&2
     fi
