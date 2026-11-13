@@ -2493,6 +2493,40 @@ def test_untold_joins_a_line_through_a_hash_inside_a_string_that_spans_lines(tmp
     assert lines_of(check_gh_repo.untold(path)) == refused
 
 
+@pytest.mark.parametrize("text, refused", [
+    # A string that spans lines closes before a comment ending in a backslash: the comment joins nothing, so its GH_REPO= tells no later gh (#51 R2).
+    ("echo \"x \\\ny\" # GH_REPO=o/r \\\ngh pr view 1\n", [3]),
+    # The same with a CRLF file.
+    ("echo \"x \\\r\ny\" # GH_REPO=o/r \\\r\ngh pr view 1\r\n", [3]),
+    # The same over three lines of string.
+    ("echo \"x \\\ny \\\nz\" # GH_REPO=o/r \\\ngh pr view 1\n", [4]),
+    # A comment ending in a backslash after a string on one line still joins nothing (the line-by-line reading already held).
+    ("echo \"x\" # GH_REPO=o/r \\\ngh pr view 1\n", [2]),
+    # A real continuation after the closed string still tells the gh its own GH_REPO= on the joined line.
+    ("echo \"x \\\ny\" ; GH_REPO=o/r \\\ngh pr view 1\n", []),
+])
+def test_untold_judges_a_chain_by_the_string_an_earlier_line_opened(tmp_path, text, refused):
+    path = tmp_path / "script.sh"
+    path.write_bytes(text.encode())
+    assert lines_of(check_gh_repo.untold(path)) == refused
+
+
+@pytest.mark.parametrize("lines, expected", [
+    ([], []),
+    (["a"], [False]),
+    (["a \\"], [False]),
+    (["a \\", "b"], [True, False]),
+    # a string that spans lines closes before a comment ending in a backslash: that line joins nothing
+    (["echo \"x \\", "y\" # c \\", "z"], [True, False, False]),
+    # a comment on its own line ends the chain
+    (["a \\", "# c \\", "d"], [True, False, False]),
+    # two chains one after the other
+    (["a \\", "b", "c \\", "d"], [True, False, True, False]),
+])
+def test_joined_lines_says_which_lines_join_the_next(lines, expected):
+    assert check_gh_repo.joined_lines(lines) == expected
+
+
 @pytest.mark.parametrize("lines, number, expected", [
     # the last line of the file ends in a backslash: nothing follows it to join
     (["a \\"], 1, ("a \\", 1)),

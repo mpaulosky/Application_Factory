@@ -362,16 +362,33 @@ def logical_line(lines, number):
 CONTINUATION_LIMIT = 100
 
 
-def continued_text(lines, number):
+def joined_lines(lines):
+    """For each line of lines, whether bash joins the next line to it (a trailing backslash outside a comment).
+
+    Each chain is judged whole by logical_line, from its first line, so a string that spans lines decides whether the # after it starts a comment: a line is not judged alone.
+    """
+    joins = [False] * len(lines)
+    number = 1
+    while number <= len(lines):
+        _, count = logical_line(lines, number)
+        for index in range(number - 1, number + count - 2):
+            joins[index] = True
+        number += count
+    return joins
+
+
+def continued_text(lines, number, joins=None):
     """The text of the physical lines right before lines[number - 1] that a trailing backslash joins to it, backslashes removed,
     and whether the chain goes on past the CONTINUATION_LIMIT lines read (a file of many continued lines costs a bounded amount per line).
+    `joins` is joined_lines(lines), which the caller computes once for the file.
     """
+    joins = joined_lines(lines) if joins is None else joins
     text = ""
     index = number - 2
-    while index >= 0 and number - 2 - index < CONTINUATION_LIMIT and continues(lines[index]):
+    while index >= 0 and number - 2 - index < CONTINUATION_LIMIT and joins[index]:
         text = lines[index][:-1] + text
         index -= 1
-    return text, index >= 0 and continues(lines[index])
+    return text, index >= 0 and joins[index]
 
 
 def close_parenthesis(line, start, depth):
@@ -727,6 +744,7 @@ def continues(line):
 def untold(path):
     """Each line of path with a gh command not told its repository, as file:line: text."""
     lines = read_lines(path)
+    joins = joined_lines(lines)
     found = []
     exported = False
     bodies = []
@@ -760,7 +778,7 @@ def untold(path):
             if last is None and "<<" in header:
                 last = last_lines(lines)
             bodies = data_heredocs(header, lines, header_end, last)
-        starts_command = track_branches(line, branches, starts_command) or not continues(line)
+        starts_command = track_branches(line, branches, starts_command) or not joins[number - 1]
         if EXPORTS.match(line):
             # An export in a branch that never runs leaves GH_REPO unset.
             exported = exported or all(runs for runs, _, _ in branches)
@@ -769,7 +787,7 @@ def untold(path):
             exported = False
         if OPT_OUT.search(line):
             continue
-        earlier, truncated = continued_text(lines, number)
+        earlier, truncated = continued_text(lines, number, joins)
         if any(not told(line[:match.start()], line[match.end():], exported, earlier, truncated) for match in GH.finditer(line)):
             found.append(f"{for_log(str(path))}:{number}: {shown(line)}")
     return found
