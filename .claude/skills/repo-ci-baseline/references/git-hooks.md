@@ -160,9 +160,10 @@ build runs. It needs cases for:
 checkout and from a subfolder of it (refused, before the lint), the opt-out, a linked worktree, a repo's first commit,
 and `git commit` end to end, which runs the hook with `GIT_DIR` set.
 
-`scripts/tests/check-branch-name.test.sh` covers the script's `--pr` form, which the CI job uses: the Actions
+`scripts/tests/check-branch-name.test.sh` covers the script's push form and its `--pr` form, which the CI job uses: the Actions
 branches (`docs/release-notes`, `docs/backfill-blog-posts`) and any `dependabot/*` allowed with `--pr`, only a shell-safe `dependabot/*` allowed for a push
-(a backtick, quote, `|`, `&` or a non-ASCII letter refused), a `claude/...` branch refused, and other `docs/` names refused.
+(a backtick, quote, `|` or `&` refused, and a non-ASCII letter refused under `LC_ALL=C`, where a UTF-8 locale's `[A-Za-z]` may take an accented one),
+a `claude/...` branch refused, and other `docs/` names refused.
 
 CI's hook-tests job runs this suite, `pre-commit.test.sh`, `check-branch-name.test.sh`, `check-pr-title.test.sh`, `sync-copilot-review.test.sh`, `watch-pr.test.sh`,
 `cleanup.test.sh`, `lint-edited-file.test.sh` and `work-issue.test.sh`.
