@@ -336,7 +336,8 @@ def data_heredocs(header, lines, start, last=None):
 def logical_line(lines, number):
     """The logical line that starts at lines[number - 1], with the continuations bash joins (a trailing backslash outside a comment), and how many physical lines it takes.
 
-    A backslash at the end of a comment joins nothing, and a # inside a string that an earlier line of the chain opened is no comment, so the joined text is judged.
+    A backslash at the end of a comment joins nothing, and a # inside a string that an earlier line of the chain opened is no comment, so a line with a # is judged on the
+    joined text. That holds for the first CONTINUATION_LIMIT lines of a chain; a longer chain joins on the backslash alone, as it did before the comment was looked at.
     """
     text = lines[number - 1]
     count = 1
@@ -344,10 +345,11 @@ def logical_line(lines, number):
         last = lines[number - 2 + count]
         # An odd number of trailing backslashes continues the line; an even number is escaped backslashes.
         joins = (len(text) - len(text.rstrip("\\"))) % 2 == 1
-        # A line without a # can't start a comment, and an earlier # was judged when it was joined, so only a line with one is scanned (the whole chain, which the
-        # string an earlier line opened decides; past CONTINUATION_LIMIT lines the line alone, so a long chain costs linear time).
-        if joins and "#" in last:
-            joins = continues(text if count <= CONTINUATION_LIMIT else last)
+        # Only a line with a # can start a comment (an earlier # was judged when it was joined), so only it is scanned: the whole chain so far, which the string an earlier
+        # line opened decides. This is a saving of cost and changes no result. Past the limit nothing is scanned and nothing is cut, so a long chain costs linear time and
+        # the fail-closed side of a # in a string an earlier line opened still holds.
+        if joins and "#" in last and count <= CONTINUATION_LIMIT:
+            joins = continues(text)
         if not joins:
             break
         text = text[:-1] + lines[number - 1 + count]
@@ -355,7 +357,8 @@ def logical_line(lines, number):
     return text, count
 
 
-# The most physical lines continued_text reads back; what a longer chain does to the export is in references/gotchas.md (the conditional-export bullet).
+# The most physical lines continued_text reads back, and the most that logical_line scans whole for a # inside a string (a longer chain joins on the backslash alone);
+# what a longer chain does to the export is in references/gotchas.md (the conditional-export bullet).
 CONTINUATION_LIMIT = 100
 
 

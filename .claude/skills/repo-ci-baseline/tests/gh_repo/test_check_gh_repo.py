@@ -2343,7 +2343,7 @@ def test_keywords_takes_every_character_that_ends_a_word(char):
 @pytest.mark.parametrize("text, expected", [
     ("$'a'", True), ("a$'a'", True), ("'a'", False), ("\\$'a'", False), ("$$'a'", False), ("$$$'a'", True), ("\\\\$'a'", True),
     ("\\$$'a'", True), ("\\\\$$'a'", False), ("\\$$$'a'", False), ("\"$'a'\"", True),
-    # a line that ends right after the quote: the bound checks in live_dollar stop the walk at the start of the line (mutations.json)
+    # a line whose last character is a $ or a backslash: without the bound checks in live_dollar the walk to the left of index 0 wraps to the end of the line (mutations.json)
     ("$'a'$", True), ("$'a'\\", True), ("$$$'a'\\", True),
 ])
 def test_live_dollar_takes_a_dollar_that_is_live_before_the_quote(text, expected):
@@ -2441,8 +2441,8 @@ def test_continued_text_stops_at_the_first_line_of_the_file():
     ("echo x\t# c", 7), ("echo x&# c", 7), ("echo x|# c", 7), ("echo (# c", 6), ("echo x)# c", 7), ("echo x<# c", 7), ("echo x># c", 7),
     # an escaped quote opens no string; a ${ that never closes holds the rest of the line
     ("echo \\'x # c", 9), ("echo ${x #y", -1),
-    # a backslash skips exactly the next character: the second space is the word boundary
-    ("echo a\\  # c", 9),
+    # a backslash skips the next character and no more (the second space is the word boundary), and at least it (the first space is part of the word)
+    ("echo a\\  # c", 9), ("echo a\\ # c", -1),
 ])
 def test_comment_start_finds_a_hash_that_begins_a_word_outside_quotes(line, start):
     assert check_gh_repo.comment_start(line) == start
@@ -2510,14 +2510,31 @@ def test_logical_line_joins_what_continues_and_stops_at_the_end_of_the_file(line
     assert check_gh_repo.logical_line(lines, number) == expected
 
 
-@pytest.mark.parametrize("extra", [-1, 0, 1])
-def test_logical_line_joins_a_chain_across_the_continuation_limit(extra):
-    # Past CONTINUATION_LIMIT lines a line is judged alone (linear time); a quoted # on every line still continues the chain at n-1, n and n+1.
-    chain = check_gh_repo.CONTINUATION_LIMIT + extra
-    lines = ["echo '#' \\"] * chain + ["end"]
+@pytest.mark.parametrize("hash_line, scanned", [
+    (check_gh_repo.CONTINUATION_LIMIT - 2, True), (check_gh_repo.CONTINUATION_LIMIT - 1, True),
+    (check_gh_repo.CONTINUATION_LIMIT, False), (check_gh_repo.CONTINUATION_LIMIT + 1, False),
+])
+def test_logical_line_scans_the_chain_for_a_comment_only_up_to_the_continuation_limit(hash_line, scanned):
+    # The # line (index hash_line) is a real comment ending in a backslash: a scan of the chain cuts it there, and past the limit the chain joins on the backslash alone.
+    lines = ["echo a \\"] + ["x \\"] * (hash_line - 1) + [" # b \\", "tail"]
     text, count = check_gh_repo.logical_line(lines, 1)
-    assert count == chain + 1
-    assert text == "echo '#' " * chain + "end"
+    assert count == (hash_line + 1 if scanned else hash_line + 2)
+    assert text.endswith("tail") is not scanned
+
+
+@pytest.mark.parametrize("extra", [-1, 0, 1, 100])
+def test_untold_refuses_a_gh_after_a_long_chain_with_a_string_and_a_hash(tmp_path, extra):
+    # A chain past the limit that opens a string on its first line must not be cut at a later #: the heredoc after it stays data and the gh is refused.
+    chain = check_gh_repo.CONTINUATION_LIMIT + extra
+    lines = ['echo "a \\'] + ["x \\"] * chain + [" # b \\", 'c" ; cat <<EOF', "export GH_REPO=o/r", "EOF", "gh pr view 1"]
+    assert lines_of(untold(tmp_path, "\n".join(lines) + "\n")) == [len(lines)]
+
+
+def test_untold_reads_a_long_chain_of_lines_with_a_quoted_hash_in_linear_time(tmp_path):
+    start = time.perf_counter()
+    found = untold(tmp_path, "echo '#' \\\n" * 20_000 + "gh pr view 1\n")
+    assert lines_of(found) == [20_001]
+    assert time.perf_counter() - start < 20
 
 
 @pytest.mark.parametrize("line", ["echo ${x #y", "echo ${x # y \\", "echo \\'x # c", "echo a\\  # c", "echo x\t# c"])

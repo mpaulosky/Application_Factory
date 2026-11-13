@@ -130,8 +130,11 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     that spans lines: the next line is read as code), a `[[ ... ]]` that spans lines (the next line is read as code), a backtick substitution, a `${...}` that holds a quote, a `}` or a `)`
     (it ends at the first `}`), double quotes
     nested more than 50 deep in `"$(...)"`, and a line of a multi-line string or of a heredoc body read as code that starts like `fi` or `else` can still misjudge a branch.
-    A backslash-continued chain is read back at most 100 lines (a trailing backslash inside a comment joins nothing); an export no longer tells a gh after a longer
-    chain, since a `sudo` that drops `GH_REPO` may have started before the part read, so only that gh's own `--repo` or a `GH_REPO=` right before it does.
+    A backslash-continued chain is read back at most 100 lines (a trailing backslash inside a comment joins nothing, and the first 100 lines of a chain are scanned whole,
+    so a `#` inside a string an earlier line opened is no comment; a longer chain joins on the backslash alone, so a real comment ending in a backslash past line 100 still joins
+    the next line). The text read back and the line that starts a command are judged one physical line at a time: a string that spans lines and closes before a comment ending
+    in a backslash is read as unclosed on its closing line (`b" # c \`), so a heredoc after it can be missed and a `GH_REPO=` in that comment can tell a later gh.
+    An export no longer tells a gh after a longer chain, since a `sudo` that drops `GH_REPO` may have started before the part read, so only that gh's own `--repo` or a `GH_REPO=` right before it does.
   - A file with a NUL byte is checked with the NULs removed, as bash reads it, not skipped. `--repo` reads a suffix in
     lower case (`up.SH`) and `.zsh`, treats every extensionless file under `scripts/` and `.github/ci/` as shell
     (under `.claude/skills/` it needs a shell shebang), and refuses a symlink whose target is outside the repo or

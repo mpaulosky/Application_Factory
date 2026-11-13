@@ -89,15 +89,27 @@
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "            joins = continues(text if count <= CONTINUATION_LIMIT else last)",
-      "new": "            joins = continues(last)",
-      "why": "a # inside a string that an earlier line of the chain opened is read as a comment"
+      "old": "        if joins and \"#\" in last and count <= CONTINUATION_LIMIT:",
+      "new": "        if joins and \"#\" in last and count < CONTINUATION_LIMIT:",
+      "why": "logical_line scans a chain for a comment one line short of the continuation limit"
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
       "old": "    while number - 1 + count < len(lines):\n        last = ",
       "new": "    while number - 1 + count <= len(lines):\n        last = ",
       "why": "a chain reads past the last line of the file"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "            joins = continues(text)\n",
+      "new": "            joins = continues(last)\n",
+      "why": "a # inside a string that an earlier line of the chain opened is read as a comment"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "        if joins and \"#\" in last and count <= CONTINUATION_LIMIT:",
+      "new": "        if joins and \"#\" in last:",
+      "why": "a chain past the continuation limit is scanned whole for a # (cost) or cut at one (fail open)"
     }
   ]
 }
