@@ -203,8 +203,9 @@ run_static() {
 # cache_lock <lock>: takes the per-tree cache lock, a folder (mkdir is atomic), trying 20 times 0.1 seconds apart (about 2 seconds); 1 when it can't. A cache-hit check and a
 # run's stamp writes hold it, so a check never reads a run's stamps half written (its own written, the ones it overlaps not yet). Only a cache folder that isn't a writable
 # folder (read-only, say) gives up at once: a lock seen held, or one released just after a failed try, is tried again. It's held only for a few file writes, so a lock still
-# there after 2 seconds belongs to a paused gate, or to one ended by a signal the lock doesn't catch (KILL, QUIT) or by a crash, and stays until a person removes it. While
-# it's held, INT, TERM and HUP release it and then end the gate by that signal. cache_unlock releases the lock this shell holds, if any, and sets those signals back to their default.
+# there after 2 seconds belongs to a paused gate, or to one ended by a signal the lock doesn't catch (KILL, QUIT, or any in the instant between the mkdir and the traps) or
+# by a crash, and stays until a person removes it. While it's held, INT, TERM and HUP release it and then end the gate by that signal. cache_unlock releases the lock this
+# shell holds, if any, and sets those signals back to their default.
 cache_locked=""
 cache_lock() {
   local i sig
@@ -225,8 +226,9 @@ cache_lock() {
 cache_unlock() {
   if [[ -n "$cache_locked" ]]; then
     rmdir -- "$cache_locked" 2>/dev/null || true
-    cache_locked=""
+    # The signals first: a signal before this runs the handler with the lock still named, and one after it ends the gate as by default, the lock already gone.
     trap - INT TERM HUP
+    cache_locked=""
   fi
 }
 

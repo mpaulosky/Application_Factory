@@ -777,7 +777,8 @@ cat > "$cat_shim/cat" <<EOF
 last="\${!#}"
 if [[ "\$last" == */gate-cache/test-sh-* && -n "\${CAT_MARK:-}" ]]; then
   lock="\${last%/*}/lock-\${last##*-}"
-  if [[ -d "\$lock" ]]; then echo held > "\$CAT_MARK"; else echo free > "\$CAT_MARK"; fi
+  if [[ -d "\$lock" ]]; then echo held > "\$CAT_MARK.tmp"; else echo free > "\$CAT_MARK.tmp"; fi
+  mv -f "\$CAT_MARK.tmp" "\$CAT_MARK"
   sleep 2
 fi
 exec "$real_cat" "\$@"
@@ -788,6 +789,7 @@ for sig in INT TERM HUP; do
   command rm -f "$work/cat-marked"
   ended="$(signal_gate "$repoL" "$sig" "$work/cat-marked" PATH="$cat_shim:$PATH" CAT_MARK="$work/cat-marked" GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 GATE_PART=template)"
   check "a gate given $sig while it holds the cache lock releases it and ends by that signal" "$([[ "$(cat "$work/cat-marked" 2>/dev/null)" == held && ${ended% *} == "signal $(kill -l "$sig")" && ! -e $cacheL/lock-$treeL ]] && echo 0 || echo 1)"
+  rmdir "$cacheL/lock-$treeL" 2>/dev/null || true # a failed case leaves no lock to fail the next ones
 done
 # The stub test.sh runs after the lock is released: it marks that it runs and waits 3 seconds, so the signal comes then. A trap left set would hold the gate until the
 # stub ended.
@@ -795,7 +797,12 @@ for sig in INT TERM HUP; do
   command rm -f "$work/stub-running"
   ended="$(signal_gate "$repoL" "$sig" "$work/stub-running" STUB_DURING=": > '$work/stub-running'; sleep 3" GATE_NO_CACHE=1 GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 GATE_PART=template)"
   check "a gate given $sig while test.sh runs, after it released the lock, ends by that signal at once" "$([[ -e $work/stub-running && $ended == "signal $(kill -l "$sig") prompt" && ! -e $cacheL/lock-$treeL ]] && echo 0 || echo 1)"
+  rmdir "$cacheL/lock-$treeL" 2>/dev/null || true
 done
+# cache_unlock sets the signals back to their default before it forgets the lock: in the other order, a signal between the two would find the handler set and no lock
+# named, and the handler's own signal would catch it again and again.
+reset_first="$(awk '/^cache_unlock\(\) \{/ { f = 1 } f && /trap - INT TERM HUP/ && !t { t = NR } f && /cache_locked=""/ && !c { c = NR } f && /^\}/ { f = 0 } END { print (t && c && t < c) ? 0 : 1 }' "$here/scripts/gate.sh")"
+check "cache_unlock sets the signals back before it forgets the lock" "$reset_first"
 # A stamp stuck as a folder can be neither written nor removed, even in a writable cache folder: the gate fails, and releases the lock it took.
 command rm -f "$cacheL/started.test-sh-$treeL"; mkdir -p "$cacheL/started.test-sh-$treeL/stuck"
 RUN_PART=template run "$repoL"
