@@ -200,15 +200,6 @@ run_static() {
 
 }
 
-# run_cached <name> <label> <command...>: runs the command (minutes long), unless it already passed on this tree. A pass is remembered for the tree HEAD points at, when nothing is
-# uncommitted or untracked (ignored files don't count), in the common git directory so every worktree of the clone shares it: the same tree is not checked twice. Only a pass is stored, and
-# only when the tree is still that clean tree after the command ran. GATE_NO_CACHE=1 always runs it. A git that fails here (a broken index, a lock) leaves the tree unproven clean, so the
-# command runs and nothing is stored.
-# A name such as test-sh.hooks is one part of the whole named before the dot (test-sh, ADR 0013); the whole and each part overlap, parts don't overlap each other. Every run first
-# writes a fresh token to its own start stamp and to the stamps of the runs it overlaps (a part: the whole's; the whole: every part's there is), and a pass holds its run's token.
-# A pass is trusted only while its token is still in its own stamp: a run that overlaps it and started later, whether it then failed, is still running or was killed, takes the
-# trust away as it starts. So no gate trusts a pass that a later failing run disproves, even one read before anything removed it, or one whose writer died before it could.
-# A stamp that can be neither written nor removed fails the gate, since it would keep vouching for an old pass. Clearing the old pass files is only tidying.
 # stamp_write <label> <stamp> <token>: writes the token to the start stamp; 1 when it couldn't, having removed the stamp so it vouches for nothing. A stamp that can be neither
 # written nor removed fails the gate, since it would keep vouching for an old pass.
 stamp_write() {
@@ -221,6 +212,15 @@ stamp_write() {
   return 1
 }
 
+# run_cached <name> <label> <command...>: runs the command (minutes long), unless it already passed on this tree. A pass is remembered for the tree HEAD points at, when nothing is
+# uncommitted or untracked (ignored files don't count), in the common git directory so every worktree of the clone shares it: the same tree is not checked twice. Only a pass is stored, and
+# only when the tree is still that clean tree after the command ran. GATE_NO_CACHE=1 always runs it. A git that fails here (a broken index, a lock) leaves the tree unproven clean, so the
+# command runs and nothing is stored.
+# A name such as test-sh.hooks is one part of the whole named before the dot (test-sh, ADR 0013); the whole and each part overlap, parts don't overlap each other. Every run first
+# writes a fresh token to its own start stamp and to the stamps of the runs it overlaps (a part: the whole's; the whole: every part's there is), and a pass holds its run's token.
+# A pass is trusted only while its token is still in its own stamp: a run that overlaps it and started later, whether it then failed, is still running or was killed, takes the
+# trust away as it starts. So no gate trusts a pass that a later failing run disproves, even one read before anything removed it, or one whose writer died before it could.
+# A stamp that can be neither written nor removed fails the gate (stamp_write). Clearing the old pass files is only tidying.
 run_cached() {
   local name="$1" label="$2" cache="" dirty tree common after dir whole token="" mark held s
   shift 2
