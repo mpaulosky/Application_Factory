@@ -2547,6 +2547,14 @@ def test_joined_lines_joins_nothing_for_a_real_comment_whatever_its_place_in_the
     assert found[:hash_line] == [True] * hash_line
 
 
+def test_joined_lines_judges_the_line_at_the_limit_on_the_chain_whole():
+    # A # inside a string the first line opened, on the chain's CONTINUATION_LIMIT-th line, is scanned with the chain (no comment): that line still joins the next.
+    limit = check_gh_repo.CONTINUATION_LIMIT
+    lines = ["echo \"a \\"] + ["x \\"] * (limit - 2) + [" # b \\", "c\" ; d"]
+    assert len(lines) == limit + 1
+    assert check_gh_repo.joined_lines(lines) == [True] * limit + [False]
+
+
 @pytest.mark.parametrize("hash_line", [
     check_gh_repo.CONTINUATION_LIMIT - 2, check_gh_repo.CONTINUATION_LIMIT - 1, check_gh_repo.CONTINUATION_LIMIT, check_gh_repo.CONTINUATION_LIMIT + 1, check_gh_repo.CONTINUATION_LIMIT + 2,
 ])
