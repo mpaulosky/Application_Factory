@@ -3,7 +3,7 @@
 # status on; a changed, missing or execute-bit-mismatched copy stops the gate before the stub runs; the local review check (ADR 0010)
 # skips only on GATE_SKIP_REVIEW=1, fails without an origin/main or when origin/main shares no history with HEAD, and passes review.sh check's status on, ahead of test.sh. It also checks
 # that gate.sh names each copied stand-alone test and lists every copy, that repo-config.mts lists the Factory's own files under Owned patterns,
-# that test.sh's pass is remembered per clean tree (skipped the second time, shared by worktrees, cleared before every run, never stored for a tree that changed), that --quick stops after the lint and --sync restores drifted, missing and non-executable copies and then stops, that a bare #N in an Owned file fails the gate
+# that test.sh's pass is remembered per clean tree (skipped the second time, shared by worktrees, trusted only while its token is in its start stamp, never stored for a tree that changed), that --quick stops after the lint and --sync restores drifted, missing and non-executable copies and then stops, that a bare #N in an Owned file fails the gate
 # and --quick (and a missing python3 or a broken checker fails closed), that dependabot.yml watches the root package.json, and the review tests' install step (a missing pnpm, a pnpm that leaves no tsx, a pnpm that installs it).
 # It also checks that .claude/settings.json runs the executable scripts/lint-edited-file.sh after Edit, Write and MultiEdit (ADR 0011), and that the check fails on a dropped matcher, another event or hook type,
 # a command without the quotes around CLAUDE_PROJECT_DIR or naming another script, a non-executable script and a file that is not JSON.
@@ -398,7 +398,7 @@ for f in "${copies[@]}"; do
   check "gate.sh runs $f" "$(grep -F 'tsx --test' "$here/scripts/gate.sh" | grep -Fq " $f" && echo 0 || echo 1)"
 done
 
-# Every run that runs test.sh clears the remembered pass first, so a failure (a forced run's, say) leaves nothing for the next ordinary run.
+# Every run that runs test.sh takes the trust from the remembered pass first (a new token in its stamp), so a failure (a forced run's, say) leaves nothing for the next ordinary run to trust.
 repo16="$(new_repo cache-forced-failure)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo16/.git/info/exclude"; commit_all "$repo16" base
 run "$repo16"
 GATE_NO_CACHE=1 STUB_EXIT=3 run "$repo16"
@@ -412,7 +412,7 @@ check "a forced run that passes keeps the pass remembered" "$([[ $ran == yes ]] 
 run "$repo16"
 check "so the ordinary run after it is skipped" "$([[ $ran == no ]] && echo 0 || echo 1)"
 
-# A pass is never stored for a tree that test.sh left changed, and a pass that can't be cleared fails the gate instead of being trusted later.
+# A pass is never stored for a tree that test.sh left changed.
 # moved.txt, the file the stub adds, stays visible to git (it is not in the exclude file): that is what makes the tree changed.
 repo17="$(new_repo cache-changed)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo17/.git/info/exclude"; commit_all "$repo17" base
 STUB_TOUCH="$repo17/moved.txt" run "$repo17"
@@ -425,6 +425,7 @@ run "$repo18"
 if [[ "$(id -u)" != 0 ]]; then
   chmod 555 "$repo18/.git/gate-cache"
   GATE_NO_CACHE=1 STUB_EXIT=3 run "$repo18"
+  check "a forced run in a read-only cache folder runs test.sh and fails with its status" "$([[ $status == 3 && $ran == yes ]] && ! grep -q "could not write or remove" "$repo18/out" && echo 0 || echo 1)"
   run "$repo18"
   check "a remembered pass that can't be removed is not trusted after a forced run that failed: test.sh runs" "$([[ $ran == yes ]] && ! grep -q "test.sh already passed" "$repo18/out" && echo 0 || echo 1)"
   chmod 755 "$repo18/.git/gate-cache"
@@ -435,6 +436,7 @@ if [[ "$(id -u)" != 0 ]]; then
   check "a pass is remembered and trusted in a worktree of a clone whose path holds [ and ]" "$([[ $ran == no ]] && grep -q "test.sh already passed" "$wt18b/out" && echo 0 || echo 1)"
   chmod 555 "$repo18b/.git/gate-cache"
   GATE_NO_CACHE=1 STUB_EXIT=3 run "$wt18b"
+  check "and there too a forced run runs test.sh and fails with its status" "$([[ $status == 3 && $ran == yes ]] && echo 0 || echo 1)"
   run "$wt18b"
   check "and a pass that can't be removed there is not trusted after a forced run that failed" "$([[ $ran == yes ]] && ! grep -q "test.sh already passed" "$wt18b/out" && echo 0 || echo 1)"
   chmod 755 "$repo18b/.git/gate-cache"
@@ -572,7 +574,7 @@ rm -rf "$repoP/.git/gate-cache"
 STUB_EXIT=1 RUN_PART=template RUN_SHARD=checks run "$repoP"
 check "a failing shard fails the template part" "$([[ $status == 1 && "$(shards_seen)" == checks ]] && echo 0 || echo 1)"
 
-# A run of test.sh clears the remembered passes it overlaps for the tree: a whole run clears every shard's, a shard the whole run's (Copilot's review of PR 65).
+# A run of test.sh takes the trust from the passes it overlaps for the tree: a whole run from every shard's, a shard from the whole run's (Copilot's review of PR 65).
 # Shards don't overlap each other, so one shard's failure leaves another's pass.
 rm -rf "$repoP/.git/gate-cache" "$repoP/.git/test-sh-shards"
 run "$repoP"; RUN_PART=template RUN_SHARD=scripts run "$repoP"
@@ -601,13 +603,13 @@ STUB_DURING="${overlap/STUB_EXIT=1/STUB_EXIT=0}" RUN_PART=template RUN_SHARD=scr
 RUN_PART=template RUN_SHARD=scripts run "$repoP"
 check "a shard run that another shard run overlapped in time keeps its pass: shards don't overlap" "$(grep -q "test.sh (scripts shard) already passed" "$repoP/out" && echo 0 || echo 1)"
 if [[ "$(id -u)" != 0 ]]; then
-  # A later run that can't write its start stamp removes it, so the earlier run finds no token of its own and keeps nothing.
+  # A later run that can't write the whole's start stamp removes it, so the earlier run's pass is stored but not trusted, and it says so.
   rm -rf "$repoP/.git/gate-cache"
   # shellcheck disable=SC2016 # run later by the stub, in the repo
   STUB_DURING='chmod 444 "$(git rev-parse --git-common-dir)/gate-cache/"started.test-sh-*; '"$overlap" run "$repoP"
   check "a whole run overlapped by a failing shard run that could not write the whole's stamp says its pass will not be trusted" "$([[ $status == 0 ]] && grep -q "this pass will not be trusted" "$repoP/out" && echo 0 || echo 1)"
   rm -f "$repoP/$skill/ran"; run "$repoP"
-  check "and the next full gate runs test.sh" "$([[ $ran == yes ]] && ! grep -q "already passed" "$repoP/out" && echo 0 || echo 1)"
+  check "and the next full gate runs test.sh" "$([[ $ran == yes ]] && ! grep -q "test.sh already passed" "$repoP/out" && echo 0 || echo 1)"
 else
   echo "skip - the unwritable-stamp case needs a user other than root"
 fi
@@ -626,6 +628,18 @@ check "a pass whose stamp is gone is not trusted" "$([[ $ran == yes ]] && echo 0
 : > "$repoT/.git/gate-cache/test-sh-$treeT"
 run "$repoT"
 check "an empty pass file (the format before tokens) is not trusted" "$([[ $ran == yes ]] && echo 0 || echo 1)"
+command rm -f "$repoT/.git/gate-cache/started.test-sh-$treeT"; : > "$repoT/.git/gate-cache/test-sh-$treeT"
+run "$repoT"
+check "an empty pass file with no stamp either is not trusted (empty is never a token)" "$([[ $ran == yes ]] && ! grep -q "test.sh already passed" "$repoT/out" && echo 0 || echo 1)"
+if [[ "$(id -u)" != 0 ]]; then
+  # A run that can't write its own stamp (a read-only stamp in a writable folder) removes it and stores no pass, saying so.
+  echo earlier > "$repoT/.git/gate-cache/started.test-sh-$treeT"; chmod 444 "$repoT/.git/gate-cache/started.test-sh-$treeT"; command rm -f "$repoT/.git/gate-cache/test-sh-$treeT"
+  run "$repoT"
+  check "a run that can't write its own stamp stores no pass, saying it couldn't record it" "$([[ $status == 0 && $ran == yes && ! -e $repoT/.git/gate-cache/test-sh-$treeT && ! -e $repoT/.git/gate-cache/started.test-sh-$treeT ]] && grep -q "could not record the test.sh pass" "$repoT/out" && ! grep -q "will not be trusted" "$repoT/out" && echo 0 || echo 1)"
+fi
+# The whole run writes its own stamp before it lists the shard stamps: listed first, a shard run stamping in between would be missed while the whole run's pass stayed trusted.
+own_first="$(awk '/^run_cached\(\) \{/ { f = 1 } f && /stamp_write "\$label" "\$dir\/started\.\$name-\$tree"/ && !o { o = NR } f && /for s in "\$dir\/started\.\$whole\."\*/ && !g { g = NR } f && /^\}/ { f = 0 } END { print (o && g && o < g) ? 0 : 1 }' "$here/scripts/gate.sh")"
+check "run_cached writes a run's own stamp before it lists the shard stamps" "$own_first"
 RUN_PART=template RUN_SHARD=hooks run "$repoT"; run "$repoT"
 RUN_PART=template RUN_SHARD=hooks run "$repoT"
 check "a whole run takes the trust from a shard's pass" "$([[ $ran == yes ]] && ! grep -q "test.sh already passed" "$repoT/out" && echo 0 || echo 1)"
@@ -636,12 +650,14 @@ if [[ "$(id -u)" != 0 ]]; then
   RUN_PART=template RUN_SHARD=hooks run "$repoT"
   chmod 555 "$repoT/.git/gate-cache"
   GATE_NO_CACHE=1 STUB_EXIT=1 run "$repoT"
+  check "a forced whole run in a read-only cache folder holding a shard pass runs test.sh and fails with its status" "$([[ $status == 1 && $ran == yes && "$(tail -n 1 "$repoT/.git/test-sh-shards")" == unset ]] && ! grep -q "could not" "$repoT/out" && echo 0 || echo 1)"
   RUN_PART=template RUN_SHARD=hooks run "$repoT"
   check "a forced whole run that failed takes the trust from a shard's pass it could not remove" "$([[ $ran == yes ]] && ! grep -q "already passed" "$repoT/out" && echo 0 || echo 1)"
   chmod 755 "$repoT/.git/gate-cache"
   run "$repoT"
   chmod 555 "$repoT/.git/gate-cache"
   GATE_NO_CACHE=1 STUB_EXIT=1 RUN_PART=template RUN_SHARD=scripts run "$repoT"
+  check "a forced shard run in a read-only cache folder holding the whole run's pass runs test.sh and fails with its status" "$([[ $status == 1 && $ran == yes && "$(tail -n 1 "$repoT/.git/test-sh-shards")" == scripts ]] && ! grep -q "could not" "$repoT/out" && echo 0 || echo 1)"
   run "$repoT"
   check "a forced shard run that failed takes the trust from the whole run's pass it could not remove" "$([[ $ran == yes ]] && ! grep -q "test.sh already passed" "$repoT/out" && echo 0 || echo 1)"
   chmod 755 "$repoT/.git/gate-cache"

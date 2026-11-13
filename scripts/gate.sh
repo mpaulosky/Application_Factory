@@ -209,9 +209,20 @@ run_static() {
 # A pass is trusted only while its token is still in its own stamp: a run that overlaps it and started later, whether it then failed, is still running or was killed, takes the
 # trust away as it starts. So no gate trusts a pass that a later failing run disproves, even one read before anything removed it, or one whose writer died before it could.
 # A stamp that can be neither written nor removed fails the gate, since it would keep vouching for an old pass. Clearing the old pass files is only tidying.
+# stamp_write <label> <stamp> <token>: writes the token to the start stamp; 1 when it couldn't, having removed the stamp so it vouches for nothing. A stamp that can be neither
+# written nor removed fails the gate, since it would keep vouching for an old pass.
+stamp_write() {
+  if { printf '%s\n' "$3" >"$2"; } 2>/dev/null; then return 0; fi
+  command rm -f -- "$2" 2>/dev/null || true
+  if [[ -e "$2" ]]; then
+    echo -e "${RED}❌ could not write or remove the $1 start stamp ($2): it would keep vouching for a pass this run may disprove. Remove it by hand.${RESET}" >&2
+    exit 1
+  fi
+  return 1
+}
+
 run_cached() {
-  local name="$1" label="$2" cache="" dirty tree common after dir whole token="" held s
-  local stamps=()
+  local name="$1" label="$2" cache="" dirty tree common after dir whole token="" mark held s
   shift 2
   if dirty="$(git status --porcelain --untracked-files=all)" && [[ -z "$dirty" ]] \
     && tree="$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" && common="$(git rev-parse --git-common-dir)"; then
@@ -225,28 +236,21 @@ run_cached() {
     return 0
   fi
   if [[ -n "$cache" ]]; then
-    token="$$.$RANDOM$RANDOM.$(date +%s)"
-    stamps=("$dir/started.$name-$tree")
+    mark="$$.$RANDOM$RANDOM.$(date +%s)"
+    token="$mark"
+    mkdir -p "$dir" 2>/dev/null || true
+    # The run's own stamp first, then the ones it overlaps. A whole run lists the shard stamps only after writing its own: a shard run that stamps after the list
+    # writes the whole's stamp after this run did, so this run's pass is not trusted either way.
+    stamp_write "$label" "$dir/started.$name-$tree" "$mark" || token=""
     if [[ "$name" == "$whole" ]]; then
       # Only the * is a pattern: the folder and names are quoted, so a clone path holding [, ] or ? is matched literally; an unmatched * stays literal and fails -e.
-      for s in "$dir/started.$whole."*"-$tree"; do [[ ! -e "$s" ]] || stamps+=("$s"); done
+      for s in "$dir/started.$whole."*"-$tree"; do [[ ! -e "$s" ]] || stamp_write "$label" "$s" "$mark" || true; done
     else
-      stamps+=("$dir/started.$whole-$tree")
+      stamp_write "$label" "$dir/started.$whole-$tree" "$mark" || true
     fi
-    mkdir -p "$dir" 2>/dev/null || true
-    for s in "${stamps[@]}"; do
-      if ! { printf '%s\n' "$token" >"$s"; } 2>/dev/null; then
-        command rm -f -- "$s" 2>/dev/null || true
-        if [[ -e "$s" ]]; then
-          echo -e "${RED}❌ could not write or remove the $label start stamp ($s): it would keep vouching for a pass this run may disprove. Remove it by hand.${RESET}" >&2
-          exit 1
-        fi
-        # Without its own stamp this run's pass could never be trusted, so it isn't stored.
-        [[ "$s" != "${stamps[0]}" ]] || token=""
-      fi
-    done
+    # Without its own stamp this run's pass could never be trusted, so it isn't stored (token is empty). Removing old pass files is only tidying.
     command rm -f -- "$cache" "$dir/$whole-$tree" 2>/dev/null || true
-    [[ "$name" != "$whole" ]] || command rm -f -- "$dir/$whole."*"-$tree" 2>/dev/null || true
+    if [[ "$name" == "$whole" ]]; then command rm -f -- "$dir/$whole."*"-$tree" 2>/dev/null || true; fi
   fi
   "$@"
   # Remembering the pass is best effort: a folder that can't be written to must not turn a passing command into a failing gate.
@@ -254,7 +258,7 @@ run_cached() {
     if after="$(git status --porcelain --untracked-files=all)" && [[ -z "$after" && "$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" == "$tree" ]]; then
       if [[ -z "$token" ]] || ! { printf '%s\n' "$token" >"$cache"; } 2>/dev/null; then
         echo "could not record the $label pass in $dir: it will run again next time." >&2
-      elif [[ "$(cat -- "${stamps[0]}" 2>/dev/null)" != "$token" ]]; then
+      elif [[ "$(cat -- "$dir/started.$name-$tree" 2>/dev/null)" != "$token" ]]; then
         echo "another run of $label, or of a part it overlaps, started on this tree while it ran: this pass will not be trusted." >&2
       fi
     else
