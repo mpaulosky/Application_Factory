@@ -5,9 +5,10 @@
 #   scripts/check-branch-name.sh --pr <branch>
 #
 # The pre-push hook runs the first form on each pushed branch. ci.yml's
-# "Branch name" job runs the second on a PR's head branch, which also accepts
-# the branches Actions and Dependabot create, since no hook ever sees them.
-# The pre-push hook also lets a person push to a Dependabot branch (see below).
+# "Branch name" job runs the second on a PR's head branch. The --pr form
+# additionally accepts docs/release-notes, docs/backfill-blog-posts and any
+# dependabot/*, since no hook ever sees the branches Actions and Dependabot
+# create. The hook accepts shell-safe dependabot/* too (see below).
 # CI is what catches a push that skipped the hook: a Claude cloud session's
 # claude/... branch, GitHub's web editor, or a clone without core.hooksPath.
 # Exits 0 when the name is allowed, 1 (with the reason) when it isn't.

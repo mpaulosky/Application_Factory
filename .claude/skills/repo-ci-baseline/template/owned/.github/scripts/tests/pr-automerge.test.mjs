@@ -373,6 +373,8 @@ async function evaluate(pr, events = [], options = {}) {
     // The reads after the request that throw (the read-back), and what they throw.
     readBackErrors = 0,
     readBackError = new Error("Server error on the read-back"),
+    // When set, the reads after the request find no PR (pullRequest: null).
+    readBackMissing = false,
     // When set, the reads after the request show the PR at this head (a push
     // landed while the read-back ran), with its checks passing; the commit has
     // to be in commits (graph()).
@@ -640,6 +642,9 @@ async function evaluate(pr, events = [], options = {}) {
         order.push("read-back");
         if (readsSinceRequest <= readBackErrors) {
           throw readBackError;
+        }
+        if (readBackMissing) {
+          return { repository: { pullRequest: null } };
         }
       } else if (asked.length > 0) {
         // A read of the PR after the record was posted and before the request.
@@ -1726,11 +1731,31 @@ for (const [name, options] of [
     assert.equal(result.addedLabelAt.length, 1);
     // askCopilotOnce held the run until the record was 30 seconds old.
     assert.ok(finishedAt - result.askedAt[0] >= 30 * 1000, `the run ended ${(finishedAt - result.askedAt[0]) / 1000} s after the record`);
+    // And no longer: the wait is what is left of the window, not a flat 30 s on top of the time already spent (a second of slack).
+    assert.ok(finishedAt - result.askedAt[0] <= 30 * 1000 + 1000, `the run ended ${(finishedAt - result.askedAt[0]) / 1000} s after the record`);
     for (const labelAt of result.addedLabelAt) {
       assert.ok(labelAt - result.askedAt[0] >= 30 * 1000, `review:claude was added ${(labelAt - result.askedAt[0]) / 1000} s after the record`);
     }
   });
 }
+
+// A read-back that finds no PR counts as a head that moved: the record still settles, but the caller reads the PR again, finds
+// it gone and adds nothing.
+test("holds a read-back that finds no PR until the record has settled, and calls in no Claude (mpaulosky/Application_Factory#53)", async () => {
+  mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.parse("2026-01-02T00:00:00Z") });
+  let result;
+  let finishedAt;
+  try {
+    result = await underClock(evaluate(readyPr(unreviewed), [], { readBackMissing: true, askWaitMs: 30 * 1000, askPollMs: 5000 }));
+    finishedAt = Date.now();
+  } finally {
+    mock.timers.reset();
+  }
+  assert.equal(result.requests.length, 1);
+  assert.deepEqual(result.addedLabels, [], result.logs.join("\n"));
+  assert.ok(finishedAt - result.askedAt[0] >= 30 * 1000, `the run ended ${(finishedAt - result.askedAt[0]) / 1000} s after the record`);
+  assert.ok(finishedAt - result.askedAt[0] <= 30 * 1000 + 1000, `the run ended ${(finishedAt - result.askedAt[0]) / 1000} s after the record`);
+});
 
 test("a registered request needs no settle wait: the run ends as soon as the read-back sees it (mpaulosky/Application_Factory#40)", async () => {
   mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.parse("2026-01-02T00:00:00Z") });
@@ -2323,6 +2348,7 @@ test("only the Copilot bot's exact identity is Copilot's pending request, not a 
     { __typename: "User", login: "copilot-x" },
     { __typename: "User", login: "Copilot" },
     { __typename: "Bot", login: "copilot-x" },
+    { __typename: "Bot", login: "copilot-x[bot]" },
     { __typename: "Bot", login: "my-copilot" },
     { __typename: "Team", slug: "copilot-team" }
   ];
@@ -2330,7 +2356,8 @@ test("only the Copilot bot's exact identity is Copilot's pending request, not a 
     const called = await evaluate(readyPr({ ...unreviewed, reviewRequests: pendingBy(other), comments: commentsOf(askedBy(ACTIONS, 3600)) }));
     assert.equal(called.addedLabels.length, 1, `${JSON.stringify(other)} isn't Copilot: Claude is called in`);
   }
-  for (const login of ["copilot-pull-request-reviewer", "Copilot"]) {
+  // The "[bot]" suffix and the case are ignored (isCopilotBot).
+  for (const login of ["copilot-pull-request-reviewer", "Copilot", "Copilot[bot]", "COPILOT"]) {
     const called = await evaluate(readyPr({ ...unreviewed, reviewRequests: pendingBy({ __typename: "Bot", login }), comments: commentsOf(askedBy(ACTIONS, 3600)) }));
     assert.deepEqual(called.addedLabels, [], `${login} is Copilot: Claude isn't called in`);
   }

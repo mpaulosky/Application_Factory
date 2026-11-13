@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
@@ -651,6 +652,20 @@ describe("reviewer log index", () => {
     assert.equal(reviewerLogFileName("feature/214-say-in-pr-auto-merges"), "feature-214-say-in-pr-auto-merges-reviewer.log");
     assert.equal(reviewerLogFileName('a\\b:c*d?e"f<g>h|i/j'), "a-b-c-d-e-f-g-h-i-j-reviewer.log");
     assert.equal(reviewerLogFileName("fix/421-x"), "fix-421-x-reviewer.log");
+  });
+
+  // reviewerLogFileName re-implements Sandcastle's buildLogFilename, which the package doesn't export. If the pinned Sandcastle names a
+  // reviewer log differently, every reviewer log would be dropped from the run report, so this runs the installed Sandcastle's own two
+  // functions (cut out of its built entry file) against ours. It fails, rather than skips, when they can't be found: the code moved.
+  it("names a log the way the installed Sandcastle's buildLogFilename does (mpaulosky/Application_Factory#53)", () => {
+    const source = readFileSync(fileURLToPath(import.meta.resolve("@ai-hero/sandcastle")), "utf8");
+    const sanitize = /^var sanitizeBranchForFilename = .*;$/m.exec(source)?.[0];
+    const build = /^var buildLogFilename = [\s\S]*?^\};$/m.exec(source)?.[0];
+    assert.ok(sanitize && build, "Sandcastle's buildLogFilename or sanitizeBranchForFilename is no longer where this test looks: update reviewerLogFileName and this test");
+    const sandcastleName = new Function(`${sanitize}\n${build}\nreturn buildLogFilename;`)() as (branch: string, target: undefined, name: string) => string;
+    for (const branch of ["feature/214-say-in-pr-auto-merges", "fix/421-x", "hotfix/3-a-b", "chore/some-slug", 'a\\b:c*d?e"f<g>h|i/j']) {
+      assert.equal(reviewerLogFileName(branch), sandcastleName(branch, undefined, "reviewer"), branch);
+    }
   });
 
   it("looks a log up by the name its build's branch gives it", () => {

@@ -60,6 +60,18 @@ expect refused "dependabot/x;rm"
 # shellcheck disable=SC2016 # the \$( is the point: a literal name, not an expansion
 expect refused 'dependabot/$(x)'
 expect refused "dependabot/a b"
+# The rest of the shell-unsafe characters, and a non-ASCII letter.
+# shellcheck disable=SC2016 # the backticks are the point: a literal name, not a substitution
+expect refused 'dependabot/a`x`'
+expect refused "dependabot/a'b"
+expect refused 'dependabot/a"b'
+expect refused 'dependabot/a|b'
+expect refused 'dependabot/a&b'
+# LC_ALL=C: in a UTF-8 locale bash's [A-Za-z] can match an accented letter, and the hook would take it (it is shell-safe anyway).
+LC_ALL=C expect refused 'dependabot/aé'
+# The --pr form still takes them: CI quotes the name.
+expect allowed --pr 'dependabot/a|b'
+expect allowed --pr 'dependabot/aé'
 # Branches Actions create are allowed only as a PR's head.
 for branch in docs/release-notes docs/backfill-blog-posts; do
   expect allowed --pr "$branch"

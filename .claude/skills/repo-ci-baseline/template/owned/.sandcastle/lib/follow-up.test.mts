@@ -1898,7 +1898,7 @@ describe("sweepSubject", () => {
       it(`is skipped on the branch ${branch}, which scripts/check-branch-name.sh refuses`, () => {
         const { result, approvalReads } = subjectOf(handOffPr({ headRefName: branch }));
 
-        assert.match("skip" in result ? result.skip : "", /check-branch-name\.sh/);
+        assert.match("skip" in result ? result.skip : "", /isn't a hand-off branch \(feature\/, fix\/, hotfix\/ or chore\/\)/);
         assert.equal(approvalReads(), 0);
       });
     }
