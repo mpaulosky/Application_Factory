@@ -200,7 +200,7 @@ export function sweepSubject(
   if (!followsHandOffs) {
     return { skip: `it carries ${FOLLOW_UP_LABEL}, which only a run with the default queue scope follows` };
   }
-  if (!isHandOffBranch(pr.headRefName)) return { skip: "its branch name isn't one scripts/check-branch-name.sh accepts" };
+  if (!isHandOffBranch(pr.headRefName)) return { skip: "its branch name isn't a hand-off branch (feature/, fix/, hotfix/ or chore/)" };
   if (issueNumber !== undefined && building.has(issueNumber)) {
     return { skip: `#${issueNumber} is labelled ${BUILDING_LABEL}, so a run is building it` };
   }
