@@ -1483,13 +1483,13 @@ function printable(text: string): string {
 // `record --staged` reads them, so the record doesn't depend on what the session still remembers of the earlier rounds.
 const STAGED_FILE = "findings.json";
 
-// Why a staging file or folder isn't the run's own, or undefined: it belongs to another user, or others can write to it. `uid` is the
+// Why a staging file or folder isn't the run's own, or undefined: it belongs to another user, or the group or others can write to it. `uid` is the
 // current user's (undefined where the platform has none, which skips the check). The findings in it are unpublished, and the file is read back
 // into the record, so a file another user could have written is not trusted.
 export function stagedOwnerProblem(info: { uid: number; mode: number }, uid: number | undefined, what: string): string | undefined {
   if (uid === undefined) return undefined;
   if (info.uid !== uid) return `${what} isn't owned by you.`;
-  if ((info.mode & 0o022) !== 0) return `${what} can be written by others: make it owner-only (chmod 700 for a folder, 600 for a file).`;
+  if ((info.mode & 0o022) !== 0) return `${what} can be written by the group or others: make it owner-only (chmod 700 for a folder, 600 for a file).`;
   return undefined;
 }
 
@@ -1533,7 +1533,7 @@ function readStaged(directory: string): z.infer<typeof findingListSchema> {
 // Add `findings` (a JSON array, each checked as `record` will check it) to the folder's file; a finding whose id is staged already
 // replaces that one, since a later round may change what became of it. The file holds the run's unpublished findings: it is made
 // owner-only and whole (a temp file renamed over it, never written through a link), in a folder that is the current user's, not a symlink
-// (a trailing slash doesn't hide one: the path is resolved first) and not writable by others, and a second `stage` that runs at the same
+// (a trailing slash doesn't hide one: the path is resolved first) and not writable by the group or others, and a second `stage` that runs at the same
 // time is refused by a lock file, since two would each merge into the same old file and one would lose the other's findings.
 // `close` is the descriptor close, a seam for the test that makes it fail.
 export function stageFindings(given: string, findings: unknown, close: (handle: number) => void = closeSync): { added: number; total: number } {

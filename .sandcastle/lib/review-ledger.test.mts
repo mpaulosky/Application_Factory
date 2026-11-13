@@ -4281,7 +4281,7 @@ describe("staging findings between rounds", () => {
     return file;
   };
   const folder = () => join(root, "run");
-  // A folder or staging file made by hand is owner-only whatever the umask is, as the folder `mktemp -d` makes is: `stage` refuses one others can write.
+  // A folder or staging file made by hand is owner-only whatever the umask is, as the folder `mktemp -d` makes is: `stage` refuses one the group or others can write.
   const ownerOnly = (path: string, mode: number) => {
     chmodSync(path, mode);
     return path;
@@ -4497,27 +4497,35 @@ describe("staging findings between rounds", () => {
     assert.deepEqual(ids(), ["R1", "R2"]);
   });
 
-  it("refuses a staging file or folder that others can write to", () => {
+  it("refuses a staging file or folder that the group or others can write to", () => {
     cli(["stage", folder(), array("a.json", [finding()])]);
     chmodSync(join(folder(), "findings.json"), 0o666);
-    assert.match(cli(["stage", folder(), array("b.json", [finding({ id: "R2" })])]).err, /can be written by others/);
-    assert.match(cli(["record", inputFile(), "--staged", folder()]).err, /can be written by others/);
+    assert.match(cli(["stage", folder(), array("b.json", [finding({ id: "R2" })])]).err, /can be written by the group or others/);
+    assert.match(cli(["record", inputFile(), "--staged", folder()]).err, /can be written by the group or others/);
     chmodSync(join(folder(), "findings.json"), 0o600);
     chmodSync(folder(), 0o777);
 
-    assert.match(cli(["stage", folder(), array("c.json", [finding({ id: "R3" })])]).err, /can be written by others/);
+    assert.match(cli(["stage", folder(), array("c.json", [finding({ id: "R3" })])]).err, /can be written by the group or others/);
     assert.deepEqual(ids(), ["R1"]);
   });
 
-  it("refuses a staging file that is a FIFO at once, and leaves no lock", { timeout: 150000 }, () => {
+  it("refuses a staging file that is a FIFO at once, and leaves no lock", { timeout: 150000 }, (context) => {
     // The timeouts below only catch a blocking open of the FIFO, which would never return. They must outlast tsx starting this module on
     // a loaded machine (several suites at once took over 10 s), or a slow start looks like a hang (it showed as status 143 in mpaulosky/Application_Factory#57). Two children at 60 s are 120 s, inside the 150 s test timeout.
     makeFolder();
-    execFileSync("mkfifo", [join(folder(), "findings.json")]);
+    // Skip only when the binary is missing: any other failure (a filesystem without FIFOs, a permission error) must fail the test, not hide the check.
+    const made = spawnSync("mkfifo", [join(folder(), "findings.json")], { encoding: "utf8" });
+    if ((made.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return context.skip("mkfifo is not available");
+    assert.equal(made.status, 0, `mkfifo failed: ${made.stderr}${made.error?.message ?? ""}`);
 
     const staging = spawnSync("bash", [reviewScript, "stage", folder(), array("a.json", [finding()])], { cwd: repo, encoding: "utf8", env: childEnv, timeout: 60000 });
     const recording = spawnSync("bash", [reviewScript, "record", inputFile(), "--staged", folder()], { cwd: repo, encoding: "utf8", env: childEnv, timeout: 60000 });
 
+    // A spawn error or a kill by the timeout is a hang or a failed start, so these say so before the status assertions would report a bare null.
+    assert.equal(staging.error, undefined, `stage did not finish (signal ${staging.signal}): ${staging.error?.message}`);
+    assert.equal(recording.error, undefined, `record did not finish (signal ${recording.signal}): ${recording.error?.message}`);
+    assert.equal(staging.signal, null, `stage was killed by ${staging.signal}`);
+    assert.equal(recording.signal, null, `record was killed by ${recording.signal}`);
     assert.equal(staging.status, 1, staging.stderr);
     assert.match(staging.stderr, /isn't a regular file\./);
     assert.equal(recording.status, 1, recording.stderr);
@@ -4625,8 +4633,8 @@ describe("stagedOwnerProblem", () => {
 
   it("refuses another user's file or folder, and one that the group or others can write", () => {
     assert.match(stagedOwnerProblem({ uid: 1001, mode: 0o100600 }, 1000, "f") ?? "", /^f isn't owned by you\.$/);
-    assert.match(stagedOwnerProblem({ uid: 1000, mode: 0o100620 }, 1000, "f") ?? "", /^f can be written by others/);
-    assert.match(stagedOwnerProblem({ uid: 1000, mode: 0o100602 }, 1000, "f") ?? "", /^f can be written by others/);
+    assert.match(stagedOwnerProblem({ uid: 1000, mode: 0o100620 }, 1000, "f") ?? "", /^f can be written by the group or others/);
+    assert.match(stagedOwnerProblem({ uid: 1000, mode: 0o100602 }, 1000, "f") ?? "", /^f can be written by the group or others/);
   });
 
   it("checks nothing where the platform has no user id", () => {

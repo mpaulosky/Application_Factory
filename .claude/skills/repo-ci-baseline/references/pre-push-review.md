@@ -42,7 +42,7 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   Advisory findings never block: one that needs a person goes to one follow-up issue per branch.
 - A run's findings are staged, not held in the session. Each round's triage goes to `scripts/review.sh stage <run> <file>`: each finding is checked as `record` checks it (an
   `accepted` one is refused), and one staged again under the same id replaces the earlier. The file is owner-only and replaced whole, and a second `stage` at the same time is
-  refused. `stage` refuses a run folder that is a symlink (a trailing slash doesn't hide one), another user's or writable by others. `stage` and `record --staged` refuse a
+  refused. `stage` refuses a run folder that is a symlink (a trailing slash doesn't hide one), another user's or writable by the group or others. `stage` and `record --staged` refuse a
   `findings.json` that is a link, not a regular file (a FIFO included), another user's or writable by the group or others. `record - --staged <run>` records
   `<run>/findings.json` with any findings in the JSON after them, so a long session that was compacted still records every round exactly (ids, lines, tests).
   The folder is the run's own `mktemp -d`; `record` is still the only writer of the ledger.
