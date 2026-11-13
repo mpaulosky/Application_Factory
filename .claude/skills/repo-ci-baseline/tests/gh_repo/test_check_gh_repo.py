@@ -2502,6 +2502,8 @@ def test_untold_joins_a_line_through_a_hash_inside_a_string_that_spans_lines(tmp
     ("echo \"x \\\ny \\\nz\" # GH_REPO=o/r \\\ngh pr view 1\n", [4]),
     # A comment ending in a backslash after a string on one line still joins nothing (the line-by-line reading already held).
     ("echo \"x\" # GH_REPO=o/r \\\ngh pr view 1\n", [2]),
+    # The line after that comment starts a command: an export in an if that never runs leaves GH_REPO unset.
+    ("echo \"x \\\ny\" # c \\\nif false; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
     # A real continuation after the closed string still tells the gh its own GH_REPO= on the joined line.
     ("echo \"x \\\ny\" ; GH_REPO=o/r \\\ngh pr view 1\n", []),
 ])
