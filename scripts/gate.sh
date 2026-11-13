@@ -247,7 +247,8 @@ run_cached() {
     fi
   fi
   "$@"
-  # Remembering the pass is best effort: a folder that can't be written to must not turn a passing command into a failing gate.
+  # Remembering the pass is best effort: a folder that can't be written to must not turn a passing command into a failing gate. The one exception: a pass that another run
+  # started meanwhile disproved, and that can't be removed, fails the gate, since the next run would trust it.
   if [[ -n "$cache" ]]; then
     if after="$(git status --porcelain --untracked-files=all)" && [[ -z "$after" && "$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" == "$tree" ]]; then
       if [[ -z "$token" ]]; then

@@ -620,6 +620,35 @@ chmod +x "$work/recheck-bin/cat"
 status=0
 (cd "$repoR" && env GATE_PART=template GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/recheck-bin:$PATH" bash scripts/gate.sh > "$repoR/out" 2>&1) || status=$?
 check "a run that starts after the first check but before the re-check takes the stored pass away" "$([[ $status == 0 && -e $repoR/.git/recheck-done ]] && grep -q "this pass is not remembered" "$repoR/out" && ! compgen -G "$repoR/.git/gate-cache/test-sh-*" > /dev/null && echo 0 || echo 1)"
+if [[ "$(id -u)" != 0 ]]; then
+  # A start stamp that can be neither written nor removed fails the gate before test.sh: an earlier run could otherwise keep its token and a pass this run disproves.
+  repoW="$(new_repo cache-stamp-stuck)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoW/.git/info/exclude"; commit_all "$repoW" base
+  mkdir -p "$repoW/.git/gate-cache"; echo earlier > "$repoW/.git/gate-cache/started.test-sh-$(git -C "$repoW" rev-parse 'HEAD^{tree}')"
+  chmod 444 "$repoW/.git/gate-cache/"started.*; chmod 555 "$repoW/.git/gate-cache"
+  RUN_PART=template run "$repoW"
+  check "a start stamp that can be neither written nor removed fails the gate before test.sh, saying so" "$([[ $status == 1 && $ran == no ]] && grep -q "could not write or remove the test.sh start stamp" "$repoW/out" && echo 0 || echo 1)"
+  chmod 755 "$repoW/.git/gate-cache"
+  # A pass the re-check finds disproved but can't remove fails the gate: a cat that, on the re-check's read, rewrites the stamp and makes the folder read-only.
+  repoX="$(new_repo cache-recheck-stuck)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoX/.git/info/exclude"; commit_all "$repoX" base
+  mkdir -p "$work/recheck-stuck-bin"
+  cat > "$work/recheck-stuck-bin/cat" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  case "\$a" in */started.test-sh-*)
+    n=\$(( \$("$(command -v cat)" "$repoX/.git/reads" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "$repoX/.git/reads"
+    if [[ \$n == 2 ]]; then printf 'other\\n' > "\$a"; chmod 555 "\${a%/*}"; echo other; exit 0; fi ;;
+  esac
+done
+exec "$(command -v cat)" "\$@"
+SHIM
+  chmod +x "$work/recheck-stuck-bin/cat"
+  status=0
+  (cd "$repoX" && env GATE_PART=template GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/recheck-stuck-bin:$PATH" bash scripts/gate.sh > "$repoX/out" 2>&1) || status=$?
+  check "a pass the re-check finds disproved but can't remove fails the gate, saying so" "$([[ $status == 1 && "$(cat "$repoX/.git/reads" 2>/dev/null)" == 2 ]] && grep -q "its pass (.*) could not be removed" "$repoX/out" && echo 0 || echo 1)"
+  chmod 755 "$repoX/.git/gate-cache"
+else
+  echo "skip - the stuck-stamp and stuck-pass cases need a user other than root"
+fi
 # The stamp is written before the old passes are cleared; the other order leaves a moment in which an earlier run stores a pass a later failing run never clears.
 stamp_first="$(awk '/^run_cached\(\) \{/ { in_f = 1 } in_f && /printf .* >"\$stamp"/ && !s { s = NR } in_f && /command rm -f -- "\$\{overlapping\[@\]\}"/ && !r { r = NR } in_f && /^\}/ { in_f = 0 } END { print (s && r && s < r) ? 0 : 1 }' "$here/scripts/gate.sh")"
 check "run_cached writes the start stamp before it clears the overlapping passes" "$stamp_first"
