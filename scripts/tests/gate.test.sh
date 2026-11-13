@@ -3,7 +3,7 @@
 # status on; a changed, missing or execute-bit-mismatched copy stops the gate before the stub runs; the local review check (ADR 0010)
 # skips only on GATE_SKIP_REVIEW=1, fails without an origin/main or when origin/main shares no history with HEAD, and passes review.sh check's status on, ahead of test.sh. It also checks
 # that gate.sh names each copied stand-alone test and lists every copy, that repo-config.mts lists the Factory's own files under Owned patterns,
-# that test.sh's pass is remembered per clean tree (skipped the second time, shared by worktrees, trusted only while its token is in its start stamp, never stored for a tree that changed), that --quick stops after the lint and --sync restores drifted, missing and non-executable copies and then stops, that a bare #N in an Owned file fails the gate
+# that test.sh's pass is remembered per clean tree (skipped the second time, shared by worktrees, trusted only while its token is in its start stamp, checked and stamped under a per-tree lock that a held lock or a signal leaves safe, never stored for a tree that changed), that --quick stops after the lint and --sync restores drifted, missing and non-executable copies and then stops, that a bare #N in an Owned file fails the gate
 # and --quick (and a missing python3 or a broken checker fails closed), that dependabot.yml watches the root package.json, and the review tests' install step (a missing pnpm, a pnpm that leaves no tsx, a pnpm that installs it).
 # It also checks that .claude/settings.json runs the executable scripts/lint-edited-file.sh after Edit, Write and MultiEdit (ADR 0011), and that the check fails on a dropped matcher, another event or hook type,
 # a command without the quotes around CLAUDE_PROJECT_DIR or naming another script, a non-executable script and a file that is not JSON.
@@ -16,7 +16,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 work="$(mktemp -d)"
 trap 'chmod -R u+w "$work" 2>/dev/null || true; rm -rf "$work"' EXIT # a case that makes a folder read-only is cleaned up even when it is interrupted
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH GATE_PART STUB_SANDCASTLE_EXIT RUN_PART TEST_SH_SHARD RUN_SHARD STUB_DURING # a caller's GATE_NO_CACHE=1 must not reach the stub gate runs; the tests set it themselves where they need it
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH GATE_PART STUB_SANDCASTLE_EXIT RUN_PART TEST_SH_SHARD RUN_SHARD STUB_DURING MKDIR_LOG MKDIR_FAIL_ONCE MKDIR_RELEASE CAT_MARK # a caller's GATE_NO_CACHE=1 must not reach the stub gate runs; the tests set it themselves where they need it
 
 pass=0; failed=0
 check() { # check <description> <condition: 0 for ok>
@@ -591,12 +591,12 @@ check "a forced full gate whose test.sh fails fails the gate" "$([[ $status == 1
 RUN_PART=template RUN_SHARD=hooks run "$repoP"
 check "and the next run of a shard tests again instead of trusting its old pass" "$([[ $status == 0 && "$(shards_seen)" == hooks ]] && ! grep -q "already passed" "$repoP/out" && echo 0 || echo 1)"
 
-# Two runs on one tree that overlap in time (Copilot's review of PR 65): a whole run that passes while a shard run, started after it, fails keeps no pass.
+# Two runs on one tree that overlap in time (Copilot's review of PR 65): a whole run that passes while a shard run, started after it, fails stores a pass that is not trusted.
 rm -rf "$repoP/.git/gate-cache" "$repoP/.git/test-sh-shards"
 # shellcheck disable=SC2016 # the command is run later by the stub, in the repo: its \$(...) must not expand here
 overlap='GATE_PART=template TEST_SH_SHARD=hooks STUB_EXIT=1 GATE_NO_CACHE=1 bash scripts/gate.sh > "$(git rev-parse --git-common-dir)/overlap-out" 2>&1'
 STUB_DURING="$overlap" run "$repoP"
-check "a whole run that a failing shard run overlapped passes, saying its pass is not remembered" "$([[ $status == 0 && "$(sed -n 2p "$repoP/.git/test-sh-shards")" == hooks ]] && grep -q "test.sh (hooks shard)" "$repoP/.git/overlap-out" && grep -q "another run of test.sh, or of a part it overlaps, started on this tree" "$repoP/out" && echo 0 || echo 1)"
+check "a whole run that a failing shard run overlapped passes, saying its pass will not be trusted" "$([[ $status == 0 && "$(sed -n 2p "$repoP/.git/test-sh-shards")" == hooks ]] && grep -q "test.sh (hooks shard)" "$repoP/.git/overlap-out" && grep -q "another run of test.sh, or of a part it overlaps, started on this tree" "$repoP/out" && echo 0 || echo 1)"
 rm -f "$repoP/$skill/ran"; run "$repoP"
 check "and the next full gate runs test.sh instead of trusting that pass" "$([[ $status == 0 && $ran == yes && "$(shards_seen)" == unset ]] && ! grep -q "already passed" "$repoP/out" && echo 0 || echo 1)"
 RUN_PART=template RUN_SHARD=hooks run "$repoP"
@@ -638,7 +638,8 @@ if [[ "$(id -u)" != 0 ]]; then
   run "$repoT"
   check "a run that can't write its own stamp stores no pass, saying it couldn't record it" "$([[ $status == 0 && $ran == yes && ! -e $repoT/.git/gate-cache/test-sh-$treeT && ! -e $repoT/.git/gate-cache/started.test-sh-$treeT ]] && grep -q "could not record the test.sh pass" "$repoT/out" && ! grep -q "will not be trusted" "$repoT/out" && echo 0 || echo 1)"
 fi
-# The whole run writes its own stamp before it lists the shard stamps: listed first, a shard run stamping in between would be missed while the whole run's pass stayed trusted.
+# The whole run writes its own stamp before it lists the shard stamps: listed first, a shard run stamping in between would be missed, and the whole run's stamp, written
+# after the shard's, would leave both passes trusted though each run may fail.
 own_first="$(awk '/^run_cached\(\) \{/ { f = 1 } f && /stamp_write "\$label" "\$dir\/started\.\$name-\$tree"/ && !o { o = NR } f && /for s in "\$dir\/started\.\$whole\."\*/ && !g { g = NR } f && /^\}/ { f = 0 } END { print (o && g && o < g) ? 0 : 1 }' "$here/scripts/gate.sh")"
 check "run_cached writes a run's own stamp before it lists the shard stamps" "$own_first"
 RUN_PART=template RUN_SHARD=hooks run "$repoT"; run "$repoT"
@@ -685,6 +686,65 @@ check "(the whole run's own stamp alone leaves a shard pass trusted)" "$([[ $ran
 mkdir "$cacheL/lock-$treeL"; RUN_PART=template RUN_SHARD=hooks run "$repoL"
 check "a shard run doesn't trust its pass while a whole run holds the lock between its stamp writes: test.sh runs and stores no pass" "$([[ $status == 0 && $ran == yes && -d $cacheL/lock-$treeL ]] && lock_held "$repoL" && ! grep -q "test.sh (hooks shard) already passed" "$repoL/out" && echo 0 || echo 1)"
 rmdir "$cacheL/lock-$treeL"
+# The lock's tries, counted by a mkdir on PATH: it logs each try on a lock folder to $MKDIR_LOG and, with $MKDIR_FAIL_ONCE naming a file that doesn't exist yet, fails the
+# first try without making the folder (a lock released between the failed mkdir and the test that follows); with $MKDIR_RELEASE naming a file that doesn't exist yet, it
+# removes the lock folder 0.5 seconds after the first try (a holder that releases the lock while the run waits).
+mkdir_shim="$work/mkdir-shim"; mkdir -p "$mkdir_shim"; real_mkdir="$(command -v mkdir)"
+cat > "$mkdir_shim/mkdir" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == */lock-* ]]; then
+    [[ -z "\${MKDIR_LOG:-}" ]] || echo try >> "\$MKDIR_LOG"
+    if [[ -n "\${MKDIR_FAIL_ONCE:-}" && ! -e "\$MKDIR_FAIL_ONCE" ]]; then : > "\$MKDIR_FAIL_ONCE"; exit 1; fi
+    if [[ -n "\${MKDIR_RELEASE:-}" && ! -e "\$MKDIR_RELEASE" ]]; then : > "\$MKDIR_RELEASE"; (sleep 0.5; rmdir "\$a") >/dev/null 2>&1 & fi
+  fi
+done
+exec "$real_mkdir" "\$@"
+EOF
+chmod +x "$mkdir_shim/mkdir"
+# Each counted run is the template part alone: a full gate takes the lock again for the Sandcastle check.
+tries() { if [[ -f "$work/mkdir-tries" ]]; then wc -l < "$work/mkdir-tries" | tr -d ' '; else echo 0; fi; }
+run "$repoL"; run "$repoL"
+command rm -f "$work/mkdir-tries" "$work/mkdir-failed"
+RUN_PART=template PATH="$mkdir_shim:$PATH" MKDIR_LOG="$work/mkdir-tries" MKDIR_FAIL_ONCE="$work/mkdir-failed" run "$repoL"
+check "a lock released between a failed mkdir and the test after it is tried again at once and taken: the pass is trusted" "$([[ $status == 0 && $ran == no && "$(tries)" == 2 && ! -e $cacheL/lock-$treeL ]] && grep -q "test.sh already passed" "$repoL/out" && ! grep -q "the cache lock" "$repoL/out" && echo 0 || echo 1)"
+mkdir "$cacheL/lock-$treeL"; command rm -f "$work/mkdir-released"
+RUN_PART=template PATH="$mkdir_shim:$PATH" MKDIR_RELEASE="$work/mkdir-released" run "$repoL"
+check "a lock released while a run waits for it is taken: the pass is trusted and no lock is left" "$([[ $status == 0 && $ran == no && ! -e $cacheL/lock-$treeL ]] && grep -q "test.sh already passed" "$repoL/out" && ! grep -q "the cache lock" "$repoL/out" && echo 0 || echo 1)"
+mkdir "$cacheL/lock-$treeL"; command rm -f "$work/mkdir-tries"
+RUN_PART=template PATH="$mkdir_shim:$PATH" MKDIR_LOG="$work/mkdir-tries" run "$repoL"
+check "a lock that stays held is tried 20 times before the run goes on without it" "$([[ $status == 0 && $ran == yes && "$(tries)" == 20 ]] && lock_held "$repoL" && echo 0 || echo 1)"
+rmdir "$cacheL/lock-$treeL"
+if [[ "$(id -u)" != 0 ]]; then
+  # A cache folder that can't hold a lock gives up at once (one try and one more, since the lock isn't there), saying nothing about a held lock.
+  run "$repoL"; chmod 555 "$cacheL"; command rm -f "$work/mkdir-tries"
+  RUN_PART=template PATH="$mkdir_shim:$PATH" MKDIR_LOG="$work/mkdir-tries" run "$repoL"
+  check "a lock that can't be made in a read-only cache folder is given up at once: test.sh runs, saying nothing of a held lock" "$([[ $status == 0 && $ran == yes && "$(tries)" == 2 ]] && ! grep -q "the cache lock" "$repoL/out" && echo 0 || echo 1)"
+  chmod 755 "$cacheL"
+  # A pass file that can't be written after the lock and stamps were: the run passes and says the pass isn't recorded, and the next run tests again.
+  # shellcheck disable=SC2016 # run later by the stub, in the repo
+  STUB_DURING='chmod 555 "$(git rev-parse --git-common-dir)/gate-cache"' run "$repoL"
+  chmod 755 "$cacheL"
+  check "a pass file that can't be written leaves the run passing, saying its pass isn't recorded" "$([[ $status == 0 && $ran == yes && ! -e $cacheL/test-sh-$treeL ]] && grep -q "could not record the test.sh pass" "$repoL/out" && ! grep -q "the cache lock" "$repoL/out" && echo 0 || echo 1)"
+  run "$repoL"
+  check "so the next run tests again" "$([[ $ran == yes ]] && echo 0 || echo 1)"
+fi
+# A gate that gets TERM while it holds the lock releases it and ends by that signal. A cat on PATH stands in for the hit check's read of the pass: it marks that it runs, under
+# the lock, and waits, so the signal comes while the lock is held.
+cat_shim="$work/cat-shim"; mkdir -p "$cat_shim"; real_cat="$(command -v cat)"
+cat > "$cat_shim/cat" <<EOF
+#!/usr/bin/env bash
+if [[ "\${!#}" == */gate-cache/test-sh-* && -n "\${CAT_MARK:-}" ]]; then : > "\$CAT_MARK"; sleep 2; fi
+exec "$real_cat" "\$@"
+EOF
+chmod +x "$cat_shim/cat"
+run "$repoL"; command rm -f "$work/cat-marked"
+(cd "$repoL" && exec env PATH="$cat_shim:$PATH" CAT_MARK="$work/cat-marked" GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 GATE_PART=template bash scripts/gate.sh >"$repoL/out" 2>&1) &
+signalled=$!
+for _ in $(seq 100); do [[ ! -e "$work/cat-marked" ]] || break; sleep 0.1; done
+held_then="$([[ -d $cacheL/lock-$treeL ]] && echo yes || echo no)"
+kill -s TERM "$signalled"; status=0; wait "$signalled" || status=$?
+check "a gate given TERM while it holds the cache lock releases it and ends by the signal" "$([[ -e $work/cat-marked && $held_then == yes && $status == 143 && ! -e $cacheL/lock-$treeL ]] && echo 0 || echo 1)"
 # A stamp stuck as a folder can be neither written nor removed, even in a writable cache folder: the gate fails, and releases the lock it took.
 command rm -f "$cacheL/started.test-sh-$treeL"; mkdir -p "$cacheL/started.test-sh-$treeL/stuck"
 RUN_PART=template run "$repoL"

@@ -200,21 +200,34 @@ run_static() {
 
 }
 
-# cache_lock <lock>: takes the per-tree cache lock, a folder (mkdir is atomic), waiting up to about 2 seconds; 1 when it can't. A cache-hit check and a run's stamp writes hold it, so
-# a check never reads a run's stamps half written (its own written, the ones it overlaps not yet). It's held only for those few file writes, so a lock still there after 2 seconds
-# belongs to a paused gate, or to one killed while holding it, and stays until a person removes it. cache_unlock releases the lock this shell holds, if any.
+# cache_lock <lock>: takes the per-tree cache lock, a folder (mkdir is atomic), trying 20 times 0.1 seconds apart (about 2 seconds); 1 when it can't. A cache-hit check and a
+# run's stamp writes hold it, so a check never reads a run's stamps half written (its own written, the ones it overlaps not yet). A lock released between a failed mkdir and
+# the test that follows is tried again at once; one that can't be made and isn't there (a read-only cache folder) gives up at once. It's held only for a few file writes, so
+# a lock still there after 2 seconds belongs to a paused gate, or to one killed by SIGKILL while holding it, and stays until a person removes it. While it's held, INT, TERM
+# and HUP release it and then end the gate as the signal would have. cache_unlock releases the lock this shell holds, if any, and restores those signals.
 cache_locked=""
 cache_lock() {
-  local i
+  local i sig
   for ((i = 0; i < 20; i++)); do
-    if mkdir -- "$1" 2>/dev/null; then cache_locked="$1"; return 0; fi
+    if mkdir -- "$1" 2>/dev/null || { [[ ! -e "$1" ]] && mkdir -- "$1" 2>/dev/null; }; then
+      cache_locked="$1"
+      for sig in INT TERM HUP; do
+        # shellcheck disable=SC2064 # $sig is meant to expand now, once per signal; \$BASHPID when the signal comes
+        trap "cache_unlock; kill -s $sig \$BASHPID" "$sig"
+      done
+      return 0
+    fi
     [[ -e "$1" ]] || return 1
     sleep 0.1
   done
   return 1
 }
 cache_unlock() {
-  if [[ -n "$cache_locked" ]]; then rmdir -- "$cache_locked" 2>/dev/null || true; cache_locked=""; fi
+  if [[ -n "$cache_locked" ]]; then
+    rmdir -- "$cache_locked" 2>/dev/null || true
+    cache_locked=""
+    trap - INT TERM HUP
+  fi
 }
 
 # stamp_write <label> <stamp> <token>: writes the token to the start stamp; 1 when it couldn't, having removed the stamp so it vouches for nothing. A stamp that can be neither
