@@ -202,68 +202,60 @@ run_static() {
 
 # run_cached <name> <label> <command...>: runs the command (minutes long), unless it already passed on this tree. A pass is remembered for the tree HEAD points at, when nothing is
 # uncommitted or untracked (ignored files don't count), in the common git directory so every worktree of the clone shares it: the same tree is not checked twice. Only a pass is stored, and
-# only when the tree is still that clean tree after the command ran. GATE_NO_CACHE=1 always runs it. Any run that goes on to run the command clears the old pass first (and fails if it can't),
-# so a failure leaves nothing remembered for the next run. A git that fails here (a broken index, a lock) leaves the tree unproven clean, so the command runs and nothing is stored.
-# A name such as test-sh.hooks is one part of the whole named before the dot (test-sh, ADR 0013). The whole and its parts overlap, so a run of the whole clears every
-# part's pass for the tree too, and a run of a part clears the whole's: a failure leaves no pass standing that covers what failed. Parts don't overlap each other.
-# Two runs on one tree can overlap in time too (two worktrees of a clone): each run writes its own token to the tree's start stamp, and stores its pass only while the stamp still
-# holds its token, checking again after writing it. A run that started later (a part, a whole, or another part) may yet fail, so the earlier run's pass is not kept; the cost is a
-# re-run after two runs that overlapped.
+# only when the tree is still that clean tree after the command ran. GATE_NO_CACHE=1 always runs it. A git that fails here (a broken index, a lock) leaves the tree unproven clean, so the
+# command runs and nothing is stored.
+# A name such as test-sh.hooks is one part of the whole named before the dot (test-sh, ADR 0013); the whole and each part overlap, parts don't overlap each other. Every run first
+# writes a fresh token to its own start stamp and to the stamps of the runs it overlaps (a part: the whole's; the whole: every part's there is), and a pass holds its run's token.
+# A pass is trusted only while its token is still in its own stamp: a run that overlaps it and started later, whether it then failed, is still running or was killed, takes the
+# trust away as it starts. So no gate trusts a pass that a later failing run disproves, even one read before anything removed it, or one whose writer died before it could.
+# A stamp that can be neither written nor removed fails the gate, since it would keep vouching for an old pass. Clearing the old pass files is only tidying.
 run_cached() {
-  local name="$1" label="$2" cache="" dirty tree common after whole f stale stamp="" token=""
+  local name="$1" label="$2" cache="" dirty tree common after dir whole token="" held s
+  local stamps=()
   shift 2
   if dirty="$(git status --porcelain --untracked-files=all)" && [[ -z "$dirty" ]] \
     && tree="$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" && common="$(git rev-parse --git-common-dir)"; then
     cache="$common/gate-cache/$name-$tree"
+    dir="${cache%/*}"
+    whole="${name%%.*}"
   fi
-  if [[ -n "$cache" && -f "$cache" && "${GATE_NO_CACHE:-}" != "1" ]]; then
+  if [[ -n "$cache" && -f "$cache" && "${GATE_NO_CACHE:-}" != "1" ]] && held="$(cat -- "$cache" 2>/dev/null)" \
+    && [[ -n "$held" && "$held" == "$(cat -- "$dir/started.$name-$tree" 2>/dev/null)" ]]; then
     echo "$label already passed on this tree (${cache##*-}): skipped. GATE_NO_CACHE=1 runs it again."
     return 0
   fi
   if [[ -n "$cache" ]]; then
-    whole="${name%%.*}"
-    # The stamp is written before the old passes are cleared: a run that is storing its pass meanwhile then either sees the new token and stores nothing, or stored before
-    # the clear, which removes it.
-    stamp="${cache%/*}/started.$whole-$tree"
     token="$$.$RANDOM$RANDOM.$(date +%s)"
-    # A stamp that can't be written is removed instead, so an earlier run doesn't still find its own token; one that can't be removed either fails the gate.
-    if ! { mkdir -p "${cache%/*}" && printf '%s\n' "$token" >"$stamp"; } 2>/dev/null; then
-      token=""
-      command rm -f -- "$stamp" 2>/dev/null || true
-      if [[ -e "$stamp" ]]; then
-        echo -e "${RED}❌ could not write or remove the $label start stamp ($stamp): an earlier run could keep a pass this run disproves. Remove it by hand.${RESET}" >&2
-        exit 1
-      fi
+    stamps=("$dir/started.$name-$tree")
+    if [[ "$name" == "$whole" ]]; then
+      # Only the * is a pattern: the folder and names are quoted, so a clone path holding [, ] or ? is matched literally; an unmatched * stays literal and fails -e.
+      for s in "$dir/started.$whole."*"-$tree"; do [[ ! -e "$s" ]] || stamps+=("$s"); done
+    else
+      stamps+=("$dir/started.$whole-$tree")
     fi
-    # Only the * is a pattern: the folder and names are quoted, so a clone path holding [, ] or ? is matched literally, and an unmatched * stays literal and fails -e.
-    local overlapping=("${cache%/*}/$whole-$tree" "$cache")
-    [[ "$name" != "$whole" ]] || overlapping+=("${cache%/*}/$whole."*"-$tree")
-    command rm -f -- "${overlapping[@]}" 2>/dev/null || true
-    stale=""
-    for f in "${overlapping[@]}"; do if [[ -e "$f" ]]; then stale="$f"; break; fi; done
-    if [[ -n "$stale" ]]; then
-      echo -e "${RED}❌ could not clear the remembered $label pass ($stale): a failure now would leave it for the next run. Remove it by hand.${RESET}" >&2
-      exit 1
-    fi
-  fi
-  "$@"
-  # Remembering the pass is best effort: a folder that can't be written to must not turn a passing command into a failing gate. The one exception: a pass that another run
-  # started meanwhile disproved, and that can't be removed, fails the gate, since the next run would trust it.
-  if [[ -n "$cache" ]]; then
-    if after="$(git status --porcelain --untracked-files=all)" && [[ -z "$after" && "$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" == "$tree" ]]; then
-      if [[ -z "$token" ]]; then
-        echo "could not record the $label pass in ${cache%/*}: it will run again next time." >&2
-      elif [[ "$(cat "$stamp" 2>/dev/null)" != "$token" ]]; then
-        echo "another run of $label, or of a part it overlaps, started on this tree while it ran: this pass is not remembered." >&2
-      elif ! { : >"$cache"; } 2>/dev/null; then
-        echo "could not record the $label pass in ${cache%/*}: it will run again next time." >&2
-      elif [[ "$(cat "$stamp" 2>/dev/null)" != "$token" ]]; then
-        command rm -f -- "$cache" 2>/dev/null || true
-        if [[ -e "$cache" ]]; then
-          echo -e "${RED}❌ another run of $label started on this tree while it ran, and its pass ($cache) could not be removed. Remove it by hand.${RESET}" >&2
+    mkdir -p "$dir" 2>/dev/null || true
+    for s in "${stamps[@]}"; do
+      if ! { printf '%s\n' "$token" >"$s"; } 2>/dev/null; then
+        command rm -f -- "$s" 2>/dev/null || true
+        if [[ -e "$s" ]]; then
+          echo -e "${RED}❌ could not write or remove the $label start stamp ($s): it would keep vouching for a pass this run may disprove. Remove it by hand.${RESET}" >&2
           exit 1
         fi
-        echo "another run of $label, or of a part it overlaps, started on this tree while it ran: this pass is not remembered." >&2
+        # Without its own stamp this run's pass could never be trusted, so it isn't stored.
+        [[ "$s" != "${stamps[0]}" ]] || token=""
+      fi
+    done
+    command rm -f -- "$cache" "$dir/$whole-$tree" 2>/dev/null || true
+    [[ "$name" != "$whole" ]] || command rm -f -- "$dir/$whole."*"-$tree" 2>/dev/null || true
+  fi
+  "$@"
+  # Remembering the pass is best effort: a folder that can't be written to must not turn a passing command into a failing gate.
+  if [[ -n "$cache" ]]; then
+    if after="$(git status --porcelain --untracked-files=all)" && [[ -z "$after" && "$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" == "$tree" ]]; then
+      if [[ -z "$token" ]] || ! { printf '%s\n' "$token" >"$cache"; } 2>/dev/null; then
+        echo "could not record the $label pass in $dir: it will run again next time." >&2
+      elif [[ "$(cat -- "${stamps[0]}" 2>/dev/null)" != "$token" ]]; then
+        echo "another run of $label, or of a part it overlaps, started on this tree while it ran: this pass will not be trusted." >&2
       fi
     else
       echo "the tree changed while $label ran: this pass is not remembered." >&2
