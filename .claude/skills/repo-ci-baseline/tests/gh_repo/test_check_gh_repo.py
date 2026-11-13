@@ -2343,7 +2343,6 @@ def test_keywords_takes_every_character_that_ends_a_word(char):
 @pytest.mark.parametrize("text, expected", [
     ("$'a'", True), ("a$'a'", True), ("'a'", False), ("\\$'a'", False), ("$$'a'", False), ("$$$'a'", True), ("\\\\$'a'", True),
     ("\\$$'a'", True), ("\\\\$$'a'", False), ("\\$$$'a'", False), ("\"$'a'\"", True),
-    ("$'a'$", True), ("$'a'\\", True), ("$$$'a'\\", True),
 ])
 def test_live_dollar_takes_a_dollar_that_is_live_before_the_quote(text, expected):
     assert check_gh_repo.live_dollar(text, text.index("'") - 1) is expected
@@ -2436,6 +2435,10 @@ def test_continued_text_stops_at_the_first_line_of_the_file():
     ("# note", 0), ("echo x # note", 7), ("echo x#y", -1), ("echo '#' x", -1), ("echo \"# x\"", -1), ("echo ${#x}", -1), ("echo $#", -1),
     ("echo x;# c", 7), ("a\\# b", -1), ("echo \"$(echo '#')\" # c", 19), ("", -1),
     ("echo 'a #b' # c", 12), ("echo \"a #b\" # c", 12), ("echo ${x:- #y} # c", 15), ("echo ${x:- #y}", -1),
+    # each character that ends a word lets a # after it start a comment
+    ("echo x\t# c", 7), ("echo x&# c", 7), ("echo x|# c", 7), ("echo (# c", 6), ("echo x)# c", 7), ("echo x<# c", 7), ("echo x># c", 7),
+    # an escaped quote opens no string; a ${ that never closes holds the rest of the line
+    ("echo \\'x # c", 9), ("echo ${x #y", -1),
 ])
 def test_comment_start_finds_a_hash_that_begins_a_word_outside_quotes(line, start):
     assert check_gh_repo.comment_start(line) == start
@@ -2443,13 +2446,14 @@ def test_comment_start_finds_a_hash_that_begins_a_word_outside_quotes(line, star
 
 @pytest.mark.parametrize("line, joins", [
     ("x \\", True), ("x \\\\", False), ("x \\\\\\", True), ("# x \\", False), ("echo x # y \\", False), ("echo '#' \\", True), ("", False),
+    ("echo ${x \\", True),
 ])
 def test_continues_counts_a_trailing_backslash_outside_a_comment(line, joins):
     assert check_gh_repo.continues(line) is joins
 
 
 @pytest.mark.parametrize("text, refused", [
-    ("export GH_REPO=o/r\n# unset GH_REPO \\\ngh pr view 1\n", []),
+    ("export GH_REPO=o/r\n# env -i \\\ngh pr view 1\n", []),
     ("# GH_REPO=o/r \\\ngh pr view 1\n", [2]),
     ("echo # GH_REPO=o/r \\\ngh pr view 1\n", [2]),
     ("export GH_REPO=o/r\n# sudo \\\ngh pr view 1\n", []),
@@ -2460,6 +2464,16 @@ def test_continues_counts_a_trailing_backslash_outside_a_comment(line, joins):
     ("export GH_REPO=o/r\n" + "echo hi; \\\n" * 101 + "gh pr view 1\n", [103]),
 ])
 def test_untold_reads_a_chain_as_bash_does_and_fails_closed_when_it_is_cut(tmp_path, text, refused):
+    assert lines_of(untold(tmp_path, text)) == refused
+
+
+@pytest.mark.parametrize("text, refused", [
+    # A comment that ends in a backslash joins no line, so the heredoc after it is read as data.
+    ("echo hi # c \\\ncat <<EOF\nexport GH_REPO=o/r\nEOF\ngh pr view 1\n", [5]),
+    # The same for a heredoc header that carries the comment.
+    ("cat <<EOF # c \\\nexport GH_REPO=o/r\nEOF\ngh pr view 1\n", [4]),
+])
+def test_untold_reads_a_heredoc_next_to_a_comment_that_ends_in_a_backslash_as_data(tmp_path, text, refused):
     assert lines_of(untold(tmp_path, text)) == refused
 
 

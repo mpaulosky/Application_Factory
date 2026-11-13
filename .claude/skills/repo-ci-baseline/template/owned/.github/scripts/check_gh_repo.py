@@ -337,8 +337,8 @@ def logical_line(lines, number):
     """The logical line that starts at lines[number - 1], with its backslash continuations joined, and how many physical lines it takes."""
     text = lines[number - 1]
     count = 1
-    # An odd number of trailing backslashes continues the line; an even number is escaped backslashes.
-    while (len(text) - len(text.rstrip("\\"))) % 2 and number - 1 + count < len(lines):
+    # A physical line that continues (see continues) is joined to the next; each is judged alone, as continued_text does, so a long chain costs linear time.
+    while continues(lines[number - 2 + count]) and number - 1 + count < len(lines):
         text = text[:-1] + lines[number - 1 + count]
         count += 1
     return text, count
