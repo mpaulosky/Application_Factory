@@ -137,9 +137,10 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     line 100 that holds a `#` and ends in a backslash (a comment, or a `#` in a string an earlier line opened) can't be judged: the read-back stops at it and counts as a chain cut, so a
     gh in the chain after it needs its own `--repo` or `GH_REPO=`; no `export` from that chain on, to the end of the file, tells a gh (a body's export can't); an export before the chain
     still tells a gh on a line after the chain, and one in the chain before the unjudged line, but not one in the chain after it. The line after an unjudged line is not forced to start
-    a command: a real comment on it still ends the command there. An `export` counts only when its line starts a command, which rules out one that continues an earlier line with a
-    backslash (that command's argument; like any `GH_REPO=` assignment it clears an export already set, which is the fail-closed side). A line after a line without a continuing
-    backslash always counts as starting a command, so an `export` inside a multi-line string, a `$(...)` or after a `|` still counts (the known limit above).
+    a command: a real comment on it still ends the command there. An `export` counts only when its line starts a command: not one that continues an earlier line mid-command with a
+    backslash (`echo a \`; that command's argument, and like any `GH_REPO=` assignment it clears an export already set, the fail-closed side), but one after a trailing `&&`, `;`, `|` or
+    `then` and a backslash still counts. A line after a line without a continuing backslash always counts as starting a command, so an `export` inside a multi-line string, a `$(...)` or
+    after a `|` still counts (the known limit above).
     An export no longer tells a gh after a longer chain, since a `sudo` that drops `GH_REPO` may have started before the part read, so only that gh's own `--repo` or a `GH_REPO=` right before it does.
   - A file with a NUL byte is checked with the NULs removed, as bash reads it, not skipped. `--repo` reads a suffix in
     lower case (`up.SH`) and `.zsh`, treats every extensionless file under `scripts/` and `.github/ci/` as shell

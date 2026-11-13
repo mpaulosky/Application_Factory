@@ -2623,8 +2623,9 @@ def test_untold_does_not_trust_an_export_after_a_chain_with_an_unjudged_line(tmp
     # A line that continues an earlier one but starts a command (after && ; then | at the end of that line) still counts.
     ("echo a && \\\nexport GH_REPO=o/r\ngh pr view 1\n", []),
     ("echo a; \\\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("echo a | \\\nexport GH_REPO=o/r\ngh pr view 1\n", []),
     ("if true; then \\\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
-    # After the end of a heredoc body, a case arm, a loop and a group.
+    # After a heredoc body, a case pattern, the end of a loop and the end of a group.
     ("cat <<EOF\nx\nEOF\nexport GH_REPO=o/r\ngh pr view 1\n", []),
     ("case $x in\na)\nexport GH_REPO=o/r\n;;\nesac\ngh pr view 1\n", []),
     ("for i in 1; do\n:\ndone\nexport GH_REPO=o/r\ngh pr view 1\n", []),
