@@ -2567,12 +2567,20 @@ def test_untold_refuses_a_gh_after_a_comment_with_a_gh_repo_at_any_place_in_a_lo
 
 
 @pytest.mark.parametrize("lines", [
-    # A string opened on the first line closes past the limit on a line that ends in a comment: the # is a comment, its GH_REPO= tells no later gh (the line is judged alone there).
+    # A string opened on the first line closes past the limit on a line that ends in a comment: the line is unjudged (None), the read-back stops at it, and its GH_REPO= tells no later gh.
     ["echo \"a \\"] + ["x \\"] * check_gh_repo.CONTINUATION_LIMIT + ["y\" # GH_REPO=o/r \\", "gh pr view 1"],
     # A # inside a string opened on the first line, past the limit, is no comment: the chain goes on to a gh that runs under a sudo that drops the export.
     ["export GH_REPO=o/r", "sudo env \"a \\"] + ["x \\"] * check_gh_repo.CONTINUATION_LIMIT + [" # b \\", "\" gh pr view 1"],
 ])
 def test_untold_refuses_a_gh_after_a_past_limit_line_whose_hash_it_cannot_judge(tmp_path, lines):
+    path = tmp_path / "script.sh"
+    path.write_text("\n".join(lines) + "\n")
+    assert lines_of(check_gh_repo.untold(path)) == [len(lines)]
+
+
+def test_untold_does_not_read_the_line_after_an_unjudged_line_as_a_command_start(tmp_path):
+    # A line past the limit that holds a # (None) may sit inside a string, so the next line may be string text: a `fi` in it must not pop the `if false` branch, or the export after it counts.
+    lines = ["if false; then", "echo \"a \\"] + ["x \\"] * check_gh_repo.CONTINUATION_LIMIT + ["y '#' \\", "fi ok\"", "export GH_REPO=o/r", "fi", "gh pr view 1"]
     path = tmp_path / "script.sh"
     path.write_text("\n".join(lines) + "\n")
     assert lines_of(check_gh_repo.untold(path)) == [len(lines)]

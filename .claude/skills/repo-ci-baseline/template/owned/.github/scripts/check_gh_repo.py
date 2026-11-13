@@ -369,7 +369,8 @@ def joined_lines(lines):
     Each chain is judged whole by logical_line, from its first line, so a string that spans lines decides whether the # after it starts a comment: a line is not judged alone.
     Past CONTINUATION_LIMIT lines of a chain logical_line joins on the backslash alone (a header must fail closed) and a line is not judged whole, so a line there that holds a #
     is None: it may be a comment or sit in a string an earlier line opened, and either way the read-back stops at it and reports the chain as cut (continued_text), so a
-    GH_REPO= in it tells nothing and an export before it is not trusted. A line without a # joins as logical_line says.
+    GH_REPO= in it tells nothing and an export before it is not trusted, and the line after it is not read as the start of a command (it may be text of a string). A line without a # joins as
+    logical_line says.
     """
     joins = [False] * len(lines)
     number = 1
@@ -782,7 +783,7 @@ def untold(path):
             if last is None and "<<" in header:
                 last = last_lines(lines)
             bodies = data_heredocs(header, lines, header_end, last)
-        starts_command = track_branches(line, branches, starts_command) or not joins[number - 1]
+        starts_command = track_branches(line, branches, starts_command) or joins[number - 1] is False
         if EXPORTS.match(line):
             # An export in a branch that never runs leaves GH_REPO unset.
             exported = exported or all(runs for runs, _, _ in branches)

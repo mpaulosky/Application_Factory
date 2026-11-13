@@ -114,7 +114,7 @@
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "starts_command = track_branches(line, branches, starts_command) or not joins[number - 1]",
+      "old": "starts_command = track_branches(line, branches, starts_command) or joins[number - 1] is False",
       "new": "starts_command = track_branches(line, branches, starts_command) or not continues(line)",
       "why": "the line that starts a command is judged on one physical line"
     },
@@ -195,6 +195,12 @@
       "old": "return text, index >= 0 and joins[index] is not False",
       "new": "return text, index >= 0 and bool(joins[index])",
       "why": "a line that can't be judged is not reported as a cut chain"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "or joins[number - 1] is False",
+      "new": "or not joins[number - 1]",
+      "why": "the line after an unjudged line is read as the start of a command"
     }
   ]
 }
