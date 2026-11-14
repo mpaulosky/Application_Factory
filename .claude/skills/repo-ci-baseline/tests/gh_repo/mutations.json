@@ -4,6 +4,7 @@
     "pytest",
     ".claude/skills/repo-ci-baseline/tests/gh_repo/test_check_gh_repo.py",
     "-q",
+    "-x",
     "-p",
     "no:cacheprovider"
   ],
@@ -23,21 +24,9 @@
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "return text, index >= 0 and continues(lines[index])",
+      "old": "return text, index >= 0 and joins[index] is not False",
       "new": "return text, False",
       "why": "a chain past the limit is never reported as cut"
-    },
-    {
-      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "return text, index >= 0 and continues(lines[index])",
-      "new": "return text, continues(lines[index])",
-      "why": "the first line of the file is read as a chain"
-    },
-    {
-      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "while index >= 0 and number - 2 - index < CONTINUATION_LIMIT and continues(lines[index]):",
-      "new": "while number - 2 - index < CONTINUATION_LIMIT and continues(lines[index]):",
-      "why": "the walk back may run past the start of the file"
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
@@ -86,6 +75,180 @@
       "old": "            position += 2\n            boundary = False\n        elif char in \"'\\\"\"",
       "new": "            position += 1\n            boundary = False\n        elif char in \"'\\\"\"",
       "why": "an escaped character is read twice"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "        if joins and \"#\" in last and count <= CONTINUATION_LIMIT:",
+      "new": "        if joins and \"#\" in last and count < CONTINUATION_LIMIT:",
+      "why": "logical_line scans a chain for a comment one line short of the continuation limit"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "    while number - 1 + count < len(lines):\n        last = ",
+      "new": "    while number - 1 + count <= len(lines):\n        last = ",
+      "why": "a chain reads past the last line of the file"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "            joins = continues(\"\".join(parts))\n",
+      "new": "            joins = continues(last)\n",
+      "why": "a # inside a string that an earlier line of the chain opened is read as a comment"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "        if joins and \"#\" in last and count <= CONTINUATION_LIMIT:",
+      "new": "        if joins and \"#\" in last:",
+      "why": "a chain past the continuation limit is scanned whole for a # (cost) or cut at one (fail open)"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "for index in range(number - 1, number + count - 2):",
+      "new": "for index in range(number - 1, number + count - 1):",
+      "why": "the last line of a chain is marked as joining the next"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "        number += count\n    return joins",
+      "new": "        number += 1\n    return joins",
+      "why": "each line of a chain is judged as the start of a chain, not the chain whole"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "starts_command = track_branches(line, branches, starts_command) or joins[number - 1] is False",
+      "new": "starts_command = track_branches(line, branches, starts_command) or not continues(line)",
+      "why": "the line that starts a command is judged on one physical line"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "return text, index >= 0 and joins[index] is not False",
+      "new": "return text, joins[index] is not False",
+      "why": "an empty file is indexed (defensive: no caller passes one)"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "while index >= 0 and number - 2 - index < CONTINUATION_LIMIT and joins[index]:",
+      "new": "while number - 2 - index < CONTINUATION_LIMIT and joins[index]:",
+      "why": "the walk back is not stopped at the start of an empty file (defensive: no caller passes one)"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "number - 2 - index < CONTINUATION_LIMIT and joins[index]:",
+      "new": "number - 2 - index < CONTINUATION_LIMIT and continues(lines[index]):",
+      "why": "the text read back judges one physical line, not the chain"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "joins[index] = True if index - number + 2 <= CONTINUATION_LIMIT or \"#\" not in lines[index] else None",
+      "new": "joins[index] = True",
+      "why": "a real comment past the limit joins the next line for the read-back"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "joins[index] = True if index - number + 2 <= CONTINUATION_LIMIT or \"#\" not in lines[index] else None",
+      "new": "joins[index] = True if index - number + 2 < CONTINUATION_LIMIT or \"#\" not in lines[index] else None",
+      "why": "the limit's own line is read as past it"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "        if re.match(r\"[ \\t]*#\", line):\n",
+      "new": "        if False:\n",
+      "why": "a comment line is read as code (its unset clears an export)"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "        joins = tail % 2 == 1\n",
+      "new": "        joins = tail % 2 == 0\n",
+      "why": "an even run of backslashes joins and an odd one does not"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "        parts[-1] = parts[-1][:-1]\n",
+      "new": "        parts[-1] = parts[-1]\n",
+      "why": "the joining backslash stays in the text"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "            position = len(line) if end < 0 else end + 1\n            boundary = False\n        elif char == \"#\" and boundary:\n",
+      "new": "            position = end + 1\n            boundary = False\n        elif char == \"#\" and boundary:\n",
+      "why": "a ${ that never closes holds nothing"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "            position += 2\n            boundary = False\n        elif char in \"'\\\"\"",
+      "new": "            position += 3\n            boundary = False\n        elif char in \"'\\\"\"",
+      "why": "a backslash skips two characters"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "            boundary = char in \" \\t;&|()<>\"\n",
+      "new": "            boundary = char in \" ;&|()<>\"\n",
+      "why": "a tab does not end a word"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "\"#\" not in lines[index] else None",
+      "new": "comment_start(lines[index]) < 0 else None",
+      "why": "a past-limit line is judged alone for a comment instead of cut at any #"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "return text, index >= 0 and joins[index] is not False",
+      "new": "return text, index >= 0 and bool(joins[index])",
+      "why": "a line that can't be judged is not reported as a cut chain"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "or joins[number - 1] is False",
+      "new": "or not joins[number - 1]",
+      "why": "the line after an unjudged line is read as the start of a command"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "        tail = len(parts[-1]) - len(parts[-1].rstrip(\"\\\\\"))\n",
+      "new": "        pass\n",
+      "why": "the trailing backslashes of the newest part are not counted, so the first line decides every join"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "                joins[number - 1] = False\n",
+      "new": "                pass\n",
+      "why": "the line that closes a heredoc body joins the next line"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "            distrust = distrust or None in joins[number - 1:header_end - 1]\n",
+      "new": "            pass\n",
+      "why": "an export after a chain with an unjudged line tells a gh"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "(not distrust and all(runs for runs, _, _ in branches))",
+      "new": "all(runs for runs, _, _ in branches)",
+      "why": "an export is trusted after a chain with an unjudged line"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "distrust = distrust or None in joins[number - 1:header_end - 1]",
+      "new": "distrust = None in joins[number - 1:header_end - 1]",
+      "why": "a later chain without an unjudged line restores the trust in exports"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "        if starts_here and EXPORTS.match(line):\n",
+      "new": "        if EXPORTS.match(line):\n",
+      "why": "an export that continues an earlier line tells a gh"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "        starts_here = starts_command\n",
+      "new": "        starts_here = True\n",
+      "why": "every line is read as the start of a command for an export"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "        starts_command = track_branches(line, branches, starts_command) or joins[number - 1] is False\n",
+      "new": "        starts_command = joins[number - 1] is False\n",
+      "why": "a line after one that ends in && ; | or then and a backslash is not read as the start of a command"
     }
   ]
 }

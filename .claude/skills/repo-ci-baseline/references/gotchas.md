@@ -130,8 +130,18 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     that spans lines: the next line is read as code), a `[[ ... ]]` that spans lines (the next line is read as code), a backtick substitution, a `${...}` that holds a quote, a `}` or a `)`
     (it ends at the first `}`), double quotes
     nested more than 50 deep in `"$(...)"`, and a line of a multi-line string or of a heredoc body read as code that starts like `fi` or `else` can still misjudge a branch.
-    A backslash-continued chain is read back at most 100 lines (a trailing backslash inside a comment joins nothing); an export no longer tells a gh after a longer
-    chain, since a `sudo` that drops `GH_REPO` may have started before the part read, so only that gh's own `--repo` or a `GH_REPO=` right before it does.
+    A backslash-continued chain is read back at most 100 lines. The join after each of the first 100 lines of a chain is judged on the chain whole (a trailing backslash inside a comment
+    joins nothing, and a `#` inside a string an earlier line opened is no comment), so the text read back and the line that starts a command follow the chain (`joined_lines`): a string
+    that spans lines and closes before a comment ending in a backslash (`b" # c \`) joins nothing, and a `GH_REPO=` in that comment tells no later gh. The join after a later line uses
+    the backslash alone for a heredoc header, so a real comment ending in a backslash past line 100 hides a `<<` on the line after it (that heredoc's body is read as code). A line past
+    line 100 that holds a `#` and ends in a backslash (a comment, or a `#` in a string an earlier line opened) can't be judged: the read-back stops at it and counts as a chain cut, so a
+    gh in the chain after it needs its own `--repo` or `GH_REPO=`; no `export` from that chain on, to the end of the file, tells a gh (a body's export can't); an export before the chain
+    still tells a gh on a line after the chain, and one in the chain before the unjudged line, but not one in the chain after it. The line after an unjudged line is not forced to start
+    a command: a real comment on it still ends the command there. An `export` counts only when its line starts a command: not one that continues an earlier line mid-command with a
+    backslash (`echo a \`; that command's argument, and like any `GH_REPO=` assignment it clears an export already set, the fail-closed side), but one after a trailing `&&`, `;`, `|` or
+    `then` and a backslash still counts. A line after a line without a continuing backslash always counts as starting a command, so an `export` inside a multi-line string, a `$(...)` or
+    after a `|` still counts (the known limit above).
+    An export no longer tells a gh after a longer chain, since a `sudo` that drops `GH_REPO` may have started before the part read, so only that gh's own `--repo` or a `GH_REPO=` right before it does.
   - A file with a NUL byte is checked with the NULs removed, as bash reads it, not skipped. `--repo` reads a suffix in
     lower case (`up.SH`) and `.zsh`, treats every extensionless file under `scripts/` and `.github/ci/` as shell
     (under `.claude/skills/` it needs a shell shebang), and refuses a symlink whose target is outside the repo or

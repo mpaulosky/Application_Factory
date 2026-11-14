@@ -23,6 +23,20 @@ import check_gh_repo  # noqa: E402
 OWNED_SCRIPTS = TEMPLATE_OWNED / "scripts"
 
 
+@pytest.fixture(autouse=True)
+def stop_a_test_that_hangs():
+    """Fail a test that has not finished after 120 s (the slowest takes a few seconds): a scanner loop that stopped advancing fails here, not at the runner's own timeout."""
+    def stop(*_):
+        raise TimeoutError("the test did not finish in 120 s (a hang in the scanner?)")
+    previous = signal.signal(signal.SIGALRM, stop)
+    signal.alarm(120)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
 def lines_of(found):
     """The line numbers of found, whose entries are path:line: text."""
     return [int(re.match(r".*?:([0-9]+): ", entry).group(1)) for entry in found]
@@ -2343,6 +2357,7 @@ def test_keywords_takes_every_character_that_ends_a_word(char):
 @pytest.mark.parametrize("text, expected", [
     ("$'a'", True), ("a$'a'", True), ("'a'", False), ("\\$'a'", False), ("$$'a'", False), ("$$$'a'", True), ("\\\\$'a'", True),
     ("\\$$'a'", True), ("\\\\$$'a'", False), ("\\$$$'a'", False), ("\"$'a'\"", True),
+    # a line whose last character is a $ or a backslash: without the bound checks in live_dollar the walk to the left of index 0 wraps to the end of the line (mutations.json)
     ("$'a'$", True), ("$'a'\\", True), ("$$$'a'\\", True),
 ])
 def test_live_dollar_takes_a_dollar_that_is_live_before_the_quote(text, expected):
@@ -2385,7 +2400,7 @@ def test_untold_reads_a_file_of_continued_lines_in_linear_time(tmp_path):
 def test_continued_text_reads_back_at_most_the_limit(chain):
     lines = [f"{index}\\" for index in range(chain)] + ["end"]
     wanted = "".join(str(index) for index in range(max(0, chain - check_gh_repo.CONTINUATION_LIMIT), chain))
-    assert check_gh_repo.continued_text(lines, len(lines)) == (wanted, chain > check_gh_repo.CONTINUATION_LIMIT)
+    assert check_gh_repo.continued_text(lines, len(lines), check_gh_repo.joined_lines(lines)) == (wanted, chain > check_gh_repo.CONTINUATION_LIMIT)
 
 
 @pytest.mark.parametrize("text", ["\\a" * 100_000, "'a'" * 100_000, "$((1))" * 100_000, "a'b'" * 100_000])
@@ -2428,14 +2443,25 @@ def test_data_heredocs_takes_the_last_occurrence_of_a_delimiter():
 
 
 def test_continued_text_stops_at_the_first_line_of_the_file():
-    assert check_gh_repo.continued_text(["a\\", "b\\"], 2) == ("a", False)
-    assert check_gh_repo.continued_text(["a\\", "b\\"], 1) == ("", False)
+    both = ["a\\", "b\\"]
+    assert check_gh_repo.continued_text(both, 2, [True, False]) == ("a", False)
+    assert check_gh_repo.continued_text(both, 1, [True, False]) == ("", False)
+    # an empty file: the guard on the index keeps the walk off joins[-1]
+    assert check_gh_repo.continued_text([], 1, []) == ("", False)
+    # the joins given are the ones read, not the backslashes of the lines
+    assert check_gh_repo.continued_text(both, 2, [False, False]) == ("", False)
 
 
 @pytest.mark.parametrize("line, start", [
     ("# note", 0), ("echo x # note", 7), ("echo x#y", -1), ("echo '#' x", -1), ("echo \"# x\"", -1), ("echo ${#x}", -1), ("echo $#", -1),
     ("echo x;# c", 7), ("a\\# b", -1), ("echo \"$(echo '#')\" # c", 19), ("", -1),
     ("echo 'a #b' # c", 12), ("echo \"a #b\" # c", 12), ("echo ${x:- #y} # c", 15), ("echo ${x:- #y}", -1),
+    # each character that ends a word lets a # after it start a comment
+    ("echo x\t# c", 7), ("echo x&# c", 7), ("echo x|# c", 7), ("echo (# c", 6), ("echo x)# c", 7), ("echo x<# c", 7), ("echo x># c", 7),
+    # an escaped quote opens no string; a ${ that never closes holds the rest of the line
+    ("echo \\'x # c", 9), ("echo ${x #y", -1),
+    # a backslash skips the next character and no more (the second space is the word boundary), and at least it (the first space is part of the word)
+    ("echo a\\  # c", 9), ("echo a\\ # c", -1),
 ])
 def test_comment_start_finds_a_hash_that_begins_a_word_outside_quotes(line, start):
     assert check_gh_repo.comment_start(line) == start
@@ -2443,12 +2469,14 @@ def test_comment_start_finds_a_hash_that_begins_a_word_outside_quotes(line, star
 
 @pytest.mark.parametrize("line, joins", [
     ("x \\", True), ("x \\\\", False), ("x \\\\\\", True), ("# x \\", False), ("echo x # y \\", False), ("echo '#' \\", True), ("", False),
+    ("echo ${x \\", True), ("echo ${x # y \\", True),
 ])
 def test_continues_counts_a_trailing_backslash_outside_a_comment(line, joins):
     assert check_gh_repo.continues(line) is joins
 
 
 @pytest.mark.parametrize("text, refused", [
+    ("export GH_REPO=o/r\n# env -i \\\ngh pr view 1\n", []),
     ("export GH_REPO=o/r\n# unset GH_REPO \\\ngh pr view 1\n", []),
     ("# GH_REPO=o/r \\\ngh pr view 1\n", [2]),
     ("echo # GH_REPO=o/r \\\ngh pr view 1\n", [2]),
@@ -2461,6 +2489,253 @@ def test_continues_counts_a_trailing_backslash_outside_a_comment(line, joins):
 ])
 def test_untold_reads_a_chain_as_bash_does_and_fails_closed_when_it_is_cut(tmp_path, text, refused):
     assert lines_of(untold(tmp_path, text)) == refused
+
+
+@pytest.mark.parametrize("text, refused", [
+    # A comment that ends in a backslash joins no line, so the heredoc after it is read as data (a regression guard: the refusal held before joined_lines too).
+    ("echo hi # c \\\ncat <<EOF\nexport GH_REPO=o/r\nEOF\ngh pr view 1\n", [5]),
+    # The same for a heredoc header that carries the comment.
+    ("cat <<EOF # c \\\nexport GH_REPO=o/r\nEOF\ngh pr view 1\n", [4]),
+])
+def test_untold_reads_a_heredoc_next_to_a_comment_that_ends_in_a_backslash_as_data(tmp_path, text, refused):
+    assert lines_of(untold(tmp_path, text)) == refused
+
+
+@pytest.mark.parametrize("text, refused", [
+    # A # inside a string that spans lines is no comment: the chain goes on to the heredoc header, whose body is data (the gh is refused).
+    ("echo \"a \\\n # b \\\nc\" ; cat <<EOF\nexport GH_REPO=o/r\nEOF\ngh pr view 1\n", [6]),
+    # The same with a CRLF file.
+    ("echo \"a \\\r\n # b \\\r\nc\" ; cat <<EOF\r\nexport GH_REPO=o/r\r\nEOF\r\ngh pr view 1\r\n", [6]),
+])
+def test_untold_joins_a_line_through_a_hash_inside_a_string_that_spans_lines(tmp_path, text, refused):
+    path = tmp_path / "script.sh"
+    path.write_bytes(text.encode())
+    assert lines_of(check_gh_repo.untold(path)) == refused
+
+
+@pytest.mark.parametrize("text, refused", [
+    # A string that spans lines closes before a comment ending in a backslash: the comment joins nothing, so its GH_REPO= tells no later gh (Issue #51).
+    ("echo \"x \\\ny\" # GH_REPO=o/r \\\ngh pr view 1\n", [3]),
+    # The same with a CRLF file.
+    ("echo \"x \\\r\ny\" # GH_REPO=o/r \\\r\ngh pr view 1\r\n", [3]),
+    # The same over three lines of string.
+    ("echo \"x \\\ny \\\nz\" # GH_REPO=o/r \\\ngh pr view 1\n", [4]),
+    # A comment ending in a backslash after a string on one line still joins nothing (the chain stops at the comment on that line).
+    ("echo \"x\" # GH_REPO=o/r \\\ngh pr view 1\n", [2]),
+    # The line after that comment starts a command: an export in an if that never runs leaves GH_REPO unset.
+    ("echo \"x \\\ny\" # c \\\nif false; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    # A real continuation after the closed string still tells the gh its own GH_REPO= on the joined line.
+    ("echo \"x \\\ny\" ; GH_REPO=o/r \\\ngh pr view 1\n", []),
+])
+def test_untold_judges_a_chain_by_the_string_an_earlier_line_opened(tmp_path, text, refused):
+    path = tmp_path / "script.sh"
+    path.write_bytes(text.encode())
+    assert lines_of(check_gh_repo.untold(path)) == refused
+
+
+@pytest.mark.parametrize("lines, expected", [
+    ([], []),
+    (["a"], [False]),
+    (["a \\"], [False]),
+    (["a \\", "b"], [True, False]),
+    # a string that spans lines closes before a comment ending in a backslash: that line joins nothing
+    (["echo \"x \\", "y\" # c \\", "z"], [True, False, False]),
+    # a comment on its own line ends the chain
+    (["a \\", "# c \\", "d"], [True, False, False]),
+    # two chains one after the other
+    (["a \\", "b", "c \\", "d"], [True, False, True, False]),
+])
+def test_joined_lines_says_which_lines_join_the_next(lines, expected):
+    assert check_gh_repo.joined_lines(lines) == expected
+
+
+@pytest.mark.parametrize("hash_line, joins", [
+    # A real comment ending in a backslash: at the limit and before it the chain ends there (False); past it logical_line joins on the backslash alone and the line can't be judged (None).
+    (check_gh_repo.CONTINUATION_LIMIT - 2, False), (check_gh_repo.CONTINUATION_LIMIT - 1, False),
+    (check_gh_repo.CONTINUATION_LIMIT, None), (check_gh_repo.CONTINUATION_LIMIT + 1, None),
+])
+def test_joined_lines_cuts_at_a_real_comment_and_marks_one_past_the_limit_as_unjudged(hash_line, joins):
+    lines = ["echo a \\"] + ["x \\"] * (hash_line - 1) + [" # b \\", "tail"]
+    found = check_gh_repo.joined_lines(lines)
+    assert found[hash_line] is joins
+    assert found[:hash_line] == [True] * hash_line
+
+
+def test_joined_lines_judges_the_line_at_the_limit_on_the_chain_whole():
+    # A # inside a string the first line opened, on the chain's CONTINUATION_LIMIT-th line, is scanned with the chain (no comment): that line still joins the next.
+    limit = check_gh_repo.CONTINUATION_LIMIT
+    lines = ["echo \"a \\"] + ["x \\"] * (limit - 2) + [" # b \\", "c\" ; d"]
+    assert len(lines) == limit + 1
+    assert check_gh_repo.joined_lines(lines) == [True] * limit + [False]
+
+
+@pytest.mark.parametrize("hash_line", [
+    check_gh_repo.CONTINUATION_LIMIT - 2, check_gh_repo.CONTINUATION_LIMIT - 1, check_gh_repo.CONTINUATION_LIMIT, check_gh_repo.CONTINUATION_LIMIT + 1, check_gh_repo.CONTINUATION_LIMIT + 2,
+])
+def test_untold_refuses_a_gh_after_a_comment_with_a_gh_repo_at_any_place_in_a_long_chain(tmp_path, hash_line):
+    # The comment ends its line in bash, so its GH_REPO= tells nothing: the gh on the line after it is refused, wherever in the chain the comment is.
+    lines = ["echo a \\"] + ["x \\"] * (hash_line - 1) + ["# GH_REPO=o/r \\", "gh pr view 1"]
+    path = tmp_path / "script.sh"
+    path.write_text("\n".join(lines) + "\n")
+    assert lines_of(check_gh_repo.untold(path)) == [len(lines)]
+
+
+@pytest.mark.parametrize("lines", [
+    # A string opened on the first line closes past the limit on a line that ends in a comment: the line is unjudged (None), the read-back stops at it, and its GH_REPO= tells no later gh.
+    ["echo \"a \\"] + ["x \\"] * check_gh_repo.CONTINUATION_LIMIT + ["y\" # GH_REPO=o/r \\", "gh pr view 1"],
+    # A # inside a string opened on the first line, past the limit, is no comment: the chain goes on to a gh that runs under a sudo that drops the export.
+    ["export GH_REPO=o/r", "sudo env \"a \\"] + ["x \\"] * check_gh_repo.CONTINUATION_LIMIT + [" # b \\", "\" gh pr view 1"],
+])
+def test_untold_refuses_a_gh_after_a_past_limit_line_whose_hash_it_cannot_judge(tmp_path, lines):
+    path = tmp_path / "script.sh"
+    path.write_text("\n".join(lines) + "\n")
+    assert lines_of(check_gh_repo.untold(path)) == [len(lines)]
+
+
+@pytest.mark.parametrize("lines, refused_last", [
+    # A real comment ending in a backslash past the limit hides the heredoc header after it: the body's export must not tell the gh (an export from such a chain on is not trusted).
+    (["echo a \\"] + ["x \\"] * check_gh_repo.CONTINUATION_LIMIT + ["# c \\", "cat <<EOF", "export GH_REPO=o/r", "EOF", "gh pr view 1"], True),
+    # A past-limit line that holds a # in a string the first line opened is unjudged too: an export after the chain is not trusted (no hidden heredoc here, only the fail-closed side).
+    (["echo \"a \\"] + ["x \\"] * check_gh_repo.CONTINUATION_LIMIT + ["y '#' \\", "z\"", "export GH_REPO=o/r", "gh pr view 1"], True),
+    # An export before the chain still tells a gh after it, as bash does.
+    (["export GH_REPO=o/r", "echo a \\"] + ["x \\"] * check_gh_repo.CONTINUATION_LIMIT + ["# c \\", "echo b", "gh pr view 1"], False),
+    # A chain without an unjudged line leaves the export after it as it was.
+    (["echo a \\"] + ["x \\"] * check_gh_repo.CONTINUATION_LIMIT + ["echo b", "export GH_REPO=o/r", "gh pr view 1"], False),
+])
+def test_untold_does_not_trust_an_export_after_a_chain_with_an_unjudged_line(tmp_path, lines, refused_last):
+    path = tmp_path / "script.sh"
+    path.write_text("\n".join(lines) + "\n")
+    assert lines_of(check_gh_repo.untold(path)) == ([len(lines)] if refused_last else [])
+
+
+@pytest.mark.parametrize("text, refused", [
+    # An export that only continues an earlier line is an argument of that command: bash runs `echo a export GH_REPO=o/r`, which exports nothing.
+    ("echo a \\\nexport GH_REPO=o/r\ngh pr view 1\n", [3]),
+    ("echo a \\\n  \\\nexport GH_REPO=o/r\ngh pr view 1\n", [4]),
+    # An export that starts a command still tells the gh: first line, after a complete command, a comment, a blank line, `then` and a closed branch.
+    ("export GH_REPO=o/r\ngh pr view 1\n", []),
+    ("echo a\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("echo a \\\n  b\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("# note \\\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("echo a\n\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if true; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if true; then\n  :\nfi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    # A line that continues an earlier one but starts a command (after && ; then | at the end of that line) still counts.
+    ("echo a && \\\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("echo a; \\\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("echo a | \\\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if true; then \\\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # After a heredoc body, a case pattern, the end of a loop and the end of a group.
+    ("cat <<EOF\nx\nEOF\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("case $x in\na)\nexport GH_REPO=o/r\n;;\nesac\ngh pr view 1\n", []),
+    ("for i in 1; do\n:\ndone\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("{\n:\n}\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    # An export line that only continues an earlier one, like any other GH_REPO= assignment, clears an export already set (fail closed: bash would keep it).
+    ("export GH_REPO=a/b\necho a \\\nexport GH_REPO=o/r\ngh pr view 1\n", [4]),
+])
+def test_untold_counts_an_export_only_when_its_line_starts_a_command(tmp_path, text, refused):
+    assert lines_of(untold(tmp_path, text)) == refused
+
+
+def test_untold_does_not_join_the_line_after_a_heredoc_delimiter_that_ends_in_a_backslash(tmp_path):
+    # A quoted delimiter can be `GH_REPO=o/r \\`: the line that closes the body joins nothing, so its text is no assignment for the gh after it.
+    lines = ["cat <<'GH_REPO=o/r \\'", "x", "GH_REPO=o/r \\", "gh pr view 1"]
+    path = tmp_path / "script.sh"
+    path.write_text("\n".join(lines) + "\n")
+    assert lines_of(check_gh_repo.untold(path)) == [4]
+
+
+def test_logical_line_builds_a_very_long_chain_in_linear_time():
+    # The text so far must not be copied on every line: 400,000 lines take 0.1 s, the version that copied it took 11 s (the bound is far from both, on any runner).
+    lines = ["x \\"] * 400_000 + ["gh pr view 1"]
+    start = time.perf_counter()
+    text, count = check_gh_repo.logical_line(lines, 1)
+    assert time.perf_counter() - start < 3
+    assert count == 400_001
+    assert text == "x " * 400_000 + "gh pr view 1"
+
+
+def test_untold_does_not_read_the_line_after_an_unjudged_line_as_a_command_start(tmp_path):
+    # A line past the limit that holds a # (None) may sit inside a string, so the next line may be string text: a `fi` in it must not pop the `if false` branch, or the export after it counts.
+    lines = ["if false; then", "echo \"a \\"] + ["x \\"] * check_gh_repo.CONTINUATION_LIMIT + ["y '#' \\", "fi ok\"", "export GH_REPO=o/r", "fi", "gh pr view 1"]
+    path = tmp_path / "script.sh"
+    path.write_text("\n".join(lines) + "\n")
+    assert lines_of(check_gh_repo.untold(path)) == [len(lines)]
+
+
+def test_untold_scans_a_chain_for_a_comment_a_bounded_number_of_times_per_line(tmp_path, monkeypatch):
+    # Each line of a chain that holds a # is judged on the chain so far once per pass over the file: 200 chains of 100 lines scan 99 times each in each of the two passes (joined_lines,
+    # then the heredoc header in untold). A chain walked from every line scans about 990,000 times per pass; the count stops the run as soon as it passes the bound (10% over the expected 39,600).
+    bound = 2 * 200 * 99 * 11 // 10
+    calls = []
+    real = check_gh_repo.continues
+
+    def counting(text):
+        calls.append(1)
+        assert len(calls) <= bound, "a chain is walked from more lines than it holds"
+        return real(text)
+    monkeypatch.setattr(check_gh_repo, "continues", counting)
+    found = untold(tmp_path, ("echo '#' \\\n" * 99 + "x\n") * 200 + "gh pr view 1\n")
+    assert lines_of(found) == [20_001]
+
+
+@pytest.mark.parametrize("lines, number, expected", [
+    # the last line of the file ends in a backslash: nothing follows it to join
+    (["a \\"], 1, ("a \\", 1)),
+    (["x", "a \\"], 2, ("a \\", 1)),
+    # a chain that ends at the last line
+    (["a \\", "b \\"], 1, ("a b \\", 2)),
+    (["a \\", "b"], 1, ("a b", 2)),
+    # a comment in the middle of a chain ends it; an even run of backslashes does not continue
+    (["a \\", "# c \\", "d"], 1, ("a # c \\", 2)),
+    (["a \\\\", "b"], 1, ("a \\\\", 1)),
+    # a # inside a string opened on an earlier line is no comment
+    (["echo \"a \\", " # b \\", "c\" ; d"], 1, ("echo \"a  # b c\" ; d", 3)),
+])
+def test_logical_line_joins_what_continues_and_stops_at_the_end_of_the_file(lines, number, expected):
+    assert check_gh_repo.logical_line(lines, number) == expected
+
+
+@pytest.mark.parametrize("hash_line, scanned", [
+    (check_gh_repo.CONTINUATION_LIMIT - 2, True), (check_gh_repo.CONTINUATION_LIMIT - 1, True),
+    (check_gh_repo.CONTINUATION_LIMIT, False), (check_gh_repo.CONTINUATION_LIMIT + 1, False),
+])
+def test_logical_line_scans_the_chain_for_a_comment_only_up_to_the_continuation_limit(hash_line, scanned):
+    # The # line (index hash_line) is a real comment ending in a backslash: a scan of the chain cuts it there, and past the limit the chain joins on the backslash alone.
+    lines = ["echo a \\"] + ["x \\"] * (hash_line - 1) + [" # b \\", "tail"]
+    text, count = check_gh_repo.logical_line(lines, 1)
+    assert count == (hash_line + 1 if scanned else hash_line + 2)
+    assert text.endswith("tail") is not scanned
+
+
+@pytest.mark.parametrize("extra", [-1, 0, 1, 100])
+def test_untold_refuses_a_gh_after_a_long_chain_with_a_string_and_a_hash(tmp_path, extra):
+    # A chain past the limit that opens a string on its first line must not be cut at a later #: the heredoc after it stays data and the gh is refused.
+    chain = check_gh_repo.CONTINUATION_LIMIT + extra
+    lines = ['echo "a \\'] + ["x \\"] * chain + [" # b \\", 'c" ; cat <<EOF', "export GH_REPO=o/r", "EOF", "gh pr view 1"]
+    assert lines_of(untold(tmp_path, "\n".join(lines) + "\n")) == [len(lines)]
+
+
+def test_untold_reads_a_long_chain_of_lines_with_a_quoted_hash_in_linear_time(tmp_path):
+    start = time.perf_counter()
+    found = untold(tmp_path, "echo '#' \\\n" * 20_000 + "gh pr view 1\n")
+    assert lines_of(found) == [20_001]
+    assert time.perf_counter() - start < 20
+
+
+@pytest.mark.parametrize("line", ["echo ${x #y", "echo ${x # y \\", "echo \\'x # c", "echo a\\  # c", "echo x\t# c"])
+def test_comment_start_and_continues_end_on_an_unfinished_construct(line):
+    # A branch that stopped advancing would hang: fail after 5 s instead.
+    def stop(*_):
+        raise TimeoutError(f"comment_start() did not finish on {line!r}")
+    previous = signal.signal(signal.SIGALRM, stop)
+    signal.alarm(5)
+    try:
+        assert isinstance(check_gh_repo.comment_start(line), int)
+        assert isinstance(check_gh_repo.continues(line), bool)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 @pytest.mark.parametrize("text, lines", [

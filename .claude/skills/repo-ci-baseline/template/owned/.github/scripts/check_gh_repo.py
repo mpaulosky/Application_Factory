@@ -334,30 +334,73 @@ def data_heredocs(header, lines, start, last=None):
 
 
 def logical_line(lines, number):
-    """The logical line that starts at lines[number - 1], with its backslash continuations joined, and how many physical lines it takes."""
-    text = lines[number - 1]
+    """The logical line that starts at lines[number - 1], with the continuations bash joins (a trailing backslash outside a comment), and how many physical lines it takes.
+
+    A backslash at the end of a comment joins nothing, and a # inside a string that an earlier line of the chain opened is no comment, so a line with a # is judged on the
+    joined text. That holds for the join after each of the first CONTINUATION_LIMIT lines of a chain; the join after a later line uses the backslash alone, as it did before the
+    comment was looked at.
+    """
+    parts = [lines[number - 1]]
+    # The trailing backslashes of the text so far: only the newest part decides, since a join drops one backslash and leaves an even run before it.
+    tail = len(parts[0]) - len(parts[0].rstrip("\\"))
     count = 1
-    # An odd number of trailing backslashes continues the line; an even number is escaped backslashes.
-    while (len(text) - len(text.rstrip("\\"))) % 2 and number - 1 + count < len(lines):
-        text = text[:-1] + lines[number - 1 + count]
+    while number - 1 + count < len(lines):
+        last = lines[number - 2 + count]
+        # An odd number of trailing backslashes continues the line; an even number is escaped backslashes.
+        joins = tail % 2 == 1
+        # Only a line with a # can start a comment (an earlier # was judged when it was joined), so only it is scanned: the whole chain so far, which the string an earlier
+        # line opened decides. The guard saves cost and changes no result: a line with a # costs one scan of at most CONTINUATION_LIMIT lines, so a file costs at most that many
+        # line scans per line (counted in the tests), not a linear amount. Past the limit nothing is scanned and nothing is cut, so the fail-closed side of a # in a
+        # string an earlier line opened still holds.
+        if joins and "#" in last and count <= CONTINUATION_LIMIT:
+            joins = continues("".join(parts))
+        if not joins:
+            break
+        parts[-1] = parts[-1][:-1]
+        parts.append(lines[number - 1 + count])
+        tail = len(parts[-1]) - len(parts[-1].rstrip("\\"))
         count += 1
-    return text, count
+    return "".join(parts), count
 
 
-# The most physical lines continued_text reads back; what a longer chain does to the export is in references/gotchas.md (the conditional-export bullet).
+# The most physical lines continued_text reads back, and the most that logical_line scans whole for a # inside a string (the join after a later line uses the backslash alone);
+# what a longer chain does to the export is in references/gotchas.md (the conditional-export bullet).
 CONTINUATION_LIMIT = 100
 
 
-def continued_text(lines, number):
+def joined_lines(lines):
+    """For each line of lines, whether bash joins the next line to it (a trailing backslash outside a comment): True, False, or None for a line that can't be judged.
+
+    Each chain is judged whole by logical_line, from its first line, so a string that spans lines decides whether the # after it starts a comment: a line is not judged
+    alone. Past CONTINUATION_LIMIT lines of a chain logical_line joins on the backslash alone, so a heredoc header after a string that holds a # is still seen (one after
+    a real comment ending in a backslash is hidden, so untold trusts no export from a chain that holds an unjudged line on, to the end of the file:
+    references/gotchas.md). A line there is not judged whole, so one that ends in a backslash and holds a # is None: it may be a comment or sit in a string an earlier
+    line opened, and either way the read-back stops at it and reports the chain as cut (continued_text), so a GH_REPO= in it tells nothing and an export before it is not
+    trusted for a gh in the chain after it. The line after it is not forced to start a command (it may be text of a string): untold keeps what track_branches returned, so
+    a real comment on the unjudged line still ends the command there. A line without a # joins as logical_line says.
+    """
+    joins = [False] * len(lines)
+    number = 1
+    while number <= len(lines):
+        _, count = logical_line(lines, number)
+        for index in range(number - 1, number + count - 2):
+            joins[index] = True if index - number + 2 <= CONTINUATION_LIMIT or "#" not in lines[index] else None
+        number += count
+    return joins
+
+
+def continued_text(lines, number, joins):
     """The text of the physical lines right before lines[number - 1] that a trailing backslash joins to it, backslashes removed,
-    and whether the chain goes on past the CONTINUATION_LIMIT lines read (a file of many continued lines costs a bounded amount per line).
+    and whether the chain goes on past what was read: past the CONTINUATION_LIMIT lines read (a file of many continued lines costs a bounded amount per line),
+    or at a line that joined_lines can't judge (None). `joins` is joined_lines(lines), which the caller computes once for the file.
     """
     text = ""
     index = number - 2
-    while index >= 0 and number - 2 - index < CONTINUATION_LIMIT and continues(lines[index]):
+    # `index >= 0` keeps the walk off joins[-1]: at the first line of the file, and for an empty file.
+    while index >= 0 and number - 2 - index < CONTINUATION_LIMIT and joins[index]:
         text = lines[index][:-1] + text
         index -= 1
-    return text, index >= 0 and continues(lines[index])
+    return text, index >= 0 and joins[index] is not False
 
 
 def close_parenthesis(line, start, depth):
@@ -520,7 +563,7 @@ def keywords(line, command=True, names=("if", "fi", "else", "elif"), where=None)
 
     A keyword is a reserved word as bash reads one: an unquoted word where a command starts, never an argument
     (grep -q fi), never inside quotes ('; fi'), a ${...} or a comment (# fi). A command starts at the start of the line
-    (command: False for the line after one that ends mid-command with a backslash), after ; & | ( and after a
+    (command: False for the line after one that bash joins to it, as joined_lines says), after ; & | ( and after a
     BEFORE_COMMAND word (then, else, do, if, {, !...). A comment ends the command, so the next line starts one.
     A ( says what its ) ends: a ) that closes $(...), <(...) or >(...) ends no command, so a word after it is an
     argument; one that closes a subshell, or a case pattern (a) if y; then z; fi ;;), does. What a ((...)), $((...)),
@@ -680,7 +723,8 @@ def track_branches(line, branches, command=True):
 def comment_start(line):
     """The index of the # that starts a comment in line, a # that begins a word outside quotes and ${...}, or -1.
 
-    A space or ; & | ( ) < > before the # ends the word only when no backslash escapes it (foo\\ # is one word).
+    A space, tab or ; & | ( ) < > before the # ends the word only when no backslash escapes it (foo\\ # is one word).
+    A ${ that never closes holds the rest of the line.
     """
     position = 0
     boundary = True
@@ -712,15 +756,18 @@ def continues(line):
 def untold(path):
     """Each line of path with a gh command not told its repository, as file:line: text."""
     lines = read_lines(path)
+    joins = joined_lines(lines)
     found = []
     exported = False
     bodies = []
+    # Whether a chain read so far holds a line that can't be judged (joined_lines None): a heredoc header after it may be hidden, so no export from the chain on, to the end of the file, is trusted.
+    distrust = False
     # The first line of the bodies, the last line of the command that opens them, and a substitution a body leaves open.
     body_start = header_end = 0
     pending = None
     branches = []
     last = None
-    # Whether the line being read starts a command: not the line after one that ends mid-command with a backslash.
+    # Whether the line being read starts a command: not the line after one that bash joins to it (joined_lines is True); the line after an unjudged line (None) keeps what track_branches returned.
     starts_command = True
     for number, line in enumerate(lines, 1):
         if bodies and number >= body_start:
@@ -728,6 +775,8 @@ def untold(path):
             if (line.lstrip("\t") if tabs else line) == delimiter:
                 bodies.pop(0)
                 pending = None
+                # The line that closes a body joins nothing, even when a quoted delimiter ends in a backslash.
+                joins[number - 1] = False
             else:
                 codes, pending = substitutions(line, pending) if not quoted else ([], None)
                 if not OPT_OUT.search(line) and any(
@@ -741,20 +790,23 @@ def untold(path):
         if not bodies and number > header_end:
             header, count = logical_line(lines, number)
             header_end = number + count - 1
+            distrust = distrust or None in joins[number - 1:header_end - 1]
             body_start = header_end + 1
             if last is None and "<<" in header:
                 last = last_lines(lines)
             bodies = data_heredocs(header, lines, header_end, last)
-        starts_command = track_branches(line, branches, starts_command) or not continues(line)
-        if EXPORTS.match(line):
+        starts_here = starts_command
+        starts_command = track_branches(line, branches, starts_command) or joins[number - 1] is False
+        # An export counts only when its line starts a command: one that continues an earlier line is that command's argument.
+        if starts_here and EXPORTS.match(line):
             # An export in a branch that never runs leaves GH_REPO unset.
-            exported = exported or all(runs for runs, _, _ in branches)
+            exported = exported or (not distrust and all(runs for runs, _, _ in branches))
         elif UNSET.search(line) or any(
                 not PREFIX_OF_GH.match(line, assignment.start()) for assignment in ASSIGNMENT.finditer(line)):
             exported = False
         if OPT_OUT.search(line):
             continue
-        earlier, truncated = continued_text(lines, number)
+        earlier, truncated = continued_text(lines, number, joins)
         if any(not told(line[:match.start()], line[match.end():], exported, earlier, truncated) for match in GH.finditer(line)):
             found.append(f"{for_log(str(path))}:{number}: {shown(line)}")
     return found
