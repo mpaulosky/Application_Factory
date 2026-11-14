@@ -2929,6 +2929,8 @@ def fake_shfmt(tmp_path, body):
     ("echo v4.0.0\n", "found 'v4.0.0'"),
     ("echo '(devel)'\n", "found '(devel)'"),
     ("echo v3.14\n", "found 'v3.14'"),
+    # A minor version with a leading zero, which test.sh's check refuses too.
+    ("echo v3.014.0\n", "found 'v3.014.0'"),
     # shfmt --version itself failing: its exit status and what it printed.
     ("echo broken >&2; exit 3\n", "shfmt --version failed with exit 3 ('broken')"),
     # A v3.14 that fails to parse without a syntax error, and one that prints no JSON.
