@@ -2848,15 +2848,15 @@ def test_untold_reads_at_most_before_chars_of_a_gh_s_own_command_before_it(tmp_p
     ("export GH_REPO=o/r\n(\n" + "gh pr view 1; " * 20000 + "\n", [3]),
     ("export GH_REPO=o/r\necho " + "gh " * 20000 + "\n", [2]),
     ("export GH_REPO=o/r\n" + "gh pr view 1; " * 20000 + "\n", [2]),
-    # Continued lines before them, longer than BEFORE_CHARS.
-    ("export GH_REPO=o/r\n(\n" + ("y" * 10000 + "\\\n") * 100 + "GH_REPO=o/r gh pr view 1; " * 1000 + "\n", [103]),
+    # Continued lines before one gh, longer than BEFORE_CHARS.
+    ("export GH_REPO=o/r\n(\n" + ("y" * 10000 + "\\\n") * 100 + "GH_REPO=o/r gh pr view 1\n", [103]),
 ])
 def test_untold_refuses_a_long_line_of_gh_words_at_its_first_gh_past_a_cap(tmp_path, text, refused):
     assert lines_of(untold(tmp_path, text)) == refused
 
 
-def test_untold_gives_told_at_most_before_chars_of_a_gh_s_line_on_each_side(tmp_path, monkeypatch):
-    # Every gh on a long line of told commands, in code and after a syntax error: what told reads of either side stays bounded.
+def test_untold_judges_and_tells_every_gh_on_a_line_just_short_of_the_caps(tmp_path, monkeypatch):
+    # Every gh on a long line of told commands, in code and after a syntax error, reaches told().
     real = check_gh_repo.told
     longest = []
 
@@ -2867,7 +2867,7 @@ def test_untold_gives_told_at_most_before_chars_of_a_gh_s_line_on_each_side(tmp_
     # Lines just short of the caps, in code and after a syntax error: every gh on them is judged, and told.
     told_lines = "export GH_REPO=o/r\n" + "gh pr view 1; " * 290 + "\n(\n" + "gh pr view 1; " * 290 + "\n"
     assert lines_of(untold(tmp_path, told_lines)) == []
-    assert len(longest) == 580 and max(longest) <= check_gh_repo.BEFORE_CHARS
+    assert len(longest) == 580
 
 
 @pytest.mark.parametrize("length, refused", [
@@ -2899,6 +2899,19 @@ def test_untold_refuses_a_gh_whose_line_goes_on_past_before_chars(tmp_path, text
 ])
 def test_untold_counts_before_chars_on_a_continued_command_without_its_continuations(tmp_path, length, refused):
     assert lines_of(untold(tmp_path, "export GH_REPO=o/r\nFOO=" + "x" * length + " \\\n  gh pr view 1\n")) == refused
+
+
+@pytest.mark.parametrize("assignment, continuations, refused", [
+    # A command of bare continuations, its text before the gh 8191, 8192 and 8193 characters long with them: past twice
+    # BEFORE_CHARS it is refused though what is left without them is short.
+    ("FOO=xy", 4091, []),
+    ("FOO=x", 4092, []),
+    ("FOO=xy", 4092, [4095]),
+])
+def test_untold_refuses_a_command_more_than_twice_before_chars_long_with_its_continuations(tmp_path, assignment, continuations,
+                                                                                          refused):
+    text = "export GH_REPO=o/r\n" + assignment + " \\\n" + "\\\n" * continuations + "gh pr view 1\n"
+    assert lines_of(untold(tmp_path, text)) == refused
 
 
 def test_parse_reads_a_script_whose_blanks_keep_changing_as_one_that_isnt_valid_bash(monkeypatch):

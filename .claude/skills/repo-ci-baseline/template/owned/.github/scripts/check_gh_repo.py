@@ -827,8 +827,9 @@ def untold(path):
             return told(line[:match.start()], after, exported and not wrapped(earlier + line[:match.start()]))
         around = commands.around(position) or statements.around(position)
         start = around[0] if around else starts[number - 1]
-        # Counted, as on a line after a syntax error, without the backslash and newline of each continuation; a slice twice as
-        # long can't hold few enough of them to pass.
+        # Counted, as on a line after a syntax error, without the backslash and newline of each continuation. A command more than
+        # twice BEFORE_CHARS long before the gh, continuations included, is refused before it is joined, so the work stays bounded
+        # (one that is mostly bare continuations too, which fails closed).
         if position - start > 2 * BEFORE_CHARS:
             return False
         before = re.sub(r"\\\n", "", text[start:position])

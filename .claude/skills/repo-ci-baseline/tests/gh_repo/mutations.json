@@ -345,6 +345,18 @@
       "old": "before = re.sub(r\"\\\\\\n\", \"\", text[start:position])\n        if len(before) > BEFORE_CHARS:",
       "new": "before = text[start:position]\n        if len(before) > BEFORE_CHARS:",
       "why": "a continuation's backslash and newline count toward BEFORE_CHARS"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "if position - start > 2 * BEFORE_CHARS:",
+      "new": "if position - start > BEFORE_CHARS:",
+      "why": "a continued command's text with its continuations is capped at BEFORE_CHARS, not twice it"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "if position - start > 2 * BEFORE_CHARS:",
+      "new": "if position - start > 4 * BEFORE_CHARS:",
+      "why": "a command more than twice BEFORE_CHARS long with its continuations is joined"
     }
   ]
 }
