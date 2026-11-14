@@ -134,11 +134,13 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     shfmt v3.14 joins the line after a comment that ends in a backslash; bash doesn't, so a valid script may even fail to parse. The checker then hands shfmt the
     backslashes that end each line with a `#` on it as spaces, and parses again; a space the new tree puts in no comment (a `#` in a string, then a real
     continuation) gets its backslash back, and so does a space on the line right before a syntax error the blanks brought (a real continuation onto a `|` or
-    `&&` line, as in `grep '^#' f \`). After 10 parses (`COMMENT_PASSES`) with blanks still changing, the whole script is read as one that isn't valid bash.
+    `&&` line, as in `grep '^#' f \`), one per parse. After 10 parses (`COMMENT_PASSES`) with blanks still changing, the whole script is read as one that isn't
+    valid bash, so no export in it is trusted: a script with a comment that ends in a backslash and more than eight such continuations, for one.
     A script that isn't valid bash is read up to its syntax error, since bash runs the statements before it and stops there: those statements are judged on the tree
     and their export counts. The lines from the error on are judged one at a time as code, with the export the statements before left, and no export of their own;
-    a wrapper on an earlier line that a backslash joins to the `gh`'s (`sudo \`) drops that export. Only the 100 lines joined before a `gh` are read for
-    that wrapper (`JOINED_LINES`); a `gh` after more is refused. The checker parses at most five times looking for those
+    a wrapper on an earlier line that a backslash joins to the `gh`'s (`sudo \`) drops that export. Only 100 lines joined before a `gh`, and 4096 characters of
+    them, are read for that wrapper (`JOINED_LINES`, `JOINED_CHARS`); past either, the export isn't trusted for that `gh`, which then needs a `GH_REPO=` of its
+    own. The checker parses at most five times looking for those
     statements (`PREFIX_TRIES`), the whole script first.
     One statement nested deeper than the checker's tree walk goes (a chain of about 190 `&&`, `||` or `|` links) is read the same way from the script's first line:
     no export in the file is trusted.

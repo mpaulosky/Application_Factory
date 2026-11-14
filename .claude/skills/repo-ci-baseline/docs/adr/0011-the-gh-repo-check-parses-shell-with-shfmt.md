@@ -42,15 +42,18 @@ Sandcastle's sandbox, which runs the gate.
   manager's shim that needs more than `PATH` fails there; the release binary on `PATH` doesn't.
 - **A script that isn't valid bash is read up to its syntax error.** bash runs a script one complete statement at a time and stops at a syntax error, so the
   statements before the error are judged on the tree, and their export counts. The lines from the error on are judged one line at a time, as code, with no export of their
-  own trusted (an `unset` there still ends one, and a wrapper on an earlier line a backslash joins to the `gh`'s drops the export; past 100 joined lines,
-  `JOINED_LINES`, the `gh` is refused, so the text read for one `gh` stays bounded). The checker parses at most five times to find the statements before the error, the whole script first (`PREFIX_TRIES`).
+  own trusted (an `unset` there still ends one, and a wrapper on an earlier line a backslash joins to the `gh`'s drops the export). Past 100 joined lines
+  (`JOINED_LINES`) or 4096 characters of them (`JOINED_CHARS`), the export isn't trusted for that `gh`, which then needs a `GH_REPO=` of its own, so the
+  text read for one `gh` stays bounded. The checker parses at most five times to find the statements before the error, the whole script first (`PREFIX_TRIES`).
 - **A statement nested deeper than Python's recursion limit lets the checker walk** (a chain of about 190 `&&`, `||` or `|` links) is read the same way, from
   the script's first line: no export in the file is trusted. That is a limit, documented in `references/gotchas.md`, and it fails closed.
 - **One known difference from bash is worked around:** shfmt v3.14 joins the line after a comment that ends in a backslash onto the comment, where bash ends the comment
   at the newline and runs the next line, so a valid script may even fail to parse. When the tree holds such a comment, or the script doesn't parse, the checker gives
   shfmt the trailing backslashes of every line with a `#` on it as spaces, which bash reads the same inside a comment, and parses again. A space the new tree puts in
   no comment gets its backslash back, as does one on the line right before a syntax error the blanks brought (a real continuation, whose next line starts
-  with `|` or `&&`). After 10 parses (`COMMENT_PASSES`) whose blanks keep changing, the whole script is read as one that isn't valid bash.
+  with `|` or `&&`; a comment's blank put back this way that a later tree puts in a comment again leaves the syntax error where it was found). Each blank put
+  back costs a parse. After 10 parses (`COMMENT_PASSES`) whose blanks keep changing, the whole script is read as one that isn't valid bash: a script with a
+  comment that ends in a backslash and more than eight such continuations, for one, which fails closed.
 - **The `# gh-repo: ok` marker counts only as a comment** in the lines the tree reads: one inside a string, or a heredoc's delimiter, no longer skips its line.
 - **The checker starts no process but shfmt.** Its test watches every process it starts.
 
