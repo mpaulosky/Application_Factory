@@ -38,18 +38,20 @@ Sandcastle's sandbox, which runs the gate.
   this adds no Baseline piece to the Factory. A developer installs shfmt with their package manager or from the release binaries. Without shfmt, or with one
   older or newer, the checker fails with exit 2 and says which it found: the gate can't pass a script it didn't read. A tree of another shape than the checker reads
   fails the same way. A repo whose files in scope are all skills (Markdown) never needs it.
-- **shfmt reads nothing of the PR's but the script:** it runs in an empty folder of the checker's own, with only `PATH` in its environment.
+- **shfmt reads nothing of the PR's but the script:** it runs in an empty folder of the checker's own, with only `PATH` in its environment. A version
+  manager's shim that needs more than `PATH` fails there; the release binary on `PATH` doesn't.
 - **A script that isn't valid bash is read up to its syntax error.** bash runs a script one complete statement at a time and stops at a syntax error, so the
   statements before the error are judged on the tree, and their export counts. The lines from the error on are judged one line at a time, as code, with no export of their
-  own trusted (an `unset` there still ends one, and a wrapper on an earlier line a backslash joins to the `gh`'s drops the export). The checker parses at most five
-  times to find the statements before the error, the whole script first (`PREFIX_TRIES`).
+  own trusted (an `unset` there still ends one, and a wrapper on an earlier line a backslash joins to the `gh`'s drops the export; past 100 joined lines,
+  `JOINED_LINES`, the `gh` is refused, so the text read for one `gh` stays bounded). The checker parses at most five times to find the statements before the error, the whole script first (`PREFIX_TRIES`).
 - **A statement nested deeper than Python's recursion limit lets the checker walk** (a chain of about 190 `&&`, `||` or `|` links) is read the same way, from
   the script's first line: no export in the file is trusted. That is a limit, documented in `references/gotchas.md`, and it fails closed.
 - **One known difference from bash is worked around:** shfmt v3.14 joins the line after a comment that ends in a backslash onto the comment, where bash ends the comment
   at the newline and runs the next line, so a valid script may even fail to parse. When the tree holds such a comment, or the script doesn't parse, the checker gives
   shfmt the trailing backslashes of every line with a `#` on it as spaces, which bash reads the same inside a comment, and parses again. A space the new tree puts in
-  no comment gets its backslash back. After 10 parses (`COMMENT_PASSES`) whose blanks keep changing, the whole script is read as one that isn't valid bash.
-- **The `# gh-repo: ok` marker counts only as a comment** in the lines the tree reads: one inside a string no longer skips its line.
+  no comment gets its backslash back, as does one on the line right before a syntax error the blanks brought (a real continuation, whose next line starts
+  with `|` or `&&`). After 10 parses (`COMMENT_PASSES`) whose blanks keep changing, the whole script is read as one that isn't valid bash.
+- **The `# gh-repo: ok` marker counts only as a comment** in the lines the tree reads: one inside a string, or a heredoc's delimiter, no longer skips its line.
 - **The checker starts no process but shfmt.** Its test watches every process it starts.
 
 ## Consequences

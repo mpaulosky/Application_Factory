@@ -122,7 +122,8 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     reads them. It needs shfmt v3.14 or a later v3 release on `PATH`: CI's `gh-repo` and `hook-tests` jobs and the Seed Sandcastle `Dockerfile` install the pinned
     release, and on your machine it comes from your package manager (`pacman -S shfmt`, `brew install shfmt`, `apt install shfmt` where the package is v3.14 or later)
     or the release binaries at <https://github.com/mvdan/sh/releases>. Without it, or with an older or newer one, the checker fails with exit 2 and says why. It runs
-    shfmt in an empty folder of its own with only `PATH` set, so no file of the PR's (an `.editorconfig`) reaches it.
+    shfmt in an empty folder of its own with only `PATH` set, so no file of the PR's (an `.editorconfig`) reaches it; a version manager's shim (asdf, mise)
+    that needs more than `PATH` fails there, so put the release binary on `PATH` instead.
     An `export GH_REPO=...` counts when it is alone on its line, at its start, and runs in the
     script's own shell: not in a subshell, a `$(...)`, a `<(...)`, a pipe, a coprocess, a group sent to the background (`{ ...; } &`) or a heredoc body, and not
     in a branch that never runs. A branch never runs when it is the `then` of
@@ -132,10 +133,12 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     counts; one that only continues an earlier line with a backslash is that command's argument and, like any `GH_REPO=` assignment, ends an export already set.
     shfmt v3.14 joins the line after a comment that ends in a backslash; bash doesn't, so a valid script may even fail to parse. The checker then hands shfmt the
     backslashes that end each line with a `#` on it as spaces, and parses again; a space the new tree puts in no comment (a `#` in a string, then a real
-    continuation) gets its backslash back. After 10 parses (`COMMENT_PASSES`) with blanks still changing, the whole script is read as one that isn't valid bash.
+    continuation) gets its backslash back, and so does a space on the line right before a syntax error the blanks brought (a real continuation onto a `|` or
+    `&&` line, as in `grep '^#' f \`). After 10 parses (`COMMENT_PASSES`) with blanks still changing, the whole script is read as one that isn't valid bash.
     A script that isn't valid bash is read up to its syntax error, since bash runs the statements before it and stops there: those statements are judged on the tree
     and their export counts. The lines from the error on are judged one at a time as code, with the export the statements before left, and no export of their own;
-    a wrapper on an earlier line that a backslash joins to the `gh`'s (`sudo \`) drops that export. The checker parses at most five times looking for those
+    a wrapper on an earlier line that a backslash joins to the `gh`'s (`sudo \`) drops that export. Only the 100 lines joined before a `gh` are read for
+    that wrapper (`JOINED_LINES`); a `gh` after more is refused. The checker parses at most five times looking for those
     statements (`PREFIX_TRIES`), the whole script first.
     One statement nested deeper than the checker's tree walk goes (a chain of about 190 `&&`, `||` or `|` links) is read the same way from the script's first line:
     no export in the file is trusted.
@@ -181,7 +184,8 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
 
   A line that names `gh` without running it (`command -v gh >/dev/null`, `echo "needs gh"`) ends in a comment
   `# gh-repo: ok` in a script or a fenced block, or carries `<!-- gh-repo: ok -->` in a skill, and the check skips it.
-  In a script the marker counts only as a comment: `gh pr merge 1 --body "# gh-repo: ok"` is still judged. In a heredoc body some
+  In a script the marker counts only as a comment: `gh pr merge 1 --body "# gh-repo: ok"` is still judged, and so is
+  `gh pr merge 1 <<'# gh-repo: ok'`, whose heredoc delimiter is no comment. In a heredoc body some
   program reads, and in the lines after a syntax error, a `#` anywhere on the line counts, as the program reading it starts a comment there.
   A path such as `~/.config/gh/hosts.yml` is not a command. The marker is the way out for a line the rules misread; a
   real `gh` command is told its repository instead.
