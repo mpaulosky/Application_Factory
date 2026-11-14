@@ -42,9 +42,11 @@ Sandcastle's sandbox, which runs the gate.
   manager's shim that needs more than `PATH` fails there; the release binary on `PATH` doesn't.
 - **A script that isn't valid bash is read up to its syntax error.** bash runs a script one complete statement at a time and stops at a syntax error, so the
   statements before the error are judged on the tree, and their export counts. The lines from the error on are judged one line at a time, as code, with no export of their
-  own trusted (an `unset` there still ends one, and a wrapper on an earlier line a backslash joins to the `gh`'s drops the export). Past 100 joined lines
-  (`JOINED_LINES`) or 4096 characters of them (`JOINED_CHARS`), the export isn't trusted for that `gh`, which then needs a `GH_REPO=` of its own, so the
-  text read for one `gh` stays bounded. The checker parses at most five times to find the statements before the error, the whole script first (`PREFIX_TRIES`).
+  own trusted (an `unset` there still ends one, and a wrapper on an earlier line a backslash joins to the `gh`'s drops the export). The checker parses at
+  most five times to find the statements before the error, the whole script first (`PREFIX_TRIES`).
+- **The text read for one `gh` is bounded:** a `gh` with more than 4096 characters before it in its own command (`BEFORE_CHARS`), joined lines
+  included, or more than 100 continued lines before it after a syntax error (`JOINED_LINES`), is refused, whatever tells it, and only the first 4096
+  characters of the rest of its line are read. A long line of `gh` words, or a long command, then costs the checker time in proportion to its length.
 - **A statement nested deeper than Python's recursion limit lets the checker walk** (a chain of about 190 `&&`, `||` or `|` links) is read the same way, from
   the script's first line: no export in the file is trusted. That is a limit, documented in `references/gotchas.md`, and it fails closed.
 - **One known difference from bash is worked around:** shfmt v3.14 joins the line after a comment that ends in a backslash onto the comment, where bash ends the comment
