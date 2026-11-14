@@ -140,7 +140,7 @@ def test_an_install_step_retries_a_failed_download(where):
     assert re.search(r"curl [^\n]*--retry [1-9][^\n]*--retry-all-errors[^\n]* -o shfmt ", install_steps()[where]["run"])
 
 
-def test_sh_version_check():
+def sh_version_check():
     """test.sh's shfmt version check, the two lines that start with [[ "$(shfmt --version)"."""
     lines = (SKILL / "test.sh").read_text().splitlines()
     first = next(index for index, line in enumerate(lines) if line.startswith('[[ "$(shfmt --version)" =~'))
@@ -160,7 +160,7 @@ def test_test_sh_and_the_checker_accept_the_same_shfmt_releases(tmp_path, versio
     accepted = bool(found) and int(found.group(1)) >= check_gh_repo.SHFMT_OLDEST_MINOR
 
     # Act
-    done = subprocess.run(["bash", "--noprofile", "--norc", "-c", test_sh_version_check()], capture_output=True, text=True,
+    done = subprocess.run(["bash", "--noprofile", "--norc", "-c", sh_version_check()], capture_output=True, text=True,
                           env={"PATH": f"{stubs}:{os.environ['PATH']}"})
 
     # Assert: the same answer, and test.sh's refusal is exit 2 and names the release it found.

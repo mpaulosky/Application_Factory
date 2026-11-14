@@ -233,8 +233,9 @@ def shfmt_version():
                          f"({SHFMT_INSTALL})") from error
     printed = for_log(result.stdout.strip() or result.stderr.strip())
     if result.returncode:
-        raise ShfmtError(f"shfmt --version failed with exit {result.returncode} ({printed!r}); check_gh_repo.py needs {SHFMT_WANTED}, "
-                         "run with only PATH set (a version manager's shim that needs more must give way to the release binary)")
+        raise ShfmtError(f"shfmt --version failed with exit {result.returncode} ({printed!r}); check_gh_repo.py needs {SHFMT_WANTED}; "
+                         "it runs shfmt with only PATH set, so a version manager's shim (asdf, mise) that needs more fails here: "
+                         "put the release binary on PATH")
     release = SHFMT_RELEASE.fullmatch(result.stdout.strip())
     if release is None or int(release.group(1)) < SHFMT_OLDEST_MINOR:
         raise ShfmtError(f"check_gh_repo.py needs {SHFMT_WANTED}, found {printed!r} ({SHFMT_INSTALL})")
@@ -321,6 +322,8 @@ def parse(text):
     runs = backslash_runs(original)
     blanked = set()
     restored = set()
+    # The syntax error each blank put back for breaking the line after it was blamed for: the error, if it was a comment's after all.
+    broke = {}
     tree = error = None
     for _ in range(COMMENT_PASSES):
         tree, error = run_shfmt(bytes(data))
@@ -332,6 +335,7 @@ def parse(text):
                     data[start:end] = original[start:end]
                 blanked -= set(breaking)
                 restored |= set(breaking)
+                broke.update((run, error) for run in breaking)
                 continue
             fresh = [run for run in runs if run not in blanked and run not in restored]
             if not fresh:
@@ -350,6 +354,9 @@ def parse(text):
             if not pending:
                 break
             if pending & restored:
+                if all(run in broke for run in pending & restored):
+                    # A comment's blank that only seemed to break the next line: that line holds a real syntax error.
+                    return None, min(broke[run] for run in pending & restored)
                 # A comment's backslashes that an earlier tree put in no comment: which tree is bash's is unknown.
                 return None, 1
             fresh = [run for run in runs if run not in blanked and run not in restored]
@@ -700,8 +707,10 @@ def clears(line):
         not PREFIX_OF_GH.match(line, assignment.start()) for assignment in ASSIGNMENT.finditer(line))
 
 
-# How many continued lines before a gh after a syntax error are read for a wrapper; past them the gh's export isn't trusted.
+# How many continued lines, and how many characters of them, before a gh after a syntax error are read for a wrapper; past
+# either, the export isn't trusted for that gh, which is told only by its own --repo or GH_REPO=.
 JOINED_LINES = 100
+JOINED_CHARS = 4096
 
 
 def read_shape(lines):
@@ -781,11 +790,24 @@ def untold(path):
         exported_lines.append(exported)
 
     # The lines a backslash joins to each line after the syntax error, which bash reads as one: a wrapper there drops the export.
-    # Past JOINED_LINES earlier lines, the gh is judged as wrapped, so the text read for one gh stays bounded.
+    # Past JOINED_LINES earlier lines, or JOINED_CHARS characters of them, the export isn't trusted for the gh, so the text read
+    # for one gh stays bounded; each line's earlier text is joined once, however many gh words the line holds.
     joined_from = list(range(len(lines)))
     for number in range(max(count, 1), len(lines)):
         if re.search(r"(?<!\\)(\\\\)*\\$", lines[number - 1]) and number - 1 >= count:
             joined_from[number] = joined_from[number - 1]
+    joined_text = {}
+
+    def earlier_of(index):
+        """The text of the lines a backslash joins to line index, or None when it is more than the caps read."""
+        if index not in joined_text:
+            first = joined_from[index]
+            # Each joined line without the backslash that joins it.
+            if index - first > JOINED_LINES or sum(len(lines[other]) - 1 for other in range(first, index)) > JOINED_CHARS:
+                joined_text[index] = None
+            else:
+                joined_text[index] = "".join(lines[other][:-1] for other in range(first, index))
+        return joined_text[index]
 
     def judge(number, match, exported):
         position = starts[number - 1] + match.start()
@@ -795,10 +817,9 @@ def untold(path):
             return None
         after = line[match.end():]
         if place == "text":
-            first = joined_from[number - 1]
-            if number - 1 - first > JOINED_LINES:
+            earlier = earlier_of(number - 1)
+            if earlier is None:
                 return told(line[:match.start()], after, False)
-            earlier = "".join(lines[index][:-1] for index in range(first, number - 1))
             return told(line[:match.start()], after, exported and not wrapped(earlier + line[:match.start()]))
         around = commands.around(position) or statements.around(position)
         start = around[0] if around else starts[number - 1]

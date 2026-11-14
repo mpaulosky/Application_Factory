@@ -2744,6 +2744,9 @@ def test_untold_reads_a_script_whose_comments_need_too_many_passes_as_one_that_i
     # A script that isn't valid bash, with a comment ending in a backslash before its syntax error: what comes before it counts.
     ("export GH_REPO=o/r # c \\\ngh pr view 1\n(\ngh pr view 2\n", []),
     ("# c \\\nexport GH_REPO=o/r\n(\ngh pr view 1\n", []),
+    # A comment that ends in a backslash right before a real syntax error: blanking it brings the error, and it is still a comment's.
+    ("export GH_REPO=o/r\n# see \\\nfi\ngh pr view 1\n", []),
+    ("# see \\\nfi\ngh pr view 1\n", [3]),
 ])
 def test_untold_reads_a_comment_that_ends_in_a_backslash_wherever_shfmt_misreads_it(tmp_path, text, refused):
     assert lines_of(untold(tmp_path, text)) == refused
@@ -2778,6 +2781,17 @@ def test_untold_puts_back_a_blank_that_breaks_the_line_after_it(tmp_path, text, 
     assert lines_of(untold(tmp_path, text)) == refused
 
 
+@pytest.mark.parametrize("pairs, refused", [
+    # Each real continuation a blank broke costs one parse to put back: eight fit in COMMENT_PASSES, a ninth doesn't.
+    (8, []),
+    (9, [20]),
+])
+def test_untold_puts_back_one_broken_continuation_per_parse(tmp_path, pairs, refused):
+    assert check_gh_repo.COMMENT_PASSES == 10
+    text = "export GH_REPO=o/r # c \\\n" + "grep -v '^#' f \\\n  | sort\n" * pairs + "gh pr view 1\n"
+    assert lines_of(untold(tmp_path, text)) == refused
+
+
 @pytest.mark.parametrize("line", [b"#" * 200000, b"# " + b"\\" * 200000 + b"x", b"# " + b"\\" * 200000, b"x" * 200000 + b"#\\",
                                   b"x" * 200000 + b"\\"])
 def test_backslash_runs_reads_a_long_line_in_one_pass(line):
@@ -2798,6 +2812,29 @@ def test_backslash_runs_reads_a_long_line_in_one_pass(line):
 def test_untold_reads_at_most_joined_lines_continued_lines_before_a_gh_after_a_syntax_error(tmp_path, joined, refused):
     assert check_gh_repo.JOINED_LINES == 100
     assert lines_of(untold(tmp_path, "export GH_REPO=o/r\n(\n" + "echo \\\n" * joined + "gh pr view 1\n")) == refused
+
+
+def test_untold_still_reads_a_gh_s_own_prefix_past_joined_lines(tmp_path):
+    # Past the cap only the export goes untrusted: a GH_REPO= of the gh's own still tells it.
+    assert lines_of(untold(tmp_path, "(\n" + "echo \\\n" * 101 + "GH_REPO=o/r gh pr view 1\n")) == []
+
+
+@pytest.mark.parametrize("length, refused", [
+    (4095, []),
+    (4096, []),
+    (4097, [4]),
+])
+def test_untold_reads_at_most_joined_chars_of_continued_lines_before_a_gh_after_a_syntax_error(tmp_path, length, refused):
+    assert check_gh_repo.JOINED_CHARS == 4096
+    assert lines_of(untold(tmp_path, "export GH_REPO=o/r\n(\n" + "x" * length + "\\\ngh pr view 1\n")) == refused
+
+
+def test_untold_reads_many_gh_words_after_long_continued_lines_in_bounded_time(tmp_path):
+    # 100 continued lines of 10,000 characters, then a line of 1,000 gh words: each gh reads no more than JOINED_CHARS of them.
+    started = time.monotonic()
+    found = untold(tmp_path, "export GH_REPO=o/r\n(\n" + ("y" * 10000 + "\\\n") * 100 + "gh pr view 1; " * 1000 + "\n")
+    assert time.monotonic() - started < 10
+    assert lines_of(found) == [103]
 
 
 def test_parse_reads_a_script_whose_blanks_keep_changing_as_one_that_isnt_valid_bash(monkeypatch):
@@ -3004,7 +3041,7 @@ def test_check_repo_asks_shfmt_its_version_once_and_runs_it_in_an_empty_folder_w
     log = tmp_path / "log"
     repo = tmp_path / "repo"
     make_repo(repo, {"scripts/a.sh": TOLD, "scripts/b.sh": TOLD, ".editorconfig": "[*]\nindent_style = tab\n"})
-    fake = fake_shfmt(tmp_path, f'printf "%s|%s|%s\\n" "$1" "$PWD" "$(env | sort | tr "\\n" " ")" >> {log}\nexec {real} "$@"\n')
+    fake = fake_shfmt(tmp_path, f'printf "%s|%s|%s\\n" "$1" "$PWD" "$(env | sed "s/=.*//" | sort | tr "\\n" " ")" >> {log}\nexec {real} "$@"\n')
     monkeypatch.setattr(check_gh_repo, "SHFMT", str(fake))
     monkeypatch.setattr(check_gh_repo, "_checked_shfmt", [])
     monkeypatch.setenv("GH_TOKEN", "secret")
@@ -3019,9 +3056,9 @@ def test_check_repo_asks_shfmt_its_version_once_and_runs_it_in_an_empty_folder_w
     assert [call[0] for call in calls] == ["--version", "-ln", "-ln"]
     folders = {call[1] for call in calls}
     assert len(folders) == 1 and not any(Path(folders.pop()).iterdir())
-    # Only PATH, and what sh sets for itself.
+    # Only PATH, and what sh sets for itself: the fake logs the names alone, so a value with a space or a | splits nothing.
     for call in calls:
-        names = {entry.split("=", 1)[0] for entry in call[2].split()}
+        names = set(call[2].split())
         assert "PATH" in names and names <= {"PATH", "PWD", "OLDPWD", "SHLVL", "_"}, names
 
 
