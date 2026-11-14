@@ -54,18 +54,21 @@ Under `template/seed/`. Each one describes the repo, so it's the repo's once wri
 | `.sandcastle/roles/shared-rules.md` | The repo's paragraph, its pointers (`docs/CODING_STANDARDS.md`, `CONTEXT.md`, `.claude/rules/`), its stacks and test commands, any "UI developer" section naming its UI files; the one file every role reads about the repo |
 | `.sandcastle/roles/skills.md` | The repo's `# SKILLS` block, empty in the Seed; injected into the `tester`, `backend` and `ui` prompts as `{{REPO_SKILLS}}` |
 | `.sandcastle/CODING_STANDARDS.md` | The repo's code and test standards, which every role and the review follow |
-| `.sandcastle/Dockerfile` | The sandbox image: the gate's linters as `ARG`s with their SHA-256s, an optional .NET SDK (`INSTALL_DOTNET`, `DOTNET_CHANNEL`), optional Chromium libraries for Playwright (`INSTALL_PLAYWRIGHT_DEPS`, `PLAYWRIGHT_VERSION`), and `tini` as PID 1 (`ENTRYPOINT ["tini", "--", "sleep", "infinity"]`) |
+| `.sandcastle/Dockerfile` | The sandbox image: the gate's linters and the shfmt its gh check parses scripts with as `ARG`s with their SHA-256s, an optional .NET SDK (`INSTALL_DOTNET`, `DOTNET_CHANNEL`), optional Chromium libraries for Playwright (`INSTALL_PLAYWRIGHT_DEPS`, `PLAYWRIGHT_VERSION`), and `tini` as PID 1 (`ENTRYPOINT ["tini", "--", "sleep", "infinity"]`) |
 | `.sandcastle/check-paths.txt` | The files, besides the Template's own list, whose change makes the Owned `check.sh` run Sandcastle's check: those the repo's `.sandcastle/` tests read (`CLAUDE.md`, `.github/workflows`, the solution file and so on); one pathspec per line, and a line that matches no file is named on stderr on every run |
 | `package.json`, `pnpm-workspace.yaml` | Sandcastle's packages and scripts; a repo with its own Node tooling merges them |
 | `.github/ci/sandcastle-skills.txt` | The skills the Sandcastle workflow installs on the runner for the run (a pinned Application Factory commit and skill names, read as data); empty until filled ([The workflow](#the-workflow)) |
 | `.sandcastle/lib/repo-config.mts` | `REPO_SLUG` and `NOT_OWNED_BASELINE_PATHS` for the local review ([pre-push-review.md](pre-push-review.md)), `ROLE_AGENTS` (each role's model, effort, iterations and timeout), `MAX_ITERATIONS`, the sandbox `hooks`, `copyToWorktree`, the host skills to mount (`SANDBOX_SKILLS`), the CI jobs `scripts/gate.sh` reproduces (`GATE_COVERED_CHECKS`, `Build Solution` in the Seed), the command the host runs as the gate in the sandbox (`GATE_COMMAND`, `scripts/gate.sh` in the Seed), how long the host lets that gate run before it kills it (`GATE_LIMIT_MINUTES`, 10 in the Seed), the committed file it runs, which a branch may not change (`GATE_SCRIPT`), the paths whose changed files a PR's body lists for the reviewer (`CHECK_PATHS`), and `TEMPLATE_OWNED_DIR` and `TEMPLATE_ROOT_COPIES`, empty except in dotfiles |
 
-`test.sh` keeps dotfiles' own text out of the Seed's `roles/shared-rules.md`, and checks that the Dockerfile's linter versions match the Owned `scripts/gate.sh` and its .NET channel matches `global.json`.
+`test.sh` keeps dotfiles' own text out of the Seed's `roles/shared-rules.md`, and checks that the Dockerfile's linter versions match the Owned `scripts/gate.sh`,
+its shfmt release and SHA-256 the Owned `ci.yml`'s, and its .NET channel matches `global.json`.
 A repo with `Microsoft.Playwright` in its `Directory.Packages.props` sets `INSTALL_PLAYWRIGHT_DEPS=true` in the Dockerfile (it is `false` by default, where `INSTALL_DOTNET` is `true`),
 so its E2E tests find Chromium's system libraries in the sandbox. The step runs `pnpm dlx playwright@${PLAYWRIGHT_VERSION} install-deps chromium` as root and clears root's caches;
 keep `PLAYWRIGHT_VERSION` near the repo's `Microsoft.Playwright` version. It installs only the libraries: the browser itself is left to the test fixture at run time,
 so a Playwright bump needs no image change.
 A Seed file is written once, so an existing repo keeps its own Dockerfile and adds the step by hand.
+The same goes for shfmt, which the gate's gh check needs (repo-ci-baseline's ADR 0011): a Dockerfile written before it adds the Seed's `SHFMT_VERSION` `ARG`,
+its two `shfmt_sha` values and its download, check and install lines by hand, or the sandbox's gate fails with exit 2.
 A repo that already has a Dockerfile adds `tini` to its `apt-get install` list and replaces its `ENTRYPOINT ["sleep", "infinity"]`
 with `ENTRYPOINT ["tini", "--", "sleep", "infinity"]`: with `sleep` as PID 1,
 nothing reaps the processes the gate orphans, they stay zombies holding their PIDs, and a long build ends unable to fork (the gate fails with `Resource temporarily unavailable`,
@@ -350,7 +353,7 @@ One PR per repo, each its own follow-up issue. The four older repos go first (Ar
 3. **Before Apply**, move what the repo's role prompts, `plan-prompt.md` and `review-prompt.md` say about the repo: Apply overwrites them with the Owned ones.
    Its pointers (`docs/CODING_STANDARDS.md`, `CONTEXT.md`, `.claude/rules/`), its repo-specific bullets, its UI notes and its instructions for a sandbox gate (step 8)
    go into `roles/shared-rules.md`, and its `# SKILLS` block into `roles/skills.md`.
-   Diff the repo's `Dockerfile` and `package.json` against the Template's Seed files, and bring over what the repo lacks.
+   Diff the repo's `Dockerfile` and `package.json` against the Template's Seed files, and bring over what the repo lacks (shfmt, for one, in a Dockerfile from before ADR 0011).
 4. Run `pnpm install`, then commit `pnpm-lock.yaml` with the change.
 5. Add `GATE_LIMIT_MINUTES` to `lib/repo-config.mts` (the Seed's is 10): the Owned `lib/step-limit.mts` imports it, so a repo without it fails to load.
    Size it for the repo's slowest gate under parallel builds. The host runs every sandbox command under `timeout` (GNU coreutils, in the Template's

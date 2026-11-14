@@ -1,7 +1,7 @@
 # The gh repository check parses shell with shfmt
 
 **Status:** accepted (mpaulosky/Application_Factory#52). Implemented in `template/owned/.github/scripts/check_gh_repo.py` (`parse`, `parse_prefix`, `Shape`, `untold`), its tests in
-`tests/gh_repo/`, the Owned `ci.yml`'s `gh-repo` job, the Seed `.sandcastle/Dockerfile` and the Factory's `.github/actions/template-tools/`
+`tests/gh_repo/`, the Owned `ci.yml`'s `gh-repo` and `hook-tests` jobs, the Seed `.sandcastle/Dockerfile` and the Factory's `.github/actions/template-tools/`
 ([gotchas.md](../../references/gotchas.md), "Tell every `gh` command its repository").
 
 ## Context
@@ -31,15 +31,25 @@ Sandcastle's sandbox, which runs the gate.
 - **The checker runs `shfmt -ln bash --to-json` on each shell file and judges the tree,** not lines. Comments, heredoc bodies, substitutions, strings, `if`/`elif`/`else`
   branches, subshells, pipes and continuations come from shfmt. The rules about a single `gh` command (its subcommand, its `GH_REPO=` prefix, a wrapper such as `sudo`
   before it) stay as they were, applied to the words of the command the tree puts the `gh` in.
-- **shfmt is a requirement wherever the check runs,** at v3 (the JSON shape is stable within a major version). CI's `gh-repo` job, the Factory's `template-tools` action
-  and the Seed Sandcastle `Dockerfile` install the v3.14.1 release binary, checked against the SHA-256 GitHub publishes for it. A developer installs shfmt with their
-  package manager. Without shfmt, or with a shfmt that isn't v3, the checker fails with exit 2 and says so: the gate can't pass a script it didn't read.
-  A repo whose files in scope are all skills (Markdown) never needs it.
+- **shfmt is a requirement wherever the check runs,** v3.14 or a later v3 release: the checker was written and tested against v3.14's JSON,
+  and a new major version may change its shape. CI's `gh-repo` job and its `hook-tests` job (whose `pre-push.test.sh` runs the gate), and the Seed Sandcastle
+  `Dockerfile`, install the v3.14.1 release binary, checked against the SHA-256 GitHub publishes for it; `test.sh` checks that every one of them pins the same release.
+  The Factory's `template-tools` action installs the same release only so `test.sh` and the Template's tests can run: the Factory's own gate runs no gh check, so
+  this adds no Baseline piece to the Factory. A developer installs shfmt with their package manager or from the release binaries. Without shfmt, or with one
+  older or newer, the checker fails with exit 2 and says which it found: the gate can't pass a script it didn't read. A tree of another shape than the checker reads
+  fails the same way. A repo whose files in scope are all skills (Markdown) never needs it.
+- **shfmt reads nothing of the PR's but the script:** it runs in an empty folder of the checker's own, with only `PATH` in its environment.
 - **A script that isn't valid bash is read up to its syntax error.** bash runs a script one complete statement at a time and stops at a syntax error, so the
   statements before the error are judged on the tree, and their export counts. The lines from the error on are judged one line at a time, as code, with no export of their
-  own trusted (an `unset` there still ends one). The checker tries at most five shorter prefixes to find the statements before the error.
+  own trusted (an `unset` there still ends one, and a wrapper on an earlier line a backslash joins to the `gh`'s drops the export). The checker parses at most five
+  times to find the statements before the error, the whole script first (`PREFIX_TRIES`).
+- **A statement nested deeper than Python's recursion limit lets the checker walk** (a chain of about 190 `&&`, `||` or `|` links) is read the same way, from
+  the script's first line: no export in the file is trusted. That is a limit, documented in `references/gotchas.md`, and it fails closed.
 - **One known difference from bash is worked around:** shfmt v3.14 joins the line after a comment that ends in a backslash onto the comment, where bash ends the comment
-  at the newline and runs the next line. The checker gives shfmt those trailing backslashes as spaces, which bash reads the same, and parses again.
+  at the newline and runs the next line, so a valid script may even fail to parse. When the tree holds such a comment, or the script doesn't parse, the checker gives
+  shfmt the trailing backslashes of every line with a `#` on it as spaces, which bash reads the same inside a comment, and parses again. A space the new tree puts in
+  no comment gets its backslash back. After 10 parses (`COMMENT_PASSES`) whose blanks keep changing, the whole script is read as one that isn't valid bash.
+- **The `# gh-repo: ok` marker counts only as a comment** in the lines the tree reads: one inside a string no longer skips its line.
 - **The checker starts no process but shfmt.** Its test watches every process it starts.
 
 ## Consequences
@@ -48,5 +58,7 @@ Sandcastle's sandbox, which runs the gate.
 - Rows of the old table tests that were not valid bash changed their expected result: what follows the syntax error no longer has its export trusted. They are marked in the tests.
 - Every Application needs shfmt installed for its gate. The Rollout that brings this checker says so, and an Application whose Seed `.sandcastle/Dockerfile` was written
   before this change adds the shfmt download by hand (a Seed file isn't overwritten).
-- The checker starts one shfmt per shell file, a few milliseconds each; the 200-file test still finishes in well under a second.
+- The checker starts one shfmt per shell file, plus one `shfmt --version` per run, and more only for a file with a comment that ends in a backslash or a
+  syntax error. On the developer machine this was measured on, the test of a repo of 100 scripts and 100 skills took 0.34 s.
+- An `elif` or `else` after a plainly true condition, and the right side of `false &&` or `true ||`, now never run: an export there no longer counts.
 - A new shfmt major version needs the checker read against its JSON first; the version check stops a v4 until then.
