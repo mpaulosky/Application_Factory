@@ -1,11 +1,11 @@
 """Checks that every gh command in the Template's Owned scripts and a repo's own scripts and skills is told its repository; the rules are in references/gotchas.md."""
 
-import bisect
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 # A value that's never empty: literal (quoted or bare, with no expansion), or
@@ -157,13 +157,18 @@ WRITES = ("<>", ">>", ">&", ">|", ">", "&>>", "&>")
 # An if condition that never holds, and one that always does.
 NEVER = re.compile(r"(false|! *true|\[ +0 +-ne +0 +\]|\[ +1 +-eq +0 +\])$")
 ALWAYS = re.compile(r"(true|:)$")
-# The shfmt that parses a script (repo-ci-baseline's ADR 0011): a v3 release prints its syntax tree as JSON.
+# The shfmt that parses a script (repo-ci-baseline's ADR 0011): a v3 release from v3.14 on, whose syntax tree this checker reads.
 SHFMT = "shfmt"
-SHFMT_MAJOR = "v3."
+SHFMT_RELEASE = re.compile(r"v3\.([0-9]+)\.[0-9]+")
+SHFMT_OLDEST_MINOR = 14
+SHFMT_WANTED = "shfmt v3.14 or a later v3 release"
+# Where shfmt comes from, for the message when it's missing: the release binaries, or the developer's package manager.
+SHFMT_INSTALL = "https://github.com/mvdan/sh/releases, or your package manager"
 
 
 class ShfmtError(Exception):
-    """shfmt is missing, isn't a v3 release, or failed in a way that isn't a syntax error."""
+    """shfmt is missing, isn't a release this checker reads, failed in a way that isn't a syntax error, or printed a tree of
+    another shape."""
 
 
 class Line(str):
@@ -202,34 +207,61 @@ def shown(line):
 
 
 _checked_shfmt = []
+# The empty folder shfmt runs in, made once per run: shfmt starts in no folder of the PR's, so no file the PR holds (an
+# .editorconfig) reaches it.
+_shfmt_folder = []
+
+
+def shfmt_options():
+    """The folder and the environment shfmt runs with: an empty folder of its own, and only the PATH that finds it."""
+    if not _shfmt_folder:
+        _shfmt_folder.append(tempfile.TemporaryDirectory(prefix="check_gh_repo-"))
+    return {"cwd": _shfmt_folder[0].name, "env": {"PATH": os.environ.get("PATH", os.defpath)}}
 
 
 def shfmt_version():
-    """Stop with ShfmtError unless shfmt is on PATH and is a v3 release; asked once per run."""
+    """Stop with ShfmtError unless shfmt is on PATH and is v3.14 or a later v3 release; asked once per run."""
     if _checked_shfmt:
         return
     try:
-        result = subprocess.run([SHFMT, "--version"], capture_output=True, text=True, timeout=60, check=False)
+        result = subprocess.run([SHFMT, "--version"], capture_output=True, text=True, timeout=60, check=False,
+                                **shfmt_options())
+    except subprocess.TimeoutExpired as error:
+        raise ShfmtError(f"shfmt --version didn't answer in {error.timeout:g} s; check_gh_repo.py needs {SHFMT_WANTED}") from error
     except (OSError, subprocess.SubprocessError) as error:
-        raise ShfmtError(f"can't run shfmt ({error}); install shfmt {SHFMT_MAJOR}x, see references/gotchas.md") from error
-    if result.returncode or not result.stdout.strip().startswith(SHFMT_MAJOR):
-        raise ShfmtError(f"needs shfmt {SHFMT_MAJOR}x, found {for_log(result.stdout.strip() or result.stderr.strip())!r}")
+        raise ShfmtError(f"can't run shfmt ({for_log(str(error))}): check_gh_repo.py needs {SHFMT_WANTED} on PATH "
+                         f"({SHFMT_INSTALL})") from error
+    printed = for_log(result.stdout.strip() or result.stderr.strip())
+    if result.returncode:
+        raise ShfmtError(f"shfmt --version failed with exit {result.returncode} ({printed!r}); check_gh_repo.py needs {SHFMT_WANTED}")
+    release = SHFMT_RELEASE.fullmatch(result.stdout.strip())
+    if release is None or int(release.group(1)) < SHFMT_OLDEST_MINOR:
+        raise ShfmtError(f"check_gh_repo.py needs {SHFMT_WANTED}, found {printed!r} ({SHFMT_INSTALL})")
     _checked_shfmt.append(True)
 
 
 def run_shfmt(data):
     """shfmt's syntax tree of data (bytes) as JSON and None, or None and the line of a syntax error."""
     try:
-        result = subprocess.run([SHFMT, "-ln", "bash", "--to-json"], input=data, capture_output=True, timeout=60, check=False)
+        result = subprocess.run([SHFMT, "-ln", "bash", "--to-json"], input=data, capture_output=True, timeout=60, check=False,
+                                **shfmt_options())
+    except subprocess.TimeoutExpired as error:
+        raise ShfmtError(f"shfmt didn't parse a script in {error.timeout:g} s") from error
     except (OSError, subprocess.SubprocessError) as error:
-        raise ShfmtError(f"shfmt failed: {error}") from error
+        raise ShfmtError(f"can't run shfmt to parse a script ({for_log(str(error))})") from error
     if result.returncode:
         # shfmt says <line>:<col>: <message> for a syntax error; anything else is shfmt failing.
         syntax = re.match(rb"(?:<standard input>:)?([0-9]+):[0-9]+: ", result.stderr)
         if syntax:
             return None, int(syntax.group(1))
-        raise ShfmtError(f"shfmt failed: {for_log(result.stderr.decode('utf-8', 'replace').strip())}")
-    return json.loads(result.stdout), None
+        raise ShfmtError(f"shfmt failed with exit {result.returncode}: {for_log(result.stderr.decode('utf-8', 'replace').strip())!r}")
+    try:
+        tree = json.loads(result.stdout)
+    except ValueError as error:
+        raise ShfmtError(f"shfmt printed no syntax tree ({error})") from error
+    if not isinstance(tree, dict):
+        raise ShfmtError("shfmt printed no syntax tree (not a JSON object)")
+    return tree, None
 
 
 def comments_of(node, found):
@@ -246,8 +278,15 @@ def comments_of(node, found):
     return found
 
 
-# How many times a script is parsed again with the backslashes at the end of its comments blanked (one more pass is the usual).
+# How many times a script is parsed, at most, to read its comments that end in a backslash: the first parse, one with those
+# backslashes blanked, and one more for each round of blanks that turned out to be no comment's.
 COMMENT_PASSES = 10
+CONTINUED_HASH = re.compile(rb"#[^\n]*?(\\+)$", re.MULTILINE)
+
+
+def backslash_runs(data):
+    """The [start, end) of the backslashes that end each line with a # on it: the lines a comment may end in a backslash on."""
+    return [match.span(1) for match in CONTINUED_HASH.finditer(data)]
 
 
 def parse(text):
@@ -256,8 +295,10 @@ def parse(text):
 
     A byte that isn't UTF-8 (read as a surrogate) is given to shfmt as a ?, one byte for one, so the offsets still line up.
     shfmt v3.14 joins the line after a comment that ends in a backslash onto the comment's line, where bash ends the comment
-    at the newline and runs the next line: the backslashes at the end of each comment are given to shfmt as blanks, which
-    bash reads the same, until no comment ends in one.
+    at the newline and runs the next line, so a valid script can even fail to parse. When the tree holds such a comment, or
+    the script doesn't parse, the backslashes that end each line with a # on it are given to shfmt as blanks, which bash
+    reads the same inside a comment, and the script is parsed again. A blank that the new tree puts in no comment (a #
+    in a string, then a real continuation) is put back, and the script parsed again, at most COMMENT_PASSES times in all.
     """
     shfmt_version()
     data = bytearray()
@@ -266,21 +307,37 @@ def parse(text):
         starts.append(len(data))
         data += b"?" if "\udc80" <= char <= "\udcff" else char.encode("utf-8")
     starts.append(len(data))
+    original = bytes(data)
+    runs = backslash_runs(original)
+    blanked = set()
+    restored = set()
+    tree = error = None
     for _ in range(COMMENT_PASSES):
         tree, error = run_shfmt(bytes(data))
         if tree is None:
-            return None, error
-        patched = False
-        for comment in comments_of(tree, []):
-            start = comment["Hash"]["Offset"]
-            end = data.find(b"\n", start)
-            end = len(data) if end < 0 else end
-            while end > start and data[end - 1:end] == b"\\":
-                data[end - 1:end] = b" "
-                end -= 1
-                patched = True
-        if not patched:
-            break
+            fresh = [run for run in runs if run not in blanked and run not in restored]
+            if not fresh:
+                return None, error
+        else:
+            # The line each comment starts on ends in it: a blanked run there is a comment's.
+            commented = {original.rfind(b"\n", 0, comment["Hash"]["Offset"]) for comment in comments_of(tree, [])}
+            wrong = {run for run in blanked if original.rfind(b"\n", 0, run[0]) not in commented}
+            if wrong:
+                for start, end in wrong:
+                    data[start:end] = original[start:end]
+                blanked -= wrong
+                restored |= wrong
+                continue
+            pending = {run for run in runs if run not in blanked and original.rfind(b"\n", 0, run[0]) in commented}
+            if not pending:
+                break
+            if pending & restored:
+                # A comment's backslashes that an earlier tree put in no comment: which tree is bash's is unknown.
+                return None, 1
+            fresh = [run for run in runs if run not in blanked and run not in restored]
+        for start, end in fresh:
+            data[start:end] = b" " * (end - start)
+        blanked |= set(fresh)
     else:
         # Comments that end in a backslash keep turning up: read the whole file as one that isn't valid bash, line by line.
         return None, 1
@@ -301,7 +358,7 @@ def parse(text):
     return tree, None
 
 
-# How many shorter prefixes of a script that isn't valid bash are parsed, looking for the statements before its syntax error.
+# How many times a script that isn't valid bash is parsed, the whole script first, looking for the statements before its syntax error.
 PREFIX_TRIES = 5
 
 
@@ -310,7 +367,7 @@ def parse_prefix(lines):
 
     bash runs a script one complete statement at a time and stops at a syntax error, so the statements before the error are
     what runs. shfmt names the line of the error; the lines before it are parsed in turn (an if or a heredoc that the error
-    is in starts earlier), at most PREFIX_TRIES times, and the run is empty when none parses.
+    is in starts earlier), PREFIX_TRIES parses in all, and the run is empty when none parses.
     """
     count = len(lines)
     for _ in range(PREFIX_TRIES):
@@ -326,6 +383,14 @@ def parse_prefix(lines):
 def is_position(node):
     """Whether a dict of the tree is a position ({Offset, Line, Col}), not a node: a ${x:1} slice has an Offset that is a word."""
     return isinstance(node.get("Offset"), int) and "Line" in node
+
+
+def is_statement(node):
+    """Whether a dict of the tree is a statement (shfmt's Stmt), with a command or only redirections (> out, <<EOF).
+
+    An elif or an else has a Position too, but no Type and a FiPos; an if, a function has a Type.
+    """
+    return node.get("Type") is None and "Position" in node and "FiPos" not in node
 
 
 def span(node):
@@ -409,7 +474,7 @@ def output_is_data(chain):
     for index in range(len(chain) - 1, 0, -1):
         node, key = chain[index]
         parent, _ = chain[index - 1]
-        if "Cmd" in node and not writes_text_only(node):
+        if is_statement(node) and not writes_text_only(node):
             return False
         kind = parent.get("Type")
         if kind == "BinaryCmd" and parent.get("Op") in ("|", "|&") and key == "X":
@@ -426,7 +491,7 @@ def output_is_data(chain):
                 if owner.get("Type") == "CallExpr":
                     # An argument of a command: data only when that command is a data command whose own output is data.
                     return child_key == "Args" and data_statement(chain[above - 1][0]) and output_is_data(chain[:above])
-                if "Cmd" in owner or owner.get("Type"):
+                if is_statement(owner) or owner.get("Type"):
                     if owner.get("Type") in ("DblQuoted",):
                         continue
                     return False
@@ -470,24 +535,28 @@ class Shape:
         if "Hash" in node and "Text" in node:
             self.comments.append(span(node))
             return
-        if "Cmd" in node:
+        if is_statement(node):
             self._statement(node, chain, dead, here)
             return
         if kind in ("CallExpr", "DeclClause"):
             self.commands.append(span(node))
-        if "Hdoc" in node and node.get("Op") in ("<<", "<<-") and node.get("Hdoc"):
+        if node.get("Op") in ("<<", "<<-") and "Word" in node:
             self._heredoc(node, chain)
         if kind == "IfClause":
             self._if(node, chain, dead, here)
             return
-        # A subshell, a substitution, a pipe's command and a condition don't run in the script's own shell.
-        inner_here = here and kind not in ("Subshell", "CmdSubst", "ProcSubst", "TestClause", "ArithmCmd") and not (
+        # A subshell, a substitution, a pipe's command, a coprocess and a condition don't run in the script's own shell.
+        inner_here = here and kind not in ("Subshell", "CmdSubst", "ProcSubst", "TestClause", "ArithmCmd", "CoprocClause") and not (
             kind == "BinaryCmd" and node.get("Op") in ("|", "|&"))
+        # The right side of false && ... or true || ... never runs.
+        dead_right = kind == "BinaryCmd" and (
+            node.get("Op") == "&&" and NEVER.match(condition_text(self.text, [node["X"]])) is not None
+            or node.get("Op") == "||" and ALWAYS.match(condition_text(self.text, [node["X"]])) is not None)
         for key, value in node.items():
             if key in ("Pos", "End") or not isinstance(value, (dict, list)):
                 continue
             here_for_key = inner_here and key != "Cond"
-            self._walk_child(value, chain, key, dead, here_for_key)
+            self._walk_child(value, chain, key, dead or (dead_right and key == "Y"), here_for_key)
 
     def _walk_child(self, value, chain, key, dead, here):
         if isinstance(value, list):
@@ -498,16 +567,17 @@ class Shape:
 
     def _statement(self, statement, chain, dead, here):
         self.statements.append(span(statement))
-        call = statement["Cmd"]
+        call = statement.get("Cmd") or {}
+        # A command run in the background runs in a child shell. (A line EXPORTS matches is one export alone, never sent to
+        # the background or given an empty value itself: what can stop its export is around it.)
+        here = here and not statement.get("Background") and not statement.get("Coprocess")
         if call.get("Type") == "DeclClause" and (call.get("Variant") or {}).get("Value") == "export":
             args = call.get("Args") or []
             if len(args) == 1 and (args[0].get("Name") or {}).get("Value") == "GH_REPO":
                 line = statement["Pos"]["Line"] - 1
                 self.export_statements.add(line)
-                if here and not dead and not statement.get("Negated") and not statement.get("Background") \
-                        and not statement.get("Coprocess") and args[0].get("Value") and not args[0].get("Naked"):
+                if here and not dead:
                     self.export_lines.add(line)
-        here = here and not statement.get("Background") and not statement.get("Coprocess")
         for key, value in statement.items():
             if key in ("Pos", "End") or not isinstance(value, (dict, list)):
                 continue
@@ -530,7 +600,8 @@ class Shape:
             return
         inner = chain + [(branch, "Else")]
         if branch.get("Cond"):
-            self._if(branch, inner, dead, here)
+            # An elif after a condition that always holds never runs, nor does anything after it.
+            self._if(branch, inner, dead or ALWAYS.match(condition) is not None, here)
             return
         for key, value in branch.items():
             if key in ("Pos", "End") or not isinstance(value, (dict, list)):
@@ -538,21 +609,25 @@ class Shape:
             self._walk_child(value, inner, key, dead or (key == "Then" and ALWAYS.match(condition) is not None), here)
 
     def _heredoc(self, redirect, chain):
-        body = redirect["Hdoc"]
+        never_runs = {"data": True, "quoted": True, "substitutions": []}
+        # The delimiter word after << runs nothing. (The line that closes an empty body is in no statement: untold reads it as
+        # one that runs nothing.)
+        self.heredocs.append((*span(redirect["Word"]), never_runs))
+        body = redirect.get("Hdoc")
+        if not body:
+            return
         start, last = span(body)
         # The body ends where the delimiter's line starts; that line closes it and runs nothing.
         end = max(start, self.text.rfind("\n", start, last) + 1) if last > start else start
-        never_runs = {"data": True, "quoted": True, "substitutions": []}
         if last > end:
             self.heredocs.append((end, last, never_runs))
-        # The delimiter word after << runs nothing either.
-        self.heredocs.append((*span(redirect["Word"]), never_runs))
         delimiter = self.text[slice(*span(redirect["Word"]))]
         quoted = any(char in delimiter for char in "'\"\\")
-        # The statement the redirection belongs to is the last statement in the chain.
-        statement_index = max(index for index, (node, _) in enumerate(chain) if "Cmd" in node)
-        statement = chain[statement_index][0]
-        data = data_statement(statement) and output_is_data(chain[:statement_index + 1])
+        # The statement the redirection belongs to is the last statement in the chain. One with no command (<<EOF alone)
+        # is no data command, so its body is read as text some program may run.
+        found = [index for index, (node, _) in enumerate(chain) if is_statement(node)]
+        statement = chain[found[-1]][0] if found else {}
+        data = bool(found) and data_statement(statement) and output_is_data(chain[:found[-1] + 1])
         substitutions = []
         if not quoted:
             self._substitutions(body, substitutions)
@@ -601,22 +676,28 @@ class Index:
         return self.found[position]
 
 
-def untold_text(path, lines, exported_lines, judge_code):
-    """The refusals of path's lines, given a judge for each gh match in code that returns None to skip it, True when told."""
-    found = []
-    for number, line in enumerate(lines, 1):
-        if OPT_OUT.search(line):
-            continue
-        exported = exported_lines[number - 1]
-        if any(judge_code(number, match, exported) is False for match in GH.finditer(line)):
-            found.append(f"{for_log(str(path))}:{number}: {shown(line)}")
-    return found
-
-
 def clears(line):
     """Whether a line ends an export: an unset of GH_REPO, or a GH_REPO= that is no told prefix of a gh command."""
     return UNSET.search(line) is not None or any(
         not PREFIX_OF_GH.match(line, assignment.start()) for assignment in ASSIGNMENT.finditer(line))
+
+
+def read_shape(lines):
+    """The Shape of the longest run of lines from the top that is valid bash, and how many lines it has (0 when none is).
+
+    A script nested deeper than Python's recursion limit lets the checker walk (a chain of a few hundred && or | links) is
+    read as one that isn't valid bash from its first line: no export in it is trusted. A tree of a shape the checker doesn't
+    read (a shfmt whose JSON changed) is a ShfmtError.
+    """
+    try:
+        tree, count = parse_prefix(lines)
+        text = "\n".join(lines[:count])
+        return Shape(text, tree if tree is not None else {}), count
+    except RecursionError:
+        return Shape("", {}), 0
+    except (KeyError, TypeError, AttributeError, IndexError, ValueError) as error:
+        raise ShfmtError(f"shfmt's syntax tree isn't the shape check_gh_repo.py reads ({type(error).__name__}: "
+                         f"{for_log(str(error))}); it needs {SHFMT_WANTED}") from error
 
 
 def untold(path):
@@ -627,15 +708,16 @@ def untold(path):
     is still judged, with the export the parsed lines left and no export of their own.
     """
     lines = read_lines(path)
-    tree, count = parse_prefix(lines)
-    text = "\n".join(lines[:count])
-    shape = Shape(text, tree) if tree is not None else Shape(text, {})
+    shape, count = read_shape(lines)
+    text = shape.text
     starts = [0]
     for line in lines[:-1]:
         starts.append(starts[-1] + len(line) + 1)
-    # The positions asked about: the first character of each line, and each gh.
+    # The positions asked about: the first character of each line, each gh, and each gh-repo: ok marker.
     firsts = [starts[number] + len(line) - len(line.lstrip(" \t")) for number, line in enumerate(lines)]
+    markers = [[match.start() for match in OPT_OUT.finditer(line)] for line in lines]
     positions = firsts + [starts[number] + match.start() for number, line in enumerate(lines) for match in GH.finditer(line)]
+    positions += [starts[number] + column for number, columns in enumerate(markers) for column in columns]
     comments = Index(shape.comments, positions)
     commands = Index(shape.commands, positions)
     statements = Index(shape.statements, positions)
@@ -650,7 +732,8 @@ def untold(path):
             return "comment"
         body = heredoc_index.around(position)
         if body is None:
-            return "code"
+            # Outside every statement and every comment is only the line that closes a heredoc whose body is empty.
+            return "code" if statements.around(position) else "data"
         heredoc = by_span[body]
         if heredoc["data"]:
             if heredoc["quoted"] or innermost(heredoc["substitutions"], position) is None:
@@ -674,6 +757,12 @@ def untold(path):
             exported = False
         exported_lines.append(exported)
 
+    # The lines a backslash joins to each line after the syntax error, which bash reads as one: a wrapper there drops the export.
+    joined_from = list(range(len(lines)))
+    for number in range(max(count, 1), len(lines)):
+        if re.search(r"(?<!\\)(\\\\)*\\$", lines[number - 1]) and number - 1 >= count:
+            joined_from[number] = joined_from[number - 1]
+
     def judge(number, match, exported):
         position = starts[number - 1] + match.start()
         line = lines[number - 1]
@@ -682,13 +771,24 @@ def untold(path):
             return None
         after = line[match.end():]
         if place == "text":
-            return told(line[:match.start()], after, exported)
+            earlier = "".join(lines[index][:-1] for index in range(joined_from[number - 1], number - 1))
+            return told(line[:match.start()], after, exported and not wrapped(earlier + line[:match.start()]))
         around = commands.around(position) or statements.around(position)
         start = around[0] if around else starts[number - 1]
         before = re.sub(r"\\\n", "", text[start:position])
         return told(before, after, exported)
 
-    return untold_text(path, lines, exported_lines, judge)
+    def opted_out(number):
+        """Whether the line holds a gh-repo: ok marker that is a comment: in code, one the syntax tree reads as a comment."""
+        return any(where(number, starts[number] + column) != "code" for column in markers[number])
+
+    found = []
+    for number, line in enumerate(lines, 1):
+        if opted_out(number - 1):
+            continue
+        if any(judge(number, match, exported_lines[number - 1]) is False for match in GH.finditer(line)):
+            found.append(f"{for_log(str(path))}:{number}: {shown(line)}")
+    return found
 
 
 # Repo-relative paths --repo skips (the Owned Baseline files); a trailing / is a folder.

@@ -27,6 +27,7 @@ GATE = "#!/usr/bin/env bash\necho gate\n"
 EDITED_GATE = "#!/usr/bin/env bash\necho gate\nexit 0\n"
 APPLY_BRANCHES = ["chore/standardize-baseline", "chore/reapply-baseline"]
 INSTALL_SHFMT = "Install shfmt"
+INSTALLS_SHFMT = "sudo install -m 0755 shfmt /usr/local/bin/shfmt"
 
 
 def load_workflow():
@@ -214,11 +215,14 @@ class Job:
         runner = self.tmp_path / "runner"
         runner.mkdir()
         output, code = [], 0
+        skipped = []
         for index, step in enumerate(the_job()["steps"]):
             if "run" not in step or not self.runs(step, code != 0):
                 continue
-            # It downloads shfmt and installs it with sudo; the test's PATH has shfmt already (test.sh needs it).
-            if step.get("name") == INSTALL_SHFMT:
+            # It downloads shfmt and installs it with sudo; the test's PATH has shfmt already (test.sh needs it), and
+            # test_shfmt_install.py runs the step itself. Told by what it runs, so a rename can't make the harness run it.
+            if INSTALLS_SHFMT in str(step["run"]):
+                skipped.append(index)
                 continue
             script = self.tmp_path / f"step{index}.sh"
             script.write_text(self.expression(str(step["run"])))
@@ -233,6 +237,7 @@ class Job:
             output.append(done.stdout + done.stderr)
             if done.returncode != 0 and code == 0:
                 code = done.returncode
+        assert len(skipped) == 1, f"the harness skipped {len(skipped)} steps, not the one shfmt install"
         return code, "".join(output)
 
 

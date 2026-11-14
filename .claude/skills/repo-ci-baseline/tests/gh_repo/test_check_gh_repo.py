@@ -27,9 +27,9 @@ LONG_CHAIN = 100
 
 @pytest.fixture(autouse=True)
 def stop_a_test_that_hangs():
-    """Fail a test that has not finished after 120 s (the slowest takes a few seconds): a scanner loop that stopped advancing fails here, not at the runner's own timeout."""
+    """Fail a test that has not finished after 120 s (the slowest takes a few seconds): a checker loop that stopped advancing fails here, not at the runner's own timeout."""
     def stop(*_):
-        raise TimeoutError("the test did not finish in 120 s (a hang in the scanner?)")
+        raise TimeoutError("the test did not finish in 120 s (a hang in the checker?)")
     previous = signal.signal(signal.SIGALRM, stop)
     signal.alarm(120)
     try:
@@ -2121,7 +2121,7 @@ def test_check_repo_escapes_line_breaks_in_the_name_of_a_symlink_it_refuses(tmp_
     ("if x; then echo fi; fi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
     ("if false; then\necho fi\nfi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
     ("if false; then\n:\nelse\nif y; then\nexport GH_REPO=o/r\nfi\nfi\ngh pr view 1\n", []),
-    # what the scanner tells apart by reading the keywords in source order
+    # what the syntax tree tells apart, the keywords read in source order
     ("if false; then\nif x; then y; fi # note\nfi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
     ("if false; then\nif grep -q fi; then\n:\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
     ("  if false; then\nexport GH_REPO=o/r\n  fi\ngh pr view 1\n", [4]),
@@ -2193,7 +2193,8 @@ def test_check_repo_escapes_line_breaks_in_the_name_of_a_symlink_it_refuses(tmp_
     ("if false; then\n:\necho x \\\nelif y; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
     # a comment ends the command, even one that ends in a backslash
     ("if false; then\necho x # c \\\nif y; then\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [7]),
-    ("if false; then\necho x # note \\\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),  # not valid bash: the lines from the syntax error on trust no export (mpaulosky/Application_Factory#52)
+    # the comment ends at its line, so the first fi closes the if and the export runs before the stray fi stops bash
+    ("if false; then\necho x # note \\\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
     ("if false; then\n:\necho x # c \\\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
     ("if false; then\necho x \\\n# note\nfi\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
     # arithmetic and array elements are not commands
@@ -2275,9 +2276,22 @@ def test_check_repo_escapes_line_breaks_in_the_name_of_a_symlink_it_refuses(tmp_
     # a condition is judged only on an if that is the first keyword of its line
     ("if false; then :; fi; if y; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
     ("if true; then :; fi; if y; then :; else\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
-    # an elif runs whatever the if before it was, and keeps no always flag for an else after it
+    # an elif after an if that may not hold may run; after one that always holds, neither it nor its else runs
     ("if false; then :; elif y; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
-    ("if true; then\n:\nelif x; then\n:\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    ("if true; then\n:\nelif x; then\n:\nelse\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [8]),
+    ("if true; then\n:\nelif x; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [6]),
+    ("if :; then\n:\nelif x; then\n:\nelif y; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [8]),
+    ("if x; then\n:\nelif true; then\n:\nelif y; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", [8]),
+    ("if x; then\n:\nelif y; then\n:\nelif z; then\nexport GH_REPO=o/r\nfi\ngh pr view 1\n", []),
+    # the right side of false && or true || never runs; of anything else, it may
+    ("false &&\nexport GH_REPO=o/r\ngh pr view 1\n", [3]),
+    ("true ||\nexport GH_REPO=o/r\ngh pr view 1\n", [3]),
+    (": ||\nexport GH_REPO=o/r\ngh pr view 1\n", [3]),
+    ("true &&\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("false ||\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("x &&\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("false && y ||\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("true || y &&\nexport GH_REPO=o/r\ngh pr view 1\n", []),
     # a stray fi is a syntax error
     ("fi\nexport GH_REPO=o/r\ngh pr view 1\n", [3]),  # not valid bash: the lines from the syntax error on trust no export (mpaulosky/Application_Factory#52)
     # a stray elif before any if is a syntax error
@@ -2360,7 +2374,7 @@ def test_untold_reads_a_chain_as_bash_does(tmp_path, text, refused):
 
 
 @pytest.mark.parametrize("text, refused", [
-    # A comment that ends in a backslash joins no line, so the heredoc after it is read as data (a regression guard: the refusal held before joined_lines too).
+    # A comment that ends in a backslash joins no line, so the heredoc after it is read as data (a regression guard).
     ("echo hi # c \\\ncat <<EOF\nexport GH_REPO=o/r\nEOF\ngh pr view 1\n", [5]),
     # The same for a heredoc header that carries the comment.
     ("cat <<EOF # c \\\nexport GH_REPO=o/r\nEOF\ngh pr view 1\n", [4]),
@@ -2548,7 +2562,7 @@ def test_untold_judges_an_if_at_its_real_then(tmp_path, text, lines):
 
 
 def test_untold_reads_a_file_with_an_if_that_never_has_a_then_in_linear_time(tmp_path):
-    # A regression guard for a pending condition kept as a string that each line was added to; the cap itself is pinned below.
+    # A file with an if and no then costs linear time.
     text = "if x\n" + "echo hi\n" * 50_000 + "gh pr view 1\n"
     started = time.monotonic()
     found = untold(tmp_path, text)
@@ -2714,3 +2728,253 @@ def test_untold_reads_a_script_whose_comments_need_too_many_passes_as_one_that_i
     monkeypatch.setattr(check_gh_repo, "COMMENT_PASSES", 1)
     assert lines_of(untold(tmp_path, "export GH_REPO=o/r # c \\\ngh pr view 1\n")) == [2]
     assert lines_of(untold(tmp_path, "export GH_REPO=o/r\ngh pr view 1\n")) == []
+
+
+# --- the first pre-push review of mpaulosky/Application_Factory#52 ---
+
+@pytest.mark.parametrize("text, refused", [
+    # A valid script shfmt 3.14 doesn't parse at all, its fi joined onto a comment: the comment's backslash is blanked and it parses.
+    ("if x; then\n  echo a # note \\\nfi\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("if x; then\n  echo a # note \\\nfi\ngh pr view 1\n", [4]),
+    # A # in a string, then a real continuation: its backslash is put back, so the gh stays an argument of the sudo echo.
+    ("export GH_REPO=o/r # c \\\nsudo echo \"#\" \\\ngh pr view 1\n", [3]),
+    ("export GH_REPO=o/r # c \\\necho \"#\" \\\n  x\ngh pr view 1\n", []),
+    # A script that isn't valid bash, with a comment ending in a backslash before its syntax error: what comes before it counts.
+    ("export GH_REPO=o/r # c \\\ngh pr view 1\n(\ngh pr view 2\n", []),
+    ("# c \\\nexport GH_REPO=o/r\n(\ngh pr view 1\n", []),
+])
+def test_untold_reads_a_comment_that_ends_in_a_backslash_wherever_shfmt_misreads_it(tmp_path, text, refused):
+    assert lines_of(untold(tmp_path, text)) == refused
+
+
+@pytest.mark.parametrize("passes, text, refused", [
+    # Two parses: the first finds the comment, the second has its backslash blanked.
+    (1, "export GH_REPO=o/r # c \\\ngh pr view 1\n", [2]),
+    (2, "export GH_REPO=o/r # c \\\ngh pr view 1\n", []),
+    # Three: the second blanked a # in a string too, and the third has its backslash put back.
+    (2, "export GH_REPO=o/r # c \\\necho \"#\" \\\n  x\ngh pr view 1\n", [4]),
+    (3, "export GH_REPO=o/r # c \\\necho \"#\" \\\n  x\ngh pr view 1\n", []),
+    # A script with no comment that ends in a backslash is parsed once.
+    (1, "export GH_REPO=o/r\ngh pr view 1\n", []),
+])
+def test_untold_parses_a_script_at_most_comment_passes_times_for_its_comments(tmp_path, monkeypatch, passes, text, refused):
+    monkeypatch.setattr(check_gh_repo, "COMMENT_PASSES", passes)
+    assert lines_of(untold(tmp_path, text)) == refused
+
+
+def test_parse_reads_a_script_whose_blanks_keep_changing_as_one_that_isnt_valid_bash(monkeypatch):
+    # A run put back because one tree put it in no comment, that a later tree puts in a comment: neither tree is trusted.
+    text = "a # x \\\nb # y \\\n"
+    second = text.index("#", text.index("\n"))
+    trees = iter([[0], [0], [0, second]])
+
+    def fake(data):
+        return {"Comments": [{"Hash": {"Offset": offset, "Line": 1, "Col": 1}, "Text": ""} for offset in next(trees)]}, None
+    monkeypatch.setattr(check_gh_repo, "run_shfmt", fake)
+    assert check_gh_repo.parse(text) == (None, 1)
+
+
+@pytest.mark.parametrize("braces, refused", [
+    # A run of open braces costs one parse each: the prefix before them is found on parse PREFIX_TRIES, and not after it.
+    (3, []),
+    (4, []),
+    (5, [7]),
+])
+def test_untold_finds_the_statements_before_a_syntax_error_in_at_most_prefix_tries_parses(tmp_path, braces, refused):
+    assert check_gh_repo.PREFIX_TRIES == 5
+    assert lines_of(untold(tmp_path, "export GH_REPO=o/r\n" + "{\n" * braces + "gh pr view 1\n")) == refused
+
+
+def test_untold_reads_a_slice_expansion_after_a_character_of_several_bytes(tmp_path):
+    # The offsets are converted from bytes to characters, and the slice's Offset word is no position to convert.
+    path = tmp_path / "script.sh"
+    path.write_bytes("echo é ${x:1:2}\nexport GH_REPO=o/r\necho ${y:2}; sudo gh pr view 1\ngh pr view 2\n".encode())
+    assert lines_of(check_gh_repo.untold(path)) == [3]
+
+
+@pytest.mark.parametrize("text, refused", [
+    # A group run in the background or as a coprocess, and a process substitution, run in a child shell.
+    ("{\nexport GH_REPO=o/r\n} &\ngh pr view 1\n", [4]),
+    ("coproc {\nexport GH_REPO=o/r\n}\ngh pr view 1\n", [4]),
+    ("coproc name {\nexport GH_REPO=o/r\n}\ngh pr view 1\n", [4]),
+    ("cat <(\nexport GH_REPO=o/r\n)\ngh pr view 1\n", [4]),
+    ("cat >(\nexport GH_REPO=o/r\n)\ngh pr view 1\n", [4]),
+    # A negated group runs in the script's own shell.
+    ("! {\nexport GH_REPO=o/r\n}\ngh pr view 1\n", []),
+    ("{\nexport GH_REPO=o/r\n}\ngh pr view 1\n", []),
+])
+def test_untold_takes_no_export_from_a_child_shell(tmp_path, text, refused):
+    assert lines_of(untold(tmp_path, text)) == refused
+
+
+@pytest.mark.parametrize("text, refused", [
+    # After a syntax error, a wrapper on an earlier line the backslash joins drops the export, as on the gh's own line.
+    ("export GH_REPO=o/r\n(\nsudo \\\ngh pr view 1\n", [4]),
+    ("export GH_REPO=o/r\n(\nenv -i \\\n  A=1 \\\ngh pr view 1\n", [5]),
+    ("export GH_REPO=o/r\n(\nsudo \\\\\ngh pr view 1\n", []),
+    ("export GH_REPO=o/r\n(\nsudo\ngh pr view 1\n", []),
+    ("export GH_REPO=o/r\n(\necho \\\ngh pr view 1\n", []),
+    # A GH_REPO= on the line before is no prefix the checker trusts there.
+    ("(\nGH_REPO=o/r \\\ngh pr view 1\n", [3]),
+])
+def test_untold_joins_the_continued_lines_after_a_syntax_error_to_find_a_wrapper(tmp_path, text, refused):
+    assert lines_of(untold(tmp_path, text)) == refused
+
+
+@pytest.mark.parametrize("text, refused", [
+    # A heredoc with an empty body: its delimiter word and the line that closes it run nothing.
+    ("cat <<gh\ngh\ngh pr view 1\n", [3]),
+    ("cat <<'gh'\ngh\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("cat <<-gh\n\tgh\n", []),
+    ("cat <<a <<gh\nx\na\ngh\n", []),
+    # A statement with no command but a heredoc reads it as text some program may run: no data command reads it.
+    ("<<EOF\ngh pr view 1\nEOF\n", [2]),
+    ("<<'EOF'\ngh pr view 1\nEOF\nexport GH_REPO=o/r\ngh pr view 2\n", [2]),
+    ("> out <<EOF\ngh pr view 1\nEOF\n", [2]),
+    ("2>/dev/null <<'EOF'\nexport GH_REPO=o/r\nEOF\ngh pr view 1\n", [4]),
+    (": > f\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    # A heredoc delimiter at the end of a file with no newline, a file with no newline at all, and files with no command.
+    ("cat <<'EOF'\ngh pr view 1\nEOF", []),
+    ("export GH_REPO=o/r\ngh pr view 1", []),
+    ("gh pr view 1", [1]),
+    ("", []),
+    ("#!/usr/bin/env bash\n", []),
+    ("#!/usr/bin/env bash", []),
+    ("\n\n  \n\t\n", []),
+    ("# gh pr view 1\n# \\\n", []),
+])
+def test_untold_reads_heredocs_and_files_at_their_edges(tmp_path, text, refused):
+    assert lines_of(untold(tmp_path, text)) == refused
+
+
+@pytest.mark.parametrize("separator", ["&&", "||", "|"])
+def test_untold_reads_a_chain_too_deep_to_walk_as_a_script_that_isnt_valid_bash(tmp_path, separator):
+    # A chain of a few hundred links is deeper than the checker's tree walk goes: no export in the file is trusted, and nothing crashes.
+    chain = f"true {separator} " * 1500 + "true\n"
+    assert lines_of(untold(tmp_path, "export GH_REPO=o/r\n" + chain + "gh pr view 1\n")) == [3]
+    assert lines_of(untold(tmp_path, "export GH_REPO=o/r\n" + f"true {separator} " * LONG_CHAIN + "true\ngh pr view 1\n")) == []
+
+
+@pytest.mark.parametrize("text, refused", [
+    # The gh-repo: ok marker opts a line out only when it is a comment.
+    ("gh pr merge 1 --body \"# gh-repo: ok\"\n", [1]),
+    ("echo '# gh-repo: ok'; gh pr merge 1\n", [1]),
+    ("gh pr merge 1 '<!-- gh-repo: ok -->'\n", [1]),
+    ("cat <<'EOF'\n# gh-repo: ok\nEOF\ngh pr view 1\n", [4]),
+    ("command -v gh # gh-repo: ok\n", []),
+    ("command -v gh >/dev/null # gh-repo: ok\n", []),
+    ("echo \"#\" gh # gh-repo: ok\n", []),
+    # In text some program reads, and after a syntax error, a # starts a comment of its own.
+    ("bash <<EOF\ncommand -v gh # gh-repo: ok\nEOF\n", []),
+    ("(\ncommand -v gh # gh-repo: ok\n", []),
+])
+def test_untold_honours_the_gh_repo_ok_marker_only_in_a_comment(tmp_path, text, refused):
+    assert lines_of(untold(tmp_path, text)) == refused
+
+
+def fake_shfmt(tmp_path, body):
+    """A shfmt on PATH-free terms: a script at tmp_path/bin/shfmt with the given body, set as the checker's SHFMT."""
+    folder = tmp_path / "bin"
+    folder.mkdir(exist_ok=True)
+    fake = folder / "shfmt"
+    fake.write_text("#!/bin/sh\n" + body)
+    fake.chmod(0o755)
+    return fake
+
+
+@pytest.mark.parametrize("body, message", [
+    # Not a release this checker reads: an older v3, a v2, a v4, a build with no version.
+    ("echo v3.13.0\n", "needs shfmt v3.14 or a later v3 release, found 'v3.13.0'"),
+    ("echo v2.6.4\n", "found 'v2.6.4'"),
+    ("echo v4.0.0\n", "found 'v4.0.0'"),
+    ("echo '(devel)'\n", "found '(devel)'"),
+    ("echo v3.14\n", "found 'v3.14'"),
+    # shfmt --version itself failing: its exit status and what it printed.
+    ("echo broken >&2; exit 3\n", "shfmt --version failed with exit 3 ('broken')"),
+    # A v3.14 that fails to parse without a syntax error, and one that prints no JSON.
+    ("[ \"$1\" = --version ] && { echo v3.14.1; exit 0; }; echo boom >&2; exit 1\n", "shfmt failed with exit 1: 'boom'"),
+    ("[ \"$1\" = --version ] && { echo v3.14.1; exit 0; }; echo not json\n", "shfmt printed no syntax tree"),
+    ("[ \"$1\" = --version ] && { echo v3.14.1; exit 0; }; echo '[]'\n", "shfmt printed no syntax tree"),
+    # A tree of another shape than shfmt v3.14's.
+    ("[ \"$1\" = --version ] && { echo v3.14.1; exit 0; }; echo '{\"Stmts\": [{\"Position\": 1, \"Cmd\": {}}]}'\n",
+     "shfmt's syntax tree isn't the shape check_gh_repo.py reads"),
+])
+def test_main_fails_and_says_why_when_shfmt_isnt_a_release_it_reads(tmp_path, monkeypatch, capsys, body, message):
+    make_repo(tmp_path, {"scripts/x.sh": TOLD})
+    monkeypatch.setattr(check_gh_repo, "SHFMT", str(fake_shfmt(tmp_path, body)))
+    monkeypatch.setattr(check_gh_repo, "_checked_shfmt", [])
+    assert check_gh_repo.main(["--repo", str(tmp_path)]) == 2
+    assert message in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("version", ["v3.14.1", "v3.14.0", "v3.15.0", "v3.100.2"])
+def test_shfmt_version_accepts_v3_14_and_every_later_v3(tmp_path, monkeypatch, version):
+    monkeypatch.setattr(check_gh_repo, "SHFMT", str(fake_shfmt(tmp_path, f"echo {version}\n")))
+    monkeypatch.setattr(check_gh_repo, "_checked_shfmt", [])
+    check_gh_repo.shfmt_version()
+    assert check_gh_repo._checked_shfmt == [True]
+
+
+def test_main_says_where_to_get_shfmt_when_it_is_missing(tmp_path, monkeypatch, capsys):
+    make_repo(tmp_path, {"scripts/x.sh": TOLD})
+    monkeypatch.setattr(check_gh_repo, "SHFMT", str(tmp_path / "no-shfmt"))
+    monkeypatch.setattr(check_gh_repo, "_checked_shfmt", [])
+    assert check_gh_repo.main(["--repo", str(tmp_path)]) == 2
+    err = capsys.readouterr().err
+    assert "can't run shfmt" in err and "https://github.com/mvdan/sh/releases" in err and "references/" not in err
+
+
+@pytest.mark.parametrize("call, message", [
+    ("version", "shfmt --version didn't answer in 60 s"),
+    ("parse", "shfmt didn't parse a script in 60 s"),
+])
+def test_main_fails_when_shfmt_hangs(tmp_path, monkeypatch, capsys, call, message):
+    make_repo(tmp_path, {"scripts/x.sh": TOLD})
+    real = subprocess.run
+
+    def hang(argv, *args, **kwargs):
+        if (argv[1] == "--version") == (call == "version"):
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+        return real(argv, *args, **kwargs)
+    monkeypatch.setattr(check_gh_repo.subprocess, "run", hang)
+    monkeypatch.setattr(check_gh_repo, "_checked_shfmt", [])
+    assert check_gh_repo.main(["--repo", str(tmp_path)]) == 2
+    assert message in capsys.readouterr().err
+
+
+def test_main_fails_when_shfmt_cant_be_started_to_parse(tmp_path, monkeypatch, capsys):
+    make_repo(tmp_path, {"scripts/x.sh": TOLD})
+    real = subprocess.run
+
+    def gone(argv, *args, **kwargs):
+        if argv[1] != "--version":
+            raise PermissionError(13, "Permission denied")
+        return real(argv, *args, **kwargs)
+    monkeypatch.setattr(check_gh_repo.subprocess, "run", gone)
+    monkeypatch.setattr(check_gh_repo, "_checked_shfmt", [])
+    assert check_gh_repo.main(["--repo", str(tmp_path)]) == 2
+    assert "can't run shfmt to parse a script" in capsys.readouterr().err
+
+
+def test_check_repo_asks_shfmt_its_version_once_and_runs_it_in_an_empty_folder_with_only_path(tmp_path, monkeypatch):
+    # Arrange: a fake shfmt that logs each call, its folder and its environment, then runs the real one.
+    real = subprocess.run(["sh", "-c", "command -v shfmt"], capture_output=True, text=True, check=True).stdout.strip()
+    log = tmp_path / "log"
+    repo = tmp_path / "repo"
+    make_repo(repo, {"scripts/a.sh": TOLD, "scripts/b.sh": TOLD, ".editorconfig": "[*]\nindent_style = tab\n"})
+    fake = fake_shfmt(tmp_path, f'printf "%s|%s|%s\\n" "$1" "$PWD" "$(env | sort | tr "\\n" " ")" >> {log}\nexec {real} "$@"\n')
+    monkeypatch.setattr(check_gh_repo, "SHFMT", str(fake))
+    monkeypatch.setattr(check_gh_repo, "_checked_shfmt", [])
+    monkeypatch.setenv("GH_TOKEN", "secret")
+    monkeypatch.chdir(repo)
+
+    # Act
+    found = check_gh_repo.check_repo(repo)
+
+    # Assert
+    calls = [line.split("|") for line in log.read_text().splitlines()]
+    assert found == []
+    assert [call[0] for call in calls] == ["--version", "-ln", "-ln"]
+    folders = {call[1] for call in calls}
+    assert len(folders) == 1 and not any(Path(folders.pop()).iterdir())
+    assert all("GH_TOKEN" not in call[2] and "PATH=" in call[2] for call in calls)

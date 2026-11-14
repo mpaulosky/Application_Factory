@@ -55,6 +55,9 @@ fi
 in_shard() { [[ -z "$shard" || "$shard" == "$1" ]]; }
 
 for tool in actionlint zizmor yamllint shellcheck shfmt markdownlint-cli2 git; do need "$tool"; done
+# check_gh_repo.py reads the syntax tree of shfmt v3.14 or a later v3 (ADR 0011): an older or newer one would fail its tests deep inside them.
+[[ "$(shfmt --version)" =~ ^v3\.(1[4-9]|[2-9][0-9]|[1-9][0-9]{2,})\.[0-9]+$ ]] \
+  || { echo "test.sh: shfmt v3.14 or a later v3 release is required, not '$(shfmt --version)'" >&2; exit 2; }
 
 # pytest is used in the scripts and checks shards, so it's chosen before either runs, and only when one of them does.
 if in_shard scripts || in_shard checks; then

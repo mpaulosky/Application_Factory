@@ -18,8 +18,8 @@
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "while end > start and data[end - 1:end] == b\"\\\\\":",
-      "new": "while False:",
+      "old": "data[start:end] = b\" \" * (end - start)",
+      "new": "pass",
       "why": "a comment that ends in a backslash joins the next line, as shfmt 3.14 reads it"
     },
     {
@@ -42,7 +42,7 @@
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "kind not in (\"Subshell\", \"CmdSubst\", \"ProcSubst\", \"TestClause\", \"ArithmCmd\")",
+      "old": "kind not in (\"Subshell\", \"CmdSubst\", \"ProcSubst\", \"TestClause\", \"ArithmCmd\", \"CoprocClause\")",
       "new": "kind not in (\"TestClause\", \"ArithmCmd\")",
       "why": "an export in a subshell or a $( ) counts"
     },
@@ -72,8 +72,8 @@
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "data = data_statement(statement) and output_is_data(chain[:statement_index + 1])",
-      "new": "data = data_statement(statement)",
+      "old": "data = bool(found) and data_statement(statement) and output_is_data(chain[:found[-1] + 1])",
+      "new": "data = bool(found) and data_statement(statement)",
       "why": "a heredoc whose data command's output reaches a shell is data"
     },
     {
@@ -144,9 +144,111 @@
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "            self._if(branch, inner, dead, here)\n            return\n",
+      "old": "            self._if(branch, inner, dead or ALWAYS.match(condition) is not None, here)\n            return\n",
       "new": "            return\n",
       "why": "an elif and what follows it are not read"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "data[start:end] = original[start:end]",
+      "new": "pass",
+      "why": "a backslash blanked after a # in a string is never put back"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "            if pending & restored:\n                # A comment's backslashes that an earlier tree put in no comment: which tree is bash's is unknown.\n                return None, 1\n",
+      "new": "",
+      "why": "a run both a comment's and no comment's is blanked again and again"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "for _ in range(COMMENT_PASSES):",
+      "new": "for _ in range(COMMENT_PASSES - 1):",
+      "why": "one parse fewer than COMMENT_PASSES reads the comments"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "PREFIX_TRIES = 5",
+      "new": "PREFIX_TRIES = 4",
+      "why": "one prefix fewer is parsed"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "\"ArithmCmd\", \"CoprocClause\")",
+      "new": "\"ArithmCmd\")",
+      "why": "an export in a coprocess counts"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "kind not in (\"Subshell\", \"CmdSubst\", \"ProcSubst\",",
+      "new": "kind not in (\"Subshell\", \"CmdSubst\",",
+      "why": "an export in a process substitution counts"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "self._if(branch, inner, dead or ALWAYS.match(condition) is not None, here)",
+      "new": "self._if(branch, inner, dead, here)",
+      "why": "an elif after a condition that always holds runs"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "dead or (dead_right and key == \"Y\"), here_for_key)",
+      "new": "dead, here_for_key)",
+      "why": "the right side of false && runs"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "        here = here and not statement.get(\"Background\") and not statement.get(\"Coprocess\")\n        if call",
+      "new": "        if call",
+      "why": "an export in a group run in the background counts"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "return \"code\" if statements.around(position) else \"data\"",
+      "new": "return \"code\"",
+      "why": "the line that closes an empty heredoc is read as code"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "return any(where(number, starts[number] + column) != \"code\" for column in markers[number])",
+      "new": "return bool(markers[number])",
+      "why": "a gh-repo: ok marker in a string opts its line out"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "exported and not wrapped(earlier + line[:match.start()])",
+      "new": "exported",
+      "why": "after a syntax error, a wrapper on the line before a backslash keeps the export"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "    except RecursionError:\n        return Shape(\"\", {}), 0\n",
+      "new": "",
+      "why": "a chain too deep to walk crashes the checker"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "if release is None or int(release.group(1)) < SHFMT_OLDEST_MINOR:",
+      "new": "if release is None:",
+      "why": "a shfmt older than v3.14 is accepted"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "return {\"cwd\": _shfmt_folder[0].name, \"env\": {\"PATH\": os.environ.get(\"PATH\", os.defpath)}}",
+      "new": "return {}",
+      "why": "shfmt runs in the PR's folder with the whole environment"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "return node.get(\"Type\") is None and \"Position\" in node and \"FiPos\" not in node",
+      "new": "return node.get(\"Type\") is None and \"Position\" in node",
+      "why": "an elif or an else is read as a statement"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "statement = chain[found[-1]][0] if found else {}",
+      "new": "statement = chain[found[-1]][0]",
+      "why": "a heredoc on a statement with no command crashes the checker"
     }
   ]
 }
