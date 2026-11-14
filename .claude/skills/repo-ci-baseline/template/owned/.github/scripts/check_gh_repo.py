@@ -708,9 +708,9 @@ def clears(line):
         not PREFIX_OF_GH.match(line, assignment.start()) for assignment in ASSIGNMENT.finditer(line))
 
 
-# How many characters of a gh's own command before it are read, joined lines included, and how many continued lines before it
-# after a syntax error: past either, the gh is refused. With the rest of its line read up to BEFORE_CHARS too, the text read for
-# one gh stays bounded however long the line or the command is.
+# How many characters of a gh's own command before it are read (joined lines included, without the backslash and newline that
+# join them), and of the rest of its line after it, and how many continued lines before it after a syntax error: past any of
+# them, the gh is refused, so the text read for one gh stays bounded however long the line or the command is.
 BEFORE_CHARS = 4096
 JOINED_LINES = 100
 
@@ -817,9 +817,9 @@ def untold(path):
         place = where(number - 1, position)
         if place in ("comment", "data"):
             return None
-        # The rest of the line, read from its start only: at most BEFORE_CHARS of it, and a NUL (never in a line) when it goes
-        # on, so a pattern that needs the line's end doesn't match the cut.
-        after = line[match.end():match.end() + BEFORE_CHARS] + ("\0" if len(line) - match.end() > BEFORE_CHARS else "")
+        if len(line) - match.end() > BEFORE_CHARS:
+            return False
+        after = line[match.end():]
         if place == "text":
             earlier = earlier_of(number - 1)
             if earlier is None or len(earlier) + match.start() > BEFORE_CHARS:
@@ -827,9 +827,13 @@ def untold(path):
             return told(line[:match.start()], after, exported and not wrapped(earlier + line[:match.start()]))
         around = commands.around(position) or statements.around(position)
         start = around[0] if around else starts[number - 1]
-        if position - start > BEFORE_CHARS:
+        # Counted, as on a line after a syntax error, without the backslash and newline of each continuation; a slice twice as
+        # long can't hold few enough of them to pass.
+        if position - start > 2 * BEFORE_CHARS:
             return False
         before = re.sub(r"\\\n", "", text[start:position])
+        if len(before) > BEFORE_CHARS:
+            return False
         return told(before, after, exported)
 
     def marks(position):

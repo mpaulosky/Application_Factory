@@ -2844,19 +2844,15 @@ def test_untold_reads_at_most_before_chars_of_a_gh_s_own_command_before_it(tmp_p
 
 
 @pytest.mark.parametrize("text, refused", [
-    # One long line of gh words each told by the export, after a syntax error and in code: each reads at most BEFORE_CHARS.
+    # A long line of gh words each told by the export, after a syntax error and in code: the first gh past a cap refuses the line.
     ("export GH_REPO=o/r\n(\n" + "gh pr view 1; " * 20000 + "\n", [3]),
     ("export GH_REPO=o/r\necho " + "gh " * 20000 + "\n", [2]),
-    # As many told commands on one line: each reads its own command and at most BEFORE_CHARS of the rest of the line.
-    ("export GH_REPO=o/r\n" + "gh pr view 1; " * 20000 + "\n", []),
+    ("export GH_REPO=o/r\n" + "gh pr view 1; " * 20000 + "\n", [2]),
     # Continued lines before them, longer than BEFORE_CHARS.
     ("export GH_REPO=o/r\n(\n" + ("y" * 10000 + "\\\n") * 100 + "GH_REPO=o/r gh pr view 1; " * 1000 + "\n", [103]),
 ])
-def test_untold_reads_a_long_line_of_gh_words_in_bounded_time(tmp_path, text, refused):
-    started = time.monotonic()
-    found = untold(tmp_path, text)
-    assert time.monotonic() - started < 20
-    assert lines_of(found) == refused
+def test_untold_refuses_a_long_line_of_gh_words_at_its_first_gh_past_a_cap(tmp_path, text, refused):
+    assert lines_of(untold(tmp_path, text)) == refused
 
 
 def test_untold_gives_told_at_most_before_chars_of_a_gh_s_line_on_each_side(tmp_path, monkeypatch):
@@ -2868,14 +2864,41 @@ def test_untold_gives_told_at_most_before_chars_of_a_gh_s_line_on_each_side(tmp_
         longest.append(max(len(before), len(after)))
         return real(before, after, exported)
     monkeypatch.setattr(check_gh_repo, "told", spy)
-    untold(tmp_path, "export GH_REPO=o/r\n" + "gh pr view 1; " * 2000 + "\n(\n" + "gh pr view 1; " * 2000 + "\n")
-    assert len(longest) > 2000 and max(longest) <= check_gh_repo.BEFORE_CHARS + 1
+    # Lines just short of the caps, in code and after a syntax error: every gh on them is judged, and told.
+    told_lines = "export GH_REPO=o/r\n" + "gh pr view 1; " * 290 + "\n(\n" + "gh pr view 1; " * 290 + "\n"
+    assert lines_of(untold(tmp_path, told_lines)) == []
+    assert len(longest) == 580 and max(longest) <= check_gh_repo.BEFORE_CHARS
 
 
-def test_untold_reads_the_rest_of_a_gh_s_line_cut_at_before_chars_without_reading_the_cut_as_its_end(tmp_path):
-    # Cut at BEFORE_CHARS, the rest of the line would read as || alone, a lookup's; it goes on, so the gh is judged.
-    assert lines_of(untold(tmp_path, "command -v gh ||" + " " * 5000 + "x\n")) == [1]
-    assert lines_of(untold(tmp_path, "command -v gh ||\n")) == []
+@pytest.mark.parametrize("length, refused", [
+    (4095, []),
+    (4096, []),
+    (4097, [1]),
+])
+def test_untold_refuses_a_gh_with_more_than_before_chars_after_it_on_its_line(tmp_path, length, refused):
+    # The rest of the line, " ||" and spaces, is a lookup's when it is read whole; past BEFORE_CHARS it isn't read, and the gh is refused.
+    assert lines_of(untold(tmp_path, "command -v gh ||" + " " * (length - 3) + "\n")) == refused
+
+
+@pytest.mark.parametrize("text, refused", [
+    # A long redirection target after the gh, which would end the line if the rest were cut: the gh is refused, in code and after
+    # a syntax error.
+    ("export GH_REPO=o/r\ngh >" + "x" * 5000 + " repo view 1\n", [2]),
+    ("export GH_REPO=o/r\n(\ngh >" + "x" * 5000 + " repo view 1\n", [3]),
+])
+def test_untold_refuses_a_gh_whose_line_goes_on_past_before_chars(tmp_path, text, refused):
+    assert lines_of(untold(tmp_path, text)) == refused
+
+
+@pytest.mark.parametrize("length, refused", [
+    # On the tree path BEFORE_CHARS is counted without the backslash and newline of each continuation, as after a syntax error:
+    # "FOO=" and the x's, a space and the two of the next line's indent.
+    (4088, []),
+    (4089, []),
+    (4090, [3]),
+])
+def test_untold_counts_before_chars_on_a_continued_command_without_its_continuations(tmp_path, length, refused):
+    assert lines_of(untold(tmp_path, "export GH_REPO=o/r\nFOO=" + "x" * length + " \\\n  gh pr view 1\n")) == refused
 
 
 def test_parse_reads_a_script_whose_blanks_keep_changing_as_one_that_isnt_valid_bash(monkeypatch):
