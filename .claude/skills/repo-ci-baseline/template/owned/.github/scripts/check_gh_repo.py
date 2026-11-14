@@ -1,7 +1,10 @@
 """Checks that every gh command in the Template's Owned scripts and a repo's own scripts and skills is told its repository; the rules are in references/gotchas.md."""
 
+import bisect
+import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -118,15 +121,13 @@ def wrapped(before):
         env_drops_gh_repo(words[env.end():]) for env in ENV.finditer(words))
 
 
-def told(before, after, exported, earlier="", truncated=False):
+def told(before, after, exported):
     """Whether the gh between before and after is told its repository.
 
-    earlier is the text of the backslash-continued lines before this one: a wrapper or an assignment may have
-    started on them, and bash reads them as one line. truncated says the chain went on past what was read, so
-    a wrapper that drops GH_REPO may have started before it: the export no longer tells this gh.
+    before is the text of gh's own command up to it (from the syntax tree, with its backslash continuations joined), where a
+    wrapper or an assignment before gh is; after is the rest of gh's line.
     """
-    before = earlier + before
-    exported = exported and not truncated and not wrapped(before)
+    exported = exported and not wrapped(before)
     # gh closing a quoted word: judge what follows the quote.
     if after[:1] in ("\"", "'"):
         after = after[1:]
@@ -146,312 +147,23 @@ def told(before, after, exported, earlier="", truncated=False):
     return exported if prefixed is None else re.fullmatch(VALUE, prefixed) is not None
 
 
-# A shell operator, longest first: a redirection (with <<, <<-, <<< and &> before their shorter forms) or a separator.
-OPERATOR = re.compile(r"<<<|<<-?|<&|<>|<|>>|>&|>\||>|&>>|&>|&&|\|\||;;|;|&|\|")
-REDIRECTIONS = ("<<<", "<<", "<<-", "<&", "<>", "<", ">>", ">&", ">|", ">", "&>>", "&>")
-# The redirections that write to their target.
-WRITES = ("<>", ">>", ">&", ">|", ">", "&>>", "&>")
 # The commands whose heredoc is data, never code: they print it, store it, or ignore it.
 DATA_COMMANDS = ("cat", "tee", "echo", "printf", "read", "mail", "mailx", ":", "true")
 # The files a data command may write to: text, not something a later command runs.
 DATA_SUFFIXES = ("txt", "md", "json", "yml", "yaml", "log", "out", "csv", "tsv", "toml", "ini", "conf", "cfg", "html",
                  "xml", "env", "patch", "diff")
-# Words before a command that aren't it.
-BEFORE_COMMAND = ("{", "!", "if", "then", "else", "elif", "while", "until", "do", "time")
-ASSIGNMENT_START = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\+?=")
+# The redirections that write to their target.
+WRITES = ("<>", ">>", ">&", ">|", ">", "&>>", "&>")
+# An if condition that never holds, and one that always does.
+NEVER = re.compile(r"(false|! *true|\[ +0 +-ne +0 +\]|\[ +1 +-eq +0 +\])$")
+ALWAYS = re.compile(r"(true|:)$")
+# The shfmt that parses a script (repo-ci-baseline's ADR 0011): a v3 release prints its syntax tree as JSON.
+SHFMT = "shfmt"
+SHFMT_MAJOR = "v3."
 
 
-def tokens(text):
-    """The words and operators of one logical line of shell as (kind, text, quoted) tuples, quotes and comments understood.
-
-    kind is 'word' (text is the word without its quotes, quoted whether it had any), 'op' (a redirection or separator,
-    or a parenthesis or backtick), 'open' for a $( and 'close' for the ) that ends it. A << inside a quote, a comment
-    or (( )) is no operator. The word right before a redirection that is all digits (2>&1) is its file descriptor, dropped.
-    """
-    found = []
-    word = None
-    quoted = False
-    double = False
-    frames = []
-    index = 0
-
-    def flush():
-        nonlocal word, quoted
-        if word is not None:
-            found.append(("word", "".join(word), quoted))
-        word, quoted = None, False
-
-    while index < len(text):
-        char = text[index]
-        if double:
-            if char == "\\":
-                word.append(text[index + 1:index + 2])
-                index += 2
-            elif char == '"':
-                double = False
-                index += 1
-            elif text.startswith("$(", index) and not text.startswith("$((", index):
-                flush()
-                found.append(("open", "$(", False))
-                frames.append(["double", 1])
-                double = False
-                index += 2
-            else:
-                word.append(char)
-                index += 1
-        elif char in " \t":
-            flush()
-            index += 1
-        elif char == "\\":
-            word = [] if word is None else word
-            word.append(text[index + 1:index + 2])
-            quoted = True
-            index += 2
-        elif char == "'":
-            end = text.find("'", index + 1)
-            end = len(text) if end < 0 else end
-            word = [] if word is None else word
-            word.append(text[index + 1:end])
-            quoted = True
-            index = end + 1
-        elif char == '"':
-            word = word or []
-            quoted = double = True
-            index += 1
-        elif char == "#" and word is None:
-            break
-        elif text.startswith("((", index) or text.startswith("$((", index):
-            # Arithmetic: its << is a shift, not a heredoc.
-            depth, index = 0, text.index("(", index)
-            while index < len(text):
-                depth += (text[index] == "(") - (text[index] == ")")
-                index += 1
-                if depth == 0:
-                    break
-            word = [] if word is None else word
-            word.append("0")
-        elif text.startswith("$(", index):
-            flush()
-            found.append(("open", "$(", False))
-            frames.append(["normal", 1])
-            index += 2
-        elif char in "()":
-            flush()
-            if char == ")" and frames and frames[-1][1] == 1:
-                double = frames.pop()[0] == "double"
-                found.append(("close", ")", False))
-                word, quoted = ([], True) if double else (None, False)
-            else:
-                if frames:
-                    frames[-1][1] += 1 if char == "(" else -1
-                found.append(("op", char, False))
-            index += 1
-        elif char == "`":
-            flush()
-            found.append(("op", char, False))
-            index += 1
-        elif operator := OPERATOR.match(text, index):
-            descriptor = word is not None and not quoted and "".join(word).isdigit() and operator.group()[0] in "<>"
-            if descriptor:
-                word = None
-            flush()
-            found.append(("op", operator.group(), False))
-            index = operator.end()
-        else:
-            if word is None:
-                word = []
-            word.append(char)
-            index += 1
-    flush()
-    return found
-
-
-def heredoc_header(text):
-    """The heredocs of one logical line as (delimiter, tabs, quoted), and whether the line feeds its data to a program.
-
-    A body is data only when every command on the line is one that treats its input as data (cat, tee, echo,
-    printf, read, mail, :, true), each file they write is text, and the line doesn't end in a pipe, whose
-    consumer comes after the body. Any other command, a shell or an interpreter or an assignment-prefixed . among
-    them, may run the body, so its body is read as code.
-    """
-    heredocs = []
-    data = True
-    redirect = None
-    segment = []
-    segments = []
-    found = tokens(text)
-    for kind, value, quoted in found + [("op", ";", False)]:
-        if kind == "word" and redirect:
-            if redirect in ("<<", "<<-"):
-                heredocs.append((value, redirect == "<<-", quoted))
-            elif redirect in WRITES:
-                data = data and (value.isdigit() or value == "-" or value.startswith("/dev/")
-                                 or value.rsplit("/", 1)[-1].rpartition(".")[2].lower() in DATA_SUFFIXES)
-            redirect = None
-        elif kind == "word":
-            segment.append(value)
-        elif kind == "op" and value in REDIRECTIONS:
-            redirect = value
-        else:
-            segments.append(segment)
-            segment = []
-    for words in segments:
-        while words and (words[0] in BEFORE_COMMAND or ASSIGNMENT_START.match(words[0])):
-            words = words[1:]
-        if words:
-            command = words[0].rsplit("/", 1)[-1]
-            data = data and command in DATA_COMMANDS
-            if command == "tee":
-                data = data and all(word.startswith("-") or word.rsplit("/", 1)[-1].rpartition(".")[2].lower()
-                                    in DATA_SUFFIXES or word.startswith("/dev/") for word in words[1:])
-    return heredocs, data and found[-1:] != [("op", "|", False)]
-
-
-def last_lines(lines):
-    """Where each line of lines last occurs, as two dicts of text -> index: as written, and without its leading tabs."""
-    whole, stripped = {}, {}
-    for index, text in enumerate(lines):
-        whole[str(text)] = index
-        stripped[str(text).lstrip("\t")] = index
-    return whole, stripped
-
-
-def data_heredocs(header, lines, start, last=None):
-    """The (delimiter, tabs, quoted) of each heredoc on the logical line header whose body is data, not code, in the order the bodies follow.
-
-    An unquoted delimiter still lets bash run the $(...) and backticks in a data body. A heredoc whose delimiter never
-    comes again in lines[start:] is no heredoc. last is last_lines(lines), which the caller builds once for a file with
-    many headers (else a file of `cat <<EOF` lines with no terminator would be read to its end once per line).
-    """
-    if "<<" not in header:
-        return []
-    heredocs, data = heredoc_header(header)
-    if not data:
-        return []
-    whole, stripped = last or last_lines(lines)
-    return [(delimiter, tabs, quoted) for delimiter, tabs, quoted in heredocs
-            if (stripped if tabs else whole).get(delimiter, -1) >= start]
-
-
-def logical_line(lines, number):
-    """The logical line that starts at lines[number - 1], with the continuations bash joins (a trailing backslash outside a comment), and how many physical lines it takes.
-
-    A backslash at the end of a comment joins nothing, and a # inside a string that an earlier line of the chain opened is no comment, so a line with a # is judged on the
-    joined text. That holds for the join after each of the first CONTINUATION_LIMIT lines of a chain; the join after a later line uses the backslash alone, as it did before the
-    comment was looked at.
-    """
-    parts = [lines[number - 1]]
-    # The trailing backslashes of the text so far: only the newest part decides, since a join drops one backslash and leaves an even run before it.
-    tail = len(parts[0]) - len(parts[0].rstrip("\\"))
-    count = 1
-    while number - 1 + count < len(lines):
-        last = lines[number - 2 + count]
-        # An odd number of trailing backslashes continues the line; an even number is escaped backslashes.
-        joins = tail % 2 == 1
-        # Only a line with a # can start a comment (an earlier # was judged when it was joined), so only it is scanned: the whole chain so far, which the string an earlier
-        # line opened decides. The guard saves cost and changes no result: a line with a # costs one scan of at most CONTINUATION_LIMIT lines, so a file costs at most that many
-        # line scans per line (counted in the tests), not a linear amount. Past the limit nothing is scanned and nothing is cut, so the fail-closed side of a # in a
-        # string an earlier line opened still holds.
-        if joins and "#" in last and count <= CONTINUATION_LIMIT:
-            joins = continues("".join(parts))
-        if not joins:
-            break
-        parts[-1] = parts[-1][:-1]
-        parts.append(lines[number - 1 + count])
-        tail = len(parts[-1]) - len(parts[-1].rstrip("\\"))
-        count += 1
-    return "".join(parts), count
-
-
-# The most physical lines continued_text reads back, and the most that logical_line scans whole for a # inside a string (the join after a later line uses the backslash alone);
-# what a longer chain does to the export is in references/gotchas.md (the conditional-export bullet).
-CONTINUATION_LIMIT = 100
-
-
-def joined_lines(lines):
-    """For each line of lines, whether bash joins the next line to it (a trailing backslash outside a comment): True, False, or None for a line that can't be judged.
-
-    Each chain is judged whole by logical_line, from its first line, so a string that spans lines decides whether the # after it starts a comment: a line is not judged
-    alone. Past CONTINUATION_LIMIT lines of a chain logical_line joins on the backslash alone, so a heredoc header after a string that holds a # is still seen (one after
-    a real comment ending in a backslash is hidden, so untold trusts no export from a chain that holds an unjudged line on, to the end of the file:
-    references/gotchas.md). A line there is not judged whole, so one that ends in a backslash and holds a # is None: it may be a comment or sit in a string an earlier
-    line opened, and either way the read-back stops at it and reports the chain as cut (continued_text), so a GH_REPO= in it tells nothing and an export before it is not
-    trusted for a gh in the chain after it. The line after it is not forced to start a command (it may be text of a string): untold keeps what track_branches returned, so
-    a real comment on the unjudged line still ends the command there. A line without a # joins as logical_line says.
-    """
-    joins = [False] * len(lines)
-    number = 1
-    while number <= len(lines):
-        _, count = logical_line(lines, number)
-        for index in range(number - 1, number + count - 2):
-            joins[index] = True if index - number + 2 <= CONTINUATION_LIMIT or "#" not in lines[index] else None
-        number += count
-    return joins
-
-
-def continued_text(lines, number, joins):
-    """The text of the physical lines right before lines[number - 1] that a trailing backslash joins to it, backslashes removed,
-    and whether the chain goes on past what was read: past the CONTINUATION_LIMIT lines read (a file of many continued lines costs a bounded amount per line),
-    or at a line that joined_lines can't judge (None). `joins` is joined_lines(lines), which the caller computes once for the file.
-    """
-    text = ""
-    index = number - 2
-    # `index >= 0` keeps the walk off joins[-1]: at the first line of the file, and for an empty file.
-    while index >= 0 and number - 2 - index < CONTINUATION_LIMIT and joins[index]:
-        text = lines[index][:-1] + text
-        index -= 1
-    return text, index >= 0 and joins[index] is not False
-
-
-def close_parenthesis(line, start, depth):
-    """The index in line at or after start where the substitution of the given depth ends, or len(line), and the depth left."""
-    end = start
-    while end < len(line) and depth:
-        depth += (line[end] == "(") - (line[end] == ")")
-        end += 1
-    return (end - 1 if depth == 0 else end), depth
-
-
-def substitutions(line, pending=None):
-    """The commands bash runs in line's $(...) and backticks, as (texts, pending).
-
-    A substitution still open at the line's end (pending: ('(', depth) or ('`',)) goes on in the next line: pass
-    pending back in, and the start of that line up to the close is its text.
-    """
-    found = []
-    position = 0
-    if pending:
-        if pending[0] == "(":
-            end, depth = close_parenthesis(line, 0, pending[1])
-            pending = ("(", depth) if depth else None
-        else:
-            end = 0
-            while end < len(line) and line[end] != "`":
-                end += 2 if line[end] == "\\" else 1
-            pending = None if end < len(line) else pending
-        found.append(line[:end])
-        if pending:
-            return found, pending
-        position = end + 1
-    while position < len(line):
-        if line[position] == "\\":
-            position += 2
-        elif line.startswith("$(", position):
-            end, depth = close_parenthesis(line, position + 2, 1)
-            found.append(line[position + 2:end])
-            pending = pending or (("(", depth) if depth else None)
-            position += 2
-        elif line[position] == "`":
-            end = position + 1
-            while end < len(line) and line[end] != "`":
-                end += 2 if line[end] == "\\" else 1
-            found.append(line[position + 1:end])
-            if end >= len(line):
-                pending = pending or ("`",)
-            position = end + 1
-        else:
-            position += 1
-    return found, pending
+class ShfmtError(Exception):
+    """shfmt is missing, isn't a v3 release, or failed in a way that isn't a syntax error."""
 
 
 class Line(str):
@@ -489,327 +201,494 @@ def shown(line):
     return for_log(line.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace"))
 
 
-WORD_END = " \t;&|()<>"
-NEVER = re.compile(r"(false|! *true|\[ +0 +-ne +0 +\]|\[ +1 +-eq +0 +\])$")
-ALWAYS = re.compile(r"(true|:)$")
+_checked_shfmt = []
 
 
-# How deep quoted_end follows a "..." that holds a $( that holds a "...": past it, the text is read as plain characters.
-NESTING_LIMIT = 50
+def shfmt_version():
+    """Stop with ShfmtError unless shfmt is on PATH and is a v3 release; asked once per run."""
+    if _checked_shfmt:
+        return
+    try:
+        result = subprocess.run([SHFMT, "--version"], capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ShfmtError(f"can't run shfmt ({error}); install shfmt {SHFMT_MAJOR}x, see references/gotchas.md") from error
+    if result.returncode or not result.stdout.strip().startswith(SHFMT_MAJOR):
+        raise ShfmtError(f"needs shfmt {SHFMT_MAJOR}x, found {for_log(result.stdout.strip() or result.stderr.strip())!r}")
+    _checked_shfmt.append(True)
 
 
-def live_dollar(line, index):
-    """Whether line[index] is a $ that starts an expansion.
+def run_shfmt(data):
+    """shfmt's syntax tree of data (bytes) as JSON and None, or None and the line of a syntax error."""
+    try:
+        result = subprocess.run([SHFMT, "-ln", "bash", "--to-json"], input=data, capture_output=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ShfmtError(f"shfmt failed: {error}") from error
+    if result.returncode:
+        # shfmt says <line>:<col>: <message> for a syntax error; anything else is shfmt failing.
+        syntax = re.match(rb"(?:<standard input>:)?([0-9]+):[0-9]+: ", result.stderr)
+        if syntax:
+            return None, int(syntax.group(1))
+        raise ShfmtError(f"shfmt failed: {for_log(result.stderr.decode('utf-8', 'replace').strip())}")
+    return json.loads(result.stdout), None
 
-    A run of $ pairs up into process ids ($$), so only an odd run ends in a live $; a backslash before the run makes
-    its first $ a literal.
+
+def comments_of(node, found):
+    """The comments of the tree (shfmt's Comment nodes: a Hash and a Text)."""
+    if isinstance(node, list):
+        for item in node:
+            comments_of(item, found)
+    elif isinstance(node, dict):
+        if "Hash" in node and "Text" in node:
+            found.append(node)
+        for value in node.values():
+            if isinstance(value, (dict, list)):
+                comments_of(value, found)
+    return found
+
+
+# How many times a script is parsed again with the backslashes at the end of its comments blanked (one more pass is the usual).
+COMMENT_PASSES = 10
+
+
+def parse(text):
+    """shfmt's syntax tree of text as bash, with every offset in it counted in characters of text, and None; or None and the line of
+    the syntax error when text isn't valid bash.
+
+    A byte that isn't UTF-8 (read as a surrogate) is given to shfmt as a ?, one byte for one, so the offsets still line up.
+    shfmt v3.14 joins the line after a comment that ends in a backslash onto the comment's line, where bash ends the comment
+    at the newline and runs the next line: the backslashes at the end of each comment are given to shfmt as blanks, which
+    bash reads the same, until no comment ends in one.
     """
-    if index < 0 or line[index] != "$":
-        return False
-    dollars = 1
-    while index - dollars >= 0 and line[index - dollars] == "$":
-        dollars += 1
-    slashes = 0
-    while index - dollars - slashes >= 0 and line[index - dollars - slashes] == "\\":
-        slashes += 1
-    if slashes % 2:
-        dollars -= 1
-    return dollars % 2 == 1
-
-
-def quoted_end(line, position, depth=0):
-    """The index right after the quoted string that starts at line[position], a ' or a " (past the end of line when it never closes).
-
-    Inside "..." and $'...' (a ' after a live $, see live_dollar) a backslash escapes the next character; inside '...'
-    it doesn't. A live $( inside "..." (a doubled dollar before a paren is a process id and a paren) holds commands
-    with quotes of their own, so the string goes on to the ) that closes it, down to NESTING_LIMIT levels.
-    """
-    quote = line[position]
-    escapes = quote == '"' or (quote == "'" and live_dollar(line, position - 1))
-    position += 1
-    while position < len(line) and line[position] != quote:
-        if escapes and line[position] == "\\":
-            position += 2
-        elif quote == '"' and line.startswith("$(", position) and live_dollar(line, position) and depth < NESTING_LIMIT:
-            position = parenthesis_end(line, position + 2, depth + 1)
-        else:
-            position += 1
-    return position + 1
-
-
-def parenthesis_end(line, position, depth):
-    """The index right after the ) that closes a $( whose text starts at line[position] (past the end of line when it never closes)."""
-    open_count = 1
-    while position < len(line):
-        char = line[position]
-        if char == "\\":
-            position += 2
-        elif char in "'\"":
-            position = quoted_end(line, position, depth)
-        elif char in "()":
-            open_count += 1 if char == "(" else -1
-            position += 1
-            if not open_count:
-                return position
-        else:
-            position += 1
-    return position
-
-
-def keywords(line, command=True, names=("if", "fi", "else", "elif"), where=None):
-    """The if, fi, else and elif keywords of line (or the reserved words in names), in source order, and whether the line ends where a command may start.
-
-    where, a list, gets the index each keyword starts at. Inside [[ ... ]] a word, ||, &&, ; and ( ) are operands, never keywords.
-
-    A keyword is a reserved word as bash reads one: an unquoted word where a command starts, never an argument
-    (grep -q fi), never inside quotes ('; fi'), a ${...} or a comment (# fi). A command starts at the start of the line
-    (command: False for the line after one that bash joins to it, as joined_lines says), after ; & | ( and after a
-    BEFORE_COMMAND word (then, else, do, if, {, !...). A comment ends the command, so the next line starts one.
-    A ( says what its ) ends: a ) that closes $(...), <(...) or >(...) ends no command, so a word after it is an
-    argument; one that closes a subshell, or a case pattern (a) if y; then z; fi ;;), does. What a ((...)), $((...)),
-    name=(...) or extglob group (@( ) *( ) +( ) ?( ) !( )) holds (a (( is arithmetic, never two subshells) is arithmetic,
-    array elements or a pattern, not commands, so it is skipped, and so is any ( nested in it except a $( (quotes,
-    backslashes and ${...} in it still hide a parenthesis). Known limits: a case pattern that reads fi), a ( left open
-    at the end of a line (a $( or (( or name=( spanning lines: the next line is read as code), a backtick
-    substitution, a ${...} that holds a quote, a } or a ) (it ends at the first }, and quoted_end and
-    parenthesis_end don't see it), quotes nested deeper than NESTING_LIMIT, a [[ ... ]] test that spans lines (the next line is read as code), and a line of a multi-line string or a
-    heredoc body read as code that starts like a keyword.
-    """
-    found = []
-    position = 0
-    # What each open ( is: "expansion" ($( <( >( ), "skipped" (( ), name=( ), an extglob group and what nests in them) or "subshell".
-    parentheses = []
-    in_test = False
-    while position < len(line):
-        char = line[position]
-        if parentheses and parentheses[-1] == "skipped" and char not in "()":
-            if char == "\\":
-                position += 2
-            elif char in "'\"":
-                position = quoted_end(line, position)
-            elif line.startswith("${", position):
-                end = line.find("}", position)
-                position = len(line) if end < 0 else end + 1
-            else:
-                position += 1
-        elif char in " \t":
-            position += 1
-        elif char == "#":
-            command = True
+    shfmt_version()
+    data = bytearray()
+    starts = []
+    for char in text:
+        starts.append(len(data))
+        data += b"?" if "\udc80" <= char <= "\udcff" else char.encode("utf-8")
+    starts.append(len(data))
+    for _ in range(COMMENT_PASSES):
+        tree, error = run_shfmt(bytes(data))
+        if tree is None:
+            return None, error
+        patched = False
+        for comment in comments_of(tree, []):
+            start = comment["Hash"]["Offset"]
+            end = data.find(b"\n", start)
+            end = len(data) if end < 0 else end
+            while end > start and data[end - 1:end] == b"\\":
+                data[end - 1:end] = b" "
+                end -= 1
+                patched = True
+        if not patched:
             break
-        elif char == "\\" and position == len(line) - 1:
-            position += 1
-        elif char == "(":
-            before = line[position - 1] if position else ""
-            if before == "$":
-                kind = "expansion"
-            elif line.startswith("((", position) or (parentheses and parentheses[-1] == "skipped") or in_test or (before and before in "=(@?*+!"):
-                kind = "skipped"
+    else:
+        # Comments that end in a backslash keep turning up: read the whole file as one that isn't valid bash, line by line.
+        return None, 1
+    if len(data) != len(text):
+        # The character each byte offset starts.
+        character = {offset: index for index, offset in enumerate(starts)}
+
+        def convert(node):
+            if isinstance(node, dict):
+                if is_position(node):
+                    node["Offset"] = character.get(node["Offset"], node["Offset"])
+                for value in node.values():
+                    convert(value)
+            elif isinstance(node, list):
+                for value in node:
+                    convert(value)
+        convert(tree)
+    return tree, None
+
+
+# How many shorter prefixes of a script that isn't valid bash are parsed, looking for the statements before its syntax error.
+PREFIX_TRIES = 5
+
+
+def parse_prefix(lines):
+    """The syntax tree of the longest run of lines from the top that is valid bash, and how many lines it has.
+
+    bash runs a script one complete statement at a time and stops at a syntax error, so the statements before the error are
+    what runs. shfmt names the line of the error; the lines before it are parsed in turn (an if or a heredoc that the error
+    is in starts earlier), at most PREFIX_TRIES times, and the run is empty when none parses.
+    """
+    count = len(lines)
+    for _ in range(PREFIX_TRIES):
+        tree, error = parse("\n".join(lines[:count]))
+        if tree is not None:
+            return tree, count
+        count = min(count - 1, error - 1)
+        if count <= 0:
+            break
+    return None, 0
+
+
+def is_position(node):
+    """Whether a dict of the tree is a position ({Offset, Line, Col}), not a node: a ${x:1} slice has an Offset that is a word."""
+    return isinstance(node.get("Offset"), int) and "Line" in node
+
+
+def span(node):
+    """The [start, end) of a node of the tree, in characters."""
+    return node["Pos"]["Offset"], node["End"]["Offset"]
+
+
+def literal(word):
+    """The text of a word that is only literal text and quotes (a quoted delimiter, a command name), or None when it holds an expansion."""
+    text = []
+    for part in word.get("Parts") or []:
+        kind = part.get("Type")
+        if kind == "Lit":
+            text.append(part["Value"].replace("\\", ""))
+        elif kind == "SglQuoted":
+            text.append(part["Value"])
+        elif kind == "DblQuoted":
+            inner = literal(part)
+            if inner is None:
+                return None
+            text.append(inner)
+        else:
+            return None
+    return "".join(text)
+
+
+def text_file(target):
+    """Whether a file a data command writes is text, not something a later command runs."""
+    return target.isdigit() or target == "-" or target.startswith("/dev/") or \
+        target.rsplit("/", 1)[-1].rpartition(".")[2].lower() in DATA_SUFFIXES
+
+
+def writes_text_only(statement):
+    """Whether every file the statement's own redirections write to is text."""
+    for redirect in statement.get("Redirs") or []:
+        if redirect.get("Op") in WRITES:
+            target = literal(redirect["Word"])
+            if target is None or not text_file(target):
+                return False
+    return True
+
+
+def command_name(call):
+    """The name of the command a CallExpr runs, without its folder, or None when it's no literal word."""
+    args = call.get("Args") or []
+    name = literal(args[0]) if args else None
+    return None if name is None else name.rsplit("/", 1)[-1]
+
+
+def data_statement(statement):
+    """Whether a statement is one data command (cat, tee, echo, printf, read, mail, :, true) that writes only text."""
+    call = statement.get("Cmd") or {}
+    if call.get("Type") != "CallExpr" or not writes_text_only(statement):
+        return False
+    name = command_name(call)
+    if name not in DATA_COMMANDS:
+        return False
+    if name == "tee":
+        for word in call["Args"][1:]:
+            target = literal(word)
+            if target is None or not (target.startswith("-") or text_file(target)):
+                return False
+    return True
+
+
+def pipeline_statements(statement):
+    """The statements of a pipeline that starts at statement (itself, when it is no pipe)."""
+    call = statement.get("Cmd") or {}
+    if call.get("Type") == "BinaryCmd" and call.get("Op") in ("|", "|&"):
+        return pipeline_statements(call["X"]) + pipeline_statements(call["Y"])
+    return [statement]
+
+
+def output_is_data(chain):
+    """Whether what the statement at the end of chain (a list of (node, key) from the root down) prints ends up as data.
+
+    It does when nothing that may run it reads it: each pipe it goes into ends in data commands, each file a statement
+    around it writes is text, and a $(...) or <(...) it is in goes to a data command or into a variable. A compound
+    command passes its output on; a function's output is the script's.
+    """
+    for index in range(len(chain) - 1, 0, -1):
+        node, key = chain[index]
+        parent, _ = chain[index - 1]
+        if "Cmd" in node and not writes_text_only(node):
+            return False
+        kind = parent.get("Type")
+        if kind == "BinaryCmd" and parent.get("Op") in ("|", "|&") and key == "X":
+            if not all(data_statement(statement) for statement in pipeline_statements(parent["Y"])):
+                return False
+        elif kind in ("CmdSubst", "ProcSubst"):
+            # What reads the substitution's text: the word it is in belongs to an Assign (stored) or a CallExpr's Args.
+            for above in range(index - 2, -1, -1):
+                owner, owner_key = chain[above]
+                child_key = chain[above + 1][1]
+                if "Name" in owner and owner.get("Type") is None and child_key == "Value":
+                    # NAME=$(...): stored in a variable.
+                    return True
+                if owner.get("Type") == "CallExpr":
+                    # An argument of a command: data only when that command is a data command whose own output is data.
+                    return child_key == "Args" and data_statement(chain[above - 1][0]) and output_is_data(chain[:above])
+                if "Cmd" in owner or owner.get("Type"):
+                    if owner.get("Type") in ("DblQuoted",):
+                        continue
+                    return False
+            return False
+    return True
+
+
+def condition_text(text, statements):
+    """The source of an if's condition, without the ; or blanks after it."""
+    if not statements:
+        return ""
+    start, _ = span(statements[0])
+    _, end = span(statements[-1])
+    return text[start:end].replace("\\\n", "").strip(" \t\n").removesuffix(";").strip(" \t\n")
+
+
+class Shape:
+    """What the syntax tree says about a script: its comments, its heredocs, its commands and the lines that export GH_REPO."""
+
+    def __init__(self, text, tree):
+        self.text = text
+        self.comments = []
+        # (start, end, heredoc): end is the start of the delimiter's line.
+        self.heredocs = []
+        # [start, end) of each simple command and statement, to find the one a gh is in.
+        self.commands = []
+        self.statements = []
+        # The 0-based index of each line that starts an export of GH_REPO, and of each whose export runs in the script's own shell, in a branch that can run.
+        self.export_statements = set()
+        self.export_lines = set()
+        self._walk(tree, [(tree, None)], dead=False, here=True)
+
+    def _walk(self, node, chain, dead, here):
+        if isinstance(node, list):
+            for item in node:
+                self._walk(item, chain, dead, here)
+            return
+        if not isinstance(node, dict) or is_position(node):
+            return
+        kind = node.get("Type")
+        if "Hash" in node and "Text" in node:
+            self.comments.append(span(node))
+            return
+        if "Cmd" in node:
+            self._statement(node, chain, dead, here)
+            return
+        if kind in ("CallExpr", "DeclClause"):
+            self.commands.append(span(node))
+        if "Hdoc" in node and node.get("Op") in ("<<", "<<-") and node.get("Hdoc"):
+            self._heredoc(node, chain)
+        if kind == "IfClause":
+            self._if(node, chain, dead, here)
+            return
+        # A subshell, a substitution, a pipe's command and a condition don't run in the script's own shell.
+        inner_here = here and kind not in ("Subshell", "CmdSubst", "ProcSubst", "TestClause", "ArithmCmd") and not (
+            kind == "BinaryCmd" and node.get("Op") in ("|", "|&"))
+        for key, value in node.items():
+            if key in ("Pos", "End") or not isinstance(value, (dict, list)):
+                continue
+            here_for_key = inner_here and key != "Cond"
+            self._walk_child(value, chain, key, dead, here_for_key)
+
+    def _walk_child(self, value, chain, key, dead, here):
+        if isinstance(value, list):
+            for item in value:
+                self._walk_child(item, chain, key, dead, here)
+        elif isinstance(value, dict):
+            self._walk(value, chain + [(value, key)], dead, here)
+
+    def _statement(self, statement, chain, dead, here):
+        self.statements.append(span(statement))
+        call = statement["Cmd"]
+        if call.get("Type") == "DeclClause" and (call.get("Variant") or {}).get("Value") == "export":
+            args = call.get("Args") or []
+            if len(args) == 1 and (args[0].get("Name") or {}).get("Value") == "GH_REPO":
+                line = statement["Pos"]["Line"] - 1
+                self.export_statements.add(line)
+                if here and not dead and not statement.get("Negated") and not statement.get("Background") \
+                        and not statement.get("Coprocess") and args[0].get("Value") and not args[0].get("Naked"):
+                    self.export_lines.add(line)
+        here = here and not statement.get("Background") and not statement.get("Coprocess")
+        for key, value in statement.items():
+            if key in ("Pos", "End") or not isinstance(value, (dict, list)):
+                continue
+            self._walk_child(value, chain, key, dead, here)
+
+    def _if(self, clause, chain, dead, here):
+        """An if or an elif: its then branch is dead when its condition never holds; a plain else when that condition always does."""
+        condition = condition_text(self.text, clause.get("Cond") or [])
+        for key, value in clause.items():
+            if key in ("Pos", "End", "Else") or not isinstance(value, (dict, list)):
+                continue
+            if key == "Cond":
+                self._walk_child(value, chain, key, dead, False)
+            elif key == "Then":
+                self._walk_child(value, chain, key, dead or NEVER.match(condition) is not None, here)
             else:
-                kind = "expansion" if before and before in "<>" else "subshell"
-            parentheses.append(kind)
-            command = kind != "skipped"
-            position += 1
-        elif char == ")":
-            command = (parentheses.pop() if parentheses else "subshell") == "subshell"
-            position += 1
-        elif char in ";&|":
-            command = command if in_test else True
-            position += 1
-        elif char in "<>":
-            command = False
-            position += 1
-        else:
-            start = position
-            while position < len(line) and line[position] not in WORD_END:
-                if line[position] == "\\":
-                    position += 2
-                elif line[position] in "'\"":
-                    position = quoted_end(line, position)
-                elif line.startswith("${", position):
-                    end = line.find("}", position)
-                    position = len(line) if end < 0 else end + 1
-                else:
-                    position += 1
-            word = line[start:position]
-            if command and word in names:
-                found.append(word)
-                if where is not None:
-                    where.append(start)
-            if command and word == "[[":
-                in_test = True
-            elif word == "]]":
-                in_test = False
-            command = command and word in BEFORE_COMMAND
-    return found, command
+                self._walk_child(value, chain, key, dead, here)
+        branch = clause.get("Else")
+        if not branch:
+            return
+        inner = chain + [(branch, "Else")]
+        if branch.get("Cond"):
+            self._if(branch, inner, dead, here)
+            return
+        for key, value in branch.items():
+            if key in ("Pos", "End") or not isinstance(value, (dict, list)):
+                continue
+            self._walk_child(value, inner, key, dead or (key == "Then" and ALWAYS.match(condition) is not None), here)
+
+    def _heredoc(self, redirect, chain):
+        body = redirect["Hdoc"]
+        start, last = span(body)
+        # The body ends where the delimiter's line starts; that line closes it and runs nothing.
+        end = max(start, self.text.rfind("\n", start, last) + 1) if last > start else start
+        never_runs = {"data": True, "quoted": True, "substitutions": []}
+        if last > end:
+            self.heredocs.append((end, last, never_runs))
+        # The delimiter word after << runs nothing either.
+        self.heredocs.append((*span(redirect["Word"]), never_runs))
+        delimiter = self.text[slice(*span(redirect["Word"]))]
+        quoted = any(char in delimiter for char in "'\"\\")
+        # The statement the redirection belongs to is the last statement in the chain.
+        statement_index = max(index for index, (node, _) in enumerate(chain) if "Cmd" in node)
+        statement = chain[statement_index][0]
+        data = data_statement(statement) and output_is_data(chain[:statement_index + 1])
+        substitutions = []
+        if not quoted:
+            self._substitutions(body, substitutions)
+        self.heredocs.append((start, end, {"data": data, "quoted": quoted, "substitutions": substitutions}))
+
+    def _substitutions(self, node, found):
+        if isinstance(node, list):
+            for item in node:
+                self._substitutions(item, found)
+        elif isinstance(node, dict) and not is_position(node):
+            if node.get("Type") in ("CmdSubst", "ProcSubst"):
+                found.append(span(node))
+            for value in node.values():
+                if isinstance(value, (dict, list)):
+                    self._substitutions(value, found)
 
 
-def split_condition(text):
-    """text cut at its real then (a then where a command starts, never an argument: echo then), without the ; before it, and whether it has one."""
-    where = []
-    keywords(text, True, ("then",), where)
-    if where:
-        return text[:where[0]].strip(" \t").removesuffix(";").strip(" \t"), True
-    return text.strip(" \t").removesuffix(";").strip(" \t"), False
+def innermost(spans, position):
+    """The smallest [start, end) of spans that holds position, or None (for the few substitutions of one heredoc)."""
+    best = None
+    for start, end in spans:
+        if start <= position < end and (best is None or end - start < best[1] - best[0]):
+            best = (start, end)
+    return best
 
 
-def without_comment(line):
-    """line up to its comment."""
-    start = comment_start(line)
-    return line if start < 0 else line[:start]
+class Index:
+    """The innermost span around each of the given positions, found in one pass over both, sorted: the syntax tree's spans nest."""
+
+    def __init__(self, spans, positions):
+        self.found = {}
+        spans = sorted(spans, key=lambda item: (item[0], -item[1]))
+        stack = []
+        index = 0
+        for position in sorted(set(positions)):
+            while index < len(spans) and spans[index][0] <= position:
+                while stack and stack[-1][1] <= spans[index][0]:
+                    stack.pop()
+                stack.append(spans[index])
+                index += 1
+            while stack and stack[-1][1] <= position:
+                stack.pop()
+            self.found[position] = stack[-1] if stack else None
+
+    def around(self, position):
+        return self.found[position]
 
 
-def condition_text(text):
-    """text up to its comment, without a backslash that joins the next line to it."""
-    text = without_comment(text)
-    return text[:-1] if (len(text) - len(text.rstrip("\\"))) % 2 else text
+def untold_text(path, lines, exported_lines, judge_code):
+    """The refusals of path's lines, given a judge for each gh match in code that returns None to skip it, True when told."""
+    found = []
+    for number, line in enumerate(lines, 1):
+        if OPT_OUT.search(line):
+            continue
+        exported = exported_lines[number - 1]
+        if any(judge_code(number, match, exported) is False for match in GH.finditer(line)):
+            found.append(f"{for_log(str(path))}:{number}: {shown(line)}")
+    return found
 
 
-# How many lines a condition may go on over before its if is read as one that may run: a bound on the work a file with an if and no then costs.
-PENDING_LIMIT = 20
-UNKNOWN = (True, False, None)
-
-
-def judged(condition):
-    """The [runs, always, pending] of a branch whose whole condition is known."""
-    condition = condition.strip()
-    return [NEVER.match(condition) is None, ALWAYS.match(condition) is not None, None]
-
-
-def opened(line, start):
-    """The branch of the if keyword that starts at line[start]: judged now when its condition ends in a then on this line,
-    pending (the condition so far, in a list) when the condition goes on, and one that may run when the if doesn't start the line."""
-    if line[:start].strip(" \t"):
-        return list(UNKNOWN)
-    condition, ended = split_condition(condition_text(line[start + 2:]))
-    return judged(condition) if ended else [True, False, [condition]]
-
-
-def track_branches(line, branches, command=True):
-    """Keep branches, one [runs, always, pending] per open if, up to date for this line, and return whether the line ends where a command may start.
-
-    runs is False while the branch being read can't run. Only a condition that is plainly false (or plainly true,
-    for its else) is judged, and only on an if that starts its line; any other branch may run. A condition that
-    goes on past its line is pending (the lines so far, in a list) and is judged at its real then, from all its
-    lines; one that has no then within PENDING_LIMIT lines may run. Keywords
-    count in source order, so a fi closes the block it ends before an if later on the line opens the next, and an
-    else flips the branch whether it starts the line or follows a ;. A quoted or commented keyword is not one, and
-    neither is a keyword where no command starts, such as the line after `echo x \\`: command says whether the line
-    starts one. A line inside a multi-line string or a non-data heredoc body that looks like a fi or an else can
-    misjudge a branch, either way: it can pop a branch that never runs, so an export in it counts again, as it did
-    before branches were tracked, or flip one.
-    """
-    if branches and branches[-1][2] is not None:
-        part, ended = split_condition(condition_text(line))
-        branches[-1][2].append(part)
-        if ended:
-            branches[-1] = judged("\n".join(branches[-1][2]))
-        elif len(branches[-1][2]) > PENDING_LIMIT:
-            branches[-1] = list(UNKNOWN)
-    where = []
-    found, command = keywords(line, command, where=where)
-    for index, word in enumerate(found):
-        if word == "if":
-            # Only the first keyword of a line can be an if that starts it.
-            branches.append(opened(line, where[index]) if index == 0 else list(UNKNOWN))
-        elif word == "fi":
-            if branches:
-                branches.pop()
-        elif branches:
-            branches[-1] = [not branches[-1][1], branches[-1][1], None] if word == "else" else list(UNKNOWN)
-    return command
-
-
-def comment_start(line):
-    """The index of the # that starts a comment in line, a # that begins a word outside quotes and ${...}, or -1.
-
-    A space, tab or ; & | ( ) < > before the # ends the word only when no backslash escapes it (foo\\ # is one word).
-    A ${ that never closes holds the rest of the line.
-    """
-    position = 0
-    boundary = True
-    while position < len(line):
-        char = line[position]
-        if char == "\\":
-            position += 2
-            boundary = False
-        elif char in "'\"":
-            position = quoted_end(line, position)
-            boundary = False
-        elif line.startswith("${", position):
-            end = line.find("}", position)
-            position = len(line) if end < 0 else end + 1
-            boundary = False
-        elif char == "#" and boundary:
-            return position
-        else:
-            boundary = char in " \t;&|()<>"
-            position += 1
-    return -1
-
-
-def continues(line):
-    """True when line ends in an odd number of backslashes outside a comment, so bash joins the next line to it."""
-    return (len(line) - len(line.rstrip("\\"))) % 2 == 1 and comment_start(line) < 0
+def clears(line):
+    """Whether a line ends an export: an unset of GH_REPO, or a GH_REPO= that is no told prefix of a gh command."""
+    return UNSET.search(line) is not None or any(
+        not PREFIX_OF_GH.match(line, assignment.start()) for assignment in ASSIGNMENT.finditer(line))
 
 
 def untold(path):
-    """Each line of path with a gh command not told its repository, as file:line: text."""
+    """Each line of path with a gh command not told its repository, as file:line: text.
+
+    The lines shfmt parses (all of them, for a script that is valid bash) are judged on the syntax tree. The lines from a syntax
+    error on are judged as text, each one as code: bash stops at the error, but which lines would run is unknown, so a gh there
+    is still judged, with the export the parsed lines left and no export of their own.
+    """
     lines = read_lines(path)
-    joins = joined_lines(lines)
-    found = []
+    tree, count = parse_prefix(lines)
+    text = "\n".join(lines[:count])
+    shape = Shape(text, tree) if tree is not None else Shape(text, {})
+    starts = [0]
+    for line in lines[:-1]:
+        starts.append(starts[-1] + len(line) + 1)
+    # The positions asked about: the first character of each line, and each gh.
+    firsts = [starts[number] + len(line) - len(line.lstrip(" \t")) for number, line in enumerate(lines)]
+    positions = firsts + [starts[number] + match.start() for number, line in enumerate(lines) for match in GH.finditer(line)]
+    comments = Index(shape.comments, positions)
+    commands = Index(shape.commands, positions)
+    statements = Index(shape.statements, positions)
+    heredoc_index = Index([(start, end) for start, end, _ in shape.heredocs], positions)
+    by_span = {(start, end): heredoc for start, end, heredoc in shape.heredocs}
+
+    def where(number, position):
+        """'comment', 'data' (never runs), 'text' (a heredoc body some program reads, or a line after a syntax error), or 'code'."""
+        if number >= count:
+            return "comment" if re.match(r"[ \t]*#", lines[number]) else "text"
+        if comments.around(position):
+            return "comment"
+        body = heredoc_index.around(position)
+        if body is None:
+            return "code"
+        heredoc = by_span[body]
+        if heredoc["data"]:
+            if heredoc["quoted"] or innermost(heredoc["substitutions"], position) is None:
+                return "data"
+            return "code"
+        return "text"
+
+    # The export state each line is judged with: an export alone on its line that runs in the script's own shell,
+    # in a branch that can run, tells the lines after it; an unset or another GH_REPO= in code ends it.
+    exported_lines = []
     exported = False
-    bodies = []
-    # Whether a chain read so far holds a line that can't be judged (joined_lines None): a heredoc header after it may be hidden, so no export from the chain on, to the end of the file, is trusted.
-    distrust = False
-    # The first line of the bodies, the last line of the command that opens them, and a substitution a body leaves open.
-    body_start = header_end = 0
-    pending = None
-    branches = []
-    last = None
-    # Whether the line being read starts a command: not the line after one that bash joins to it (joined_lines is True); the line after an unjudged line (None) keeps what track_branches returned.
-    starts_command = True
-    for number, line in enumerate(lines, 1):
-        if bodies and number >= body_start:
-            delimiter, tabs, quoted = bodies[0]
-            if (line.lstrip("\t") if tabs else line) == delimiter:
-                bodies.pop(0)
-                pending = None
-                # The line that closes a body joins nothing, even when a quoted delimiter ends in a backslash.
-                joins[number - 1] = False
-            else:
-                codes, pending = substitutions(line, pending) if not quoted else ([], None)
-                if not OPT_OUT.search(line) and any(
-                        not told(code[:match.start()], code[match.end():], exported)
-                        for code in codes for match in GH.finditer(code)):
-                    found.append(f"{for_log(str(path))}:{number}: {shown(line)}")
+    for number, line in enumerate(lines):
+        place = where(number, firsts[number]) if line.strip(" \t") else "comment"
+        if place in ("comment", "data"):
+            exported_lines.append(exported)
             continue
-        if re.match(r"[ \t]*#", line):
-            starts_command = True
-            continue
-        if not bodies and number > header_end:
-            header, count = logical_line(lines, number)
-            header_end = number + count - 1
-            distrust = distrust or None in joins[number - 1:header_end - 1]
-            body_start = header_end + 1
-            if last is None and "<<" in header:
-                last = last_lines(lines)
-            bodies = data_heredocs(header, lines, header_end, last)
-        starts_here = starts_command
-        starts_command = track_branches(line, branches, starts_command) or joins[number - 1] is False
-        # An export counts only when its line starts a command: one that continues an earlier line is that command's argument.
-        if starts_here and EXPORTS.match(line):
-            # An export in a branch that never runs leaves GH_REPO unset.
-            exported = exported or (not distrust and all(runs for runs, _, _ in branches))
-        elif UNSET.search(line) or any(
-                not PREFIX_OF_GH.match(line, assignment.start()) for assignment in ASSIGNMENT.finditer(line)):
+        if number < count and number in shape.export_statements and EXPORTS.match(line):
+            # An export in a branch that never runs, or in a subshell, leaves GH_REPO as it was.
+            exported = exported or number in shape.export_lines
+        elif clears(line):
             exported = False
-        if OPT_OUT.search(line):
-            continue
-        earlier, truncated = continued_text(lines, number, joins)
-        if any(not told(line[:match.start()], line[match.end():], exported, earlier, truncated) for match in GH.finditer(line)):
-            found.append(f"{for_log(str(path))}:{number}: {shown(line)}")
-    return found
+        exported_lines.append(exported)
+
+    def judge(number, match, exported):
+        position = starts[number - 1] + match.start()
+        line = lines[number - 1]
+        place = where(number - 1, position)
+        if place in ("comment", "data"):
+            return None
+        after = line[match.end():]
+        if place == "text":
+            return told(line[:match.start()], after, exported)
+        around = commands.around(position) or statements.around(position)
+        start = around[0] if around else starts[number - 1]
+        before = re.sub(r"\\\n", "", text[start:position])
+        return told(before, after, exported)
+
+    return untold_text(path, lines, exported_lines, judge)
 
 
 # Repo-relative paths --repo skips (the Owned Baseline files); a trailing / is a folder.
@@ -1062,6 +941,14 @@ HINT = ("check_gh_repo.py: export GH_REPO before the first gh command in a scrip
 
 
 def main(argv):
+    try:
+        return run(argv)
+    except ShfmtError as error:
+        print(f"check_gh_repo.py: {error}", file=sys.stderr)
+        return 2
+
+
+def run(argv):
     if argv[:1] == ["--repo"]:
         if len(argv) != 2 or argv[1] == "--repo":
             print("usage: check_gh_repo.py --repo <root> | <dir>...", file=sys.stderr)

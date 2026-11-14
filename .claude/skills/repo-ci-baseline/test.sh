@@ -54,7 +54,7 @@ if [[ -n "$shard" ]] && ((known == 0)); then
 fi
 in_shard() { [[ -z "$shard" || "$shard" == "$1" ]]; }
 
-for tool in actionlint zizmor yamllint shellcheck markdownlint-cli2 git; do need "$tool"; done
+for tool in actionlint zizmor yamllint shellcheck shfmt markdownlint-cli2 git; do need "$tool"; done
 
 # pytest is used in the scripts and checks shards, so it's chosen before either runs, and only when one of them does.
 if in_shard scripts || in_shard checks; then

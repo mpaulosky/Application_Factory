@@ -129,7 +129,9 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
   everything it checks, CI checks too.
   After the lints it runs `python3 -I .github/scripts/check_gh_repo.py --repo`, which refuses a `gh` command in the
   repo's own `scripts/`, `.github/ci/` and skills that isn't told its repository (not the Owned Baseline files;
-  [gotchas.md](gotchas.md)). Then it checks that the branch's diff passed the local review (`scripts/review.sh check`, [pre-push-review.md](pre-push-review.md)) in a repo that
+  [gotchas.md](gotchas.md)). It reads each script with shfmt v3, which must be installed: without it the check fails
+  ([ADR 0011](../docs/adr/0011-the-gh-repo-check-parses-shell-with-shfmt.md)).
+  Then it checks that the branch's diff passed the local review (`scripts/review.sh check`, [pre-push-review.md](pre-push-review.md)) in a repo that
   has `.sandcastle/lib/review-ledger.mts`; `GATE_SKIP_REVIEW=1` skips that for gate runs you start yourself (the hook drops the variable, so a push never
   skips it; it drops `GATE_SKIP_SELF_TEST` too, the switch of a gate that tests itself, and `GATE_PART`, which makes a gate run one part of itself), and it is the one check CI doesn't repeat.
   Then it runs `bash scripts/sync-copilot-review.sh --check` when the repo has the script: the Copilot review instructions must match the

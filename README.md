@@ -45,7 +45,7 @@ runs `scripts/gate.sh`; to run the tests by hand:
 .claude/skills/repo-ci-baseline/test.sh
 ```
 
-It needs `actionlint`, `zizmor`, `yamllint`, `shellcheck`, `markdownlint-cli2`, `node` and `git`. [`CLAUDE.md`](CLAUDE.md) has the layout, the commands and the git workflow.
+It needs `actionlint`, `zizmor`, `yamllint`, `shellcheck`, `shfmt`, `markdownlint-cli2`, `node` and `git`. [`CLAUDE.md`](CLAUDE.md) has the layout, the commands and the git workflow.
 
 ## Status
 
