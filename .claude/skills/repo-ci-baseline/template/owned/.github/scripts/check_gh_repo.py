@@ -281,7 +281,7 @@ def comments_of(node, found):
 
 
 # How many times a script is parsed, at most, to read its comments that end in a backslash: the first parse, one with those
-# backslashes blanked, and one more for each blank put back because it turned out to be no comment's.
+# backslashes blanked, and one more for each blank put back, because a tree put it in no comment or because it broke the line after it.
 COMMENT_PASSES = 10
 
 
@@ -322,7 +322,8 @@ def parse(text):
     runs = backslash_runs(original)
     blanked = set()
     restored = set()
-    # The syntax error each blank put back for breaking the line after it was blamed for: the error, if it was a comment's after all.
+    # For each blank put back because it seemed to break the line after it, the syntax error it was blamed for. If a later tree puts
+    # that blank in a comment again, the blame was wrong: the error is a real one, and the statements before it count.
     broke = {}
     tree = error = None
     for _ in range(COMMENT_PASSES):
@@ -707,10 +708,11 @@ def clears(line):
         not PREFIX_OF_GH.match(line, assignment.start()) for assignment in ASSIGNMENT.finditer(line))
 
 
-# How many continued lines, and how many characters of them, before a gh after a syntax error are read for a wrapper; past
-# either, the export isn't trusted for that gh, which is told only by its own --repo or GH_REPO=.
+# How many characters of a gh's own command before it are read, joined lines included, and how many continued lines before it
+# after a syntax error: past either, the gh is refused. With the rest of its line read up to BEFORE_CHARS too, the text read for
+# one gh stays bounded however long the line or the command is.
+BEFORE_CHARS = 4096
 JOINED_LINES = 100
-JOINED_CHARS = 4096
 
 
 def read_shape(lines):
@@ -790,24 +792,23 @@ def untold(path):
         exported_lines.append(exported)
 
     # The lines a backslash joins to each line after the syntax error, which bash reads as one: a wrapper there drops the export.
-    # Past JOINED_LINES earlier lines, or JOINED_CHARS characters of them, the export isn't trusted for the gh, so the text read
-    # for one gh stays bounded; each line's earlier text is joined once, however many gh words the line holds.
     joined_from = list(range(len(lines)))
     for number in range(max(count, 1), len(lines)):
         if re.search(r"(?<!\\)(\\\\)*\\$", lines[number - 1]) and number - 1 >= count:
             joined_from[number] = joined_from[number - 1]
-    joined_text = {}
+    # The joined text of the line being judged, made once for all its gh words: (index, text).
+    joined = [None, None]
 
     def earlier_of(index):
-        """The text of the lines a backslash joins to line index, or None when it is more than the caps read."""
-        if index not in joined_text:
+        """The text of the lines a backslash joins to line index, or None when there are more than JOINED_LINES of them or it is
+        longer than BEFORE_CHARS (each joined line without the backslash that joins it)."""
+        if joined[0] != index:
             first = joined_from[index]
-            # Each joined line without the backslash that joins it.
-            if index - first > JOINED_LINES or sum(len(lines[other]) - 1 for other in range(first, index)) > JOINED_CHARS:
-                joined_text[index] = None
-            else:
-                joined_text[index] = "".join(lines[other][:-1] for other in range(first, index))
-        return joined_text[index]
+            text_of = None
+            if index - first <= JOINED_LINES and sum(len(lines[other]) - 1 for other in range(first, index)) <= BEFORE_CHARS:
+                text_of = "".join(lines[other][:-1] for other in range(first, index))
+            joined[:] = [index, text_of]
+        return joined[1]
 
     def judge(number, match, exported):
         position = starts[number - 1] + match.start()
@@ -815,14 +816,18 @@ def untold(path):
         place = where(number - 1, position)
         if place in ("comment", "data"):
             return None
-        after = line[match.end():]
+        # The rest of the line, read from its start only: at most BEFORE_CHARS of it, and a NUL (never in a line) when it goes
+        # on, so a pattern that needs the line's end doesn't match the cut.
+        after = line[match.end():match.end() + BEFORE_CHARS] + ("\0" if len(line) - match.end() > BEFORE_CHARS else "")
         if place == "text":
             earlier = earlier_of(number - 1)
-            if earlier is None:
-                return told(line[:match.start()], after, False)
+            if earlier is None or len(earlier) + match.start() > BEFORE_CHARS:
+                return False
             return told(line[:match.start()], after, exported and not wrapped(earlier + line[:match.start()]))
         around = commands.around(position) or statements.around(position)
         start = around[0] if around else starts[number - 1]
+        if position - start > BEFORE_CHARS:
+            return False
         before = re.sub(r"\\\n", "", text[start:position])
         return told(before, after, exported)
 

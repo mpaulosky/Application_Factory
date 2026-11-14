@@ -2817,27 +2817,65 @@ def test_untold_reads_at_most_joined_lines_continued_lines_before_a_gh_after_a_s
     assert lines_of(untold(tmp_path, "export GH_REPO=o/r\n(\n" + "echo \\\n" * joined + "gh pr view 1\n")) == refused
 
 
-def test_untold_still_reads_a_gh_s_own_prefix_past_joined_lines(tmp_path):
-    # Past the cap only the export goes untrusted: a GH_REPO= of the gh's own still tells it.
-    assert lines_of(untold(tmp_path, "(\n" + "echo \\\n" * 101 + "GH_REPO=o/r gh pr view 1\n")) == []
+@pytest.mark.parametrize("joined, refused", [
+    # Past JOINED_LINES the gh is refused, even one with a GH_REPO= of its own.
+    (100, []),
+    (101, [103]),
+])
+def test_untold_refuses_a_gh_after_more_than_joined_lines_continued_lines_whatever_tells_it(tmp_path, joined, refused):
+    assert lines_of(untold(tmp_path, "(\n" + "echo \\\n" * joined + "GH_REPO=o/r gh pr view 1\n")) == refused
 
 
 @pytest.mark.parametrize("length, refused", [
-    (4095, []),
-    (4096, []),
-    (4097, [4]),
+    (4095, [False, False, False]),
+    (4096, [False, False, False]),
+    (4097, [True, True, True]),
 ])
-def test_untold_reads_at_most_joined_chars_of_continued_lines_before_a_gh_after_a_syntax_error(tmp_path, length, refused):
-    assert check_gh_repo.JOINED_CHARS == 4096
-    assert lines_of(untold(tmp_path, "export GH_REPO=o/r\n(\n" + "x" * length + "\\\ngh pr view 1\n")) == refused
+def test_untold_reads_at_most_before_chars_of_a_gh_s_own_command_before_it(tmp_path, length, refused):
+    # The characters before the gh in its own command: on continued lines after a syntax error, on its own line after one, and
+    # in a command the tree reads. Past BEFORE_CHARS the gh is refused, though the export would tell it.
+    assert check_gh_repo.BEFORE_CHARS == 4096
+    texts = [
+        "export GH_REPO=o/r\n(\n" + "x" * length + "\\\ngh pr view 1\n",
+        "export GH_REPO=o/r\n(\n" + "x" * (length - 2) + "; gh pr view 1\n",
+        "export GH_REPO=o/r\nFOO=" + "x" * (length - 5) + " gh pr view 1\n",
+    ]
+    assert [bool(untold(tmp_path, text)) for text in texts] == refused
 
 
-def test_untold_reads_many_gh_words_after_long_continued_lines_in_bounded_time(tmp_path):
-    # 100 continued lines of 10,000 characters, then a line of 1,000 gh words: each gh reads no more than JOINED_CHARS of them.
+@pytest.mark.parametrize("text, refused", [
+    # One long line of gh words each told by the export, after a syntax error and in code: each reads at most BEFORE_CHARS.
+    ("export GH_REPO=o/r\n(\n" + "gh pr view 1; " * 20000 + "\n", [3]),
+    ("export GH_REPO=o/r\necho " + "gh " * 20000 + "\n", [2]),
+    # As many told commands on one line: each reads its own command and at most BEFORE_CHARS of the rest of the line.
+    ("export GH_REPO=o/r\n" + "gh pr view 1; " * 20000 + "\n", []),
+    # Continued lines before them, longer than BEFORE_CHARS.
+    ("export GH_REPO=o/r\n(\n" + ("y" * 10000 + "\\\n") * 100 + "GH_REPO=o/r gh pr view 1; " * 1000 + "\n", [103]),
+])
+def test_untold_reads_a_long_line_of_gh_words_in_bounded_time(tmp_path, text, refused):
     started = time.monotonic()
-    found = untold(tmp_path, "export GH_REPO=o/r\n(\n" + ("y" * 10000 + "\\\n") * 100 + "gh pr view 1; " * 1000 + "\n")
-    assert time.monotonic() - started < 10
-    assert lines_of(found) == [103]
+    found = untold(tmp_path, text)
+    assert time.monotonic() - started < 20
+    assert lines_of(found) == refused
+
+
+def test_untold_gives_told_at_most_before_chars_of_a_gh_s_line_on_each_side(tmp_path, monkeypatch):
+    # Every gh on a long line of told commands, in code and after a syntax error: what told reads of either side stays bounded.
+    real = check_gh_repo.told
+    longest = []
+
+    def spy(before, after, exported):
+        longest.append(max(len(before), len(after)))
+        return real(before, after, exported)
+    monkeypatch.setattr(check_gh_repo, "told", spy)
+    untold(tmp_path, "export GH_REPO=o/r\n" + "gh pr view 1; " * 2000 + "\n(\n" + "gh pr view 1; " * 2000 + "\n")
+    assert len(longest) > 2000 and max(longest) <= check_gh_repo.BEFORE_CHARS + 1
+
+
+def test_untold_reads_the_rest_of_a_gh_s_line_cut_at_before_chars_without_reading_the_cut_as_its_end(tmp_path):
+    # Cut at BEFORE_CHARS, the rest of the line would read as || alone, a lookup's; it goes on, so the gh is judged.
+    assert lines_of(untold(tmp_path, "command -v gh ||" + " " * 5000 + "x\n")) == [1]
+    assert lines_of(untold(tmp_path, "command -v gh ||\n")) == []
 
 
 def test_parse_reads_a_script_whose_blanks_keep_changing_as_one_that_isnt_valid_bash(monkeypatch):
@@ -2850,6 +2888,34 @@ def test_parse_reads_a_script_whose_blanks_keep_changing_as_one_that_isnt_valid_
         return {"Comments": [{"Hash": {"Offset": offset, "Line": 1, "Col": 1}, "Text": ""} for offset in next(trees)]}, None
     monkeypatch.setattr(check_gh_repo, "run_shfmt", fake)
     assert check_gh_repo.parse(text) == (None, 1)
+
+
+def fake_trees(monkeypatch, results):
+    """Has parse() read the given (comment offsets, error) results in turn instead of running shfmt."""
+    results = iter(results)
+
+    def fake(data):
+        offsets, error = next(results)
+        if error:
+            return None, error
+        return {"Comments": [{"Hash": {"Offset": offset, "Line": 1, "Col": 1}, "Text": ""} for offset in offsets]}, None
+    monkeypatch.setattr(check_gh_repo, "run_shfmt", fake)
+
+
+def test_parse_reads_a_script_whose_blanks_were_put_back_for_both_reasons_as_one_that_isnt_valid_bash(monkeypatch):
+    # Line 1's run is put back for being in no comment, line 3's for breaking line 4; a later tree puts both in comments.
+    text = "a # x \\\nb\nc # y \\\nd\n"
+    first, second = text.index("#"), text.rindex("#")
+    fake_trees(monkeypatch, [([first, second], None), ([second], None), ([], 4), ([first, second], None)])
+    assert check_gh_repo.parse(text) == (None, 1)
+
+
+def test_parse_reads_a_script_up_to_the_first_error_its_comment_blanks_were_blamed_for(monkeypatch):
+    # Both runs are put back for breaking the line after them, then a later tree puts both in comments: both errors are real.
+    text = "a # x \\\nb\nc # y \\\nd\n"
+    first, second = text.index("#"), text.rindex("#")
+    fake_trees(monkeypatch, [([first, second], None), ([], 4), ([], 2), ([first, second], None)])
+    assert check_gh_repo.parse(text) == (None, 2)
 
 
 @pytest.mark.parametrize("braces, refused", [
@@ -2973,6 +3039,8 @@ def fake_shfmt(tmp_path, body):
     ("echo v3.014.0\n", "found 'v3.014.0'"),
     # shfmt --version itself failing: its exit status and what it printed.
     ("echo broken >&2; exit 3\n", "shfmt --version failed with exit 3 ('broken')"),
+    ("echo broken >&2; exit 3\n", "it runs shfmt with only PATH set, so a version manager's shim (asdf, mise) that needs more fails here: "
+                                   "put the release binary on PATH"),
     # A v3.14 that fails to parse without a syntax error, and one that prints no JSON.
     ("[ \"$1\" = --version ] && { echo v3.14.1; exit 0; }; echo boom >&2; exit 1\n", "shfmt failed with exit 1: 'boom'"),
     ("[ \"$1\" = --version ] && { echo v3.14.1; exit 0; }; echo not json\n", "shfmt printed no syntax tree"),

@@ -258,14 +258,14 @@
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "if index - first > JOINED_LINES or",
-      "new": "if index - first > JOINED_LINES * 2 or",
+      "old": "if index - first <= JOINED_LINES and",
+      "new": "if index - first <= JOINED_LINES * 2 and",
       "why": "more continued lines than JOINED_LINES are read before a gh after a syntax error"
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "if index - first > JOINED_LINES or",
-      "new": "if index - first >= JOINED_LINES or",
+      "old": "if index - first <= JOINED_LINES and",
+      "new": "if index - first < JOINED_LINES and",
       "why": "JOINED_LINES continued lines are no longer read"
     },
     {
@@ -294,21 +294,57 @@
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "            if earlier is None:\n                return told(line[:match.start()], after, False)\n",
-      "new": "            if earlier is None:\n                return False\n",
-      "why": "past the caps a gh's own GH_REPO= no longer tells it"
+      "old": "for other in range(first, index)) <= BEFORE_CHARS:",
+      "new": "for other in range(first, index)) <= BEFORE_CHARS * 2:",
+      "why": "more than BEFORE_CHARS of continued lines are read before a gh after a syntax error"
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "for other in range(first, index)) > JOINED_CHARS:",
-      "new": "for other in range(first, index)) > JOINED_CHARS * 2:",
-      "why": "more characters than JOINED_CHARS are read before a gh after a syntax error"
+      "old": "if earlier is None or len(earlier) + match.start() > BEFORE_CHARS:",
+      "new": "if earlier is None or len(earlier) + match.start() > BEFORE_CHARS * 2:",
+      "why": "more than BEFORE_CHARS of a gh's line are read before it after a syntax error"
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "for other in range(first, index)) > JOINED_CHARS:",
-      "new": "for other in range(first, index)) >= JOINED_CHARS:",
-      "why": "JOINED_CHARS characters of continued lines are no longer read"
+      "old": "if earlier is None or len(earlier) + match.start() > BEFORE_CHARS:",
+      "new": "if earlier is None or len(earlier) + match.start() >= BEFORE_CHARS:",
+      "why": "BEFORE_CHARS characters before a gh after a syntax error are no longer read"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "if earlier is None or len(earlier) + match.start() > BEFORE_CHARS:\n                return False",
+      "new": "if earlier is None:\n                return False",
+      "why": "a gh's own line before it is read whole after a syntax error"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "        if position - start > BEFORE_CHARS:\n            return False\n",
+      "new": "",
+      "why": "a gh's command is read whole before it"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "        if position - start > BEFORE_CHARS:\n",
+      "new": "        if position - start >= BEFORE_CHARS:\n",
+      "why": "BEFORE_CHARS characters of a gh's command are no longer read"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "+ (\"\\0\" if len(line) - match.end() > BEFORE_CHARS else \"\")",
+      "new": "",
+      "why": "the cut rest of a gh's line reads as its end"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "after = line[match.end():match.end() + BEFORE_CHARS]",
+      "new": "after = line[match.end():]",
+      "why": "the rest of a gh's line is read whole for each gh"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "if all(run in broke for run in pending & restored):",
+      "new": "if any(run in broke for run in pending & restored):",
+      "why": "a blank put back for being in no comment is read as one put back for a break"
     }
   ]
 }
