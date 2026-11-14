@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,9 @@ CI = SKILL / "template" / "owned" / ".github" / "workflows" / "ci.yml"
 DOCKERFILE = SKILL / "template" / "seed" / ".sandcastle" / "Dockerfile"
 # The Factory's own action; it isn't part of the Template.
 ACTION = SKILL.parents[2] / ".github" / "actions" / "template-tools" / "action.yml"
+sys.path.insert(0, str(SKILL / "template" / "owned" / ".github" / "scripts"))
+import check_gh_repo  # noqa: E402
+
 # What a step runs to install shfmt.
 INSTALLS = "sudo install -m 0755 shfmt /usr/local/bin/shfmt"
 # What makes a job need shfmt: the checker itself, the gate that runs it, or the hook tests that run the gate.
@@ -134,3 +138,33 @@ def test_an_install_step_fails_and_installs_nothing_when_the_download_doesnt_mat
 @pytest.mark.parametrize("where", sorted(install_steps()))
 def test_an_install_step_retries_a_failed_download(where):
     assert re.search(r"curl [^\n]*--retry [1-9][^\n]*--retry-all-errors[^\n]* -o shfmt ", install_steps()[where]["run"])
+
+
+def test_sh_version_check():
+    """test.sh's shfmt version check, the two lines that start with [[ "$(shfmt --version)"."""
+    lines = (SKILL / "test.sh").read_text().splitlines()
+    first = next(index for index, line in enumerate(lines) if line.startswith('[[ "$(shfmt --version)" =~'))
+    return "\n".join(lines[first:first + 2]) + "\n"
+
+
+@pytest.mark.parametrize("version", [
+    "v3.13.9", "v3.14.0", "v3.14.1", "v3.20.0", "v3.99.0", "v3.100.0", "v2.6.4", "v4.0.0", "v3.14", "(devel)", "v3.014.0",
+])
+def test_test_sh_and_the_checker_accept_the_same_shfmt_releases(tmp_path, version):
+    # Arrange: a shfmt on PATH that prints the version, and the checker's own rule for it.
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    (stubs / "shfmt").write_text(f"#!/bin/sh\necho '{version}'\n")
+    (stubs / "shfmt").chmod(0o755)
+    found = check_gh_repo.SHFMT_RELEASE.fullmatch(version)
+    accepted = bool(found) and int(found.group(1)) >= check_gh_repo.SHFMT_OLDEST_MINOR
+
+    # Act
+    done = subprocess.run(["bash", "--noprofile", "--norc", "-c", test_sh_version_check()], capture_output=True, text=True,
+                          env={"PATH": f"{stubs}:{os.environ['PATH']}"})
+
+    # Assert: the same answer, and test.sh's refusal is exit 2 and names the release it found.
+    assert (done.returncode == 0) == accepted, (version, done.returncode)
+    if not accepted:
+        assert done.returncode == 2
+        assert f"shfmt v3.14 or a later v3 release is required, not '{version}'" in done.stderr

@@ -102,7 +102,7 @@
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "self.heredocs.append((*span(redirect[\"Word\"]), never_runs))",
+      "old": "self.heredocs.append((*span(redirect[\"Word\"]), {**never_runs, \"delimiter\": True}))",
       "new": "pass",
       "why": "a heredoc's delimiter word is read as code"
     },
@@ -150,8 +150,8 @@
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "data[start:end] = original[start:end]",
-      "new": "pass",
+      "old": "for start, end in wrong:\n                    data[start:end] = original[start:end]",
+      "new": "for start, end in wrong:\n                    pass",
       "why": "a backslash blanked after a # in a string is never put back"
     },
     {
@@ -210,7 +210,7 @@
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "return any(where(number, starts[number] + column) != \"code\" for column in markers[number])",
+      "old": "return any(marks(starts[number] + column) for column in markers[number])",
       "new": "return bool(markers[number])",
       "why": "a gh-repo: ok marker in a string opts its line out"
     },
@@ -243,6 +243,42 @@
       "old": "return node.get(\"Type\") is None and \"Position\" in node and \"FiPos\" not in node",
       "new": "return node.get(\"Type\") is None and \"Position\" in node",
       "why": "an elif or an else is read as a statement"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "breaking = [run for run in blanked if runs[run] == error - 1]",
+      "new": "breaking = []",
+      "why": "a blank that breaks the line after it is never put back"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": " and not (body and by_span[body].get(\"delimiter\"))",
+      "new": "",
+      "why": "a gh-repo: ok in a heredoc's delimiter word opts its line out"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "if number - 1 - first > JOINED_LINES:",
+      "new": "if number - 1 - first > JOINED_LINES * 2:",
+      "why": "more continued lines than JOINED_LINES are read before a gh after a syntax error"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "if number - 1 - first > JOINED_LINES:",
+      "new": "if number - 1 - first >= JOINED_LINES:",
+      "why": "JOINED_LINES continued lines are no longer read"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "if len(stripped) < len(line) and b\"#\" in stripped:",
+      "new": "if len(stripped) < len(line):",
+      "why": "a backslash on a line with no # is blanked too"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "SHFMT_RELEASE = re.compile(r\"v3\\.(0|[1-9][0-9]*)\\.[0-9]+\")",
+      "new": "SHFMT_RELEASE = re.compile(r\"v3\\.([0-9]+)\\.[0-9]+\")",
+      "why": "a minor version with a leading zero is accepted, which test.sh refuses"
     }
   ]
 }

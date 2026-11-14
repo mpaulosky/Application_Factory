@@ -2732,7 +2732,7 @@ def test_untold_reads_a_script_whose_comments_need_too_many_passes_as_one_that_i
     assert lines_of(untold(tmp_path, "export GH_REPO=o/r\ngh pr view 1\n")) == []
 
 
-# --- the first pre-push review of mpaulosky/Application_Factory#52 ---
+# --- mpaulosky/Application_Factory#52: edge cases of the tree-reading checker ---
 
 @pytest.mark.parametrize("text, refused", [
     # A valid script shfmt 3.14 doesn't parse at all, its fi joined onto a comment: the comment's backslash is blanked and it parses.
@@ -2762,6 +2762,42 @@ def test_untold_reads_a_comment_that_ends_in_a_backslash_wherever_shfmt_misreads
 def test_untold_parses_a_script_at_most_comment_passes_times_for_its_comments(tmp_path, monkeypatch, passes, text, refused):
     monkeypatch.setattr(check_gh_repo, "COMMENT_PASSES", passes)
     assert lines_of(untold(tmp_path, text)) == refused
+
+
+def test_comment_passes_is_ten():
+    assert check_gh_repo.COMMENT_PASSES == 10
+
+
+@pytest.mark.parametrize("text, refused", [
+    # A # in a string, then a real continuation onto a pipe: blanking it breaks the next line, so its backslash is put back.
+    ("# note \\\ngrep -v '^#' f \\\n  | sort\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("# note \\\ngrep -v '^#' f \\\n  && true\nexport GH_REPO=o/r\ngh pr view 1\n", []),
+    ("# note \\\ngrep -v '^#' f \\\n  | sort\ngh pr view 1\n", [4]),
+])
+def test_untold_puts_back_a_blank_that_breaks_the_line_after_it(tmp_path, text, refused):
+    assert lines_of(untold(tmp_path, text)) == refused
+
+
+@pytest.mark.parametrize("line", [b"#" * 200000, b"# " + b"\\" * 200000 + b"x", b"# " + b"\\" * 200000, b"x" * 200000 + b"#\\",
+                                  b"x" * 200000 + b"\\"])
+def test_backslash_runs_reads_a_long_line_in_one_pass(line):
+    started = time.monotonic()
+    runs = check_gh_repo.backslash_runs(b"a\n" + line + b"\nb\n")
+    assert time.monotonic() - started < 1
+    stripped = line.rstrip(b"\\")
+    # Only a line with a # before its trailing backslashes has a run.
+    assert runs == ({(2 + len(stripped), 2 + len(line)): 2} if len(stripped) < len(line) and b"#" in stripped else {})
+
+
+@pytest.mark.parametrize("joined, refused", [
+    # After a syntax error, the continued lines before a gh are read for a wrapper up to JOINED_LINES; past them it's refused.
+    (99, []),
+    (100, []),
+    (101, [104]),
+])
+def test_untold_reads_at_most_joined_lines_continued_lines_before_a_gh_after_a_syntax_error(tmp_path, joined, refused):
+    assert check_gh_repo.JOINED_LINES == 100
+    assert lines_of(untold(tmp_path, "export GH_REPO=o/r\n(\n" + "echo \\\n" * joined + "gh pr view 1\n")) == refused
 
 
 def test_parse_reads_a_script_whose_blanks_keep_changing_as_one_that_isnt_valid_bash(monkeypatch):
@@ -2868,6 +2904,8 @@ def test_untold_reads_a_chain_too_deep_to_walk_as_a_script_that_isnt_valid_bash(
     ("echo \"#\" gh # gh-repo: ok\n", []),
     # In text some program reads, and after a syntax error, a # starts a comment of its own.
     ("bash <<EOF\ncommand -v gh # gh-repo: ok\nEOF\n", []),
+    # A delimiter that reads like a marker is no comment on the gh's line.
+    ("gh pr merge 1 <<'# gh-repo: ok'\n# gh-repo: ok\n", [1]),
     ("(\ncommand -v gh # gh-repo: ok\n", []),
 ])
 def test_untold_honours_the_gh_repo_ok_marker_only_in_a_comment(tmp_path, text, refused):
@@ -2979,7 +3017,10 @@ def test_check_repo_asks_shfmt_its_version_once_and_runs_it_in_an_empty_folder_w
     assert [call[0] for call in calls] == ["--version", "-ln", "-ln"]
     folders = {call[1] for call in calls}
     assert len(folders) == 1 and not any(Path(folders.pop()).iterdir())
-    assert all("GH_TOKEN" not in call[2] and "PATH=" in call[2] for call in calls)
+    # Only PATH, and what sh sets for itself.
+    for call in calls:
+        names = {entry.split("=", 1)[0] for entry in call[2].split()}
+        assert "PATH" in names and names <= {"PATH", "PWD", "OLDPWD", "SHLVL", "_"}, names
 
 
 def test_is_statement_tells_a_statement_from_an_elif_or_an_else_and_an_if():

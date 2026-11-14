@@ -159,7 +159,7 @@ NEVER = re.compile(r"(false|! *true|\[ +0 +-ne +0 +\]|\[ +1 +-eq +0 +\])$")
 ALWAYS = re.compile(r"(true|:)$")
 # The shfmt that parses a script (repo-ci-baseline's ADR 0011): a v3 release from v3.14 on, whose syntax tree this checker reads.
 SHFMT = "shfmt"
-SHFMT_RELEASE = re.compile(r"v3\.([0-9]+)\.[0-9]+")
+SHFMT_RELEASE = re.compile(r"v3\.(0|[1-9][0-9]*)\.[0-9]+")
 SHFMT_OLDEST_MINOR = 14
 SHFMT_WANTED = "shfmt v3.14 or a later v3 release"
 # Where shfmt comes from, for the message when it's missing: the release binaries, or the developer's package manager.
@@ -233,7 +233,8 @@ def shfmt_version():
                          f"({SHFMT_INSTALL})") from error
     printed = for_log(result.stdout.strip() or result.stderr.strip())
     if result.returncode:
-        raise ShfmtError(f"shfmt --version failed with exit {result.returncode} ({printed!r}); check_gh_repo.py needs {SHFMT_WANTED}")
+        raise ShfmtError(f"shfmt --version failed with exit {result.returncode} ({printed!r}); check_gh_repo.py needs {SHFMT_WANTED}, "
+                         "run with only PATH set (a version manager's shim that needs more must give way to the release binary)")
     release = SHFMT_RELEASE.fullmatch(result.stdout.strip())
     if release is None or int(release.group(1)) < SHFMT_OLDEST_MINOR:
         raise ShfmtError(f"check_gh_repo.py needs {SHFMT_WANTED}, found {printed!r} ({SHFMT_INSTALL})")
@@ -279,14 +280,21 @@ def comments_of(node, found):
 
 
 # How many times a script is parsed, at most, to read its comments that end in a backslash: the first parse, one with those
-# backslashes blanked, and one more for each round of blanks that turned out to be no comment's.
+# backslashes blanked, and one more for each blank put back because it turned out to be no comment's.
 COMMENT_PASSES = 10
-CONTINUED_HASH = re.compile(rb"#[^\n]*?(\\+)$", re.MULTILINE)
 
 
 def backslash_runs(data):
-    """The [start, end) of the backslashes that end each line with a # on it: the lines a comment may end in a backslash on."""
-    return [match.span(1) for match in CONTINUED_HASH.finditer(data)]
+    """{(start, end): line} of the backslashes that end each line with a # on it (lines counted from 1): the lines a comment may
+    end in a backslash on. One pass over the lines, so a long line costs its length."""
+    runs = {}
+    offset = 0
+    for number, line in enumerate(data.split(b"\n"), 1):
+        stripped = line.rstrip(b"\\")
+        if len(stripped) < len(line) and b"#" in stripped:
+            runs[(offset + len(stripped), offset + len(line))] = number
+        offset += len(line) + 1
+    return runs
 
 
 def parse(text):
@@ -298,7 +306,9 @@ def parse(text):
     at the newline and runs the next line, so a valid script can even fail to parse. When the tree holds such a comment, or
     the script doesn't parse, the backslashes that end each line with a # on it are given to shfmt as blanks, which bash
     reads the same inside a comment, and the script is parsed again. A blank that the new tree puts in no comment (a #
-    in a string, then a real continuation) is put back, and the script parsed again, at most COMMENT_PASSES times in all.
+    in a string, then a real continuation) is put back, and so is a blank on the line right before a syntax error the blanks
+    brought (a real continuation, whose next line then starts with | or &&); the script is parsed again each time, at most
+    COMMENT_PASSES times in all.
     """
     shfmt_version()
     data = bytearray()
@@ -315,6 +325,14 @@ def parse(text):
     for _ in range(COMMENT_PASSES):
         tree, error = run_shfmt(bytes(data))
         if tree is None:
+            # A blank that was a real continuation breaks the line after it: put that one back, and parse again.
+            breaking = [run for run in blanked if runs[run] == error - 1]
+            if breaking:
+                for start, end in breaking:
+                    data[start:end] = original[start:end]
+                blanked -= set(breaking)
+                restored |= set(breaking)
+                continue
             fresh = [run for run in runs if run not in blanked and run not in restored]
             if not fresh:
                 return None, error
@@ -610,9 +628,9 @@ class Shape:
 
     def _heredoc(self, redirect, chain):
         never_runs = {"data": True, "quoted": True, "substitutions": []}
-        # The delimiter word after << runs nothing. (The line that closes an empty body is in no statement: untold reads it as
-        # one that runs nothing.)
-        self.heredocs.append((*span(redirect["Word"]), never_runs))
+        # The delimiter word after << runs nothing, and is no comment either: a gh-repo: ok in it marks nothing. (The line that
+        # closes an empty body is in no statement: untold reads it as one that runs nothing.)
+        self.heredocs.append((*span(redirect["Word"]), {**never_runs, "delimiter": True}))
         body = redirect.get("Hdoc")
         if not body:
             return
@@ -682,6 +700,10 @@ def clears(line):
         not PREFIX_OF_GH.match(line, assignment.start()) for assignment in ASSIGNMENT.finditer(line))
 
 
+# How many continued lines before a gh after a syntax error are read for a wrapper; past them the gh's export isn't trusted.
+JOINED_LINES = 100
+
+
 def read_shape(lines):
     """The Shape of the longest run of lines from the top that is valid bash, and how many lines it has (0 when none is).
 
@@ -717,7 +739,8 @@ def untold(path):
     firsts = [starts[number] + len(line) - len(line.lstrip(" \t")) for number, line in enumerate(lines)]
     markers = [[match.start() for match in OPT_OUT.finditer(line)] for line in lines]
     positions = firsts + [starts[number] + match.start() for number, line in enumerate(lines) for match in GH.finditer(line)]
-    positions += [starts[number] + column for number, columns in enumerate(markers) for column in columns]
+    number_of = {starts[number] + column: number for number, columns in enumerate(markers) for column in columns}
+    positions += list(number_of)
     comments = Index(shape.comments, positions)
     commands = Index(shape.commands, positions)
     statements = Index(shape.statements, positions)
@@ -758,6 +781,7 @@ def untold(path):
         exported_lines.append(exported)
 
     # The lines a backslash joins to each line after the syntax error, which bash reads as one: a wrapper there drops the export.
+    # Past JOINED_LINES earlier lines, the gh is judged as wrapped, so the text read for one gh stays bounded.
     joined_from = list(range(len(lines)))
     for number in range(max(count, 1), len(lines)):
         if re.search(r"(?<!\\)(\\\\)*\\$", lines[number - 1]) and number - 1 >= count:
@@ -771,16 +795,24 @@ def untold(path):
             return None
         after = line[match.end():]
         if place == "text":
-            earlier = "".join(lines[index][:-1] for index in range(joined_from[number - 1], number - 1))
+            first = joined_from[number - 1]
+            if number - 1 - first > JOINED_LINES:
+                return told(line[:match.start()], after, False)
+            earlier = "".join(lines[index][:-1] for index in range(first, number - 1))
             return told(line[:match.start()], after, exported and not wrapped(earlier + line[:match.start()]))
         around = commands.around(position) or statements.around(position)
         start = around[0] if around else starts[number - 1]
         before = re.sub(r"\\\n", "", text[start:position])
         return told(before, after, exported)
 
+    def marks(position):
+        """Whether a gh-repo: ok marker is no code: in code, one the syntax tree reads as a comment, and never a heredoc's delimiter."""
+        body = heredoc_index.around(position)
+        return where(number_of[position], position) != "code" and not (body and by_span[body].get("delimiter"))
+
     def opted_out(number):
-        """Whether the line holds a gh-repo: ok marker that is a comment: in code, one the syntax tree reads as a comment."""
-        return any(where(number, starts[number] + column) != "code" for column in markers[number])
+        """Whether the line holds a gh-repo: ok marker that marks it."""
+        return any(marks(starts[number] + column) for column in markers[number])
 
     found = []
     for number, line in enumerate(lines, 1):
