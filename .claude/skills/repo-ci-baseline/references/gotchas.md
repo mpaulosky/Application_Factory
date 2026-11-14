@@ -139,8 +139,9 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     A script that isn't valid bash is read up to its syntax error, since bash runs the statements before it and stops there: those statements are judged on the tree
     and their export counts. The lines from the error on are judged one at a time as code, with the export the statements before left, and no export of their own;
     a wrapper on an earlier line that a backslash joins to the `gh`'s (`sudo \`) drops that export. A `gh` with more than 4096 characters before it in its own
-    command (`BEFORE_CHARS`), joined lines included, or more than 100 continued lines before it after a syntax error (`JOINED_LINES`), is refused whatever tells
-    it, so the text read for one `gh` stays bounded: split such a command. The checker parses at most five times looking for those
+    command (`BEFORE_CHARS`; joined lines included, without the backslash and newline that join them) or after it on its line, or more than 100 continued lines
+    before it after a syntax error (`JOINED_LINES`), is refused whatever tells it,
+    so the text read for one `gh` stays bounded: split such a command or line. The checker parses at most five times looking for those
     statements (`PREFIX_TRIES`), the whole script first.
     One statement nested deeper than the checker's tree walk goes (a chain of about 190 `&&`, `||` or `|` links) is read the same way from the script's first line:
     no export in the file is trusted.
