@@ -2744,9 +2744,12 @@ def test_untold_reads_a_script_whose_comments_need_too_many_passes_as_one_that_i
     # A script that isn't valid bash, with a comment ending in a backslash before its syntax error: what comes before it counts.
     ("export GH_REPO=o/r # c \\\ngh pr view 1\n(\ngh pr view 2\n", []),
     ("# c \\\nexport GH_REPO=o/r\n(\ngh pr view 1\n", []),
-    # A comment that ends in a backslash right before a real syntax error: blanking it brings the error, and it is still a comment's.
+    # A comment that ends in a backslash right before a real syntax error: alone on its line shfmt finds the error at once, after
+    # a command shfmt joins the error onto the comment, blanking it brings the error back, and the run is still a comment's.
     ("export GH_REPO=o/r\n# see \\\nfi\ngh pr view 1\n", []),
     ("# see \\\nfi\ngh pr view 1\n", [3]),
+    ("export GH_REPO=o/r\necho a # see \\\nfi\ngh pr view 1\n", []),
+    ("echo a # see \\\nfi\ngh pr view 1\n", [3]),
 ])
 def test_untold_reads_a_comment_that_ends_in_a_backslash_wherever_shfmt_misreads_it(tmp_path, text, refused):
     assert lines_of(untold(tmp_path, text)) == refused
