@@ -801,7 +801,8 @@ def untold(path):
 
     def earlier_of(index):
         """The text of the lines a backslash joins to line index, or None when there are more than JOINED_LINES of them or it is
-        longer than BEFORE_CHARS (each joined line without the backslash that joins it)."""
+        longer than BEFORE_CHARS (each joined line without the backslash that joins it). judge() checks BEFORE_CHARS again with
+        the gh's own line; this check only keeps the joined text it builds small."""
         if joined[0] != index:
             first = joined_from[index]
             text_of = None

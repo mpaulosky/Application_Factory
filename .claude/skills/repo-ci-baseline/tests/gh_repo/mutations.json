@@ -294,12 +294,6 @@
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "for other in range(first, index)) <= BEFORE_CHARS:",
-      "new": "for other in range(first, index)) <= BEFORE_CHARS * 2:",
-      "why": "more than BEFORE_CHARS of continued lines are read before a gh after a syntax error"
-    },
-    {
-      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
       "old": "if earlier is None or len(earlier) + match.start() > BEFORE_CHARS:",
       "new": "if earlier is None or len(earlier) + match.start() > BEFORE_CHARS * 2:",
       "why": "more than BEFORE_CHARS of a gh's line are read before it after a syntax error"
