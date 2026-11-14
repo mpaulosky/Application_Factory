@@ -141,7 +141,9 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     a wrapper on an earlier line that a backslash joins to the `gh`'s (`sudo \`) drops that export. A `gh` with more than 4096 characters before it in its own
     command (`BEFORE_CHARS`; joined lines included, without the backslash and newline that join them) or after it on its line, or more than 100 continued lines
     before it after a syntax error (`JOINED_LINES`), is refused whatever tells it,
-    so the text read for one `gh` stays bounded: split such a command or line. The checker parses at most five times looking for those
+    so the text read for one `gh` stays bounded: split such a command or line. So is one whose command is more than 8192 characters long before it,
+    continuations included. Within that bound a crafted command (hundreds of `env` or `NAME=value` words before many `gh` words) still takes the old
+    checker's rules seconds. The checker parses at most five times looking for those
     statements (`PREFIX_TRIES`), the whole script first.
     One statement nested deeper than the checker's tree walk goes (a chain of about 190 `&&`, `||` or `|` links) is read the same way from the script's first line:
     no export in the file is trusted.

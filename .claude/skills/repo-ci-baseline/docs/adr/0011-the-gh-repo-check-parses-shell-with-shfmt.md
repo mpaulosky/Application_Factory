@@ -46,8 +46,9 @@ Sandcastle's sandbox, which runs the gate.
   most five times to find the statements before the error, the whole script first (`PREFIX_TRIES`).
 - **The text read for one `gh` is bounded:** a `gh` with more than 4096 characters before it in its own command (`BEFORE_CHARS`; joined lines
   included, without the backslash and newline that join them) or after it on its line, or with more than 100 continued lines before it after a syntax
-  error (`JOINED_LINES`), is refused, whatever tells it. The rules that judge a `gh` within that bound (a wrapper, an `env`, a run of assignments) are the
-  old checker's, and so is the time they take on a crafted command: a known limit, which only slows the check of the file that holds it.
+  error (`JOINED_LINES`), is refused, whatever tells it; so is one whose command is more than twice that long before it, continuations included. The rules
+  that judge a `gh` within that bound (a wrapper, an `env`, a run of assignments) are the old checker's, and so is the time they take on a crafted command:
+  a known limit, which slows the `gh-repo` check of the branch that holds it.
 - **A statement nested deeper than Python's recursion limit lets the checker walk** (a chain of about 190 `&&`, `||` or `|` links) is read the same way, from
   the script's first line: no export in the file is trusted. That is a limit, documented in `references/gotchas.md`, and it fails closed.
 - **One known difference from bash is worked around:** shfmt v3.14 joins the line after a comment that ends in a backslash onto the comment, where bash ends the comment
