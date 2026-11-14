@@ -825,7 +825,7 @@ def test_check_repo_starts_no_process_but_shfmt(tmp_path, monkeypatch):
 
     def popen(argv, *args, **kwargs):
         # Every process subprocess starts goes through Popen.
-        started.append(argv[0])
+        started.append(tuple(argv))
         return real_popen(argv, *args, **kwargs)
 
     def refuse(*args, **kwargs):
@@ -833,13 +833,15 @@ def test_check_repo_starts_no_process_but_shfmt(tmp_path, monkeypatch):
 
     monkeypatch.setattr(subprocess, "Popen", popen)
     monkeypatch.setattr(os, "system", refuse)
+    monkeypatch.setattr(check_gh_repo, "_checked_shfmt", [])
 
     # Act
     found = check_gh_repo.check_repo(tmp_path)
 
     # Assert
     assert len(found) == 2
-    assert started and set(started) == {"shfmt"}
+    # Only its version, once, and its read-only JSON parse of standard input, never a mode that writes a file (shfmt -w).
+    assert started == [("shfmt", "--version"), ("shfmt", "-ln", "bash", "--to-json")]
 
 
 def test_check_repo_passes_a_repo_of_200_small_files(tmp_path):
@@ -2978,3 +2980,15 @@ def test_check_repo_asks_shfmt_its_version_once_and_runs_it_in_an_empty_folder_w
     folders = {call[1] for call in calls}
     assert len(folders) == 1 and not any(Path(folders.pop()).iterdir())
     assert all("GH_TOKEN" not in call[2] and "PATH=" in call[2] for call in calls)
+
+
+def test_is_statement_tells_a_statement_from_an_elif_or_an_else_and_an_if():
+    # Every one of them has a Position in shfmt's tree; only a Stmt, with a command or redirections alone, is a statement.
+    tree, _ = check_gh_repo.parse("if a; then\n  b\nelif c; then\n  d\nelse\n  e\nfi\n> out\n")
+    clause = tree["Stmts"][0]["Cmd"]
+    elif_branch = clause["Else"]
+    assert check_gh_repo.is_statement(tree["Stmts"][0])
+    assert check_gh_repo.is_statement(tree["Stmts"][1])
+    assert not check_gh_repo.is_statement(clause)
+    assert not check_gh_repo.is_statement(elif_branch)
+    assert not check_gh_repo.is_statement(elif_branch["Else"])

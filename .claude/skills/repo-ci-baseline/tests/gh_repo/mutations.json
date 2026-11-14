@@ -72,8 +72,8 @@
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "data = bool(found) and data_statement(statement) and output_is_data(chain[:found[-1] + 1])",
-      "new": "data = bool(found) and data_statement(statement)",
+      "old": "data = data_statement(statement) and output_is_data(chain[:statement_index + 1])",
+      "new": "data = data_statement(statement)",
       "why": "a heredoc whose data command's output reaches a shell is data"
     },
     {
@@ -243,12 +243,6 @@
       "old": "return node.get(\"Type\") is None and \"Position\" in node and \"FiPos\" not in node",
       "new": "return node.get(\"Type\") is None and \"Position\" in node",
       "why": "an elif or an else is read as a statement"
-    },
-    {
-      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "statement = chain[found[-1]][0] if found else {}",
-      "new": "statement = chain[found[-1]][0]",
-      "why": "a heredoc on a statement with no command crashes the checker"
     }
   ]
 }

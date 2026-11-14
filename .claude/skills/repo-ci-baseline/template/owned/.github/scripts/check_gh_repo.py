@@ -623,11 +623,11 @@ class Shape:
             self.heredocs.append((end, last, never_runs))
         delimiter = self.text[slice(*span(redirect["Word"]))]
         quoted = any(char in delimiter for char in "'\"\\")
-        # The statement the redirection belongs to is the last statement in the chain. One with no command (<<EOF alone)
-        # is no data command, so its body is read as text some program may run.
-        found = [index for index, (node, _) in enumerate(chain) if is_statement(node)]
-        statement = chain[found[-1]][0] if found else {}
-        data = bool(found) and data_statement(statement) and output_is_data(chain[:found[-1] + 1])
+        # The statement the redirection belongs to is the last statement in the chain: every redirection is a statement's,
+        # even one with no command (<<EOF alone), which is no data command, so its body is read as text some program may run.
+        statement_index = max(index for index, (node, _) in enumerate(chain) if is_statement(node))
+        statement = chain[statement_index][0]
+        data = data_statement(statement) and output_is_data(chain[:statement_index + 1])
         substitutions = []
         if not quoted:
             self._substitutions(body, substitutions)
