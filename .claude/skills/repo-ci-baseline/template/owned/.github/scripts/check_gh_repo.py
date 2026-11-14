@@ -709,8 +709,9 @@ def clears(line):
 
 
 # How many characters of a gh's own command before it are read (joined lines included, without the backslash and newline that
-# join them), and of the rest of its line after it, and how many continued lines before it after a syntax error: past any of
-# them, the gh is refused, so the text read for one gh stays bounded however long the line or the command is.
+# join them), and of the rest of its line after it, and how many continued lines before it after a syntax error, and, in a
+# command the tree reads, twice BEFORE_CHARS of its command before it with the continuations: past any of them, the gh is
+# refused, so the text read for one gh stays bounded however long the line or the command is.
 BEFORE_CHARS = 4096
 JOINED_LINES = 100
 

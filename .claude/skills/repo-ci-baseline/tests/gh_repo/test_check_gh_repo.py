@@ -2848,26 +2848,31 @@ def test_untold_reads_at_most_before_chars_of_a_gh_s_own_command_before_it(tmp_p
     ("export GH_REPO=o/r\n(\n" + "gh pr view 1; " * 20000 + "\n", [3]),
     ("export GH_REPO=o/r\necho " + "gh " * 20000 + "\n", [2]),
     ("export GH_REPO=o/r\n" + "gh pr view 1; " * 20000 + "\n", [2]),
-    # Continued lines before one gh, longer than BEFORE_CHARS.
-    ("export GH_REPO=o/r\n(\n" + ("y" * 10000 + "\\\n") * 100 + "GH_REPO=o/r gh pr view 1\n", [103]),
 ])
 def test_untold_refuses_a_long_line_of_gh_words_at_its_first_gh_past_a_cap(tmp_path, text, refused):
     assert lines_of(untold(tmp_path, text)) == refused
 
 
+def test_untold_refuses_a_gh_after_continued_lines_longer_than_before_chars(tmp_path):
+    # 100 continued lines (JOINED_LINES allows that many) after a syntax error, longer together than BEFORE_CHARS, before one
+    # gh that its own prefix tells: refused.
+    text = "export GH_REPO=o/r\n(\n" + ("y" * 10000 + "\\\n") * 100 + "GH_REPO=o/r gh pr view 1\n"
+    assert lines_of(untold(tmp_path, text)) == [103]
+
+
 def test_untold_judges_and_tells_every_gh_on_a_line_just_short_of_the_caps(tmp_path, monkeypatch):
     # Every gh on a long line of told commands, in code and after a syntax error, reaches told().
     real = check_gh_repo.told
-    longest = []
+    calls = []
 
     def spy(before, after, exported):
-        longest.append(max(len(before), len(after)))
+        calls.append(1)
         return real(before, after, exported)
     monkeypatch.setattr(check_gh_repo, "told", spy)
     # Lines just short of the caps, in code and after a syntax error: every gh on them is judged, and told.
     told_lines = "export GH_REPO=o/r\n" + "gh pr view 1; " * 290 + "\n(\n" + "gh pr view 1; " * 290 + "\n"
     assert lines_of(untold(tmp_path, told_lines)) == []
-    assert len(longest) == 580
+    assert len(calls) == 580
 
 
 @pytest.mark.parametrize("length, refused", [
