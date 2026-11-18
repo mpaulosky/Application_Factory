@@ -165,8 +165,10 @@ and `git commit` end to end, which runs the hook with `GIT_DIR` set.
 
 `scripts/tests/check-branch-name.test.sh` covers the script's push form and its `--pr` form, which the CI job uses: the Actions
 branches (`docs/release-notes`, `docs/backfill-blog-posts`, refused for a push) and any `dependabot/*` allowed with `--pr`, only a shell-safe `dependabot/*` allowed for a push
-(a backtick, quote, `|` or `&` refused), non-ASCII names (`fix/1-café`, `dependabot/aé`) refused under `LC_ALL=C` and under every UTF-8 locale the machine has where `[a-z]`
-matches an accented letter (the script exports `LC_ALL=C`, so the hook, CI, `cleanup.sh` and `work-issue.sh` agree on a name whatever the caller's locale),
+(a backtick, quote, `|` or `&` refused), non-ASCII names (`fix/1-café`, `dependabot/aé`) refused under `LC_ALL=C`, under `C.UTF-8` and `en_US.UTF-8` when installed, and under every
+other UTF-8 locale of the machine where `[a-z]` matches an accented letter (a skip line says when there is none), with `fix/1-cafe` still allowed,
+and a check that the script exports `LC_ALL=C` before its first regex match, which holds on any machine (so the hook, CI, `cleanup.sh` and
+`work-issue.sh` agree on a name whatever the caller's locale),
 a `claude/...` branch refused, and other `docs/` names refused.
 
 CI's hook-tests job runs this suite, `pre-commit.test.sh`, `check-branch-name.test.sh`, `check-pr-title.test.sh`, `sync-copilot-review.test.sh`, `watch-pr.test.sh`,

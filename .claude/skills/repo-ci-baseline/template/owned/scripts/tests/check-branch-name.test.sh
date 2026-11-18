@@ -72,17 +72,37 @@ LC_ALL=C expect refused 'dependabot/aé'
 # accented letter, so a slug like fix/1-café would pass the hook there and be refused in CI. Run the non-ASCII names under every UTF-8 locale this
 # machine has where a bare [a-z] does match 'é' (the ones that would let them through), and under C.UTF-8 and en_US.UTF-8 when present.
 utf8_locales=()
+widening=0
 while IFS= read -r loc; do
   case "$loc" in *[Uu][Tt][Ff]8 | *[Uu][Tt][Ff]-8) ;; *) continue ;; esac
-  if [[ "$loc" == C.* || "$loc" == en_US.* ]] || LC_ALL="$loc" bash -c '[[ é =~ ^[a-z]$ ]]' 2>/dev/null; then utf8_locales+=("$loc"); fi
+  if LC_ALL="$loc" bash -c '[[ é =~ ^[a-z]$ ]]' 2>/dev/null; then
+    utf8_locales+=("$loc")
+    widening=$((widening + 1))
+  elif [[ "$loc" == C.* || "$loc" == en_US.* ]]; then
+    utf8_locales+=("$loc")
+  fi
 done < <(locale -a 2>/dev/null)
-for loc in "${utf8_locales[@]}"; do
+# ${a[@]+"${a[@]}"}: an empty array is no unbound variable under set -u in bash before 4.4.
+for loc in ${utf8_locales[@]+"${utf8_locales[@]}"}; do
   for name in fix/1-café feature/2-naïve chore/résumé 'dependabot/aé' 'dependabot/npm/é'; do
     LC_ALL="$loc" expect refused "$name"
   done
   LC_ALL="$loc" expect allowed fix/1-cafe
 done
-echo "     (non-ASCII names checked under ${#utf8_locales[@]} UTF-8 locale(s): ${utf8_locales[*]:-none})"
+if ((widening == 0)); then
+  echo "skip - no UTF-8 locale here where [a-z] matches an accented letter, so the names above prove nothing about the locale; the pin below still does"
+fi
+echo "     (non-ASCII names checked under ${#utf8_locales[@]} UTF-8 locale(s), $widening where [a-z] matches 'é': ${utf8_locales[*]:-none})"
+# The pin, which holds on any machine: the script exports LC_ALL=C before its first regex match, so no match runs in the caller's locale.
+first_match=$(grep -n '=~' "$SCRIPT" | head -n 1 | cut -d: -f1)
+export_line=$(grep -nx 'export LC_ALL=C' "$SCRIPT" | head -n 1 | cut -d: -f1)
+if [[ -n "$export_line" && -n "$first_match" ]] && ((export_line < first_match)); then
+  PASSED=$((PASSED + 1))
+  echo "ok   - the script exports LC_ALL=C (line $export_line) before its first regex match (line $first_match)"
+else
+  FAILED=$((FAILED + 1))
+  echo "FAIL - the script must export LC_ALL=C before its first regex match: export at line ${export_line:-none}, first match at line ${first_match:-none}"
+fi
 # The --pr form still takes them: CI quotes the name.
 expect allowed --pr 'dependabot/a|b'
 expect allowed --pr 'dependabot/aé'
