@@ -63,9 +63,11 @@ Anyone who can comment can forge a marker and be unheard by the watcher. That is
 
 ## Limits
 
-- The lists are read once, not paged: 100 review threads, 100 checks, the last 100 reviews and the last 100 comments. For an open PR, a list GitHub says has more is an incomplete read,
-  a failed poll (never a quiet one), so a PR past those limits ends the watcher with exit 2;
-  a merged or closed PR is reported from its state alone, though its lists must still be arrays. The checks come from the PR's own
+- The first query reads 100 review threads, 100 checks, the last 100 reviews and the last 100 comments. For an open PR, a list GitHub says has more is read on, 100 at a time,
+  from its cursor (threads and checks forward, reviews and comments back, kept in GitHub's order), up to 10 pages after the first (1,100 items). A list longer than that, a page
+  gh can't read, a missing cursor, a page of another shape, or a checks page of another head (a push between pages) is an incomplete read, a failed poll (never a quiet one)
+  whose message says which; five in a row end the watcher with exit 2. Each page costs about one more GraphQL point.
+  A merged or closed PR is reported from its state alone, though its lists must still be arrays. The checks come from the PR's own
   `statusCheckRollup`, and only while it is of `headRefOid`; the last of the PR's commits needn't be the head, and the head ref (in the head repository) isn't read,
   so a fork PR is watched. A PR with no rollup yet has no check reported and is quiet, unless GitHub calls it `UNSTABLE` (a check failed):
   then the read is incomplete and the poll fails.

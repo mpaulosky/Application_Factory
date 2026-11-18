@@ -21,7 +21,7 @@
 #
 # Exit codes: 0 the session is needed; 1 quiet until the timeout (or after --once); 2 a usage error, a missing tool or a PR that
 # can't be read (five polls in a row fail; a poll that fails, isn't GitHub's answer, or reads an open PR's list or rollup only in part
-# is never read as quiet).
+# is never read as quiet). A list longer than 100 is read on by its cursor, up to 1,100 items; a longer one is a failed poll that says so.
 # Environment: WATCH_PR_MARKER, WATCH_PR_INTERVAL (default 60 seconds; each poll costs about 1-3 GraphQL points, so not lower),
 # WATCH_PR_TIMEOUT (default 120 minutes), GITHUB_REPOSITORY (else the upstream, then the origin remote).
 set -euo pipefail
@@ -102,7 +102,29 @@ common_dir="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
 seen_file="$common_dir/watch-pr-$pr.seen"
 
 # shellcheck disable=SC2016 # GraphQL's $variables are not the shell's
-QUERY='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){state merged mergeable mergeStateStatus headRefOid statusCheckRollup{commit{oid} contexts(first:100){pageInfo{hasNextPage} nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}} reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved comments(last:1){nodes{author{__typename login} body}}}} reviews(last:100){pageInfo{hasPreviousPage} nodes{id state author{__typename login} body}} comments(last:100){pageInfo{hasPreviousPage} nodes{id author{__typename login} body}}}}}'
+QUERY='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){state merged mergeable mergeStateStatus headRefOid statusCheckRollup{commit{oid} contexts(first:100){pageInfo{hasNextPage endCursor} nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}} reviewThreads(first:100){pageInfo{hasNextPage endCursor} nodes{isResolved comments(last:1){nodes{author{__typename login} body}}}} reviews(last:100){pageInfo{hasPreviousPage startCursor} nodes{id state author{__typename login} body}} comments(last:100){pageInfo{hasPreviousPage startCursor} nodes{id author{__typename login} body}}}}}'
+
+# A list with more than the first query's 100 is read on, a page of 100 at a time, from its cursor: threads and checks forward from their end cursor,
+# reviews and comments back from their start cursor (the first query took the newest 100). Each page query reads that one list.
+# shellcheck disable=SC2016 # GraphQL's $variables are not the shell's
+PAGE_PR='query($owner:String!,$name:String!,$number:Int!,$cursor:String!){repository(owner:$owner,name:$name){pullRequest(number:$number){'
+# shellcheck disable=SC2016
+PAGE_QUERY_threads="${PAGE_PR}"'reviewThreads(first:100,after:$cursor){pageInfo{hasNextPage endCursor} nodes{isResolved comments(last:1){nodes{author{__typename login} body}}}}}}}'
+# shellcheck disable=SC2016
+PAGE_QUERY_reviews="${PAGE_PR}"'reviews(last:100,before:$cursor){pageInfo{hasPreviousPage startCursor} nodes{id state author{__typename login} body}}}}}'
+# shellcheck disable=SC2016
+PAGE_QUERY_comments="${PAGE_PR}"'comments(last:100,before:$cursor){pageInfo{hasPreviousPage startCursor} nodes{id author{__typename login} body}}}}}'
+# shellcheck disable=SC2016
+PAGE_QUERY_checks="${PAGE_PR}"'headRefOid statusCheckRollup{commit{oid} contexts(first:100,after:$cursor){pageInfo{hasNextPage endCursor} nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}'
+# At most this many pages after the first, per list (1,100 items): a longer list is a failed poll that says so, never a quiet one.
+MAX_EXTRA_PAGES=10
+
+# The answer must be GitHub's pull request, with its lists present, or it is no answer at all.
+BASE_JQ='
+  .data.repository.pullRequest
+  | type == "object" and (.state | type == "string")
+    and ([.reviewThreads.nodes, .reviews.nodes, .comments.nodes] | all(type == "array"))
+'
 
 # The response must have GitHub's shape, with every list present and read whole: anything else is a failed poll, never a quiet one.
 # The checks come from the PR's own rollup, not the last of its commits (GitHub lists them by date, so the last needn't be the head) and not
@@ -161,7 +183,58 @@ REASONS_JQ="$OURS_JQ"'
 '
 
 errfile="$(mktemp)"
-trap 'command rm -f "$errfile"' EXIT
+pagefile="$(mktemp)"
+trap 'command rm -f "$errfile" "$pagefile"' EXIT
+
+# read_rest: reads each list of the open PR in $resp that has more pages to its end, merging the pages into $resp (later pages after the
+# first's threads and checks, earlier ones before its reviews and comments). Returns 1 with $reason set when a page can't be read whole: gh
+# fails, GitHub gives no cursor, the page isn't the list's shape, a checks page is of another head than the first answer's, or the list has more
+# than MAX_EXTRA_PAGES pages after the first. A page goes through a file, not an argument: 100 comment bodies can pass the argument length limit.
+read_rest() {
+  local list path flag cur_field order pages cursor query head
+  if [[ "$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.state')" != OPEN ]]; then return 0; fi
+  head="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.headRefOid // ""')"
+  for list in threads reviews comments checks; do
+    case "$list" in
+      threads) path=.reviewThreads flag=hasNextPage cur_field=endCursor order=after query="$PAGE_QUERY_threads" ;;
+      reviews) path=.reviews flag=hasPreviousPage cur_field=startCursor order=before query="$PAGE_QUERY_reviews" ;;
+      comments) path=.comments flag=hasPreviousPage cur_field=startCursor order=before query="$PAGE_QUERY_comments" ;;
+      checks) path=.statusCheckRollup.contexts flag=hasNextPage cur_field=endCursor order=after query="$PAGE_QUERY_checks" ;;
+    esac
+    pages=0
+    while [[ "$(printf '%s' "$resp" | jq -r --arg flag "$flag" ".data.repository.pullRequest$path.pageInfo[\$flag] // false")" == true ]]; do
+      if ((pages >= MAX_EXTRA_PAGES)); then
+        reason="the PR's $list run to more than $((MAX_EXTRA_PAGES + 1)) pages of 100, more than 10 pages after the first, which the watcher doesn't read"
+        return 1
+      fi
+      pages=$((pages + 1))
+      cursor="$(printf '%s' "$resp" | jq -r --arg f "$cur_field" ".data.repository.pullRequest$path.pageInfo[\$f] // \"\" | strings")"
+      if [[ -z "$cursor" ]]; then
+        reason="an incomplete read: GitHub says the PR's $list have more pages but gave no cursor for them"
+        return 1
+      fi
+      if ! gh api graphql -f query="$query" -f owner="${repo%%/*}" -f name="${repo#*/}" -F number="$pr" -f cursor="$cursor" >"$pagefile" 2>"$errfile"; then
+        reason="gh failed reading page $((pages + 1)) of the PR's $list: $(head -n 1 "$errfile")"
+        return 1
+      fi
+      if ! jq -e --arg flag "$flag" ".data.repository.pullRequest$path | type == \"object\" and (.nodes | type == \"array\") and (.pageInfo[\$flag] | type == \"boolean\")" "$pagefile" >/dev/null 2>&1; then
+        reason="an incomplete read: page $((pages + 1)) of the PR's $list is not a list of them"
+        return 1
+      fi
+      if [[ "$list" == checks ]] && ! jq -e --arg head "$head" '.data.repository.pullRequest | .headRefOid == $head and .statusCheckRollup.commit.oid == $head' "$pagefile" >/dev/null 2>&1; then
+        reason="an incomplete read: the PR's head moved while its checks were read"
+        return 1
+      fi
+      if ! resp="$(printf '%s' "$resp" | jq -c --slurpfile page "$pagefile" --arg order "$order" "
+          (\$page[0].data.repository.pullRequest$path) as \$p
+          | .data.repository.pullRequest$path |= (.pageInfo = \$p.pageInfo
+              | .nodes = (if \$order == \"after\" then .nodes + \$p.nodes else \$p.nodes + .nodes end))")"; then
+        reason="the PR's $list could not be put together"
+        return 1
+      fi
+    done
+  done
+}
 
 failures=0
 elapsed=0
@@ -172,9 +245,14 @@ while true; do
   if ! resp="$(gh api graphql -f query="$QUERY" -f owner="${repo%%/*}" -f name="${repo#*/}" -F number="$pr" 2>"$errfile")"; then
     ok=0
     reason="gh failed: $(head -n 1 "$errfile")"
-  elif ! printf '%s' "$resp" | jq -e "$SHAPE_JQ" >/dev/null 2>&1; then
+  elif ! printf '%s' "$resp" | jq -e "$BASE_JQ" >/dev/null 2>&1; then
     ok=0
     reason="the answer is not a pull request"
+  elif ! read_rest; then
+    ok=0
+  elif ! printf '%s' "$resp" | jq -e "$SHAPE_JQ" >/dev/null 2>&1; then
+    ok=0
+    reason="an incomplete read of the open PR: its checks are not of its head commit yet, or a list's page information is missing"
   fi
 
   if ((ok)); then
