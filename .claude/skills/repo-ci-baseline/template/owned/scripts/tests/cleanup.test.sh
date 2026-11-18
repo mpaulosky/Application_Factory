@@ -325,19 +325,41 @@ for pu in git@github.com:evil/r.git https://github.com/acme/other ssh://git@gith
   shown="${pu/#ssh:\/\/git@/ssh://***@}" # a scheme URL's userinfo is never printed
   check "a github.com push URL ($pu) of another owner or name than the fetch URL's is refused" "[[ $st == 1 ]] && grep -qF \"push URL ($shown)\" <<<\"\$o\""
 done
+NOTE='[the masked text holds a ?, #, \ or @, so another URL reader may take another host]'
 # A URL's userinfo can hold a credential (https://TOKEN@host/..., https://user:password@host/...): the refusal and the CLEANUP_PUSH_URL_OK=1 warning print
 # both URLs without it, in place of it ***, and the comparison still sees the URLs as they are.
 for creds in 'ghp_SECRETtoken123' 'me:SECRETpass' 'x-access-token:SECRET@x'; do
   o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL="https://$creds@github.com/acme/r" SHIM_PUSH_URLS="https://$creds@github.com/evil/r" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
-  check "a refused push URL with userinfo ($creds) is printed without it, and so is the fetch URL" "[[ $st == 1 ]] && ! grep -q SECRET <<<\"\$o\" && grep -qF 'push URL (https://***@github.com/evil/r)' <<<\"\$o\" && grep -qF 'read from (https://***@github.com/acme/r)' <<<\"\$o\""
+  check "a refused push URL with userinfo ($creds) is printed without it, and so is the fetch URL" "[[ $st == 1 ]] && ! grep -q SECRET <<<\"\$o\" && grep -qF 'push URL (https://***@github.com/evil/r' <<<\"\$o\" && grep -qF 'read from (https://***@github.com/acme/r' <<<\"\$o\""
   o=$(PATH="$work/shim:$PATH" CLEANUP_PUSH_URL_OK=1 SHIM_ORIGIN_URL="https://$creds@ghe.example.com/acme/r" SHIM_PUSH_URLS="https://$creds@ghe.example.com/other/r" bash scripts/cleanup.sh --dry-run 2>&1)
-  check "the CLEANUP_PUSH_URL_OK=1 warning prints a push URL with userinfo ($creds) without it" "! grep -q SECRET <<<\"\$o\" && grep -qF 'push URL (https://***@ghe.example.com/other/r)' <<<\"\$o\""
+  check "the CLEANUP_PUSH_URL_OK=1 warning prints a push URL with userinfo ($creds) without it, and the fetch URL too" "! grep -q SECRET <<<\"\$o\" && grep -qF 'push URL (https://***@ghe.example.com/other/r' <<<\"\$o\" && grep -qF 'read from (https://***@ghe.example.com/acme/r' <<<\"\$o\""
 done
-# A ? or # ends the authority, so an @ after one is not userinfo: such a URL is printed as it is, its host (evil.com) shown.
-for pu in 'https://evil.com?@github.com/evil/r' 'https://evil.com#@github.com/evil/r'; do
+# git reads the userinfo up to an @ before the first /, whatever a ?, # or \ before it; curl and others may end the host at one of those. So the
+# text up to the last @ before the first / is masked (a password may hold any of them), and when it holds a ?, #, \ or a second @, the message
+# says another reader may take another host: the host is never hidden without a word.
+for pu in 'https://me:pa#SECRET@github.com/evil/r' 'https://me:pa?SECRET@github.com/evil/r' 'https://evil.com\SECRET@github.com/evil/r' \
+  'https://a@SECRET@github.com/evil/r'; do
   o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
-  check "a push URL with an @ after a ? or # ($pu) is printed as it is" "[[ $st == 1 ]] && grep -qF \"push URL ($pu)\" <<<\"\$o\""
+  check "a push URL whose userinfo holds a ?, #, \\ or @ ($pu) is masked, with a word on the host" "[[ $st == 1 ]] && ! grep -q SECRET <<<\"\$o\" && grep -qF \"push URL (https://***@github.com/evil/r \$NOTE)\" <<<\"\$o\""
 done
+# Every scheme is masked (letters, digits, + . - after the first letter, in any case), and so is an empty userinfo; a URL with no scheme, or none
+# of whose @ comes before the first /, is printed as it is.
+for pu in 'http://SECRET@git.example.com/other/r' 'git+ssh://SECRET@git.example.com/other/r' 'HTTPS://SECRET@git.example.com/other/r' \
+  'svn.x-1://SECRET@git.example.com/other/r' 'https://@git.example.com/other/r'; do
+  o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+  check "a push URL $pu is printed with its userinfo masked" "[[ $st == 1 ]] && ! grep -q SECRET <<<\"\$o\" && grep -qF \"push URL (\${pu%%://*}://***@git.example.com/other/r)\" <<<\"\$o\""
+done
+for pu in 'git@ghe.example.com:other/r.git' '1https://SECRET@git.example.com/other/r'; do
+  o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+  check "a push URL with no scheme ($pu) is printed as it is" "[[ $st == 1 ]] && grep -qF \"push URL ($pu)\" <<<\"\$o\""
+done
+# The match runs in the C locale (shown_url's local LC_ALL=C): in a UTF-8 locale a byte that is no character can stop bash's [^/]* and print the
+# URL, token and all. Run it under each UTF-8 locale the machine has, and pin the line, which holds on a machine with none.
+for loc in $(locale -a 2>/dev/null | grep -iE 'utf-?8$'); do
+  o=$(LC_ALL="$loc" PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS=$'https://tok\xffSECRET\xc3@git.example.com/other/r' bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+  check "under $loc, userinfo with bytes that are no UTF-8 character is masked" "[[ $st == 1 ]] && ! grep -q SECRET <<<\"\$o\" && grep -qF 'push URL (https://***@git.example.com/other/r)' <<<\"\$o\""
+done
+check "shown_url matches in the C locale" "sed -n '/^shown_url() {/,/^}/p' scripts/cleanup.sh | grep -qx '  local LC_ALL=C'"
 # An @ after the host, in the path, is not userinfo: such a URL is printed as it is.
 o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS="https://git.example.com/other/r@x" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
 check "a push URL with an @ only in its path is printed as it is" "[[ $st == 1 ]] && grep -qF 'push URL (https://git.example.com/other/r@x)' <<<\"\$o\""
@@ -370,7 +392,11 @@ for pu in https://github.com/acme/r/ https://www.github.com/acme/r.git https://G
 done
 for pu in "https://evil.com#@github.com/acme/r" "https://github.com:/acme/r" "https://github.com/foo/acme/r" "https://github.com/acme/r/extra" "https://github.com/acme/r?x=1" "https://github.com/" "https://ssh.github.com.evil.com/acme/r" "https://user@evil.com/@github.com/acme/r" "file:///github.com/acme/r" "https://[::1]/acme/r" "git@github.com:/acme/r" "https://gitlab.com/a/team/app" "evil.com:x@github.com:acme/r" "x:@github.com:acme/r" "https://github.com/acme /r"; do
   o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
-  shown="${pu/#https:\/\/user@/https://***@}" # a lookalike is printed as it is, host and all, save a scheme URL's userinfo
+  case "$pu" in # a lookalike is printed as it is, save a scheme URL's text up to the last @ before its first /, which is masked
+    "https://evil.com#@github.com/acme/r") shown="https://***@github.com/acme/r $NOTE" ;;
+    "https://user@evil.com/@github.com/acme/r") shown="https://***@evil.com/@github.com/acme/r" ;;
+    *) shown="$pu" ;;
+  esac
   check "the push URL $pu is not read as github.com's acme/r" "[[ $st == 1 ]] && grep -qF \"push URL ($shown)\" <<<\"\$o\""
 done
 o=$(PATH="$work/shim:$PATH" SHIM_PUSH_EMPTY=1 bash scripts/cleanup.sh --dry-run 2>&1); st=$?

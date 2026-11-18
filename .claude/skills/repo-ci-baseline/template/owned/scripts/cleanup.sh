@@ -20,7 +20,8 @@
 # fetches and prunes the remote-tracking refs).
 # Exits 1 when it can't run (not main, not the primary checkout, dirty main, main can't fast-forward, origin can't be fetched, no gh, no repository,
 # a gh lookup failed, a bad argument, an origin push URL that is not shown to be the fetch URL's repository (the same text, or both github.com URLs for the same owner/name; CLEANUP_PUSH_URL_OK=1 accepts the push URLs as they are), no scripts/check-branch-name.sh) and, after finishing the rest, when a removal git refused, a branch a worktree is rebasing or bisecting (a real run only: a dry run exits 0), a check of origin
-# failed, the closing fetch failed or a commit was made, or the branch deleted, after a branch was judged. CLEANUP_PUSH_URL_OK=1 prints a warning for each push URL it lets through unchecked. A branch is judged by its PR, and at most 100 PRs are read per branch name: 100 or more keeps the branch.
+# failed, the closing fetch failed or a commit was made, or the branch deleted, after a branch was judged. CLEANUP_PUSH_URL_OK=1 prints a warning for each push URL it lets through unchecked. Both that
+# warning and the refusal mask a scheme URL's userinfo, which can hold a token, as *** (shown_url). A branch is judged by its PR, and at most 100 PRs are read per branch name: 100 or more keeps the branch.
 # A local branch is deleted by update-ref --no-deref -d, which compares and deletes in one step: the tip is also rechecked before its worktree or the worktree's entry is removed, and a branch a worktree is rebasing or bisecting is kept.
 # A worktree on a detached HEAD belongs to no branch and is never touched.
 set -euo pipefail
@@ -59,6 +60,20 @@ slug_of() {
   fi
   if [[ -n "$out" ]]; then printf '%s' "${u: -${#out}}"; fi # the owner/name ends the URL: take it from the original, case kept
 }
+# shown_url <url>: <url> as printed, with a scheme URL's text between :// and the last @ before the first / replaced by ***. That text is the
+# userinfo as git reads it (up to an @ before the first /) and as curl does (which may end the host at a ?, # or \ first), so a token or a
+# password is never printed, whatever it holds. When the masked text holds a ?, #, \ or a second @, readers may disagree on the host, and the
+# printed URL says so rather than hide it. A URL with no scheme, or no @ before its first /, is printed as it is. It runs in the C locale, so a
+# byte that is no character still matches [^/]. Only the messages use it: the comparisons use the URLs as they are.
+shown_url() {
+  local LC_ALL=C
+  if [[ "$1" =~ ^([A-Za-z][A-Za-z0-9+.-]*://)([^/]*)@(.*)$ ]]; then
+    printf '%s***@%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[3]}"
+    if [[ "${BASH_REMATCH[2]}" == *[?#\\@]* ]]; then printf ' [the masked text holds a ?, #, \\ or @, so another URL reader may take another host]'; fi
+  else
+    printf '%s' "$1"
+  fi
+}
 url="$(git remote get-url upstream 2>/dev/null || git remote get-url origin 2>/dev/null || true)"
 repo="${GITHUB_REPOSITORY:-}"
 if [[ -z "$repo" ]]; then repo="$(slug_of "$url")"; fi
@@ -72,13 +87,6 @@ origin_slug="$(lc "$origin_repo")"
 # git push origin goes to origin's push URLs, which can name another repository than the fetch URL the PRs are read for. Refuse unless every push URL is the fetch URL's own text, or both
 # are github.com URLs (slug_of) for the same owner/name, in any case. Any other host, or a form slug_of doesn't know, must match the fetch URL's text; CLEANUP_PUSH_URL_OK=1 accepts the
 # push URLs as they are, for a person who has checked them. A push URL that can't be read refuses too.
-# shown_url <url>: <url> as printed, with a scheme URL's userinfo (between :// and the last @ before the first / ? or #, none of which userinfo can
-# hold; it can hold a token or a password) replaced by ***, so the host is always shown: https://evil.com#@github.com/o/r keeps evil.com#. Only the
-# printing uses it: the comparisons below use the URLs as they are.
-shown_url() {
-  local LC_ALL=C
-  if [[ "$1" =~ ^([A-Za-z][A-Za-z0-9+.-]*://)[^/?#]*@(.*)$ ]]; then printf '%s***@%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"; else printf '%s' "$1"; fi
-}
 fetch_url="$(git remote get-url origin 2>/dev/null || true)"
 push_urls="$(git remote get-url --push --all origin 2>/dev/null)" && [[ -n "$push_urls" ]] || die "can't read origin's push URLs"
 fetch_slug="$(lc "$(slug_of "$fetch_url")")"
