@@ -227,7 +227,7 @@ if [[ "\$1" == fetch && -n "\${SHIM_FETCH_FAIL:-}" ]]; then # all: every fetch f
   if [[ "\$SHIM_FETCH_FAIL" == all || \$n -ge 2 ]]; then echo "shim: fetch failed" >&2; exit 128; fi
 fi
 if [[ "\$1 \$2 \$3 \$4 \$5" == "remote get-url --push --all origin" && -n "\${SHIM_PUSH_EMPTY:-}" ]]; then exit 0; fi
-if [[ "\$1 \$2 \$3 \$4 \$5" == "remote get-url --push --all origin" && ( -n "\${SHIM_PUSH_URLS:-}" || -n "\${SHIM_ORIGIN_URL:-}" ) ]]; then printf '%s\n' "\${SHIM_PUSH_URLS:-\$SHIM_ORIGIN_URL}" | LC_ALL=C tr ';' '\n'; exit 0; fi
+if [[ "\$1 \$2 \$3 \$4 \$5" == "remote get-url --push --all origin" && ( -n "\${SHIM_PUSH_URLS:-}" || -n "\${SHIM_ORIGIN_URL:-}" ) ]]; then printf '%s\n' "\${SHIM_PUSH_URLS:-\$SHIM_ORIGIN_URL}" | LC_ALL=C tr ';' '\n'; exit 0; fi # C: a BSD tr refuses bytes that are no UTF-8 character in a UTF-8 locale
 if [[ "\$1 \$2 \$3" == "remote get-url --push" && -n "\${SHIM_PUSH_FAIL:-}" ]]; then echo "shim: get-url failed" >&2; exit 128; fi
 if [[ "\$1 \$2 \$3" == "update-ref --no-deref -d" && -n "\${SHIM_ADVANCE:-}" && "\$4" == "refs/heads/\$SHIM_ADVANCE" ]]; then # a commit lands on the branch between cleanup's check and its delete
   new=\$("$(command -v git)" commit-tree "\$4^{tree}" -p "\$4" -m late) && "$(command -v git)" update-ref "\$4" "\$new"
@@ -364,6 +364,12 @@ o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_
 check "a push URL's control characters are printed as ?" "[[ $st == 1 && \$o != *\$'\\e'* && \$o != *\$'\\r'* ]] && grep -qF 'push URL (https://evil.com/?[2K?git.example.com/acme/r)' <<<\"\$o\""
 o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS=$'https://SECRET@git.example.com/other/r\x7f\x01' bash scripts/cleanup.sh --dry-run 2>&1); st=$?
 check "a masked push URL's control characters are printed as ? too" "[[ $st == 1 && \$o != *\$'\\x7f'* && \$o != *\$'\\x01'* ]] && ! grep -q SECRET <<<\"\$o\" && grep -qF 'push URL (https://***@git.example.com/other/r??)' <<<\"\$o\""
+# Every byte that is not printable ASCII (a UTF-8 C1 control such as U+009B, a bidi override such as U+202E) is printed as ? too.
+o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS=$'https://evil.com/\xc2\x9b2K\xe2\x80\xaegit.example.com/acme/r' bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+check "a push URL's non-ASCII bytes are printed as ?" "[[ $st == 1 ]] && ! LC_ALL=C grep -q '[^ -~]' <<<\"\$(grep -o 'push URL ([^)]*)' <<<\"\$o\")\" && grep -qF 'push URL (https://evil.com/??2K???git.example.com/acme/r)' <<<\"\$o\""
+o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS=$'https://SECRET@git.example.com/\xc2\x9bother/r' bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+check "a masked push URL's non-ASCII bytes are printed as ? too" "[[ $st == 1 ]] && ! grep -q SECRET <<<\"\$o\" && grep -qF 'push URL (https://***@git.example.com/??other/r)' <<<\"\$o\""
+check "the git shim splits push URLs in the C locale" "grep -qF \"| LC_ALL=C tr ';'\" '$SCRIPTS/tests/cleanup.test.sh'"
 check "shown_url matches in the C locale" "sed -n '/^shown_url() {/,/^}/p' scripts/cleanup.sh | grep -qx '  local LC_ALL=C'"
 # An @ after the host, in the path, is not userinfo: such a URL is printed as it is.
 o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS="https://git.example.com/other/r@x" bash scripts/cleanup.sh --dry-run 2>&1); st=$?

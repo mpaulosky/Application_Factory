@@ -64,8 +64,8 @@ slug_of() {
 # userinfo as git reads it (up to an @ before the first /) and as curl does (which may end the host at a ?, # or \ first), so a token or a
 # password is never printed, whatever it holds. When the masked text holds a ?, #, \ or a second @, readers may disagree on the host, and the
 # printed URL says so rather than hide it. A URL with no scheme, or no @ before its first /, is printed as it is. It runs in the C locale, so a
-# byte that is no character still matches [^/]. A control character (ESC, CR) is printed as ?, so it can't
-# redraw the line and hide the host. Only the messages use it: the comparisons use the URLs as they are.
+# byte that is no character still matches [^/]. Every byte that is not printable ASCII is printed as ?: a control character (ESC,
+# CR, a UTF-8 C1 control such as U+009B) or a bidi override (U+202E) can't redraw or reorder the line and hide the host. Only the messages use it: the comparisons use the URLs as they are.
 shown_url() {
   local LC_ALL=C
   local shown
@@ -75,7 +75,7 @@ shown_url() {
   else
     shown="$1"
   fi
-  printf '%s' "${shown//[[:cntrl:]]/?}"
+  printf '%s' "${shown//[^ -~]/?}"
 }
 url="$(git remote get-url upstream 2>/dev/null || git remote get-url origin 2>/dev/null || true)"
 repo="${GITHUB_REPOSITORY:-}"

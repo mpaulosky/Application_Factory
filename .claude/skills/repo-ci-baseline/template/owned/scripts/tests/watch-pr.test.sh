@@ -919,6 +919,15 @@ run --once 7
 check "a checks page whose rollup is of another commit is a failed poll: exit 2" status_is 2
 check "it says that page is not of the head commit" grep -q "page 2 of the PR's checks is not of its head commit" <<<"$err"
 check "not that the head moved (rollup of another commit)" not grep -q 'head moved' <<<"$err"
+# A checks page of the head's rollup that names no head is not taken for the head's either.
+pages_repo
+pr '{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true,"endCursor":"K1"},"nodes":[]}}}'
+page K1 checks "$PASSING" false
+jq 'del(.data.repository.pullRequest.headRefOid)' "$GH_PAGES_DIR/K1.json" > "$GH_PAGES_DIR/K1.tmp" && mv "$GH_PAGES_DIR/K1.tmp" "$GH_PAGES_DIR/K1.json"
+run --once 7
+check "a checks page naming no head is a failed poll: exit 2" status_is 2
+check "it says that page is not of the head commit (no head named)" grep -q "page 2 of the PR's checks is not of its head commit" <<<"$err"
+check "not that the head moved (no head named)" not grep -q 'head moved' <<<"$err"
 # A checks page that is no pull request at all is no list of checks, not a head that moved.
 pages_repo
 pr '{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true,"endCursor":"K1"},"nodes":[]}}}'
