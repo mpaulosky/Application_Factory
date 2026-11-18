@@ -67,9 +67,22 @@ expect refused "dependabot/a'b"
 expect refused 'dependabot/a"b'
 expect refused 'dependabot/a|b'
 expect refused 'dependabot/a&b'
-# LC_ALL=C: in a UTF-8 locale bash's [A-Za-z] can match an accented letter, and the hook would take it (it is shell-safe anyway). This guards the
-# ASCII-only class against a widening to any character; it does not catch a locale-aware class such as [[:alpha:]] (outside this test).
 LC_ALL=C expect refused 'dependabot/aé'
+# The script checks in ASCII whatever the caller's locale: in some UTF-8 locales (en_US.UTF-8 with glibc) bash's [a-z] and [A-Za-z] also match an
+# accented letter, so a slug like fix/1-café would pass the hook there and be refused in CI. Run the non-ASCII names under every UTF-8 locale this
+# machine has where a bare [a-z] does match 'é' (the ones that would let them through), and under C.UTF-8 and en_US.UTF-8 when present.
+utf8_locales=()
+while IFS= read -r loc; do
+  case "$loc" in *[Uu][Tt][Ff]8 | *[Uu][Tt][Ff]-8) ;; *) continue ;; esac
+  if [[ "$loc" == C.* || "$loc" == en_US.* ]] || LC_ALL="$loc" bash -c '[[ é =~ ^[a-z]$ ]]' 2>/dev/null; then utf8_locales+=("$loc"); fi
+done < <(locale -a 2>/dev/null)
+for loc in "${utf8_locales[@]}"; do
+  for name in fix/1-café feature/2-naïve chore/résumé 'dependabot/aé' 'dependabot/npm/é'; do
+    LC_ALL="$loc" expect refused "$name"
+  done
+  LC_ALL="$loc" expect allowed fix/1-cafe
+done
+echo "     (non-ASCII names checked under ${#utf8_locales[@]} UTF-8 locale(s): ${utf8_locales[*]:-none})"
 # The --pr form still takes them: CI quotes the name.
 expect allowed --pr 'dependabot/a|b'
 expect allowed --pr 'dependabot/aé'
