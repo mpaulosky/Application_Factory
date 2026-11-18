@@ -322,8 +322,28 @@ o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_
 check "push URLs that differ for a non-GitHub origin are refused" "[[ $st == 1 ]] && grep -q 'push URL (https://git.example.com/other/r)' <<<\"\$o\""
 for pu in git@github.com:evil/r.git https://github.com/acme/other ssh://git@github.com/acme.git; do
   o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
-  check "a github.com push URL ($pu) of another owner or name than the fetch URL's is refused" "[[ $st == 1 ]] && grep -qF \"push URL ($pu)\" <<<\"\$o\""
+  shown="${pu/#ssh:\/\/git@/ssh://***@}" # a scheme URL's userinfo is never printed
+  check "a github.com push URL ($pu) of another owner or name than the fetch URL's is refused" "[[ $st == 1 ]] && grep -qF \"push URL ($shown)\" <<<\"\$o\""
 done
+# A URL's userinfo can hold a credential (https://TOKEN@host/..., https://user:password@host/...): the refusal and the CLEANUP_PUSH_URL_OK=1 warning print
+# both URLs without it, in place of it ***, and the comparison still sees the URLs as they are.
+for creds in 'ghp_SECRETtoken123' 'me:SECRETpass' 'x-access-token:SECRET@x'; do
+  o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL="https://$creds@github.com/acme/r" SHIM_PUSH_URLS="https://$creds@github.com/evil/r" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+  check "a refused push URL with userinfo ($creds) is printed without it, and so is the fetch URL" "[[ $st == 1 ]] && ! grep -q SECRET <<<\"\$o\" && grep -qF 'push URL (https://***@github.com/evil/r)' <<<\"\$o\" && grep -qF 'read from (https://***@github.com/acme/r)' <<<\"\$o\""
+  o=$(PATH="$work/shim:$PATH" CLEANUP_PUSH_URL_OK=1 SHIM_ORIGIN_URL="https://$creds@ghe.example.com/acme/r" SHIM_PUSH_URLS="https://$creds@ghe.example.com/other/r" bash scripts/cleanup.sh --dry-run 2>&1)
+  check "the CLEANUP_PUSH_URL_OK=1 warning prints a push URL with userinfo ($creds) without it" "! grep -q SECRET <<<\"\$o\" && grep -qF 'push URL (https://***@ghe.example.com/other/r)' <<<\"\$o\""
+done
+# A ? or # ends the authority, so an @ after one is not userinfo: such a URL is printed as it is, its host (evil.com) shown.
+for pu in 'https://evil.com?@github.com/evil/r' 'https://evil.com#@github.com/evil/r'; do
+  o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+  check "a push URL with an @ after a ? or # ($pu) is printed as it is" "[[ $st == 1 ]] && grep -qF \"push URL ($pu)\" <<<\"\$o\""
+done
+# An @ after the host, in the path, is not userinfo: such a URL is printed as it is.
+o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS="https://git.example.com/other/r@x" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+check "a push URL with an @ only in its path is printed as it is" "[[ $st == 1 ]] && grep -qF 'push URL (https://git.example.com/other/r@x)' <<<\"\$o\""
+# The same credentials in both URLs, of the same repository, still compare as the same: only what is printed changes.
+o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL="https://me:SECRET@git.example.com/acme/r" SHIM_PUSH_URLS="https://me:SECRET@git.example.com/acme/r" EXPECT_GH_REPO=acme/r EXPECT_GH_BASE_REPO=acme/r GITHUB_REPOSITORY=acme/r bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+check "a push URL the same as the fetch URL, credentials included, is accepted" "[[ $st == 0 ]]"
 o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="git@ghe.example.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
 check "an ssh push URL for an https fetch URL of a non-github.com host is refused (only the same text is shown to be the same)" "[[ $st == 1 ]] && grep -q 'CLEANUP_PUSH_URL_OK=1' <<<\"\$o\""
 o=$(PATH="$work/shim:$PATH" CLEANUP_PUSH_URL_OK=1 SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="git@ghe.example.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
@@ -350,7 +370,8 @@ for pu in https://github.com/acme/r/ https://www.github.com/acme/r.git https://G
 done
 for pu in "https://evil.com#@github.com/acme/r" "https://github.com:/acme/r" "https://github.com/foo/acme/r" "https://github.com/acme/r/extra" "https://github.com/acme/r?x=1" "https://github.com/" "https://ssh.github.com.evil.com/acme/r" "https://user@evil.com/@github.com/acme/r" "file:///github.com/acme/r" "https://[::1]/acme/r" "git@github.com:/acme/r" "https://gitlab.com/a/team/app" "evil.com:x@github.com:acme/r" "x:@github.com:acme/r" "https://github.com/acme /r"; do
   o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
-  check "the push URL $pu is not read as github.com's acme/r" "[[ $st == 1 ]] && grep -qF \"push URL ($pu)\" <<<\"\$o\""
+  shown="${pu/#https:\/\/user@/https://***@}" # a lookalike is printed as it is, host and all, save a scheme URL's userinfo
+  check "the push URL $pu is not read as github.com's acme/r" "[[ $st == 1 ]] && grep -qF \"push URL ($shown)\" <<<\"\$o\""
 done
 o=$(PATH="$work/shim:$PATH" SHIM_PUSH_EMPTY=1 bash scripts/cleanup.sh --dry-run 2>&1); st=$?
 check "push URLs that print nothing refuse the run too" "[[ $st == 1 ]] && grep -q \"can't read origin's push URLs\" <<<\"\$o\""

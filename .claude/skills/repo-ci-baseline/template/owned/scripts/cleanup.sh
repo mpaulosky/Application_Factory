@@ -72,6 +72,13 @@ origin_slug="$(lc "$origin_repo")"
 # git push origin goes to origin's push URLs, which can name another repository than the fetch URL the PRs are read for. Refuse unless every push URL is the fetch URL's own text, or both
 # are github.com URLs (slug_of) for the same owner/name, in any case. Any other host, or a form slug_of doesn't know, must match the fetch URL's text; CLEANUP_PUSH_URL_OK=1 accepts the
 # push URLs as they are, for a person who has checked them. A push URL that can't be read refuses too.
+# shown_url <url>: <url> as printed, with a scheme URL's userinfo (between :// and the last @ before the first / ? or #, none of which userinfo can
+# hold; it can hold a token or a password) replaced by ***, so the host is always shown: https://evil.com#@github.com/o/r keeps evil.com#. Only the
+# printing uses it: the comparisons below use the URLs as they are.
+shown_url() {
+  local LC_ALL=C
+  if [[ "$1" =~ ^([A-Za-z][A-Za-z0-9+.-]*://)[^/?#]*@(.*)$ ]]; then printf '%s***@%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"; else printf '%s' "$1"; fi
+}
 fetch_url="$(git remote get-url origin 2>/dev/null || true)"
 push_urls="$(git remote get-url --push --all origin 2>/dev/null)" && [[ -n "$push_urls" ]] || die "can't read origin's push URLs"
 fetch_slug="$(lc "$(slug_of "$fetch_url")")"
@@ -79,8 +86,8 @@ while IFS= read -r pu; do
   [[ -z "$pu" || "$pu" == "$fetch_url" ]] && continue
   push_slug="$(lc "$(slug_of "$pu")")"
   if [[ -n "$push_slug" && "$push_slug" == "$fetch_slug" ]]; then continue; fi
-  if [[ "${CLEANUP_PUSH_URL_OK:-}" == 1 ]]; then echo "⚠ CLEANUP_PUSH_URL_OK=1: origin's push URL ($pu) is not shown to be the repository its PRs are read from ($fetch_url), and is used as it is" >&2; continue; fi
-  die "origin's push URL ($pu) is not shown to be the repository its PRs are read from ($fetch_url): make them the same, or set CLEANUP_PUSH_URL_OK=1 if you have checked it, then run this again"
+  if [[ "${CLEANUP_PUSH_URL_OK:-}" == 1 ]]; then echo "⚠ CLEANUP_PUSH_URL_OK=1: origin's push URL ($(shown_url "$pu")) is not shown to be the repository its PRs are read from ($(shown_url "$fetch_url")), and is used as it is" >&2; continue; fi
+  die "origin's push URL ($(shown_url "$pu")) is not shown to be the repository its PRs are read from ($(shown_url "$fetch_url")): make them the same, or set CLEANUP_PUSH_URL_OK=1 if you have checked it, then run this again"
 done <<<"$push_urls"
 
 # resolve_path <dir> <path>: <path> made absolute against <dir>, with . and .. collapsed (text only: the folder may be gone, so no symlinks are followed).
