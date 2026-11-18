@@ -814,7 +814,7 @@ check "it says no cursor was given" grep -q 'no cursor' <<<"$err"
 pages_repo
 pr '{"reviews":{"pageInfo":{"hasPreviousPage":true,"startCursor":"missing"},"nodes":[]}}'
 run --once 7
-check "a page gh fails to read is a failed poll: exit 2" status_is 2
+check "a page that fails to be read is a failed poll: exit 2" status_is 2
 pages_repo
 pr '{"comments":{"pageInfo":{"hasPreviousPage":true,"startCursor":"C1"},"nodes":[]}}'
 echo '{"data":{"repository":{"pullRequest":{"comments":{"nodes":"nope"}}}}}' > "$GH_PAGES_DIR/C1.json"
