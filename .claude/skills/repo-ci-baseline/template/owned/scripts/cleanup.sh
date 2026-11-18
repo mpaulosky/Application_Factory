@@ -64,15 +64,18 @@ slug_of() {
 # userinfo as git reads it (up to an @ before the first /) and as curl does (which may end the host at a ?, # or \ first), so a token or a
 # password is never printed, whatever it holds. When the masked text holds a ?, #, \ or a second @, readers may disagree on the host, and the
 # printed URL says so rather than hide it. A URL with no scheme, or no @ before its first /, is printed as it is. It runs in the C locale, so a
-# byte that is no character still matches [^/]. Only the messages use it: the comparisons use the URLs as they are.
+# byte that is no character still matches [^/]. A control character (ESC, CR) is printed as ?, so it can't
+# redraw the line and hide the host. Only the messages use it: the comparisons use the URLs as they are.
 shown_url() {
   local LC_ALL=C
+  local shown
   if [[ "$1" =~ ^([A-Za-z][A-Za-z0-9+.-]*://)([^/]*)@(.*)$ ]]; then
-    printf '%s***@%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[3]}"
-    if [[ "${BASH_REMATCH[2]}" == *[?#\\@]* ]]; then printf ' [the masked text holds a ?, #, \\ or @, so another URL reader may take another host]'; fi
+    shown="${BASH_REMATCH[1]}***@${BASH_REMATCH[3]}"
+    if [[ "${BASH_REMATCH[2]}" == *[?#\\@]* ]]; then shown+=' [the masked text holds a ?, #, \ or @, so another URL reader may take another host]'; fi
   else
-    printf '%s' "$1"
+    shown="$1"
   fi
+  printf '%s' "${shown//[[:cntrl:]]/?}"
 }
 url="$(git remote get-url upstream 2>/dev/null || git remote get-url origin 2>/dev/null || true)"
 repo="${GITHUB_REPOSITORY:-}"

@@ -911,6 +911,28 @@ pr '{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true,"endCursor"
 echo '{"data":{"repository":{"pullRequest":{"headRefOid":"new-head","statusCheckRollup":null}}}}' > "$GH_PAGES_DIR/K1.json"
 run --once 7
 check "a checks page of a new head with no rollup says the head moved" grep -q 'head moved' <<<"$err"
+# A checks page of the head whose own rollup is of another commit is not merged: it says so, and not that the head moved.
+pages_repo
+pr '{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true,"endCursor":"K1"},"nodes":[]}}}'
+page K1 checks "$FAILING" false "" '{"statusCheckRollup":{"commit":{"oid":"another-commit"}}}'
+run --once 7
+check "a checks page whose rollup is of another commit is a failed poll: exit 2" status_is 2
+check "it says that page is not of the head commit" grep -q "page 2 of the PR's checks is not of its head commit" <<<"$err"
+check "not that the head moved (rollup of another commit)" not grep -q 'head moved' <<<"$err"
+# A checks page that is no pull request at all is no list of checks, not a head that moved.
+pages_repo
+pr '{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true,"endCursor":"K1"},"nodes":[]}}}'
+echo '{"data":{"repository":{"pullRequest":null}}}' > "$GH_PAGES_DIR/K1.json"
+run --once 7
+check "a checks page with no pull request says it is not a list" grep -q "page 2 of the PR's checks is not a list" <<<"$err"
+check "not that the head moved (no pull request)" not grep -q 'head moved' <<<"$err"
+# Nodes with no id are never taken for repeats of each other: both id-less comments are read.
+pages_repo
+pr "{\"comments\":{\"pageInfo\":{\"hasPreviousPage\":true,\"startCursor\":\"C1\"},\"nodes\":[{\"author\":$PERSON,\"body\":\"idless newer\"}]}}"
+page C1 comments "[{\"author\":$PERSON,\"body\":\"idless older\"}]" false
+run --once 7
+check "an id-less comment on page 2 is read" grep -q 'idless older' <<<"$out"
+check "and the id-less one on page 1 too" grep -q 'idless newer' <<<"$out"
 
 # Every page query asks for what the merge reads, with balanced braces (the fake gh doesn't read the query, so pin its text).
 pages_repo
@@ -923,7 +945,8 @@ run --once 7
 check "all four lists were paged" test "$(grep -c 'cursor=' "$GH_LOG")" -eq 4
 # shellcheck disable=SC2016 # GraphQL's $cursor, not the shell's
 check "the checks page query reads forward from the end cursor" grep -qF 'contexts(first:100,after:$cursor){pageInfo{hasNextPage endCursor}' "$GH_LOG"
-check "the checks page query reads the head and the rollup's commit" grep -qF 'headRefOid statusCheckRollup{commit{oid}' "$GH_LOG"
+checks_query=$(grep -F 'contexts(first:100,after:' "$GH_LOG") # the checks page query's own line: the first query holds the same head fields
+check "the checks page query reads the head and the rollup's commit" grep -qF 'headRefOid statusCheckRollup{commit{oid}' <<<"$checks_query"
 while IFS= read -r logged; do
   query=${logged#*query=}
   query=${query%% -f owner=*}

@@ -187,8 +187,8 @@ pagefile="$(mktemp)"
 trap 'command rm -f "$errfile" "$pagefile"' EXIT
 
 # read_rest: reads each list of the open PR in $resp that has more pages to its end, merging the pages into $resp (later pages after the
-# first's threads and checks, earlier ones before its reviews and comments; a review or comment a later page repeats, as when the list shifted
-# between page queries, is kept once). Returns 1 with $reason set when a page can't be read whole: gh fails, GitHub gives no cursor, the first
+# first's threads and checks, earlier ones before its reviews and comments; a review or comment with an id a later page repeats, as when the list
+# shifted between page queries, is kept once). Returns 1 with $reason set when a page can't be read whole: gh fails, GitHub gives no cursor, the first
 # answer's checks are not of its head yet (no page of them is read then), a checks page is of another head than the first answer's or its
 # rollup of another commit, the page isn't the list's shape, or the list has more than MAX_EXTRA_PAGES pages after the first. A page goes
 # through a file, not an argument: 100 comment bodies can pass the argument length limit. Pages are read at different moments, so a list
@@ -224,23 +224,24 @@ read_rest() {
         reason="gh failed reading page $((pages + 1)) of the PR's $list: $(head -n 1 "$errfile")"
         return 1
       fi
-      if [[ "$list" == checks ]] && ! jq -e --arg head "$head_oid" '.data.repository.pullRequest.headRefOid == $head' "$pagefile" >/dev/null 2>&1; then
+      # A page naming another head is a push between pages; a page naming none is no list of checks (the shape check below says so).
+      if [[ "$list" == checks ]] && jq -e --arg head "$head_oid" '.data.repository.pullRequest.headRefOid | type == "string" and . != $head' "$pagefile" >/dev/null 2>&1; then
         reason="an incomplete read: the PR's head moved while its checks were read"
-        return 1
-      fi
-      if [[ "$list" == checks ]] && ! jq -e --arg head "$head_oid" '.data.repository.pullRequest.statusCheckRollup.commit.oid == $head' "$pagefile" >/dev/null 2>&1; then
-        reason="an incomplete read: page $((pages + 1)) of the PR's checks is not of its head commit"
         return 1
       fi
       if ! jq -e --arg flag "$flag" ".data.repository.pullRequest$path | type == \"object\" and (.nodes | type == \"array\") and (.pageInfo[\$flag] | type == \"boolean\")" "$pagefile" >/dev/null 2>&1; then
         reason="an incomplete read: page $((pages + 1)) of the PR's $list is not a list of them"
         return 1
       fi
+      if [[ "$list" == checks ]] && ! jq -e --arg head "$head_oid" '.data.repository.pullRequest | .headRefOid == $head and .statusCheckRollup.commit.oid == $head' "$pagefile" >/dev/null 2>&1; then
+        reason="an incomplete read: page $((pages + 1)) of the PR's checks is not of its head commit"
+        return 1
+      fi
       if ! resp="$(printf '%s' "$resp" | jq -c --slurpfile page "$pagefile" --arg order "$order" "
           (\$page[0].data.repository.pullRequest$path) as \$p
           | .data.repository.pullRequest$path |= (.pageInfo = \$p.pageInfo
               | .nodes = (if \$order == \"after\" then .nodes + \$p.nodes
-                  else (\$p.nodes + .nodes) | reduce .[] as \$n ([]; if any(.[]; .id == \$n.id) then . else . + [\$n] end) end))")"; then
+                  else (\$p.nodes + .nodes) | reduce .[] as \$n ([]; if \$n.id != null and any(.[]; .id == \$n.id) then . else . + [\$n] end) end))")"; then
         reason="the PR's $list could not be put together"
         return 1
       fi

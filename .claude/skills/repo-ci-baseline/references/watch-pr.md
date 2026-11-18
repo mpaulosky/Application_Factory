@@ -68,12 +68,12 @@ Anyone who can comment can forge a marker and be unheard by the watcher. That is
   gh can't read, a missing cursor, a page of another shape, checks whose first rollup is not of the head yet (they are not paged then), or a checks page of another head
   (a push between pages) is an incomplete read, a failed poll (never a quiet one) whose message says which; five in a row end the watcher with exit 2. Each page costs about
   one more GraphQL point. The page cap is per list, so the four lists may take 40 pages after the first in one poll.
-- Pages are read at different moments, not as one snapshot. A review or comment a later page repeats (the list shifted between queries) is kept once, but a list that
-  shifts can be read without an item (a comment deleted, a check re-run) for that one poll; the next poll reads it afresh.
   A merged or closed PR is reported from its state alone, though its lists must still be arrays. The checks come from the PR's own
   `statusCheckRollup`, and only while it is of `headRefOid`; the last of the PR's commits needn't be the head, and the head ref (in the head repository) isn't read,
   so a fork PR is watched. A PR with no rollup yet has no check reported and is quiet, unless GitHub calls it `UNSTABLE` (a check failed):
   then the read is incomplete and the poll fails.
+- Pages are read at different moments, not as one snapshot. A review or comment with an id a later page repeats (the list shifted between queries) is kept once, but a list that
+  shifts can be read without an item (a comment deleted, a check re-run) for that one poll; the next poll reads it afresh.
 - `behind` appears only where the base branch's rules require an up-to-date branch. PR Auto-Merge also merges `main` into a ready PR, so it may clear before the session acts.
 - The Sandcastle workflow's own red `Sandcastle` check counts as `check-failed`.
 - The tests run against a fake `gh`; nothing in the Template runs it against live GitHub.

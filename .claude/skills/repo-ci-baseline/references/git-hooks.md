@@ -79,7 +79,8 @@ still holds the tip it judged (one GitHub already deleted counts as removed, and
 it forgets git's entry for that one worktree only (a locked one is kept; a parent folder that is missing, empty, unreadable or unsearchable may be an unmounted drive, so the branch is kept with the
 hint to run `git worktree prune`). It needs `gh` logged in, and for an `origin` that is not on github.com, `GITHUB_REPOSITORY`. It exits 1 when it can't run (not on `main`, an `origin` push URL that
 is not shown to be the fetch URL's repository (the same text, or both github.com URLs for the same owner/name; `CLEANUP_PUSH_URL_OK=1` accepts push URLs you have checked,
-and warns about each; both messages print a scheme URL's userinfo, which can hold a token, as `***`), not
+and warns about each; both messages print a scheme URL's text up to the last `@` before the first `/`, its userinfo, which can hold a token, as `***`, add a note when that text holds a
+`?`, `#`, `\` or second `@` (another URL reader may take another host), and print a control character as `?`), not
 the primary checkout, a dirty `main`, no `gh` or repository, a bad argument), can't fetch `origin`, `main` can't fast-forward or a `gh` lookup fails, and, after doing the rest, when a removal git
 refused, a branch a worktree is rebasing or bisecting (a real run only), a check of `origin` or the closing fetch failed, or a commit was made, or the branch deleted, after a branch was judged.
 `--dry-run` shows the steps. `git worktree remove` alone leaves the local and `origin` branches behind.
