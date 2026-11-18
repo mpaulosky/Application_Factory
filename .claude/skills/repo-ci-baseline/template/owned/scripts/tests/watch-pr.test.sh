@@ -2,12 +2,14 @@
 # Tests for scripts/watch-pr.sh, run in throwaway git repositories against a fake `gh` and a fake `sleep`.
 # Usage: scripts/tests/watch-pr.test.sh
 #
-# The fake gh ignores the query it is given and prints a canned GraphQL response, so the script must read gh's whole output with jq
-# itself (no `gh --jq`). The response has GitHub's own shape, under .data.repository.pullRequest:
+# The fake gh logs the query it is given but doesn't read it: it prints a canned GraphQL response ($GH_FIXTURE) for the first query, and for a
+# page query (one with -f cursor=<c>, when GH_PAGES_DIR is set) the file $GH_PAGES_DIR/<c>.json, so the script must read gh's whole output
+# with jq itself (no `gh --jq`). The response has GitHub's own shape, under .data.repository.pullRequest:
 #   state, merged, mergeable, mergeStateStatus, headRefOid,
-#   statusCheckRollup.{commit.oid, contexts.nodes[]}  (CheckRun: name, conclusion, status; StatusContext: context, state),
-#   reviewThreads.nodes[]  (isResolved, comments.nodes[]: author { __typename, login }, body; the last one is the thread's last comment),
-#   reviews.nodes[] and comments.nodes[]  (id, author { __typename, login }, body, and state for a review).
+#   statusCheckRollup.{commit.oid, contexts.{pageInfo.{hasNextPage, endCursor}, nodes[]}}  (CheckRun: name, conclusion, status; StatusContext: context, state),
+#   reviewThreads.{pageInfo.{hasNextPage, endCursor}, nodes[]}  (isResolved, comments.nodes[]: author { __typename, login }, body; the last one is the
+#   thread's last comment),
+#   reviews and comments: {pageInfo.{hasPreviousPage, startCursor}, nodes[]}  (id, author { __typename, login }, body, and state for a review).
 set -uo pipefail
 
 # Hooks that run this file set GIT_* variables that would aim git init and rev-parse at the outer repo.
@@ -714,7 +716,8 @@ echo '{"data":{"repository":{"pullRequest":{"state":"OPEN"}}}}' > "$GH_FIXTURE"
 run --once 7
 check "a response missing its lists is not quiet" not status_is 1
 
-# A list GitHub says has more pages, or a rollup that isn't of headRefOid, is an incomplete read: a failed poll, never quiet.
+# A list GitHub says has more pages but gives no cursor for (these fixtures have none), or a rollup that isn't of headRefOid, is an incomplete
+# read: a failed poll, never quiet. A list that does give a cursor is read on: see the paging tests below.
 for incomplete in \
   '{"reviewThreads":{"pageInfo":{"hasNextPage":true}}}' \
   '{"reviews":{"pageInfo":{"hasPreviousPage":true}}}' \
@@ -815,11 +818,13 @@ pages_repo
 pr '{"reviews":{"pageInfo":{"hasPreviousPage":true,"startCursor":"missing"},"nodes":[]}}'
 run --once 7
 check "a page that fails to be read is a failed poll: exit 2" status_is 2
+check "it says which page failed" grep -q "failed reading page 2 of the PR's reviews" <<<"$err"
 pages_repo
 pr '{"comments":{"pageInfo":{"hasPreviousPage":true,"startCursor":"C1"},"nodes":[]}}'
 echo '{"data":{"repository":{"pullRequest":{"comments":{"nodes":"nope"}}}}}' > "$GH_PAGES_DIR/C1.json"
 run --once 7
 check "a page whose nodes aren't a list is a failed poll: exit 2" status_is 2
+check "it says that page is not a list" grep -q "page 2 of the PR's comments is not a list" <<<"$err"
 pages_repo
 pr '{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true,"endCursor":"K1"},"nodes":[]}}}'
 page K1 checks "$PASSING" false "" '{"headRefOid":"another-head","statusCheckRollup":{"commit":{"oid":"another-head"}}}'
@@ -846,6 +851,86 @@ pr "{\"reviewThreads\":{\"pageInfo\":{\"hasNextPage\":true,\"endCursor\":\"T1\"}
 page T1 threads "[{\"isResolved\":false,\"comments\":{\"nodes\":[{\"author\":$PERSON,\"body\":\"second-page\"}]}}]" false
 run --once 7
 check "a later page's thread is printed after the first page's" in_order "$out" first-page second-page
+
+# The page count is per list: two lists of 6 pages after the first each (12 pages in all, past the 10 one list may have) are read whole.
+pages_repo
+pr '{"reviewThreads":{"pageInfo":{"hasNextPage":true,"endCursor":"T1"},"nodes":[]},"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true,"endCursor":"K1"},"nodes":[]}}}'
+for i in 1 2 3 4 5 6; do
+  if ((i < 6)); then
+    page "T$i" threads "$RESOLVED" true "T$((i + 1))"
+    page "K$i" checks "$PASSING" true "K$((i + 1))"
+  else
+    page "T$i" threads "$RESOLVED" false
+    page "K$i" checks "$PASSING" false
+  fi
+done
+run --once 7
+check "two lists of 6 pages after the first each are read whole: quiet" status_is 1
+
+# A list read back over three pages: each page is asked for from the cursor of the page before, and the comments are kept oldest first.
+pages_repo
+pr "{\"comments\":{\"pageInfo\":{\"hasPreviousPage\":true,\"startCursor\":\"C1\"},\"nodes\":[{\"id\":\"IC_3\",\"author\":$PERSON,\"body\":\"third\"}]}}"
+page C1 comments "[{\"id\":\"IC_2\",\"author\":$PERSON,\"body\":\"second\"}]" true C2
+page C2 comments "[{\"id\":\"IC_1\",\"author\":$PERSON,\"body\":\"first\"}]" false
+run --once 7
+check "a three-page list of comments is read whole" status_is 0
+check "page 3 is asked for from page 2's cursor" grep -qF 'cursor=C2' "$GH_LOG"
+check "the comments are printed oldest first over three pages" in_order "$out" first second
+check "and the newest last" in_order "$out" second third
+
+# A node a later page repeats (the list shifted between page queries) is read once: a one-shot event is printed once.
+pages_repo
+pr "{\"reviews\":{\"pageInfo\":{\"hasPreviousPage\":true,\"startCursor\":\"R1\"},\"nodes\":[{\"id\":\"PRR_1\",\"state\":\"COMMENTED\",\"author\":$PERSON,\"body\":\"once only\"}]}}"
+page R1 reviews "[{\"id\":\"PRR_1\",\"state\":\"COMMENTED\",\"author\":$PERSON,\"body\":\"once only\"}]" false
+run --once 7
+check "a review a later page repeats is printed once" test "$(grep -c 'once only' <<<"$out")" -eq 1
+
+# A missing or non-string cursor fails the read for every list, with that reason.
+for over in '{"reviews":{"pageInfo":{"hasPreviousPage":true,"startCursor":null},"nodes":[]}}' \
+  '{"comments":{"pageInfo":{"hasPreviousPage":true,"startCursor":7},"nodes":[]}}' \
+  '{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true,"endCursor":""},"nodes":[]}}}'; do
+  pages_repo
+  pr "$over"
+  run --once 7
+  check "a list with more pages and cursor $over is a failed poll: exit 2" status_is 2
+  check "it says no cursor was given ($over)" grep -q "no cursor" <<<"$err"
+done
+
+# A first rollup not of the head yet is not paged: it is the not-of-head reason, not a head that moved.
+pages_repo
+pr '{"statusCheckRollup":{"commit":{"oid":"older-commit"},"contexts":{"pageInfo":{"hasNextPage":true,"endCursor":"K1"},"nodes":[]}}}'
+page K1 checks "$PASSING" false
+run --once 7
+check "a first rollup of another commit with a next page is a failed poll: exit 2" status_is 2
+check "it says the checks are not of the head yet" grep -q 'not of its head commit yet' <<<"$err"
+check "not that the head moved" not grep -q 'head moved' <<<"$err"
+check "and its checks are not paged" not grep -qF 'cursor=K1' "$GH_LOG"
+# A push between pages whose new head has no rollup yet says the head moved, not that the page is no list.
+pages_repo
+pr '{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true,"endCursor":"K1"},"nodes":[]}}}'
+echo '{"data":{"repository":{"pullRequest":{"headRefOid":"new-head","statusCheckRollup":null}}}}' > "$GH_PAGES_DIR/K1.json"
+run --once 7
+check "a checks page of a new head with no rollup says the head moved" grep -q 'head moved' <<<"$err"
+
+# Every page query asks for what the merge reads, with balanced braces (the fake gh doesn't read the query, so pin its text).
+pages_repo
+pr '{"reviewThreads":{"pageInfo":{"hasNextPage":true,"endCursor":"T1"},"nodes":[]},"reviews":{"pageInfo":{"hasPreviousPage":true,"startCursor":"R1"},"nodes":[]},"comments":{"pageInfo":{"hasPreviousPage":true,"startCursor":"C1"},"nodes":[]},"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true,"endCursor":"K1"},"nodes":[]}}}'
+page T1 threads "$RESOLVED" false
+page R1 reviews '[]' false
+page C1 comments '[]' false
+page K1 checks "$PASSING" false
+run --once 7
+check "all four lists were paged" test "$(grep -c 'cursor=' "$GH_LOG")" -eq 4
+# shellcheck disable=SC2016 # GraphQL's $cursor, not the shell's
+check "the checks page query reads forward from the end cursor" grep -qF 'contexts(first:100,after:$cursor){pageInfo{hasNextPage endCursor}' "$GH_LOG"
+check "the checks page query reads the head and the rollup's commit" grep -qF 'headRefOid statusCheckRollup{commit{oid}' "$GH_LOG"
+while IFS= read -r logged; do
+  query=${logged#*query=}
+  query=${query%% -f owner=*}
+  opens=${query//[^\{]/}
+  closes=${query//[^\}]/}
+  check "a page query's braces balance (${query:0:60}...)" test "${#opens}" -eq "${#closes}" -a "${#opens}" -gt 0
+done < <(grep 'cursor=' "$GH_LOG")
 
 # An incomplete read that paging can't mend (a rollup of another commit) says so, not that the answer is malformed.
 new_repo
