@@ -188,6 +188,19 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
+      # The checker parses each script with shfmt (repo-ci-baseline's ADR 0011): the release binary,
+      # checked against the SHA-256 GitHub publishes for it, into a folder already on PATH. The hook-tests job installs the same one.
+      - name: Install shfmt
+        env:
+          SHFMT_VERSION: "3.14.1"
+          SHFMT_SHA256: "76e77641faa025814b77f153b29796b8e6fa2fca03e0c76a691608b86c7ea7bf"
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 --retry-all-errors -o shfmt "https://github.com/mvdan/sh/releases/download/v${SHFMT_VERSION}/shfmt_v${SHFMT_VERSION}_linux_amd64"
+          echo "${SHFMT_SHA256}  shfmt" | sha256sum -c -
+          sudo install -m 0755 shfmt /usr/local/bin/shfmt
+          shfmt --version
+
       - name: Check the base branch's rules against this tree
         env:
           BASE_REF: ${{ github.base_ref }}
@@ -353,6 +366,18 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # pre-push.test.sh runs the gate, whose gh check parses shell with shfmt: the gh-repo job's pinned and checked release.
+      - name: Install shfmt
+        env:
+          SHFMT_VERSION: "3.14.1"
+          SHFMT_SHA256: "76e77641faa025814b77f153b29796b8e6fa2fca03e0c76a691608b86c7ea7bf"
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 --retry-all-errors -o shfmt "https://github.com/mvdan/sh/releases/download/v${SHFMT_VERSION}/shfmt_v${SHFMT_VERSION}_linux_amd64"
+          echo "${SHFMT_SHA256}  shfmt" | sha256sum -c -
+          sudo install -m 0755 shfmt /usr/local/bin/shfmt
+          shfmt --version
 
       - name: Run pre-push hook tests
         run: bash .github/hooks/tests/pre-push.test.sh

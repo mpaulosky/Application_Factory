@@ -5,7 +5,7 @@
 # .github/scripts/discover_tests.py and .github/scripts/check_gh_repo.py, with the refs git would
 # pass on stdin. Stub `dotnet`, `pnpm`, `markdownlint-cli2`, `yamllint`,
 # `actionlint`, `zizmor` and `shellcheck` binaries log each call, and fail when the call matches the FAIL glob, so no
-# real build or network access is needed.
+# real build or network access is needed. check_gh_repo.py is the real one, so shfmt (v3.14 or a later v3) must be on PATH.
 # Usage: .github/hooks/tests/pre-push.test.sh
 set -uo pipefail
 

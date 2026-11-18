@@ -116,32 +116,37 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     `--ignore-environment`, `env -u GH_REPO` / `--unset=GH_REPO` or `env -S` is refused even after an export, since
     those drop `GH_REPO` before `gh` runs; only a `GH_REPO=<value>` right before `gh` on the same line tells it
     (`sudo GH_REPO=o/r gh pr view 1`). `bash -c`, `eval`, `| sh` and `xargs gh` inherit the export and are accepted
-    (mpaulosky/dotfiles#344). A later `unset GH_REPO`, or an assignment that is no prefix of a `gh` command, ends an export. An `export GH_REPO=...` that starts its line
-    in a branch of an `if` whose condition is plainly false (`false`, `! true`, `[ 0 -ne 0 ]`, `[ 1 -eq 0 ]`), or in the `else` of a plainly
-    true one (`true`, `:`), is no export; any other condition is assumed to run, and so is an `elif` branch. The condition is judged only on an `if`
-    that starts its line, and at its real `then` (a `then` where a command starts, never `echo then`), read over the following lines when the condition goes on
-    (a condition with no `then` within 20 lines may run). Inside `[[ ... ]]` a word, `||`, `&&`, `;` and parentheses are operands, never keywords; a `#` after an escaped blank (`foo\ #`) is
-    no comment. Keywords are read in source order (`fi; if true; then` closes one block and opens the next; an `else` flips the
-    branch whether it starts the line or follows a `;`). An `if`, `fi`, `else` or `elif` counts only where a command starts: not quoted, escaped, in `${...}` or in a
-    comment (`'; fi'`, `echo x # fi`), not an argument (`grep -q fi`), not after a `)` that closes `$(...)`, `<(...)` or `>(...)`, not inside `((...))`,
-    `$((...))`, `name=(...)` or an extglob group `+(...)` (a parenthesis nested in them, except a `$(`, and a quoted or escaped one, are part of them), and not at the
-    start of a line that a trailing backslash continues mid-command (a comment ends the command, so the line after one starts a new one). A `)` that closes a
-    subshell or a case pattern does start a command (`a) if y; then z; fi ;;`). A case pattern `fi)`, a `(` left open at the end of a line (a `$(`, `((` or `name=(`
-    that spans lines: the next line is read as code), a `[[ ... ]]` that spans lines (the next line is read as code), a backtick substitution, a `${...}` that holds a quote, a `}` or a `)`
-    (it ends at the first `}`), double quotes
-    nested more than 50 deep in `"$(...)"`, and a line of a multi-line string or of a heredoc body read as code that starts like `fi` or `else` can still misjudge a branch.
-    A backslash-continued chain is read back at most 100 lines. The join after each of the first 100 lines of a chain is judged on the chain whole (a trailing backslash inside a comment
-    joins nothing, and a `#` inside a string an earlier line opened is no comment), so the text read back and the line that starts a command follow the chain (`joined_lines`): a string
-    that spans lines and closes before a comment ending in a backslash (`b" # c \`) joins nothing, and a `GH_REPO=` in that comment tells no later gh. The join after a later line uses
-    the backslash alone for a heredoc header, so a real comment ending in a backslash past line 100 hides a `<<` on the line after it (that heredoc's body is read as code). A line past
-    line 100 that holds a `#` and ends in a backslash (a comment, or a `#` in a string an earlier line opened) can't be judged: the read-back stops at it and counts as a chain cut, so a
-    gh in the chain after it needs its own `--repo` or `GH_REPO=`; no `export` from that chain on, to the end of the file, tells a gh (a body's export can't); an export before the chain
-    still tells a gh on a line after the chain, and one in the chain before the unjudged line, but not one in the chain after it. The line after an unjudged line is not forced to start
-    a command: a real comment on it still ends the command there. An `export` counts only when its line starts a command: not one that continues an earlier line mid-command with a
-    backslash (`echo a \`; that command's argument, and like any `GH_REPO=` assignment it clears an export already set, the fail-closed side), but one after a trailing `&&`, `;`, `|` or
-    `then` and a backslash still counts. A line after a line without a continuing backslash always counts as starting a command, so an `export` inside a multi-line string, a `$(...)` or
-    after a `|` still counts (the known limit above).
-    An export no longer tells a gh after a longer chain, since a `sudo` that drops `GH_REPO` may have started before the part read, so only that gh's own `--repo` or a `GH_REPO=` right before it does.
+    (mpaulosky/dotfiles#344). A later `unset GH_REPO`, or an assignment that is no prefix of a `gh` command, ends an export.
+    The checker reads a script with shfmt's syntax tree (`shfmt -ln bash --to-json`; [ADR 0011](../docs/adr/0011-the-gh-repo-check-parses-shell-with-shfmt.md)),
+    so comments, strings, heredoc bodies, substitutions, backticks, `${...}`, `[[ ... ]]`, case patterns and backslash continuations of any length are read as bash
+    reads them. It needs shfmt v3.14 or a later v3 release on `PATH`: CI's `gh-repo` and `hook-tests` jobs and the Seed Sandcastle `Dockerfile` install the pinned
+    release, and on your machine it comes from your package manager (`pacman -S shfmt`, `brew install shfmt`, `apt install shfmt` where the package is v3.14 or later)
+    or the release binaries at <https://github.com/mvdan/sh/releases>. Without it, or with an older or newer one, the checker fails with exit 2 and says why. It runs
+    shfmt in an empty folder of its own with only `PATH` set, so no file of the PR's (an `.editorconfig`) reaches it; a version manager's shim (asdf, mise)
+    that needs more than `PATH` fails there, so put the release binary on `PATH` instead.
+    An `export GH_REPO=...` counts when it is alone on its line, at its start, and runs in the
+    script's own shell: not in a subshell, a `$(...)`, a `<(...)`, a pipe, a coprocess, a group sent to the background (`{ ...; } &`) or a heredoc body, and not
+    in a branch that never runs. A branch never runs when it is the `then` of
+    an `if` or `elif` whose condition is plainly false (`false`, `! true`, `[ 0 -ne 0 ]`, `[ 1 -eq 0 ]`), the `else` or any `elif` after a condition that is plainly
+    true (`true`, `:`), or the right side of `false &&` or `true ||`; any other condition may run. An export that doesn't run leaves an earlier one standing. An
+    export after `&&`, `||` or `;` on an earlier line
+    counts; one that only continues an earlier line with a backslash is that command's argument and, like any `GH_REPO=` assignment, ends an export already set.
+    shfmt v3.14 joins the line after a comment that ends in a backslash; bash doesn't, so a valid script may even fail to parse. The checker then hands shfmt the
+    backslashes that end each line with a `#` on it as spaces, and parses again; a space the new tree puts in no comment (a `#` in a string, then a real
+    continuation) gets its backslash back, and so does a space on the line right before a syntax error the blanks brought (a real continuation onto a `|` or
+    `&&` line, as in `grep '^#' f \`), one per parse. After 10 parses (`COMMENT_PASSES`) with blanks still changing, the whole script is read as one that isn't
+    valid bash, so no export in it is trusted: a script with a comment that ends in a backslash and more than eight such continuations, for one.
+    A script that isn't valid bash is read up to its syntax error, since bash runs the statements before it and stops there: those statements are judged on the tree
+    and their export counts. The lines from the error on are judged one at a time as code, with the export the statements before left, and no export of their own;
+    a wrapper on an earlier line that a backslash joins to the `gh`'s (`sudo \`) drops that export. A `gh` with more than 4096 characters before it in its own
+    command (`BEFORE_CHARS`; joined lines included, without the backslash and newline that join them) or after it on its line, or more than 100 continued lines
+    before it after a syntax error (`JOINED_LINES`), or whose command is more than 8192 characters (twice `BEFORE_CHARS`) long before it,
+    continuations included, is refused whatever tells it, so the text read for one `gh` stays bounded: split such a command or line.
+    Within those bounds a crafted command (hundreds of `env` or `NAME=value` words before many `gh` words) still takes the old
+    checker's rules seconds. The checker parses at most five times looking for those
+    statements (`PREFIX_TRIES`), the whole script first.
+    One statement nested deeper than the checker's tree walk goes (a chain of about 190 `&&`, `||` or `|` links) is read the same way from the script's first line:
+    no export in the file is trusted.
   - A file with a NUL byte is checked with the NULs removed, as bash reads it, not skipped. `--repo` reads a suffix in
     lower case (`up.SH`) and `.zsh`, treats every extensionless file under `scripts/` and `.github/ci/` as shell
     (under `.claude/skills/` it needs a shell shebang), and refuses a symlink whose target is outside the repo or
@@ -159,18 +164,20 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     its own next command, and is accepted before the export. A pipe or a backslash continuation after it is refused.
   - `gh.exe` is `gh`: it is judged by the same rules, and a longer word (`gh.executable`, `neigh.exe`) or a folder
     (`~/.config/gh.exe/`) is not.
-  - The body of a heredoc is skipped only when every command on its logical line (backslash continuations joined)
-    treats its input as data: `cat`, `tee`, `echo`, `printf`, `read`, `mail`, `:` and `true`, with a plain redirect and
-    any `NAME=value` words before them, and every file they write is text (`.txt`, `.md`, `.json`, `/dev/stderr`, `>&2`,
-    ...). Prose naming `gh` in `cat <<EOF` usage text is then no code, as an `echo` message is not. Any other command
-    may run its input, so its body is read as code: a shell (`bash <<EOF`, `cat <<EOF | sh`, `eval`, `source`,
-    `GH_TOKEN=x . /dev/stdin <<EOF`), an interpreter (`python3 - <<EOF`, `node - <<EOF`, `ssh host <<EOF`), a script
-    written to a file that isn't text (`cat > run.sh <<EOF`, `cat > "$file" <<EOF`), and a line ending in a pipe, whose
-    consumer follows the body. A `<<` inside a quote, a comment or `(( ))` is no heredoc. An unquoted delimiter
-    (`<<EOF`, not `<<'EOF'`) still lets bash run the `$(...)` and backticks in a data body, so a `gh` inside one is
-    judged, on whichever line of a multi-line substitution it is.
+  - The body of a heredoc is skipped only when the command it is fed to treats its input as data: `cat`, `tee`, `echo`,
+    `printf`, `read`, `mail`, `:` and `true`, with any `NAME=value` words before them, every file they write is text (`.txt`,
+    `.md`, `.json`, `/dev/stderr`, `>&2`, ...), and their output goes on only to data: the terminal, a pipe into more data commands,
+    a variable (`x=$(cat <<EOF ...)`), or a data command's argument (`echo "$(cat <<EOF ...)"`). Prose naming `gh` in `cat <<EOF`
+    usage text is then no code, as an `echo` message is not. Any other command may run its input, so its body is read as code,
+    line by line: a shell (`bash <<EOF`, `cat <<EOF | sh`, `eval "$(cat <<EOF ...)"`, `source <(cat <<EOF ...)`,
+    `GH_TOKEN=x . /dev/stdin <<EOF`), an interpreter (`python3 - <<EOF`, `node - <<EOF`, `ssh host <<EOF`), and a script
+    written to a file that isn't text (`cat > run.sh <<EOF`, `cat > "$file" <<EOF`). A heredoc on a statement with no command
+    (`<<EOF` alone, `> out <<EOF`) is read as code too. The delimiter word and the line that
+    closes the body, even an empty one, are no code. An unquoted delimiter (`<<EOF`, not `<<'EOF'`) still lets bash run the `$(...)` and
+    backticks in a data body, so a `gh` inside one is judged.
   - Lines end only at a newline, as bash's do (an optional `\r` before it is dropped). A binary file (with a NUL byte)
-    is skipped; any other file is read whatever bytes it holds.
+    is read with its NULs removed, as bash reads it; any other file is read whatever bytes it holds (a byte that isn't UTF-8 is
+    given to shfmt as a `?`).
 
   A skill's snippets stand alone, so there is no export: in a fenced block or an inline code span, write
   `GH_REPO=owner/repo gh ...` (or `GH_REPO="${repo:?}"`) right before each `gh` command, or give `--repo owner/repo`
@@ -182,6 +189,9 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
 
   A line that names `gh` without running it (`command -v gh >/dev/null`, `echo "needs gh"`) ends in a comment
   `# gh-repo: ok` in a script or a fenced block, or carries `<!-- gh-repo: ok -->` in a skill, and the check skips it.
+  In a script the marker counts only as a comment: `gh pr merge 1 --body "# gh-repo: ok"` is still judged, and so is
+  `gh pr merge 1 <<'# gh-repo: ok'`, whose heredoc delimiter is no comment. In a heredoc body some
+  program reads, and in the lines after a syntax error, a `#` anywhere on the line counts, as the program reading it starts a comment there.
   A path such as `~/.config/gh/hosts.yml` is not a command. The marker is the way out for a line the rules misread; a
   real `gh` command is told its repository instead.
 - **Script tests need pytest,** which the system Python may lack. `uvx pytest -q .github/scripts/tests` runs them

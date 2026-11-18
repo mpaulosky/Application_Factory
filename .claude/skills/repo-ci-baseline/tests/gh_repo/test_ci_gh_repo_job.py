@@ -26,6 +26,8 @@ TOLD = "export GH_REPO=o/r\ngh pr view 1\n"
 GATE = "#!/usr/bin/env bash\necho gate\n"
 EDITED_GATE = "#!/usr/bin/env bash\necho gate\nexit 0\n"
 APPLY_BRANCHES = ["chore/standardize-baseline", "chore/reapply-baseline"]
+INSTALL_SHFMT = "Install shfmt"
+INSTALLS_SHFMT = "sudo install -m 0755 shfmt /usr/local/bin/shfmt"
 
 
 def load_workflow():
@@ -213,8 +215,14 @@ class Job:
         runner = self.tmp_path / "runner"
         runner.mkdir()
         output, code = [], 0
+        skipped = []
         for index, step in enumerate(the_job()["steps"]):
             if "run" not in step or not self.runs(step, code != 0):
+                continue
+            # It downloads shfmt and installs it with sudo; the test's PATH has shfmt already (test.sh needs it), and
+            # test_shfmt_install.py runs the step itself. Told by what it runs, so a rename can't make the harness run it.
+            if INSTALLS_SHFMT in str(step["run"]):
+                skipped.append(index)
                 continue
             script = self.tmp_path / f"step{index}.sh"
             script.write_text(self.expression(str(step["run"])))
@@ -229,10 +237,28 @@ class Job:
             output.append(done.stdout + done.stderr)
             if done.returncode != 0 and code == 0:
                 code = done.returncode
+        assert len(skipped) == 1, f"the harness skipped {len(skipped)} steps, not the one shfmt install"
         return code, "".join(output)
 
 
 BASE = {CHECKER_PATH: CHECKER.read_text(), "scripts/gate.sh": GATE, "scripts/ok.sh": TOLD}
+
+
+def test_the_job_installs_a_pinned_and_checked_shfmt_before_the_checker_runs():
+    # Arrange: the checker parses shell with shfmt (repo-ci-baseline's ADR 0011).
+    steps = the_job()["steps"]
+    names = [step.get("name") for step in steps]
+    checker = next(index for index, step in enumerate(steps) if "check_gh_repo.py\" --repo" in str(step.get("run", "")))
+
+    # Act
+    install = steps[names.index(INSTALL_SHFMT)]
+
+    # Assert: before the checker, a version and the release's SHA-256 pinned, the download checked against it.
+    assert names.index(INSTALL_SHFMT) < checker
+    assert re.fullmatch(r"3\.[0-9]+\.[0-9]+", install["env"]["SHFMT_VERSION"])
+    assert re.fullmatch(r"[0-9a-f]{64}", install["env"]["SHFMT_SHA256"])
+    assert "sha256sum -c -" in install["run"]
+    assert "github.com/mvdan/sh/releases/download/" in install["run"]
 
 
 def run_job(tmp_path, head_files=None, base_files=None, **kwargs):
