@@ -160,7 +160,9 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     `.github/scripts/check_owned_files.py`, which fails with `Owned file <path> differs from <base>` when a PR changes (blob or mode), deletes, renames
     or adds an Owned file (the base checker's `OWNED` paths: a file in an Owned folder, or an Owned file the base lacks, such as `scripts/review.sh`;
     `\r` and `\n` in a path are logged as those two characters). Both scripts are taken from the PR's base commit (`git show <base.sha>:<path>` into a
-    temp folder) and run with `python3 -I`, so the PR's copies never judge it. A base with neither (the first Apply) passes and says so; a base with
+    temp folder) and run with `python3 -I`, so the PR's copies never judge it. A readable base whose tree has neither (the first Apply) passes and says so;
+    a base commit, tree or script git can't read fails both checks (`::error::`, or `check_owned_files.py`'s exit 2, as does a base checker that fails
+    to load or has no `OWNED` list), so an unreadable base never passes as the first Apply. A base with
     `check_gh_repo.py` but no `check_owned_files.py` predates the script, so the PR brings it, and the Owned files check fails rather than run the PR's
     copy or check nothing: land it through a labelled Apply PR.
   - An Apply PR is exempt from the Owned files check only when all three hold (R20): its head branch is `chore/standardize-baseline` or

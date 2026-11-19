@@ -270,6 +270,8 @@ class Job:
         runner.mkdir()
         output, code = [], 0
         skipped = []
+        # Each job's own result, by its index in both_jobs(): the exit code of its first failing step, or 0, and its output.
+        self.job_codes, self.job_outputs = {}, {}
         steps = [(job_index, step) for job_index, job in enumerate(both_jobs()) for step in job["steps"]]
         failed = set()
         for index, (job_index, step) in enumerate(steps):
@@ -291,8 +293,11 @@ class Job:
             done = subprocess.run(["bash", "--noprofile", "--norc", *options.split(), str(script)], cwd=self.work,
                                   env=env, capture_output=True, text=True)
             output.append(done.stdout + done.stderr)
+            self.job_outputs[job_index] = self.job_outputs.get(job_index, "") + done.stdout + done.stderr
+            self.job_codes.setdefault(job_index, 0)
             if done.returncode != 0:
                 failed.add(job_index)
+                self.job_codes[job_index] = self.job_codes[job_index] or done.returncode
                 code = code or done.returncode
         assert len(skipped) == 1, f"the harness skipped {len(skipped)} steps, not the one shfmt install"
         return code, "".join(output)
@@ -782,6 +787,46 @@ def test_the_job_fails_when_the_base_has_the_checker_but_not_the_owned_files_che
     assert ("::error::main has .github/scripts/check_gh_repo.py but no .github/scripts/check_owned_files.py, so its Owned files "
             "can't be compared by the base's own rules") in output
     assert differs_lines(output) == []
+
+
+# Only a readable base whose tree has no checker is the first Apply: a base git can't read fails both jobs.
+
+JOB_NAMES = ["gh-repo", "owned-files"]
+
+
+def test_a_base_commit_git_cant_read_fails_both_jobs(tmp_path):
+    # Arrange: base.sha names a commit the checkout doesn't have.
+    job = Job(tmp_path, BASE, {"scripts/gate.sh": EDITED_GATE})
+    job.base_sha = "1" * 40
+
+    # Act
+    code, output = job.run()
+
+    # Assert: each job fails on its own with an error annotation, and neither passes as the first Apply.
+    assert code != 0
+    for index, name in enumerate(JOB_NAMES):
+        assert job.job_codes.get(index, 0) != 0, f"{name} passed an unreadable base: {job.job_outputs.get(index)}"
+        assert f"::error::can't read the base commit {'1' * 40} of main" in job.job_outputs[index], name
+    assert "first Apply" not in output
+
+
+def test_a_base_whose_checker_git_cant_read_fails_both_jobs(tmp_path):
+    # Arrange: the base's tree names check_gh_repo.py, but its blob is gone, so it isn't the first Apply.
+    job = Job(tmp_path, BASE, {"scripts/gate.sh": EDITED_GATE, CHECKER_PATH: CHECKER.read_text() + "# head\n"})
+    blob = subprocess.run(["git", "rev-parse", f"{job.base_sha}:{CHECKER_PATH}"], cwd=job.work, check=True,
+                          capture_output=True, text=True).stdout.strip()
+    (job.work / ".git" / "objects" / blob[:2] / blob[2:]).unlink()
+
+    # Act
+    code, output = job.run()
+
+    # Assert
+    assert code != 0
+    for index, name in enumerate(JOB_NAMES):
+        assert job.job_codes.get(index, 0) != 0, f"{name} passed an unreadable checker: {job.job_outputs.get(index)}"
+    assert "::error::can't read main's .github/scripts/check_gh_repo.py at " in job.job_outputs[0]
+    assert "check_owned_files.py: git show failed" in job.job_outputs[1]
+    assert "first Apply" not in output
 
 
 # R20: an Apply PR is exempt only with the maintainer-only label, from a branch of this repo.

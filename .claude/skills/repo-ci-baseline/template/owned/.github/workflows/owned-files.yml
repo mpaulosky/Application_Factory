@@ -10,6 +10,8 @@ name: Owned files
 # commit the merge ref was built from, not the base branch's moving tip, so a
 # re-run, or a run queued while an Apply PR lands, can't fail on files the PR
 # never touched. The first Apply's base has no checker: it passes and says so.
+# Only a readable base counts as that: a base commit, tree or script git can't
+# read fails the check.
 #
 # An Apply PR, whose job is to change the Owned files, is exempt only when all
 # three hold: its head branch is chore/standardize-baseline or
@@ -60,9 +62,23 @@ jobs:
         run: |
           tmp=$(mktemp -d)
           trap 'rm -rf "$tmp"' EXIT
+          # Only a readable base whose tree has no checker is the first Apply; a base git can't read fails.
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2> /dev/null; then
+            echo "::error::can't read the base commit ${BASE_SHA} of ${BASE_REF}, so its Owned files can't be compared."
+            exit 1
+          fi
+          if ! listed=$(git ls-tree --name-only "$BASE_SHA" -- .github/scripts/check_gh_repo.py .github/scripts/check_owned_files.py); then
+            echo "::error::can't read the tree of ${BASE_REF}'s commit ${BASE_SHA}, so its Owned files can't be compared."
+            exit 1
+          fi
           # The base's copy of the script, as for the gh check, so the PR's own copy never judges it.
-          if ! git show "${BASE_SHA}:.github/scripts/check_owned_files.py" > "$tmp/check_owned_files.py" 2> /dev/null; then
-            if ! git cat-file -e "${BASE_SHA}:.github/scripts/check_gh_repo.py" 2> /dev/null; then
+          if grep -qxF .github/scripts/check_owned_files.py <<< "$listed"; then
+            if ! git show "${BASE_SHA}:.github/scripts/check_owned_files.py" > "$tmp/check_owned_files.py"; then
+              echo "::error::can't read ${BASE_REF}'s .github/scripts/check_owned_files.py at ${BASE_SHA}."
+              exit 1
+            fi
+          else
+            if ! grep -qxF .github/scripts/check_gh_repo.py <<< "$listed"; then
               echo "${BASE_REF} has no .github/scripts/check_gh_repo.py: no Owned files to compare (the first Apply)."
               exit 0
             fi
