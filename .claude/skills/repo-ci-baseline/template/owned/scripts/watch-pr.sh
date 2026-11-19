@@ -30,8 +30,12 @@
 # can't be read (five polls in a row fail; a poll that fails, isn't GitHub's answer, or reads an open PR's list or rollup only in part
 # is never read as quiet). A list longer than 100 is read on by its cursor to its end, however long; a cursor that doesn't move on
 # (one already read, or more pages with none) is a failed poll that says so, never an endless one.
-# Environment: WATCH_PR_MARKER, WATCH_PR_INTERVAL (default 60 seconds; each poll costs about 1-3 GraphQL points, so not lower),
-# WATCH_PR_TIMEOUT (default 120 minutes), GITHUB_REPOSITORY (else the upstream, then the origin remote).
+# What a poll costs is bounded per hour, not per poll: each query (the first and every page) costs GitHub one GraphQL point, and after a poll
+# the watcher waits the interval or, when the poll made more queries than that allows, 3600 * queries / budget seconds, whichever is longer.
+# So a PR of any length is read whole, and the watcher never spends more than its budget an hour of the 5,000 points GitHub gives the token.
+# Environment: WATCH_PR_MARKER, WATCH_PR_INTERVAL (default 60 seconds; a poll without more pages is one query, so not lower),
+# WATCH_PR_TIMEOUT (default 120 minutes), WATCH_PR_BUDGET (GraphQL points an hour, default 1000),
+# GITHUB_REPOSITORY (else the upstream, then the origin remote).
 set -euo pipefail
 
 usage() {
@@ -42,6 +46,7 @@ usage() {
 MARKER="${WATCH_PR_MARKER:-<!-- claude-session -->}"
 interval="${WATCH_PR_INTERVAL:-60}"
 timeout_min="${WATCH_PR_TIMEOUT:-120}"
+budget="${WATCH_PR_BUDGET:-1000}"
 once=0
 would_skip=0
 pr=""
@@ -93,6 +98,7 @@ fi
 if [[ -z "$pr" || ! "$pr" =~ ^[1-9][0-9]*$ ]]; then usage; exit 2; fi
 if [[ ! "$interval" =~ ^[1-9][0-9]*$ ]]; then echo "watch-pr: --interval must be a whole number of seconds, 1 or more" >&2; exit 2; fi
 if [[ ! "$timeout_min" =~ ^[1-9][0-9]*$ ]]; then echo "watch-pr: --timeout must be a whole number of minutes, 1 or more" >&2; exit 2; fi
+if [[ ! "$budget" =~ ^[1-9][0-9]{0,8}$ ]]; then echo "watch-pr: WATCH_PR_BUDGET must be a whole number of GraphQL points an hour, 1 to 999999999" >&2; exit 2; fi
 
 if ! command -v gh >/dev/null 2>&1; then # gh-repo: ok
   echo "watch-pr: gh is required and was not found on PATH" >&2 # gh-repo: ok
@@ -240,6 +246,7 @@ read_rest() {
         return 1
       fi
       used+="$cursor"$'\n'
+      queries=$((queries + 1))
       if ! gh api graphql -f query="$query" -f owner="${repo%%/*}" -f name="${repo#*/}" -F number="$pr" -f cursor="$cursor" >"$pagefile" 2>"$errfile"; then
         reason="gh failed reading page $((pages + 1)) of the PR's $list: $(head -n 1 "$errfile")"
         return 1
@@ -286,6 +293,7 @@ elapsed=0
 while true; do
   ok=1
   resp=""
+  queries=1 # the queries this poll makes: the first, and one per page read_rest asks for (a failed one too)
   if ! resp="$(gh api graphql -f query="$QUERY" -f owner="${repo%%/*}" -f name="${repo#*/}" -F number="$pr" 2>"$errfile")"; then
     ok=0
     reason="gh failed: $(head -n 1 "$errfile")"
@@ -309,6 +317,10 @@ while true; do
     fi
   fi
 
+  # The wait after this poll: the interval, or longer when the poll's queries would pass the hourly budget at that pace.
+  wait=$(((queries * 3600 + budget - 1) / budget))
+  if ((wait < interval)); then wait="$interval"; fi
+
   if ((ok)); then
     failures=0
     if [[ -n "$reasons" ]]; then
@@ -320,8 +332,8 @@ while true; do
     fi
     if ((once)); then exit 1; fi
     # The timeout counts the waits between quiet polls; a failed poll's wait doesn't count, and at most four of them run in a row.
-    if ((elapsed + interval > timeout_min * 60)); then exit 1; fi
-    elapsed=$((elapsed + interval))
+    if ((elapsed + wait > timeout_min * 60)); then exit 1; fi
+    elapsed=$((elapsed + wait))
   else
     failures=$((failures + 1))
     echo "watch-pr: poll $failures failed: $reason" >&2
@@ -330,5 +342,5 @@ while true; do
       exit 2
     fi
   fi
-  sleep "$interval"
+  sleep "$wait"
 done

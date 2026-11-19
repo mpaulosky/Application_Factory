@@ -16,7 +16,7 @@ set -uo pipefail
 
 # Hooks that run this file set GIT_* variables that would aim git init and rev-parse at the outer repo.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
-unset GITHUB_REPOSITORY WATCH_PR_MARKER WATCH_PR_INTERVAL WATCH_PR_TIMEOUT GH_REPO
+unset GITHUB_REPOSITORY WATCH_PR_MARKER WATCH_PR_INTERVAL WATCH_PR_TIMEOUT WATCH_PR_BUDGET GH_REPO
 
 SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/watch-pr.sh"
 work="$(mktemp -d)"
@@ -851,7 +851,7 @@ new_repo
 run 7 --once
 check "the PR number may come before --once" status_is 1
 
-# The default interval is 60 seconds (about 1-3 GraphQL points a poll, so not lower).
+# The default interval is 60 seconds (a poll without more pages is one GraphQL query, so not lower).
 new_repo
 run_env WATCH_PR_TIMEOUT=2 -- 7
 check "the default interval is 60 seconds" grep -qx 60 "$SLEEP_LOG"
@@ -1114,6 +1114,49 @@ for i in 1 2 3 4 5 6; do
 done
 run --once 7
 check "two lists of 6 pages after the first each are read whole: quiet" status_is 1
+
+# What a PR's pages cost is bounded per hour, not capped per poll: after a poll the watcher waits the interval, or 3600 * queries / budget seconds
+# when longer. These 12 pages are 13 queries a poll: 468 s at a budget of 100, 47 s at the default 1000.
+twelve_pages() {
+  pages_repo
+  pr '{"reviewThreads":{"pageInfo":{"hasNextPage":true,"endCursor":"T1"},"nodes":[]},"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true,"endCursor":"K1"},"nodes":[]}}}'
+  for i in 1 2 3 4 5 6; do
+    if ((i < 6)); then
+      page "T$i" threads "$RESOLVED" true "T$((i + 1))"
+      page "K$i" checks "$PASSING" true "K$((i + 1))"
+    else
+      page "T$i" threads "$RESOLVED" false
+      page "K$i" checks "$PASSING" false
+    fi
+  done
+}
+twelve_pages
+run_env WATCH_PR_BUDGET=100 -- --interval 60 --timeout 10 7
+quiet "a long PR at a budget of 100 points an hour"
+check "a poll of 13 queries at a budget of 100 waits 468 s, not the interval" test "$(cat "$SLEEP_LOG")" = 468
+check "the timeout counts that wait: ten minutes is two polls of 13 queries" test "$(grep -c . "$GH_LOG")" -eq 26
+
+twelve_pages
+run --interval 1 --timeout 1 7
+quiet "a long PR at the default budget"
+check "the default budget is 1000 points an hour: a poll of 13 queries waits 47 s" test "$(cat "$SLEEP_LOG")" = 47
+
+# A poll that fails after reading pages waits by what it cost too: 7 page queries (the last fails) and the first are 8 queries, 288 s at 100.
+pages_repo
+pr '{"reviewThreads":{"pageInfo":{"hasNextPage":true,"endCursor":"T1"},"nodes":[]}}'
+for i in 1 2 3 4 5 6; do page "T$i" threads "$RESOLVED" true "T$((i + 1))"; done
+run_env WATCH_PR_BUDGET=100 -- --interval 60 --timeout 120 7
+check "a page that can't be read, five polls in a row: exit 2" status_is 2
+check "each failed poll of 8 queries waits 288 s" test "$(grep -vcx 288 "$SLEEP_LOG")" -eq 0
+check "four waits between the five failed polls" sleeps_are 4
+
+for bad in 0 soon 1000000000 -5; do
+  new_repo
+  run_env WATCH_PR_BUDGET="$bad" -- --once 7
+  check "WATCH_PR_BUDGET=$bad: exit 2" status_is 2
+  check "WATCH_PR_BUDGET=$bad: nothing polled" polls_are 0
+  check "WATCH_PR_BUDGET=$bad: says what it must be" err_has "WATCH_PR_BUDGET must be"
+done
 
 # A list read back over three pages: each page is asked for from the cursor of the page before, and the comments are kept oldest first.
 pages_repo

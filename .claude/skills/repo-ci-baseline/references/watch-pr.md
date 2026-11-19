@@ -11,8 +11,13 @@ scripts/watch-pr.sh --interval 120 --timeout 30 <pr>
 scripts/watch-pr.sh --would-skip < body.txt   # does the watcher skip this body from the owner? (exit 0 yes, 1 no)
 ```
 
-`WATCH_PR_INTERVAL` and `WATCH_PR_TIMEOUT` set the defaults and the flags win. Each poll costs about 1–3 GraphQL points of the owner's allowance
-([tokens.md](tokens.md)), which is why the interval defaults to 60 s and shouldn't go lower.
+`WATCH_PR_INTERVAL` and `WATCH_PR_TIMEOUT` set the defaults and the flags win. Each query costs one GraphQL point of the owner's 5,000 an hour
+([tokens.md](tokens.md)), and a poll of a PR without more pages is one query, which is why the interval defaults to 60 s and shouldn't go lower.
+
+`WATCH_PR_BUDGET` (default 1000) is the most GraphQL points an hour the watcher spends, however long the PR. After each poll, quiet or failed, it waits
+the interval, or `3600 × queries ÷ budget` seconds when that's longer, `queries` being the first query and every page it asked for. A poll of 301 queries
+(300 pages of comments) waits about 18 minutes at the default; a poll of up to 16 waits the interval. Nothing is capped and no poll fails for its length:
+a long PR is read whole, only less often. The timeout counts these waits as it counts the interval.
 
 ## Reasons
 
@@ -92,7 +97,7 @@ as MEMBER, not OWNER, so the session's own replies wouldn't count as its own the
   A page gh can't read, a missing cursor, a cursor the list was already read from (a page handing back its own cursor, or an earlier page's, which would never end),
   a page of another shape, checks whose first rollup is not of the head yet (they are not paged then), or a checks page of another head
   (a push between pages) or whose own rollup is of another commit is an incomplete read, a failed poll (never a quiet one) whose message says which; five in a row end the
-  watcher with exit 2. Each page costs about one more GraphQL point, so a long PR costs a poll one point per 100 items.
+  watcher with exit 2. Each page costs one more GraphQL point, so a long PR costs a poll one point per 100 items, and the wait after the poll grows with them (`WATCH_PR_BUDGET`, above).
   A list's pages are kept in a file and put together once, after its last page, with the repeated ids found in one pass, so reading a list takes time
   linear in its items, never in the square of its pages. A cursor is checked against the cursors that list was read from, so two lists GitHub hands the same cursor each read it.
   A merged or closed PR is reported from its state alone, though its lists must still be arrays. The checks come from the PR's own
