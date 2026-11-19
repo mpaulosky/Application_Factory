@@ -52,6 +52,8 @@ A bot (`__typename` Bot: Copilot, github-actions) is never a person for `changes
 **One-shot** events (`changes-requested`, `review`, `comment`) are written to the **seen file**, `watch-pr-<n>.seen` in the git common directory
 (`git rev-parse --git-common-dir`, so a linked worktree shares the main checkout's), and the next run doesn't report them again.
 jq reads the seen file itself, never as an argument, so no list of seen ids, however long, can keep jq from starting.
+A seen file that can't be written (a read-only git directory, a full disk) doesn't end the poll: the reasons are printed and it exits 0, a
+`watch-pr: can't record <id> in <file>` line goes to stderr, and the event comes back every run until the file can be written.
 
 ## Exit codes
 

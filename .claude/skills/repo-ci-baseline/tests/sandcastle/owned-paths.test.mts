@@ -273,6 +273,7 @@ const EXEMPT_GLOBS_AUDITED: Readonly<Record<string, GlobEntry>> = {
       ".github/scripts/tests/test_load_test_env.py",
       ".github/scripts/tests/test_pat_calls.py",
       ".github/scripts/tests/test_post_claude_review.py",
+      ".github/scripts/tests/test_pr_automerge_triggers.py",
       ".github/scripts/tests/test_release_post.py",
       ".github/scripts/tests/test_release_queue.py",
     ], why: "pytest and node --test run over them; they run in CI with tokens, so a new script is a decision" },

@@ -17,7 +17,8 @@
 #   more              how many reasons past the first 50 a poll didn't print (last): no comment flood floods the session. Only the
 #                     printed one-shot events are recorded as seen, so the next run prints the rest; a thread past the first 50 shows
 #                     once those ahead of it are resolved.
-# A one-shot event is recorded in watch-pr-<n>.seen in the git common directory, so the next run stays quiet about it.
+# A one-shot event is recorded in watch-pr-<n>.seen in the git common directory, so the next run stays quiet about it. A seen file that
+# can't be written doesn't end the poll: stderr says so, it exits 0, and the event comes back next run.
 #
 # A comment is the session's when its body contains WATCH_PR_MARKER (default `<!-- claude-session -->`), and Sandcastle's when it
 # starts with `<!-- sandcastle:<name> -->`, with or without data after the name, and in either case only when its author is the
