@@ -197,6 +197,7 @@ class Job:
         self.base_sha = self.rev("HEAD")
         self.write(head_files)
         self.commit("head")
+        self.head_sha = self.rev("HEAD")
 
     def rev(self, name):
         return subprocess.run(["git", "rev-parse", name], cwd=self.work, check=True, capture_output=True,
@@ -209,6 +210,13 @@ class Job:
         self.commit("base moves on")
         self.git(self.work, "push", "-q", "origin", self.base_ref)
         self.git(self.work, "checkout", "-q", self.head_ref)
+
+    def merge_into_moved_base(self, files):
+        """The base moves on, then the checkout becomes the merge commit GitHub builds of the head into the moved base (first parent the
+        base's new tip, second the head), while the payload's base.sha stays where the head was cut, as on a label event long after the push."""
+        self.advance_base(files)
+        self.git(self.work, "checkout", "-q", "--detach", self.base_ref)
+        self.git(self.work, "merge", "-q", "--no-ff", "--no-edit", self.head_ref)
 
     @staticmethod
     def git(cwd, *args):
@@ -233,7 +241,8 @@ class Job:
                   "github.workspace": str(self.work), "github.event_name": "pull_request",
                   "github.event.pull_request.base.ref": self.base_ref,
                   "github.event.pull_request.base.sha": self.base_sha,
-                  "github.event.pull_request.head.ref": self.head_ref, "github.repository": REPOSITORY,
+                  "github.event.pull_request.head.ref": self.head_ref,
+                  "github.event.pull_request.head.sha": self.head_sha, "github.repository": REPOSITORY,
                   "github.event.pull_request.head.repo.full_name": self.head_repo}
 
         def value(match):
@@ -689,6 +698,52 @@ def test_the_job_ignores_a_checker_the_base_changed_after_the_head_was_cut(tmp_p
 
     # Assert
     assert code == 0, output
+
+
+def test_the_owned_files_job_compares_a_merge_commit_with_its_own_first_parent_not_a_stale_base_sha(tmp_path):
+    # Arrange: an Apply PR edits gate.sh on main after this PR was pushed; a label event later checks out GitHub's merge commit of the
+    # PR into that main, while the payload's base.sha is still the commit the PR was cut from.
+    job = Job(tmp_path, BASE, {"README.md": "# hi\n"})
+    job.merge_into_moved_base({"scripts/gate.sh": EDITED_GATE})
+
+    # Act
+    job.run()
+
+    # Assert: the Owned files job judges only what the PR changed.
+    owned = both_jobs().index(owned_files_job())
+    assert job.job_codes[owned] == 0, job.job_outputs[owned]
+    assert differs_lines(job.job_outputs[owned]) == []
+
+
+def test_the_owned_files_job_still_fails_a_merge_commit_whose_pr_edits_an_owned_file(tmp_path):
+    # Arrange: the same moved base, and the PR edits an Owned file itself.
+    job = Job(tmp_path, BASE, {"scripts/review.sh": "#!/usr/bin/env bash\necho mine\n"})
+    job.merge_into_moved_base({"README.md": "# moved\n"})
+
+    # Act
+    job.run()
+
+    # Assert
+    owned = both_jobs().index(owned_files_job())
+    assert job.job_codes[owned] == 1, job.job_outputs[owned]
+    assert "scripts/review.sh" in job.job_outputs[owned]
+
+
+def test_the_owned_files_job_compares_a_head_that_is_itself_a_merge_with_the_payloads_base(tmp_path):
+    # Arrange: the PR edits an Owned file, then merges main into its branch, and the checkout is that head itself. Its first parent is
+    # the PR's own edit, so taking it as the base would hide the edit: only GitHub's merge of the head (second parent the head) uses it.
+    job = Job(tmp_path, BASE, {"scripts/review.sh": "#!/usr/bin/env bash\necho mine\n"})
+    job.advance_base({"README.md": "# moved\n"})
+    job.git(job.work, "merge", "-q", "--no-ff", "--no-edit", job.base_ref)
+    job.head_sha = job.rev("HEAD")
+
+    # Act
+    job.run()
+
+    # Assert
+    owned = both_jobs().index(owned_files_job())
+    assert job.job_codes[owned] == 1, job.job_outputs[owned]
+    assert "scripts/review.sh" in job.job_outputs[owned]
 
 
 def test_the_job_ignores_a_file_the_base_added_to_an_owned_folder_after_the_head_was_cut(tmp_path):

@@ -178,21 +178,24 @@ run_env() { # run_env <VAR=value>... -- <args...>
 # run_bounded <seconds> <VAR=value>... -- <args...>: run_env, killed after <seconds> with status 124, by a watchdog in plain bash (GNU timeout
 # isn't on macOS). The watchdog's own sleep is the real one: the fake is only on the watcher's PATH. The watchdog writes its marker before it
 # kills, so the watcher's end tells a timeout by the marker, never by whether the watchdog is still alive; a watcher that ends first stops the
-# watchdog and its sleep. ${vars[@]+...} because bash before 4.4 (macOS's 3.2) calls an empty array unbound under set -u.
+# watchdog and its sleep (the trap stops every job the watchdog started, so a sleep whose pid isn't set yet is stopped too). The sleep's pid is
+# written to $work/bounded-nap, so sleep_gone can tell it ended without pgrep. ${vars[@]+...} because bash before 4.4 (macOS's 3.2) calls an
+# empty array unbound under set -u.
 run_bounded() {
   local secs="$1" pid dog fired="$work/bounded-fired"
   shift
   local -a vars=()
   while [[ "$1" != "--" ]]; do vars+=("$1"); shift; done
   shift
-  rm -f "$fired"
+  rm -f "$fired" "$work/bounded-nap"
   (cd "$repo" && exec env ${vars[@]+"${vars[@]}"} PATH="$fakebin:$PATH" bash "$SCRIPT" "$@") >"$work/out" 2>"$work/err" &
   pid=$!
   (
-    nap=""
-    trap '[[ -n $nap ]] && kill "$nap" 2>/dev/null; exit 0' TERM
+    # shellcheck disable=SC2046 # one pid per word
+    trap 'kill $(jobs -p) 2>/dev/null; exit 0' TERM
     command sleep "$secs" &
     nap=$!
+    echo "$nap" >"$work/bounded-nap"
     wait "$nap" || exit 0
     : >"$fired"
     kill "$pid"
@@ -204,6 +207,17 @@ run_bounded() {
   wait "$dog" 2>/dev/null || true
   out="$(<"$work/out")"
   err="$(<"$work/err")"
+}
+# sleep_gone: the last run_bounded's watchdog sleep has ended, within about 2 s (its SIGTERM lands asynchronously). False when no pid was written.
+sleep_gone() {
+  local nap tries=0
+  [[ -s "$work/bounded-nap" ]] || return 1
+  nap="$(<"$work/bounded-nap")"
+  while kill -0 "$nap" 2>/dev/null; do
+    tries=$((tries + 1))
+    if ((tries > 20)); then return 1; fi
+    command sleep 0.1
+  done
 }
 polls() { grep -c '^GH_REPO=' "$GH_LOG"; }
 sleeps() { grep -c . "$SLEEP_LOG"; }
@@ -647,6 +661,24 @@ new_repo
 thread false "$COPILOT" "Consider a constant here."
 run --once 7
 check "a bot's thread comment (Copilot's) is still shown" out_has "copilot-pull-request-reviewer: Consider a constant here."
+
+# Zero-width characters, bidi controls, the line and paragraph separators and the byte-order mark reorder, hide or break printed text in a
+# terminal: none is printed, in the owner's shown text or a bot's, each made a space, and the text around them is.
+# shellcheck disable=SC2016 # jq's $variables are not the shell's
+INVISIBLE='"a​b‌c‍d‎e‏f g h‪i‫j‬k‭l‮m⁦n⁧o⁨p⁩q﻿r"'
+raw_lacks_invisible() { [[ "$(jq -Rs 'test("[​-‏ -‮⁦-⁩﻿]")' "$work/raw")" == false ]]; }
+SPACED="a b c d e f g h i j k l m n o p q r"
+new_repo
+pr "$(jq -nc --argjson o "$OWNER" "{comments: {nodes: [{id: \"C1\", author: \$o, authorAssociation: \"OWNER\", body: $INVISIBLE}]}}")"
+run_raw --once 7
+check "the owner's comment with invisible characters: exit 0" status_is 0
+check "the owner's comment: no zero-width, bidi, separator or byte-order character is printed" raw_lacks_invisible
+check "the owner's comment: each is a space, and the text around them is printed" out_has "watch-pr: comment: owner: $SPACED"
+new_repo
+pr "$(jq -nc --argjson b "$COPILOT" "{reviewThreads: {nodes: [{isResolved: false, comments: {nodes: [{author: \$b, authorAssociation: \"NONE\", body: $INVISIBLE}]}}]}}")"
+run_raw --once 7
+check "a bot's thread with invisible characters: no zero-width, bidi, separator or byte-order character is printed" raw_lacks_invisible
+check "a bot's thread: each is a space, and the text around them is printed" out_has "watch-pr: thread: copilot-pull-request-reviewer: $SPACED"
 
 # A quoted or mid-body Sandcastle marker is not Sandcastle's.
 new_repo
@@ -1308,13 +1340,14 @@ new_repo
 for try in 1 2 3; do
   run_bounded 1 WATCH_PR_INTERVAL=1 -- 7
   check "a run past run_bounded's bound is status 124 (try $try)" status_is 124
+  check "a run past the bound leaves no watchdog sleep running (try $try)" sleep_gone
 done
 # No VAR=value: the watcher runs (it polls), so a helper that fails before starting it can't pass on the status alone.
 new_repo
 run_bounded 59 -- --once 7
 check "a run inside run_bounded's bound keeps its own status" status_is 1
 check "a run_bounded call with no VAR=value runs the watcher: one poll" polls_are 1
-check "a run that ends first leaves no watchdog sleep running" not pgrep -fx 'sleep 59' 
+check "a run that ends first leaves no watchdog sleep running" sleep_gone
 
 # Two lists paged, each with something on its page: each list's merge holds only its own pages, so the poll prints exactly the two events.
 pages_repo

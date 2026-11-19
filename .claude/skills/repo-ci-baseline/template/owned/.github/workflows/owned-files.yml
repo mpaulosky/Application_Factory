@@ -6,10 +6,11 @@ name: Owned files
 # by the base branch's copy of .github/scripts/check_owned_files.py, so a PR
 # can't weaken its own check: the base's script is written outside the checkout
 # and run isolated (python3 -I) over the PR's tree, with no secrets and a
-# read-only token. It reads the base at github.event.pull_request.base.sha, the
-# commit the merge ref was built from, not the base branch's moving tip, so a
-# re-run, or a run queued while an Apply PR lands, can't fail on files the PR
-# never touched. The first Apply's base has no checker: it passes and says so.
+# read-only token. It reads the base at the commit the merge ref was built from
+# (the checked-out merge commit's first parent, else
+# github.event.pull_request.base.sha), not the base branch's moving tip, so a
+# re-run, a label event long after the push, or a run queued while an Apply PR
+# lands can't fail on files the PR never touched. The first Apply's base has no checker: it passes and says so.
 # Only a readable base counts as that: a base commit, tree or script git can't
 # read fails the check.
 #
@@ -59,9 +60,16 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           tmp=$(mktemp -d)
           trap 'rm -rf "$tmp"' EXIT
+          # The checkout is GitHub's merge commit of the PR's head, whose first parent is the base it was built from. A label event can
+          # come long after the push, when the payload's base.sha needn't be that parent, so the merge commit's own first parent is the
+          # base whenever HEAD is that merge (its second parent is the head): a file the base changed since never reads as the PR's.
+          if [[ "$(git rev-parse -q --verify 'HEAD^2' || true)" == "$HEAD_SHA" ]]; then
+            BASE_SHA=$(git rev-parse 'HEAD^1')
+          fi
           # Only a readable base whose tree has no checker is the first Apply; a base git can't read fails.
           if ! git cat-file -e "${BASE_SHA}^{commit}" 2> /dev/null; then
             echo "::error::can't read the base commit ${BASE_SHA} of ${BASE_REF}, so its Owned files can't be compared."

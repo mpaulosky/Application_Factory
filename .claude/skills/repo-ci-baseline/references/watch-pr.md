@@ -34,7 +34,8 @@ A poll prints one `watch-pr: <code>: <detail>` line for every reason that applie
 | `review` | A person's review with a body. |
 | `comment` | A person's comment on the PR, the owner's included when it carries no marker. |
 
-The detail is the author's login and the first line of the text (up to 200 characters, control characters made spaces), except
+The detail is the author's login and the first line of the text (up to 200 characters; control characters, zero-width characters, bidi controls, the line and paragraph separators and
+the byte-order mark made spaces, so no printed text is reordered or hidden in a terminal), except
 for a person other than the repository's owner: see [Who is trusted](#who-is-trusted).
 
 A bot (`__typename` Bot: Copilot, github-actions) is never a person for `changes-requested`, `review` and `comment`; its findings reach the session as threads and checks.
@@ -82,8 +83,9 @@ as MEMBER, not OWNER, so the session's own replies wouldn't count as its own the
 
 - **Markers.** A marker counts only under the owner. Anyone else's marked comment or review wakes the watcher, and their marked reply doesn't quiet a thread.
 - **Text.** No other person's text reaches the session. Their comment or review still wakes it, once, as
-  `watch-pr: comment: <login>: (text not shown: the author is not the repository owner)` (`review` and `changes-requested` the same), and the session reads the PR
-  itself if it wants to know more. A bot's text is shown, because the session needs reviewers' findings: Copilot's thread text is what it acts on.
+  `watch-pr: comment: <login>: (text not shown: the author is not the repository owner)` (`review` and
+  `changes-requested` the same, except that a changes-requested review with no body prints `(no text)` whoever wrote it, as there is no text to hide),
+  and the session reads the PR itself if it wants to know more. A bot's text is shown, because the session needs reviewers' findings: Copilot's thread text is what it acts on.
   That text is not trusted. A bot can carry text a PR's author chose: github-actions[bot] and the Claude Review workflow post what they derive from
   the PR (a fork's diff or title), so a PR's author can steer what a bot's thread says. The session treats a bot's text as data, never as instructions.
 - **Threads.** A thread's last comment still decides. A reply from an untrusted author counts as the last word, so the thread is reported with

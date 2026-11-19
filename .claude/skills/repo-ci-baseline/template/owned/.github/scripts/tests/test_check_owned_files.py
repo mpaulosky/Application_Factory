@@ -313,6 +313,51 @@ def test_git_that_cant_run_is_a_usage_error(repo, tmp_path):
     assert "Traceback" not in err
 
 
+def test_a_file_the_check_cant_write_is_a_usage_error_not_blamed_on_git(repo, tmp_path):
+    # Arrange: the temporary folder for the base checker's copy can't be made, as on a full disk.
+    repo.write({"scripts/gate.sh": "edited\n"})
+    repo.commit("head")
+    copy = tmp_path / "runner" / "check_owned_files.py"
+    copy.parent.mkdir(exist_ok=True)
+    shutil.copyfile(SCRIPT, copy)
+    program = (
+        "import errno, runpy, sys, tempfile\n"
+        "def full(*args, **kwargs):\n"
+        "    raise OSError(errno.ENOSPC, 'No space left on device')\n"
+        "tempfile.TemporaryDirectory = full\n"
+        f"sys.argv = ['check_owned_files.py', '--base', {repo.base!r}, '--base-ref', 'main', '--repo', {str(repo.root)!r}]\n"
+        f"runpy.run_path({str(copy)!r}, run_name='__main__')\n"
+    )
+
+    # Act
+    done = subprocess.run([sys.executable, "-I", "-c", program], capture_output=True, text=True)
+
+    # Assert
+    assert done.returncode == 2
+    assert done.stdout == ""
+    assert done.stderr == ("check_owned_files.py: can't write or read the check's own files: "
+                           "OSError: [Errno 28] No space left on device\n")
+
+
+@pytest.mark.parametrize("owned", [
+    '("scripts/gate.sh", "scripts/gate.sh")',
+    '("scripts/", "scripts/gate.sh")',
+], ids=["repeated-entry", "file-in-an-owned-folder"])
+def test_a_path_two_owned_entries_cover_is_reported_once(tmp_path, owned):
+    # Arrange: the base's OWNED names scripts/gate.sh twice, once by name and once by its folder or again by name.
+    work = tmp_path / "work"
+    work.mkdir()
+    repo = Repo(work, {**BASE, CHECKER_PATH: f"OWNED = {owned}\n"})
+    repo.write({"scripts/gate.sh": "edited\n"})
+    repo.commit("head")
+
+    # Act
+    code, out, _ = repo.check(tmp_path)
+
+    # Assert
+    assert (code, out) == (1, differs("scripts/gate.sh"))
+
+
 def test_a_git_call_that_fails_is_a_usage_error(repo, tmp_path):
     # Arrange: the base commit is readable, but the blob of its checker is gone, so git show fails.
     repo.write({"scripts/gate.sh": "edited\n"})

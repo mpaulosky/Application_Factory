@@ -41,7 +41,11 @@ class Unreadable(Exception):
 
 
 def git(repo, *args, check=True):
-    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=check)
+    """Runs git in repo; a git that can't be started (not on PATH, not executable) is Unreadable, worded as such."""
+    try:
+        return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=check)
+    except OSError as error:
+        raise Unreadable(f"can't run git: {error}") from error
 
 
 def records(output):
@@ -111,7 +115,8 @@ def main(argv=None):
             detail = (error.stderr or b"").decode("utf-8", "replace").strip()
             reason = f"git {error.cmd[3]} failed (exit {error.returncode}): {detail}"
         elif isinstance(error, OSError):
-            reason = f"can't run git: {error}"
+            # git's own start is worded by git() above; this is a file the check itself writes or reads (the base checker's copy).
+            reason = f"can't write or read the check's own files: {type(error).__name__}: {error}"
         else:
             reason = str(error)
         sys.stderr.buffer.write(b"check_owned_files.py: " + for_log(reason.encode("utf-8", "replace")) + b"\n")

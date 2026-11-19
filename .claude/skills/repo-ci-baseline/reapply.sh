@@ -74,7 +74,7 @@ footer="🤖 Generated with [Claude Code](https://claude.com/claude-code)"
 # description (a test holds them equal), so this and github-settings.sh --fix never fight over it.
 apply_label="baseline:apply"
 apply_label_color="5319E7"
-apply_label_description="An Apply PR: may change the Baseline's Owned files (only triage or write access adds it)"
+apply_label_description="An Apply PR: may change the Owned files the gh check lists (only triage or write access adds it)"
 # PR Auto-Merge's COPILOT_ASKED_MARKER and landing.py's COPILOT_ASKED_COMMENT, word for word (a test holds them equal).
 asked_marker="<!-- pr-automerge:copilot-asked -->"
 asked_comment="Copilot's review was requested for this PR. It is asked once per PR; if GitHub drops the request, review:claude calls in Claude instead. mpaulosky/dotfiles#360"$'\n\n'"$asked_marker"

@@ -163,7 +163,9 @@ SHAPE_JQ='
 # One line per reason: code, detail and the node id of a one-shot event (else empty), apart by the unit separator.
 # shellcheck disable=SC2016
 REASONS_JQ="$OURS_JQ"'
-  def clean: tostring | gsub("[\u0000-\u001f\u007f-\u009f]"; " ") | .[0:200];
+  # clean: C0 and C1 controls, and the characters that reorder, hide or break a line in a terminal (zero-width ones, bidi controls, the line
+  # and paragraph separators and the byte-order mark), each made a space, then the first 200 characters.
+  def clean: tostring | gsub("[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]"; " ") | .[0:200];
   def first_line: (. // "") | split("\n")[0];
   def person: (.author.__typename // "") != "Bot";
   def who: .author.login // "unknown";

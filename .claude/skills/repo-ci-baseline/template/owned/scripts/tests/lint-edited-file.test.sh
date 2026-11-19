@@ -686,27 +686,35 @@ for json in '{"tool_input": {"file_path": "a\ud800.md"}}' '{"tool_input": {"file
   check "input $json is read, names no file, and exits 0 silently" ${p[@]+"${p[@]}"}
 done
 
-# lone_name <json escape>: makes $repo/docs/s<bytes>.md holding BAD, the bytes being what the script writes for the escape:
-# U+DC80..U+DCFF the raw byte, any other surrogate its three-byte form. Fails where the file system refuses the name (macOS).
+# lone_name <prefix> <json escapes>: makes $repo/docs/<prefix><bytes>.md holding BAD (a prefix of its own per case, so a name an earlier case
+# made can't stand in for this one's), the bytes being what the script writes for each escape, in order (a
+# space-separated list of hex code points, for a run of lone surrogates): U+DC80..U+DCFF the raw byte, any other surrogate its three-byte
+# form. Fails where the file system refuses the name (macOS).
 lone_name() {
   python3 -I -c '
 import sys
-c = chr(int(sys.argv[2], 16))
-b = bytes([ord(c) - 0xDC00]) if 0xDC80 <= ord(c) <= 0xDCFF else c.encode("utf-8", "surrogatepass")
-with open(sys.argv[1].encode() + b"/docs/s" + b + b".md", "wb") as f:
+b = b"".join(bytes([ord(c) - 0xDC00]) if 0xDC80 <= ord(c) <= 0xDCFF else c.encode("utf-8", "surrogatepass")
+             for c in (chr(int(h, 16)) for h in sys.argv[3].split()))
+with open(sys.argv[1].encode() + b"/docs/" + sys.argv[2].encode() + b + b".md", "wb") as f:
     f.write(b"# T\n\nBAD\n")
-' "$repo" "$1" 2> /dev/null
+' "$repo" "$1" "$2" 2> /dev/null
 }
-for esc in d800 dc00 dbff dcff; do
-  if ! lone_name "$esc"; then
-    pass "a file named with lone surrogate \\u$esc: skipped, the file system refuses the name"
+# Each edge of the raw-byte range (U+DC7F, U+DC80, U+DCFF, U+DD00), the ends of the high surrogates, and runs of two lone surrogates,
+# which Python hands the handler as one range.
+lone_case=0
+for escs in d800 dbff dc00 dc7f dc80 dcff dd00 "dc80 dc81" "d800 d800" "dc7f dc80"; do
+  lone_case=$((lone_case + 1))
+  # shellcheck disable=SC2086 # one code point per word
+  json_escs="$(printf '\\u%s' $escs)"
+  if ! lone_name "s$lone_case-" "$escs"; then
+    pass "a file named with lone surrogates $json_escs: skipped, the file system refuses the name"
     continue
   fi
-  run_hook '{"tool_input": {"file_path": "'"$repo"'/docs/s\u'"$esc"'.md"}}'
+  run_hook '{"tool_input": {"file_path": "'"$repo"'/docs/s'"$lone_case-$json_escs"'.md"}}'
   p=()
   [[ $STATUS -eq 2 ]] || p+=("exit $STATUS, want 2: the file the path names was not linted")
   [[ "$(ran markdownlint-cli2)" == 1 ]] || p+=("markdownlint-cli2 did not run once")
-  check "a file named with lone surrogate \\u$esc is linted" ${p[@]+"${p[@]}"}
+  check "a file named with lone surrogates $json_escs is linted" ${p[@]+"${p[@]}"}
 done
 
 # --- Missing tools --------------------------------------------------------
