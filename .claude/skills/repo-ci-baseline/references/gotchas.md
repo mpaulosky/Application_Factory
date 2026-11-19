@@ -167,10 +167,10 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     `chore/reapply-baseline`, it carries the `baseline:apply` label, and its head is a branch of the repo itself, not a fork's, so a fork's later
     pushes can't ride a label a maintainer set. Only someone with triage or write access can add a label on GitHub; a branch name alone, which
     anyone who can push may choose, exempts nothing. `reapply.sh` makes the label (`gh label create --force`, `github/labels.json`'s color and
-    description) and adds it to the re-Apply PR; `github-settings.sh --fix` makes it too. A Standardize PR is labelled by hand
-    (`docs/Instructions.md`, B4). `owned-files.yml` runs on `labeled` and `unlabeled` too, so adding or removing the label reruns only
-    this check; a re-run of an old run reads the labels its event had, so add or remove the label instead. It is its own workflow because a
-    label event in `ci.yml` would restart the build and tests and report skipped required checks on the head.
+    description) first, before it labels a PR or pushes, and adds it to the re-Apply PR, a run with nothing to push included;
+    `github-settings.sh --fix` makes it too. A Standardize PR is labelled by hand (`docs/Instructions.md`, B4). `owned-files.yml` runs on
+    `labeled` and `unlabeled` too, so adding or removing the label reruns only this check; a re-run of an old run reads the labels its event had,
+    so add or remove the label instead. It is its own workflow because a label event in `ci.yml` would restart the build and tests and report skipped required checks on the head.
     `.github/scripts/tests/test_check_owned_files.py` tests the script, `test_ci_gh_repo_job.py` the two jobs' steps and the exemption.
   - A bare `gh` that ends its line in `||` or `&&` (`command -v gh >/dev/null 2>&1 ||`) is a lookup that goes on to
     its own next command, and is accepted before the export. A pipe or a backslash continuation after it is refused.

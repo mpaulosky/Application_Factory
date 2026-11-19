@@ -23,11 +23,13 @@
 #   2. Merge origin/chore/reapply-baseline (when it exists), then origin/main,
 #      so the push is never non-fast-forward and the pre-push gate's
 #      up-to-date check passes.
-#   3. Run apply.sh and commit its output alone as the Apply commit. When it
+#   3. Create the baseline:apply label (gh label create --force, labels.json's color and
+#      description), so every path below has it and a label failure pushes nothing.
+#      Then run apply.sh and commit its output alone as the Apply commit. When it
 #      changes nothing and nothing is left unpushed (an earlier failed push),
+#      label the open PR (an earlier run may have pushed and then failed), then
 #      stop there and say so.
-#   4. Create the baseline:apply label (gh label create --force, labels.json's color and
-#      description), then git push -u origin HEAD, through the repo's pre-push gate. A failed push
+#   4. git push -u origin HEAD, through the repo's pre-push gate. A failed push
 #      prints its log's path and exits 1. The gate lets a re-Apply through without
 #      a review only when every file is an Owned file that carries no behaviour; when Apply writes the coverage
 #      threshold, the hand-off rules, an issue template, the reviewer agent, a
@@ -257,7 +259,13 @@ for ref in "origin/$branch" origin/main; do
   fi
 done
 
-# ── 3. The Apply commit ─────────────────────────────────────────────────────
+# ── 3. The label, then the Apply commit ─────────────────────────────────────
+# owned-files.yml exempts the PR from the Owned files check only while it carries baseline:apply, and only someone
+# with triage or write access can add a label: this runs with the owner's token. The label is made (or reset to
+# labels.json's color and description) once, before anything below adds it to a PR (the nothing-to-push path
+# included: gh pr edit --add-label fails in a repo without it) and before the push, so a repo where it can't be
+# made fails here with nothing pushed.
+gh_ label create "$apply_label" --color "$apply_label_color" --description "$apply_label_description" --force >/dev/null
 echo "── $repo_name: apply.sh"
 "$apply" "$worktree"
 w add -A
@@ -277,10 +285,6 @@ else
 fi
 
 # ── 4. Push through the pre-push gate ───────────────────────────────────────
-# owned-files.yml exempts the PR from the Owned files check only while it carries baseline:apply, and only someone
-# with triage or write access can add a label: this runs with the owner's token. The label is made (or reset to
-# labels.json's color and description) before the push, so a repo without it fails here with nothing pushed.
-gh_ label create "$apply_label" --color "$apply_label_color" --description "$apply_label_description" --force >/dev/null
 log="$(mktemp "${TMPDIR:-/tmp}/reapply-$repo_name.XXXXXX.log")"
 echo "── $repo_name: pushing through the pre-push gate (log: $log)"
 if ! w push -u origin HEAD > "$log" 2>&1; then

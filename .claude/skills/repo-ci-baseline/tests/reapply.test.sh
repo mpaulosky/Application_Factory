@@ -56,6 +56,8 @@ reapply="$skill/reapply.sh"
 # {headRefOid, isCrossRepository}; the real jq runs on the --jq argument. While
 # $stub/all-fails exists, listing them fails. While $stub/open-cross exists, the open PR
 # lists as a fork's (isCrossRepository true). $stub/open must hold a number.
+# The repo starts each case without any label: `pr edit --add-label <l>` and `pr create --label <l>` fail as gh
+# does ("could not add label: '<l>' not found") unless a `label create <l>` is in $stub/gh.log before them.
 mkdir -p "$work/bin"
 cat > "$work/bin/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -64,6 +66,16 @@ printf '%s\n' "$*" >> "$stub/gh.log"
 body_from() { while [[ $# -gt 0 ]]; do [[ "$1" == --body-file ]] && cp "$2" "$stub/body"; shift; done; }
 arg_after() { local flag="$1"; shift; while [[ $# -gt 0 ]]; do [[ "$1" == "$flag" ]] && { printf '%s' "$2"; return; }; shift; done; }
 logins_json() { jq -Rn '[inputs | select(length > 0)]'; }
+# A label added by pr edit or pr create must have been made first, as on GitHub.
+label_made_or_fail() {
+  local l
+  l="$(arg_after "$1" "${@:2}")"
+  [[ -z "$l" ]] && return 0
+  # gh.log's last line is this call; a label create before it made the label.
+  if ! head -n -1 "$stub/gh.log" | grep -q "^label create $l "; then
+    echo "could not add label: '$l' not found" >&2; exit 1
+  fi
+}
 case "$1 $2" in
   "pr list")
     case "$*" in
@@ -81,7 +93,7 @@ case "$1 $2" in
         if [[ -e "$stub/all-fails" ]]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi
         if [[ -s "$stub/all-prs" ]]; then jq -r "$(arg_after --jq "$@")" "$stub/all-prs"; fi ;;
     esac ;;
-  "pr create") body_from "$@"; echo "https://github.com/acme/Widget/pull/7" ;;
+  "pr create") label_made_or_fail --label "$@"; body_from "$@"; echo "https://github.com/acme/Widget/pull/7" ;;
   "label create")
     if [[ -e "$stub/label-fails" ]]; then echo "HTTP 403: Resource not accessible" >&2; exit 1; fi ;;
   "pr view")
@@ -109,6 +121,7 @@ case "$1 $2" in
     jq --arg b "$text" '. + [{author: {login: "acme"}, body: $b}]' "$stub/comments.json" > "$stub/comments.tmp"
     mv "$stub/comments.tmp" "$stub/comments.json" ;;
   "pr edit")
+    label_made_or_fail --add-label "$@"
     body_from "$@"
     if [[ "$*" == *"--add-reviewer"* && -e "$stub/already" ]]; then
       echo "reviewer already requested" >&2; exit 1
@@ -192,6 +205,19 @@ check "no change: succeeds and says so" '[[ $rc -eq 0 ]] && grep -q "already mat
 check "no change: no commit" '[[ "$(git -C "$wt" rev-parse HEAD)" == "$before" ]]'
 check "no change: no push" '[[ "$(wc -l < "$stub/push.log")" -eq 1 ]]'
 check "no change: the open PR still gets the label" 'grep -qx "pr edit 7 --add-label baseline:apply" "$stub/gh.log"'
+
+# ── Nothing new, an open PR, and a repo without the label (R1): it is made before the PR is labelled ──
+reset_gh
+echo 7 > "$stub/open"
+before="$(git -C "$wt" rev-parse HEAD)"
+out="$("$reapply" --brings '#82' "$repo" 2>&1)" && rc=0 || rc=$?
+check "no change, no label yet: exits 0 and says it already matches" \
+  '[[ $rc -eq 0 ]] && grep -q "already matches the Template; nothing to commit or push" <<< "$out" || { echo "$out" >&2; false; }'
+check "no change, no label yet: the label is made before the PR is labelled" \
+  '[[ "$(grep -n "^label create baseline:apply " "$stub/gh.log" | head -n1 | cut -d: -f1)" -lt "$(grep -nx "pr edit 7 --add-label baseline:apply" "$stub/gh.log" | cut -d: -f1)" ]]'
+check "no change, no label yet: the label is made once" '[[ "$(grep -c "^label create " "$stub/gh.log")" -eq 1 ]]'
+check "no change, no label yet: no commit, no push" \
+  '[[ "$(git -C "$wt" rev-parse HEAD)" == "$before" && "$(wc -l < "$stub/push.log")" -eq 1 ]]'
 
 # ── Uncommitted work: refused, nothing touched ──────────────────────────────
 echo wip > "$wt/wip.txt"
