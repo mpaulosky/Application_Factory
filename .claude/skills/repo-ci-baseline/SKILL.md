@@ -37,7 +37,7 @@ A fix made only in a repo is reverted by its next Apply.
 | Review before the push | In a repo with Sandcastle, `/pre-push-review` reviews the branch's whole diff locally, grades each finding, fixes the real ones and records a ledger; `scripts/gate.sh` refuses a push without a clean one, so GitHub's reviewers are a backstop; `/hardening-review` repeats it as full passes, with each reviewer's example input run, a mutation check on every batch of fixes and a stop when a pass finds nothing new, for a large or risky branch | [pre-push-review.md](references/pre-push-review.md) |
 | Copilot review instructions | A repo with a code-review skill generates `.github/copilot-instructions.md` from it, and the gate and CI fail when it drifts; a repo without the skill passes | [copilot-review-sync.md](references/copilot-review-sync.md) |
 | Sandcastle | Repos that run Sandcastle share its code, prompts, workflow, guardrails and the session guidance for handing a PR off (Owned) and start from the same per-repo values (Seed); Apply adds them only to a repo with a `.sandcastle/` folder or no commits | [sandcastle.md](references/sandcastle.md) |
-| PR watcher | `scripts/watch-pr.sh <pr>` polls one PR read-only and exits with the reason the session that opened it must act (merged, conflict, a failed check, a thread, a person's words), skipping what the session and Sandcastle post by their markers | [watch-pr.md](references/watch-pr.md) |
+| PR watcher | `scripts/watch-pr.sh <pr>` polls one PR read-only and exits with the reason the session that opened it must act (merged, conflict, a failed check, a thread, a person's words), skipping what the session and Sandcastle post by their markers (counted only under the repository's owner) and never printing a person's text unless the owner wrote it; a bot's text is shown, as data | [watch-pr.md](references/watch-pr.md) |
 | GitHub settings | One standard for merge settings, the `main-rules` ruleset and required checks, labels, Actions and security, checked and applied by `github-settings.sh` | [github-settings.md](references/github-settings.md) |
 
 Read a part's reference before changing it: each holds the design, the review findings behind it, and its live check.
@@ -63,9 +63,11 @@ With squad still installed (`.squad/` or `squad-*` workflows), run the `remove-s
 3. **Adapt**, in further commits, working through [adapt.md](references/adapt.md).
    Done when every item there is resolved and the repo's local gate (`scripts/gate.sh`) passes.
 4. **Land.** Push once and open the PR **as a draft**: the repo's old auto-merge workflow would otherwise merge it the moment its checks pass.
-   While it's a draft, run the docs-only probe from [docs-only-ci.md](references/docs-only-ci.md#verify-live), then land it by hand as [automerge.md](references/automerge.md#adapting) describes.
-   Run `github-settings.sh --fix` on the repo while it's a draft and again right after the merge ([github-settings.md](references/github-settings.md#when-to-run-it)),
-   and merge while nothing else is in flight: the merge is the new `release.yml`'s first live run.
+   While it's a draft, run the docs-only probe from [docs-only-ci.md](references/docs-only-ci.md#verify-live) and `github-settings.sh --fix` on the repo
+   ([github-settings.md](references/github-settings.md#when-to-run-it)), which makes the `baseline:apply` label.
+   Then give the PR that label, which `owned-files.yml`'s Owned files check needs to exempt it: `gh pr edit <n> --repo <repo> --add-label baseline:apply`.
+   Then land it by hand as [automerge.md](references/automerge.md#adapting) describes, while nothing else is in flight: the merge is the new `release.yml`'s first live run.
+   Run `github-settings.sh --fix` again right after the merge.
    Done when the PR *and* its release-blog PR have merged.
 5. **Verify live**, each part as its reference describes.
    A part counts only once its live check passes on the repo.
@@ -77,7 +79,8 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
 ## Change the Baseline
 
 1. Edit `template/` (and the part's reference) in a Factory worktree.
-2. Run `test.sh`: the hook suites, the auto-merge script tests, the release-script tests, the renderer oracle, the GitHub scripts' tests
+2. Run `test.sh`: the hook suites, the auto-merge script tests, the Owned `.github/scripts` tests (release scripts, Claude Review, the gh check
+   and the Owned files check), the hardening review script tests, the renderer oracle, the GitHub scripts' tests
    (settings, the landing decision, status, land, rollout), the Claude Review benchmark's tests, actionlint, zizmor, yamllint, shellcheck, markdownlint, the no-placeholders-in-Owned
    check, the check that the Owned scripts' `gh` commands are told their repository, the Sandcastle copy and Seed checks, and the `apply.sh` and `reapply.sh` tests.
    It needs those tools, and shfmt v3.14 or a later v3 for the gh check's tests (ADR 0011); the Factory's CI runs the same script.
@@ -92,7 +95,7 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
      prepares the `chore/reapply-baseline` worktree, merges the remote branch and `main`, commits `apply.sh`'s output alone,
      pushes through the gate (which asks for a review when Apply writes the coverage threshold,
      the hand-off rules, an issue template, the reviewer agent, a Sandcastle prompt (intake, critique, plan, review or a role's), the local gate's check.sh or global.json),
-     opens the re-Apply PR ready (or adds the commit to the open one) and requests Copilot;
+     opens the re-Apply PR ready (or adds the commit to the open one) with the `baseline:apply` label, which `owned-files.yml`'s Owned files check needs to exempt it, and requests Copilot;
      it records Copilot's ask on the PR when the request doesn't register, so Claude Review runs (a first re-Apply PR has the old PR Auto-Merge).
      Its header comment has the details; name the head it prints in thread replies.
    - **Land:** `land.sh <owner/repo#n>...` watches the PRs and acts on the landing decision until each PR and its release-blog PR land

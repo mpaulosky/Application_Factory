@@ -23,8 +23,11 @@
 #   2. Merge origin/chore/reapply-baseline (when it exists), then origin/main,
 #      so the push is never non-fast-forward and the pre-push gate's
 #      up-to-date check passes.
-#   3. Run apply.sh and commit its output alone as the Apply commit. When it
+#   3. Create the baseline:apply label (gh label create --force, labels.json's color and
+#      description), so every path below has it and a label failure pushes nothing.
+#      Then run apply.sh and commit its output alone as the Apply commit. When it
 #      changes nothing and nothing is left unpushed (an earlier failed push),
+#      label the open PR (an earlier run may have pushed and then failed), then
 #      stop there and say so.
 #   4. git push -u origin HEAD, through the repo's pre-push gate. A failed push
 #      prints its log's path and exits 1. The gate lets a re-Apply through without
@@ -34,7 +37,9 @@
 #      (its message names them): run /pre-push-review in the worktree, then run
 #      this again.
 #   5. Open the re-Apply PR (ready, not a draft), or add a line for this Apply
-#      commit to the open one's description, then request Copilot's review and
+#      commit to the open one's description, with the baseline:apply label either
+#      way (owned-files.yml's Owned files check exempts an Apply PR only with it;
+#      a run that finds nothing to push still labels the open PR), then request Copilot's review and
 #      read the request back: gh exits 0 even when GitHub drops it. A request
 #      that didn't register (as when the Copilot code review budget is used up),
 #      or that GitHub refused outright, is warned about, and the run still
@@ -65,6 +70,11 @@ commit_subject="chore: Apply repo-ci-baseline Template"
 co_author="Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 pr_title="chore: Re-apply the repo-ci-baseline Template"
 footer="🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+# The label owned-files.yml's Owned files check exempts an Apply PR by, with github/labels.json's color and
+# description (a test holds them equal), so this and github-settings.sh --fix never fight over it.
+apply_label="baseline:apply"
+apply_label_color="5319E7"
+apply_label_description="An Apply PR: may change the Owned files the gh check lists (only triage or write access adds it)"
 # PR Auto-Merge's COPILOT_ASKED_MARKER and landing.py's COPILOT_ASKED_COMMENT, word for word (a test holds them equal).
 asked_marker="<!-- pr-automerge:copilot-asked -->"
 asked_comment="Copilot's review was requested for this PR. It is asked once per PR; if GitHub drops the request, review:claude calls in Claude instead. mpaulosky/dotfiles#360"$'\n\n'"$asked_marker"
@@ -249,7 +259,13 @@ for ref in "origin/$branch" origin/main; do
   fi
 done
 
-# ── 3. The Apply commit ─────────────────────────────────────────────────────
+# ── 3. The label, then the Apply commit ─────────────────────────────────────
+# owned-files.yml exempts the PR from the Owned files check only while it carries baseline:apply, and only someone
+# with triage or write access can add a label: this runs with the owner's token. The label is made (or reset to
+# labels.json's color and description) once, before anything below adds it to a PR (the nothing-to-push path
+# included: gh pr edit --add-label fails in a repo without it) and before the push, so a repo where it can't be
+# made fails here with nothing pushed.
+gh_ label create "$apply_label" --color "$apply_label_color" --description "$apply_label_description" --force >/dev/null
 echo "── $repo_name: apply.sh"
 "$apply" "$worktree"
 w add -A
@@ -260,6 +276,8 @@ else
   pushed=origin/main
   w rev-parse --verify --quiet "refs/remotes/origin/$branch" >/dev/null && pushed="origin/$branch"
   if w merge-base --is-ancestor HEAD "$pushed"; then
+    # An earlier run that pushed and then failed may have left the open PR without its label.
+    [[ -z "$open_pr" ]] || gh_ pr edit "$open_pr" --add-label "$apply_label" >/dev/null
     echo "reapply.sh: $repo_name already matches the Template; nothing to commit or push"
     exit 0
   fi
@@ -300,7 +318,7 @@ $changed
 
 $footer
 EOF
-  url="$(gh_ pr create --base main --head "$branch" --title "$pr_title" --body-file "$body_file")"
+  url="$(gh_ pr create --base main --head "$branch" --title "$pr_title" --body-file "$body_file" --label "$apply_label")"
   pr="${url##*/}"
   [[ "$pr" =~ ^[0-9]+$ ]] || die "gh pr create printed '$url', not a PR URL"
   echo "── $repo_name: opened PR #$pr ($url)"
@@ -313,7 +331,7 @@ else
     { print }
     END { if (!done) { print ""; print line } }' "$body_file.old" > "$body_file"
   command rm -f "$body_file.old"
-  gh_ pr edit "$pr" --body-file "$body_file" >/dev/null
+  gh_ pr edit "$pr" --body-file "$body_file" --add-label "$apply_label" >/dev/null
   echo "── $repo_name: added $head to PR #$pr's description"
 fi
 

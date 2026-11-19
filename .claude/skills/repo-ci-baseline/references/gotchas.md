@@ -106,7 +106,8 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
   view`, `edit` and most other `gh repo` subcommands don't read `GH_REPO` and have no `-R`: give them the repository as
   their first argument (`list`, `create`, `clone`, `gitignore` and `license` name their own or need none, while
   `rename`, `deploy-key` and `autolink` read `GH_REPO`). `test.sh` checks the Owned scripts with the same
-  `check_gh_repo.py`, whose tests are in `tests/gh_repo/`.
+  `check_gh_repo.py`. Its tests ship with it (Owned `.github/scripts/tests/test_check_gh_repo.py`, run by every repo's `python-tests` job,
+  which installs the pinned shfmt for them); the few that need the Factory (`OWNED` against the Template's folders, this page) are in `tests/gh_repo/`.
 
   More rules of a script, which this page holds in full (the checker's docstring only points here):
 
@@ -119,7 +120,7 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     (mpaulosky/dotfiles#344). A later `unset GH_REPO`, or an assignment that is no prefix of a `gh` command, ends an export.
     The checker reads a script with shfmt's syntax tree (`shfmt -ln bash --to-json`; [ADR 0011](../docs/adr/0011-the-gh-repo-check-parses-shell-with-shfmt.md)),
     so comments, strings, heredoc bodies, substitutions, backticks, `${...}`, `[[ ... ]]`, case patterns and backslash continuations of any length are read as bash
-    reads them. It needs shfmt v3.14 or a later v3 release on `PATH`: CI's `gh-repo` and `hook-tests` jobs and the Seed Sandcastle `Dockerfile` install the pinned
+    reads them. It needs shfmt v3.14 or a later v3 release on `PATH`: CI's `gh-repo`, `python-tests` and `hook-tests` jobs and the Seed Sandcastle `Dockerfile` install the pinned
     release, and on your machine it comes from your package manager (`pacman -S shfmt`, `brew install shfmt`, `apt install shfmt` where the package is v3.14 or later)
     or the release binaries at <https://github.com/mvdan/sh/releases>. Without it, or with an older or newer one, the checker fails with exit 2 and says why. It runs
     shfmt in an empty folder of its own with only `PATH` set, so no file of the PR's (an `.editorconfig`) reaches it; a version manager's shim (asdf, mise)
@@ -155,11 +156,25 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     `<pre>` block (from the line with `<pre` to the one with `</pre>`) and a `<code>...</code>` element on one line.
     HTML comments, `<script>` and `<style>` are not read, and `<!-- gh-repo: ok -->` skips a line in each kind.
   - CI's `gh-repo` job (Owned `ci.yml`, on pull requests) runs the base branch's `check_gh_repo.py` against the PR's
-    tree, so `--no-verify` or an edited checker can't skip it, and fails with `Owned file <path> differs from <base>`
-    when a PR changes, deletes or adds an Owned file (the checker's `OWNED` paths: a file in an Owned folder, or an Owned file the base
-    lacks, such as `scripts/review.sh`), unless its
-    head branch is `chore/standardize-baseline` or `chore/reapply-baseline`. Anyone who can push a branch can use those names: it
-    stops a careless edit, not a deliberate one.
+    tree, so `--no-verify` or an edited checker can't skip it. The Owned `owned-files.yml` workflow runs the base branch's
+    `.github/scripts/check_owned_files.py`, which fails with `Owned file <path> differs from <base>` when a PR changes (blob or mode), deletes, renames
+    or adds an Owned file (the base checker's `OWNED` paths: a file in an Owned folder, or an Owned file the base lacks, such as `scripts/review.sh`;
+    `\r` and `\n` in a path are logged as those two characters). Both scripts are taken from the PR's base commit (`git show <base>:<path>` into a
+    temp folder; for the Owned files check the base is the checked-out merge commit's first parent when its second is the PR's head, else
+    `base.sha`) and run with `python3 -I`, so the PR's copies never judge it. A readable base whose tree has neither (the first Apply) passes and says so;
+    a base commit, tree or script git can't read fails both checks (`::error::`, or `check_owned_files.py`'s exit 2, as does a base checker that fails
+    to load or has no `OWNED` list), so an unreadable base never passes as the first Apply. A base with
+    `check_gh_repo.py` but no `check_owned_files.py` predates the script, so the PR brings it, and the Owned files check fails rather than run the PR's
+    copy or check nothing: land it through a labelled Apply PR.
+  - An Apply PR is exempt from the Owned files check only when all three hold (R20): its head branch is `chore/standardize-baseline` or
+    `chore/reapply-baseline`, it carries the `baseline:apply` label, and its head is a branch of the repo itself, not a fork's, so a fork's later
+    pushes can't ride a label a maintainer set. Only someone with triage or write access can add a label on GitHub; a branch name alone, which
+    anyone who can push may choose, exempts nothing. `reapply.sh` makes the label (`gh label create --force`, `github/labels.json`'s color and
+    description) first, before it labels a PR or pushes, and adds it to the re-Apply PR, a run with nothing to push included;
+    `github-settings.sh --fix` makes it too. A Standardize PR is labelled by hand (`docs/Instructions.md`, B4). `owned-files.yml` runs on
+    `labeled` and `unlabeled` too, so adding or removing the label reruns only this check; a re-run of an old run reads the labels its event had,
+    so add or remove the label instead. It is its own workflow because a label event in `ci.yml` would restart the build and tests and report skipped required checks on the head.
+    `.github/scripts/tests/test_check_owned_files.py` tests the script, `test_ci_gh_repo_job.py` the two jobs' steps and the exemption.
   - A bare `gh` that ends its line in `||` or `&&` (`command -v gh >/dev/null 2>&1 ||`) is a lookup that goes on to
     its own next command, and is accepted before the export. A pipe or a backslash continuation after it is refused.
   - `gh.exe` is `gh`: it is judged by the same rules, and a longer word (`gh.executable`, `neigh.exe`) or a folder

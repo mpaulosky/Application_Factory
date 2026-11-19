@@ -157,7 +157,7 @@ WRITES = ("<>", ">>", ">&", ">|", ">", "&>>", "&>")
 # An if condition that never holds, and one that always does.
 NEVER = re.compile(r"(false|! *true|\[ +0 +-ne +0 +\]|\[ +1 +-eq +0 +\])$")
 ALWAYS = re.compile(r"(true|:)$")
-# The shfmt that parses a script (repo-ci-baseline's ADR 0011): a v3 release from v3.14 on, whose syntax tree this checker reads.
+# The shfmt that parses a script: a v3 release from v3.14 on, since this checker reads shfmt's syntax tree, not the script's text.
 SHFMT = "shfmt"
 SHFMT_RELEASE = re.compile(r"v3\.(0|[1-9][0-9]*)\.[0-9]+")
 SHFMT_OLDEST_MINOR = 14

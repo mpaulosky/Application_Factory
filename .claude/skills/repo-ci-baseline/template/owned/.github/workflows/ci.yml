@@ -159,21 +159,19 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
         run: bash scripts/check-branch-name.sh --pr "$HEAD_REF"
 
-  # The "gh commands are told their repository" check, and Owned files left
-  # alone, judged by the base branch's copy of the checker, so a PR can't
-  # weaken its own check: scripts/gate.sh runs the checker too, but a push can
-  # skip the hook and an edited checker passes itself. The base's checker is
-  # written outside the checkout and run isolated (python3 -I) over the PR's
-  # tree, with no secrets and a read-only token. A PR that changes the checker
-  # is judged by the old one. The second step fails when a PR's Owned file
-  # differs from the base's, or adds an Owned file the base lacks, except in an Apply PR (chore/standardize-baseline,
-  # chore/reapply-baseline), whose job is to change them. Anyone who can push a
-  # branch can name theirs so: this stops a careless edit, not a deliberate one.
-  # Both steps read the base at github.event.pull_request.base.sha, the commit the
-  # merge ref was built from, not the base branch's moving tip: a re-run, or a job
-  # queued while an Apply PR lands, would otherwise fail on files the PR never touched.
-  # Neither step has anything to compare with in the first Apply, whose base has
-  # no checker. Not a required status check.
+  # The "gh commands are told their repository" check, judged by the base
+  # branch's copy of the checker (.github/scripts/check_gh_repo.py), so a PR
+  # can't weaken its own check: scripts/gate.sh runs it too, but a push can skip
+  # the hook and an edited checker passes itself. The base's checker is written
+  # outside the checkout and run isolated (python3 -I) over the PR's tree, with
+  # no secrets and a read-only token. A PR that changes the checker is judged by
+  # the old one. It reads the base at github.event.pull_request.base.sha, the
+  # commit the merge ref was built from, not the base branch's moving tip: a
+  # re-run, or a job queued while an Apply PR lands, would otherwise fail on
+  # files the PR never touched. The first Apply's base has no checker: the check
+  # passes and says so; only a readable base counts as that, and a base commit,
+  # tree or checker git can't read fails it. owned-files.yml checks that a PR
+  # leaves the Owned files alone. Not a required status check.
   gh-repo:
     name: GitHub commands told their repository
     if: github.event_name == 'pull_request'
@@ -188,8 +186,9 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
-      # The checker parses each script with shfmt (repo-ci-baseline's ADR 0011): the release binary,
-      # checked against the SHA-256 GitHub publishes for it, into a folder already on PATH. The hook-tests job installs the same one.
+      # The gh check reads each script's syntax tree from shfmt, so it needs shfmt v3.14 or a later v3 (the Application
+      # Factory's repo-ci-baseline ADR 0011): the release binary, checked against the SHA-256 GitHub publishes for it,
+      # into a folder already on PATH. The python-tests and hook-tests jobs install the same one.
       - name: Install shfmt
         env:
           SHFMT_VERSION: "3.14.1"
@@ -208,65 +207,24 @@ jobs:
         run: |
           tmp=$(mktemp -d)
           trap 'rm -rf "$tmp"' EXIT
-          if ! git show "${BASE_SHA}:.github/scripts/check_gh_repo.py" > "$tmp/check_gh_repo.py"; then
+          # Only a readable base whose tree has no checker is the first Apply; a base git can't read fails.
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2> /dev/null; then
+            echo "::error::can't read the base commit ${BASE_SHA} of ${BASE_REF}, so its rules can't be checked."
+            exit 1
+          fi
+          if ! listed=$(git ls-tree --name-only "$BASE_SHA" -- .github/scripts/check_gh_repo.py); then
+            echo "::error::can't read the tree of ${BASE_REF}'s commit ${BASE_SHA}, so its rules can't be checked."
+            exit 1
+          fi
+          if [[ -z "$listed" ]]; then
             echo "${BASE_REF} has no .github/scripts/check_gh_repo.py: nothing to check against (the first Apply)."
             exit 0
           fi
-          python3 -I "$tmp/check_gh_repo.py" --repo "$GITHUB_WORKSPACE"
-
-      - name: Check the Owned files against the base branch's
-        if: >-
-          always()
-          && github.head_ref != 'chore/standardize-baseline'
-          && github.head_ref != 'chore/reapply-baseline'
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          tmp=$(mktemp -d)
-          trap 'rm -rf "$tmp"' EXIT
           if ! git show "${BASE_SHA}:.github/scripts/check_gh_repo.py" > "$tmp/check_gh_repo.py"; then
-            echo "${BASE_REF} has no .github/scripts/check_gh_repo.py: no Owned files to compare (the first Apply)."
-            exit 0
+            echo "::error::can't read ${BASE_REF}'s .github/scripts/check_gh_repo.py at ${BASE_SHA}."
+            exit 1
           fi
-          # The base's OWNED list: files, and folders (a trailing /).
-          python3 -I -c '
-          import importlib.util, sys
-          spec = importlib.util.spec_from_file_location("check_gh_repo", sys.argv[1])
-          module = importlib.util.module_from_spec(spec)
-          spec.loader.exec_module(module)
-          print("\n".join(module.OWNED))
-          ' "$tmp/check_gh_repo.py" > "$tmp/owned.txt"
-          # Walk the base's tree, so a file the PR deleted or renamed is found too. An entry is
-          # "<mode> <type> <sha>", a tab, the path: a missing path, a changed mode (chmod -x, a
-          # symlink swap) or a changed blob all differ. A path is PR-controlled: escape \r and \n
-          # before it reaches the log, or the rest of a file name could start a workflow command.
-          status=0
-          report() {
-            local name=$1
-            name=${name//$'\r'/\\r}
-            name=${name//$'\n'/\\n}
-            echo "Owned file ${name} differs from ${BASE_REF}"
-            status=1
-          }
-          while IFS= read -r entry; do
-            while IFS= read -r -d '' base_entry; do
-              path=${base_entry#*$'\t'}
-              head_entry=$(git ls-tree -z HEAD -- "$path" | tr '\0' '\n')
-              if [ "${base_entry}" != "$head_entry" ]; then
-                report "$path"
-              fi
-            done < <(git ls-tree -r -z "$BASE_SHA" -- "$entry")
-            # A file the PR adds (inside an Owned folder, or as an Owned entry itself) isn't in the base's
-            # tree, and the checker skips it: report it, or nothing reads it.
-            while IFS= read -r -d '' head_entry; do
-              path=${head_entry#*$'\t'}
-              if ! git cat-file -e "${BASE_SHA}:${path}" 2>/dev/null; then
-                report "$path"
-              fi
-            done < <(git ls-tree -r -z HEAD -- "$entry")
-          done < "$tmp/owned.txt"
-          exit "$status"
+          python3 -I "$tmp/check_gh_repo.py" --repo "$GITHUB_WORKSPACE"
 
   build:
     name: Build Solution
@@ -328,8 +286,11 @@ jobs:
           dotnet build "$SOLUTION_FILE" --configuration Release
           --no-restore -warnaserror
 
-  # Unit tests for .github/scripts (the release blog generator).
-  # Deliberately not a required status check on main's ruleset.
+  # Unit tests for the scripts in .github/scripts (the release blog generator,
+  # Claude Review's script and the rest), among them the gh check
+  # (check_gh_repo.py), the Owned files check (check_owned_files.py) and the
+  # gh-repo job that runs them. Deliberately not a required status check on
+  # main's ruleset.
   python-tests:
     name: Python tests
     runs-on: ubuntu-latest
@@ -346,16 +307,30 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The gh check's tests run the checker, which reads each script's syntax tree from shfmt and so needs shfmt v3.14
+      # or a later v3: the gh-repo job's pinned and checked release.
+      - name: Install shfmt
+        env:
+          SHFMT_VERSION: "3.14.1"
+          SHFMT_SHA256: "76e77641faa025814b77f153b29796b8e6fa2fca03e0c76a691608b86c7ea7bf"
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 --retry-all-errors -o shfmt "https://github.com/mvdan/sh/releases/download/v${SHFMT_VERSION}/shfmt_v${SHFMT_VERSION}_linux_amd64"
+          echo "${SHFMT_SHA256}  shfmt" | sha256sum -c -
+          sudo install -m 0755 shfmt /usr/local/bin/shfmt
+          shfmt --version
+
+      # PyYAML lets the gh-repo job's tests read this workflow.
       - name: Install pytest
-        run: python -m pip install pytest
+        run: python -m pip install pytest pyyaml
 
       - name: Run pytest
         run: python -m pytest .github/scripts/tests
 
   # Tests for .github/hooks/pre-commit, .github/hooks/pre-push and scripts/gate.sh,
-  # with stubbed tools, and for scripts/check-branch-name.sh, check-pr-title.sh
-  # sync-copilot-review.sh, watch-pr.sh, cleanup.sh and work-issue.sh.
-  # Also not a required status check.
+  # with stubbed tools, and for scripts/check-branch-name.sh, check-pr-title.sh,
+  # sync-copilot-review.sh, watch-pr.sh, cleanup.sh, work-issue.sh and
+  # lint-edited-file.sh. Also not a required status check.
   hook-tests:
     name: Hook tests
     runs-on: ubuntu-latest
@@ -367,7 +342,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # pre-push.test.sh runs the gate, whose gh check parses shell with shfmt: the gh-repo job's pinned and checked release.
+      # pre-push.test.sh runs the gate, whose gh check reads each script's syntax tree from shfmt and so needs shfmt v3.14
+      # or a later v3: the gh-repo job's pinned and checked release.
       - name: Install shfmt
         env:
           SHFMT_VERSION: "3.14.1"

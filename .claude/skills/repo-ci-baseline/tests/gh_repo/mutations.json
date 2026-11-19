@@ -2,7 +2,7 @@
   "test": [
     "uvx",
     "pytest",
-    ".claude/skills/repo-ci-baseline/tests/gh_repo/test_check_gh_repo.py",
+    ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/tests/test_check_gh_repo.py",
     "-q",
     "-x",
     "-p",

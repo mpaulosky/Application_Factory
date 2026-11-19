@@ -1,0 +1,100 @@
+---
+name: Owned files
+
+# Fails a PR that changes, deletes, renames or adds an Owned Baseline file
+# (the base checker's OWNED list: a file, or a file in an Owned folder), judged
+# by the base branch's copy of .github/scripts/check_owned_files.py, so a PR
+# can't weaken its own check: the base's script is written outside the checkout
+# and run isolated (python3 -I) over the PR's tree, with no secrets and a
+# read-only token. It reads the base at the commit the merge ref was built from
+# (the checked-out merge commit's first parent, else
+# github.event.pull_request.base.sha), not the base branch's moving tip, so a
+# re-run, a label event long after the push, or a run queued while an Apply PR
+# lands can't fail on files the PR never touched. The first Apply's base has no checker: it passes and says so.
+# Only a readable base counts as that: a base commit, tree or script git can't
+# read fails the check.
+#
+# An Apply PR, whose job is to change the Owned files, is exempt only when all
+# three hold: its head branch is chore/standardize-baseline or
+# chore/reapply-baseline, it carries the baseline:apply label, and its head is a
+# branch of this repo, not a fork's (so a fork's later pushes can't ride a label
+# a maintainer set). On GitHub only someone with triage or write access can add
+# a label (triage counts as a maintainer here), and reapply.sh, which runs with
+# the owner's token, adds it to the re-Apply PR. A branch name alone, which
+# anyone who can push may choose, exempts nothing.
+#
+# Its own workflow, not a ci.yml job, so adding or removing a label reruns only
+# this check: a label event in ci.yml would start the build and tests again,
+# cancel the run in progress, and report skipped required checks on the head.
+# The event's labels are read when it fires, so a re-run of an old run doesn't
+# see a label added since: add or remove the label instead, which starts a new
+# run. Not a required status check.
+"on":
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  owned-files:
+    name: Owned files left alone
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Check the Owned files against the base branch's
+        if: >-
+          ${{ !((github.head_ref == 'chore/standardize-baseline' || github.head_ref == 'chore/reapply-baseline')
+          && contains(github.event.pull_request.labels.*.name, 'baseline:apply')
+          && github.event.pull_request.head.repo.full_name == github.repository) }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          # The checkout is GitHub's merge commit of the PR's head, whose first parent is the base it was built from. A label event can
+          # come long after the push, when the payload's base.sha needn't be that parent, so the merge commit's own first parent is the
+          # base whenever HEAD is that merge (its second parent is the head): a file the base changed since never reads as the PR's.
+          if [[ "$(git rev-parse -q --verify 'HEAD^2' || true)" == "$HEAD_SHA" ]]; then
+            BASE_SHA=$(git rev-parse 'HEAD^1')
+          fi
+          # Only a readable base whose tree has no checker is the first Apply; a base git can't read fails.
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2> /dev/null; then
+            echo "::error::can't read the base commit ${BASE_SHA} of ${BASE_REF}, so its Owned files can't be compared."
+            exit 1
+          fi
+          if ! listed=$(git ls-tree --name-only "$BASE_SHA" -- .github/scripts/check_gh_repo.py .github/scripts/check_owned_files.py); then
+            echo "::error::can't read the tree of ${BASE_REF}'s commit ${BASE_SHA}, so its Owned files can't be compared."
+            exit 1
+          fi
+          # The base's copy of the script, as for the gh check, so the PR's own copy never judges it.
+          if grep -qxF .github/scripts/check_owned_files.py <<< "$listed"; then
+            if ! git show "${BASE_SHA}:.github/scripts/check_owned_files.py" > "$tmp/check_owned_files.py"; then
+              echo "::error::can't read ${BASE_REF}'s .github/scripts/check_owned_files.py at ${BASE_SHA}."
+              exit 1
+            fi
+          else
+            if ! grep -qxF .github/scripts/check_gh_repo.py <<< "$listed"; then
+              echo "${BASE_REF} has no .github/scripts/check_gh_repo.py: no Owned files to compare (the first Apply)."
+              exit 0
+            fi
+            # A base with the checker but no check_owned_files.py predates the script, so this PR brings it:
+            # an Apply PR, which the if: above skips once it carries baseline:apply, or a hand edit. Running
+            # the PR's copy would let it judge itself and passing would check nothing, so this fails.
+            echo "::error::${BASE_REF} has .github/scripts/check_gh_repo.py but no .github/scripts/check_owned_files.py," \
+              "so its Owned files can't be compared by the base's own rules: bring it in an Apply PR labelled baseline:apply."
+            exit 1
+          fi
+          python3 -I "$tmp/check_owned_files.py" --base "$BASE_SHA" --base-ref "$BASE_REF" --repo "$GITHUB_WORKSPACE"

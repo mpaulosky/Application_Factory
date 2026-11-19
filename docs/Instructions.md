@@ -57,6 +57,13 @@ with exit 2. From here on, `pre-commit` refuses commits in the primary checkout:
 change, including filling the placeholders the report lists, is made in a worktree under `../[ProjectName]-worktrees/` (see the
 skill's `references/git-hooks.md`).
 
+The Template ships the two Claude Code hook scripts but not `.claude/settings.json`, which wires them. Wiring them is optional, and each
+Application decides it for itself (the Factory's [ADR 0011](adr/0011-markdown-and-yaml-are-linted-as-they-are-written.md)): to lint as Claude
+writes, or to check the git hooks when a session starts, you can add their entries to the Application's own `.claude/settings.json`, `PostToolUse`
+for `scripts/lint-edited-file.sh` (the edit-time lint) and `SessionStart` for `scripts/check-git-hooks.sh`. The skill's `references/git-hooks.md`
+shows both entries ([Edit-time lint](../.claude/skills/repo-ci-baseline/references/git-hooks.md#edit-time-lint),
+[Session-start check](../.claude/skills/repo-ci-baseline/references/git-hooks.md#session-start-check)).
+
 `core.hooksPath` is what turns the hooks on, in each clone. Don't set a global `init.templateDir` to install them:
 the hooks it copies into `.git/hooks/` are symlinks or copies that go stale when the Template moves (#12 left them
 dangling), a Baseline repo's `core.hooksPath` overrides them anyway, and in any other repo the pre-push hook would run a
@@ -119,7 +126,9 @@ git add -A
 git commit -m "chore: Apply the repo-ci-baseline Template"
 ```
 
-As in A3, the gate needs shfmt v3.14 or a later v3 on `PATH` before the first push.
+As in A3, the gate needs shfmt v3.14 or a later v3 on `PATH` before the first push, and wiring the Claude Code hooks in `.claude/settings.json` is
+optional: to lint as Claude writes, you can add the entries A3 names ([Edit-time lint](../.claude/skills/repo-ci-baseline/references/git-hooks.md#edit-time-lint),
+[Session-start check](../.claude/skills/repo-ci-baseline/references/git-hooks.md#session-start-check)).
 
 ### B3. Adapt
 
@@ -135,7 +144,11 @@ its checks pass. While it's a draft:
 - run the docs-only probe from `references/docs-only-ci.md`,
 - run `"$BASELINE/github-settings.sh" --fix mpaulosky/[Repo]` (it also checks the `RELEASE_PR_PAT` secret exists).
 
-Then land it by hand as `references/automerge.md` describes, while nothing else is in flight: the merge is the new
+Then add the `baseline:apply` label, which `github-settings.sh --fix` has made:
+`gh pr edit <number> --repo mpaulosky/[Repo] --add-label baseline:apply`. The Owned files check (`owned-files.yml`) fails a PR that changes a
+file in the base's `check_gh_repo.py` `OWNED` list (the Owned scripts, their tests and the review skills; not the workflows or
+`.github/scripts/`) unless it is a `chore/standardize-baseline` or `chore/reapply-baseline` branch of the repo itself with that label; adding it
+reruns the check. Then land it by hand as `references/automerge.md` describes, while nothing else is in flight: the merge is the new
 `release.yml`'s first live run. Run `github-settings.sh --fix` again right after the merge, so the new required checks
 are added. Done when the PR **and** its release-blog PR have merged, and `github-settings.sh` reports the repo clean.
 

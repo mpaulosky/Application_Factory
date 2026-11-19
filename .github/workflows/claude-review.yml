@@ -50,7 +50,8 @@ name: Claude Review
 # Claude's on a rerun) instead of stranding. Only PRs into main, the only ones
 # PR Auto-Merge merges.
 #
-# Accepted limit (repo-ci-baseline's ADR 0004): the marker proves a review
+# Accepted limit (ADR 0004 of the repo-ci-baseline skill, in
+# mpaulosky/Application_Factory): the marker proves a review
 # came through github-actions[bot], not that Claude wrote it. This workflow
 # runs on pull_request, from the PR's merge commit, so a push that changes it
 # could post a marked review of its own. The merge gate guards against
@@ -2000,9 +2001,10 @@ jobs:
       # credential-shaped text redacted. It reads the answer from the
       # execution file, a path, so this log holds none.
       #
-      # Accepted limits (repo-ci-baseline's ADR 0004, which ships with the
-      # skill, not with this workflow): the check is a backstop, and Claude's
-      # read restrictions above are the defence, so a quote changed any other
+      # Accepted limits (ADR 0004 of the repo-ci-baseline skill, in
+      # mpaulosky/Application_Factory, not shipped with this workflow): the
+      # check is a backstop, and Claude's read restrictions above are the
+      # defence, so a quote changed any other
       # way gets through too, such as these, raised in review: pieces split
       # by letters or digits, or by characters NFKC and NFKD map to them
       # (fullwidth, ligatures, circled or superscript), or spread across
