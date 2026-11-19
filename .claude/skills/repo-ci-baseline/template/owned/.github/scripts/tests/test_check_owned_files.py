@@ -1,4 +1,4 @@
-"""Tests for check_owned_files.py, the gh-repo job's Owned files check: throwaway git repos, a base commit with a
+"""Tests for check_owned_files.py, owned-files.yml's Owned files check: throwaway git repos, a base commit with a
 check_gh_repo.py that lists OWNED and a head commit on top, and the script run as the job runs it (python3 -I, from a
 copy outside the checkout). No GitHub.
 """
@@ -44,13 +44,13 @@ class Repo:
         self.git("commit", "-q", "--allow-empty", "-m", message)
         return self.git("rev-parse", "HEAD")
 
-    def check(self, tmp_path, base=None, base_ref="main"):
+    def check(self, tmp_path, base=None, base_ref="main", env=None):
         """Runs a copy of the script outside the repo, as the job does; returns (exit code, stdout, stderr)."""
         copy = tmp_path / "runner" / "check_owned_files.py"
         copy.parent.mkdir(exist_ok=True)
         shutil.copyfile(SCRIPT, copy)
         done = subprocess.run([sys.executable, "-I", str(copy), "--base", base or self.base, "--base-ref", base_ref,
-                               "--repo", str(self.root)], capture_output=True)
+                               "--repo", str(self.root)], capture_output=True, env=env)
         return done.returncode, done.stdout.decode("utf-8", "surrogateescape"), done.stderr.decode()
 
 
@@ -245,6 +245,121 @@ def test_a_base_commit_git_cant_read_is_a_usage_error(repo, tmp_path):
     assert code == 2
     assert out == ""
     assert "can't read the base commit" in err
+
+
+def base_with_checker(tmp_path, checker):
+    work = tmp_path / "work"
+    work.mkdir()
+    return Repo(work, {**BASE, CHECKER_PATH: checker})
+
+
+@pytest.mark.parametrize("checker", [
+    pytest.param("raise RuntimeError('boom')\n", id="raises"),
+    pytest.param("import sys\nsys.exit(0)\n", id="exits"),
+    pytest.param("OWNED = (\n", id="syntax-error"),
+])
+def test_a_base_checker_that_fails_to_load_is_a_usage_error(tmp_path, checker):
+    # Arrange
+    repo = base_with_checker(tmp_path, checker)
+    repo.write({"scripts/gate.sh": "edited\n"})
+    repo.commit("head")
+
+    # Act
+    code, out, err = repo.check(tmp_path)
+
+    # Assert: one line naming the script, never a traceback or a pass.
+    assert code == 2
+    assert out == ""
+    assert err.startswith("check_owned_files.py: the base's .github/scripts/check_gh_repo.py fails to load")
+    assert "Traceback" not in err
+    assert len(err.splitlines()) == 1
+
+
+@pytest.mark.parametrize("checker", [
+    pytest.param("NOT_OWNED = ('scripts/gate.sh',)\n", id="missing"),
+    pytest.param("OWNED = None\n", id="none"),
+    pytest.param("OWNED = 'scripts/gate.sh'\n", id="a-string"),
+    pytest.param("OWNED = ()\n", id="empty"),
+    pytest.param("OWNED = ('scripts/gate.sh', 3)\n", id="not-a-path"),
+])
+def test_a_base_checker_without_an_owned_list_is_a_usage_error(tmp_path, checker):
+    # Arrange
+    repo = base_with_checker(tmp_path, checker)
+    repo.write({"scripts/gate.sh": "edited\n"})
+    repo.commit("head")
+
+    # Act
+    code, out, err = repo.check(tmp_path)
+
+    # Assert
+    assert code == 2
+    assert out == ""
+    assert err == "check_owned_files.py: the base's .github/scripts/check_gh_repo.py has no OWNED list of paths\n"
+
+
+def test_git_that_cant_run_is_a_usage_error(repo, tmp_path):
+    # Arrange: no git on PATH.
+    empty = tmp_path / "no-git"
+    empty.mkdir()
+
+    # Act
+    code, out, err = repo.check(tmp_path, env={"PATH": str(empty)})
+
+    # Assert
+    assert code == 2
+    assert out == ""
+    assert err.startswith("check_owned_files.py: can't run git: ")
+    assert "Traceback" not in err
+
+
+def test_a_git_call_that_fails_is_a_usage_error(repo, tmp_path):
+    # Arrange: the base commit is readable, but the blob of its checker is gone, so git show fails.
+    repo.write({"scripts/gate.sh": "edited\n"})
+    repo.commit("head")
+    blob = repo.git("rev-parse", f"{repo.base}:{CHECKER_PATH}")
+    objects = repo.root / ".git" / "objects"
+    (objects / blob[:2] / blob[2:]).unlink()
+
+    # Act
+    code, out, err = repo.check(tmp_path)
+
+    # Assert
+    assert code == 2
+    assert out == ""
+    assert err.startswith("check_owned_files.py: ")
+    assert "Traceback" not in err
+    assert len(err.splitlines()) == 1
+
+
+def test_a_line_break_in_the_base_ref_is_escaped(repo, tmp_path):
+    # Arrange: a base branch name that would start a workflow command on its own line.
+    repo.write({"scripts/gate.sh": "edited\n"})
+    repo.commit("head")
+
+    # Act
+    code, out, _ = repo.check(tmp_path, base_ref="main\n::error::x")
+
+    # Assert
+    assert code == 1
+    assert not any(line.startswith("::") for line in out.splitlines())
+    assert out == "Owned file scripts/gate.sh differs from main\\n::error::x\n"
+
+
+def test_a_line_break_in_the_base_ref_is_escaped_on_the_first_apply(tmp_path):
+    # Arrange
+    work = tmp_path / "work"
+    work.mkdir()
+    repo = Repo(work, {"README.md": "# hi\n"})
+    repo.write(BASE)
+    repo.commit("head")
+
+    # Act
+    code, out, _ = repo.check(tmp_path, base_ref="main\r\n::error::x")
+
+    # Assert
+    assert code == 0
+    assert not any(line.startswith("::") for line in out.splitlines())
+    assert out.startswith("main\\r\\n::error::x has no ")
 
 
 def test_the_checkout_is_left_as_it_was(repo, tmp_path):

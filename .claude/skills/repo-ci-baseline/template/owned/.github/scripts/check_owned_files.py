@@ -3,7 +3,7 @@
 
     python3 -I check_owned_files.py --base <sha> --base-ref <branch> [--repo <checkout>]
 
-CI's gh-repo job runs the base commit's copy of this script, written outside the checkout, so a PR can't weaken its own
+owned-files.yml's Owned files job runs the base commit's copy of this script, written outside the checkout, so a PR can't weaken its own
 check. It reads the base's OWNED list (files, and folders with a trailing /) out of the base's
 .github/scripts/check_gh_repo.py, then compares the checkout's HEAD (the PR's merge commit) with the base:
 
@@ -15,8 +15,10 @@ check. It reads the base's OWNED list (files, and folders with a trailing /) out
 Each difference is one line, "Owned file <path> differs from <branch>", with \\r and \\n in the path written as those
 two characters, since a path is the PR's and a line break in it could start a workflow command in the log.
 
-Exit 0 when nothing differs, and when the base has no check_gh_repo.py (the first Apply: there is nothing to compare
-with); 1 when something differs; 2 on a usage error or a base commit git can't read.
+Exit 0 when nothing differs, and when the base's tree has no check_gh_repo.py (the first Apply: there is nothing to
+compare with); 1 when something differs; 2 on a usage error, a base commit git can't read, a base checker that fails to
+load or has no OWNED list of paths, or a git call that fails: each prints one "check_owned_files.py: ..." line to
+stderr, never a traceback.
 """
 
 import argparse
@@ -34,6 +36,10 @@ def for_log(text):
     return text.replace(b"\r", b"\\r").replace(b"\n", b"\\n")
 
 
+class Unreadable(Exception):
+    """The base or the checkout can't be read as the check needs: exit 2."""
+
+
 def git(repo, *args, check=True):
     return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=check)
 
@@ -44,8 +50,10 @@ def records(output):
 
 
 def owned_entries(repo, base):
-    """The base checker's OWNED list, or None when the base has no checker."""
-    if git(repo, "cat-file", "-e", f"{base}:{CHECKER}", check=False).returncode != 0:
+    """The base checker's OWNED list, or None when the base's tree has no checker. The tree is listed, not probed with
+    cat-file -e, so a checker the base's tree names but git can't read fails (exit 2) instead of passing as the first
+    Apply."""
+    if not records(git(repo, "ls-tree", "-z", base, "--", CHECKER).stdout):
         return None
     with tempfile.TemporaryDirectory(prefix="check_owned_files-") as folder:
         path = Path(folder) / "check_gh_repo.py"
@@ -53,8 +61,14 @@ def owned_entries(repo, base):
         spec = importlib.util.spec_from_file_location("check_gh_repo", path)
         module = importlib.util.module_from_spec(spec)
         sys.dont_write_bytecode = True
-        spec.loader.exec_module(module)
-        return list(module.OWNED)
+        try:
+            spec.loader.exec_module(module)
+        except (Exception, SystemExit) as error:
+            raise Unreadable(f"the base's {CHECKER} fails to load: {type(error).__name__}: {error}") from error
+        owned = getattr(module, "OWNED", None)
+        if not isinstance(owned, (list, tuple)) or not owned or not all(isinstance(entry, str) and entry for entry in owned):
+            raise Unreadable(f"the base's {CHECKER} has no OWNED list of paths")
+        return list(owned)
 
 
 def differing(repo, base, entries):
@@ -84,14 +98,24 @@ def main(argv=None):
     out = sys.stdout.buffer
     base_ref = for_log(args.base_ref.encode())
 
-    if git(args.repo, "cat-file", "-e", f"{args.base}^{{commit}}", check=False).returncode != 0:
-        print(f"check_owned_files.py: can't read the base commit {args.base!r} in {args.repo}", file=sys.stderr)
+    try:
+        if git(args.repo, "cat-file", "-e", f"{args.base}^{{commit}}", check=False).returncode != 0:
+            raise Unreadable(f"can't read the base commit {args.base!r} in {args.repo}")
+        entries = owned_entries(args.repo, args.base)
+        if entries is None:
+            out.write(base_ref + b" has no " + CHECKER.encode() + b": no Owned files to compare (the first Apply).\n")
+            return 0
+        paths = differing(args.repo, args.base, entries)
+    except (Unreadable, subprocess.CalledProcessError, OSError) as error:
+        if isinstance(error, subprocess.CalledProcessError):
+            detail = (error.stderr or b"").decode("utf-8", "replace").strip()
+            reason = f"git {error.cmd[3]} failed (exit {error.returncode}): {detail}"
+        elif isinstance(error, OSError):
+            reason = f"can't run git: {error}"
+        else:
+            reason = str(error)
+        sys.stderr.buffer.write(b"check_owned_files.py: " + for_log(reason.encode("utf-8", "replace")) + b"\n")
         return 2
-    entries = owned_entries(args.repo, args.base)
-    if entries is None:
-        out.write(base_ref + b" has no " + CHECKER.encode() + b": no Owned files to compare (the first Apply).\n")
-        return 0
-    paths = differing(args.repo, args.base, entries)
     for path in paths:
         out.write(b"Owned file " + for_log(path) + b" differs from " + base_ref + b"\n")
     out.flush()
