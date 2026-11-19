@@ -214,8 +214,7 @@ code at each finding's line yourself, then give it one outcome:
   exists. Then the reason is ``repeats .security/NNNN (fixed), pinned by <test>``. When the policy is gone from the code or the pinning test or check no
   longer exists, the finding is a new one, and its summary names the entry. An `accepted` or `open` entry is read like any other but changes nothing yet:
   the finding is raised as before, with `"repeats": "NNNN"` (step 8) when it repeats that entry.
-- **Leave it open** for a person (never one the earlier review shows `fixAsked`: the next bullet alone decides those, security and Advisory
-  ones included), with its suggested fix, when a Critical or Warning finding's `needsPerson` is true, or the last, review-only round raised
+- **Leave it open** for a person, with its suggested fix, when a Critical or Warning finding's `needsPerson` is true, or the last, review-only round raised
   it (step 7), or when it's a problem a person decided needs no change, in
   the earlier review or in the owner's own PR-thread reply (step 3), or one the earlier review left open: the person
   decides it again for this code (step 9). Name the earlier finding or thread and its reason in the summary, so they can.
@@ -223,6 +222,7 @@ code at each finding's line yourself, then give it one outcome:
   yourself, and record each one still there as a new open Warning naming the old id, whether or not a reviewer raised it.
   An earlier Advisory finding that's still there is fixed now, unless it waits for a person: then it's recorded open
   again as Advisory, its summary opening with the old id (`R3 again: ...`), and it never blocks.
+  None of this bullet applies to a finding the earlier review shows `fixAsked`: the next bullet alone decides those, security and Advisory ones included.
 - **Fix it** when the earlier review shows it `"fixAsked": true` and the problem is still in the code: the person asked for it to be fixed
   (`scripts/review.sh accept-open --fix`), so it is fixed in this run, not left open again, whatever its `needsPerson` said and whether or not it is a
   security finding (a security one is fixed behind a test). The Rules still hold: a fix that would weaken a test, a check, a validation or a permission, or

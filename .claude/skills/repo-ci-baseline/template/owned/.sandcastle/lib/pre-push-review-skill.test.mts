@@ -299,7 +299,7 @@ describe("the pre-push-review skill's fixing, in the rest of its text", () => {
   it("fixes what the person asked to be fixed with accept-open --fix, within the Rules, and never runs accept-open with ids itself", () => {
     const flat = skill.replace(/\s+/g, " ");
     assert.ok(flat.includes('- **Fix it** when the earlier review shows it `"fixAsked": true`'), "step 5 fixes a fixAsked finding");
-    assert.ok(flat.includes("(never one the earlier review shows `fixAsked`: the next bullet alone decides those, security and Advisory ones included)"), "Leave it open yields to fixAsked");
+    assert.ok(flat.includes("None of this bullet applies to a finding the earlier review shows `fixAsked`: the next bullet alone decides those, security and Advisory ones included."), "Leave it open yields to fixAsked");
     assert.ok(flat.includes("In the last, review-only round (step 7) nothing is fixed: it stays open with its fix."), "the review-only round fixes nothing");
     assert.ok(flat.includes("since asking for a fix isn't asking for that change"), "the Rules' exceptions still hold");
     assert.ok(flat.includes("`scripts/review.sh accept-open` lists every open finding"), "step 9 names accept-open");
