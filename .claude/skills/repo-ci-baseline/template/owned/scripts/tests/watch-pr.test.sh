@@ -661,34 +661,43 @@ thread false "$COPILOT" "Consider a constant here."
 run --once 7
 check "a bot's thread comment (Copilot's) is still shown" out_has "copilot-pull-request-reviewer: Consider a constant here."
 
-# Every control and format character, the line and paragraph separators and the other default-ignorable characters reorder or hide printed
-# text in a terminal: none is printed, in the owner's shown text or a bot's, each made a space, and the text around them is. Their
-# neighbours, just outside each range, are printed as they are. The characters are code points here, never literal in this file.
-HIDING="7 1f 7f 85 9f ad 34f 61c 115f 1160 180b 180e 180f 200b 200c 200d 200e 200f 2028 2029 202a 202e 2060 2064 2065 2066 2069 206a 206f
-3164 fe00 fe0f feff fff9 fffb ffa0 e0001 e0020 e0041 e007f e0100 e01ef"
-KEPT="20 7e a0 ac ae 34e 350 61b 61d 115e 1161 180a 1810 200a 2010 2014 2027 202f 205f 2070 3163 3165 fdfd fe10 fefc fff8 fffc ff9f ffa1
-e9 65e5 1f600"
-# body <hex code points>: a JSON string "w0<c0>w1<c1>...end"; spaced <hex code points>: the same with each character a space.
+# Every control and format character, the line and paragraph separators, every default-ignorable code point and the blank braille cell
+# reorder or hide printed text in a terminal: none is printed, in the owner's shown text or a bot's, each made a space, and the text around
+# them is. Their neighbours, just outside each range, are printed as they are. The characters are code points here, never literal in this
+# file, and each list is cut into bodies that fit the 200 characters a line keeps.
+HIDING="7 1f 7f 85 9f ad 34f 61c 115f 1160 17b4 17b5 180b 180e 180f 200b 200c 200d 200e 200f 2028 2029 202a 202e 2060 2064 2065 2066 2069
+206a 206f 2800 3164 fe00 fe0f feff fff0 fff8 fff9 fffb ffa0 1bca0 1bca3 1d173 1d17a e0000 e0001 e0002 e0020 e0041 e007f e0080 e00ff e0100
+e01ef e01f0 e0fff"
+KEPT="20 7e a0 ac ae 34e 350 61b 61d 115e 1161 17b3 17b6 180a 1810 200a 2010 2014 2027 202f 205f 2070 27ff 2801 3163 3165 fdfd fe10 fefc ffef
+fffc ff9f ffa1 1bc9f 1d172 1d17b e1000 e9 65e5 1f600"
+# chunks <hex code points>: the list cut into lines of 20; body <hex>: a JSON string "w0<c0>w1<c1>...end"; spaced <hex>: the same with
+# each character a space.
+chunks() { local -a cps; read -r -d '' -a cps <<<"$1" || true; local i; for ((i = 0; i < ${#cps[@]}; i += 20)); do echo "${cps[*]:i:20}"; done; }
 cps() { local h out=""; for h in $1; do out+="$((16#$h)),"; done; echo "[${out%,}]"; }
 body() { jq -nc --argjson c "$(cps "$1")" '[range($c | length) as $i | "w\($i)", ([$c[$i]] | implode)] | add + "end"'; }
 spaced() { jq -nr --argjson c "$(cps "$1")" '[range($c | length) as $i | "w\($i)"] | join(" ") + " end"'; }
 raw_lacks_hiding() { [[ "$(jq -Rs --argjson c "$(cps "$HIDING")" '[explode[] | select(IN($c[]))] | length' "$work/raw")" == 0 ]]; }
-new_repo
-pr "$(jq -nc --argjson o "$OWNER" --argjson b "$(body "$HIDING")" '{comments: {nodes: [{id: "C1", author: $o, authorAssociation: "OWNER", body: $b}]}}')"
-run_raw --once 7
-check "the owner's comment with hiding characters: exit 0" status_is 0
-check "the owner's comment: no control, format, separator or other default-ignorable character is printed" raw_lacks_hiding
-check "the owner's comment: each is a space, and the text around them is printed" out_has "watch-pr: comment: owner: $(spaced "$HIDING")"
-new_repo
-pr "$(jq -nc --argjson b "$COPILOT" --argjson t "$(body "$HIDING")" '{reviewThreads: {nodes: [{isResolved: false, comments: {nodes: [{author: $b, authorAssociation: "NONE", body: $t}]}}]}}')"
-run_raw --once 7
-check "a bot's thread with hiding characters: none is printed" raw_lacks_hiding
-check "a bot's thread: each is a space, and the text around them is printed" out_has "watch-pr: thread: copilot-pull-request-reviewer: $(spaced "$HIDING")"
-new_repo
-pr "$(jq -nc --argjson o "$OWNER" --argjson b "$(body "$KEPT")" '{comments: {nodes: [{id: "C1", author: $o, authorAssociation: "OWNER", body: $b}]}}')"
-run_raw --once 7
-check "the owner's comment: each hiding range's neighbours, and accented, CJK and emoji text, are printed as they are" \
-  out_has "watch-pr: comment: owner: $(jq -r . <<<"$(body "$KEPT")")"
+while read -r part; do
+  new_repo
+  pr "$(jq -nc --argjson o "$OWNER" --argjson b "$(body "$part")" '{comments: {nodes: [{id: "C1", author: $o, authorAssociation: "OWNER", body: $b}]}}')"
+  run_raw --once 7
+  check "the owner's comment with hiding characters ($part): exit 0" status_is 0
+  check "the owner's comment ($part): no control, format, separator or default-ignorable character is printed" raw_lacks_hiding
+  check "the owner's comment ($part): each is a space, and the text around them is printed" out_has "watch-pr: comment: owner: $(spaced "$part")"
+  new_repo
+  pr "$(jq -nc --argjson b "$COPILOT" --argjson t "$(body "$part")" '{reviewThreads: {nodes: [{isResolved: false, comments: {nodes: [{author: $b, authorAssociation: "NONE", body: $t}]}}]}}')"
+  run_raw --once 7
+  check "a bot's thread with hiding characters ($part): none is printed" raw_lacks_hiding
+  check "a bot's thread ($part): each is a space, and the text around them is printed" \
+    out_has "watch-pr: thread: copilot-pull-request-reviewer: $(spaced "$part")"
+done < <(chunks "$HIDING")
+while read -r part; do
+  new_repo
+  pr "$(jq -nc --argjson o "$OWNER" --argjson b "$(body "$part")" '{comments: {nodes: [{id: "C1", author: $o, authorAssociation: "OWNER", body: $b}]}}')"
+  run_raw --once 7
+  check "the owner's comment: each hiding range's neighbours, and accented, CJK and emoji text ($part), are printed as they are" \
+    out_has "watch-pr: comment: owner: $(jq -r . <<<"$(body "$part")")"
+done < <(chunks "$KEPT")
 
 # A quoted or mid-body Sandcastle marker is not Sandcastle's.
 new_repo

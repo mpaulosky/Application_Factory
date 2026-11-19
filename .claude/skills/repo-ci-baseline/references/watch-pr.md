@@ -35,8 +35,8 @@ A poll prints one `watch-pr: <code>: <detail>` line for every reason that applie
 | `comment` | A person's comment on the PR, the owner's included when it carries no marker. |
 
 The detail is the author's login and the first line of the text (up to 200 characters; every control and format character, among them the bidi
-controls, the zero-width ones, the soft hyphen and the tag characters, the line and paragraph separators, and the other default-ignorable characters
-a terminal shows as nothing, such as the variation selectors and the Hangul fillers, made spaces, so no printed text is reordered or hidden), except
+controls, the zero-width ones, the soft hyphen and the tag characters, the line and paragraph separators, every default-ignorable code point (Unicode's
+list, unassigned ones included) and the blank braille cell, which a terminal shows as nothing, made spaces, so no printed text is reordered or hidden), except
 for a person other than the repository's owner: see [Who is trusted](#who-is-trusted).
 
 A bot (`__typename` Bot: Copilot, github-actions) is never a person for `changes-requested`, `review` and `comment`; its findings reach the session as threads and checks.
