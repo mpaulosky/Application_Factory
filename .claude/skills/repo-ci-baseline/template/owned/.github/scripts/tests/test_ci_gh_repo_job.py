@@ -829,6 +829,48 @@ def test_a_base_whose_checker_git_cant_read_fails_both_jobs(tmp_path):
     assert "first Apply" not in output
 
 
+def delete_object(job, name):
+    """Deletes the loose object `name` names in the work repo; the fixture's objects are loose (nothing packs them)."""
+    sha = subprocess.run(["git", "rev-parse", name], cwd=job.work, check=True, capture_output=True, text=True).stdout.strip()
+    path = job.work / ".git" / "objects" / sha[:2] / sha[2:]
+    assert path.is_file(), f"{name} ({sha}) isn't a loose object, so it can't be deleted"
+    path.unlink()
+
+
+def test_a_base_whose_tree_git_cant_read_fails_both_jobs(tmp_path):
+    # Arrange: the base commit is there, so cat-file -e passes, but its root tree is gone, so ls-tree fails.
+    job = Job(tmp_path, BASE, {"scripts/gate.sh": EDITED_GATE})
+    delete_object(job, f"{job.base_sha}^{{tree}}")
+    subprocess.run(["git", "cat-file", "-e", f"{job.base_sha}^{{commit}}"], cwd=job.work, check=True)
+
+    # Act
+    code, output = job.run()
+
+    # Assert
+    assert code != 0
+    for index, name in enumerate(JOB_NAMES):
+        assert job.job_codes.get(index, 0) != 0, f"{name} passed an unreadable tree: {job.job_outputs.get(index)}"
+        assert f"::error::can't read the tree of main's commit {job.base_sha}" in job.job_outputs[index]
+    assert "first Apply" not in output
+
+
+def test_a_base_whose_owned_files_checker_git_cant_read_fails_the_owned_files_job(tmp_path):
+    # Arrange: the base's tree names check_owned_files.py, but its blob is gone; the head's copy differs, so it isn't the head's blob too.
+    job = Job(tmp_path, BASE, {"scripts/gate.sh": EDITED_GATE, OWNED_CHECK_PATH: OWNED_CHECK.read_text() + "# head\n"})
+    delete_object(job, f"{job.base_sha}:{OWNED_CHECK_PATH}")
+
+    # Act
+    code, output = job.run()
+
+    # Assert
+    assert code != 0
+    assert job.job_codes.get(1, 0) != 0, f"{JOB_NAMES[1]} passed an unreadable checker: {job.job_outputs.get(1)}"
+    assert f"::error::can't read main's .github/scripts/check_owned_files.py at {job.base_sha}." in job.job_outputs[1]
+    # Not the message for a base that predates check_owned_files.py.
+    assert "but no .github/scripts/check_owned_files.py" not in job.job_outputs[1]
+    assert "first Apply" not in output
+
+
 # R20: an Apply PR is exempt only with the maintainer-only label, from a branch of this repo.
 
 @pytest.mark.parametrize("head_ref", APPLY_BRANCHES)

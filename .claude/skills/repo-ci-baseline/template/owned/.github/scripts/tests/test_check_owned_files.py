@@ -281,6 +281,7 @@ def test_a_base_checker_that_fails_to_load_is_a_usage_error(tmp_path, checker):
     pytest.param("OWNED = 'scripts/gate.sh'\n", id="a-string"),
     pytest.param("OWNED = ()\n", id="empty"),
     pytest.param("OWNED = ('scripts/gate.sh', 3)\n", id="not-a-path"),
+    pytest.param("OWNED = ('scripts/gate.sh', '')\n", id="empty-entry"),
 ])
 def test_a_base_checker_without_an_owned_list_is_a_usage_error(tmp_path, checker):
     # Arrange
@@ -329,6 +330,26 @@ def test_a_git_call_that_fails_is_a_usage_error(repo, tmp_path):
     assert err.startswith("check_owned_files.py: ")
     assert "Traceback" not in err
     assert len(err.splitlines()) == 1
+
+
+def test_a_base_tree_git_cant_read_is_a_usage_error(repo, tmp_path):
+    # Arrange: the base commit is readable, so cat-file -e passes, but its root tree is gone, so ls-tree fails.
+    repo.write({"scripts/gate.sh": "edited\n"})
+    repo.commit("head")
+    tree = repo.git("rev-parse", f"{repo.base}^{{tree}}")
+    loose = repo.root / ".git" / "objects" / tree[:2] / tree[2:]
+    assert loose.is_file()
+    loose.unlink()
+
+    # Act
+    code, out, err = repo.check(tmp_path)
+
+    # Assert: one line naming the failed git call, never the first Apply's pass.
+    assert code == 2
+    assert out == ""
+    assert err.startswith("check_owned_files.py: git ls-tree failed")
+    assert len(err.splitlines()) == 1
+    assert "first Apply" not in out + err
 
 
 def test_a_line_break_in_the_base_ref_is_escaped(repo, tmp_path):
