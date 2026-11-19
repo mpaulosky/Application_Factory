@@ -80,6 +80,7 @@ check "with no origin/main the block runs on every tracked file" "[[ $st == 0 ]]
 check "with no origin/main a newline name is still listed whole" "has MD_FILES \"line\${newline}break.md\""
 
 # A git that fails stops the block, instead of leaving the lists empty.
+# shellcheck disable=SC2016 # the wrapper is code for lists to eval, so it must not expand here
 out="$(lists 'git() { if [[ "$1" == ls-files ]]; then return 1; fi; command git "$@"; }' 2>&1)"; st=$?
 check "a git ls-files that fails stops the block (set -e), and lists nothing" "[[ $st != 0 ]] && ! grep -q '^MD_FILES' <<< \"\$out\""
 

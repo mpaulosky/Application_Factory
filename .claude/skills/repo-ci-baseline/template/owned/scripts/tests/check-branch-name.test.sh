@@ -54,7 +54,9 @@ expect allowed --pr --author 'dependabot[bot]' dependabot/npm_and_yarn/types/nod
 expect allowed --pr --author 'dependabot[bot]' dependabot/
 expect refused --pr --author someone dependabot/npm_and_yarn/types/node-20~1
 expect refused --pr dependabot/npm_and_yarn/types/node-20~1
+# shellcheck disable=SC2016 # the $( is the point: a literal name, not an expansion
 expect refused --pr --author 'dependabot' 'dependabot/$(x)'
+# shellcheck disable=SC2016 # the same literal name
 expect refused --pr --author 'dependabot[bot] ' 'dependabot/$(x)'
 expect allowed --pr --author someone dependabot/nuget/all-nuget-1a2b3c
 # --author names only who opened the PR: it never lets another name through.
