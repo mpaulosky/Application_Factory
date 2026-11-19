@@ -8,7 +8,7 @@ queries and writes only its seen file.
 scripts/watch-pr.sh <pr>                      # poll every 60 s for up to 120 minutes
 scripts/watch-pr.sh --once <pr>               # one poll
 scripts/watch-pr.sh --interval 120 --timeout 30 <pr>
-scripts/watch-pr.sh --would-skip < body.txt   # does the watcher skip this comment body? (exit 0 yes, 1 no)
+scripts/watch-pr.sh --would-skip < body.txt   # does the watcher skip this body from a write-access author? (exit 0 yes, 1 no)
 ```
 
 `WATCH_PR_INTERVAL` and `WATCH_PR_TIMEOUT` set the defaults and the flags win. Each poll costs about 1–3 GraphQL points of the owner's allowance
@@ -24,10 +24,13 @@ A poll prints one `watch-pr: <code>: <detail>` line for every reason that applie
 | `conflict` | The PR conflicts with its base. |
 | `behind` | The base branch moved and the repo's rules require an up-to-date branch. Not reported beside `conflict`. |
 | `check-failed` | A check run ended FAILURE, TIMED_OUT, ACTION_REQUIRED or STARTUP_FAILURE, or a status context is FAILURE or ERROR. The names are listed. Cancelled, skipped, neutral and pending checks don't count. |
-| `thread` | An unresolved review thread whose last comment is not the session's or Sandcastle's (Copilot's counts). |
+| `thread` | An unresolved review thread whose last comment is not the session's or Sandcastle's (Copilot's counts, and so does a reply from anyone without write access). |
 | `changes-requested` | A person's review asked for changes. |
 | `review` | A person's review with a body. |
 | `comment` | A person's comment on the PR, the owner's included when it carries no marker. |
+
+The detail is the author's login and the first line of the text (up to 200 characters, control characters made spaces), except
+for an author without write access: see [Who is trusted](#who-is-trusted).
 
 A bot (`__typename` Bot: Copilot, github-actions) is never a person for `changes-requested`, `review` and `comment`; its findings reach the session as threads and checks.
 `mergeable` UNKNOWN means GitHub hasn't worked it out yet, so the watcher keeps polling.
@@ -48,7 +51,8 @@ The timeout is counted in the waits between quiet polls (a failed poll's wait is
 
 ## What it skips
 
-Sandcastle and the session post under the owner's token, so the author can't tell them from the owner. Two markers do:
+Sandcastle and the session post under the owner's token, so the author can't tell them from the owner. Two markers do, on a comment, review or
+thread reply whose author has write access (see [Who is trusted](#who-is-trusted)):
 
 - **The session's.** A body that contains `WATCH_PR_MARKER` anywhere (default `<!-- claude-session -->`, the text `docs/PROCESS.md` has the session put in its replies).
 - **Sandcastle's.** A body that *starts* with `<!-- sandcastle:<name> -->`, where the name is lower-case letters and hyphens, with or without data after the name:
@@ -59,7 +63,22 @@ Every PR comment Sandcastle posts opens with a marker: `PR_MARKER`, `FOLLOW_UP_M
 `APPROVAL_LAPSED_MARKER`, `OVERLAP_MARKER`, `GIVE_UP_MARKER` and `WORKTREE_TAMPERED_MARKER`, all in `.sandcastle/lib/config.mts`. `config.test.mts` runs `watch-pr.sh --would-skip` on every
 string that file exports starting `<!-- sandcastle:`, so a new marker is covered by exporting it from `config.mts`. A new PR comment from Sandcastle needs a marker as its first line.
 
-Anyone who can comment can forge a marker and be unheard by the watcher. That is acceptable: the watcher is a convenience for the session, not a gate.
+`--would-skip` reads a body alone, so it answers for a body from an author with write access.
+
+## Who is trusted
+
+On a public repository anyone can comment on a PR, review it or reply to its threads, so the body alone can't say who wrote it. The queries read each
+comment's, review's and thread reply's `authorAssociation`, on the first query and on every page read after it, and only OWNER, MEMBER or
+COLLABORATOR (write access) is trusted. Anything else, a missing field included, is not.
+
+- **Markers.** A marker counts only under a trusted author. Anyone else's marked comment or review wakes the watcher, and their marked reply doesn't quiet a thread.
+- **Text.** No untrusted author's text reaches the session. Their comment or review still wakes it, once, as
+  `watch-pr: comment: <login>: (text not shown: the author has no write access)` (`review` and `changes-requested` the same), and the session reads the PR
+  itself if it wants to know more. A bot's text is shown: a bot is never a person, it posts only through an app installed on the repository, and
+  Copilot's thread text is what the session acts on.
+- **Threads.** A thread's last comment still decides. A reply from an untrusted author counts as the last word, so the thread is reported with
+  their login and the fixed phrase, never quieted. A stranger can't hide a thread, only keep one reported until a trusted author replies with the
+  marker or the thread is resolved. The session's own last reply, under a trusted author, quiets it as before.
 
 ## Limits
 

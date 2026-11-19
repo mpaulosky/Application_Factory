@@ -2,7 +2,7 @@
 # Watches one pull request and exits with the reason when the session that opened it needs to act. Owned by the repo-ci-baseline
 # Template (references/watch-pr.md). Read-only: it makes `gh api graphql` queries and writes only its seen file.
 #   scripts/watch-pr.sh [--once] [--interval <seconds>] [--timeout <minutes>] <pr-number>
-#   scripts/watch-pr.sh --would-skip      reads a comment body on stdin; exit 0 when the watcher skips it, 1 when it wouldn't
+#   scripts/watch-pr.sh --would-skip      reads a comment body on stdin; exit 0 when the watcher skips it from a write-access author, 1 when it wouldn't
 #
 # Each poll prints one `watch-pr: <code>: <detail>` line per reason that applies, then exits 0. The codes, in order:
 #   merged, closed    the PR is done (printed alone)
@@ -16,8 +16,11 @@
 # A one-shot event is recorded in watch-pr-<n>.seen in the git common directory, so the next run stays quiet about it.
 #
 # A comment is the session's when its body contains WATCH_PR_MARKER (default `<!-- claude-session -->`), and Sandcastle's when it
-# starts with `<!-- sandcastle:<name> -->`, with or without data after the name. Neither wakes the watcher: both post under the
-# owner's token, so the marker is the only way to tell them from the owner.
+# starts with `<!-- sandcastle:<name> -->`, with or without data after the name, and in either case only when its author has write
+# access (authorAssociation OWNER, MEMBER or COLLABORATOR). Neither wakes the watcher: both post under the owner's token, so the marker
+# tells them from the owner, and the association keeps anyone else from forging one. Another author's text never reaches the session:
+# a comment or review from a person without write access wakes it with their login and a fixed phrase instead, and a thread whose last
+# reply is theirs is reported the same way, never quieted by it. A bot's thread text (Copilot's) is shown; bots are never a person.
 #
 # Exit codes: 0 the session is needed; 1 quiet until the timeout (or after --once); 2 a usage error, a missing tool or a PR that
 # can't be read (five polls in a row fail; a poll that fails, isn't GitHub's answer, or reads an open PR's list or rollup only in part
@@ -66,12 +69,15 @@ fi
 
 # The classifier, written once for the poll and for --would-skip. A body is ours when it carries the session's marker anywhere,
 # or starts (\A, not ^, which also matches after a newline) with a Sandcastle marker: a name of lower-case letters and hyphens,
-# then optionally data (approved-head and overlap carry some), then `-->`.
+# then optionally data (approved-head and overlap carry some), then `-->`. The poll counts it only on a node whose author has write
+# access (writer): anyone can comment on a public repository's PR, and so anyone can write the marker. --would-skip reads a body alone.
 # shellcheck disable=SC2016 # jq's $variables are not the shell's
 OURS_JQ='
   def ours($body):
     ($body // "") as $s
     | ($s | contains($session)) or ($s | test("\\A<!-- sandcastle:[a-z-]+( [^>\n]*)?-->"));
+  def writer: .authorAssociation as $a | $a == "OWNER" or $a == "MEMBER" or $a == "COLLABORATOR";
+  def ours_node: writer and ours(.body);
 '
 
 if ((would_skip)); then
@@ -102,18 +108,18 @@ common_dir="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
 seen_file="$common_dir/watch-pr-$pr.seen"
 
 # shellcheck disable=SC2016 # GraphQL's $variables are not the shell's
-QUERY='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){state merged mergeable mergeStateStatus headRefOid statusCheckRollup{commit{oid} contexts(first:100){pageInfo{hasNextPage endCursor} nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}} reviewThreads(first:100){pageInfo{hasNextPage endCursor} nodes{isResolved comments(last:1){nodes{author{__typename login} body}}}} reviews(last:100){pageInfo{hasPreviousPage startCursor} nodes{id state author{__typename login} body}} comments(last:100){pageInfo{hasPreviousPage startCursor} nodes{id author{__typename login} body}}}}}'
+QUERY='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){state merged mergeable mergeStateStatus headRefOid statusCheckRollup{commit{oid} contexts(first:100){pageInfo{hasNextPage endCursor} nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}} reviewThreads(first:100){pageInfo{hasNextPage endCursor} nodes{isResolved comments(last:1){nodes{author{__typename login} authorAssociation body}}}} reviews(last:100){pageInfo{hasPreviousPage startCursor} nodes{id state author{__typename login} authorAssociation body}} comments(last:100){pageInfo{hasPreviousPage startCursor} nodes{id author{__typename login} authorAssociation body}}}}}'
 
 # A list with more than the first query's 100 is read on, a page of 100 at a time, from its cursor: threads and checks forward from their end cursor,
 # reviews and comments back from their start cursor (the first query took the newest 100). Each page query reads that one list.
 # shellcheck disable=SC2016 # GraphQL's $variables are not the shell's
 PAGE_PR='query($owner:String!,$name:String!,$number:Int!,$cursor:String!){repository(owner:$owner,name:$name){pullRequest(number:$number){'
 # shellcheck disable=SC2016
-PAGE_QUERY_threads="${PAGE_PR}"'reviewThreads(first:100,after:$cursor){pageInfo{hasNextPage endCursor} nodes{isResolved comments(last:1){nodes{author{__typename login} body}}}}}}}'
+PAGE_QUERY_threads="${PAGE_PR}"'reviewThreads(first:100,after:$cursor){pageInfo{hasNextPage endCursor} nodes{isResolved comments(last:1){nodes{author{__typename login} authorAssociation body}}}}}}}'
 # shellcheck disable=SC2016
-PAGE_QUERY_reviews="${PAGE_PR}"'reviews(last:100,before:$cursor){pageInfo{hasPreviousPage startCursor} nodes{id state author{__typename login} body}}}}}'
+PAGE_QUERY_reviews="${PAGE_PR}"'reviews(last:100,before:$cursor){pageInfo{hasPreviousPage startCursor} nodes{id state author{__typename login} authorAssociation body}}}}}'
 # shellcheck disable=SC2016
-PAGE_QUERY_comments="${PAGE_PR}"'comments(last:100,before:$cursor){pageInfo{hasPreviousPage startCursor} nodes{id author{__typename login} body}}}}}'
+PAGE_QUERY_comments="${PAGE_PR}"'comments(last:100,before:$cursor){pageInfo{hasPreviousPage startCursor} nodes{id author{__typename login} authorAssociation body}}}}}'
 # shellcheck disable=SC2016
 PAGE_QUERY_checks="${PAGE_PR}"'headRefOid statusCheckRollup{commit{oid} contexts(first:100,after:$cursor){pageInfo{hasNextPage endCursor} nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}'
 # At most this many pages after the first, per list (1,100 items): a longer list is a failed poll that says so, never a quiet one.
@@ -148,10 +154,12 @@ SHAPE_JQ='
 # One line per reason: code, detail and the node id of a one-shot event (else empty), apart by the unit separator.
 # shellcheck disable=SC2016
 REASONS_JQ="$OURS_JQ"'
-  def clean: tostring | gsub("[\u0001-\u001f\u007f]"; " ") | .[0:200];
+  def clean: tostring | gsub("[\u0000-\u001f\u007f-\u009f]"; " ") | .[0:200];
   def first_line: (. // "") | split("\n")[0];
   def person: (.author.__typename // "") != "Bot";
   def who: .author.login // "unknown";
+  # What the session is shown of a node: the first line of its body when its author has write access or is a bot, else a fixed phrase.
+  def said: if writer or (person | not) then .body | first_line else "(text not shown: the author has no write access)" end;
   def line($code; $detail; $id): [$code, ($detail | clean), $id] | join("\u001f");
   .data.repository.pullRequest as $pr
   | ($seen | split("\n")) as $seen_ids
@@ -169,16 +177,16 @@ REASONS_JQ="$OURS_JQ"'
       ($pr.reviewThreads.nodes[]
        | select(.isResolved == false)
        | (.comments.nodes | last) as $last
-       | select($last != null and (ours($last.body) | not))
-       | line("thread"; "\($last | who): \($last.body | first_line)"; "")),
+       | select($last != null and ($last | ours_node | not))
+       | line("thread"; "\($last | who): \($last | said)"; "")),
       ($pr.reviews.nodes[]
-       | select(person and (ours(.body) | not) and (.id as $id | $seen_ids | index($id) | not))
-       | if .state == "CHANGES_REQUESTED" then line("changes-requested"; "\(who): \(if (.body // "") == "" then "(no text)" else .body | first_line end)"; .id)
-         elif ((.body // "") | test("\\S")) and .state != "PENDING" then line("review"; "\(who): \(.body | first_line)"; .id)
+       | select(person and (ours_node | not) and (.id as $id | $seen_ids | index($id) | not))
+       | if .state == "CHANGES_REQUESTED" then line("changes-requested"; "\(who): \(if (.body // "") == "" then "(no text)" else said end)"; .id)
+         elif ((.body // "") | test("\\S")) and .state != "PENDING" then line("review"; "\(who): \(said)"; .id)
          else empty end),
       ($pr.comments.nodes[]
-       | select(person and (ours(.body) | not) and (.id as $id | $seen_ids | index($id) | not))
-       | line("comment"; "\(who): \((.body // "") | first_line)"; .id))
+       | select(person and (ours_node | not) and (.id as $id | $seen_ids | index($id) | not))
+       | line("comment"; "\(who): \(said)"; .id))
     end
 '
 
