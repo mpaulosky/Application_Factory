@@ -1851,7 +1851,7 @@ async function buildMarkedIssue(
           `Sandcastle couldn't publish \`${branch}\`: it passed the gate, but pushing it or opening or updating its pull request failed after the ` +
             `${reviewUnfinished ? "review didn't finish" : "review left findings open"} and the pull request was held as a draft. The branch keeps its commits. A person needs to look at it. A pull ` +
             `request from it may already be open as a draft, without the note saying why: find it with \`gh pr list --head ${branch}\` before opening ` +
-            `one, and do not mark it ready until ${reviewUnfinished ? "the review has been run again and nothing is open" : "each open finding is fixed or accepted (the review's ledger is on the runner: run `/pre-push-review` on the branch first, then `scripts/review.sh accept <id> <reason>`)"}. If origin's ` +
+            `one, and do not mark it ready until ${reviewUnfinished ? "the review has been run again and nothing is open" : "each open finding is fixed or accepted (the review's ledger is on the runner: run `/pre-push-review` on the branch first, then `scripts/review.sh accept <id> <reason>`, or `scripts/review.sh accept-open`, which lists them)"}. If origin's ` +
             `\`${branch}\` isn't at \`${gated}\`, the commit the gate passed, it still has to be pushed from its worktree, and if origin's branch has ` +
             `commits the local one doesn't, the two need reconciling.\n\n${fence}text\n${detail}\n${fence}`,
         );

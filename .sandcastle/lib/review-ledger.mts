@@ -1117,6 +1117,9 @@ export type OpenDecision = { accept: readonly { id: string; reason: string }[]; 
 // until a review fixes it when it blocks at all (isBlocking: not a non-security Advisory one).
 export function decideOpen(cwd: string, base: string, decision: OpenDecision, onSecurity?: (message: string) => void): Ledger {
   const accepting = decision.accept.map(({ id, reason }) => ({ id, why: stripControl(reason).trim() }));
+  // The list's ready command holds "<reason>" for the person to replace: run as it is, it would record the placeholder as each reason.
+  const unfilled = accepting.filter(({ why }) => /^<\s*reason\s*>$/i.test(why)).map(({ id }) => id);
+  if (unfilled.length > 0) throw new Error(`write each reason in place of <reason>: ${unfilled.join(", ")}`);
   const unexplained = accepting.filter(({ why }) => why === "").map(({ id }) => id);
   if (unexplained.length > 0) throw new Error(`say why the finding is accepted: ${unexplained.join(", ")}`);
   const ids = [...accepting.map(({ id }) => id), ...decision.fix];
@@ -1168,10 +1171,11 @@ export function renderOpen(ledger: Ledger): string {
       ...(finding.fix === null || finding.fix === undefined ? [] : [`    Suggested fix: ${plainText(finding.fix)}`]),
     ].join("\n"),
   );
-  // The ready command names the findings that block, else every open one, and never one already asked to be fixed.
+  // The ready command names the undecided findings that block, else (none of them blocks) every undecided one, and never one already
+  // asked to be fixed; none when every open finding is asked. The examples use an undecided id when there is one.
   const undecided = open.filter((finding) => finding.fixAsked !== true);
   const ready = (undecided.some(isBlocking) ? undecided.filter(isBlocking) : undecided).map((finding) => finding.id);
-  const example = ready[0] ?? open[0]?.id ?? "R1";
+  const example = ready[0] ?? "R1";
   return [
     `${open.length} open finding(s) on the review of ${ledger.branch === "" ? "HEAD" : plainText(ledger.branch)} at ${ledger.head.slice(0, 12)}:`,
     "",
@@ -1219,7 +1223,7 @@ export function parseOpenDecision(words: readonly string[]): OpenDecision | unde
   }
   if (fixing && fix.length === 0) throw new Error("--fix needs the ids to fix after it");
   if (shared !== undefined && !named.some(({ reason }) => reason === undefined)) {
-    throw new Error("--reason is for bare ids to accept, and none is named before --fix");
+    throw new Error(`--reason is for bare ids to accept (R3), and none is named${fixing ? " before --fix" : ""}: give R3="<reason>", or a bare id with --reason`);
   }
   const accept = named.map(({ id, reason }) => {
     const why = reason ?? shared;

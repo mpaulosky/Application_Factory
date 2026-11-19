@@ -214,11 +214,11 @@ code at each finding's line yourself, then give it one outcome:
   exists. Then the reason is ``repeats .security/NNNN (fixed), pinned by <test>``. When the policy is gone from the code or the pinning test or check no
   longer exists, the finding is a new one, and its summary names the entry. An `accepted` or `open` entry is read like any other but changes nothing yet:
   the finding is raised as before, with `"repeats": "NNNN"` (step 8) when it repeats that entry.
-- **Leave it open** for a person, with its suggested fix, when a Critical or Warning finding's `needsPerson` is true, or the last, review-only round raised
+- **Leave it open** for a person (never one the earlier review shows `fixAsked`: the next bullet alone decides those, security and Advisory
+  ones included), with its suggested fix, when a Critical or Warning finding's `needsPerson` is true, or the last, review-only round raised
   it (step 7), or when it's a problem a person decided needs no change, in
   the earlier review or in the owner's own PR-thread reply (step 3), or one the earlier review left open: the person
-  decides it again for this code (step 9), unless the earlier review shows it `fixAsked` (the next bullet, which wins). Name the earlier finding or thread
-  and its reason in the summary, so they can.
+  decides it again for this code (step 9). Name the earlier finding or thread and its reason in the summary, so they can.
   Reviewers see an accepted or open security finding only by id, so check each one in `latest` against the code
   yourself, and record each one still there as a new open Warning naming the old id, whether or not a reviewer raised it.
   An earlier Advisory finding that's still there is fixed now, unless it waits for a person: then it's recorded open
@@ -227,7 +227,8 @@ code at each finding's line yourself, then give it one outcome:
   (`scripts/review.sh accept-open --fix`), so it is fixed in this run, not left open again, whatever its `needsPerson` said and whether or not it is a
   security finding (a security one is fixed behind a test). The Rules still hold: a fix that would weaken a test, a check, a validation or a permission, or
   that changes the gate, the ledger, the reviewer agent, `.claude/settings.json` or a workflow's permissions, stays open for the person with its suggested
-  fix, since asking for a fix isn't asking for that change. Raise it under a new id naming the old one.
+  fix, since asking for a fix isn't asking for that change. In the last, review-only round (step 7) nothing is fixed: it stays open with its fix.
+  Raise it under a new id naming the old one.
 
 Stage the findings, so a long session that loses its memory of the earlier rounds still records them. Write the round's JSON array, every
 field of step 8's `findings` (ids as below), with the Write tool to `<run>/round-N.json` (the text quotes code, as in step 4), and run

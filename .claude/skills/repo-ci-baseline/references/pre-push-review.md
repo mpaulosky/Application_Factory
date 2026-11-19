@@ -39,8 +39,9 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   printed is that of the whole diff, so a change in a mirror alone still needs a new review. One agent per lens is already how the round starts; splitting round 1 by file group is not done.
 - Critical and Warning findings left open (because they need a person, or the last, review-only round raised them) block the push until the person fixes them or accepts
   them with `scripts/review.sh accept` or `scripts/review.sh accept-open` (never on their behalf).
-  `scripts/review.sh accept-open` lists the open findings with their suggested fixes, ending with a ready command that names the blocking ones; with
-  ids it decides several at once, all or none: `R3="<reason>"` (or `--reason "<reason>"` for bare ids) accepts, and the ids after `--fix` stay open
+  `scripts/review.sh accept-open` lists the open findings with their suggested fixes, ending with a ready command that names the blocking ones not
+  asked to be fixed (every open one not asked when none of those blocks; none when all are asked), each with `<reason>` to replace: run unedited it is
+  refused. With ids it decides several at once, all or none: `R3="<reason>"` (or `--reason "<reason>"` for bare ids) accepts, and the ids after `--fix` stay open
   with `fixAsked` (blocking unless Advisory and not security), which the next run fixes whatever their `needsPerson` said, the Rules' exceptions apart.
   Every finding is named, with no "all", so a review recorded again since the list, or a fix asked meanwhile, can't be accepted unseen.
   `record` and `stage` refuse `fixAsked`: only the person asks.
