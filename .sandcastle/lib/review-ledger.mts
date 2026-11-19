@@ -327,10 +327,18 @@ const inputFindingSchema = recordedFields
 // findings without requiring the mark, has no `security` mark. A finding with no severity counts as a Warning (see
 // severityOf), so it blocks until a person decides it, and one with no mark
 // counts as a security finding (see isSecurity).
+// `fixAsked` is the person's choice, through `scripts/review.sh accept-open --fix`, that an open finding be fixed rather than accepted: the
+// next run's triage fixes it whatever its needsPerson said. Only that command sets it (record's input has no such field), only on an
+// open finding, and accepting the finding drops it.
 export const storedFindingSchema = findingFields
-  .extend({ severity: z.enum(SEVERITIES).optional(), security: z.boolean().optional() })
+  .extend({ severity: z.enum(SEVERITIES).optional(), security: z.boolean().optional(), fixAsked: z.literal(true).optional() })
   .strict()
-  .superRefine(checkOutcome);
+  .superRefine(checkOutcome)
+  .superRefine((finding, context) => {
+    if (finding.fixAsked === true && finding.status !== "open") {
+      context.addIssue({ code: "custom", message: `${finding.id} is ${finding.status}, so it can't be asked to be fixed` });
+    }
+  });
 
 export type Finding = z.infer<typeof storedFindingSchema>;
 
@@ -1097,22 +1105,48 @@ export function recordReview(
 // the finding was recorded against is accepted too if it is open (a fixed one stays, with a warning), and `onSecurity` hears of it (or of why it
 // couldn't be): the acceptance itself stands either way.
 export function acceptFinding(cwd: string, base: string, id: string, reason: string, onSecurity?: (message: string) => void): Ledger {
-  const why = stripControl(reason).trim();
-  if (why === "") throw new Error("say why the finding is accepted");
+  return decideOpen(cwd, base, { accept: [{ id, reason }], fix: [] }, onSecurity);
+}
+
+// What the person decided about some of a review's open findings: each one accepted with its own reason, or asked to be fixed.
+export type OpenDecision = { accept: readonly { id: string; reason: string }[]; fix: readonly string[] };
+
+// Apply a person's decision to the open findings on the ledger for HEAD's diff, all or nothing: every id is checked (it names an
+// open finding, it is decided once, an accepted one has a reason) before the ledger changes, so a refusal leaves it as it was.
+// An accepted finding is accepted as acceptFinding says; one asked to be fixed stays open with `fixAsked`, so it still blocks the push
+// until a review fixes it.
+export function decideOpen(cwd: string, base: string, decision: OpenDecision, onSecurity?: (message: string) => void): Ledger {
+  const accepting = decision.accept.map(({ id, reason }) => ({ id, why: stripControl(reason).trim() }));
+  const unexplained = accepting.filter(({ why }) => why === "").map(({ id }) => id);
+  if (unexplained.length > 0) throw new Error(`say why the finding is accepted: ${unexplained.join(", ")}`);
+  const ids = [...accepting.map(({ id }) => id), ...decision.fix];
+  if (ids.length === 0) throw new Error("name at least one finding to accept or fix");
+  const twice = ids.filter((id, index) => ids.indexOf(id) !== index);
+  if (twice.length > 0) throw new Error(`each finding is decided once: ${[...new Set(twice)].join(", ")} named more than once`);
   const key = diffKey(cwd, base);
   return withLock(cwd, () => {
     const ledger = readLedger(cwd, key);
     if (ledger === undefined) throw new Error("no review is recorded for this diff: run /pre-push-review first");
-    const finding = ledger.findings.find((candidate) => candidate.id === id);
-    if (finding === undefined) throw new Error(`the review has no finding ${id}`);
-    if (finding.status !== "open") throw new Error(`${id} is already ${finding.status}`);
-    finding.status = "accepted";
-    finding.reason = why;
+    const byId = new Map(ledger.findings.map((finding) => [finding.id, finding]));
+    for (const id of ids) {
+      const finding = byId.get(id);
+      if (finding === undefined) throw new Error(`the review has no finding ${id}`);
+      if (finding.status !== "open") throw new Error(`${id} is already ${finding.status}`);
+    }
+    const accepted = accepting.map(({ id, why }) => {
+      const finding = byId.get(id) as Finding;
+      finding.status = "accepted";
+      finding.reason = why;
+      delete finding.fixAsked;
+      return { finding, why };
+    });
+    for (const id of decision.fix) (byId.get(id) as Finding).fixAsked = true;
     const written = ledgerSchema.parse(ledger);
     writeLedger(cwd, written);
-    if (isSecurity(finding)) {
+    for (const { finding, why } of accepted) {
+      if (!isSecurity(finding)) continue;
       try {
-        const entry = markAccepted(cwd, finding, why, readEntryMap(cwd, key, id), onSecurity);
+        const entry = markAccepted(cwd, finding, why, readEntryMap(cwd, key, finding.id), onSecurity);
         if (entry !== undefined) onSecurity?.(`marked ${entry} accepted`);
       } catch (error) {
         onSecurity?.(`couldn't mark the entry accepted: ${(error as Error).message ?? String(error)}`);
@@ -1120,6 +1154,84 @@ export function acceptFinding(cwd: string, base: string, id: string, reason: str
     }
     return written;
   });
+}
+
+// The open findings of a review, for the person deciding them: each with its grade, where it is, what goes wrong, the suggested fix and
+// whether it was asked to be fixed, then the commands that decide them. Local only (the person's own terminal), like the report.
+export function renderOpen(ledger: Ledger): string {
+  const open = ledger.findings.filter((finding) => finding.status === "open");
+  if (open.length === 0) return "No open findings.\n";
+  const blocks = open.map((finding) =>
+    [
+      `${finding.id}  ${severityOf(finding)}${isBlocking(finding) ? ", blocks the push" : ""}${finding.fixAsked === true ? ", asked to be fixed" : ""}  ${plainText(finding.lens)}${isSecurity(finding) ? " (security)" : ""}  ${plainText(`${finding.path}:${finding.line}`)}`,
+      `    ${plainText(finding.summary)}`,
+      ...(finding.fix === null || finding.fix === undefined ? [] : [`    Suggested fix: ${plainText(finding.fix)}`]),
+    ].join("\n"),
+  );
+  const example = open[0]?.id ?? "R1";
+  return [
+    `${open.length} open finding(s) on the review of ${ledger.branch === "" ? "HEAD" : plainText(ledger.branch)} at ${ledger.head.slice(0, 12)}:`,
+    "",
+    ...blocks,
+    "",
+    "Decide them (yours to run, never an agent's on your behalf):",
+    `  scripts/review.sh accept-open ${example}="<reason>" ...            accept each with its own reason`,
+    `  scripts/review.sh accept-open --reason "<reason>" ${example} ...     accept these with one reason`,
+    `  scripts/review.sh accept-open --reason "<reason>" --all             accept every open finding not asked to be fixed`,
+    `  scripts/review.sh accept-open --fix ${example} ...                   ask for these to be fixed: the next /pre-push-review fixes them`,
+    "",
+  ].join("\n");
+}
+
+// The words after `accept-open`: ids to accept (`R3`, with --reason, or `R3=<reason>`), --all for every open finding, and after --fix the
+// ids to fix. Undefined with no words: list the open findings.
+export function parseOpenDecision(words: readonly string[], ledger: Ledger): OpenDecision | undefined {
+  if (words.length === 0) return undefined;
+  let shared: string | undefined;
+  let all = false;
+  let fixing = false;
+  const named: { id: string; reason: string | undefined }[] = [];
+  const fix: string[] = [];
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index] as string;
+    if (word === "--reason") {
+      const next = words[index + 1];
+      if (next === undefined || /^--/.test(next)) throw new Error("--reason needs the reason after it");
+      if (shared !== undefined) throw new Error("give --reason once");
+      shared = next;
+      index += 1;
+    } else if (word === "--all") {
+      if (fixing) throw new Error("--all accepts: put it before --fix");
+      all = true;
+    } else if (word === "--fix") {
+      if (fixing) throw new Error("give --fix once, then the ids to fix");
+      fixing = true;
+    } else {
+      const match = /^(R[1-9]\d{0,5})(?:=([\s\S]*))?$/.exec(word);
+      if (match === null) throw new Error(`${word} isn't a finding id (R1, R2, ...) or one of --reason, --all, --fix`);
+      const [, id, reason] = match as unknown as [string, string, string | undefined];
+      if (fixing) {
+        if (reason !== undefined) throw new Error(`${id} is to be fixed, so it takes no reason`);
+        fix.push(id);
+      } else named.push({ id, reason });
+    }
+  }
+  if (fixing && fix.length === 0) throw new Error("--fix needs the ids to fix after it");
+  if (all && named.length > 0) throw new Error("--all accepts every open finding: name none beside it");
+  if (all && shared === undefined) throw new Error("--all needs --reason");
+  const ids = all
+    ? ledger.findings.filter((finding) => finding.status === "open" && finding.fixAsked !== true && !fix.includes(finding.id)).map((finding) => finding.id)
+    : [];
+  if (all && ids.length === 0) throw new Error("no open finding is left to accept");
+  const accept = [
+    ...named.map(({ id, reason }) => {
+      const why = reason ?? shared;
+      if (why === undefined) throw new Error(`say why ${id} is accepted: ${id}="<reason>", or --reason "<reason>"`);
+      return { id, reason: why };
+    }),
+    ...ids.map((id) => ({ id, reason: shared as string })),
+  ];
+  return { accept, fix };
 }
 
 export type ReviewCheck = { ok: boolean; message: string };
@@ -1207,7 +1319,7 @@ export function renderReport(ledger: Ledger): string {
       .filter((finding) => severityOf(finding) === severity)
       .map(
         (finding) =>
-          `| ${finding.id} | ${cell(finding.lens)}${isSecurity(finding) ? " (security)" : ""} | ${where(finding)} | ${cell(finding.summary)} | ${finding.status} | ${cell(finding.test ?? finding.reason ?? "")} |`,
+          `| ${finding.id} | ${cell(finding.lens)}${isSecurity(finding) ? " (security)" : ""} | ${where(finding)} | ${cell(finding.summary)} | ${finding.status}${finding.fixAsked === true ? ", asked to be fixed" : ""} | ${cell(finding.test ?? finding.reason ?? "")} |`,
       );
     if (rows.length === 0) return [];
     return ["", `### ${severityHeadings[severity]}`, "", "| Id | Lens | Where | Finding | Status | Test or reason |", "| --- | --- | --- | --- | --- | --- |", ...rows];
@@ -1443,6 +1555,10 @@ const USAGE = `Usage: scripts/review.sh <command>
                          record a review from JSON ({ reviewedKey, reviewedHead, rounds, reviewerAgent, pr, findings }); - reads stdin;
                          with --staged the findings in <dir>/findings.json come before the file's own
   accept <id> <reason>   accept an open finding on HEAD's review
+  accept-open [<id>[=<reason>]... | --all] [--reason <reason>] [--fix <id>...]
+                         with nothing after it, list HEAD's review's open findings and how to decide them; otherwise accept the ids
+                         named (each with its own =<reason>, or the --reason one; --all is every open finding not asked to be fixed)
+                         and ask for the ids after --fix to be fixed by the next review, all at once or none
   report                 print HEAD's review report
   notes                  print the "## Review notes" section for the PR description
   advisory               print the follow-up issue's list of open Advisory findings
@@ -1658,6 +1774,19 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         const [id, ...reason] = rest;
         if (id === undefined || reason.length === 0) return fail(USAGE);
         out(renderReport(acceptFinding(cwd, mergeBase(cwd), id, reason.join(" "), (message) => process.stderr.write(`.security: ${printable(message)}\n`))));
+        return 0;
+      }
+      case "accept-open": {
+        const ledger = readLedger(cwd, diffKey(cwd, mergeBase(cwd)));
+        if (ledger === undefined) return fail("No review is recorded for this diff.");
+        const decision = parseOpenDecision(rest, ledger);
+        if (decision === undefined) {
+          out(renderOpen(ledger));
+          return 0;
+        }
+        const decided = decideOpen(cwd, mergeBase(cwd), decision, (message) => process.stderr.write(`.security: ${printable(message)}\n`));
+        out(renderReport(decided));
+        if (decision.fix.length > 0) out(`Asked to be fixed: ${decision.fix.join(", ")}. Run /pre-push-review: it fixes them, and they block the push until then.`);
         return 0;
       }
       case "report":

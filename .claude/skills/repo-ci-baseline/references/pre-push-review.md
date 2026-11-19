@@ -39,6 +39,9 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   printed is that of the whole diff, so a change in a mirror alone still needs a new review. One agent per lens is already how the round starts; splitting round 1 by file group is not done.
 - Critical and Warning findings left open (because they need a person, or the last, review-only round raised them) block the push until the person fixes them or accepts
   them with `scripts/review.sh accept` (never on their behalf).
+  `scripts/review.sh accept-open` lists the open findings with their suggested fixes; with ids it decides several at once, all or none:
+  `R3="<reason>"` (or `--reason "<reason>"` for bare ids, `--all` for every open one) accepts, and the ids after `--fix` stay open and blocking
+  with `fixAsked`, which the next run fixes whatever their `needsPerson` said. `record` refuses `fixAsked`: only the person asks.
   Advisory findings never block: one that needs a person goes to one follow-up issue per branch.
 - A run's findings are staged, not held in the session. Each round's triage goes to `scripts/review.sh stage <run> <file>`: each finding is checked as `record` checks it (an
   `accepted` one is refused), and one staged again under the same id replaces the earlier. The file is owner-only and replaced whole, and a second `stage` at the same time is

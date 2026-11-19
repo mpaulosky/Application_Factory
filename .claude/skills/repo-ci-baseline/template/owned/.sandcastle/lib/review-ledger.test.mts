@@ -1556,6 +1556,147 @@ describe("acceptFinding", () => {
   });
 });
 
+describe("accept-open", () => {
+  const open = (id: string, overrides: Partial<Finding> = {}) => finding({ id, status: "open", test: null, ...overrides });
+  const stored = () => readLedger(repo, diffKey(repo, mergeBase(repo)))?.findings ?? [];
+  const statusOf = (id: string) => stored().find((found) => found.id === id);
+
+  it("with nothing after it lists the open findings, their fixes and the commands, and changes nothing", () => {
+    record([finding(), open("R2", { summary: "The retry loops forever.", fix: "Cap the retries." }), open("R3", { severity: "advisory" })]);
+    const before = JSON.stringify(stored());
+
+    const result = cli(["accept-open"]);
+
+    assert.equal(result.code, 0, result.err);
+    assert.match(result.out, /^2 open finding\(s\)/);
+    assert.match(result.out, /^R2 {2}critical, blocks the push {2}Edge cases {2}app\.cs:3$/m);
+    assert.match(result.out, /^ {4}The retry loops forever\.$/m);
+    assert.match(result.out, /^ {4}Suggested fix: Cap the retries\.$/m);
+    assert.match(result.out, /^R3 {2}advisory {2}/m);
+    assert.doesNotMatch(result.out, /^R1 /m);
+    assert.match(result.out, /accept-open R2="<reason>"/);
+    assert.match(result.out, /--fix R2/);
+    assert.equal(JSON.stringify(stored()), before);
+  });
+
+  it("says so when nothing is open", () => {
+    record([finding()]);
+
+    assert.match(cli(["accept-open"]).out, /^No open findings\.$/m);
+  });
+
+  it("accepts each id with its own reason, so the check passes", () => {
+    record([open("R1"), open("R2")]);
+
+    const result = cli(["accept-open", "R1=The spec asks for it.", "R2=Tracked in #81; a = sign stays."]);
+
+    assert.equal(result.code, 0, result.err);
+    assert.equal(statusOf("R1")?.reason, "The spec asks for it.");
+    assert.equal(statusOf("R2")?.reason, "Tracked in #81; a = sign stays.");
+    assert.equal(cli(["check"]).code, 0);
+  });
+
+  it("accepts bare ids with the --reason one, and an id's own reason wins", () => {
+    record([open("R1"), open("R2")]);
+
+    assert.equal(cli(["accept-open", "--reason", "Shared.", "R1", "R2=Own."]).code, 0);
+
+    assert.equal(statusOf("R1")?.reason, "Shared.");
+    assert.equal(statusOf("R2")?.reason, "Own.");
+  });
+
+  it("--all accepts every open finding but those asked to be fixed, and leaves fixed ones", () => {
+    record([finding(), open("R2"), open("R3"), open("R4")]);
+
+    const result = cli(["accept-open", "--reason", "All fine.", "--all", "--fix", "R4"]);
+
+    assert.equal(result.code, 0, result.err);
+    assert.equal(statusOf("R1")?.status, "fixed");
+    assert.equal(statusOf("R2")?.status, "accepted");
+    assert.equal(statusOf("R3")?.status, "accepted");
+    assert.equal(statusOf("R4")?.status, "open");
+    assert.equal(statusOf("R4")?.fixAsked, true);
+    assert.match(result.out, /Asked to be fixed: R4\./);
+  });
+
+  it("--all leaves a finding an earlier --fix asked to be fixed", () => {
+    record([open("R1"), open("R2")]);
+    assert.equal(cli(["accept-open", "--fix", "R1"]).code, 0);
+
+    assert.equal(cli(["accept-open", "--reason", "Fine.", "--all"]).code, 0);
+
+    assert.equal(statusOf("R1")?.status, "open");
+    assert.equal(statusOf("R2")?.status, "accepted");
+  });
+
+  it("--fix keeps the finding open and blocking, marked in the report and the list", () => {
+    record([open("R1")]);
+
+    assert.equal(cli(["accept-open", "--fix", "R1"]).code, 0);
+
+    assert.equal(statusOf("R1")?.status, "open");
+    assert.equal(statusOf("R1")?.fixAsked, true);
+    assert.equal(cli(["check"]).code, 1);
+    assert.match(cli(["report"]).out, /\| open, asked to be fixed \|/);
+    assert.match(cli(["accept-open"]).out, /^R1 {2}critical, blocks the push, asked to be fixed /m);
+  });
+
+  it("accepting a finding asked to be fixed drops the ask", () => {
+    record([open("R1")]);
+    cli(["accept-open", "--fix", "R1"]);
+
+    assert.equal(cli(["accept-open", "R1=Changed my mind."]).code, 0);
+
+    assert.equal(statusOf("R1")?.status, "accepted");
+    assert.equal(statusOf("R1")?.fixAsked, undefined);
+  });
+
+  // Each refusal leaves the ledger as it was: R1 is open and would be accepted if the decision were applied in part.
+  for (const [what, args, error] of [
+    ["an id with no reason", ["R1", "R2"], /say why R1 is accepted/],
+    ["an empty reason", ["R1=  ", "R2=Fine."], /say why the finding is accepted: R1/],
+    ["a finding that is fixed", ["R1=Fine.", "R3=Fine."], /R3 is already fixed/],
+    ["a finding the review hasn't", ["R1=Fine.", "R9=Fine."], /has no finding R9/],
+    ["an id named twice", ["R1=Fine.", "--fix", "R1"], /R1 named more than once/],
+    ["a word that isn't an id", ["R1=Fine.", "r2"], /r2 isn't a finding id/],
+    ["--all beside an id", ["--reason", "x", "--all", "R1"], /name none beside it/],
+    ["--all with no reason", ["--all"], /--all needs --reason/],
+    ["--fix with no ids", ["R1=Fine.", "--fix"], /--fix needs the ids/],
+    ["a reason on an id to fix", ["--fix", "R1=why"], /takes no reason/],
+    ["--reason with nothing after it", ["R1", "--reason"], /--reason needs the reason/],
+  ] as const) {
+    it(`refuses ${what}, and changes nothing`, () => {
+      record([open("R1"), open("R2"), finding({ id: "R3" })]);
+      const before = JSON.stringify(stored());
+
+      const result = cli(["accept-open", ...args]);
+
+      assert.equal(result.code, 1);
+      assert.match(result.err, error);
+      assert.equal(JSON.stringify(stored()), before);
+    });
+  }
+
+  it("refuses when no review is recorded", () => {
+    const result = cli(["accept-open"]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /No review is recorded/);
+  });
+
+  it("record refuses a finding that says it was asked to be fixed: only the person asks", () => {
+    assert.throws(() => recordReview(repo, mergeBase(repo), { ...reviewed(), rounds: 1, findings: [{ ...open("R1"), fixAsked: true } as Finding] }), /fixAsked/);
+  });
+
+  it("a stored ledger can't hold the ask on a finding that isn't open", () => {
+    record([finding()]);
+    const path = join(ledgerDir(repo), `${diffKey(repo, mergeBase(repo))}.json`);
+    rewriteFindings(path, (found) => ({ ...found, fixAsked: true }));
+
+    assert.throws(() => readLedger(repo, diffKey(repo, mergeBase(repo))), /damaged/);
+  });
+});
+
 describe("latestLedger", () => {
   it("returns the review nearest HEAD after fix commits changed the key", () => {
     record([finding({ status: "accepted", test: null, reason: "First." })], 1, new Date("2026-10-20T10:00:00Z"));
@@ -3004,6 +3145,18 @@ describe("the security record", () => {
       assert.match(firstEntry(), /^- Status: fixed$/m);
       assert.doesNotMatch(firstEntry(), /## Accepted/);
       assert.equal(readLedger(repo, diffKey(repo, mergeBase(repo)))?.findings[0]?.status, "accepted");
+    });
+
+    it("accept-open accepts several security findings at once, and marks each one's entry accepted", () => {
+      recordHere([weakness({ status: "open", test: null }), weakness({ id: "R2", path: "scripts/other.sh", summary: "Another weakness.", status: "open", test: null })]);
+
+      const result = cli(["accept-open", "R1=The folder is a sandbox.", "R2=Known."]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.match(result.err, /^\.security: marked 0001 accepted$/m);
+      assert.match(result.err, /^\.security: marked 0002 accepted$/m);
+      assert.match(entry(entries()[0] ?? ""), /^- Status: accepted$/m);
+      assert.match(entry(entries()[1] ?? ""), /^- Status: accepted$/m);
     });
 
     it("accept turns the open entry accepted that a finding was matched to through `repeats` in other words", () => {

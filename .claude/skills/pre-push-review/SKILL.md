@@ -222,6 +222,9 @@ code at each finding's line yourself, then give it one outcome:
   yourself, and record each one still there as a new open Warning naming the old id, whether or not a reviewer raised it.
   An earlier Advisory finding that's still there is fixed now, unless it waits for a person: then it's recorded open
   again as Advisory, its summary opening with the old id (`R3 again: ...`), and it never blocks.
+- **Fix it** when the earlier review shows it `"fixAsked": true` and the problem is still in the code: the person asked for it to be fixed
+  (`scripts/review.sh accept-open --fix`), so it is fixed in this run whatever its `needsPerson` said, by the Rules above (a fix that would weaken a check
+  stays open). Raise it under a new id naming the old one.
 
 Stage the findings, so a long session that loses its memory of the earlier rounds still records them. Write the round's JSON array, every
 field of step 8's `findings` (ids as below), with the Write tool to `<run>/round-N.json` (the text quotes code, as in step 4), and run
@@ -334,8 +337,11 @@ Show the person the output of `scripts/review.sh report`: every finding grouped 
 happened to it, and its test or reason.
 
 When Critical or Warning findings are open, the push is blocked: say so, and for each one say what decision it needs and
-the suggested fix. The person either accepts it with `scripts/review.sh accept R3 "<reason>"`, or asks you to fix it:
-fix it as in step 6, then start a new run at step 1, in which the record just made is step 3's earlier review. The
+the suggested fix. `scripts/review.sh accept-open` lists every open finding with its fix and the commands that decide them. The person
+either accepts it, with `scripts/review.sh accept R3 "<reason>"` or several at once with `scripts/review.sh accept-open R3="<reason>" R4="<reason>"`
+(`--reason "<reason>"` for one reason, `--all` for every open one), or asks you to fix it, by saying so or with `scripts/review.sh accept-open --fix R3`,
+which marks it `fixAsked` and leaves it open and blocking: fix it as in step 6, then start a new run at step 1, in which the record just made is step 3's
+earlier review. Never run `accept` or `accept-open` with ids yourself: only the person decides. The
 Advisory findings left open never block. For a branch Sandcastle builds, the host runs these rounds itself (`.sandcastle/lib/host-review.mts`), with these
 reviewers, the Bar and lenses, and `prepare` and `record` run by the host in the main checkout, so no session records for it and no agent reaches `.git/review`;
 its sandboxes still skip the gate's review check and see an empty `.git/review`.
