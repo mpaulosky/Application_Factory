@@ -171,24 +171,37 @@ run_env() { # run_env <VAR=value>... -- <args...>
   local -a vars=()
   while [[ "$1" != "--" ]]; do vars+=("$1"); shift; done
   shift
-  out="$(cd "$repo" && env "${vars[@]}" PATH="$fakebin:$PATH" bash "$SCRIPT" "$@" 2>"$work/err")"
+  out="$(cd "$repo" && env ${vars[@]+"${vars[@]}"} PATH="$fakebin:$PATH" bash "$SCRIPT" "$@" 2>"$work/err")"
   status=$?
   err="$(<"$work/err")"
 }
 # run_bounded <seconds> <VAR=value>... -- <args...>: run_env, killed after <seconds> with status 124, by a watchdog in plain bash (GNU timeout
-# isn't on macOS). The watchdog's own sleep is the real one: the fake is only on the watcher's PATH.
+# isn't on macOS). The watchdog's own sleep is the real one: the fake is only on the watcher's PATH. The watchdog writes its marker before it
+# kills, so the watcher's end tells a timeout by the marker, never by whether the watchdog is still alive; a watcher that ends first stops the
+# watchdog and its sleep. ${vars[@]+...} because bash before 4.4 (macOS's 3.2) calls an empty array unbound under set -u.
 run_bounded() {
-  local secs="$1" pid dog
+  local secs="$1" pid dog fired="$work/bounded-fired"
   shift
   local -a vars=()
   while [[ "$1" != "--" ]]; do vars+=("$1"); shift; done
   shift
-  (cd "$repo" && exec env "${vars[@]}" PATH="$fakebin:$PATH" bash "$SCRIPT" "$@") >"$work/out" 2>"$work/err" &
+  rm -f "$fired"
+  (cd "$repo" && exec env ${vars[@]+"${vars[@]}"} PATH="$fakebin:$PATH" bash "$SCRIPT" "$@") >"$work/out" 2>"$work/err" &
   pid=$!
-  (command sleep "$secs" && kill "$pid") >/dev/null 2>&1 &
+  (
+    nap=""
+    trap '[[ -n $nap ]] && kill "$nap" 2>/dev/null; exit 0' TERM
+    command sleep "$secs" &
+    nap=$!
+    wait "$nap" || exit 0
+    : >"$fired"
+    kill "$pid"
+  ) >/dev/null 2>&1 &
   dog=$!
   wait "$pid" && status=0 || status=$?
-  if kill -0 "$dog" 2>/dev/null; then kill "$dog" 2>/dev/null || true; else status=124; fi
+  if [[ -e "$fired" ]]; then status=124; fi
+  kill "$dog" 2>/dev/null || true
+  wait "$dog" 2>/dev/null || true
   out="$(<"$work/out")"
   err="$(<"$work/err")"
 }
@@ -1292,11 +1305,16 @@ check "300 pages are no failed poll" not err_has "failed"
 
 # The watchdog itself: a watcher that runs past the bound is stopped with status 124, and one that ends first keeps its own status.
 new_repo
-run_bounded 1 WATCH_PR_INTERVAL=1 -- 7
-check "a run past run_bounded's bound is status 124" status_is 124
+for try in 1 2 3; do
+  run_bounded 1 WATCH_PR_INTERVAL=1 -- 7
+  check "a run past run_bounded's bound is status 124 (try $try)" status_is 124
+done
+# No VAR=value: the watcher runs (it polls), so a helper that fails before starting it can't pass on the status alone.
 new_repo
-run_bounded 60 -- --once 7
+run_bounded 59 -- --once 7
 check "a run inside run_bounded's bound keeps its own status" status_is 1
+check "a run_bounded call with no VAR=value runs the watcher: one poll" polls_are 1
+check "a run that ends first leaves no watchdog sleep running" not pgrep -fx 'sleep 59' 
 
 # Two lists paged, each with something on its page: each list's merge holds only its own pages, so the poll prints exactly the two events.
 pages_repo
