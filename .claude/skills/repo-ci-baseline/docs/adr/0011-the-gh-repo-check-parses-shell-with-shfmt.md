@@ -1,7 +1,8 @@
 # The gh repository check parses shell with shfmt
 
 **Status:** accepted (mpaulosky/Application_Factory#52). Implemented in `template/owned/.github/scripts/check_gh_repo.py` (`parse`, `parse_prefix`, `Shape`, `untold`), its tests in
-`tests/gh_repo/`, the Owned `ci.yml`'s `gh-repo` and `hook-tests` jobs, the Seed `.sandcastle/Dockerfile` and the Factory's `.github/actions/template-tools/`
+`template/owned/.github/scripts/tests/` (shipped with it) and `tests/gh_repo/` (the Factory-only ones), the Owned `ci.yml`'s `gh-repo`, `python-tests` and
+`hook-tests` jobs, the Seed `.sandcastle/Dockerfile` and the Factory's `.github/actions/template-tools/`
 ([gotchas.md](../../references/gotchas.md), "Tell every `gh` command its repository").
 
 ## Context

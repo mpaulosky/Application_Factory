@@ -248,6 +248,7 @@ const EXEMPT_GLOBS_AUDITED: Readonly<Record<string, GlobEntry>> = {
   ".github/scripts/**": { files: [
       ".github/scripts/backfill_blog_posts.py",
       ".github/scripts/check_gh_repo.py",
+      ".github/scripts/check_owned_files.py",
       ".github/scripts/detect_changes.py",
       ".github/scripts/discover_tests.py",
       ".github/scripts/draft_release.py",
@@ -258,6 +259,9 @@ const EXEMPT_GLOBS_AUDITED: Readonly<Record<string, GlobEntry>> = {
       ".github/scripts/tests/conftest.py",
       ".github/scripts/tests/pr-automerge.test.mjs",
       ".github/scripts/tests/test_backfill_blog_posts.py",
+      ".github/scripts/tests/test_check_gh_repo.py",
+      ".github/scripts/tests/test_check_owned_files.py",
+      ".github/scripts/tests/test_ci_gh_repo_job.py",
       ".github/scripts/tests/test_claude_review_copilot_gate.py",
       ".github/scripts/tests/test_claude_review_merge_check.py",
       ".github/scripts/tests/test_claude_review_resolved_threads.py",

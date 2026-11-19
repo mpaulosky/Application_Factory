@@ -5,7 +5,7 @@
 #   TEST_SH_SHARD=hooks|scripts|checks test.sh
 #
 # Runs the Template's own tests (hook suites, auto-merge script tests,
-# release-script pytest), the hardening-review scripts' tests, the renderer oracle and the GitHub scripts' tests
+# the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle and the GitHub scripts' tests
 # (settings, the landing decision, status, land and rollout), the Claude Review
 # benchmark's tests, lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
@@ -16,7 +16,7 @@
 # change. A repo's copies of Owned files are checked by status.sh and apply.sh --dry-run, not here.
 #
 # TEST_SH_SHARD runs one of its three shards, which is how the Factory's CI runs it in parallel jobs (ADR 0013): hooks is the hook and Owned script
-# tests, scripts the auto-merge, release, hardening-review, renderer, GitHub script and benchmark tests, checks everything from actionlint on. With
+# tests, scripts the auto-merge, Owned .github/scripts, hardening-review, renderer, GitHub script and benchmark tests, checks everything from actionlint on. With
 # no TEST_SH_SHARD every shard runs, in that order. Every step sits in exactly one shard; scripts/tests/gate.test.sh checks that.
 set -euo pipefail
 # The step headers carry SECONDS: count from here, whatever SECONDS a caller exported (mpaulosky/dotfiles#417).
@@ -103,7 +103,9 @@ step "Auto-merge script tests"
 need node
 node --test "$owned/.github/scripts/tests/pr-automerge.test.mjs" || fail "pr-automerge.test.mjs"
 
-step "Release script tests"
+step "Owned .github/scripts tests (release scripts, Claude Review, the gh check and the Owned files check)"
+# The tests an Application's python-tests job runs, from the Owned tree as from a repo root: check_gh_repo.py's own tests
+# among them, which need shfmt (checked above). Its Factory-only tests (the Template's folders, gotchas.md) are tests/gh_repo/.
 (cd "$owned" && "${pytest_cmd[@]}" -q -p no:cacheprovider .github/scripts/tests) || fail "pytest"
 
 step "Hardening review script tests"
@@ -249,8 +251,9 @@ step "gh commands in Owned scripts are told their repository"
 # default repository, a fork in a fork's clone (auth0-management-app's
 # .github/ci/gate-checks.sh), and the repo can't edit Owned files, so a
 # re-Apply that brings one would fail every gate there (mpaulosky/dotfiles#267).
-# check_gh_repo.py holds the rule; its tests run first, so a check that stopped
-# refusing anything can't pass the scripts.
+# check_gh_repo.py holds the rule. Its own tests ship with it and run in the scripts shard (the Owned .github/scripts
+# tests above), so a check that stopped refusing anything fails there; here run the tests that need the Factory (OWNED
+# against the Template's folders, gotchas.md, the shfmt installs and the mutation spec).
 (cd "$skill_dir/tests/gh_repo" && "${pytest_cmd[@]}" -q -p no:cacheprovider .) || fail "gh_repo pytest"
 python3 -I "$owned/.github/scripts/check_gh_repo.py" "$owned/scripts" \
   || fail "export GH_REPO before an Owned script's first gh command, and give gh repo's subcommands their repository"

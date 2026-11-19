@@ -1,6 +1,7 @@
-"""Tests for the Owned ci.yml's job that runs the base branch's check_gh_repo.py against a PR's tree
-(mpaulosky/dotfiles#344, R46/R61 and R58). No GitHub: the job's `run:` steps are read out of the YAML and run in bash
-against scratch git repos, with a bare repo as `origin`, as the workflow runs them.
+"""Tests for ci.yml's gh-repo job, which runs the base branch's check_gh_repo.py and check_owned_files.py against a PR's
+tree (mpaulosky/dotfiles#344, R46/R61 and R58). No GitHub: the job's `run:` steps are read out of the YAML and run in bash
+against scratch git repos, with a bare repo as `origin`, as the workflow runs them. They need PyYAML (or uvx) and shfmt
+v3.14 or a later v3 on PATH; the job's shfmt install itself is tested in the Application Factory.
 
 The job is found by the step that runs check_gh_repo.py. A step's `if:` may use only github.head_ref, github.base_ref,
 github.event_name, string literals, ==, !=, &&, ||, ! and parentheses; anything else can't be evaluated here, so keep the
@@ -16,10 +17,11 @@ from pathlib import Path
 import pytest
 
 HERE = Path(__file__).resolve().parent
-TEMPLATE_OWNED = HERE.parents[1] / "template" / "owned"
-CI = TEMPLATE_OWNED / ".github" / "workflows" / "ci.yml"
-CHECKER = TEMPLATE_OWNED / ".github" / "scripts" / "check_gh_repo.py"
+CI = HERE.parents[1] / "workflows" / "ci.yml"
+CHECKER = HERE.parent / "check_gh_repo.py"
 CHECKER_PATH = ".github/scripts/check_gh_repo.py"
+OWNED_CHECK = HERE.parent / "check_owned_files.py"
+OWNED_CHECK_PATH = ".github/scripts/check_owned_files.py"
 
 UNTOLD = "gh pr view 1\n"
 TOLD = "export GH_REPO=o/r\ngh pr view 1\n"
@@ -34,7 +36,7 @@ def load_workflow():
     try:
         import yaml
     except ImportError:
-        # test.sh may run pytest through uvx, which has no PyYAML: read the file with it in a one-off environment.
+        # pytest may run through uvx (the Application Factory's test.sh does), which has no PyYAML: read the file with it in a one-off environment.
         script = "import json, sys, yaml; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))"
         done = subprocess.run(["uvx", "--with", "pyyaml", "python", "-I", "-c", script, str(CI)],
                               check=True, capture_output=True, text=True)
@@ -219,8 +221,8 @@ class Job:
         for index, step in enumerate(the_job()["steps"]):
             if "run" not in step or not self.runs(step, code != 0):
                 continue
-            # It downloads shfmt and installs it with sudo; the test's PATH has shfmt already (test.sh needs it), and
-            # test_shfmt_install.py runs the step itself. Told by what it runs, so a rename can't make the harness run it.
+            # It downloads shfmt and installs it with sudo; the test's PATH has shfmt already (the checker needs it), and
+            # the Application Factory's test_shfmt_install.py runs the step itself. Told by what it runs, so a rename can't make the harness run it.
             if INSTALLS_SHFMT in str(step["run"]):
                 skipped.append(index)
                 continue
@@ -241,11 +243,11 @@ class Job:
         return code, "".join(output)
 
 
-BASE = {CHECKER_PATH: CHECKER.read_text(), "scripts/gate.sh": GATE, "scripts/ok.sh": TOLD}
+BASE = {CHECKER_PATH: CHECKER.read_text(), OWNED_CHECK_PATH: OWNED_CHECK.read_text(), "scripts/gate.sh": GATE, "scripts/ok.sh": TOLD}
 
 
 def test_the_job_installs_a_pinned_and_checked_shfmt_before_the_checker_runs():
-    # Arrange: the checker parses shell with shfmt (repo-ci-baseline's ADR 0011).
+    # Arrange: the checker reads each script's syntax tree from shfmt.
     steps = the_job()["steps"]
     names = [step.get("name") for step in steps]
     checker = next(index for index, step in enumerate(steps) if "check_gh_repo.py\" --repo" in str(step.get("run", "")))
@@ -411,7 +413,7 @@ def test_the_job_passes_a_pr_that_leaves_every_owned_file_alone(tmp_path):
 
 def test_the_job_fails_a_pr_that_adds_an_owned_file_the_base_lacks(tmp_path):
     # Arrange: only an Apply branch, or a base with no checker, may add an Owned file.
-    base = {CHECKER_PATH: CHECKER.read_text(), "scripts/ok.sh": TOLD}
+    base = {CHECKER_PATH: CHECKER.read_text(), OWNED_CHECK_PATH: OWNED_CHECK.read_text(), "scripts/ok.sh": TOLD}
 
     # Act
     code, output = run_job(tmp_path, {"scripts/gate.sh": GATE, "scripts/review.sh": GATE}, base_files=base)
@@ -671,3 +673,55 @@ def test_the_job_fails_a_pr_that_adds_an_absent_single_file_owned_entry(tmp_path
     # Assert
     assert code != 0
     assert f"Owned file {added} differs from main" in output
+
+
+# R19: the Owned files check is the base's check_owned_files.py, as the gh check is the base's check_gh_repo.py.
+
+def test_the_job_takes_the_owned_files_check_from_the_base_branch_not_the_pr():
+    # Arrange
+    text = "\n".join(str(step.get("run", "")) for step in the_job()["steps"])
+
+    # Act, Assert
+    assert re.search(r'git show "\$\{BASE_SHA\}:\.github/scripts/check_owned_files\.py" > "\$tmp/check_owned_files\.py"', text)
+    assert re.search(r'python3 -I "\$tmp/check_owned_files\.py" --base "\$BASE_SHA" --base-ref "\$BASE_REF" --repo "\$GITHUB_WORKSPACE"', text)
+    assert not re.search(r"python3?[^\n]*\s\.?/?\.github/scripts/check_owned_files\.py", text), \
+        "the PR's own copy of the Owned files check must not be run"
+
+
+def test_the_job_judges_a_pr_that_edits_the_owned_files_check_by_the_old_one(tmp_path):
+    # Arrange: the PR's copy would pass anything.
+    files = {OWNED_CHECK_PATH: "import sys\nsys.exit(0)\n", "scripts/gate.sh": EDITED_GATE}
+
+    # Act
+    code, output = run_job(tmp_path, files)
+
+    # Assert
+    assert code != 0
+    assert "Owned file scripts/gate.sh differs from main" in output
+
+
+def test_the_job_passes_and_says_so_when_the_base_has_no_checker(tmp_path):
+    # Arrange: the first Apply, onto a base with none of the Baseline.
+    base = {"README.md": "# hi\n"}
+
+    # Act
+    code, output = run_job(tmp_path, {**BASE, "scripts/gate.sh": EDITED_GATE}, base_files=base)
+
+    # Assert
+    assert code == 0, output
+    assert "main has no .github/scripts/check_gh_repo.py: nothing to check against (the first Apply)." in output
+    assert "main has no .github/scripts/check_gh_repo.py: no Owned files to compare (the first Apply)." in output
+
+
+def test_the_job_fails_when_the_base_has_the_checker_but_not_the_owned_files_check(tmp_path):
+    # Arrange: a base from before check_owned_files.py; the PR brings it, so its copy must not judge the PR.
+    base = {key: value for key, value in BASE.items() if key != OWNED_CHECK_PATH}
+
+    # Act
+    code, output = run_job(tmp_path, {OWNED_CHECK_PATH: OWNED_CHECK.read_text()}, base_files=base)
+
+    # Assert
+    assert code != 0
+    assert ("::error::main has .github/scripts/check_gh_repo.py but no .github/scripts/check_owned_files.py, so its Owned files "
+            "can't be compared by the base's own rules") in output
+    assert differs_lines(output) == []

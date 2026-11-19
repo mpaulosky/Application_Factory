@@ -1,7 +1,8 @@
-"""Tests for check_gh_repo.py (mpaulosky/dotfiles#267, #321): every gh command in the
-Template's Owned scripts, and in every repo's own scripts and skills, is told its repository, so a re-Apply can't fail a
-Baseline repo's gate check for gh commands that reach gh's default repository
-(a fork, in a fork's clone). No GitHub.
+"""Tests for check_gh_repo.py (mpaulosky/dotfiles#267, mpaulosky/dotfiles#321): every gh command in a repo's own scripts and
+skills is told its repository, so a gh command can't reach gh's default repository (a fork, in a fork's clone). No GitHub.
+They ship with the checker in the Baseline and run from the repo root (`python -m pytest .github/scripts/tests`); they need
+shfmt v3.14 or a later v3 on PATH, as the checker does. The tests that need the Application Factory's own files (the Template's
+folders, references/gotchas.md) are in its repo-ci-baseline skill, under tests/gh_repo/.
 """
 
 import ast
@@ -15,12 +16,9 @@ from pathlib import Path
 
 import pytest
 
-HERE = Path(__file__).resolve().parent
-TEMPLATE_OWNED = HERE.parents[1] / "template" / "owned"
-sys.path.insert(0, str(TEMPLATE_OWNED / ".github" / "scripts"))
-import check_gh_repo  # noqa: E402
+# conftest.py puts .github/scripts on sys.path.
+import check_gh_repo
 
-OWNED_SCRIPTS = TEMPLATE_OWNED / "scripts"
 # The longest backslash chain the old line scanner read back (mpaulosky/Application_Factory#52): the tests still cover chains around it, which shfmt reads whole.
 LONG_CHAIN = 100
 
@@ -248,20 +246,9 @@ def test_main_fails_when_a_root_isnt_a_directory(tmp_path, capsys):
     assert "missing" in capsys.readouterr().err
 
 
-def test_main_passes_the_templates_owned_scripts():
-    # Arrange
-    assert any(path.is_file() for path in OWNED_SCRIPTS.rglob("*"))
-
-    # Act
-    code = check_gh_repo.main([str(OWNED_SCRIPTS)])
-
-    # Assert
-    assert code == 0
-
-
 # --- mpaulosky/dotfiles#321: the gate checks a repo's own scripts and skills ---
 
-CHECKER = TEMPLATE_OWNED / ".github" / "scripts" / "check_gh_repo.py"
+CHECKER = Path(__file__).resolve().parents[1] / "check_gh_repo.py"
 
 
 def make_repo(root, files):
@@ -288,12 +275,6 @@ def untold_md(tmp_path, text, name="SKILL.md"):
 
 UNTOLD = "gh pr view 1\n"
 TOLD = "export GH_REPO=o/r\ngh pr view 1\n"
-
-
-def covered(relative):
-    """Whether OWNED lists the repo-relative path, as itself or under a folder entry."""
-    return any(relative == entry or (entry.endswith("/") and relative.startswith(entry))
-               for entry in check_gh_repo.OWNED)
 
 
 # Shell files, checked in --repo mode.
@@ -468,28 +449,6 @@ def test_check_repo_checks_what_isnt_an_owned_baseline_file(tmp_path, name):
 
     # Assert
     assert [line.split(":")[0] for line in found] == [name]
-
-
-def test_owned_covers_every_owned_script_and_skill_file_of_the_template():
-    # Arrange
-    owned_files = [path.relative_to(TEMPLATE_OWNED).as_posix()
-                   for folder in ("scripts", ".claude/skills")
-                   for path in (TEMPLATE_OWNED / folder).rglob("*") if path.is_file()]
-    assert owned_files
-
-    # Act, Assert
-    assert [name for name in owned_files if not covered(name)] == []
-
-
-def test_every_owned_entry_exists_in_the_template():
-    # Arrange
-    assert check_gh_repo.OWNED
-
-    # Act
-    missing = [entry for entry in check_gh_repo.OWNED if not (TEMPLATE_OWNED / entry).exists()]
-
-    # Assert
-    assert missing == []
 
 
 def test_owned_names_files_and_folders_under_scripts_the_skills_readme_and_the_review_skills_only():
@@ -818,7 +777,7 @@ def test_the_check_imports_nothing_that_reaches_the_network():
 
 
 def test_check_repo_starts_no_process_but_shfmt(tmp_path, monkeypatch):
-    # Arrange: shfmt parses each script (repo-ci-baseline's ADR 0011); nothing else is started.
+    # Arrange: shfmt parses each script (the Application Factory's repo-ci-baseline ADR 0011); nothing else is started.
     make_repo(tmp_path, {"scripts/x.sh": UNTOLD, ".claude/skills/mine/SKILL.md": "`gh pr list`\n"})
     started = []
     real_popen = subprocess.Popen
@@ -1392,48 +1351,6 @@ def test_check_repo_refuses_a_placeholder_repository_in_a_skill_by_its_relative_
 
     # Assert
     assert found == [".claude/skills/mine/SKILL.md:4: gh issue list --repo <owner>/<repo>"]
-
-
-# R45 and R52: gotchas.md holds the rules; the docstring points at it.
-BASELINE_SKILL = HERE.parents[1]
-GOTCHAS = BASELINE_SKILL / "references" / "gotchas.md"
-SKILLS_README = BASELINE_SKILL / "template" / "owned" / ".claude" / "skills" / "README.md"
-
-
-def test_the_checkers_docstring_is_one_line_that_points_at_gotchas_md():
-    # Arrange
-    docstring = check_gh_repo.__doc__.strip()
-
-    # Act, Assert
-    assert len(docstring.splitlines()) == 1
-    assert "gotchas.md" in docstring
-
-
-def test_gotchas_md_says_a_placeholder_repository_in_a_skill_is_refused():
-    # Arrange
-    text = GOTCHAS.read_text()
-
-    # Act, Assert
-    assert "<owner>/<repo>" in text
-    assert re.search(r"<owner>/<repo>[^.]*\brefused\b|\brefused\b[^.]*<owner>/<repo>", text)
-
-
-def test_the_owned_skills_readme_says_a_placeholder_repository_in_a_skill_is_refused():
-    # Arrange
-    text = SKILLS_README.read_text()
-
-    # Act, Assert
-    assert "<owner>/<repo>" in text
-    assert re.search(r"<owner>/<repo>[^.]*\brefused\b|\brefused\b[^.]*<owner>/<repo>", text)
-
-
-@pytest.mark.parametrize("rule", [r"gh\.exe", r"heredoc", r"binary"])
-def test_gotchas_md_holds_the_rules_the_docstring_used_to(rule):
-    # Arrange
-    text = GOTCHAS.read_text()
-
-    # Act, Assert
-    assert re.search(rule, text)
 
 
 # --- mpaulosky/dotfiles#344: hardening of the checker ---
@@ -2398,7 +2315,7 @@ def test_untold_joins_a_line_through_a_hash_inside_a_string_that_spans_lines(tmp
 
 
 @pytest.mark.parametrize("text, refused", [
-    # A string that spans lines closes before a comment ending in a backslash: the comment joins nothing, so its GH_REPO= tells no later gh (Issue #51).
+    # A string that spans lines closes before a comment ending in a backslash: the comment joins nothing, so its GH_REPO= tells no later gh (mpaulosky/Application_Factory#51).
     ("echo \"x \\\ny\" # GH_REPO=o/r \\\ngh pr view 1\n", [3]),
     # The same with a CRLF file.
     ("echo \"x \\\r\ny\" # GH_REPO=o/r \\\r\ngh pr view 1\r\n", [3]),
@@ -3076,7 +2993,7 @@ def fake_shfmt(tmp_path, body):
     ("echo v4.0.0\n", "found 'v4.0.0'"),
     ("echo '(devel)'\n", "found '(devel)'"),
     ("echo v3.14\n", "found 'v3.14'"),
-    # A minor version with a leading zero, which test.sh's check refuses too.
+    # A minor version with a leading zero, which the Application Factory's test.sh refuses too.
     ("echo v3.014.0\n", "found 'v3.014.0'"),
     # shfmt --version itself failing: its exit status and what it printed.
     ("echo broken >&2; exit 3\n", "shfmt --version failed with exit 3 ('broken')"),

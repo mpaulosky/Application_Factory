@@ -1,5 +1,5 @@
 """Tests for the shfmt installs check_gh_repo.py needs (repo-ci-baseline's ADR 0011): the Owned ci.yml's jobs that run the
-checker, the Factory's template-tools action and the Seed Sandcastle Dockerfile. Each pins the same release and SHA-256, and
+checker or its tests, the Factory's template-tools action and the Seed Sandcastle Dockerfile. Each pins the same release and SHA-256, and
 each install checks the download against it before installing it. No network: the install steps run with curl and sudo stubbed.
 """
 
@@ -24,8 +24,9 @@ import check_gh_repo  # noqa: E402
 
 # What a step runs to install shfmt.
 INSTALLS = "sudo install -m 0755 shfmt /usr/local/bin/shfmt"
-# What makes a job need shfmt: the checker itself, the gate that runs it, or the hook tests that run the gate.
-NEEDS_SHFMT = re.compile(r"check_gh_repo\.py|scripts/gate\.sh|pre-push\.test\.sh")
+# What makes a job need shfmt: the checker itself, the gate that runs it, the hook tests that run the gate, or the
+# .github/scripts tests, which hold the checker's own tests.
+NEEDS_SHFMT = re.compile(r"check_gh_repo\.py|scripts/gate\.sh|pre-push\.test\.sh|pytest \.github/scripts/tests")
 
 
 def load_yaml(path):
@@ -65,8 +66,8 @@ def test_every_ci_job_that_runs_the_checker_installs_shfmt_before_it():
     needing = {name: job for name, job in WORKFLOW["jobs"].items()
                if any(NEEDS_SHFMT.search(str(step.get("run", ""))) for step in job.get("steps", []))}
 
-    # Act, Assert: the gh-repo job and the hook-tests job, and in each the install comes before the first step that needs it.
-    assert {"gh-repo", "hook-tests"} <= set(needing)
+    # Act, Assert: the gh-repo, python-tests and hook-tests jobs, and in each the install comes before the first step that needs it.
+    assert {"gh-repo", "python-tests", "hook-tests"} <= set(needing)
     for name, job in needing.items():
         runs = [str(step.get("run", "")) for step in job["steps"]]
         first = next(index for index, run in enumerate(runs) if NEEDS_SHFMT.search(run))
@@ -81,8 +82,8 @@ def test_every_shfmt_install_pins_the_same_release_and_sha256():
     # Act
     pins = {(step["env"]["SHFMT_VERSION"], step["env"]["SHFMT_SHA256"]) for step in steps.values()}
 
-    # Assert: three steps (two ci.yml jobs and the action), one pin, the Dockerfile's amd64 arm the same and its arm64 arm a SHA-256.
-    assert len(steps) == 3, sorted(steps)
+    # Assert: four steps (three ci.yml jobs and the action), one pin, the Dockerfile's amd64 arm the same and its arm64 arm a SHA-256.
+    assert len(steps) == 4, sorted(steps)
     assert len(pins) == 1, pins
     (pinned_version, pinned_sha), = pins
     assert re.fullmatch(r"3\.[0-9]+\.[0-9]+", pinned_version)
