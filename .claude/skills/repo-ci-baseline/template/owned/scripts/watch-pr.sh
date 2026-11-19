@@ -18,7 +18,9 @@
 # A comment is the session's when its body contains WATCH_PR_MARKER (default `<!-- claude-session -->`), and Sandcastle's when it
 # starts with `<!-- sandcastle:<name> -->`, with or without data after the name, and in either case only when its author is the
 # repository's owner (authorAssociation OWNER; a MEMBER or COLLABORATOR is not trusted). Neither wakes the watcher: both post under the
-# owner's token, so the marker tells them from the owner, and the association keeps anyone else from forging one. No other person's text
+# owner's token, so the marker tells them from the owner, and the association keeps anyone else from forging one. It assumes a repository a
+# user owns, as every Fleet repository is: in an organization's repository GitHub may report the owner's comments as MEMBER, so the session's
+# own replies wouldn't count as its own there. No other person's text
 # reaches the session: a comment or review from anyone but the owner wakes it with their login and a fixed phrase instead, and a thread
 # whose last reply is theirs is reported the same way, never quieted by it. A bot's text (Copilot's threads) is shown, because the session
 # needs reviewers' findings; bots are never a person. It is not trusted: a bot can relay text a PR's author chose (github-actions[bot] and
@@ -163,7 +165,7 @@ REASONS_JQ="$OURS_JQ"'
   def said: if is_owner or (person | not) then .body | first_line else "(text not shown: the author is not the repository owner)" end;
   def line($code; $detail; $id): [$code, ($detail | clean), $id] | join("\u001f");
   .data.repository.pullRequest as $pr
-  | ($seen | split("\n")) as $seen_ids
+  | ($seen | sub("\n+\\z"; "") | split("\n")) as $seen_ids
   | if $pr.state == "MERGED" or $pr.merged == true then line("merged"; "the PR was merged"; "")
     elif $pr.state == "CLOSED" then line("closed"; "the PR was closed without merging"; "")
     else
@@ -193,7 +195,8 @@ REASONS_JQ="$OURS_JQ"'
 
 errfile="$(mktemp)"
 pagefile="$(mktemp)"
-trap 'command rm -f "$errfile" "$pagefile"' EXIT
+nodesfile="$(mktemp)"
+trap 'command rm -f "$errfile" "$pagefile" "$nodesfile"' EXIT
 
 # read_rest: reads each list of the open PR in $resp that has more pages to its end, merging the pages into $resp (later pages after the
 # first's threads and checks, earlier ones before its reviews and comments; a review or comment with an id a later page repeats, as when the list
@@ -201,10 +204,12 @@ trap 'command rm -f "$errfile" "$pagefile"' EXIT
 # answer's checks are not of its head yet (no page of them is read then), a checks page is of another head than the first answer's or its
 # rollup of another commit, the page isn't the list's shape, or GitHub hands back a cursor this list has already been read from (it would
 # never end). There is no cap on the pages: a list is read until GitHub says it has no more. A page goes
-# through a file, not an argument: 100 comment bodies can pass the argument length limit. Pages are read at different moments, so a list
+# through a file, not an argument: 100 comment bodies can pass the argument length limit. Each page's nodes are kept in a file and put into $resp
+# once, after the list's last page, and the ids are kept once in a keyed set, so reading a list costs time linear in its items, never in the
+# square of its pages. Pages are read at different moments, so a list
 # that shifts between them (a comment deleted, a check re-run) can be read without an item for one poll; the next poll reads it afresh.
 read_rest() {
-  local list path flag cur_field order pages cursor query head_oid used
+  local list path flag cur_field order pages cursor query head_oid used info
   if [[ "$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.state')" != OPEN ]]; then return 0; fi
   head_oid="$(printf '%s' "$resp" | jq -r '.data.repository.pullRequest.headRefOid // ""')"
   for list in threads reviews comments checks; do
@@ -216,13 +221,16 @@ read_rest() {
     esac
     pages=0
     used=$'\n' # the cursors this list has been read from, one per line
-    while [[ "$(printf '%s' "$resp" | jq -r --arg flag "$flag" ".data.repository.pullRequest$path.pageInfo[\$flag] // false")" == true ]]; do
+    : >"$nodesfile" # each page's nodes, one array per line, in the order read
+    # The list's page information: the first answer's, then the last page's. $resp is left as it is until the list's last page is read.
+    info="$(printf '%s' "$resp" | jq -c ".data.repository.pullRequest$path.pageInfo")"
+    while [[ "$(jq -rn --argjson info "$info" --arg flag "$flag" '$info[$flag] // false')" == true ]]; do
       if [[ "$list" == checks ]] && ! printf '%s' "$resp" | jq -e --arg head "$head_oid" '.data.repository.pullRequest.statusCheckRollup.commit.oid == $head' >/dev/null 2>&1; then
         reason="an incomplete read of the open PR: its checks are not of its head commit yet"
         return 1
       fi
       pages=$((pages + 1))
-      cursor="$(printf '%s' "$resp" | jq -r --arg f "$cur_field" ".data.repository.pullRequest$path.pageInfo[\$f] // \"\" | strings")"
+      cursor="$(jq -rn --argjson info "$info" --arg f "$cur_field" '$info[$f] // "" | strings')"
       if [[ -z "$cursor" ]]; then
         reason="an incomplete read: GitHub says the PR's $list have more pages but gave no cursor for them"
         return 1
@@ -249,15 +257,26 @@ read_rest() {
         reason="an incomplete read: page $((pages + 1)) of the PR's checks is not of its head commit"
         return 1
       fi
-      if ! resp="$(printf '%s' "$resp" | jq -c --slurpfile page "$pagefile" --arg order "$order" "
-          (\$page[0].data.repository.pullRequest$path) as \$p
-          | .data.repository.pullRequest$path |= (.pageInfo = \$p.pageInfo
-              | .nodes = (if \$order == \"after\" then .nodes + \$p.nodes
-                  else (\$p.nodes + .nodes) | reduce .[] as \$n ([]; if \$n.id != null and any(.[]; .id == \$n.id) then . else . + [\$n] end) end))")"; then
+      if ! jq -c ".data.repository.pullRequest$path.nodes" "$pagefile" >>"$nodesfile" \
+        || ! info="$(jq -c ".data.repository.pullRequest$path.pageInfo" "$pagefile")"; then
         reason="the PR's $list could not be put together"
         return 1
       fi
     done
+    if ((pages == 0)); then continue; fi
+    # Threads and checks: the first answer's, then each page's. Reviews and comments: the pages from the oldest (the last read), then the first
+    # answer's, each id kept at its first place in that order (a null id is always kept), found in one pass with a set of the ids kept.
+    if ! resp="$(printf '%s' "$resp" | jq -c --slurpfile pages "$nodesfile" --argjson info "$info" --arg order "$order" "
+        .data.repository.pullRequest$path |= (.pageInfo = \$info
+          | .nodes = (if \$order == \"after\" then .nodes + [\$pages[][]]
+              else [(\$pages | reverse)[][], .nodes[]]
+                | reduce .[] as \$n ({kept: {}, nodes: []};
+                    (\$n.id | tojson) as \$key
+                    | if \$n.id != null and .kept[\$key] then . else .nodes += [\$n] | if \$n.id != null then .kept[\$key] = true else . end end)
+                | .nodes end))")"; then
+      reason="the PR's $list could not be put together"
+      return 1
+    fi
   done
 }
 
@@ -281,9 +300,10 @@ while true; do
   fi
 
   if ((ok)); then
-    seen_text=""
-    if [[ -f "$seen_file" ]]; then seen_text="$(<"$seen_file")"; fi
-    if ! reasons="$(printf '%s' "$resp" | jq -r --arg session "$MARKER" --arg seen "$seen_text" "$REASONS_JQ" 2>/dev/null)"; then
+    # The seen ids go to jq from the file, never as an argument: no list of them, however long, can pass the argument length limit.
+    seen_from=/dev/null
+    if [[ -f "$seen_file" ]]; then seen_from="$seen_file"; fi
+    if ! reasons="$(printf '%s' "$resp" | jq -r --arg session "$MARKER" --rawfile seen "$seen_from" "$REASONS_JQ" 2>/dev/null)"; then
       ok=0
       reason="the answer could not be read"
     fi

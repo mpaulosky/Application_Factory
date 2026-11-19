@@ -38,6 +38,7 @@ A bot (`__typename` Bot: Copilot, github-actions) is never a person for `changes
 **Persistent** states (`conflict`, `behind`, `check-failed`, `thread`) are recomputed every poll and reported until fixed.
 **One-shot** events (`changes-requested`, `review`, `comment`) are written to the **seen file**, `watch-pr-<n>.seen` in the git common directory
 (`git rev-parse --git-common-dir`, so a linked worktree shares the main checkout's), and the next run doesn't report them again.
+jq reads the seen file itself, never as an argument, so no list of seen ids, however long, can keep jq from starting.
 
 ## Exit codes
 
@@ -71,6 +72,8 @@ On a public repository anyone can comment on a PR, review it or reply to its thr
 comment's, review's and thread reply's `authorAssociation`, on the first query and on every page read after it, and only OWNER, the
 repository's owner, is trusted. Anything else is not: MEMBER and COLLABORATOR (people with write access) included, and a missing field.
 The session and Sandcastle post with the owner's token, so their markers still count.
+The watcher assumes a repository a user owns, as every Fleet repository is. In an organization's repository GitHub may report the owner's comments
+as MEMBER, not OWNER, so the session's own replies wouldn't count as its own there: they would wake the watcher and keep their threads reported.
 
 - **Markers.** A marker counts only under the owner. Anyone else's marked comment or review wakes the watcher, and their marked reply doesn't quiet a thread.
 - **Text.** No other person's text reaches the session. Their comment or review still wakes it, once, as
@@ -90,6 +93,8 @@ The session and Sandcastle post with the owner's token, so their markers still c
   a page of another shape, checks whose first rollup is not of the head yet (they are not paged then), or a checks page of another head
   (a push between pages) or whose own rollup is of another commit is an incomplete read, a failed poll (never a quiet one) whose message says which; five in a row end the
   watcher with exit 2. Each page costs about one more GraphQL point, so a long PR costs a poll one point per 100 items.
+  A list's pages are kept in a file and put together once, after its last page, with the repeated ids found in one pass, so reading a list takes time
+  linear in its items, never in the square of its pages. A cursor is checked against the cursors that list was read from, so two lists GitHub hands the same cursor each read it.
   A merged or closed PR is reported from its state alone, though its lists must still be arrays. The checks come from the PR's own
   `statusCheckRollup`, and only while it is of `headRefOid`; the last of the PR's commits needn't be the head, and the head ref (in the head repository) isn't read,
   so a fork PR is watched. A PR with no rollup yet has no check reported and is quiet, unless GitHub calls it `UNSTABLE` (a check failed):

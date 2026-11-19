@@ -61,10 +61,11 @@ if [[ -n "${GH_FAKE_GARBAGE-}" ]]; then
   exit 0
 fi
 # A page query (one with -f cursor=<c>) is answered from $GH_PAGES_DIR/<c>.json, so a test can chain pages by cursor. Past 100 page
-# queries in one test it fails instead, so a watcher that pages without end (a cursor that never moves on) stops, with a failed read.
+# queries in one test (GH_PAGE_LIMIT, raised only by the test of a list of hundreds of pages) it fails instead, so a watcher that pages
+# without end (a cursor that never moves on) stops, with a failed read.
 for arg in "$@"; do
   if [[ "$arg" == cursor=* && -n "${GH_PAGES_DIR-}" ]]; then
-    if (($(grep -c 'cursor=' "$GH_LOG") > 100)); then echo "gh: fake page limit" >&2; exit 1; fi # gh-repo: ok
+    if (($(grep -c 'cursor=' "$GH_LOG") > ${GH_PAGE_LIMIT:-100})); then echo "gh: fake page limit" >&2; exit 1; fi # gh-repo: ok
     cat "$GH_PAGES_DIR/${arg#cursor=}.json" 2>/dev/null || { echo "gh: no page ${arg#cursor=}" >&2; exit 1; } # gh-repo: ok
     exit 0
   fi
@@ -661,6 +662,22 @@ run --once 7
 woken comment
 check "a new comment is reported" out_has "changelog"
 
+# A seen file past Linux's 128 KB limit on one argument (about 200 KB of ids) is read from the file: the watcher still polls, and still
+# skips the ids in it.
+new_repo
+for ((i = 0; i < 9000; i++)); do printf 'IC_kwDOAAAAAAAAAA%06d\n' "$i"; done > "$repo/.git/watch-pr-7.seen"
+echo C1 >> "$repo/.git/watch-pr-7.seen"
+check "the seen file is past 128 KB" test "$(wc -c < "$repo/.git/watch-pr-7.seen")" -gt 200000
+comment C1 "$PERSON" "Can you also update the docs?"
+run --once 7
+quiet "a comment in a 200 KB seen file"
+check "a 200 KB seen file is no failed poll" not err_has "failed"
+pr "{\"comments\":{\"nodes\":[{\"id\":\"C1\",\"author\":$PERSON,$PA\"body\":\"Can you also update the docs?\"},{\"id\":\"C2\",\"author\":$PERSON,$PA\"body\":\"And the changelog?\"}]}}"
+run --once 7
+woken comment
+check "with a 200 KB seen file, the new comment is reported" out_has "changelog"
+check "and the seen one is not" out_lacks "docs"
+
 new_repo
 review R1 COMMENTED "$PERSON" "Looks fine overall, one question."
 run --once 7
@@ -1083,7 +1100,7 @@ page T1 threads "[{\"isResolved\":false,\"comments\":{\"nodes\":[{\"author\":$PE
 run --once 7
 check "a later page's thread is printed after the first page's" in_order "$out" first-page second-page
 
-# Two lists of 6 pages after the first each (12 pages in all) are read whole, and the cursors read are kept per list.
+# Two lists of 6 pages after the first each (12 pages in all) are read whole.
 pages_repo
 pr '{"reviewThreads":{"pageInfo":{"hasNextPage":true,"endCursor":"T1"},"nodes":[]},"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true,"endCursor":"K1"},"nodes":[]}}}'
 for i in 1 2 3 4 5 6; do
@@ -1173,6 +1190,35 @@ page C1 comments "[{\"author\":$PERSON,$PA\"body\":\"idless older\"}]" false
 run --once 7
 check "an id-less comment on page 2 is read" grep -q 'idless older' <<<"$out"
 check "and the id-less one on page 1 too" grep -q 'idless newer' <<<"$out"
+
+# The cursors read are kept per list: threads and comments that GitHub hands the same cursor (one page file serves both lists here) are each
+# read from it, once, and the poll is whole, not a cursor already read from.
+pages_repo
+pr '{"reviewThreads":{"pageInfo":{"hasNextPage":true,"endCursor":"X"},"nodes":[]},"comments":{"pageInfo":{"hasPreviousPage":true,"startCursor":"X"},"nodes":[]}}'
+page X threads "$RESOLVED" false "" '{"comments":{"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[]}}'
+run --once 7
+quiet "threads and comments that share a cursor"
+check "a cursor two lists share is not one already read from" not err_has "already read from"
+check "the shared cursor is read once per list" test "$(grep -c 'cursor=X' "$GH_LOG")" -eq 2
+
+# A list of hundreds of pages is read in time linear in its items, never in the square of its pages: 300 pages of 100 comments after the
+# first (30,000 comments, each on a page of its own cursor) are read whole within the time bound, quiet, and no poll fails.
+pages_repo
+pr '{"comments":{"pageInfo":{"hasPreviousPage":true,"startCursor":"P1"},"nodes":[]}}'
+jq -nc --argjson owner "$OWNER" '
+  range(1; 301) as $p
+  | {data: {repository: {pullRequest: {comments: {
+      pageInfo: {hasPreviousPage: ($p < 300), startCursor: (if $p < 300 then "P\($p + 1)" else null end)},
+      nodes: [range(0; 100) as $i | {id: "IC_\($p)_\($i)", author: $owner, authorAssociation: "OWNER",
+                                     body: "page \($p) item \($i)\n<!-- claude-session -->"}]}}}}}' \
+  | { p=0; while IFS= read -r line; do p=$((p + 1)); printf '%s\n' "$line" > "$GH_PAGES_DIR/P$p.json"; done; }
+out="$(cd "$repo" && GH_PAGE_LIMIT=400 PATH="$fakebin:$PATH" timeout 120 bash "$SCRIPT" --once 7 2>"$work/err")"
+status=$?
+err="$(<"$work/err")"
+check "300 pages of comments are read within 120 seconds (not timed out)" not status_is 124
+quiet "300 pages of the session's own comments"
+check "each of the 300 pages is read once" test "$(grep -c 'cursor=' "$GH_LOG")" -eq 300
+check "300 pages are no failed poll" not err_has "failed"
 
 # Every page query asks for what the merge reads, with balanced braces (the fake gh doesn't read the query, so pin its text).
 pages_repo
