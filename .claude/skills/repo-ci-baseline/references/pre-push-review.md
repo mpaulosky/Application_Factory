@@ -38,7 +38,13 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   becomes a file, must match section for section); a mirror that differs from its root copy, has no root section, or has a quoted or unreadable header stays. The key
   printed is that of the whole diff, so a change in a mirror alone still needs a new review. One agent per lens is already how the round starts; splitting round 1 by file group is not done.
 - Critical and Warning findings left open (because they need a person, or the last, review-only round raised them) block the push until the person fixes them or accepts
-  them with `scripts/review.sh accept` (never on their behalf).
+  them with `scripts/review.sh accept` or `scripts/review.sh accept-open` (never on their behalf).
+  `scripts/review.sh accept-open` lists the open findings with their suggested fixes, ending with a ready command that names the blocking ones not
+  asked to be fixed (every open one not asked when none of those blocks; none when all are asked), each with `<reason>` to replace: run unedited it is
+  refused. With ids it decides several at once, all or none: `R3="<reason>"` (or `--reason "<reason>"` for bare ids) accepts, and the ids after `--fix` stay open
+  with `fixAsked` (blocking unless Advisory and not security), which the next run fixes whatever their `needsPerson` said, the Rules' exceptions apart.
+  Every finding is named, with no "all", so a review recorded again since the list, or a fix asked meanwhile, can't be accepted unseen.
+  `record` and `stage` refuse `fixAsked`: only the person asks.
   Advisory findings never block: one that needs a person goes to one follow-up issue per branch.
 - A run's findings are staged, not held in the session. Each round's triage goes to `scripts/review.sh stage <run> <file>`: each finding is checked as `record` checks it (an
   `accepted` one is refused), and one staged again under the same id replaces the earlier. The file is owner-only and replaced whole, and a second `stage` at the same time is
@@ -129,8 +135,8 @@ again, and settled differently, on the next (one weakness took six rounds). The 
   `security: true`; see `isSecurity`), under the ledger's lock, after the ledger is written. A problem writing entries is a warning on stderr (`.security: ...`),
   never a failed record; one finding that can't be written is a warning of its own and the others are still written, and a number another writer took first is chosen again
   (up to five times). The finding may carry a `policy` (one sentence, the rule that now holds) and `repeats` (the number of the entry it repeats), and the review a `pr`;
-  none is stored in the ledger. `scripts/review.sh accept` turns the matching entry `accepted`. A person may edit an entry; an entry whose status can't be
-  read counts as `unknown` and suppresses nothing.
+  none is stored in the ledger. `scripts/review.sh accept` (or `accept-open`) turns the matching entry `accepted`; `accept-open --fix` leaves it as it is.
+  A person may edit an entry; an entry whose status can't be read counts as `unknown` and suppresses nothing.
 - **No second file.** A finding for a weakness an entry holds writes none: the entry it names in `repeats`, else the one with the same fingerprint (a hash of the
   path and the summary, case and spacing set aside). An `open` entry recorded `fixed` later is updated in place (the file is replaced whole by a rename, as is one `accept` turns
   `accepted`, so no reader sees a truncated entry). The match is exact on purpose: a wrongly merged
@@ -232,7 +238,7 @@ A branch Sandcastle builds gets this review's rounds after the reviewer role and
   public-text check would change, or that reads like a `## Review notes` section, is left out on its own. The rest, and any security finding, are only counted.
 - Open Critical or Warning findings (and any open security finding, whatever its grade) hold the PR as a draft, and so does a review that didn't finish, since it hasn't cleared the code (its
   note says so): the host opens it with `gh pr create --draft`, and its body says why and what a person does: the ledger stays on the runner (it can hold security details), so a person
-  first runs `/pre-push-review` on the checked-out branch to record one. Only a person accepts a finding, with `scripts/review.sh accept`, and marks the
+  first runs `/pre-push-review` on the checked-out branch to record one. Only a person accepts a finding, with `scripts/review.sh accept` or `accept-open`, and marks the
   PR ready with `gh pr ready`; the host never does either. A PR with none open is opened ready. A PR that already exists for the branch (a rerun) is turned into a draft with `gh pr ready
   --undo` before the new commits are pushed (retried after a GitHub server error; if it still fails nothing is pushed and the issue gets a comment saying so) and then given the new body
   (the body is read again just before the edit, which keeps what that read held; gh has no compare-and-swap, so a change made in the one call between the read and the edit is lost), but
