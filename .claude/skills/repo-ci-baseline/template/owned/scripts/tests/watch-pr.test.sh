@@ -544,6 +544,40 @@ check "a login with control characters: exit 0" status_is 0
 check "control characters in a login are not printed" not grep -q $'[\x01-\x1f\x7f]' <<<"$out"
 check "nor a C1 control character" not grep -qF $'\302\233' <<<"$out"
 check "the rest of the login is" out_has "evil [2Jx y: $HIDDEN"
+# NUL, C1 controls (U+0085 NEL, U+009B CSI) and ESC in a write-access author's login and body, built with jq's escapes since bash can't
+# hold a NUL: none reaches standard output, read raw from a file (command substitution would drop a NUL itself), and the text around them does.
+# A NUL jq left in would be dropped by the script's own command substitution, with a warning, joining the text on either side.
+# shellcheck disable=SC2016 # jq's $variables are not the shell's
+DIRTY_JQ='{__typename: "User", login: "rev\u0000i\u0085e\u009bw\u001b[2Jer"} as $dirty
+  | {author: $dirty, authorAssociation: "COLLABORATOR", body: "before\u0000x\u0085y\u009bz\u001b[2Jafter\nsecond line"} as $said'
+run_raw() { # run_raw <args...>: the script's standard output into $work/raw, byte for byte, and as $out
+  (cd "$repo" && PATH="$fakebin:$PATH" bash "$SCRIPT" "$@" > "$work/raw" 2> "$work/err")
+  status=$?
+  out="$(tr -d '\000' < "$work/raw")"
+  err="$(<"$work/err")"
+}
+raw_has_no_nul() { [[ $(wc -c < "$work/raw") -eq $(tr -d '\000' < "$work/raw" | wc -c) ]]; }
+raw_lacks() { ! LC_ALL=C grep -qF -- "$1" "$work/raw"; }
+raw_lacks_c0() { ! LC_ALL=C grep -q $'[\x01-\x09\x0b-\x1f\x7f]' "$work/raw"; }
+dirty_cases() { # dirty_cases <kind>: the checks for a run on a dirty author and body
+  check "$1 with NUL, C1 and ESC: exit 0" status_is 0
+  check "$1 with NUL, C1 and ESC: no NUL is printed" raw_has_no_nul
+  check "$1 with NUL, C1 and ESC: no NUL reaches bash (its 'ignored null byte' warning)" not err_has "null byte"
+  check "$1 with NUL, C1 and ESC: no U+0085 is printed" raw_lacks $'\302\205'
+  check "$1 with NUL, C1 and ESC: no U+009B is printed" raw_lacks $'\302\233'
+  check "$1 with NUL, C1 and ESC: no ESC or other C0 control is printed" raw_lacks_c0
+  check "$1 with NUL, C1 and ESC: the login and body around them are" out_has "watch-pr: $1: rev i e w [2Jer: before x y z [2Jafter"
+  check "$1 with NUL, C1 and ESC: only the body's first line" out_lacks "second line"
+}
+new_repo
+pr "$(jq -nc "$DIRTY_JQ"' | {comments: {nodes: [{id: "C1"} + $said]}}')"
+run_raw --once 7
+dirty_cases comment
+new_repo
+pr "$(jq -nc --argjson o "$OWNER" "$DIRTY_JQ"' | {reviewThreads: {nodes: [{isResolved: false, comments: {nodes: [
+  {author: $o, authorAssociation: "OWNER", body: "Done.\n<!-- claude-session -->"}, $said]}}]}}')"
+run_raw --once 7
+dirty_cases thread
 new_repo
 thread false "$COPILOT" "Consider a constant here."
 run --once 7
