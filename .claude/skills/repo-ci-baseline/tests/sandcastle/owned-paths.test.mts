@@ -234,7 +234,7 @@ const EXEMPT_GLOBS_AUDITED: Readonly<Record<string, GlobEntry>> = {
     files: [
       ".github/workflows/backfill-blog-posts.yml", ".github/workflows/ci.yml", ".github/workflows/claude-review.yml", ".github/workflows/code-metrics.yml",
       ".github/workflows/codeql-analysis.yml", ".github/workflows/copilot-review-sync.yml", ".github/workflows/dependabot-auto-merge.yml",
-      ".github/workflows/lint-actions.yml", ".github/workflows/lint-markdown.yml", ".github/workflows/lint-yaml.yml", ".github/workflows/pr-automerge.yml",
+      ".github/workflows/lint-actions.yml", ".github/workflows/lint-markdown.yml", ".github/workflows/lint-yaml.yml", ".github/workflows/owned-files.yml", ".github/workflows/pr-automerge.yml",
       ".github/workflows/pr-review-submitted.yml", ".github/workflows/pr-title.yml", ".github/workflows/release.yml", ".github/workflows/sandcastle.yml",
     ],
     why: "the Template's gate runs actionlint, zizmor, yamllint and the workflow tests over them",

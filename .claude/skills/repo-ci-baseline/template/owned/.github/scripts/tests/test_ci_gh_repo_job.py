@@ -1,11 +1,13 @@
-"""Tests for ci.yml's gh-repo job, which runs the base branch's check_gh_repo.py and check_owned_files.py against a PR's
-tree (mpaulosky/dotfiles#344, R46/R61 and R58). No GitHub: the job's `run:` steps are read out of the YAML and run in bash
-against scratch git repos, with a bare repo as `origin`, as the workflow runs them. They need PyYAML (or uvx) and shfmt
-v3.14 or a later v3 on PATH; the job's shfmt install itself is tested in the Application Factory.
+"""Tests for the jobs that judge a PR's tree by its base branch's scripts (mpaulosky/dotfiles#344, R46/R61, R58 and R20):
+ci.yml's gh-repo job, which runs the base's check_gh_repo.py, and owned-files.yml's job, which runs the base's
+check_owned_files.py. No GitHub: the jobs' `run:` steps are read out of the YAML and run in bash against scratch git
+repos, with a bare repo as `origin`, as the workflows run them. They need PyYAML (or uvx) and shfmt v3.14 or a later v3
+on PATH; the gh-repo job's shfmt install itself is tested in the Application Factory.
 
-The job is found by the step that runs check_gh_repo.py. A step's `if:` may use only github.head_ref, github.base_ref,
-github.event_name, string literals, ==, !=, &&, ||, ! and parentheses; anything else can't be evaluated here, so keep the
-condition that simple, or test it in the script.
+Each job is found by the step that runs its script. A step's `if:` may use only github.head_ref, github.base_ref,
+github.event_name, github.repository, github.event.pull_request.head.repo.full_name,
+contains(github.event.pull_request.labels.*.name, '<label>'), string literals, ==, !=, &&, ||, ! and parentheses;
+anything else can't be evaluated here, so keep the condition that simple, or test it in the script.
 """
 
 import json
@@ -18,6 +20,7 @@ import pytest
 
 HERE = Path(__file__).resolve().parent
 CI = HERE.parents[1] / "workflows" / "ci.yml"
+OWNED_WORKFLOW = HERE.parents[1] / "workflows" / "owned-files.yml"
 CHECKER = HERE.parent / "check_gh_repo.py"
 CHECKER_PATH = ".github/scripts/check_gh_repo.py"
 OWNED_CHECK = HERE.parent / "check_owned_files.py"
@@ -28,23 +31,26 @@ TOLD = "export GH_REPO=o/r\ngh pr view 1\n"
 GATE = "#!/usr/bin/env bash\necho gate\n"
 EDITED_GATE = "#!/usr/bin/env bash\necho gate\nexit 0\n"
 APPLY_BRANCHES = ["chore/standardize-baseline", "chore/reapply-baseline"]
+APPLY_LABEL = "baseline:apply"
+REPOSITORY = "acme/widget"
 INSTALL_SHFMT = "Install shfmt"
 INSTALLS_SHFMT = "sudo install -m 0755 shfmt /usr/local/bin/shfmt"
 
 
-def load_workflow():
+def load_workflow(path):
     try:
         import yaml
     except ImportError:
         # pytest may run through uvx (the Application Factory's test.sh does), which has no PyYAML: read the file with it in a one-off environment.
         script = "import json, sys, yaml; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))"
-        done = subprocess.run(["uvx", "--with", "pyyaml", "python", "-I", "-c", script, str(CI)],
+        done = subprocess.run(["uvx", "--with", "pyyaml", "python", "-I", "-c", script, str(path)],
                               check=True, capture_output=True, text=True)
         return json.loads(done.stdout)
-    return yaml.safe_load(CI.read_text())
+    return yaml.safe_load(path.read_text())
 
 
-WORKFLOW = load_workflow()
+WORKFLOW = load_workflow(CI)
+OWNED_FILES = load_workflow(OWNED_WORKFLOW)
 
 
 def checker_jobs():
@@ -56,6 +62,23 @@ def the_job():
     jobs = checker_jobs()
     assert len(jobs) == 1, f"ci.yml must have exactly one job that runs check_gh_repo.py, not {sorted(jobs)}"
     return next(iter(jobs.values()))
+
+
+def owned_files_job():
+    jobs = [job for job in OWNED_FILES["jobs"].values()
+            if any("check_owned_files.py" in str(step.get("run", "")) for step in job.get("steps", []))]
+    assert len(jobs) == 1, "owned-files.yml must have exactly one job that runs check_owned_files.py"
+    return jobs[0]
+
+
+def both_jobs():
+    return [the_job(), owned_files_job()]
+
+
+def owned_files_step():
+    steps = [step for step in owned_files_job()["steps"] if "check_owned_files.py" in str(step.get("run", ""))]
+    assert len(steps) == 1
+    return steps[0]
 
 
 def job_text(job):
@@ -78,13 +101,32 @@ def test_the_job_runs_on_pull_requests_only():
         "the job needs an if: on github.event_name == 'pull_request'"
 
 
-def test_the_pull_request_trigger_has_no_paths_filter():
+@pytest.mark.parametrize("workflow", [WORKFLOW, OWNED_FILES], ids=["ci.yml", "owned-files.yml"])
+def test_the_pull_request_trigger_has_no_paths_filter(workflow):
     # Arrange
-    trigger = WORKFLOW.get("on", WORKFLOW.get(True))["pull_request"] or {}
+    trigger = workflow.get("on", workflow.get(True))["pull_request"] or {}
 
     # Act, Assert
     assert "paths-ignore" not in trigger
     assert "paths" not in trigger
+    assert "branches" not in trigger
+
+
+def test_the_owned_files_check_runs_on_pull_requests_only_and_again_when_a_label_changes():
+    # Arrange
+    triggers = OWNED_FILES.get("on", OWNED_FILES.get(True))
+
+    # Act, Assert: adding or removing baseline:apply must start a new run, since a run reads the labels its event had.
+    assert set(triggers) == {"pull_request"}
+    assert set(triggers["pull_request"]["types"]) == {"opened", "synchronize", "reopened", "labeled", "unlabeled"}
+
+
+def test_ci_yml_does_not_run_on_label_events():
+    # Arrange: a label event would start the build and tests again and report skipped required checks on the head.
+    types = (WORKFLOW.get("on", WORKFLOW.get(True))["pull_request"] or {}).get("types", [])
+
+    # Act, Assert
+    assert "labeled" not in types and "unlabeled" not in types
 
 
 def test_the_job_takes_its_checker_from_the_base_branch_not_the_pr():
@@ -110,18 +152,23 @@ def test_the_job_runs_the_checker_isolated_against_the_workspace():
         "the PR's own copy of the checker must not be run"
 
 
-def test_the_job_has_no_secrets_and_no_write_permission():
-    # Arrange
-    job = the_job()
-
+@pytest.mark.parametrize("job", both_jobs(), ids=["gh-repo", "owned-files"])
+def test_the_job_has_no_secrets_and_no_write_permission(job):
     # Act, Assert
     assert "secrets." not in job_text(job)
     assert job.get("permissions", {"contents": "read"}) in ({}, {"contents": "read"})
 
 
-def test_the_jobs_checkouts_keep_no_credentials():
+def test_the_owned_files_workflow_reads_only():
+    # Act, Assert
+    assert OWNED_FILES["permissions"] == {"contents": "read"}
+    assert "secrets." not in json.dumps(OWNED_FILES)
+
+
+@pytest.mark.parametrize("job", both_jobs(), ids=["gh-repo", "owned-files"])
+def test_the_jobs_checkouts_keep_no_credentials(job):
     # Arrange
-    checkouts = [step for step in the_job()["steps"] if str(step.get("uses", "")).startswith("actions/checkout@")]
+    checkouts = [step for step in job["steps"] if str(step.get("uses", "")).startswith("actions/checkout@")]
 
     # Act, Assert
     assert checkouts
@@ -133,9 +180,11 @@ def test_the_jobs_checkouts_keep_no_credentials():
 class Job:
     """A PR to run the job on: a bare origin with the base branch, and a clone on the PR's head branch."""
 
-    def __init__(self, tmp_path, base_files, head_files, head_ref="feature/344-x", base_ref="main"):
+    def __init__(self, tmp_path, base_files, head_files, head_ref="feature/344-x", base_ref="main", labels=(),
+                 head_repo=REPOSITORY):
         self.tmp_path = tmp_path
         self.base_ref, self.head_ref = base_ref, head_ref
+        self.labels, self.head_repo = list(labels), head_repo
         self.origin, self.work = tmp_path / "origin.git", tmp_path / "work"
         self.git(tmp_path, "init", "-q", "--bare", "-b", base_ref, str(self.origin))
         self.work.mkdir()
@@ -184,7 +233,8 @@ class Job:
                   "github.workspace": str(self.work), "github.event_name": "pull_request",
                   "github.event.pull_request.base.ref": self.base_ref,
                   "github.event.pull_request.base.sha": self.base_sha,
-                  "github.event.pull_request.head.ref": self.head_ref}
+                  "github.event.pull_request.head.ref": self.head_ref, "github.repository": REPOSITORY,
+                  "github.event.pull_request.head.repo.full_name": self.head_repo}
 
         def value(match):
             name = match.group(1)
@@ -203,7 +253,9 @@ class Job:
             return True
         text = re.sub(r"^\$\{\{(.*)\}\}$", r"\1", str(condition).strip(), flags=re.S).strip()
         text = re.sub(r"always\(\)|failure\(\)|success\(\)", "true", text)
-        text = re.sub(r"github\.(head_ref|base_ref|event_name)",
+        text = re.sub(r"contains\(\s*github\.event\.pull_request\.labels\.\*\.name\s*,\s*'([^']*)'\s*\)",
+                      lambda match: "true" if match.group(1) in self.labels else "false", text)
+        text = re.sub(r"github\.(head_ref|base_ref|event_name|repository|event\.pull_request\.head\.repo\.full_name)\b",
                       lambda match: repr(self.expression("${{ github." + match.group(1) + " }}")), text)
         residue = re.sub(r"'[^']*'|==|!=|&&|\|\||[!() ]|\btrue\b|\bfalse\b", "", text)
         if residue:
@@ -213,13 +265,15 @@ class Job:
         return bool(eval(python, {"__builtins__": {}}))  # noqa: S307 - the expression was checked above
 
     def run(self):
-        """Runs the job's run: steps in order; returns (exit code of the first failing step or 0, all output)."""
+        """Runs both jobs' run: steps in order, each job on its own; returns (exit code of the first failing step or 0, all output)."""
         runner = self.tmp_path / "runner"
         runner.mkdir()
         output, code = [], 0
         skipped = []
-        for index, step in enumerate(the_job()["steps"]):
-            if "run" not in step or not self.runs(step, code != 0):
+        steps = [(job_index, step) for job_index, job in enumerate(both_jobs()) for step in job["steps"]]
+        failed = set()
+        for index, (job_index, step) in enumerate(steps):
+            if "run" not in step or not self.runs(step, job_index in failed):
                 continue
             # It downloads shfmt and installs it with sudo; the test's PATH has shfmt already (the checker needs it), and
             # the Application Factory's test_shfmt_install.py runs the step itself. Told by what it runs, so a rename can't make the harness run it.
@@ -237,8 +291,9 @@ class Job:
             done = subprocess.run(["bash", "--noprofile", "--norc", *options.split(), str(script)], cwd=self.work,
                                   env=env, capture_output=True, text=True)
             output.append(done.stdout + done.stderr)
-            if done.returncode != 0 and code == 0:
-                code = done.returncode
+            if done.returncode != 0:
+                failed.add(job_index)
+                code = code or done.returncode
         assert len(skipped) == 1, f"the harness skipped {len(skipped)} steps, not the one shfmt install"
         return code, "".join(output)
 
@@ -374,8 +429,8 @@ def test_the_job_names_the_base_branch_in_the_owned_file_message(tmp_path):
 @pytest.mark.parametrize("head_ref", ["feature/344-x", "fix/1-y", "hotfix/2-z", "chore/other", "chore/reapply-baseline-2",
                                       "feature/chore/reapply-baseline", "chore/standardize"])
 def test_the_job_checks_owned_files_for_every_head_branch_but_the_two_apply_branches(tmp_path, head_ref):
-    # Arrange, Act
-    code, output = run_job(tmp_path, {"scripts/gate.sh": EDITED_GATE}, head_ref=head_ref)
+    # Arrange, Act: even with the label.
+    code, output = run_job(tmp_path, {"scripts/gate.sh": EDITED_GATE}, head_ref=head_ref, labels=[APPLY_LABEL])
 
     # Assert
     assert code != 0
@@ -383,9 +438,9 @@ def test_the_job_checks_owned_files_for_every_head_branch_but_the_two_apply_bran
 
 
 @pytest.mark.parametrize("head_ref", APPLY_BRANCHES)
-def test_the_job_passes_the_same_owned_file_edit_from_an_apply_branch(tmp_path, head_ref):
+def test_the_job_passes_the_same_owned_file_edit_from_a_labelled_apply_branch_of_this_repo(tmp_path, head_ref):
     # Arrange, Act
-    code, output = run_job(tmp_path, {"scripts/gate.sh": EDITED_GATE}, head_ref=head_ref)
+    code, output = run_job(tmp_path, {"scripts/gate.sh": EDITED_GATE}, head_ref=head_ref, labels=["review:claude", APPLY_LABEL])
 
     # Assert
     assert code == 0, output
@@ -395,7 +450,8 @@ def test_the_job_passes_the_same_owned_file_edit_from_an_apply_branch(tmp_path, 
 @pytest.mark.parametrize("head_ref", APPLY_BRANCHES)
 def test_the_job_still_runs_the_checker_on_an_apply_branch(tmp_path, head_ref):
     # Arrange, Act
-    code, output = run_job(tmp_path, {"scripts/gate.sh": EDITED_GATE, "scripts/new.sh": UNTOLD}, head_ref=head_ref)
+    code, output = run_job(tmp_path, {"scripts/gate.sh": EDITED_GATE, "scripts/new.sh": UNTOLD}, head_ref=head_ref,
+                           labels=[APPLY_LABEL])
 
     # Assert
     assert code != 0
@@ -554,7 +610,7 @@ def test_the_job_fails_a_pr_that_adds_a_file_to_the_other_owned_folder(tmp_path)
 def test_the_job_passes_an_apply_branch_that_adds_a_file_to_an_owned_folder(tmp_path):
     # Arrange, Act
     code, output = run_job(tmp_path, {".claude/skills/pre-push-review/new.md": "# New\n"},
-                           head_ref="chore/reapply-baseline")
+                           head_ref="chore/reapply-baseline", labels=[APPLY_LABEL])
 
     # Assert
     assert code == 0, output
@@ -644,7 +700,8 @@ def test_the_job_ignores_a_file_the_base_added_to_an_owned_folder_after_the_head
 
 def test_the_job_passes_an_apply_branch_that_adds_a_single_file_owned_entry(tmp_path):
     # Arrange, Act
-    code, output = run_job(tmp_path, {"scripts/review.sh": "#!/usr/bin/env bash\ntrue\n"}, head_ref="chore/reapply-baseline")
+    code, output = run_job(tmp_path, {"scripts/review.sh": "#!/usr/bin/env bash\ntrue\n"}, head_ref="chore/reapply-baseline",
+                           labels=[APPLY_LABEL])
 
     # Assert
     assert code == 0, output
@@ -679,7 +736,7 @@ def test_the_job_fails_a_pr_that_adds_an_absent_single_file_owned_entry(tmp_path
 
 def test_the_job_takes_the_owned_files_check_from_the_base_branch_not_the_pr():
     # Arrange
-    text = "\n".join(str(step.get("run", "")) for step in the_job()["steps"])
+    text = "\n".join(str(step.get("run", "")) for step in owned_files_job()["steps"])
 
     # Act, Assert
     assert re.search(r'git show "\$\{BASE_SHA\}:\.github/scripts/check_owned_files\.py" > "\$tmp/check_owned_files\.py"', text)
@@ -725,3 +782,46 @@ def test_the_job_fails_when_the_base_has_the_checker_but_not_the_owned_files_che
     assert ("::error::main has .github/scripts/check_gh_repo.py but no .github/scripts/check_owned_files.py, so its Owned files "
             "can't be compared by the base's own rules") in output
     assert differs_lines(output) == []
+
+
+# R20: an Apply PR is exempt only with the maintainer-only label, from a branch of this repo.
+
+@pytest.mark.parametrize("head_ref", APPLY_BRANCHES)
+def test_an_apply_branch_without_the_label_is_checked(tmp_path, head_ref):
+    # Arrange, Act: anyone who can push a branch can name it so; the name alone exempts nothing.
+    code, output = run_job(tmp_path, {"scripts/gate.sh": EDITED_GATE}, head_ref=head_ref, labels=["review:claude"])
+
+    # Assert
+    assert code != 0
+    assert differs_lines(output) == ["Owned file scripts/gate.sh differs from main"]
+
+
+@pytest.mark.parametrize("head_ref", APPLY_BRANCHES)
+def test_a_labelled_apply_branch_from_a_fork_is_checked(tmp_path, head_ref):
+    # Arrange, Act: a fork's later pushes must not ride a label a maintainer set.
+    code, output = run_job(tmp_path, {"scripts/gate.sh": EDITED_GATE}, head_ref=head_ref, labels=[APPLY_LABEL],
+                           head_repo="someone/widget")
+
+    # Assert
+    assert code != 0
+    assert differs_lines(output) == ["Owned file scripts/gate.sh differs from main"]
+
+
+def test_a_label_of_a_similar_name_exempts_nothing(tmp_path):
+    # Arrange, Act
+    code, output = run_job(tmp_path, {"scripts/gate.sh": EDITED_GATE}, head_ref="chore/reapply-baseline",
+                           labels=["baseline:apply-2", "baseline"])
+
+    # Assert
+    assert code != 0
+    assert differs_lines(output) == ["Owned file scripts/gate.sh differs from main"]
+
+
+def test_the_exemption_needs_the_branch_the_label_and_this_repo():
+    # Arrange: the step's condition, read as written.
+    condition = re.sub(r"\s+", " ", str(owned_files_step()["if"]))
+
+    # Act, Assert
+    assert f"contains(github.event.pull_request.labels.*.name, '{APPLY_LABEL}')" in condition
+    assert "github.event.pull_request.head.repo.full_name == github.repository" in condition
+    assert all(f"github.head_ref == '{branch}'" in condition for branch in APPLY_BRANCHES)

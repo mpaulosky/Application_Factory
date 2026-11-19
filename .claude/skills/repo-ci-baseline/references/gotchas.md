@@ -156,14 +156,22 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     `<pre>` block (from the line with `<pre` to the one with `</pre>`) and a `<code>...</code>` element on one line.
     HTML comments, `<script>` and `<style>` are not read, and `<!-- gh-repo: ok -->` skips a line in each kind.
   - CI's `gh-repo` job (Owned `ci.yml`, on pull requests) runs the base branch's `check_gh_repo.py` against the PR's
-    tree, so `--no-verify` or an edited checker can't skip it, and the base branch's `.github/scripts/check_owned_files.py`, which fails with
-    `Owned file <path> differs from <base>` when a PR changes (blob or mode), deletes, renames or adds an Owned file (the base checker's `OWNED` paths:
-    a file in an Owned folder, or an Owned file the base lacks, such as `scripts/review.sh`; `\r` and `\n` in a path are logged as those two characters), unless its
-    head branch is `chore/standardize-baseline` or `chore/reapply-baseline`. Anyone who can push a branch can use those names: it
-    stops a careless edit, not a deliberate one. Both scripts are taken from the PR's base commit (`git show <base.sha>:<path>` into a temp folder) and run
-    with `python3 -I`, so the PR's copies never judge it. A base with neither (the first Apply) passes and says so; a base with `check_gh_repo.py` but no
-    `check_owned_files.py` predates the script, so the PR brings it, and the Owned files check fails rather than run the PR's copy or check nothing:
-    land it through an Apply PR. `.github/scripts/tests/test_check_owned_files.py` tests the script and `test_ci_gh_repo_job.py` the job's steps.
+    tree, so `--no-verify` or an edited checker can't skip it. The Owned `owned-files.yml` workflow runs the base branch's
+    `.github/scripts/check_owned_files.py`, which fails with `Owned file <path> differs from <base>` when a PR changes (blob or mode), deletes, renames
+    or adds an Owned file (the base checker's `OWNED` paths: a file in an Owned folder, or an Owned file the base lacks, such as `scripts/review.sh`;
+    `\r` and `\n` in a path are logged as those two characters). Both scripts are taken from the PR's base commit (`git show <base.sha>:<path>` into a
+    temp folder) and run with `python3 -I`, so the PR's copies never judge it. A base with neither (the first Apply) passes and says so; a base with
+    `check_gh_repo.py` but no `check_owned_files.py` predates the script, so the PR brings it, and the Owned files check fails rather than run the PR's
+    copy or check nothing: land it through a labelled Apply PR.
+  - An Apply PR is exempt from the Owned files check only when all three hold (R20): its head branch is `chore/standardize-baseline` or
+    `chore/reapply-baseline`, it carries the `baseline:apply` label, and its head is a branch of the repo itself, not a fork's, so a fork's later
+    pushes can't ride a label a maintainer set. Only someone with triage or write access can add a label on GitHub; a branch name alone, which
+    anyone who can push may choose, exempts nothing. `reapply.sh` makes the label (`gh label create --force`, `github/labels.json`'s color and
+    description) and adds it to the re-Apply PR; `github-settings.sh --fix` makes it too. A Standardize PR is labelled by hand
+    (`docs/Instructions.md`, B4). `owned-files.yml` runs on `labeled` and `unlabeled` too, so adding or removing the label reruns only
+    this check; a re-run of an old run reads the labels its event had, so add or remove the label instead. It is its own workflow because a
+    label event in `ci.yml` would restart the build and tests and report skipped required checks on the head.
+    `.github/scripts/tests/test_check_owned_files.py` tests the script, `test_ci_gh_repo_job.py` the two jobs' steps and the exemption.
   - A bare `gh` that ends its line in `||` or `&&` (`command -v gh >/dev/null 2>&1 ||`) is a lookup that goes on to
     its own next command, and is accepted before the export. A pipe or a backslash continuation after it is refused.
   - `gh.exe` is `gh`: it is judged by the same rules, and a longer word (`gh.executable`, `neigh.exe`) or a folder

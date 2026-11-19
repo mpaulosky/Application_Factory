@@ -159,23 +159,18 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
         run: bash scripts/check-branch-name.sh --pr "$HEAD_REF"
 
-  # The "gh commands are told their repository" check, and Owned files left
-  # alone, judged by the base branch's copies of their scripts, so a PR can't
-  # weaken its own check: scripts/gate.sh runs the gh check too, but a push can
-  # skip the hook and an edited checker passes itself. The base's scripts are
-  # written outside the checkout and run isolated (python3 -I) over the PR's
-  # tree, with no secrets and a read-only token. A PR that changes either script
-  # is judged by the old one. The gh check (.github/scripts/check_gh_repo.py)
-  # fails on a gh command not told its repository. The Owned files check
-  # (.github/scripts/check_owned_files.py) fails when a PR's Owned file
-  # differs from the base's, or adds an Owned file the base lacks, except in an Apply PR (chore/standardize-baseline,
-  # chore/reapply-baseline), whose job is to change them. Anyone who can push a
-  # branch can name theirs so: this stops a careless edit, not a deliberate one.
-  # Both checks read the base at github.event.pull_request.base.sha, the commit the
-  # merge ref was built from, not the base branch's moving tip: a re-run, or a job
-  # queued while an Apply PR lands, would otherwise fail on files the PR never touched.
-  # Neither check has anything to compare with in the first Apply, whose base has
-  # no checker: both pass and say so. Not a required status check.
+  # The "gh commands are told their repository" check, judged by the base
+  # branch's copy of the checker (.github/scripts/check_gh_repo.py), so a PR
+  # can't weaken its own check: scripts/gate.sh runs it too, but a push can skip
+  # the hook and an edited checker passes itself. The base's checker is written
+  # outside the checkout and run isolated (python3 -I) over the PR's tree, with
+  # no secrets and a read-only token. A PR that changes the checker is judged by
+  # the old one. It reads the base at github.event.pull_request.base.sha, the
+  # commit the merge ref was built from, not the base branch's moving tip: a
+  # re-run, or a job queued while an Apply PR lands, would otherwise fail on
+  # files the PR never touched. The first Apply's base has no checker: the check
+  # passes and says so. owned-files.yml checks that a PR leaves the Owned files
+  # alone. Not a required status check.
   gh-repo:
     name: GitHub commands told their repository
     if: github.event_name == 'pull_request'
@@ -216,31 +211,6 @@ jobs:
             exit 0
           fi
           python3 -I "$tmp/check_gh_repo.py" --repo "$GITHUB_WORKSPACE"
-
-      - name: Check the Owned files against the base branch's
-        if: >-
-          always()
-          && github.head_ref != 'chore/standardize-baseline'
-          && github.head_ref != 'chore/reapply-baseline'
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          tmp=$(mktemp -d)
-          trap 'rm -rf "$tmp"' EXIT
-          # The base's copy of the script, as for the gh check, so the PR's own copy never judges it.
-          if ! git show "${BASE_SHA}:.github/scripts/check_owned_files.py" > "$tmp/check_owned_files.py" 2> /dev/null; then
-            if ! git cat-file -e "${BASE_SHA}:.github/scripts/check_gh_repo.py" 2> /dev/null; then
-              echo "${BASE_REF} has no .github/scripts/check_gh_repo.py: no Owned files to compare (the first Apply)."
-              exit 0
-            fi
-            # A base with the checker but no check_owned_files.py predates the script, so this PR brings it: an
-            # Apply PR, which the if: above skips, or a hand edit. Running the PR's copy would let it judge itself
-            # and passing would check nothing, so this fails; the Apply branches' exemption is the way past it.
-            echo "::error::${BASE_REF} has .github/scripts/check_gh_repo.py but no .github/scripts/check_owned_files.py, so its Owned files can't be compared by the base's own rules: Apply the Baseline from chore/reapply-baseline first."
-            exit 1
-          fi
-          python3 -I "$tmp/check_owned_files.py" --base "$BASE_SHA" --base-ref "$BASE_REF" --repo "$GITHUB_WORKSPACE"
 
   build:
     name: Build Solution

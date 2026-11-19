@@ -92,7 +92,7 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
      prepares the `chore/reapply-baseline` worktree, merges the remote branch and `main`, commits `apply.sh`'s output alone,
      pushes through the gate (which asks for a review when Apply writes the coverage threshold,
      the hand-off rules, an issue template, the reviewer agent, a Sandcastle prompt (intake, critique, plan, review or a role's), the local gate's check.sh or global.json),
-     opens the re-Apply PR ready (or adds the commit to the open one) and requests Copilot;
+     opens the re-Apply PR ready (or adds the commit to the open one) with the `baseline:apply` label, which `owned-files.yml`'s Owned files check needs to exempt it, and requests Copilot;
      it records Copilot's ask on the PR when the request doesn't register, so Claude Review runs (a first re-Apply PR has the old PR Auto-Merge).
      Its header comment has the details; name the head it prints in thread replies.
    - **Land:** `land.sh <owner/repo#n>...` watches the PRs and acts on the landing decision until each PR and its release-blog PR land
