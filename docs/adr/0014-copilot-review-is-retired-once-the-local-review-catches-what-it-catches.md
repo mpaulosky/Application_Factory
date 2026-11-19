@@ -5,8 +5,8 @@ status: proposed
 
 Copilot's review of a pull request finds problems the local review (ADR 0010) misses, and each one costs a fix commit, a new local review and a new CI run. The research note
 [`docs/research/copilot-review-alignment.md`](../research/copilot-review-alignment.md) inventories those escapes: 19 findings on four pull requests that had a clean local review. This ADR builds on
-ADR 0008 (Claude Review as Copilot's backup) and ADR 0010. It was first written as the second decision of ADR 0011 and split out so that ADR 0011 holds only what was built; it stays proposed until
-the replay below is run.
+ADR 0008 (a Claude review where Copilot can't review a PR; `claude-review.yml`'s header gives the rule) and ADR 0010. It was first written as the second decision of ADR 0011
+and split out so that ADR 0011 holds only what was built; it stays proposed until the replay below is run.
 
 ## Decision
 
@@ -25,4 +25,7 @@ that pull request marks this ADR accepted.
 ## Consequences
 
 - Nothing changes until the replay is run: `copilot_code_review` stays in `main-rules`, and PR Auto-Merge (ADR 0008) keeps waiting for Copilot's review or Claude Review as its backup.
+- The removal is more than the ruleset entry. `claude-review.yml` reviews only where Copilot can't, and `pr-automerge.yml` and `pr-review-submitted.yml` wait on Copilot's review, so
+  with no Copilot request they would wait on a review that never comes. The removal pull request also settles how those three review a PR with no Copilot request. They are Owned
+  Template files, so the change is made in `template/owned/` and reaches the Fleet by a Rollout (`rollout.sh`); the ruleset change goes through `main-rules.json` and `github-settings.sh --fix`.
 - Removing `copilot_code_review` later reduces review latency and the Fleet's Copilot usage; it also removes a second pair of eyes. The replay's recall number is what decides, not this ADR.

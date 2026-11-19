@@ -5,7 +5,7 @@ status: accepted
 
 A lint failure in a Markdown or YAML file used to surface late: at the commit (the `pre-commit` hook lints staged Markdown only), at the push (the Factory's gate runs `markdownlint-cli2` and
 `yamllint` over the whole repo), in CI (`lint-markdown`, `lint-yaml`, `lint-actions`), or in a review, where it costs a re-review cycle. This ADR builds on ADR 0006 and ADR 0010.
-Retiring Copilot's review, once written here as a second decision, is its own proposed ADR: [ADR 0014](0014-copilot-review-is-retired-once-the-local-review-catches-what-it-catches.md).
+Copilot review is not decided here: retiring it is the proposed [ADR 0014](0014-copilot-review-is-retired-once-the-local-review-catches-what-it-catches.md).
 
 ## Decision: lint the file when the tool writes it
 
