@@ -60,7 +60,7 @@ jobs:
       # Only open a metrics PR when asked to, and only from main: a run from
       # another branch must not publish metrics.
       - name: Create pull request
-        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        uses: peter-evans/create-pull-request@3ffccacd46053766916f087ce41d627c0b8cf2d1 # v8.1.3
         if: ${{ inputs.publish && github.ref == 'refs/heads/main' && steps.dotnet-code-metrics.outputs.updated-metrics == 'true' && env.HAS_RELEASE_PR_PAT == 'true' }}
         with:
           # [skip-release]: a metrics refresh isn't a release. A fixed title in

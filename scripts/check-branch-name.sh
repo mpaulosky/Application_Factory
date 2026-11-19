@@ -13,6 +13,9 @@
 # claude/... branch, GitHub's web editor, or a clone without core.hooksPath.
 # Exits 0 when the name is allowed, 1 (with the reason) when it isn't.
 set -euo pipefail
+# Check in ASCII whatever the caller's locale: in some UTF-8 locales bash's [a-z] and [A-Za-z] also match an accented letter, so the hook, CI and
+# the scripts that call this one (cleanup.sh, work-issue.sh) would disagree on a name like fix/1-café.
+export LC_ALL=C
 
 pr=false
 if [[ "${1:-}" == "--pr" ]]; then
@@ -30,8 +33,7 @@ if [[ "$branch" =~ ^(feature|fix|hotfix)/[0-9]+-[a-z0-9]+(-[a-z0-9]+)*$ ]] \
 fi
 
 # Dependabot's branches can't be renamed, and a person pushes to one to fix its PR (mirroring a bump into the Template's file, say),
-# so the hook allows them too, in shell-safe characters only ('@' and '+' included, which a scoped package or a version can carry;
-# in a UTF-8 locale bash's [A-Za-z] can also match an accented letter, which is shell-safe too).
+# so the hook allows them too, in shell-safe ASCII characters only ('@' and '+' included, which a scoped package or a version can carry).
 # Sandcastle hands off no such branch (lib/branches.mts#isHandOffBranch). The --pr form below takes any dependabot/* name, as it did
 # before the hook did: CI quotes the name, and refusing a Dependabot branch for a character would block its PR.
 if [[ "$branch" =~ ^dependabot/[A-Za-z0-9._@+-]+(/[A-Za-z0-9._@+-]+)*$ ]]; then
