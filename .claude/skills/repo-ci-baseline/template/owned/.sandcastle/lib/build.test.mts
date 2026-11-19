@@ -5424,6 +5424,7 @@ describe("buildIssue's PR state after the local review", () => {
     assert.match(DRAFT_NOTE, /run `\/pre-push-review` on it, which records a ledger/);
     assert.match(DRAFT_NOTE, /ids that review prints/);
     assert.ok(DRAFT_NOTE.indexOf("/pre-push-review") < DRAFT_NOTE.indexOf("review.sh accept <id>"), DRAFT_NOTE);
+    assert.ok(DRAFT_NOTE.includes("`scripts/review.sh accept-open` lists them"), DRAFT_NOTE);
     assert.match(DRAFT_NOTE, /`gh pr ready`/);
     assert.ok(!DRAFT_NOTE.includes("review.sh report"), DRAFT_NOTE);
   });
@@ -5863,6 +5864,7 @@ describe("buildIssue when publishing fails after the PR was held as a draft", ()
     assert.match(comments[0] ?? "", /scripts\/review\.sh accept/);
     // The ledger stayed on the runner: accept needs a ledger from a local /pre-push-review first.
     assert.match(comments[0] ?? "", /ledger is on the runner: run `\/pre-push-review` on the branch first, then `scripts\/review\.sh accept <id> <reason>`/);
+    assert.match(comments[0] ?? "", /or `scripts\/review\.sh accept-open`, which lists them/);
     assert.doesNotMatch(comments[0] ?? "", /open one by hand/);
     assert.match(comments[0] ?? "", /non-fast-forward/);
   });

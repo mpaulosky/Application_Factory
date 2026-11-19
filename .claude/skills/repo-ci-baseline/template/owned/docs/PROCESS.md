@@ -76,7 +76,8 @@ post, word for word. Keep it current: after every follow-up commit, update it so
   against `origin/main` with parallel read-only reviewers, fixes each Critical and Warning finding behind a regression test and each
   Advisory one in the review, reviews the fixes again until a round fixes nothing, and records the result under `.git/review/`. GitHub's
   reviewers are then a backstop that finds little. A Critical or Warning finding left open blocks the push until it is
-  fixed or the person accepts it with `scripts/review.sh accept R3 "<reason>"`, never on their behalf. Advisory findings
+  fixed or the person accepts it with `scripts/review.sh accept R3 "<reason>"`, never on their behalf (`scripts/review.sh accept-open` lists
+  the open ones and decides several at once, accepting or asking for a fix). Advisory findings
   (docs, comments, conventions) never block: one that needs a person goes to one follow-up issue per branch. For a large or
   risky branch that one review and a round of fixes won't settle, `/hardening-review` (`.claude/skills/hardening-review/`) repeats full
   passes until one fixes nothing, then records once: the gate asks for that one record all the same.
