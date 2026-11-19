@@ -265,7 +265,7 @@ refused, since only the person accepts. Then write `Step: recorded` into `state.
 
 Then step 9: show the report, and tell the person the stop condition holds, how many passes it took and what each fixed.
 They decide whether it is done. Show them the **known-open list once**, each item with its suggested fix, so they accept
-it with `scripts/review.sh accept <id> "<reason>"` or ask for a fix. This is the one time an old item costs them a
+it with `scripts/review.sh accept <id> "<reason>"` (or several with `scripts/review.sh accept-open`) or ask for a fix. This is the one time an old item costs them a
 decision. Report, follow-up issue and the PR's Review notes are as step 9 says.
 
 ## Reviewer answer format

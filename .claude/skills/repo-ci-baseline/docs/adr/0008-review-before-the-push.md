@@ -17,7 +17,8 @@ That repo moved the heavy review onto the developer's machine, before the push, 
 - **Findings are graded Critical, Warning or Advisory, and the review fixes all three.** Only bugs in code that runs, behaviour with no test, and security weaknesses
   block, and only while one is left open for a person. Docs, comments and
   conventions are fixed in the review or go to one follow-up issue, so a stale comment never blocks a push as hard as a bug.
-- **Only the person accepts a finding**, with `scripts/review.sh accept`. An acceptance never carries to a later review of different code.
+- **Only the person accepts a finding**, with `scripts/review.sh accept`, or several at once by id with `scripts/review.sh accept-open`, which can
+  also mark a finding `fixAsked` for the next review to fix; nothing else sets that mark. An acceptance never carries to a later review of different code.
 - **Reviewers are read-only and run at high effort.** The `pre-push-reviewer` agent has Read, Grep and Glob only, because the diff, issue and threads it reads
   were written by people who may not have write access.
 - **It is Owned.** The skill, agent, ledger and gate step carry no per-repo values; the repo's name (`REPO_SLUG`) and its own files under Owned patterns

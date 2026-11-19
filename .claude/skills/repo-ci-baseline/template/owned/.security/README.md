@@ -22,7 +22,7 @@ recorded `fixed` for is updated in place.
 - `fixed`: the weakness is resolved and a test or gate check pins the policy. A review does not raise a finding that repeats it
   as new. It reads the entry first, and raises the finding again only when the code no longer holds the policy or the pinning
   test or check is gone.
-- `accepted`: a person accepted the weakness (`scripts/review.sh accept`). The entry is read like any other and changes no
+- `accepted`: a person accepted the weakness (`scripts/review.sh accept` or `accept-open`). The entry is read like any other and changes no
   behaviour yet.
 - `open`: the weakness is waiting for a person. The entry is read like any other and changes no behaviour yet.
 

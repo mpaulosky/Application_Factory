@@ -5424,6 +5424,7 @@ describe("buildIssue's PR state after the local review", () => {
     assert.match(DRAFT_NOTE, /run `\/pre-push-review` on it, which records a ledger/);
     assert.match(DRAFT_NOTE, /ids that review prints/);
     assert.ok(DRAFT_NOTE.indexOf("/pre-push-review") < DRAFT_NOTE.indexOf("review.sh accept <id>"), DRAFT_NOTE);
+    assert.ok(DRAFT_NOTE.includes("`scripts/review.sh accept-open` lists them"), DRAFT_NOTE);
     assert.match(DRAFT_NOTE, /`gh pr ready`/);
     assert.ok(!DRAFT_NOTE.includes("review.sh report"), DRAFT_NOTE);
   });
