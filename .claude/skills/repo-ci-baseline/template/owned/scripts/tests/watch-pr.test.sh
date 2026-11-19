@@ -713,7 +713,20 @@ floor_covers_property() {
     | select(test("[\\p{Default_Ignorable_Code_Point}]") and (test($floor) | not)) | explode[0]] | length')" == 0 ]]
 }
 check "clean's class is found" test -n "$clean_floor"
+check "clean's own ranges are taken without the property" not grep -qF Default_Ignorable <<<"$clean_floor"
+check "clean's own ranges are taken without the C categories" not grep -qF 'p{C' <<<"$clean_floor"
+check "clean's own ranges hold a range this test knows" grep -qF 'ufe00-' <<<"$clean_floor"
 check "clean's own ranges, without the property, hold every code point this jq calls default-ignorable" floor_covers_property
+
+# A seen file that can't be written doesn't end the poll: the reason is printed, the poll exits 0, and stderr says the id wasn't recorded.
+new_repo
+mkdir "$repo/.git/watch-pr-7.seen"
+comment C1 "$OWNER" "Please rebase."
+run --once 7
+check "an unwritable seen file: exit 0" status_is 0
+check "an unwritable seen file: the comment is printed" out_has "watch-pr: comment: owner: Please rebase."
+check "an unwritable seen file: stderr says C1 wasn't recorded" err_has "watch-pr: can't record C1 in"
+check "an unwritable seen file: no shell error" not err_has "Is a directory"
 
 # A poll prints at most 50 reasons, then one line saying how many more; only the printed one-shot events are recorded as seen.
 # owner_comments <n>: a PR with <n> comments by the owner, C1 to C<n>.
@@ -726,8 +739,9 @@ check "50 reasons: no 'more' line" out_lacks "watch-pr: more:"
 new_repo
 owner_comments 51
 run --once 7
+check "51 reasons: exit 0" status_is 0
 check "51 reasons: 51 lines, the last the 'more' line" out_line_count_is 51
-check "51 reasons: the 'more' line counts the one not printed" out_has "watch-pr: more: 1 more not printed; the next run prints them"
+check "51 reasons: the 'more' line counts the one not printed" out_has "watch-pr: more: 1 more not printed; act on these and run again"
 check "51 reasons: the 50th is printed" out_has "watch-pr: comment: owner: Note 50."
 check "51 reasons: the 51st isn't" out_lacks "Note 51."
 check "51 reasons: the printed ones are recorded as seen" test "$(grep -c . "$repo/.git/watch-pr-7.seen")" -eq 50
@@ -739,8 +753,65 @@ new_repo
 owner_comments 120
 run --once 7
 check "120 reasons: the 'more' line counts the 70 not printed" out_has "watch-pr: more: 70 more not printed"
-check "120 reasons: the 'more' line is the last" test "$(tail -n 1 <<<"$out")" == "watch-pr: more: 70 more not printed; the next run prints them"
+check "120 reasons: the 'more' line is the last" test "$(tail -n 1 <<<"$out")" == "watch-pr: more: 70 more not printed; act on these and run again"
 check "120 reasons: 51 lines" out_line_count_is 51
+check "120 reasons: exit 0" status_is 0
+# The order: a failed check, then the one-shot events, then the threads, whatever order GitHub lists them in.
+# mixed <threads> <comments> [checks-json]: a PR with <threads> unresolved Copilot threads T1.., <comments> owner comments C1.. and those checks.
+mixed() {
+  pr "$(jq -nc --argjson o "$OWNER" --argjson b "$COPILOT" --argjson t "$1" --argjson c "$2" --argjson k "${3:-[]}" '
+    {statusCheckRollup: {contexts: {nodes: $k}},
+     reviewThreads: {nodes: [range(1; $t + 1) | {isResolved: false, comments: {nodes: [{author: $b, authorAssociation: "NONE", body: "Thread \(.)."}]}}]},
+     comments: {nodes: [range(1; $c + 1) | {id: "C\(.)", author: $o, authorAssociation: "OWNER", body: "Note \(.)."}]}}')"
+}
+FAILED_CHECK='[{"__typename":"CheckRun","name":"Unit tests","status":"COMPLETED","conclusion":"FAILURE"}]'
+new_repo
+mixed 1 1 "$FAILED_CHECK"
+review_json="$(jq -nc --argjson p "$PERSON" '{id: "R1", author: $p, authorAssociation: "COLLABORATOR", state: "CHANGES_REQUESTED", body: "No."}')"
+pr "$(jq -c --argjson r "$review_json" '.data.repository.pullRequest | {statusCheckRollup, reviewThreads, comments, reviews: {nodes: [$r]}}' "$GH_FIXTURE")"
+run --once 7
+check "the order: exit 0" status_is 0
+check "the order: a failed check before a changes request" in_order "$out" "watch-pr: check-failed:" "watch-pr: changes-requested:"
+check "the order: a changes request before a comment" in_order "$out" "watch-pr: changes-requested:" "watch-pr: comment:"
+check "the order: a comment before a thread" in_order "$out" "watch-pr: comment:" "watch-pr: thread:"
+# 51 threads: 50 printed and a 'more' line, every poll, and nothing recorded.
+new_repo
+mixed 51 0
+run --once 7
+check "51 threads: exit 0" status_is 0
+check "51 threads: 50 thread lines and the 'more' line" out_line_count_is 51
+check "51 threads: the 'more' line counts the one not printed" out_has "watch-pr: more: 1 more not printed; act on these and run again"
+check "51 threads: the 51st isn't printed" out_lacks "Thread 51."
+check "51 threads: nothing is recorded as seen" not test -s "$repo/.git/watch-pr-7.seen"
+first="$out"
+run --once 7
+check "51 threads, the next run: the same lines" test "$out" == "$first"
+# 50 threads and a comment: the comment is printed first and recorded, and one thread waits.
+new_repo
+mixed 50 1
+run --once 7
+check "50 threads and a comment: exit 0" status_is 0
+check "50 threads and a comment: the comment is printed" out_has "watch-pr: comment: owner: Note 1."
+check "50 threads and a comment: the comment comes first" test "$(head -n 1 <<<"$out")" == "watch-pr: comment: owner: Note 1."
+check "50 threads and a comment: the comment is recorded as seen" grep -qxF C1 "$repo/.git/watch-pr-7.seen"
+check "50 threads and a comment: 49 threads, then 'more: 1'" out_has "watch-pr: more: 1 more not printed"
+check "50 threads and a comment: the 50th thread waits" out_lacks "Thread 50."
+run --once 7
+check "50 threads and a comment, the next run: the 50 threads alone" out_line_count_is 50
+check "50 threads and a comment, the next run: the comment isn't printed again" out_lacks "Note 1."
+# A failed check counts against the 50: then 49 comments, and one left.
+new_repo
+mixed 0 50 "$FAILED_CHECK"
+run --once 7
+check "a failed check and 50 comments: the check, 49 comments and 'more: 1'" out_line_count_is 51
+check "a failed check and 50 comments: the check is printed" out_has "watch-pr: check-failed: Unit tests"
+check "a failed check and 50 comments: the 50th comment waits" out_lacks "Note 50."
+check "a failed check and 50 comments: 49 recorded" test "$(grep -c . "$repo/.git/watch-pr-7.seen")" -eq 49
+# 49 reasons: no 'more' line.
+new_repo
+owner_comments 49
+run --once 7
+check "49 reasons: 49 lines, no 'more' line" out_line_count_is 49
 
 # A quoted or mid-body Sandcastle marker is not Sandcastle's.
 new_repo

@@ -29,14 +29,15 @@ A poll prints one `watch-pr: <code>: <detail>` line for every reason that applie
 | `conflict` | The PR conflicts with its base. |
 | `behind` | The base branch moved and the repo's rules require an up-to-date branch. Not reported beside `conflict`. |
 | `check-failed` | A check run ended FAILURE, TIMED_OUT, ACTION_REQUIRED or STARTUP_FAILURE, or a status context is FAILURE or ERROR. The names are listed. Cancelled, skipped, neutral and pending checks don't count. |
-| `thread` | An unresolved review thread whose last comment is not the session's or Sandcastle's (Copilot's counts, and so does a reply from anyone but the repository's owner). |
 | `changes-requested` | A person's review asked for changes. |
 | `review` | A person's review with a body. |
 | `comment` | A person's comment on the PR, the owner's included when it carries no marker. |
+| `thread` | An unresolved review thread whose last comment is not the session's or Sandcastle's (Copilot's counts, and so does a reply from anyone but the repository's owner). After the one-shot events, so no number of threads keeps them out of the 50 lines a poll prints. |
 | `more` | Printed last when the poll found more than 50 reasons: how many it didn't print. |
 
 A poll prints at most 50 reasons, so no flood of comments floods the session. Every list is still read whole, and only the one-shot events
-it printed are recorded as seen, so the next run prints the rest; a persistent state past the first 50 is reported once those ahead of it are fixed.
+it printed are recorded as seen, so the next run prints the rest. Threads come last, so a comment or review is never kept out by them; a thread past the
+first 50 is reported once those ahead of it are resolved. The `more` line says to act on the printed reasons and run again.
 
 The detail is the author's login and the first line of the text (up to 200 characters; every control and format character, among them the bidi
 controls, the zero-width ones, the soft hyphen and the tag characters, the line and paragraph separators, every default-ignorable code point (Unicode's

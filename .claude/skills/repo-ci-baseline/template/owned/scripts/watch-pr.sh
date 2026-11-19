@@ -9,12 +9,14 @@
 #   conflict          the PR conflicts with its base
 #   behind            the base branch moved and the repo requires an up-to-date branch
 #   check-failed      a check run failed, timed out, needs action or didn't start, or a status context failed
-#   thread            an unresolved review thread whose last comment is not the session's or Sandcastle's
 #   changes-requested a person's review requested changes (reported once)
 #   review            a person's review with a body (reported once)
 #   comment           a person's PR comment (reported once)
+#   thread            an unresolved review thread whose last comment is not the session's or Sandcastle's (after the one-shot events,
+#                     so no number of threads keeps them out of the 50 lines)
 #   more              how many reasons past the first 50 a poll didn't print (last): no comment flood floods the session. Only the
-#                     printed one-shot events are recorded as seen, so the next run prints the rest.
+#                     printed one-shot events are recorded as seen, so the next run prints the rest; a thread past the first 50 shows
+#                     once those ahead of it are resolved.
 # A one-shot event is recorded in watch-pr-<n>.seen in the git common directory, so the next run stays quiet about it.
 #
 # A comment is the session's when its body contains WATCH_PR_MARKER (default `<!-- claude-session -->`), and Sandcastle's when it
@@ -192,11 +194,6 @@ REASONS_JQ="$OURS_JQ"'
                  or (.state as $s | ["FAILURE", "ERROR"] | index($s)))
         | (.name // .context)]
        | if length > 0 then line("check-failed"; join(", "); "") else empty end),
-      ($pr.reviewThreads.nodes[]
-       | select(.isResolved == false)
-       | (.comments.nodes | last) as $last
-       | select($last != null and ($last | ours_node | not))
-       | line("thread"; "\($last | who): \($last | said)"; "")),
       ($pr.reviews.nodes[]
        | select(person and (ours_node | not) and (.id as $id | $seen_ids | index($id) | not))
        | if .state == "CHANGES_REQUESTED" then line("changes-requested"; "\(who): \(if (.body // "") == "" then "(no text)" else said end)"; .id)
@@ -204,7 +201,14 @@ REASONS_JQ="$OURS_JQ"'
          else empty end),
       ($pr.comments.nodes[]
        | select(person and (ours_node | not) and (.id as $id | $seen_ids | index($id) | not))
-       | line("comment"; "\(who): \(said)"; .id))
+       | line("comment"; "\(who): \(said)"; .id)),
+      # Threads last: one is reported every poll until resolved, so many of them must not keep the one-shot events above out of the
+      # 50 lines a poll prints.
+      ($pr.reviewThreads.nodes[]
+       | select(.isResolved == false)
+       | (.comments.nodes | last) as $last
+       | select($last != null and ($last | ours_node | not))
+       | line("thread"; "\($last | who): \($last | said)"; ""))
     end
 '
 
@@ -343,9 +347,12 @@ while true; do
         if ((printed >= max_lines)); then more=$((more + 1)); continue; fi
         printed=$((printed + 1))
         echo "watch-pr: $code: $detail"
-        if [[ -n "$id" ]]; then echo "$id" >> "$seen_file"; fi
+        # A seen file that can't be written (a read-only git directory, a full disk) doesn't end the poll: the session is still needed.
+        if [[ -n "$id" ]] && ! { echo "$id" >> "$seen_file"; } 2>/dev/null; then
+          echo "watch-pr: can't record $id in $seen_file; the next run reports it again" >&2
+        fi
       done <<< "$reasons"
-      if ((more)); then echo "watch-pr: more: $more more not printed; the next run prints them"; fi
+      if ((more)); then echo "watch-pr: more: $more more not printed; act on these and run again"; fi
       exit 0
     fi
     if ((once)); then exit 1; fi

@@ -167,10 +167,23 @@ name: PR Auto-Merge
   # no-op workflow whose completion lands here. Copilot's review usually
   # arrives after CI, so without it the PR waits for the sweep. Claude
   # Review posts with GITHUB_TOKEN, which starts no workflows, so its own
-  # completion is the signal instead. "repo-ci-baseline Template" is
+  # completion is the signal instead. Every workflow that runs on an open
+  # PR is listed (test_pr_automerge_triggers.py checks it); Owned files
+  # runs again on a label event, so its end can be the last check's. "repo-ci-baseline Template" is
   # dotfiles' CI, which carries a copy of this file; no Baseline repo has it.
   workflow_run:
-    workflows: ["Build and Test Suite", "Lint Markdown", "Lint YAML", "Lint Actions", "CodeQL", "PR Title", "PR Review Submitted", "Claude Review", "repo-ci-baseline Template"]
+    workflows:
+      - "Build and Test Suite"
+      - "Lint Markdown"
+      - "Lint YAML"
+      - "Lint Actions"
+      - "CodeQL"
+      - "PR Title"
+      - "PR Review Submitted"
+      - "Claude Review"
+      - "Owned files"
+      - "Copilot Review Sync"
+      - "repo-ci-baseline Template"
     types: [completed]
   # Resolving a review thread has no Actions trigger, so a PR whose last
   # blocker was an open thread is picked up by this sweep. Off the round

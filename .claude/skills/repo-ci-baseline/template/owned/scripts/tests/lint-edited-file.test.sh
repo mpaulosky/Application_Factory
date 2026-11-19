@@ -689,15 +689,21 @@ done
 # lone_name <prefix> <hex code points>: makes $repo/docs/<prefix><bytes>.md holding BAD (a prefix of its own per case, so a name an earlier case
 # made can't stand in for this one's), the bytes being what the script writes for each escape, in order (a
 # space-separated list of hex code points, for a run of lone surrogates): U+DC80..U+DCFF the raw byte, any other surrogate its three-byte
-# form. Fails where the file system refuses the name (macOS).
+# form. Exits 3 where the file system refuses the name (macOS: EILSEQ), and fails with its error on anything else.
 lone_name() {
   python3 -I -c '
-import sys
+import errno, sys
 b = b"".join(bytes([ord(c) - 0xDC00]) if 0xDC80 <= ord(c) <= 0xDCFF else c.encode("utf-8", "surrogatepass")
              for c in (chr(int(h, 16)) for h in sys.argv[3].split()))
-with open(sys.argv[1].encode() + b"/docs/" + sys.argv[2].encode() + b + b".md", "wb") as f:
+try:
+    f = open(sys.argv[1].encode() + b"/docs/" + sys.argv[2].encode() + b + b".md", "wb")
+except OSError as error:
+    if error.errno == errno.EILSEQ:
+        sys.exit(3)
+    raise
+with f:
     f.write(b"# T\n\nBAD\n")
-' "$repo" "$1" "$2" 2> /dev/null
+' "$repo" "$1" "$2"
 }
 # Each edge of the raw-byte range (U+DC7F, U+DC80, U+DCFF, U+DD00), the ends of the high surrogates, and runs of two lone surrogates,
 # which Python hands the handler as one range.
@@ -706,8 +712,14 @@ for escs in d800 dbff dc00 dc7f dc80 dcff dd00 "dc80 dc81" "d800 d800" "dc7f dc8
   lone_case=$((lone_case + 1))
   # shellcheck disable=SC2086 # one code point per word
   json_escs="$(printf '\\u%s' $escs)"
-  if ! lone_name "s$lone_case-" "$escs"; then
+  lone_status=0
+  lone_name "s$lone_case-" "$escs" || lone_status=$?
+  if ((lone_status == 3)); then
     pass "a file named with lone surrogates $json_escs: skipped, the file system refuses the name"
+    continue
+  fi
+  if ((lone_status != 0)); then
+    check "a file named with lone surrogates $json_escs is made" "lone_name exited $lone_status"
     continue
   fi
   run_hook '{"tool_input": {"file_path": "'"$repo"'/docs/s'"$lone_case-$json_escs"'.md"}}'
