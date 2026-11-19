@@ -626,7 +626,7 @@ def test_a_secret_in_an_extra_field_is_withheld_too(tmp_path):
     assert withheld(tmp_path, {"summary": "s", "findings": [], SECRET[20:40]: 1}, [SECRET])
 
 
-# Six of the accepted limits in repo-ci-baseline's ADR 0004, pinned so a
+# Six of the accepted limits in ADR 0004 of the repo-ci-baseline skill (mpaulosky/Application_Factory), pinned so a
 # change to them is deliberate. Pieces are joined by a character of the body
 # that isn't next to them in it, so no window across a join is a window of
 # the secret, whatever order the seed gives.
