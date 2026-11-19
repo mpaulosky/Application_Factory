@@ -1661,15 +1661,16 @@ describe("accept-open", () => {
     assert.doesNotMatch(out, /--all/);
   });
 
-  it("the ready command is left out when every open finding is asked to be fixed, and the examples use no asked id", () => {
-    record([open("R1"), open("R2")]);
-    cli(["accept-open", "--fix", "R1", "R2"]);
+  it("the ready command is left out when every open finding is asked to be fixed, and the examples name an open one", () => {
+    record([finding(), open("R2"), open("R3")]);
+    cli(["accept-open", "--fix", "R2", "R3"]);
 
     const out = cli(["accept-open"]).out;
 
     assert.doesNotMatch(out, /^ {2}scripts\/review\.sh accept-open (R\d+=|$)/m);
-    assert.match(out, /^ {2}scripts\/review\.sh accept-open --reason "<reason>" R1 \.\.\./m);
-    assert.match(out, /^ {2}scripts\/review\.sh accept-open --fix R1 \.\.\./m);
+    assert.match(out, /^ {2}scripts\/review\.sh accept-open --reason "<reason>" R2 \.\.\./m);
+    assert.match(out, /^ {2}scripts\/review\.sh accept-open --fix R2 \.\.\./m);
+    assert.doesNotMatch(out, / R1 /);
     assert.match(out, /^2 open finding\(s\)/);
   });
 
@@ -1680,6 +1681,7 @@ describe("accept-open", () => {
     const out = cli(["accept-open"]).out;
 
     assert.match(out, /^ {2}scripts\/review\.sh accept-open R2="<reason>"$/m);
+    assert.match(out, /^ {2}scripts\/review\.sh accept-open --reason "<reason>" R2 \.\.\./m);
     assert.match(out, /^ {2}scripts\/review\.sh accept-open --fix R2 \.\.\./m);
   });
 
@@ -1691,6 +1693,28 @@ describe("accept-open", () => {
     assert.equal(result.code, 1);
     assert.match(result.err, /write each reason in place of <reason>: R1, R2/);
     assert.equal(statusOf("R1")?.status, "open");
+  });
+
+  it("accept refuses the placeholder too, and leaves the finding open", () => {
+    record([open("R1")]);
+
+    const result = cli(["accept", "R1", "<reason>"]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /write each reason in place of <reason>: R1/);
+    assert.equal(statusOf("R1")?.status, "open");
+    assert.throws(() => acceptFinding(repo, mergeBase(repo), "R1", "\u200b<\treason\t>\u200b"), /in place of <reason>: R1/);
+    assert.equal(statusOf("R1")?.status, "open");
+  });
+
+  it("a reason that only holds or nearly is the placeholder is a reason", () => {
+    const reasons = ["<reason> because the spec asks", "a <reason>", "<reasons>", "<reason", "reason>", "reason"];
+    record(reasons.map((_, index) => open(`R${index + 1}`)));
+
+    const result = cli(["accept-open", ...reasons.map((reason, index) => `R${index + 1}=${reason}`)]);
+
+    assert.equal(result.code, 0, result.err);
+    reasons.forEach((reason, index) => assert.equal(statusOf(`R${index + 1}`)?.reason, reason));
   });
 
   it("the ready command names every open one when none blocks", () => {
@@ -1769,10 +1793,11 @@ describe("accept-open", () => {
     ["--reason before another option", ["--reason", "--fix", "R1"], /--reason needs the reason/],
     ["--reason twice", ["--reason", "a", "--reason", "b", "R1"], /give --reason once/],
     ["--reason after --fix", ["--fix", "R1", "--reason", "Fine.", "R2"], /put --reason before --fix/],
-    ["--reason no bare id uses", ["--reason", "Fine.", "R1=Own."], /^--reason is for bare ids to accept \(R3\), and none is named: give R3=/m],
-    ["--reason with only ids to fix", ["--reason", "Fine.", "--fix", "R1"], /--reason is for bare ids to accept \(R3\), and none is named before --fix: /],
-    ["--reason alone", ["--reason", "Fine."], /^--reason is for bare ids to accept \(R3\), and none is named: give R3=/m],
+    ["--reason no bare id uses", ["--reason", "Fine.", "R1=Own."], /^--reason is for bare ids to accept, and no id is bare \(each has its own reason, or none is named\): name a bare id such as R3 with it$/m],
+    ["--reason with only ids to fix", ["--reason", "Fine.", "--fix", "R1"], /^--reason is for bare ids to accept, and no id before --fix is bare /m],
+    ["--reason alone", ["--reason", "Fine."], /^--reason is for bare ids to accept, and no id is bare /m],
     ["the placeholder as the --reason", ["--reason", "<reason>", "R1"], /write each reason in place of <reason>: R1/],
+    ["the placeholder on one id of two", ["R1=<reason>", "R2=Fine."], /write each reason in place of <reason>: R1$/m],
   ] as const) {
     it(`refuses ${what}, and changes nothing`, () => {
       record([open("R1"), open("R2"), finding({ id: "R3" })]);

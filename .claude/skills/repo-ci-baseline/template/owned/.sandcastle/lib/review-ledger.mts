@@ -1172,10 +1172,11 @@ export function renderOpen(ledger: Ledger): string {
     ].join("\n"),
   );
   // The ready command names the undecided findings that block, else (none of them blocks) every undecided one, and never one already
-  // asked to be fixed; none when every open finding is asked. The examples use an undecided id when there is one.
+  // asked to be fixed; none when every open finding is asked. The examples use an undecided id when there is one, else an open one (an
+  // asked finding is still open: accepting it drops the ask).
   const undecided = open.filter((finding) => finding.fixAsked !== true);
   const ready = (undecided.some(isBlocking) ? undecided.filter(isBlocking) : undecided).map((finding) => finding.id);
-  const example = ready[0] ?? "R1";
+  const example = ready[0] ?? open[0]?.id ?? "R1";
   return [
     `${open.length} open finding(s) on the review of ${ledger.branch === "" ? "HEAD" : plainText(ledger.branch)} at ${ledger.head.slice(0, 12)}:`,
     "",
@@ -1223,7 +1224,7 @@ export function parseOpenDecision(words: readonly string[]): OpenDecision | unde
   }
   if (fixing && fix.length === 0) throw new Error("--fix needs the ids to fix after it");
   if (shared !== undefined && !named.some(({ reason }) => reason === undefined)) {
-    throw new Error(`--reason is for bare ids to accept (R3), and none is named${fixing ? " before --fix" : ""}: give R3="<reason>", or a bare id with --reason`);
+    throw new Error(`--reason is for bare ids to accept, and no id${fixing ? " before --fix" : ""} is bare (each has its own reason, or none is named): name a bare id such as R3 with it`);
   }
   const accept = named.map(({ id, reason }) => {
     const why = reason ?? shared;
