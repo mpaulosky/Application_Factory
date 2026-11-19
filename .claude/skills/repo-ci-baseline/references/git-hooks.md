@@ -222,10 +222,12 @@ These are the checks the CI lint workflows run; a gate runs `actionlint` and `zi
   inherited from a git hook, are cleared first.
 - The path reaches the linter whole: from the repo root of the file's own repository, as `./<path>`, and for Markdown with `--no-globs`, so a name with `[`, `*` or a leading `-` is not read as a glob
   or an option (checked against the real tool: `a[1].md` and `x*y.md` are linted as those files). The config's `ignores` still apply.
+- A `file_path` holding a lone surrogate (valid JSON, but no UTF-8) is still read, not an exit 1: `\udc80` to `\udcff` stand for the raw bytes `0x80` to `0xff`
+  (Python's `surrogateescape`) and any other lone surrogate for its three-byte form (`surrogatepass`). A file with that name is linted; a path that names none exits 0, as for any missing file.
 - The tests use stub linters on `PATH` that fail on a marker word and log their arguments and working directory, and check each linter's exact arguments, which stream carries the report, and the
   repository boundary. A last block runs the real `markdownlint-cli2` when it is installed; an Application's hook-tests job installs none, so there it is skipped.
 
-The Template doesn't carry `.claude/settings.json`, so each repo adds the hook by hand:
+The Template doesn't carry `.claude/settings.json`, so each repo adds the hook by hand (the script's header shows the same entry):
 
 ```json
 {

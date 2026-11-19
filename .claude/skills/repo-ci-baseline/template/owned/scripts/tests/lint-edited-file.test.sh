@@ -676,6 +676,39 @@ for json in 'not json' ''; do
   check "input '$json' exits 1 with a message on stderr, not 0" ${p[@]+"${p[@]}"}
 done
 
+# A lone surrogate is valid JSON but no UTF-8: the path is still read (exit 0 when it names no file), not the hook's failure.
+for json in '{"tool_input": {"file_path": "a\ud800.md"}}' '{"tool_input": {"file_path": "a\udc00.md"}}'; do
+  run_hook "$json"
+  p=()
+  [[ $STATUS -eq 0 ]] || p+=("exit $STATUS, want 0: a path with a lone surrogate names no file here")
+  [[ -z "$OUTPUT" ]] || p+=("output: $OUTPUT")
+  log_empty || p+=("a linter ran: $(cat "$LOG")")
+  check "input $json is read, names no file, and exits 0 silently" ${p[@]+"${p[@]}"}
+done
+
+# lone_name <json escape>: makes $repo/docs/s<bytes>.md holding BAD, the bytes being what the script writes for the escape:
+# U+DC80..U+DCFF the raw byte, any other surrogate its three-byte form. Fails where the file system refuses the name (macOS).
+lone_name() {
+  python3 -I -c '
+import sys
+c = chr(int(sys.argv[2], 16))
+b = bytes([ord(c) - 0xDC00]) if 0xDC80 <= ord(c) <= 0xDCFF else c.encode("utf-8", "surrogatepass")
+with open(sys.argv[1].encode() + b"/docs/s" + b + b".md", "wb") as f:
+    f.write(b"# T\n\nBAD\n")
+' "$repo" "$1" 2> /dev/null
+}
+for esc in d800 dc00 dbff dcff; do
+  if ! lone_name "$esc"; then
+    pass "a file named with lone surrogate \\u$esc: skipped, the file system refuses the name"
+    continue
+  fi
+  run_hook '{"tool_input": {"file_path": "'"$repo"'/docs/s\u'"$esc"'.md"}}'
+  p=()
+  [[ $STATUS -eq 2 ]] || p+=("exit $STATUS, want 2: the file the path names was not linted")
+  [[ "$(ran markdownlint-cli2)" == 1 ]] || p+=("markdownlint-cli2 did not run once")
+  check "a file named with lone surrogate \\u$esc is linted" ${p[@]+"${p[@]}"}
+done
+
 # --- Missing tools --------------------------------------------------------
 NOLINT="$WORK/nolint"
 link_tools "$NOLINT"

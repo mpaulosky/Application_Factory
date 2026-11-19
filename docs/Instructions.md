@@ -57,6 +57,10 @@ with exit 2. From here on, `pre-commit` refuses commits in the primary checkout:
 change, including filling the placeholders the report lists, is made in a worktree under `../[ProjectName]-worktrees/` (see the
 skill's `references/git-hooks.md`).
 
+The Template ships the two Claude Code hook scripts but not `.claude/settings.json`, which wires them: add their entries to the Application's own
+`.claude/settings.json` by hand, `PostToolUse` for `scripts/lint-edited-file.sh` (the edit-time lint) and `SessionStart` for `scripts/check-git-hooks.sh`.
+The skill's `references/git-hooks.md` shows both entries ([Edit-time lint](../.claude/skills/repo-ci-baseline/references/git-hooks.md#edit-time-lint)).
+
 `core.hooksPath` is what turns the hooks on, in each clone. Don't set a global `init.templateDir` to install them:
 the hooks it copies into `.git/hooks/` are symlinks or copies that go stale when the Template moves (#12 left them
 dangling), a Baseline repo's `core.hooksPath` overrides them anyway, and in any other repo the pre-push hook would run a
@@ -119,7 +123,7 @@ git add -A
 git commit -m "chore: Apply the repo-ci-baseline Template"
 ```
 
-As in A3, the gate needs shfmt v3.14 or a later v3 on `PATH` before the first push.
+As in A3, the gate needs shfmt v3.14 or a later v3 on `PATH` before the first push, and the Claude Code hooks are wired in `.claude/settings.json` by hand.
 
 ### B3. Adapt
 

@@ -55,7 +55,8 @@ import sys
 import unicodedata
 import urllib.parse
 
-# Accepted limit (repo-ci-baseline's ADR 0004): the marker proves the login,
+# Accepted limit (ADR 0004 of the repo-ci-baseline skill, in
+# mpaulosky/Application_Factory): the marker proves the login,
 # not that Claude wrote the review; see claude-review.yml.
 MARKER = "<!-- claude-review -->"
 # The second line of a review with findings outside the diff.
