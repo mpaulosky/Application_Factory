@@ -803,6 +803,31 @@ done
 # named, and the handler's own signal would catch it again and again.
 reset_first="$(awk '/^cache_unlock\(\) \{/ { f = 1 } f && /trap - INT TERM HUP/ && !t { t = NR } f && /cache_locked=""/ && !c { c = NR } f && /^\}/ { f = 0 } END { print (t && c && t < c) ? 0 : 1 }' "$here/scripts/gate.sh")"
 check "cache_unlock sets the signals back before it forgets the lock" "$reset_first"
+# A signal while cache_unlock removes the lock (R30): an rmdir on PATH removes it, has another gate take it at once, then sends the signal to the gate it runs for. The
+# gate's handler must not remove the lock again (the other gate's), and the gate must still end by that signal. With RMDIR_TAKE unset, nobody takes it: the gate must
+# not leave its own lock behind either (R27).
+rmdir_shim="$work/rmdir-shim"; mkdir -p "$rmdir_shim"; real_rmdir="$(command -v rmdir)"
+cat > "$rmdir_shim/rmdir" <<EOF
+#!/usr/bin/env bash
+last="\${!#}"
+"$real_rmdir" "\$@" || exit
+if [[ "\$last" == */gate-cache/lock-* && ! -e "\$RMDIR_MARK" ]]; then
+  : > "\$RMDIR_MARK"
+  [[ -z "\${RMDIR_TAKE:-}" ]] || mkdir -- "\$last"
+  kill -s "\$RMDIR_SIG" "\$PPID"
+fi
+EOF
+chmod +x "$rmdir_shim/rmdir"
+for sig in INT TERM HUP; do
+  command rm -f "$work/rmdir-marked"
+  PATH="$rmdir_shim:$PATH" RMDIR_MARK="$work/rmdir-marked" RMDIR_SIG="$sig" RMDIR_TAKE=1 GATE_NO_CACHE=1 RUN_PART=template run "$repoL"
+  check "a gate given $sig while it removes the cache lock leaves a lock another gate took then, and ends by that signal" "$([[ -e $work/rmdir-marked && $status == $((128 + $(kill -l "$sig"))) && $ran == no && -d $cacheL/lock-$treeL ]] && echo 0 || echo 1)"
+  "$real_rmdir" "$cacheL/lock-$treeL" 2>/dev/null || true
+  command rm -f "$work/rmdir-marked"
+  PATH="$rmdir_shim:$PATH" RMDIR_MARK="$work/rmdir-marked" RMDIR_SIG="$sig" GATE_NO_CACHE=1 RUN_PART=template run "$repoL"
+  check "a gate given $sig while it removes the cache lock leaves no lock of its own, and ends by that signal" "$([[ -e $work/rmdir-marked && $status == $((128 + $(kill -l "$sig"))) && $ran == no && ! -e $cacheL/lock-$treeL ]] && echo 0 || echo 1)"
+  "$real_rmdir" "$cacheL/lock-$treeL" 2>/dev/null || true
+done
 # A stamp stuck as a folder can be neither written nor removed, even in a writable cache folder: the gate fails, and releases the lock it took.
 command rm -f "$cacheL/started.test-sh-$treeL"; mkdir -p "$cacheL/started.test-sh-$treeL/stuck"
 RUN_PART=template run "$repoL"
