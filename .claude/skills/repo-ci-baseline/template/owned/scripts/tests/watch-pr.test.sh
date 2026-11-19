@@ -179,7 +179,8 @@ run_env() { # run_env <VAR=value>... -- <args...>
 # isn't on macOS). The watchdog's own sleep is the real one: the fake is only on the watcher's PATH. The watchdog writes its marker before it
 # kills, so the watcher's end tells a timeout by the marker, never by whether the watchdog is still alive; a watcher that ends first stops the
 # watchdog and its sleep (the trap stops every job the watchdog started, so a sleep whose pid isn't set yet is stopped too). The sleep's pid is
-# written to $work/bounded-nap, so sleep_gone can tell it ended without pgrep. ${vars[@]+...} because bash before 4.4 (macOS's 3.2) calls an
+# written to $work/bounded-nap once the trap is set, and run_bounded waits for it before stopping the watchdog; the trap waits for the sleep,
+# so it is reaped, never left a zombie, and sleep_gone can tell it ended without pgrep. ${vars[@]+...} because bash before 4.4 (macOS's 3.2) calls an
 # empty array unbound under set -u.
 run_bounded() {
   local secs="$1" pid dog fired="$work/bounded-fired"
@@ -192,7 +193,7 @@ run_bounded() {
   pid=$!
   (
     # shellcheck disable=SC2046 # one pid per word
-    trap 'kill $(jobs -p) 2>/dev/null; exit 0' TERM
+    trap 'kill $(jobs -p) 2>/dev/null; wait; exit 0' TERM
     command sleep "$secs" &
     nap=$!
     echo "$nap" >"$work/bounded-nap"
@@ -203,21 +204,19 @@ run_bounded() {
   dog=$!
   wait "$pid" && status=0 || status=$?
   if [[ -e "$fired" ]]; then status=124; fi
+  # The pid file is written after the trap is set: stop the watchdog only once it is, or a TERM before the trap ends it without the trap.
+  local tries=0
+  while [[ ! -s "$work/bounded-nap" ]] && ((tries < 50)); do tries=$((tries + 1)); command sleep 0.1; done
   kill "$dog" 2>/dev/null || true
   wait "$dog" 2>/dev/null || true
   out="$(<"$work/out")"
   err="$(<"$work/err")"
 }
-# sleep_gone: the last run_bounded's watchdog sleep has ended, within about 2 s (its SIGTERM lands asynchronously). False when no pid was written.
+# sleep_gone: the last run_bounded's watchdog sleep has ended. The watchdog reaps it (its trap waits) before run_bounded's wait returns, so
+# it is gone, not a zombie, at once. False when no pid was written.
 sleep_gone() {
-  local nap tries=0
   [[ -s "$work/bounded-nap" ]] || return 1
-  nap="$(<"$work/bounded-nap")"
-  while kill -0 "$nap" 2>/dev/null; do
-    tries=$((tries + 1))
-    if ((tries > 20)); then return 1; fi
-    command sleep 0.1
-  done
+  ! kill -0 "$(<"$work/bounded-nap")" 2>/dev/null
 }
 polls() { grep -c '^GH_REPO=' "$GH_LOG"; }
 sleeps() { grep -c . "$SLEEP_LOG"; }
@@ -662,23 +661,34 @@ thread false "$COPILOT" "Consider a constant here."
 run --once 7
 check "a bot's thread comment (Copilot's) is still shown" out_has "copilot-pull-request-reviewer: Consider a constant here."
 
-# Zero-width characters, bidi controls, the line and paragraph separators and the byte-order mark reorder, hide or break printed text in a
-# terminal: none is printed, in the owner's shown text or a bot's, each made a space, and the text around them is.
-# shellcheck disable=SC2016 # jq's $variables are not the shell's
-INVISIBLE='"a​b‌c‍d‎e‏f g h‪i‫j‬k‭l‮m⁦n⁧o⁨p⁩q﻿r"'
-raw_lacks_invisible() { [[ "$(jq -Rs 'test("[​-‏ -‮⁦-⁩﻿]")' "$work/raw")" == false ]]; }
-SPACED="a b c d e f g h i j k l m n o p q r"
+# Every control and format character, the line and paragraph separators and the other default-ignorable characters reorder or hide printed
+# text in a terminal: none is printed, in the owner's shown text or a bot's, each made a space, and the text around them is. Their
+# neighbours, just outside each range, are printed as they are. The characters are code points here, never literal in this file.
+HIDING="7 1f 7f 85 9f ad 34f 61c 115f 1160 180b 180e 180f 200b 200c 200d 200e 200f 2028 2029 202a 202e 2060 2064 2065 2066 2069 206a 206f
+3164 fe00 fe0f feff fff9 fffb ffa0 e0001 e0020 e0041 e007f e0100 e01ef"
+KEPT="20 7e a0 ac ae 34e 350 61b 61d 115e 1161 180a 1810 200a 2010 2014 2027 202f 205f 2070 3163 3165 fdfd fe10 fefc fff8 fffc ff9f ffa1
+e9 65e5 1f600"
+# body <hex code points>: a JSON string "w0<c0>w1<c1>...end"; spaced <hex code points>: the same with each character a space.
+cps() { local h out=""; for h in $1; do out+="$((16#$h)),"; done; echo "[${out%,}]"; }
+body() { jq -nc --argjson c "$(cps "$1")" '[range($c | length) as $i | "w\($i)", ([$c[$i]] | implode)] | add + "end"'; }
+spaced() { jq -nr --argjson c "$(cps "$1")" '[range($c | length) as $i | "w\($i)"] | join(" ") + " end"'; }
+raw_lacks_hiding() { [[ "$(jq -Rs --argjson c "$(cps "$HIDING")" '[explode[] | select(IN($c[]))] | length' "$work/raw")" == 0 ]]; }
 new_repo
-pr "$(jq -nc --argjson o "$OWNER" "{comments: {nodes: [{id: \"C1\", author: \$o, authorAssociation: \"OWNER\", body: $INVISIBLE}]}}")"
+pr "$(jq -nc --argjson o "$OWNER" --argjson b "$(body "$HIDING")" '{comments: {nodes: [{id: "C1", author: $o, authorAssociation: "OWNER", body: $b}]}}')"
 run_raw --once 7
-check "the owner's comment with invisible characters: exit 0" status_is 0
-check "the owner's comment: no zero-width, bidi, separator or byte-order character is printed" raw_lacks_invisible
-check "the owner's comment: each is a space, and the text around them is printed" out_has "watch-pr: comment: owner: $SPACED"
+check "the owner's comment with hiding characters: exit 0" status_is 0
+check "the owner's comment: no control, format, separator or other default-ignorable character is printed" raw_lacks_hiding
+check "the owner's comment: each is a space, and the text around them is printed" out_has "watch-pr: comment: owner: $(spaced "$HIDING")"
 new_repo
-pr "$(jq -nc --argjson b "$COPILOT" "{reviewThreads: {nodes: [{isResolved: false, comments: {nodes: [{author: \$b, authorAssociation: \"NONE\", body: $INVISIBLE}]}}]}}")"
+pr "$(jq -nc --argjson b "$COPILOT" --argjson t "$(body "$HIDING")" '{reviewThreads: {nodes: [{isResolved: false, comments: {nodes: [{author: $b, authorAssociation: "NONE", body: $t}]}}]}}')"
 run_raw --once 7
-check "a bot's thread with invisible characters: no zero-width, bidi, separator or byte-order character is printed" raw_lacks_invisible
-check "a bot's thread: each is a space, and the text around them is printed" out_has "watch-pr: thread: copilot-pull-request-reviewer: $SPACED"
+check "a bot's thread with hiding characters: none is printed" raw_lacks_hiding
+check "a bot's thread: each is a space, and the text around them is printed" out_has "watch-pr: thread: copilot-pull-request-reviewer: $(spaced "$HIDING")"
+new_repo
+pr "$(jq -nc --argjson o "$OWNER" --argjson b "$(body "$KEPT")" '{comments: {nodes: [{id: "C1", author: $o, authorAssociation: "OWNER", body: $b}]}}')"
+run_raw --once 7
+check "the owner's comment: each hiding range's neighbours, and accented, CJK and emoji text, are printed as they are" \
+  out_has "watch-pr: comment: owner: $(jq -r . <<<"$(body "$KEPT")")"
 
 # A quoted or mid-body Sandcastle marker is not Sandcastle's.
 new_repo

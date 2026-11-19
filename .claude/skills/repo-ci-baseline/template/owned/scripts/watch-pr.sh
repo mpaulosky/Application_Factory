@@ -163,9 +163,13 @@ SHAPE_JQ='
 # One line per reason: code, detail and the node id of a one-shot event (else empty), apart by the unit separator.
 # shellcheck disable=SC2016
 REASONS_JQ="$OURS_JQ"'
-  # clean: C0 and C1 controls, and the characters that reorder, hide or break a line in a terminal (zero-width ones, bidi controls, the line
-  # and paragraph separators and the byte-order mark), each made a space, then the first 200 characters.
-  def clean: tostring | gsub("[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]"; " ") | .[0:200];
+  # clean: every control and format character (Cc, Cf: the bidi controls, zero-width ones, the byte-order mark, the soft hyphen and the tag
+  # characters among them), the line and paragraph separators (Zl, Zp), and the other default-ignorable characters a terminal shows as
+  # nothing (the combining grapheme joiner, the Hangul fillers, the Mongolian and other variation selectors, U+2065), each made a space, so
+  # no printed text is reordered or hidden; then the first 200 characters.
+  def clean: tostring
+    | gsub("[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\u034f\u115f\u1160\u180b-\u180f\u2065\u3164\ufe00-\ufe0f\uffa0\udb40\udd00-\udb40\uddef]"; " ")
+    | .[0:200];
   def first_line: (. // "") | split("\n")[0];
   def person: (.author.__typename // "") != "Bot";
   def who: .author.login // "unknown";

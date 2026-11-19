@@ -17,7 +17,8 @@ two characters, since a path is the PR's and a line break in it could start a wo
 
 Exit 0 when nothing differs, and when the base's tree has no check_gh_repo.py (the first Apply: there is nothing to
 compare with); 1 when something differs; 2 on a usage error, a base commit git can't read, a base checker that fails to
-load or has no OWNED list of paths, or a git call that fails: each prints one "check_owned_files.py: ..." line to
+load or has no OWNED list of paths, a git that can't be started or a git call that fails, or a file of the check's own it
+can't write or read (its temporary copy of the base checker): each prints one "check_owned_files.py: ..." line to
 stderr, never a traceback.
 """
 

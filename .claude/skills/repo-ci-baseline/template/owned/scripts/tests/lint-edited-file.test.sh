@@ -686,7 +686,7 @@ for json in '{"tool_input": {"file_path": "a\ud800.md"}}' '{"tool_input": {"file
   check "input $json is read, names no file, and exits 0 silently" ${p[@]+"${p[@]}"}
 done
 
-# lone_name <prefix> <json escapes>: makes $repo/docs/<prefix><bytes>.md holding BAD (a prefix of its own per case, so a name an earlier case
+# lone_name <prefix> <hex code points>: makes $repo/docs/<prefix><bytes>.md holding BAD (a prefix of its own per case, so a name an earlier case
 # made can't stand in for this one's), the bytes being what the script writes for each escape, in order (a
 # space-separated list of hex code points, for a run of lone surrogates): U+DC80..U+DCFF the raw byte, any other surrogate its three-byte
 # form. Fails where the file system refuses the name (macOS).
