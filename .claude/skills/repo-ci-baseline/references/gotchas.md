@@ -140,9 +140,11 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     A script that isn't valid bash is read up to its syntax error, since bash runs the statements before it and stops there: those statements are judged on the tree
     and their export counts. The lines from the error on are judged one at a time as code, with the export the statements before left, and no export of their own;
     a wrapper on an earlier line that a backslash joins to the `gh`'s (`sudo \`) drops that export. A `gh` with more than 4096 characters before it in its own
-    command (`BEFORE_CHARS`; joined lines included, without the backslash and newline that join them) or after it on its line, or more than 100 continued lines
+    command (`BEFORE_CHARS`; joined lines included, without the backslash and newline that join them), or more than 100 continued lines
     before it after a syntax error (`JOINED_LINES`), or whose command is more than 8192 characters (twice `BEFORE_CHARS`) long before it,
-    continuations included, is refused whatever tells it, so the text read for one `gh` stays bounded: split such a command or line.
+    continuations included, is refused whatever tells it: split such a command. After a `gh`, at most 4096 characters of the rest of its line are read
+    (`AFTER_CHARS`): what tells a `gh` is in the first words of its own command, so a long one (`gh api ... --jq '<5000 characters>'`) passes, but a `gh` whose
+    subcommand or repository starts past them, or behind a run of blanks or redirections that long, is refused. So the text read for one `gh` stays bounded.
     Within those bounds a crafted command (hundreds of `env` or `NAME=value` words before many `gh` words) still takes the old
     checker's rules seconds. The checker parses at most five times looking for those
     statements (`PREFIX_TRIES`), the whole script first.
