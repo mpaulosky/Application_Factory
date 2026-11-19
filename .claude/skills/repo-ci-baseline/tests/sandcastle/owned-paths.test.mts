@@ -256,6 +256,7 @@ const EXEMPT_GLOBS_AUDITED: Readonly<Record<string, GlobEntry>> = {
       ".github/scripts/post_claude_review.py",
       ".github/scripts/release_post.py",
       ".github/scripts/release_queue.py",
+      ".github/scripts/requirements-tests.txt",
       ".github/scripts/tests/conftest.py",
       ".github/scripts/tests/pr-automerge.test.mjs",
       ".github/scripts/tests/test_backfill_blog_posts.py",

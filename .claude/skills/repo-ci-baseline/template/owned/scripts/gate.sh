@@ -26,19 +26,31 @@ step() { echo -e "\n${CYAN}▶ $1${RESET}"; }
 
 # Files added, copied, modified or renamed since this branch left origin/main.
 # Without an origin/main (a fresh clone of a fork, say) lint every tracked file.
+# NUL-separated, so a name git would quote (non-ASCII, a tab, a newline, a quote) reaches the linters as it is on disk. Written to a
+# file first, so a git that fails stops the gate here (set -e) instead of leaving every list empty.
+CHANGED_FILE="$(mktemp)"
+trap 'rm -f "$CHANGED_FILE"' EXIT
 if BASE="$(git merge-base HEAD origin/main 2>/dev/null)"; then
-  CHANGED="$(git diff --name-only --diff-filter=ACMR "$BASE" HEAD)"
+  git diff --name-only -z --diff-filter=ACMR "$BASE" HEAD > "$CHANGED_FILE"
 else
   BASE=""
-  CHANGED="$(git ls-files)"
+  git ls-files -z > "$CHANGED_FILE"
 fi
+# The changed files matching the extended regex $1, and not $2 when it's given, one array entry each.
+pick() {
+  if [[ $# -gt 1 ]]; then
+    { grep -zE "$1" "$CHANGED_FILE" || true; } | { grep -zvE "$2" || true; }
+  else
+    grep -zE "$1" "$CHANGED_FILE" || true
+  fi
+}
 
-mapfile -t MD_FILES < <(grep -E '\.md$' <<< "$CHANGED" | grep -Ev '^docs/blogs/' || true)
+mapfile -d '' -t MD_FILES < <(pick '\.md$' '^docs/blogs/')
 # pnpm writes its lockfile in its own YAML style; it isn't hand-edited.
-mapfile -t YAML_FILES < <(grep -E '\.ya?ml$' <<< "$CHANGED" | grep -Ev '(^|/)pnpm-lock\.yaml$' || true)
-mapfile -t WORKFLOW_FILES < <(grep -E '^\.github/(workflows/[^/]+\.ya?ml|dependabot\.ya?ml|actionlint\.ya?ml|zizmor\.ya?ml)$' <<< "$CHANGED" || true)
+mapfile -d '' -t YAML_FILES < <(pick '\.ya?ml$' '(^|/)pnpm-lock\.yaml$')
+mapfile -d '' -t WORKFLOW_FILES < <(pick '^\.github/(workflows/[^/]+\.ya?ml|dependabot\.ya?ml|actionlint\.ya?ml|zizmor\.ya?ml)$')
 # Shell scripts, plus extensionless scripts and git hooks.
-mapfile -t SHELL_FILES < <(grep -E '\.sh$|^scripts/[^/.]+$|^\.github/hooks/((pre|post)-[a-z-]+|(prepare-)?commit-msg)$' <<< "$CHANGED" || true)
+mapfile -d '' -t SHELL_FILES < <(pick '\.sh$|^scripts/[^/.]+$|^\.github/hooks/((pre|post)-[a-z-]+|(prepare-)?commit-msg)$')
 
 # An installed markdownlint-cli2 (as the pre-commit hook uses) when there is
 # one; otherwise this pinned version, never whatever the registry serves at push time.

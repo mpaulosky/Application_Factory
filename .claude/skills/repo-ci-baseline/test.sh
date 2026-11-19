@@ -96,6 +96,27 @@ bash "$owned/scripts/tests/check-git-hooks.test.sh" || fail "check-git-hooks.tes
 bash "$owned/scripts/tests/lint-edited-file.test.sh" || fail "lint-edited-file.test.sh"
 grep -qxF '        run: bash scripts/tests/lint-edited-file.test.sh' "$owned/.github/workflows/ci.yml" \
   || fail "the Owned ci.yml's hook-tests job must run scripts/tests/lint-edited-file.test.sh, so every repo tests its copy"
+bash "$skill_dir/tests/owned-gate-files.test.sh" || fail "owned-gate-files.test.sh"
+# Every pip install in an Owned workflow takes only hashed pins (R43 of TicketManager's re-Apply review): the python-tests job installs
+# requirements-tests.txt with --require-hashes, and every pin there is exact and carries a hash.
+grep -qxF '        run: python -m pip install --require-hashes --no-deps -r .github/scripts/requirements-tests.txt' "$owned/.github/workflows/ci.yml" \
+  || fail "the Owned ci.yml's python-tests job must install .github/scripts/requirements-tests.txt with --require-hashes --no-deps"
+if grep -nE 'pip install' "$owned"/.github/workflows/*.yml | grep -v -- '--require-hashes'; then
+  fail "every pip install in an Owned workflow must use --require-hashes (the lines above don't)"
+fi
+python3 - "$owned/.github/scripts/requirements-tests.txt" <<'PY_REQ' || fail "requirements-tests.txt must pin each package exactly, with at least one sha256 hash, pytest and pyyaml among them"
+import re, sys
+text = open(sys.argv[1]).read()
+entries = re.split(r"\n(?=[A-Za-z])", re.sub(r"^#.*\n|^\n", "", text, flags=re.M))
+names = set()
+for entry in filter(str.strip, entries):
+    first = entry.split()[0]
+    match = re.fullmatch(r"([a-z0-9][a-z0-9._-]*)==[0-9][^\s\\]*", first)
+    assert match, f"not an exact pin: {first}"
+    assert re.search(r"--hash=sha256:[0-9a-f]{64}", entry), f"no hash: {first}"
+    names.add(match.group(1))
+assert {"pytest", "pyyaml"} <= names, names
+PY_REQ
 fi # the hooks shard
 
 if in_shard scripts; then

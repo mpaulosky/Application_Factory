@@ -659,6 +659,78 @@ p=()
 log_has "markdownlint-cli2 $repo " || p+=("not run from the main checkout: $(cat "$LOG")")
 check "with a linked worktree as the project, a file in the main checkout is linted" ${p[@]+"${p[@]}"}
 
+# --- A markdownlint config that isn't committed as it is --------------------
+# markdownlint-cli2 loads JavaScript from a .cjs/.mjs config and from customRules in any config, so a config an agent wrote must not
+# run through this hook unprompted: the file is left unlinted, and the person is told which config.
+vet="$(new_repo vetted)"
+mkdir -p "$vet/docs/deep"
+printf '{ "config": { "default": true } }\n' > "$vet/.markdownlint-cli2.jsonc"
+printf '{ "name": "x" }\n' > "$vet/package.json"
+printf '# Title\n' > "$vet/docs/deep/ok.md"
+printf '# Title\n' > "$vet/top.md"
+git -C "$vet" add .markdownlint-cli2.jsonc package.json
+git -C "$vet" -c user.name=t -c user.email=t@t commit --quiet -m configs
+# vetted_case <label> <expected config, or "" for linted>
+vetted_case() {
+  run_hook "$(edit_json "$vet/docs/deep/ok.md")" "$STUBS:$TOOLS" "$vet"
+  p=()
+  [[ $STATUS -eq 0 ]] || p+=("exit $STATUS, want 0")
+  if [[ -z "$2" ]]; then
+    [[ "$(ran markdownlint-cli2)" == 1 ]] || p+=("markdownlint-cli2 did not run")
+    [[ -z "$OUTPUT" ]] || p+=("output: $OUTPUT")
+  else
+    [[ "$(ran markdownlint-cli2)" == 0 ]] || p+=("markdownlint-cli2 ran under an unvetted config")
+    msg="$(system_message "$STDOUT")"
+    [[ "$msg" == *"docs/deep/ok.md was not linted"* && "$msg" == *"config $2 isn't committed"* ]] || p+=("systemMessage: $msg")
+  fi
+  check "$1" ${p[@]+"${p[@]}"}
+}
+vetted_case "committed configs on the path: the file is linted" ""
+printf 'module.exports = {};\n' > "$vet/docs/.markdownlint-cli2.cjs"
+vetted_case "an untracked .cjs config in a folder above the file: not linted, and named" docs/.markdownlint-cli2.cjs
+rm "$vet/docs/.markdownlint-cli2.cjs"
+printf '{}\n' > "$vet/docs/deep/.markdownlint.json"
+vetted_case "an untracked config in the file's own folder: not linted" docs/deep/.markdownlint.json
+git -C "$vet" add docs/deep/.markdownlint.json
+vetted_case "a config staged but not committed: not linted" docs/deep/.markdownlint.json
+git -C "$vet" rm --quiet --cached docs/deep/.markdownlint.json
+rm "$vet/docs/deep/.markdownlint.json"
+printf '{ "customRules": ["./x.js"] }\n' > "$vet/.markdownlint-cli2.jsonc"
+vetted_case "the root config changed since it was committed: not linted" .markdownlint-cli2.jsonc
+git -C "$vet" checkout --quiet -- .markdownlint-cli2.jsonc
+printf '{ "markdownlint-cli2": { "customRules": ["./x.js"] } }\n' > "$vet/package.json"
+vetted_case "a changed package.json, which can hold a config: not linted" package.json
+git -C "$vet" checkout --quiet -- package.json
+mkdir -p "$vet/other"
+printf 'module.exports = {};\n' > "$vet/other/.markdownlint-cli2.mjs"
+vetted_case "an untracked config off the file's path changes nothing: linted" ""
+rm -r "$vet/other"
+vetted_case "back as committed: linted again" ""
+# A file at the repository root: its own folder is the root, checked once.
+printf 'module.exports = {};\n' > "$vet/.markdownlint.cjs"
+run_hook "$(edit_json "$vet/top.md")" "$STUBS:$TOOLS" "$vet"
+p=()
+[[ $STATUS -eq 0 && "$(ran markdownlint-cli2)" == 0 ]] || p+=("exit $STATUS, ran $(ran markdownlint-cli2)")
+[[ "$(system_message "$STDOUT")" == *"config .markdownlint.cjs isn't committed"* ]] || p+=("systemMessage: $STDOUT")
+check "a root file under an untracked root config: not linted" ${p[@]+"${p[@]}"}
+rm "$vet/.markdownlint.cjs"
+# A YAML file isn't linted by markdownlint, so its configs don't matter.
+printf 'module.exports = {};\n' > "$vet/docs/.markdownlint-cli2.cjs"
+printf 'key: value\n' > "$vet/docs/x.yml"
+run_hook "$(edit_json "$vet/docs/x.yml")" "$STUBS:$TOOLS" "$vet"
+p=()
+[[ $STATUS -eq 0 && "$(ran yamllint)" == 1 ]] || p+=("exit $STATUS, yamllint ran $(ran yamllint)")
+check "a YAML file is linted whatever the markdownlint configs" ${p[@]+"${p[@]}"}
+rm "$vet/docs/.markdownlint-cli2.cjs" "$vet/docs/x.yml"
+# A repository with no commit vets nothing: a config there isn't committed.
+bare="$(new_repo nocommit)"
+printf '{}\n' > "$bare/.markdownlint-cli2.jsonc"
+printf '# Title\n' > "$bare/a.md"
+run_hook "$(edit_json "$bare/a.md")" "$STUBS:$TOOLS" "$bare"
+p=()
+[[ $STATUS -eq 0 && "$(ran markdownlint-cli2)" == 0 ]] || p+=("exit $STATUS, ran $(ran markdownlint-cli2)")
+check "a config in a repository with no commit: not linted" ${p[@]+"${p[@]}"}
+
 # --- Input that is not a file edit ----------------------------------------
 for json in '{}' '{"tool_input": {}}' '{"tool_input": {"file_path": 5}}' '{"tool_input": {"file_path": ""}}' '{"tool_input": {"file_path": null}}' '[]' '{"tool_input": "x"}'; do
   run_hook "$json"
@@ -826,6 +898,9 @@ EOF
   printf '# T\n\ntext\n' > "$real/good.md"
   printf '# T\n\n\n\ntext\n' > "$real/docs/a[1].md"
   printf '# T\n\n\n\ntext\n' > "$real/docs/x*y.md"
+  # The hook lints only under a committed config.
+  git -C "$real" add .markdownlint-cli2.jsonc
+  git -C "$real" -c user.name=t -c user.email=t@t commit --quiet -m config
   run_hook "$(edit_json "$real/bad.md")" "$REAL_PATH" "$real"
   p=()
   [[ $STATUS -eq 2 && "$STDERR" == *MD012* ]] || p+=("exit $STATUS")

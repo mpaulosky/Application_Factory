@@ -16,8 +16,10 @@ expect() {
   shift
   output="$(bash "$SCRIPT" "$@" 2>&1)"
   status=$?
+  local shown="${*: -1}"
+  if [[ "$shown" == *[[:cntrl:]]* ]]; then shown="$(printf '%q' "$shown")"; fi
   if [[ "$outcome" == allowed && $status -eq 0 && -z "$output" ]] \
-    || [[ "$outcome" == refused && $status -eq 1 && "$output" == *"'${*: -1}' does not match"* ]]; then
+    || [[ "$outcome" == refused && $status -eq 1 && "$output" == *"'${shown}' does not match"* && "$output" != *$'\n'*$'\n'* ]]; then
     PASSED=$((PASSED + 1))
     echo "ok   - $* is $outcome"
   else
@@ -47,9 +49,17 @@ expect allowed dependabot/a+b
 # The pattern is anchored at the start: dependabot/ inside another name is not a Dependabot branch.
 expect refused claude/dependabot/x
 expect refused xdependabot/a
-# The --pr form takes any dependabot/* name, as before the hook did: CI quotes it, and a PR must not fail on a character.
-expect allowed --pr dependabot/npm_and_yarn/types/node-20~1
-expect allowed --pr dependabot/
+# The --pr form takes any other dependabot/* name only from dependabot[bot]: its branch can't be renamed.
+expect allowed --pr --author 'dependabot[bot]' dependabot/npm_and_yarn/types/node-20~1
+expect allowed --pr --author 'dependabot[bot]' dependabot/
+expect refused --pr --author someone dependabot/npm_and_yarn/types/node-20~1
+expect refused --pr dependabot/npm_and_yarn/types/node-20~1
+expect refused --pr --author 'dependabot' 'dependabot/$(x)'
+expect refused --pr --author 'dependabot[bot] ' 'dependabot/$(x)'
+expect allowed --pr --author someone dependabot/nuget/all-nuget-1a2b3c
+# --author names only who opened the PR: it never lets another name through.
+expect refused --pr --author 'dependabot[bot]' claude/x
+expect refused --pr --author 'dependabot[bot]' patch-1
 # Shell-unsafe or malformed names stay refused for a push.
 expect refused dependabot/
 expect refused dependabot/a/
@@ -103,9 +113,16 @@ else
   FAILED=$((FAILED + 1))
   echo "FAIL - the script must export LC_ALL=C before its first regex match: export at line ${export_line:-none}, first match at line ${first_match:-none}"
 fi
-# The --pr form still takes them: CI quotes the name.
-expect allowed --pr 'dependabot/a|b'
-expect allowed --pr 'dependabot/aé'
+# The --pr form takes them from dependabot[bot] alone.
+expect allowed --pr --author 'dependabot[bot]' 'dependabot/a|b'
+expect allowed --pr --author 'dependabot[bot]' 'dependabot/aé'
+expect refused --pr 'dependabot/a|b'
+expect refused --pr --author someone 'dependabot/aé'
+# A refused name's control characters are printed escaped, on the one line.
+expect refused --pr $'dependabot/a\nb'
+expect refused $'claude/x\n::error::y'
+expect refused $'chore/a\e[31mb'
+
 # Branches Actions create are allowed only as a PR's head.
 for branch in docs/release-notes docs/backfill-blog-posts; do
   expect allowed --pr "$branch"

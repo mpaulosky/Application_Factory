@@ -23,7 +23,10 @@
 # (CLAUDE_PROJECT_DIR, which Claude Code sets and which is required). A file in another clone, in a directory that merely
 # names the project's .git, a symlink, or anything under node_modules is left alone, because the linters would load that
 # repository's own config and binaries, and markdownlint-cli2 runs JavaScript from its config. A project that is not a git
-# repository has nothing to lint.
+# repository has nothing to lint. In the project too, a Markdown file is linted only while every markdownlint config on its path
+# (its folder and each one above it, up to the repository root) is committed as it is: an agent could write a .cjs config, or a
+# customRules entry in any, and have this hook run it with no Bash prompt. The person is told which config, and the gate and CI
+# still lint the file.
 #
 # Exit 0: the file is clean, is missing, is not Markdown or YAML, is not in the project, or no linter for it is installed (this hook
 # only helps; the commit hook and the gate still check). A skipped linter is reported as a systemMessage on stdout, which
@@ -179,9 +182,33 @@ local_bin() {
   fi
 }
 
+# unvetted_config: prints the first markdownlint-cli2 config (or package.json, which can hold one) on the file's path that git doesn't
+# hold as committed: untracked, ignored, staged or changed since HEAD, or in a repository with no commit. Returns 1 when there is none.
+unvetted_config() {
+  local at="$dir" name path relp
+  while :; do
+    for name in .markdownlint-cli2.jsonc .markdownlint-cli2.yaml .markdownlint-cli2.cjs .markdownlint-cli2.mjs \
+      .markdownlint.jsonc .markdownlint.json .markdownlint.yaml .markdownlint.yml .markdownlint.cjs .markdownlint.mjs package.json; do
+      path="$at/$name"
+      [[ -e "$path" || -L "$path" ]] || continue
+      relp="${path#"$root"/}"
+      if ! git -C "$root" ls-files --error-unmatch -- ":(literal)$relp" > /dev/null 2>&1 \
+        || ! git -C "$root" diff --quiet HEAD -- ":(literal)$relp" > /dev/null 2>&1; then
+        printf '%s' "$relp"
+        return 0
+      fi
+    done
+    [[ "$at" != "$root" ]] || return 1
+    at="${at%/*}"
+  done
+}
+
+unvetted=""
 if [[ "$kind" == markdown ]]; then
   bin="$(local_bin markdownlint-cli2)"
-  if [[ -z "$bin" ]]; then
+  if unvetted="$(unvetted_config)"; then
+    :
+  elif [[ -z "$bin" ]]; then
     skipped+=("markdownlint-cli2")
   else
     # --no-globs: the path is a file name, even if it holds [ ] or *. The config's ignores still apply to it.
@@ -228,6 +255,12 @@ if ((${#failures[@]} > 0)); then
     echo "If this output is not about the content of $rel (a usage error, a missing library), a linter is too old or misconfigured: tell the person instead of retrying."
   } >&2
   exit 2
+fi
+
+if [[ -n "$unvetted" ]]; then
+  python3 -I -c 'import json, sys; print(json.dumps({"systemMessage": sys.argv[1]}))' \
+    "lint-edited-file.sh: $rel was not linted: its markdownlint config $unvetted isn't committed as it is, and a config can load JavaScript. Commit it (or undo the change) and edit the file again; the gate and CI still check it."
+  exit 0
 fi
 
 if ((${#skipped[@]} > 0)); then

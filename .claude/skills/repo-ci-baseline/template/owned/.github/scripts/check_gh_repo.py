@@ -1106,10 +1106,16 @@ HINT = ("check_gh_repo.py: export GH_REPO before the first gh command in a scrip
 
 
 def main(argv):
+    """Exit 0 when every gh command is told its repository, 1 when one isn't (and prints it), 2 when the check can't run: a bad usage,
+    no usable shfmt, or a file or folder it can't read or decode, which must never read as 1."""
     try:
         return run(argv)
     except ShfmtError as error:
         print(f"check_gh_repo.py: {error}", file=sys.stderr)
+        return 2
+    except (OSError, UnicodeError) as error:
+        where = getattr(error, "filename", None)
+        print(f"check_gh_repo.py: can't read {for_log(str(where)) if where else 'a file'}: {for_log(str(error))}", file=sys.stderr)
         return 2
 
 
