@@ -369,7 +369,8 @@ o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_
 check "a push URL's non-ASCII bytes are printed as ?" "[[ $st == 1 ]] && ! LC_ALL=C grep -q '[^ -~]' <<<\"\$(grep -o 'push URL ([^)]*)' <<<\"\$o\")\" && grep -qF 'push URL (https://evil.com/??2K???git.example.com/acme/r)' <<<\"\$o\""
 o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS=$'https://SECRET@git.example.com/\xc2\x9bother/r' bash scripts/cleanup.sh --dry-run 2>&1); st=$?
 check "a masked push URL's non-ASCII bytes are printed as ? too" "[[ $st == 1 ]] && ! grep -q SECRET <<<\"\$o\" && grep -qF 'push URL (https://***@git.example.com/??other/r)' <<<\"\$o\""
-check "the git shim splits push URLs in the C locale" "grep -qF \"| LC_ALL=C tr ';'\" '$SCRIPTS/tests/cleanup.test.sh'"
+# Only the shim's own line: it starts with "if [[", which this check's line does not, and [|] is no | in this line's text.
+check "the git shim splits push URLs in the C locale" "grep -Eq '^if .*remote get-url --push --all origin.*[|] LC_ALL=C tr ' '$SCRIPTS/tests/cleanup.test.sh'"
 check "shown_url matches in the C locale" "sed -n '/^shown_url() {/,/^}/p' scripts/cleanup.sh | grep -qx '  local LC_ALL=C'"
 # An @ after the host, in the path, is not userinfo: such a URL is printed as it is.
 o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS="https://git.example.com/other/r@x" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
