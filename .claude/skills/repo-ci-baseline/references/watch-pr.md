@@ -99,7 +99,7 @@ as MEMBER, not OWNER, so the session's own replies wouldn't count as its own the
   (a push between pages) or whose own rollup is of another commit is an incomplete read, a failed poll (never a quiet one) whose message says which; five in a row end the
   watcher with exit 2. Each page costs one more GraphQL point, so a long PR costs a poll one point per 100 items, and the wait after the poll grows with them (`WATCH_PR_BUDGET`, above).
   A list's pages are kept in a file and put together once, after its last page, with the repeated ids found in one pass, so reading a list takes time
-  linear in its items, never in the square of its pages. A cursor is checked against the cursors that list was read from, so two lists GitHub hands the same cursor each read it.
+  linear in its items, never in the square of its items or its pages. A cursor is checked against the cursors that list was read from, so two lists GitHub hands the same cursor each read it.
   A merged or closed PR is reported from its state alone, though its lists must still be arrays. The checks come from the PR's own
   `statusCheckRollup`, and only while it is of `headRefOid`; the last of the PR's commits needn't be the head, and the head ref (in the head repository) isn't read,
   so a fork PR is watched. A PR with no rollup yet has no check reported and is quiet, unless GitHub calls it `UNSTABLE` (a check failed):

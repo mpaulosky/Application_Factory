@@ -175,6 +175,23 @@ run_env() { # run_env <VAR=value>... -- <args...>
   status=$?
   err="$(<"$work/err")"
 }
+# run_bounded <seconds> <VAR=value>... -- <args...>: run_env, killed after <seconds> with status 124, by a watchdog in plain bash (GNU timeout
+# isn't on macOS). The watchdog's own sleep is the real one: the fake is only on the watcher's PATH.
+run_bounded() {
+  local secs="$1" pid dog
+  shift
+  local -a vars=()
+  while [[ "$1" != "--" ]]; do vars+=("$1"); shift; done
+  shift
+  (cd "$repo" && exec env "${vars[@]}" PATH="$fakebin:$PATH" bash "$SCRIPT" "$@") >"$work/out" 2>"$work/err" &
+  pid=$!
+  (command sleep "$secs" && kill "$pid") >/dev/null 2>&1 &
+  dog=$!
+  wait "$pid" && status=0 || status=$?
+  if kill -0 "$dog" 2>/dev/null; then kill "$dog" 2>/dev/null || true; else status=124; fi
+  out="$(<"$work/out")"
+  err="$(<"$work/err")"
+}
 polls() { grep -c '^GH_REPO=' "$GH_LOG"; }
 sleeps() { grep -c . "$SLEEP_LOG"; }
 
@@ -1150,7 +1167,18 @@ check "a page that can't be read, five polls in a row: exit 2" status_is 2
 check "each failed poll of 8 queries waits 288 s" test "$(grep -vcx 288 "$SLEEP_LOG")" -eq 0
 check "four waits between the five failed polls" sleeps_are 4
 
-for bad in 0 soon 1000000000 -5; do
+for good in 1 999999999; do
+  new_repo
+  run_env WATCH_PR_BUDGET="$good" -- --once 7
+  check "WATCH_PR_BUDGET=$good is a budget: quiet, exit 1" status_is 1
+  check "WATCH_PR_BUDGET=$good: one poll" polls_are 1
+done
+# A budget of 1 point an hour still waits its share: a poll of one query, 3600 s.
+new_repo
+run_env WATCH_PR_BUDGET=1 -- --interval 60 --timeout 60 7
+check "WATCH_PR_BUDGET=1: a poll of one query waits 3600 s" test "$(cat "$SLEEP_LOG")" = 3600
+
+for bad in 0 01 soon 1000000000 -5; do
   new_repo
   run_env WATCH_PR_BUDGET="$bad" -- --once 7
   check "WATCH_PR_BUDGET=$bad: exit 2" status_is 2
@@ -1244,24 +1272,43 @@ quiet "threads and comments that share a cursor"
 check "a cursor two lists share is not one already read from" not err_has "already read from"
 check "the shared cursor is read once per list" test "$(grep -c 'cursor=X' "$GH_LOG")" -eq 2
 
-# A list of hundreds of pages is read in time linear in its items, never in the square of its pages: 300 pages of 100 comments after the
-# first (30,000 comments, each on a page of its own cursor) are read whole within the time bound, quiet, and no poll fails.
+# A list of hundreds of pages is read in time linear in its items, never in the square of its items or its pages: 300 pages of 400 comments
+# after the first (120,000 comments, each page of its own cursor; GitHub gives 100 a page, the fake any number) are read whole within the time
+# bound, quiet, and no poll fails. A merge in the square of the items takes minutes here.
 pages_repo
 pr '{"comments":{"pageInfo":{"hasPreviousPage":true,"startCursor":"P1"},"nodes":[]}}'
 jq -nc --argjson owner "$OWNER" '
   range(1; 301) as $p
   | {data: {repository: {pullRequest: {comments: {
       pageInfo: {hasPreviousPage: ($p < 300), startCursor: (if $p < 300 then "P\($p + 1)" else null end)},
-      nodes: [range(0; 100) as $i | {id: "IC_\($p)_\($i)", author: $owner, authorAssociation: "OWNER",
+      nodes: [range(0; 400) as $i | {id: "IC_\($p)_\($i)", author: $owner, authorAssociation: "OWNER",
                                      body: "page \($p) item \($i)\n<!-- claude-session -->"}]}}}}}' \
   | { p=0; while IFS= read -r line; do p=$((p + 1)); printf '%s\n' "$line" > "$GH_PAGES_DIR/P$p.json"; done; }
-out="$(cd "$repo" && GH_PAGE_LIMIT=400 PATH="$fakebin:$PATH" timeout 120 bash "$SCRIPT" --once 7 2>"$work/err")"
-status=$?
-err="$(<"$work/err")"
-check "300 pages of comments are read within 120 seconds (not timed out)" not status_is 124
+run_bounded 60 GH_PAGE_LIMIT=400 -- --once 7
+check "300 pages of 400 comments are read within 60 seconds (not timed out)" not status_is 124
 quiet "300 pages of the session's own comments"
 check "each of the 300 pages is read once" test "$(grep -c 'cursor=' "$GH_LOG")" -eq 300
 check "300 pages are no failed poll" not err_has "failed"
+
+# The watchdog itself: a watcher that runs past the bound is stopped with status 124, and one that ends first keeps its own status.
+new_repo
+run_bounded 1 WATCH_PR_INTERVAL=1 -- 7
+check "a run past run_bounded's bound is status 124" status_is 124
+new_repo
+run_bounded 60 -- --once 7
+check "a run inside run_bounded's bound keeps its own status" status_is 1
+
+# Two lists paged, each with something on its page: each list's merge holds only its own pages, so the poll prints exactly the two events.
+pages_repo
+pr '{"reviewThreads":{"pageInfo":{"hasNextPage":true,"endCursor":"T1"},"nodes":[]},"comments":{"pageInfo":{"hasPreviousPage":true,"startCursor":"C1"},"nodes":[]},"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true,"endCursor":"K1"},"nodes":[]}}}'
+page T1 threads "$UNRESOLVED" false
+page C1 comments "[{\"id\":\"IC_own\",\"author\":$PERSON,$PA\"body\":\"a paged comment\"}]" false
+page K1 checks "$PASSING" false
+run --once 7
+check "two paged lists with an event each: two lines" out_line_count_is 2
+check "the thread is reported" out_has "watch-pr: thread: reviewer: on page two"
+check "the comment is reported" out_has "watch-pr: comment: reviewer: a paged comment"
+check "no list's pages reach another's merge" out_lacks "unknown"
 
 # Every page query asks for what the merge reads, with balanced braces (the fake gh doesn't read the query, so pin its text).
 pages_repo

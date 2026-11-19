@@ -212,7 +212,7 @@ trap 'command rm -f "$errfile" "$pagefile" "$nodesfile"' EXIT
 # never end). There is no cap on the pages: a list is read until GitHub says it has no more. A page goes
 # through a file, not an argument: 100 comment bodies can pass the argument length limit. Each page's nodes are kept in a file and put into $resp
 # once, after the list's last page, and the ids are kept once in a keyed set, so reading a list costs time linear in its items, never in the
-# square of its pages. Pages are read at different moments, so a list
+# square of its items or its pages. Pages are read at different moments, so a list
 # that shifts between them (a comment deleted, a check re-run) can be read without an item for one poll; the next poll reads it afresh.
 read_rest() {
   local list path flag cur_field order pages cursor query head_oid used info
@@ -272,15 +272,18 @@ read_rest() {
     done
     if ((pages == 0)); then continue; fi
     # Threads and checks: the first answer's, then each page's. Reviews and comments: the pages from the oldest (the last read), then the first
-    # answer's, each id kept at its first place in that order (a null id is always kept), found in one pass with a set of the ids kept.
+    # answer's, each id kept at its first place in that order (a null id is always kept), found in one pass with a set of the ids kept. The pass
+    # is a foreach that emits each node it keeps, never an array appended to in its state: jq copies such an array on every append, which is
+    # time in the square of the items.
     if ! resp="$(printf '%s' "$resp" | jq -c --slurpfile pages "$nodesfile" --argjson info "$info" --arg order "$order" "
         .data.repository.pullRequest$path |= (.pageInfo = \$info
           | .nodes = (if \$order == \"after\" then .nodes + [\$pages[][]]
-              else [(\$pages | reverse)[][], .nodes[]]
-                | reduce .[] as \$n ({kept: {}, nodes: []};
-                    (\$n.id | tojson) as \$key
-                    | if \$n.id != null and .kept[\$key] then . else .nodes += [\$n] | if \$n.id != null then .kept[\$key] = true else . end end)
-                | .nodes end))")"; then
+              else [foreach ((\$pages | reverse)[][], .nodes[]) as \$n ({kept: {}, keep: false};
+                  (\$n.id | tojson) as \$key
+                  | if \$n.id == null then .keep = true
+                    elif .kept[\$key] then .keep = false
+                    else .kept[\$key] = true | .keep = true end;
+                  if .keep then \$n else empty end)] end))")"; then
       reason="the PR's $list could not be put together"
       return 1
     fi
