@@ -238,7 +238,8 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
 - **Triggers**, each a moment a condition can become true: `push` to `main` (it leaves every open PR `BEHIND`, so it sweeps them;
   GitHub reports `UNKNOWN` merge states right after, so each PR is asked again up to four times, 5 s apart),
   `pull_request_target` (opened, ready_for_review, reopened, edited, synchronize, and unlabeled for the hand-back label),
-  `workflow_run` completion of every workflow that owns a required check, of **PR Review Submitted** and of **Claude Review**,
+  `workflow_run` completion of every Template workflow that runs on `pull_request` for more than `closed` (Owned files and Copilot Review Sync
+  among them, since either may be the last to finish; `test_pr_automerge_triggers.py` checks it), of **PR Review Submitted** and of **Claude Review**,
   a schedule (resolving a thread has no Actions trigger), and `workflow_dispatch` from `main`.
 - **PR Review Submitted** (`pr-review-submitted.yml`) runs on `pull_request_review: submitted` with no permissions and does nothing.
   Its completion fires this workflow's `workflow_run`, which runs main's copy.
@@ -315,7 +316,8 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
 ## Adapting
 
 - **Survey whether the repo's auto-merge waits for review.** IssueManager's armed native auto-merge and merged on `CLEAN` alone; its #231 merged with an open Copilot thread.
-- `workflow_run.workflows` lists every workflow that owns a required check, by its `name:` (including `PR Title`), plus `PR Review Submitted`.
+- `workflow_run.workflows` lists every Template workflow that runs on `pull_request` for more than `closed`, by its `name:` (including `PR Title`), plus
+  `PR Review Submitted`; `test_pr_automerge_triggers.py` checks the Template's, and leaves an Application's own workflows alone.
   A repo whose ruleset requires a check from a workflow outside the Template needs that workflow in the list: Template first.
 - **Land the Standardize PR by hand, held as a draft.** The old workflow on `main` still runs on it and would arm auto-merge the moment its checks pass; drafts are the one state it skips.
   Open the PR as a draft, request Copilot's review with `gh pr edit <n> --add-reviewer @copilot`, and resolve every thread.

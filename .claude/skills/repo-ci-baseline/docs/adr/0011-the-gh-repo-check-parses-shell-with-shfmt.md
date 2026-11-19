@@ -1,7 +1,8 @@
 # The gh repository check parses shell with shfmt
 
 **Status:** accepted (mpaulosky/Application_Factory#52). Implemented in `template/owned/.github/scripts/check_gh_repo.py` (`parse`, `parse_prefix`, `Shape`, `untold`), its tests in
-`tests/gh_repo/`, the Owned `ci.yml`'s `gh-repo` and `hook-tests` jobs, the Seed `.sandcastle/Dockerfile` and the Factory's `.github/actions/template-tools/`
+`template/owned/.github/scripts/tests/` (shipped with it) and `tests/gh_repo/` (the Factory-only ones), the Owned `ci.yml`'s `gh-repo`, `python-tests` and
+`hook-tests` jobs, the Seed `.sandcastle/Dockerfile` and the Factory's `.github/actions/template-tools/`
 ([gotchas.md](../../references/gotchas.md), "Tell every `gh` command its repository").
 
 ## Context
@@ -14,7 +15,7 @@ backticks, a `${...}` holding a quote, a `}` or a `)`, quotes nested past 50 lev
 read as code, and chains of more than 100 continued lines. Some of these misread in the fail-open direction: an export the scanner trusted that bash never runs.
 
 The check runs in three places in every Application: `scripts/gate.sh` on the developer's machine, CI's `gh-repo` job (the base branch's copy, under `python3 -I`), and
-Sandcastle's sandbox, which runs the gate.
+Sandcastle's sandbox, which runs the gate. CI's `python-tests` job runs the checker too, through its tests in `.github/scripts/tests/`.
 
 ## Considered options
 
@@ -32,8 +33,9 @@ Sandcastle's sandbox, which runs the gate.
   branches, subshells, pipes and continuations come from shfmt. The rules about a single `gh` command (its subcommand, its `GH_REPO=` prefix, a wrapper such as `sudo`
   before it) stay as they were, applied to the words of the command the tree puts the `gh` in.
 - **shfmt is a requirement wherever the check runs,** v3.14 or a later v3 release: the checker was written and tested against v3.14's JSON,
-  and a new major version may change its shape. CI's `gh-repo` job and its `hook-tests` job (whose `pre-push.test.sh` runs the gate), and the Seed Sandcastle
-  `Dockerfile`, install the v3.14.1 release binary, checked against the SHA-256 GitHub publishes for it; `test.sh` checks that every one of them pins the same release.
+  and a new major version may change its shape. CI's `gh-repo` job, its `hook-tests` job (whose `pre-push.test.sh` runs the gate) and its `python-tests` job
+  (which runs the checker's tests), and the Seed Sandcastle `Dockerfile`, install the v3.14.1 release binary, checked against the SHA-256 GitHub publishes
+  for it; `test.sh` checks that every one of them pins the same release.
   The Factory's `template-tools` action installs the same release only so `test.sh` and the Template's tests can run: the Factory's own gate runs no gh check, so
   this adds no Baseline piece to the Factory. A developer installs shfmt with their package manager or from the release binaries. Without shfmt, or with one
   older or newer, the checker fails with exit 2 and says which it found: the gate can't pass a script it didn't read. A tree of another shape than the checker reads

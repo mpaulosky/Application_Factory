@@ -56,6 +56,8 @@ reapply="$skill/reapply.sh"
 # {headRefOid, isCrossRepository}; the real jq runs on the --jq argument. While
 # $stub/all-fails exists, listing them fails. While $stub/open-cross exists, the open PR
 # lists as a fork's (isCrossRepository true). $stub/open must hold a number.
+# The repo starts each case without any label: `pr edit --add-label <l>` and `pr create --label <l>` fail as gh
+# does ("could not add label: '<l>' not found") unless a `label create <l>` is in $stub/gh.log before them.
 mkdir -p "$work/bin"
 cat > "$work/bin/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -64,6 +66,16 @@ printf '%s\n' "$*" >> "$stub/gh.log"
 body_from() { while [[ $# -gt 0 ]]; do [[ "$1" == --body-file ]] && cp "$2" "$stub/body"; shift; done; }
 arg_after() { local flag="$1"; shift; while [[ $# -gt 0 ]]; do [[ "$1" == "$flag" ]] && { printf '%s' "$2"; return; }; shift; done; }
 logins_json() { jq -Rn '[inputs | select(length > 0)]'; }
+# A label added by pr edit or pr create must have been made first, as on GitHub.
+label_made_or_fail() {
+  local l
+  l="$(arg_after "$1" "${@:2}")"
+  [[ -z "$l" ]] && return 0
+  # gh.log's last line is this call; a label create before it made the label.
+  if ! sed '$d' "$stub/gh.log" | grep -q "^label create $l "; then
+    echo "could not add label: '$l' not found" >&2; exit 1
+  fi
+}
 case "$1 $2" in
   "pr list")
     case "$*" in
@@ -81,7 +93,9 @@ case "$1 $2" in
         if [[ -e "$stub/all-fails" ]]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi
         if [[ -s "$stub/all-prs" ]]; then jq -r "$(arg_after --jq "$@")" "$stub/all-prs"; fi ;;
     esac ;;
-  "pr create") body_from "$@"; echo "https://github.com/acme/Widget/pull/7" ;;
+  "pr create") label_made_or_fail --label "$@"; body_from "$@"; echo "https://github.com/acme/Widget/pull/7" ;;
+  "label create")
+    if [[ -e "$stub/label-fails" ]]; then echo "HTTP 403: Resource not accessible" >&2; exit 1; fi ;;
   "pr view")
     if [[ "$*" == *"--json headRefOid,reviewRequests,reviews,url"* ]]; then
       if [[ -e "$stub/requests" ]]; then requests="$(logins_json < "$stub/requests")"
@@ -107,6 +121,7 @@ case "$1 $2" in
     jq --arg b "$text" '. + [{author: {login: "acme"}, body: $b}]' "$stub/comments.json" > "$stub/comments.tmp"
     mv "$stub/comments.tmp" "$stub/comments.json" ;;
   "pr edit")
+    label_made_or_fail --add-label "$@"
     body_from "$@"
     if [[ "$*" == *"--add-reviewer"* && -e "$stub/already" ]]; then
       echo "reviewer already requested" >&2; exit 1
@@ -126,7 +141,8 @@ git_q() { git -c core.hooksPath=/dev/null "$@"; }
 reset_gh() {
   : > "$stub/gh.log"; : > "$stub/open"; : > "$stub/merged"; : > "$stub/all-prs"; echo '[]' > "$stub/comments.json"
   command rm -f "$stub/already" "$stub/dropped" "$stub/request-fails" "$stub/requests" "$stub/reviews" \
-    "$stub/comment-fails" "$stub/comments-fail" "$stub/comment-body" "$stub/merged-fails" "$stub/all-fails" "$stub/open-cross"
+    "$stub/comment-fails" "$stub/comments-fail" "$stub/comment-body" "$stub/merged-fails" "$stub/all-fails" "$stub/open-cross" \
+    "$stub/label-fails"
 }
 
 # ── The repo: a bare origin, its primary checkout on main, and a helper clone
@@ -143,6 +159,11 @@ git_q -C "$repo" push -q origin main
 hub="$work/hub"
 git_q clone -q "$origin" "$hub"
 wt="$work/Widget-worktrees/chore-reapply-baseline"
+
+# Every label gh was asked to add is baseline:apply: reapply.sh never adds review:claude (or any other).
+only_apply_label() {
+  ! grep -oE -- '--(add-)?label[= ][^ ]+' "$stub/gh.log" | grep -qvxE -- '--(add-)?label[= ]baseline:apply'
+}
 
 # ── A first run: a fresh worktree, the Apply commit, a new PR ───────────────
 reset_gh
@@ -167,6 +188,11 @@ check "first run: body names the local head" 'grep -q "\`$head\` Apply commit" "
 check "first run: body has its sections and footer" \
   'grep -q "^## Why" "$stub/body" && grep -q "^## What changed" "$stub/body" && grep -q "^## Verification" "$stub/body" && [[ "$(tail -n1 "$stub/body")" == "🤖 Generated with [Claude Code](https://claude.com/claude-code)" ]]'
 check "first run: Copilot requested" 'grep -qx "pr edit 7 --add-reviewer @copilot" "$stub/gh.log"'
+# owned-files.yml exempts an Apply PR from the Owned files check only with baseline:apply (R20).
+label_args="$(jq -r '.[] | select(.name == "baseline:apply") | "--color \(.color) --description \(.description)"' "$skill_dir/github/labels.json")"
+check "first run: labels.json has the baseline:apply label" '[[ -n "$label_args" ]]'
+check "first run: the label is made, as labels.json has it" 'grep -qxF "label create baseline:apply $label_args --force" "$stub/gh.log"'
+check "first run: the PR is opened with the label" 'grep -q "^pr create .* --label baseline:apply$" "$stub/gh.log"'
 check "first run: Copilot's request read back" 'grep -q "^pr view 7 --json headRefOid,reviewRequests,reviews,url" "$stub/gh.log"'
 check "first run: reports the local head" 'grep -q "head $head" <<< "$out"'
 
@@ -178,6 +204,20 @@ out="$("$reapply" --brings '#82' "$repo" 2>&1)" && rc=0 || rc=$?
 check "no change: succeeds and says so" '[[ $rc -eq 0 ]] && grep -q "already matches the Template" <<< "$out"'
 check "no change: no commit" '[[ "$(git -C "$wt" rev-parse HEAD)" == "$before" ]]'
 check "no change: no push" '[[ "$(wc -l < "$stub/push.log")" -eq 1 ]]'
+check "no change: the open PR still gets the label" 'grep -qx "pr edit 7 --add-label baseline:apply" "$stub/gh.log"'
+
+# ── Nothing new, an open PR, and a repo without the label (R1): it is made before the PR is labelled ──
+reset_gh
+echo 7 > "$stub/open"
+before="$(git -C "$wt" rev-parse HEAD)"
+out="$("$reapply" --brings '#82' "$repo" 2>&1)" && rc=0 || rc=$?
+check "no change, no label yet: exits 0 and says it already matches" \
+  '[[ $rc -eq 0 ]] && grep -q "already matches the Template; nothing to commit or push" <<< "$out" || { echo "$out" >&2; false; }'
+check "no change, no label yet: the label is made before the PR is labelled" \
+  '[[ "$(grep -n "^label create baseline:apply " "$stub/gh.log" | head -n1 | cut -d: -f1)" -lt "$(grep -nx "pr edit 7 --add-label baseline:apply" "$stub/gh.log" | cut -d: -f1)" ]]'
+check "no change, no label yet: the label is made once" '[[ "$(grep -c "^label create " "$stub/gh.log")" -eq 1 ]]'
+check "no change, no label yet: no commit, no push" \
+  '[[ "$(git -C "$wt" rev-parse HEAD)" == "$before" && "$(wc -l < "$stub/push.log")" -eq 1 ]]'
 
 # ── Uncommitted work: refused, nothing touched ──────────────────────────────
 echo wip > "$wt/wip.txt"
@@ -215,6 +255,19 @@ check "open PR: description gains the Apply line before the footer" \
   '[[ "$(grep -n "\`$head\` Apply commit.*mpaulosky/Other#82" "$stub/body" | cut -d: -f1)" -lt "$(grep -n "Generated with" "$stub/body" | cut -d: -f1)" ]]'
 check "open PR: earlier description kept" 'grep -q "pr #7 description" "$stub/body"'
 check "open PR: Copilot requested" 'grep -qx "pr edit 7 --add-reviewer @copilot" "$stub/gh.log"'
+check "open PR: the description edit adds the label" 'grep -q "^pr edit 7 --body-file .* --add-label baseline:apply$" "$stub/gh.log"'
+
+# ── The label can't be made: nothing is pushed, no PR is touched ───────────
+reset_gh
+echo 7 > "$stub/open"
+touch "$stub/label-fails"
+pushes="$(wc -l < "$stub/push.log")"
+printf 'name: CI label\n' > "$skill/template/owned/.github/workflows/ci.yml"
+out="$("$reapply" --brings '#83' "$repo" 2>&1)" && rc=0 || rc=$?
+check "label fails: exits non-zero, past the worktree checks" '[[ $rc -ne 0 ]] && grep -q "^label create baseline:apply" "$stub/gh.log"'
+check "label fails: nothing pushed" '[[ "$(wc -l < "$stub/push.log")" -eq "$pushes" ]]'
+check "label fails: no PR opened or edited" '! grep -q "^pr \(create\|edit\)" "$stub/gh.log"'
+command rm -f "$stub/label-fails"
 
 # ── A failed push: the log is named, no PR is touched ───────────────────────
 reset_gh
@@ -268,7 +321,7 @@ touch "$stub/dropped"
 printf 'name: CI v5\n' > "$skill/template/owned/.github/workflows/ci.yml"
 out="$("$reapply" --brings '#85' "$repo" 2>&1)" && rc=0 || rc=$?
 check "dropped: exits 0" '[[ $rc -eq 0 ]] || { echo "$out" >&2; false; }'
-check "dropped: never adds review:claude" '! grep -q -- "--add-label" "$stub/gh.log"'
+check "dropped: never adds review:claude" 'only_apply_label'
 check "dropped: warns that Copilot wasn't requested and land.sh adds review:claude once checks are green" \
   'grep -q "warning: Copilot.s review request didn.t register on #7 (GitHub drops it once the Copilot code review budget is used up); land.sh adds review:claude once its checks are green: land.sh acme/Widget#7" <<< "$out"'
 check "dropped: does not claim Copilot was requested" '! grep -q "Copilot requested" <<< "$out"'
@@ -283,7 +336,7 @@ touch "$stub/request-fails"
 printf 'name: CI v7\n' > "$skill/template/owned/.github/workflows/ci.yml"
 out="$("$reapply" --brings '#85' "$repo" 2>&1)" && rc=0 || rc=$?
 check "request fails: exits 0" '[[ $rc -eq 0 ]] || { echo "$out" >&2; false; }'
-check "request fails: never adds review:claude" '! grep -q -- "--add-label" "$stub/gh.log"'
+check "request fails: never adds review:claude" 'only_apply_label'
 check "request fails: warns with gh's message" \
   'grep -q "warning: requesting Copilot.s review on #7 failed: GraphQL: Could not add requested reviewers" <<< "$out"'
 check "request fails: names land.sh as the next step" 'grep -q "next: land.sh acme/Widget#7" <<< "$out"'
@@ -330,7 +383,7 @@ check "ask record, request dropped: one comment posted on #7" '[[ "$(comments_po
 check "ask record, request dropped: the comment is landing.py's ask comment, marker included" \
   '[[ "$(cat "$stub/comment-body" 2>/dev/null)" == "$expected_comment" && "$expected_comment" == *"$marker" ]]'
 check "ask record, request dropped: the record is by the owner and counts once" '[[ "$(marker_comments)" -eq 1 ]]'
-check "ask record, request dropped: still never adds review:claude" '! grep -q -- "--add-label" "$stub/gh.log"'
+check "ask record, request dropped: still never adds review:claude" 'only_apply_label'
 check "ask record, request dropped: the warning says the ask is recorded and land.sh adds review:claude" \
   'grep -q "didn.t register on #7" <<< "$out" && grep -qi "recorded" <<< "$out" && grep -q "land.sh acme/Widget#7" <<< "$out"'
 # Same PR, run again with the record in place: not posted twice.
@@ -379,7 +432,7 @@ check "ask record: a failed post warns with gh's message" \
 check "ask record: a failed post still names land.sh as the next step" 'grep -q "next: land.sh acme/Widget#7" <<< "$out"'
 reset_gh; echo 7 > "$stub/open"; touch "$stub/dropped" "$stub/comments-fail"; rerun
 check "ask record: an unreadable comment list counts as no record, so the record is posted" '[[ $rc -eq 0 && "$(comments_posted)" -eq 1 ]]'
-check "ask record: an unreadable comment list never adds review:claude" '! grep -q -- "--add-label" "$stub/gh.log"'
+check "ask record: an unreadable comment list never adds review:claude" 'only_apply_label'
 
 # A new PR whose request is dropped gets the record too (the first PR of a repo).
 # (the old branch's work counts as merged, so this run starts a new branch and PR)

@@ -1,8 +1,18 @@
 #!/usr/bin/env bash
-# Claude Code's PostToolUse hook for Edit, Write and MultiEdit (.claude/settings.json): lints the Markdown or YAML file
-# the tool just wrote, so a violation is fixed in the same turn and not found by the commit hook, the gate, CI or a reviewer.
+# A Claude Code PostToolUse hook for Edit, Write and MultiEdit: lints the Markdown or YAML file the tool just wrote, so a
+# violation is fixed in the same turn and not found by the commit hook, the gate, CI or a reviewer.
 #
 #   scripts/lint-edited-file.sh            (Claude Code passes the tool call as JSON on stdin)
+#
+# The Template ships this script, not the settings file that runs it: an Application wires it in its own .claude/settings.json,
+# with this entry under "hooks" (the Application Factory's own .claude/settings.json holds the same one):
+#
+#   "PostToolUse": [
+#     {
+#       "matcher": "Edit|Write|MultiEdit",
+#       "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/lint-edited-file.sh" }]
+#     }
+#   ]
 #
 # Markdown: markdownlint-cli2 with the repo's .markdownlint-cli2.jsonc, which the pre-commit hook, the gate and CI use too.
 # YAML: yamllint with the repo's .yamllint.yml. A workflow (.github/workflows/*.yml, at the repo root or under any folder, such as the Factory's Template
@@ -15,7 +25,7 @@
 # repository's own config and binaries, and markdownlint-cli2 runs JavaScript from its config. A project that is not a git
 # repository has nothing to lint.
 #
-# Exit 0: the file is clean, is not Markdown or YAML, is not in the project, or no linter for it is installed (this hook
+# Exit 0: the file is clean, is missing, is not Markdown or YAML, is not in the project, or no linter for it is installed (this hook
 # only helps; the commit hook and the gate still check). A skipped linter is reported as a systemMessage on stdout, which
 # Claude Code shows to the person. Exit 2: a linter reported a violation; its output goes to stderr, which Claude Code feeds
 # back to the agent. Exit 1: the hook could not run (python3 missing, CLAUDE_PROJECT_DIR unset, bad JSON, or, for a Markdown or YAML file, git missing or older than 2.36); Claude Code shows that to the
@@ -40,14 +50,21 @@ if [[ -z "${CLAUDE_PROJECT_DIR:-}" ]]; then
 fi
 
 # The file the tool wrote. Edit, Write and MultiEdit all name it file_path. A JSON error is an error, not "nothing to lint".
-# surrogateescape keeps a path with a lone surrogate from failing the write.
+# JSON can hold a lone surrogate (U+D800..U+DFFF), which UTF-8 cannot encode. U+DC80..U+DCFF become the raw bytes 0x80..0xFF
+# (Python's surrogateescape); any other lone surrogate becomes its three-byte UTF-8 form (surrogatepass). So every path is
+# written; one that names no file is not linted (exit 0), as for any missing file.
 # The sentinel x keeps a trailing newline in the name: "a.md<newline>" is not "a.md".
 if ! file="$(python3 -I -c '
-import json, sys
+import codecs, json, sys
+def lone_surrogate(err):
+    chars = err.object[err.start:err.end]
+    out = b"".join(bytes([ord(c) - 0xDC00]) if 0xDC80 <= ord(c) <= 0xDCFF else c.encode("utf-8", "surrogatepass") for c in chars)
+    return out, err.end
+codecs.register_error("lone_surrogate", lone_surrogate)
 data = json.load(sys.stdin)
 tool_input = data.get("tool_input") if isinstance(data, dict) else None
 path = tool_input.get("file_path") if isinstance(tool_input, dict) else None
-sys.stdout.buffer.write(path.encode("utf-8", "surrogateescape") if isinstance(path, str) else b"")
+sys.stdout.buffer.write(path.encode("utf-8", "lone_surrogate") if isinstance(path, str) else b"")
 '; rc=$?; printf x; exit "$rc")"; then
   echo "lint-edited-file.sh: could not read the edited file path from the hook input, so the file was not linted." >&2
   exit 1

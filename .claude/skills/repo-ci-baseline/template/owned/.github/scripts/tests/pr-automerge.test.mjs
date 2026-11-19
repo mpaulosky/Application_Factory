@@ -2786,7 +2786,8 @@ test("still waits on a github-actions thread outside a Claude review while the r
 test("follows Claude Review's runs", () => {
   const workflow = readFileSync(WORKFLOW, "utf8");
 
-  assert.match(workflow, /workflows: \[[^\]]*"Claude Review"[^\]]*\]/);
+  // The list is a block sequence, one name a line, under workflow_run's workflows:.
+  assert.match(workflow, /\n  workflow_run:\n    workflows:\n(?:      - "[^"\n]+"\n)*      - "Claude Review"\n/);
 });
 
 test("waits on a Claude review of the head with findings outside the diff", async () => {

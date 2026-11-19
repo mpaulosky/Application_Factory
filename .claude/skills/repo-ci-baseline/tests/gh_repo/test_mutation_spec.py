@@ -1,5 +1,5 @@
 """mutations.json is the scanner's mutation spec for the hardening-review skill's mutate.py (run it by hand: see CLAUDE.md). A full run
-takes about a minute and edits the tree, so the gate only checks that the spec still fits the code: each mutation's `old` occurs
+takes about five minutes and edits the tree, so the gate only checks that the spec still fits the code: each mutation's `old` occurs
 exactly once in its file (the runner reports NOT FOUND or AMBIGUOUS otherwise), changes something, and leaves a file that still compiles
 (a mutant that doesn't compile would be "caught" by every test).
 """
@@ -14,9 +14,13 @@ ROOT = HERE.parents[4]
 SPEC = json.loads((HERE / "mutations.json").read_text())
 
 
-def test_the_spec_runs_this_directorys_tests_and_has_mutations():
-    tests = [part for part in SPEC["test"] if part.endswith("test_check_gh_repo.py")]
-    assert len(tests) == 1 and (ROOT / tests[0]).is_file()
+# The checker's tests ship with it in the Template, beside the Owned .github/scripts/tests/conftest.py that puts the checker on sys.path.
+CHECKER_TESTS = ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/tests/test_check_gh_repo.py"
+
+
+def test_the_spec_runs_the_checkers_tests_in_the_template_and_has_mutations():
+    tests = [part for part in SPEC["test"] if part.endswith(".py")]
+    assert tests == [CHECKER_TESTS] and (ROOT / tests[0]).is_file()
     assert SPEC["timeout"] > 0
     assert len(SPEC["mutations"]) >= 10
 

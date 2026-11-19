@@ -85,6 +85,8 @@ post, word for word. Keep it current: after every follow-up commit, update it so
   `scripts/gate.sh`: the lints, the local review's check (a clean record for the diff; a clean merge of `main` keeps
   it, a new commit needs a new one), the build and the tests CI runs. `GATE_SKIP_REVIEW=1` skips the review check for
   gate runs while iterating, never for a push. Sandcastle's sandboxes set it: the host runs the review's rounds on a built branch itself (`lib/host-review.mts`).
+  The gate needs shfmt v3.14 or a later v3 on `PATH`: its check that each `gh` command is told its repository parses every script with shfmt, and it fails,
+  naming shfmt, when shfmt is missing or another release (`pacman -S shfmt`, `brew install shfmt`, or the release binaries at <https://github.com/mvdan/sh/releases>).
 - **Required checks:** Build Solution, Test Suite, Branch name, PR title, actionlint, zizmor, shellcheck, markdownlint
   and yamllint. A docs-only PR skips the build and tests, and so does a Dependabot GitHub Actions bump; a skipped check
   counts as passing.
