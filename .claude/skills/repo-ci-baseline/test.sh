@@ -105,7 +105,7 @@ node --test "$owned/.github/scripts/tests/pr-automerge.test.mjs" || fail "pr-aut
 
 step "Owned .github/scripts tests (release scripts, Claude Review, the gh check and the Owned files check)"
 # The tests an Application's python-tests job runs, from the Owned tree as from a repo root: check_gh_repo.py's own tests
-# among them, which need shfmt (checked above). Its Factory-only tests (the Template's folders, gotchas.md) are tests/gh_repo/.
+# among them, which need shfmt (checked above). Their Factory-only tests (the Template's folders, gotchas.md, the trigger test's guard) are tests/gh_repo/.
 (cd "$owned" && "${pytest_cmd[@]}" -q -p no:cacheprovider .github/scripts/tests) || fail "pytest"
 
 step "Hardening review script tests"
@@ -253,7 +253,8 @@ step "gh commands in Owned scripts are told their repository"
 # re-Apply that brings one would fail every gate there (mpaulosky/dotfiles#267).
 # check_gh_repo.py holds the rule. Its own tests ship with it and run in the scripts shard (the Owned .github/scripts
 # tests above), so a check that stopped refusing anything fails there; here run the tests that need the Factory (OWNED
-# against the Template's folders, gotchas.md, the shfmt installs and the mutation spec).
+# against the Template's folders, gotchas.md, the shfmt installs and the mutation spec), and test_pr_automerge_triggers.py's
+# guard and workflow set, which its own pin of them skips outside the Template.
 (cd "$skill_dir/tests/gh_repo" && "${pytest_cmd[@]}" -q -p no:cacheprovider .) || fail "gh_repo pytest"
 python3 -I "$owned/.github/scripts/check_gh_repo.py" "$owned/scripts" \
   || fail "export GH_REPO before an Owned script's first gh command, and give gh repo's subcommands their repository"

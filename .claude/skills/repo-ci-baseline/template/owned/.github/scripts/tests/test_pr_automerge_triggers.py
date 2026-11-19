@@ -14,7 +14,8 @@ import pytest
 
 WORKFLOWS = Path(__file__).resolve().parents[2] / "workflows"
 
-# The workflow files the Template ships. In the Template, test_the_template_ships_these_workflows pins this to the folder.
+# The workflow files the Template ships. In the Template, test_the_template_ships_these_workflows pins this to the folder, and the
+# Factory's tests/gh_repo/test_pr_automerge_triggers_in_the_template.py checks the guard both ways and the set, whatever the guard says.
 TEMPLATE_WORKFLOWS = {
     "backfill-blog-posts.yml", "ci.yml", "claude-review.yml", "code-metrics.yml", "codeql-analysis.yml", "copilot-review-sync.yml",
     "dependabot-auto-merge.yml", "lint-actions.yml", "lint-markdown.yml", "lint-yaml.yml", "owned-files.yml", "pr-automerge.yml",
