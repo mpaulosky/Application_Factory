@@ -23,6 +23,8 @@ there too, until the PR merges (a branch it makes from `origin/main` has no upst
 wt="$(scripts/work-issue.sh 42)" && cd "$wt"   # e.g. fix/42-null-children in ../<Repo>-worktrees/fix-42-null-children
 ```
 
+A Claude Code session given a prompt of `Work Issue` and an issue's number runs that command with the number first, before it reads or changes any code, and works only in the folder it prints.
+
 For work without an issue, make it by hand: `git worktree add --no-track -b chore/upgrade-net10 ../<Repo>-worktrees/chore-upgrade-net10 origin/main`.
 The folder is the branch name with `/` turned into `-`.
 
@@ -83,8 +85,9 @@ post, word for word. Keep it current: after every follow-up commit, update it so
   passes until one fixes nothing, then records once: the gate asks for that one record all the same.
 - **Before a push**, the pre-push hook refuses a branch that is behind `origin/main` (it fetches main first), because
   the PR couldn't merge until it's up to date: bring main in with `git merge origin/main`. Then it runs
-  `scripts/gate.sh`: the lints, the local review's check (a clean record for the diff; a clean merge of `main` keeps
-  it, a new commit needs a new one), the build and the tests CI runs. `GATE_SKIP_REVIEW=1` skips the review check for
+  `scripts/gate.sh`: the lints, the local review's check (a clean record for the diff; a clean merge of `main`, or a
+  rebase onto `origin/main` with no conflict, keeps it; a new commit or a resolved conflict needs a new one), the build and the tests CI runs.
+  The gate only checks that record: it never reviews again. `GATE_SKIP_REVIEW=1` skips the review check for
   gate runs while iterating, never for a push. Sandcastle's sandboxes set it: the host runs the review's rounds on a built branch itself (`lib/host-review.mts`).
   The gate needs shfmt v3.14 or a later v3 on `PATH`: its check that each `gh` command is told its repository parses every script with shfmt, and it fails,
   naming shfmt, when shfmt is missing or another release (`pacman -S shfmt`, `brew install shfmt`, or the release binaries at <https://github.com/mvdan/sh/releases>).

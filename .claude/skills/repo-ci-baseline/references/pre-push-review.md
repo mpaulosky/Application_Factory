@@ -70,7 +70,8 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   (on a file system that can't link, it is written in place instead), so a reader never sees a half-written file where links work and a symlink put at the name is replaced, not written through. A number
   another writer took is tried again, up to five times; a
   finding whose entry can't be written is a warning, and the other findings are still written.
-- The ledger is keyed by the branch's hunks against its merge base with `origin/main`. A clean merge of `main` keeps the review; a new commit, a conflict
+- The ledger is keyed by the branch's hunks against its merge base with `origin/main`. A clean merge of `main` keeps the review, and so does a rebase onto
+  `origin/main` with no conflict (the rebased tree is the one that merge gives, and the hunks are the same); a new commit, a conflict
   resolution or a `main` change inside one of the branch's hunks needs a new one. A re-Apply on `chore/reapply-baseline` passes without one only when every
   change is a regular Owned file added or modified, as Apply writes them (`OWNED_PATHS` in the ledger lists them, and a dotfiles test keeps it equal to
   `template/owned/`). A deleted Owned file, a symlink, a submodule, a file of the repo's own, a Seed file the re-Apply writes because the repo lacked it, or one of
@@ -337,3 +338,6 @@ A branch Sandcastle builds gets this review's rounds after the reviewer role and
 - **Claude Review reviewing only what a push changed.** Claude Review now opens findings only for what a local review can't check and reads the PR's
   `## Review notes` as accepted findings ([ADR 0004](../docs/adr/0004-claude-review-as-copilots-backup.md#claude-review-after-the-local-review)),
   but it still reads the PR's whole diff on every push. A delta needs the diff step's exclusion and holding rules applied to a second diff.
+- **A delta review of a fix made after the review was recorded** (issue 54). A later round inside one run reviews only that round's fixes (`prepare <run> last`), but a fix
+  for a PR thread made after the run ended starts a new run, whose round 1 reads the whole diff again: `prepare <since>` takes only the HEAD a round in the same run folder
+  printed, so no fix goes unread. Anchoring a delta at the last recorded review's HEAD needs a decision on what carries over from that review (its findings, a person's acceptances).

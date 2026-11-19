@@ -14,8 +14,8 @@ Most of the threads GitHub's reviewers open on a PR are about behaviour a review
 
 `scripts/gate.sh` refuses a diff this review hasn't passed: its Local review step reads the ledger
 `scripts/review.sh` keeps under `.git/review/`. The ledger is keyed by the branch's own hunks against its merge base with
-`origin/main`. A merge of `main` that leaves those hunks as they were keeps the review; a new commit, a conflict
-resolution, or a `main` change inside one of the branch's hunks needs a new one.
+`origin/main`. A merge of `main`, or a rebase onto `origin/main` with no conflict, that leaves those hunks as they were keeps the
+review; a new commit, a conflict resolution, or a `main` change inside one of the branch's hunks needs a new one.
 
 ## Severities
 

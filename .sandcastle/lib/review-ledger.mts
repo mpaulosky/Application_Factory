@@ -10,7 +10,8 @@
 // is the reviewed commit, or that commit with a clean merge of main and
 // nothing else (see isReviewedCode). So a merge of main that leaves every hunk
 // the branch changed as it was keeps the review, close to the rule PR
-// Auto-Merge and Claude Review apply on GitHub, and a new commit, a conflict
+// Auto-Merge and Claude Review apply on GitHub, and so does a rebase onto main
+// with no conflict (its tree is that merge's), and a new commit, a conflict
 // resolution or a main change inside one of the branch's hunks needs a new
 // one.
 //

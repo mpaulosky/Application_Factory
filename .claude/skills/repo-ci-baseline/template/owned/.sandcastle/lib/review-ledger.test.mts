@@ -857,6 +857,55 @@ describe("checkReview", () => {
     assert.equal(checkReview(repo, mergeBase(repo), {}).ok, true);
   });
 
+  // Issue 54: a rebase onto origin/main with no conflict keeps the review, as a clean merge does. The rebased
+  // commits are new, but their tree is what merging main into the reviewed commit gives, and the hunks are the same.
+  it("passes the reviewed branch rebased cleanly onto a main that moved on, in another file and far down the branch's file", () => {
+    commit(repo, "app.cs", lines(50, (index) => (index === 2 ? "changed" : index === 29 ? "deep change" : undefined)), "a second commit");
+    record([]);
+    const reviewedHead = run(repo, "rev-parse", "HEAD");
+    commit(upstream, "other.cs", "y\n", "main moves on");
+    commit(upstream, "app.cs", lines(50, (index) => (index === 44 ? "main's change" : undefined)), "main edits line 45");
+    run(repo, "fetch", "--quiet", "origin");
+    run(repo, "rebase", "--quiet", "origin/main");
+
+    assert.notEqual(run(repo, "rev-parse", "HEAD"), reviewedHead);
+    assert.equal(mergeBase(repo), run(repo, "rev-parse", "origin/main"));
+    assert.equal(checkReview(repo, mergeBase(repo), {}).ok, true);
+  });
+
+  it("fails after a clean rebase onto a main that changed a line inside one of the branch's hunks", () => {
+    record([]);
+    commit(upstream, "app.cs", lines(50, (index) => (index === 4 ? "main's change" : undefined)), "main edits line 5");
+    run(repo, "fetch", "--quiet", "origin");
+    run(repo, "rebase", "--quiet", "origin/main");
+
+    assert.equal(checkReview(repo, mergeBase(repo), {}).ok, false);
+  });
+
+  it("fails after a rebase whose conflict was resolved, even back to the branch's own line", () => {
+    record([]);
+    commit(upstream, "app.cs", lines(50, (index) => (index === 2 ? "main's change" : undefined)), "main edits line 3");
+    run(repo, "fetch", "--quiet", "origin");
+    assert.throws(() => run(repo, "rebase", "--quiet", "origin/main"));
+    writeFileSync(join(repo, "app.cs"), lines(50, (index) => (index === 2 ? "changed" : undefined)));
+    run(repo, "add", "app.cs");
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "core.editor=true", "rebase", "--continue"], { cwd: repo, stdio: "pipe" });
+
+    assert.equal(checkReview(repo, mergeBase(repo), {}).ok, false);
+  });
+
+  it("fails after a clean rebase that also changed a commit of the branch", () => {
+    commit(repo, "app.cs", lines(50, (index) => (index === 2 ? "changed" : index === 29 ? "deep change" : undefined)), "a second commit");
+    record([]);
+    commit(upstream, "other.cs", "y\n", "main moves on");
+    run(repo, "fetch", "--quiet", "origin");
+    run(repo, "rebase", "--quiet", "origin/main");
+    writeFileSync(join(repo, "app.cs"), lines(50, (index) => (index === 2 ? "changed" : index === 29 ? "deeper change" : undefined)));
+    run(repo, "-c", "core.editor=true", "commit", "--quiet", "--amend", "--no-edit", "-a");
+
+    assert.equal(checkReview(repo, mergeBase(repo), {}).ok, false);
+  });
+
   it("throws, naming the file, on a ledger that doesn't match the schema, rather than pass it", () => {
     const ledger = record([finding({ status: "open", test: null })]);
     const path = join(ledgerDir(repo), `${ledger.key}.json`);
