@@ -1646,7 +1646,7 @@ describe("accept-open", () => {
     cli(["accept-open", "--fix", "R1"]);
     commit(repo, "later.cs", "a later change\n", "later change");
 
-    const latest = JSON.parse(cli(["latest"]).out) as { findings: Finding[] };
+    const latest = JSON.parse(cli(["latest"]).out) as { findings: { id: string; fixAsked?: boolean }[] };
 
     assert.equal(latest.findings.find((found) => found.id === "R1")?.fixAsked, true);
   });
