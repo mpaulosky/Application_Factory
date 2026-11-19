@@ -677,7 +677,13 @@ cps() { local h out=""; for h in $1; do out+="$((16#$h)),"; done; echo "[${out%,
 body() { jq -nc --argjson c "$(cps "$1")" '[range($c | length) as $i | "w\($i)", ([$c[$i]] | implode)] | add + "end"'; }
 spaced() { jq -nr --argjson c "$(cps "$1")" '[range($c | length) as $i | "w\($i)"] | join(" ") + " end"'; }
 raw_lacks_hiding() { [[ "$(jq -Rs --argjson c "$(cps "$HIDING")" '[explode[] | select(IN($c[]))] | length' "$work/raw")" == 0 ]]; }
-while read -r part; do
+# Each list is read into an array first, so nothing a run starts can read the list's lines from its stdin.
+hiding_parts=() kept_parts=()
+while read -r part; do hiding_parts+=("$part"); done < <(chunks "$HIDING")
+while read -r part; do kept_parts+=("$part"); done < <(chunks "$KEPT")
+check "the hiding list is tested in 3 bodies" test "${#hiding_parts[@]}" -eq 3
+check "the kept list is tested in 2 bodies" test "${#kept_parts[@]}" -eq 2
+for part in "${hiding_parts[@]}"; do
   new_repo
   pr "$(jq -nc --argjson o "$OWNER" --argjson b "$(body "$part")" '{comments: {nodes: [{id: "C1", author: $o, authorAssociation: "OWNER", body: $b}]}}')"
   run_raw --once 7
@@ -690,14 +696,51 @@ while read -r part; do
   check "a bot's thread with hiding characters ($part): none is printed" raw_lacks_hiding
   check "a bot's thread ($part): each is a space, and the text around them is printed" \
     out_has "watch-pr: thread: copilot-pull-request-reviewer: $(spaced "$part")"
-done < <(chunks "$HIDING")
-while read -r part; do
+done
+for part in "${kept_parts[@]}"; do
   new_repo
   pr "$(jq -nc --argjson o "$OWNER" --argjson b "$(body "$part")" '{comments: {nodes: [{id: "C1", author: $o, authorAssociation: "OWNER", body: $b}]}}')"
   run_raw --once 7
   check "the owner's comment: each hiding range's neighbours, and accented, CJK and emoji text ($part), are printed as they are" \
     out_has "watch-pr: comment: owner: $(jq -r . <<<"$(body "$part")")"
-done < <(chunks "$KEPT")
+done
+# clean lists every default-ignorable code point by range too, so a jq with older Unicode tables blanks no fewer: every code point this jq
+# calls default-ignorable is matched by the class with the property taken out (the C categories, which some of them are in, taken out too).
+clean_floor="$(sed -n 's/^  def clean: tostring | gsub("\(\[[^]]*\]\)"; .*/\1/p' "$SCRIPT" \
+  | sed -e 's/\\\\p{Default_Ignorable_Code_Point}//' -e 's/\\\\p{C[cf]}//g')"
+floor_covers_property() {
+  [[ "$(jq -rn --arg floor "$(jq -rn "\"$clean_floor\"")" '[range(0; 1114112) | select(. < 55296 or . > 57343) | [.] | implode
+    | select(test("[\\p{Default_Ignorable_Code_Point}]") and (test($floor) | not)) | explode[0]] | length')" == 0 ]]
+}
+check "clean's class is found" test -n "$clean_floor"
+check "clean's own ranges, without the property, hold every code point this jq calls default-ignorable" floor_covers_property
+
+# A poll prints at most 50 reasons, then one line saying how many more; only the printed one-shot events are recorded as seen.
+# owner_comments <n>: a PR with <n> comments by the owner, C1 to C<n>.
+owner_comments() { pr "$(jq -nc --argjson o "$OWNER" --argjson n "$1" '{comments: {nodes: [range(1; $n + 1) | {id: "C\(.)", author: $o, authorAssociation: "OWNER", body: "Note \(.)."}]}}')"; }
+new_repo
+owner_comments 50
+run --once 7
+check "50 reasons: each is printed" out_line_count_is 50
+check "50 reasons: no 'more' line" out_lacks "watch-pr: more:"
+new_repo
+owner_comments 51
+run --once 7
+check "51 reasons: 51 lines, the last the 'more' line" out_line_count_is 51
+check "51 reasons: the 'more' line counts the one not printed" out_has "watch-pr: more: 1 more not printed; the next run prints them"
+check "51 reasons: the 50th is printed" out_has "watch-pr: comment: owner: Note 50."
+check "51 reasons: the 51st isn't" out_lacks "Note 51."
+check "51 reasons: the printed ones are recorded as seen" test "$(grep -c . "$repo/.git/watch-pr-7.seen")" -eq 50
+check "51 reasons: the one not printed isn't recorded" not grep -qxF C51 "$repo/.git/watch-pr-7.seen"
+run --once 7
+check "51 reasons, the next run: the one left is printed" out_has "watch-pr: comment: owner: Note 51."
+check "51 reasons, the next run: it alone" out_line_count_is 1
+new_repo
+owner_comments 120
+run --once 7
+check "120 reasons: the 'more' line counts the 70 not printed" out_has "watch-pr: more: 70 more not printed"
+check "120 reasons: the 'more' line is the last" test "$(tail -n 1 <<<"$out")" == "watch-pr: more: 70 more not printed; the next run prints them"
+check "120 reasons: 51 lines" out_line_count_is 51
 
 # A quoted or mid-body Sandcastle marker is not Sandcastle's.
 new_repo

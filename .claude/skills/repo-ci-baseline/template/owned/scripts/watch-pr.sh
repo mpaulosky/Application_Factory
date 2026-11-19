@@ -4,7 +4,7 @@
 #   scripts/watch-pr.sh [--once] [--interval <seconds>] [--timeout <minutes>] <pr-number>
 #   scripts/watch-pr.sh --would-skip      reads a comment body on stdin; exit 0 when the watcher skips it from the repository's owner, 1 when it wouldn't
 #
-# Each poll prints one `watch-pr: <code>: <detail>` line per reason that applies, then exits 0. The codes, in order:
+# Each poll prints one `watch-pr: <code>: <detail>` line per reason that applies, up to 50, then exits 0. The codes, in order:
 #   merged, closed    the PR is done (printed alone)
 #   conflict          the PR conflicts with its base
 #   behind            the base branch moved and the repo requires an up-to-date branch
@@ -13,6 +13,8 @@
 #   changes-requested a person's review requested changes (reported once)
 #   review            a person's review with a body (reported once)
 #   comment           a person's PR comment (reported once)
+#   more              how many reasons past the first 50 a poll didn't print (last): no comment flood floods the session. Only the
+#                     printed one-shot events are recorded as seen, so the next run prints the rest.
 # A one-shot event is recorded in watch-pr-<n>.seen in the git common directory, so the next run stays quiet about it.
 #
 # A comment is the session's when its body contains WATCH_PR_MARKER (default `<!-- claude-session -->`), and Sandcastle's when it
@@ -47,6 +49,7 @@ MARKER="${WATCH_PR_MARKER:-<!-- claude-session -->}"
 interval="${WATCH_PR_INTERVAL:-60}"
 timeout_min="${WATCH_PR_TIMEOUT:-120}"
 budget="${WATCH_PR_BUDGET:-1000}"
+max_lines=50
 once=0
 would_skip=0
 pr=""
@@ -166,8 +169,10 @@ REASONS_JQ="$OURS_JQ"'
   # clean: every control and format character (Cc, Cf: the bidi controls, zero-width ones, the byte-order mark, the soft hyphen and the tag
   # characters among them), the line and paragraph separators (Zl, Zp), every default-ignorable code point (the list Unicode keeps, unassigned
   # ones included: the variation selectors, the Hangul fillers, the Khmer inherent vowels) and the blank braille cell, which a terminal
-  # shows as nothing, each made a space, so no printed text is reordered or hidden; then the first 200 characters.
-  def clean: tostring | gsub("[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\\p{Default_Ignorable_Code_Point}\u2800]"; " ") | .[0:200];
+  # shows as nothing, each made a space, so no printed text is reordered or hidden; then the first 200 characters. The default-ignorable
+  # code points are also listed by range, so a jq whose Oniguruma has older Unicode tables (U+180F joined in Unicode 14)
+  # never blanks fewer of them.
+  def clean: tostring | gsub("[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\\p{Default_Ignorable_Code_Point}\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufff8\ud82f\udca0-\ud82f\udca3\ud834\udd73-\ud834\udd7a\udb40\udc00-\udb43\udfff\u2800]"; " ") | .[0:200];
   def first_line: (. // "") | split("\n")[0];
   def person: (.author.__typename // "") != "Bot";
   def who: .author.login // "unknown";
@@ -331,10 +336,16 @@ while true; do
   if ((ok)); then
     failures=0
     if [[ -n "$reasons" ]]; then
+      # At most max_lines reasons are printed; only a printed one-shot event is recorded as seen, so the next run prints the rest.
+      printed=0
+      more=0
       while IFS=$'\x1f' read -r code detail id; do
+        if ((printed >= max_lines)); then more=$((more + 1)); continue; fi
+        printed=$((printed + 1))
         echo "watch-pr: $code: $detail"
         if [[ -n "$id" ]]; then echo "$id" >> "$seen_file"; fi
       done <<< "$reasons"
+      if ((more)); then echo "watch-pr: more: $more more not printed; the next run prints them"; fi
       exit 0
     fi
     if ((once)); then exit 1; fi
