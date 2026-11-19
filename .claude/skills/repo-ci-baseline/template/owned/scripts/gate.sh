@@ -130,8 +130,8 @@ fi
 # A gh command not told its repository reaches gh's default one, a fork in a
 # fork's clone. The check reads this repo's scripts/, .github/ci/ and skills,
 # not the Owned Baseline files, and needs no base (mpaulosky/dotfiles#321).
-# It parses each script with shfmt v3.14 or a later v3 and fails, naming it,
-# when shfmt is missing or another release (repo-ci-baseline's ADR 0011).
+# It parses each script with shfmt v3.14 or a later v3, since it reads shfmt's
+# syntax tree, and fails, naming it, when shfmt is missing or another release.
 step "GitHub commands told their repository (.github/scripts/check_gh_repo.py)"
 python3 -I .github/scripts/check_gh_repo.py --repo "$ROOT"
 

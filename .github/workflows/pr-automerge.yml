@@ -295,7 +295,8 @@ jobs:
             const CLAUDE_CHECKS = ["Check for a merge from main", "Review with Claude", "Post Claude's review"];
             // Claude Review posts as github-actions[bot]; the marker tells its
             // reviews apart from anything else posted under that login.
-            // Accepted limit (repo-ci-baseline's ADR 0004): the marker proves the
+            // Accepted limit (ADR 0004 of the repo-ci-baseline skill, in
+            // mpaulosky/Application_Factory): the marker proves the
             // login, not that Claude wrote the review; see claude-review.yml.
             const CLAUDE_MARKER = "<!-- claude-review -->";
             // Copilot's review comments are authored by this Bot.
