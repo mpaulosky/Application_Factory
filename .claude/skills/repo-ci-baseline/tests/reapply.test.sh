@@ -72,7 +72,7 @@ label_made_or_fail() {
   l="$(arg_after "$1" "${@:2}")"
   [[ -z "$l" ]] && return 0
   # gh.log's last line is this call; a label create before it made the label.
-  if ! head -n -1 "$stub/gh.log" | grep -q "^label create $l "; then
+  if ! sed '$d' "$stub/gh.log" | grep -q "^label create $l "; then
     echo "could not add label: '$l' not found" >&2; exit 1
   fi
 }

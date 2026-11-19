@@ -63,11 +63,11 @@ With squad still installed (`.squad/` or `squad-*` workflows), run the `remove-s
 3. **Adapt**, in further commits, working through [adapt.md](references/adapt.md).
    Done when every item there is resolved and the repo's local gate (`scripts/gate.sh`) passes.
 4. **Land.** Push once and open the PR **as a draft**: the repo's old auto-merge workflow would otherwise merge it the moment its checks pass.
-   While it's a draft, run the docs-only probe from [docs-only-ci.md](references/docs-only-ci.md#verify-live), then land it by hand as [automerge.md](references/automerge.md#adapting) describes.
-   Run `github-settings.sh --fix` on the repo while it's a draft and again right after the merge ([github-settings.md](references/github-settings.md#when-to-run-it)),
-   then give the PR the `baseline:apply` label that run made, which `owned-files.yml`'s Owned files check needs to exempt it:
-   `gh pr edit <n> --repo <repo> --add-label baseline:apply`.
-   Merge while nothing else is in flight: the merge is the new `release.yml`'s first live run.
+   While it's a draft, run the docs-only probe from [docs-only-ci.md](references/docs-only-ci.md#verify-live) and `github-settings.sh --fix` on the repo
+   ([github-settings.md](references/github-settings.md#when-to-run-it)), which makes the `baseline:apply` label.
+   Then give the PR that label, which `owned-files.yml`'s Owned files check needs to exempt it: `gh pr edit <n> --repo <repo> --add-label baseline:apply`.
+   Then land it by hand as [automerge.md](references/automerge.md#adapting) describes, while nothing else is in flight: the merge is the new `release.yml`'s first live run.
+   Run `github-settings.sh --fix` again right after the merge.
    Done when the PR *and* its release-blog PR have merged.
 5. **Verify live**, each part as its reference describes.
    A part counts only once its live check passes on the repo.
