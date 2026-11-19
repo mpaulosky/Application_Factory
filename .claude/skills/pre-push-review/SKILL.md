@@ -99,7 +99,7 @@ what was left open, is raised again for the person to decide for this code:
   Repeat with `-F after=<endCursor>` while `hasNextPage` is true.
 
 A person's decision that a finding needs no change is recorded in two places: a finding the earlier review records as
-`accepted` (the person the review runs for ran `scripts/review.sh accept`), and the repository owner's own reply on a PR
+`accepted` (the person the review runs for ran `scripts/review.sh accept` or `accept-open`), and the repository owner's own reply on a PR
 review thread. Neither carries into this review: the reviewers raise the problem again, naming the decision, and the
 person accepts it again (step 5). Sessions and Sandcastle post with the owner's token, so a thread
 reply under the owner's login counts only when its body doesn't contain `<!-- claude-session -->` and doesn't open with
@@ -326,7 +326,7 @@ The ids in the example are illustrative: use the ones step 5 gave. `reviewerAgen
 `pre-push-reviewer`, or another type only when the person chose it as a stand-in after you asked (see the rule on running reviewers). The report and the Review notes show it, so a
 reader can tell a review by the read-only agent from one by an agent with more tools.
 `status` is `fixed` (with `test`, or `reason` when it has none, except that a security finding, any Warning, needs a `test`, which may name a gate check), `dismissed` (with `reason`) or `open`. Never
-`accepted`: `record` refuses it, since only the person accepts a finding, with `scripts/review.sh accept`. `severity` is
+`accepted`: `record` refuses it, since only the person accepts a finding, with `scripts/review.sh accept` or `accept-open`. `severity` is
 the grade from step 5, and an Advisory finding is `fixed` or `dismissed`, or `open` when it waits for a person or the
 last, review-only round raised it. `security` is the mark from step 5:
 `record` refuses a finding without one, and one marked `true` that isn't graded `warning`. `record` refuses an Advisory finding

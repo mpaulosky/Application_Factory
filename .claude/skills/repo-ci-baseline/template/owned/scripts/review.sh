@@ -5,7 +5,7 @@
 #   scripts/review.sh report                 the review of HEAD's diff
 #   scripts/review.sh accept R3 "<reason>"   the person accepts a finding (never on their behalf)
 #   scripts/review.sh accept-open            list the open findings; with ids (R3="<reason>", --reason, --fix R4) the person
-#                                            accepts them or asks for them to be fixed, naming each, all or none
+#                                            accepts the ids named or asks for them to be fixed, every id at once or none
 #   scripts/review.sh notes                  the PR description's "## Review notes"
 #   scripts/review.sh advisory               the follow-up issue's open Advisory findings
 #   scripts/review.sh body <in> <out>        the PR description in <in> with those notes put in, written to <out>

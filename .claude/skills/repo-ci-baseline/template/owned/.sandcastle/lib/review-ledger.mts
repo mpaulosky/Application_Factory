@@ -363,7 +363,7 @@ const reviewerAgentSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?:
 // What the skill hands to `record`: the key and the HEAD `scripts/review.sh
 // prepare` printed when the last round started, from the patch its reviewers
 // read; how many rounds ran; and every finding this run raised, with its
-// outcome. Never `accepted`: only a person running `scripts/review.sh accept`
+// outcome. Never `accepted`: only a person running `scripts/review.sh accept` (or `accept-open`)
 // accepts a finding, on the ledger it was raised in, so no acceptance carries
 // from one ledger to another.
 export const reviewInputSchema = z
@@ -391,7 +391,7 @@ function checkFindingList(findings: readonly { id: string; status: string }[], c
   if (accepted.length > 0) {
     context.addIssue({
       code: "custom",
-      message: `${accepted.join(", ")} can't be recorded as accepted: record it open, and the person accepts it with scripts/review.sh accept`,
+      message: `${accepted.join(", ")} can't be recorded as accepted: record it open, and the person accepts it with scripts/review.sh accept or accept-open`,
     });
   }
 }
