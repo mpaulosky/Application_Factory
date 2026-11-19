@@ -65,7 +65,9 @@ With squad still installed (`.squad/` or `squad-*` workflows), run the `remove-s
 4. **Land.** Push once and open the PR **as a draft**: the repo's old auto-merge workflow would otherwise merge it the moment its checks pass.
    While it's a draft, run the docs-only probe from [docs-only-ci.md](references/docs-only-ci.md#verify-live), then land it by hand as [automerge.md](references/automerge.md#adapting) describes.
    Run `github-settings.sh --fix` on the repo while it's a draft and again right after the merge ([github-settings.md](references/github-settings.md#when-to-run-it)),
-   and merge while nothing else is in flight: the merge is the new `release.yml`'s first live run.
+   then give the PR the `baseline:apply` label that run made, which `owned-files.yml`'s Owned files check needs to exempt it:
+   `gh pr edit <n> --repo <repo> --add-label baseline:apply`.
+   Merge while nothing else is in flight: the merge is the new `release.yml`'s first live run.
    Done when the PR *and* its release-blog PR have merged.
 5. **Verify live**, each part as its reference describes.
    A part counts only once its live check passes on the repo.
@@ -77,7 +79,8 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
 ## Change the Baseline
 
 1. Edit `template/` (and the part's reference) in a Factory worktree.
-2. Run `test.sh`: the hook suites, the auto-merge script tests, the release-script tests, the renderer oracle, the GitHub scripts' tests
+2. Run `test.sh`: the hook suites, the auto-merge script tests, the Owned `.github/scripts` tests (release scripts, Claude Review, the gh check
+   and the Owned files check), the hardening review script tests, the renderer oracle, the GitHub scripts' tests
    (settings, the landing decision, status, land, rollout), the Claude Review benchmark's tests, actionlint, zizmor, yamllint, shellcheck, markdownlint, the no-placeholders-in-Owned
    check, the check that the Owned scripts' `gh` commands are told their repository, the Sandcastle copy and Seed checks, and the `apply.sh` and `reapply.sh` tests.
    It needs those tools, and shfmt v3.14 or a later v3 for the gh check's tests (ADR 0011); the Factory's CI runs the same script.

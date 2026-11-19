@@ -14,7 +14,7 @@ ROOT = HERE.parents[4]
 SPEC = json.loads((HERE / "mutations.json").read_text())
 
 
-# The checker's tests ship with it in the Template, beside the Owned .github/scripts/conftest.py that puts the checker on sys.path.
+# The checker's tests ship with it in the Template, beside the Owned .github/scripts/tests/conftest.py that puts the checker on sys.path.
 CHECKER_TESTS = ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/tests/test_check_gh_repo.py"
 
 

@@ -57,9 +57,12 @@ with exit 2. From here on, `pre-commit` refuses commits in the primary checkout:
 change, including filling the placeholders the report lists, is made in a worktree under `../[ProjectName]-worktrees/` (see the
 skill's `references/git-hooks.md`).
 
-The Template ships the two Claude Code hook scripts but not `.claude/settings.json`, which wires them: add their entries to the Application's own
-`.claude/settings.json` by hand, `PostToolUse` for `scripts/lint-edited-file.sh` (the edit-time lint) and `SessionStart` for `scripts/check-git-hooks.sh`.
-The skill's `references/git-hooks.md` shows both entries ([Edit-time lint](../.claude/skills/repo-ci-baseline/references/git-hooks.md#edit-time-lint)).
+The Template ships the two Claude Code hook scripts but not `.claude/settings.json`, which wires them. Wiring them is optional, and each
+Application decides it for itself (the Factory's [ADR 0011](adr/0011-markdown-and-yaml-are-linted-as-they-are-written.md)): to lint as Claude
+writes, or to check the git hooks when a session starts, you can add their entries to the Application's own `.claude/settings.json`, `PostToolUse`
+for `scripts/lint-edited-file.sh` (the edit-time lint) and `SessionStart` for `scripts/check-git-hooks.sh`. The skill's `references/git-hooks.md`
+shows both entries ([Edit-time lint](../.claude/skills/repo-ci-baseline/references/git-hooks.md#edit-time-lint),
+[Session-start check](../.claude/skills/repo-ci-baseline/references/git-hooks.md#session-start-check)).
 
 `core.hooksPath` is what turns the hooks on, in each clone. Don't set a global `init.templateDir` to install them:
 the hooks it copies into `.git/hooks/` are symlinks or copies that go stale when the Template moves (#12 left them
@@ -123,7 +126,9 @@ git add -A
 git commit -m "chore: Apply the repo-ci-baseline Template"
 ```
 
-As in A3, the gate needs shfmt v3.14 or a later v3 on `PATH` before the first push, and the Claude Code hooks are wired in `.claude/settings.json` by hand.
+As in A3, the gate needs shfmt v3.14 or a later v3 on `PATH` before the first push, and wiring the Claude Code hooks in `.claude/settings.json` is
+optional: to lint as Claude writes, you can add the entries A3 names ([Edit-time lint](../.claude/skills/repo-ci-baseline/references/git-hooks.md#edit-time-lint),
+[Session-start check](../.claude/skills/repo-ci-baseline/references/git-hooks.md#session-start-check)).
 
 ### B3. Adapt
 
