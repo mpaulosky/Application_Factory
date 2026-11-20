@@ -3,7 +3,8 @@
 **Status:** accepted (mpaulosky/Application_Factory#52). Implemented in `template/owned/.github/scripts/check_gh_repo.py` (`parse`, `parse_prefix`, `Shape`, `untold`), its tests in
 `template/owned/.github/scripts/tests/` (shipped with it) and `tests/gh_repo/` (the Factory-only ones), the Owned `ci.yml`'s `gh-repo`, `python-tests` and
 `hook-tests` jobs, the Seed `.sandcastle/Dockerfile` and the Factory's `.github/actions/template-tools/`
-([gotchas.md](../../references/gotchas.md), "Tell every `gh` command its repository").
+([gotchas.md](../../references/gotchas.md), "Tell every `gh` command its repository"). Amended by mpaulosky/Application_Factory#72: a `gh` is no longer refused
+for more than 4096 characters after it on its line; at most that many of its rest are read (`AFTER_CHARS`), cut back to the last blank.
 
 ## Context
 
@@ -48,8 +49,10 @@ Sandcastle's sandbox, which runs the gate. CI's `python-tests` job runs the chec
   own trusted (an `unset` there still ends one, and a wrapper on an earlier line a backslash joins to the `gh`'s drops the export). The checker parses at
   most five times to find the statements before the error, the whole script first (`PREFIX_TRIES`).
 - **The text read for one `gh` is bounded:** a `gh` with more than 4096 characters before it in its own command (`BEFORE_CHARS`; joined lines
-  included, without the backslash and newline that join them) or after it on its line, or with more than 100 continued lines before it after a syntax
-  error (`JOINED_LINES`), is refused, whatever tells it; so is one whose command is more than twice that long before it, continuations included. The rules
+  included, without the backslash and newline that join them), or with more than 100 continued lines before it after a syntax
+  error (`JOINED_LINES`), is refused, whatever tells it; so is one whose command is more than twice that long before it, continuations included. After
+  a `gh`, at most 4096 characters of the rest of its line are read (`AFTER_CHARS`), cut back to the last blank; a `gh` that what is left doesn't tell is
+  refused: one whose subcommand or repository word isn't wholly in it, or one followed by a single blank-less word that long (`gh;` and a long word). The rules
   that judge a `gh` within that bound (a wrapper, an `env`, a run of assignments) are the old checker's, and so is the time they take on a crafted command:
   a known limit, which slows the `gh-repo` check of the branch that holds it.
 - **A statement nested deeper than Python's recursion limit lets the checker walk** (a chain of about 190 `&&`, `||` or `|` links) is read the same way, from
