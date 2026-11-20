@@ -204,17 +204,24 @@ run_static() {
 # run's stamp writes hold it, so a check never reads a run's stamps half written (its own written, the ones it overlaps not yet). Only a cache folder that isn't a writable
 # folder (read-only, say) gives up at once: a lock seen held, or one released just after a failed try, is tried again. It's held only for a few file writes, so a lock still
 # there after 2 seconds belongs to a paused gate, or to one ended by a signal the lock doesn't catch (KILL, QUIT, or any in the instant between the mkdir and the traps) or
-# by a crash, and stays until a person removes it. While it's held, INT, TERM and HUP release it and then end the gate by that signal. cache_unlock releases the lock this
-# shell holds, if any, and sets those signals back to their default.
+# by a crash, and stays until a person removes it. While it's held, INT, TERM and HUP release it and then end the gate by that signal (cache_signal). cache_unlock releases
+# the lock this shell holds, if any, and sets those signals back to their default. It marks itself unlocking before its rmdir, and a signal from then until the signals are
+# reset finds cache_signal seeing the mark: it only notes the signal (the first, if more come), and cache_unlock ends the gate by it once the lock is gone. So the rmdir is
+# run once only: a second could remove a lock another gate took in that instant (R30). That rmdir runs with INT, TERM and HUP ignored, so a signal sent to the whole process
+# group (a terminal's Ctrl-C) can't kill it before it removes the lock, which nothing would then remove (R27); only a signal in the instant between its fork and the
+# ignore can. A signal before the mark runs the whole release in the handler, the lock still named, and is noted first there too, so it is the one the gate ends by; one
+# after the reset ends the gate as by default, the lock already gone.
 cache_locked=""
+cache_unlocking=""
+cache_pending=""
 cache_lock() {
   local i sig
   for ((i = 0; i < 20; i++)); do
     if mkdir -- "$1" 2>/dev/null; then
       cache_locked="$1"
       for sig in INT TERM HUP; do
-        # shellcheck disable=SC2064 # $sig is meant to expand now, once per signal; \$BASHPID when the signal comes
-        trap "cache_unlock; kill -s $sig \$BASHPID" "$sig"
+        # shellcheck disable=SC2064 # $sig is meant to expand now, once per signal
+        trap "cache_signal $sig" "$sig"
       done
       return 0
     fi
@@ -223,12 +230,34 @@ cache_lock() {
   done
   return 1
 }
+# cache_signal <signal>: the handler of a signal while the lock is held. It notes the signal, keeping the first noted, for cache_unlock to end the gate by once the lock is
+# gone; and when cache_unlock isn't already releasing the lock, it starts the release itself. So a second signal while that release runs doesn't take the first's place.
+# Its own kill is defensive: a handler runs only while the lock is named (the traps are reset before it is forgotten), so cache_unlock's own kill of the noted signal
+# ends the gate first. It would end the gate by its signal if a handler ever ran with no lock named.
+cache_signal() {
+  [[ -n "$cache_pending" ]] || cache_pending="$1"
+  if [[ -n "$cache_unlocking" ]]; then return 0; fi
+  cache_unlock
+  kill -s "$1" "$BASHPID"
+}
 cache_unlock() {
+  local sig
   if [[ -n "$cache_locked" ]]; then
-    rmdir -- "$cache_locked" 2>/dev/null || true
-    # The signals first: a signal before this runs the handler with the lock still named, and one after it ends the gate as by default, the lock already gone.
+    cache_unlocking=1
+    # Signals ignored, so one sent to the whole group can't kill the rmdir before it removes the lock; it isn't tried again, which could remove another gate's.
+    (
+      trap '' INT TERM HUP
+      exec rmdir -- "$cache_locked"
+    ) 2>/dev/null || true
+    # The signals before the lock is forgotten: a signal before this is noted by the handler, and one after it ends the gate as by default, the lock already gone.
     trap - INT TERM HUP
     cache_locked=""
+    cache_unlocking=""
+    if [[ -n "$cache_pending" ]]; then
+      sig="$cache_pending"
+      cache_pending=""
+      kill -s "$sig" "$BASHPID"
+    fi
   fi
 }
 
