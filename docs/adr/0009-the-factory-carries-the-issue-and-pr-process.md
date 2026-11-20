@@ -60,3 +60,7 @@ and its .NET required checks, and CLAUDE.md is the Factory's process document; t
 - **Update:** Dependabot does not group the two directories. Its first PR (#36, `zizmor-action` 0.8.0 to 0.8.1) bumped only the copy in `.github/workflows/`, titled "across 1 directory", and
   the gate failed on the drift. So the fallback above is the rule: a person mirrors the bump into the Template's file on Dependabot's branch before the merge. The pre-push hook now accepts
   `dependabot/*` branches so that push needs no `--no-verify`. The bump reaches the Fleet by a Rollout.
+- **Update:** the Factory's `dependabot.yml` also carries a `pip` block for the Template's `.github/scripts/requirements-tests.txt`, the hashed pins an Application's
+  `python-tests` job installs with `--require-hashes`, so nothing keeps them stale. Its directory is the Template's alone (there is no copy at the root), the
+  `template-tools` action installs the same file so the bump's PR runs the Template's tests on it, and the bump reaches the Fleet by a Rollout. The Seed's
+  `dependabot.yml` gains the same block for Applications Applied from now on.

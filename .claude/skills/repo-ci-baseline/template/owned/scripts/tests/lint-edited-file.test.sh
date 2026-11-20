@@ -659,9 +659,10 @@ p=()
 log_has "markdownlint-cli2 $repo " || p+=("not run from the main checkout: $(cat "$LOG")")
 check "with a linked worktree as the project, a file in the main checkout is linted" ${p[@]+"${p[@]}"}
 
-# --- A markdownlint config that isn't committed as it is --------------------
-# markdownlint-cli2 loads JavaScript from a .cjs/.mjs config and from customRules in any config, so a config an agent wrote must not
-# run through this hook unprompted: the file is left unlinted, and the person is told which config.
+# --- A markdownlint config the hook won't run ---------------------------------
+# One that isn't committed as it is, is a symlink, or can load JavaScript (see unvetted_config in the script): markdownlint-cli2 loads
+# a .cjs/.mjs config and the code customRules and the like name, so such a config must not run through this hook unprompted. The file
+# is left unlinted, and the person is told which config, why, and what to do.
 vet="$(new_repo vetted)"
 mkdir -p "$vet/docs/deep"
 printf '{ "config": { "default": true } }\n' > "$vet/.markdownlint-cli2.jsonc"
@@ -670,9 +671,10 @@ printf '# Title\n' > "$vet/docs/deep/ok.md"
 printf '# Title\n' > "$vet/top.md"
 git -C "$vet" add .markdownlint-cli2.jsonc package.json
 git -C "$vet" -c user.name=t -c user.email=t@t commit --quiet -m configs
-# vetted_case <label> <expected config, or "" for linted>
 uncommitted="isn't committed as it is"
-# vetted_case <label> <expected config, or "" for linted> [<why>, default $uncommitted]
+loads="can load JavaScript"
+# vetted_case <label> <expected config, or "" for linted> [<why>, default $uncommitted]: the message names the config and why, and
+# tells the person to commit it only when it isn't committed.
 vetted_case() {
   run_hook "$(edit_json "$vet/docs/deep/ok.md")" "$STUBS:$TOOLS" "$vet"
   p=()
@@ -685,6 +687,11 @@ vetted_case() {
     msg="$(system_message "$STDOUT")"
     local why="${3:-$uncommitted}"
     [[ "$msg" == *"docs/deep/ok.md was not linted"* && "$msg" == *"config $2 $why"* ]] || p+=("systemMessage: $msg")
+    if [[ "$why" == "$uncommitted" ]]; then
+      [[ "$msg" == *"commit it (or undo the change) and edit the file again; the gate and CI still check it." ]] || p+=("no advice to commit: $msg")
+    else
+      [[ "$msg" != *"commit it"* && "$msg" == *": the gate and CI still check it." ]] || p+=("wrong advice for a committed config: $msg")
+    fi
   fi
   check "$1" ${p[@]+"${p[@]}"}
 }
@@ -692,7 +699,6 @@ vetted_case() {
 commit_vet() { git -C "$vet" add -- "$@" && git -C "$vet" -c user.name=t -c user.email=t@t commit --quiet -m more; }
 # drop_vet <path>...: remove committed files from the vetted repo, in a commit.
 drop_vet() { git -C "$vet" rm --quiet -- "$@" && git -C "$vet" -c user.name=t -c user.email=t@t commit --quiet -m less; }
-loads="can load JavaScript"
 vetted_case "committed configs on the path: the file is linted" ""
 printf 'module.exports = {};\n' > "$vet/docs/.markdownlint-cli2.cjs"
 vetted_case "an untracked .cjs config in a folder above the file: not linted, and named" docs/.markdownlint-cli2.cjs
@@ -746,7 +752,60 @@ commit_vet package.json
 vetted_case "a committed package.json that doesn't parse and names customRules: not linted" package.json "$loads"
 printf '{ "name": "x" }\n' > "$vet/package.json"
 commit_vet package.json
+printf '{ "markdownlint-cli2": { "config": { "default": true, "MD013": { "line_length": 200 } } }, "description": "café \\"q\\"" }\n' > "$vet/package.json"
+vetted_case "an uncommitted package.json with a markdownlint-cli2 key: not linted" package.json
+commit_vet package.json
+vetted_case "a committed package.json with a harmless markdownlint-cli2 key (and non-ASCII, quotes elsewhere): linted" ""
+printf '{ "markdownlint-cli2": { "config": { "default": true } }, "x": "caf\u00e9 \\"q\\"" }\n' > "$vet/package.json"
+commit_vet package.json
+vetted_case "a package.json key is read decoded: an escape outside the key or JSON's own escaping doesn't count" ""
+printf '{ "markdownlint-cli2": { "config": { "MD044": { "names": ["a\\"b", "c\\\\d"] } } } }\n' > "$vet/package.json"
+commit_vet package.json
+vetted_case "a package.json key whose values JSON writes with escapes (a quote, a backslash): linted" ""
 vetted_case "back to a plain package.json: linted" ""
+# An escape could spell a key that loads code where the text doesn't show it: any backslash in a config read as text is refused.
+for case in 'jsonc|.markdownlint-cli2.jsonc|{ "customR\u0075les": ["./x.js"] }' 'yaml|.markdownlint-cli2.yaml|"custom\x52ules": ["./x.js"]' \
+  'yaml fold|.markdownlint.yaml|"custom\
+  Rules": ["./x.js"]' 'json|.markdownlint.json|{ "config": { "MD013": false }, "x": "a\\b" }'; do
+  label="${case%%|*}" rest="${case#*|}"
+  file="${rest%%|*}" body="${rest#*|}"
+  printf '%s\n' "$body" > "$vet/docs/$file"
+  commit_vet "docs/$file"
+  vetted_case "a committed $label config with a backslash: not linted" "docs/$file" "holds a backslash"
+  drop_vet "docs/$file"
+done
+printf '{ "markdownlint-cli2": { "customR\\u0075les": ["./x.js"] } }\n' > "$vet/package.json"
+commit_vet package.json
+vetted_case "a package.json key spelled with an escape is decoded first: not linted" package.json "$loads"
+printf '{ "name": "x" }\n' > "$vet/package.json"
+commit_vet package.json
+# Matched byte for byte: a byte that isn't valid UTF-8 before the word can't hide it, whatever the caller's locale.
+printf '{ "x": "\xff", "customRules": ["./x.js"] }\n' > "$vet/docs/.markdownlint-cli2.jsonc"
+commit_vet docs/.markdownlint-cli2.jsonc
+RUN_ENV=(LC_ALL=C.UTF-8)
+vetted_case "a config with an invalid UTF-8 byte before customRules, in a UTF-8 locale: not linted" docs/.markdownlint-cli2.jsonc "$loads"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+drop_vet docs/.markdownlint-cli2.jsonc
+# A tab in a folder on the path is part of the config's name, not a separator.
+mkdir -p "$vet/docs/deep"
+tabdir="$vet/docs/t"$'\t'"x"
+mkdir -p "$tabdir"
+printf '# Title\n' > "$tabdir/ok.md"
+printf '{}\n' > "$tabdir/.markdownlint.json"
+run_hook "$(edit_json "$tabdir/ok.md")" "$STUBS:$TOOLS" "$vet"
+p=()
+msg="$(system_message "$STDOUT")"
+[[ $STATUS -eq 0 && "$(ran markdownlint-cli2)" == 0 ]] || p+=("exit $STATUS, ran $(ran markdownlint-cli2)")
+[[ "$msg" == *"config docs/t"$'\t'"x/.markdownlint.json isn't committed as it is"* && "$msg" == *"commit it (or undo"* ]] || p+=("systemMessage: $msg")
+check "a config under a folder with a tab is named whole, with its advice" ${p[@]+"${p[@]}"}
+rm -r "$tabdir"
+# A symlinked package.json is refused like any other config file, whatever it holds.
+mv "$vet/package.json" "$vet/real-package.json"
+ln -s real-package.json "$vet/package.json"
+vetted_case "a package.json that is a symlink: not linted" package.json "is a symlink or not a regular file"
+rm "$vet/package.json"
+mv "$vet/real-package.json" "$vet/package.json"
+vetted_case "with package.json back: linted" ""
 # A config that is a symlink can point anywhere, an untracked file among them: never run.
 printf '{}\n' > "$vet/elsewhere.json"
 ln -s ../../elsewhere.json "$vet/docs/deep/.markdownlint.json"

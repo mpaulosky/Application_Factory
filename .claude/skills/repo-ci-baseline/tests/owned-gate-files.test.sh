@@ -88,6 +88,8 @@ check "the gate's Markdown step is found" "grep -q 'markdownlint-cli2' '$md_step
 
 # The gate runs in whatever locale the caller has: a UTF-8 one and C are both tried.
 utf8="$(locale -a 2> /dev/null | grep -iE '^(C|en_US)\.utf-?8$' | head -n 1 || true)"
+# Without one, the not-valid-UTF-8 name is only tried in C, where grep never dropped it: say so.
+[[ -n "$utf8" ]] || echo "skip - no C.UTF-8 or en_US.UTF-8 locale here, so the UTF-8 half (where grep dropped a not-valid-UTF-8 name) doesn't run"
 for loc in ${utf8:+"$utf8"} C; do
   export LC_ALL="$loc"
   run_lists
@@ -107,9 +109,52 @@ for loc in ${utf8:+"$utf8"} C; do
   check "[$loc] the workflow list holds the workflow alone" "has WORKFLOW_FILES .github/workflows/build.yml && [[ \$(count WORKFLOW_FILES) == 1 ]]"
   check "[$loc] shell: the extensionless scripts and a .sh" "has SHELL_FILES scripts/tool && has SHELL_FILES scripts/run.sh && [[ \$(count SHELL_FILES) == 3 ]]"
   check "[$loc] markdownlint-cli2 gets each name as a literal path (a leading :), never a glob or an option" \
-    "has MD_ARG ':a[1].md' && has MD_ARG ':-dash.md' && has MD_ARG \":line\${newline}break.md\" && [[ \$(count MD_ARG) == 8 ]] && ! has MD_ARG a[1].md"
+    "has MD_ARG ':a[1].md' && has MD_ARG ':-dash.md' && has MD_ARG \":line\${newline}break.md\" && has MD_ARG \":\${latin1}.md\" && [[ \$(count MD_ARG) == 8 ]] && ! has MD_ARG a[1].md"
 done
 unset LC_ALL
+
+# The real markdownlint-cli2, when installed, reads the gate's ':<name>' as that file: a[1].md is linted, not a1.md beside it, and
+# -dash.md is a file, not an option. An Application's hook-tests job has none, so there this block is skipped.
+if command -v markdownlint-cli2 > /dev/null 2>&1; then
+  real="$work/real"
+  mkdir -p "$real"
+  printf '{ "config": { "default": true } }\n' > "$real/.markdownlint-cli2.jsonc"
+  bad='# T\n\n\n\ntext\n'
+  # real_md <name>...: the gate's Markdown step on those names, with the real tool; status in rst, output in rout.
+  real_md() {
+    # shellcheck disable=SC2034 # read inside the checks' eval strings
+    rout="$(cd "$real" && (
+      set -euo pipefail
+      # shellcheck disable=SC2329 # called by the sourced step
+      step() { :; }
+      # shellcheck disable=SC2034 # read by the sourced step
+      ROOT="$real" MD_FILES=("$@")
+      # shellcheck disable=SC1090 # the gate's own Markdown step
+      source "$md_step"
+    ) 2>&1)"
+    rst=$?
+  }
+  printf '# T\n' > "$real/a[1].md"
+  # shellcheck disable=SC2059 # the format is the fixture
+  printf "$bad" > "$real/a1.md"
+  real_md 'a[1].md'
+  check "markdownlint-cli2 itself: a[1].md is linted, not the a1.md a glob would match" "[[ $rst == 0 ]]"
+  # shellcheck disable=SC2059
+  printf "$bad" > "$real/a[1].md"
+  printf '# T\n' > "$real/a1.md"
+  real_md 'a[1].md'
+  check "markdownlint-cli2 itself: a violation in a[1].md is reported" "[[ $rst != 0 ]] && [[ \"\$rout\" == *'a[1].md'* ]]"
+  # shellcheck disable=SC2059
+  printf "$bad" > "$real/-dash.md"
+  real_md -dash.md
+  check "markdownlint-cli2 itself: -dash.md is linted as a file" "[[ $rst != 0 ]] && [[ \"\$rout\" == *'-dash.md'* ]]"
+  # shellcheck disable=SC2059
+  printf "$bad" > "$real/line${newline}break.md"
+  real_md "line${newline}break.md"
+  check "markdownlint-cli2 itself: a name with a newline is linted as that file" "[[ $rst != 0 ]]"
+else
+  echo "skip - markdownlint-cli2 isn't installed, so the gate's ':<name>' form isn't tried with the real tool"
+fi
 
 # A git diff that fails stops the block, instead of leaving the lists empty.
 # shellcheck disable=SC2016 # the wrapper is code for lists to eval, so it must not expand here

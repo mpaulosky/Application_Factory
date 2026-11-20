@@ -184,14 +184,17 @@ local_bin() {
   fi
 }
 
-# unvetted_config: prints "<config>\t<why>" for the first markdownlint-cli2 config on the file's path (its folder and each one above it, up
+# unvetted_config: sets unvetted_path and unvetted_why for the first markdownlint-cli2 config on the file's path (its folder and each one above it, up
 # to the repository root, where markdownlint-cli2 stops looking) that the hook must not run, and returns 1 when there is none. A config
 # is run only when it is a regular file git holds as committed (tracked, unchanged since HEAD, in a repository with a commit) and can't
 # load JavaScript: no .cjs or .mjs config, and no customRules, markdownItPlugins, outputFormatters, modulePaths or extends in it (read as
-# text, so even a mention in a comment counts). A package.json counts only when it has a "markdownlint-cli2" key (or doesn't parse),
-# and then only that key is read for those words.
+# text, byte for byte, so even a mention in a comment counts), and no backslash in it, since a JSON or YAML escape (\u0075, \x52, a
+# folded line) could spell one of those keys where the text doesn't show it. A file of any of these names that is a symlink or not a
+# regular file is refused whatever it holds, package.json too. Otherwise a package.json counts only when it has a "markdownlint-cli2"
+# key (or doesn't parse), and then only that key, as JSON writes it decoded, is read for those words (all of it when it doesn't parse).
+unvetted_path="" unvetted_why=""
 unvetted_config() {
-  local at="$dir" name path relp text
+  local at="$dir" name path relp text raw LC_ALL=C
   while :; do
     for name in .markdownlint-cli2.jsonc .markdownlint-cli2.yaml .markdownlint-cli2.cjs .markdownlint-cli2.mjs \
       .markdownlint.jsonc .markdownlint.json .markdownlint.yaml .markdownlint.yml .markdownlint.cjs .markdownlint.mjs package.json; do
@@ -199,9 +202,10 @@ unvetted_config() {
       [[ -e "$path" || -L "$path" ]] || continue
       relp="${path#"$root"/}"
       if [[ -L "$path" || ! -f "$path" ]]; then
-        printf '%s\t%s' "$relp" "is a symlink or not a regular file"
+        unvetted_path="$relp" unvetted_why="is a symlink or not a regular file"
         return 0
       fi
+      raw=1
       if [[ "$name" == package.json ]]; then
         # The "markdownlint-cli2" key as JSON, "-" when there is none, or nothing when the file doesn't parse (then all of it counts).
         text="$(python3 -I -c 'import json, sys
@@ -212,18 +216,23 @@ except Exception:
 key = data.get("markdownlint-cli2") if isinstance(data, dict) else None
 print("-" if key is None else json.dumps(key))' "$path" 2> /dev/null || true)"
         [[ "$text" != "-" ]] || continue
-        [[ -n "$text" ]] || text="$(cat -- "$path")"
+        if [[ -n "$text" ]]; then raw=0; else text="$(cat -- "$path")"; fi
       else
         text="$(cat -- "$path")"
       fi
       if ! git -C "$root" ls-files --error-unmatch -- ":(literal)$relp" > /dev/null 2>&1 \
         || ! git -C "$root" diff --quiet HEAD -- ":(literal)$relp" > /dev/null 2>&1; then
-        printf '%s\t%s' "$relp" "isn't committed as it is"
+        unvetted_path="$relp" unvetted_why="isn't committed as it is"
         return 0
       fi
       if [[ "$name" == *.cjs || "$name" == *.mjs ]] \
         || [[ "$text" =~ customRules|markdownItPlugins|outputFormatters|modulePaths|extends ]]; then
-        printf '%s\t%s' "$relp" "can load JavaScript (a .cjs or .mjs config, or customRules, markdownItPlugins, outputFormatters, modulePaths or extends)"
+        unvetted_path="$relp"
+        unvetted_why="can load JavaScript (a .cjs or .mjs config, or customRules, markdownItPlugins, outputFormatters, modulePaths or extends)"
+        return 0
+      fi
+      if ((raw)) && [[ "$text" == *\\* ]]; then
+        unvetted_path="$relp" unvetted_why="holds a backslash, whose escape could spell a key that loads JavaScript"
         return 0
       fi
     done
@@ -232,10 +241,10 @@ print("-" if key is None else json.dumps(key))' "$path" 2> /dev/null || true)"
   done
 }
 
-unvetted=""
 if [[ "$kind" == markdown ]]; then
   bin="$(local_bin markdownlint-cli2)"
-  if unvetted="$(unvetted_config)"; then
+  # Called directly, not in $(...): it sets unvetted_path and unvetted_why, kept apart so a tab or newline in the path can't blur them.
+  if unvetted_config; then
     :
   elif [[ -z "$bin" ]]; then
     skipped+=("markdownlint-cli2")
@@ -286,12 +295,11 @@ if ((${#failures[@]} > 0)); then
   exit 2
 fi
 
-if [[ -n "$unvetted" ]]; then
-  why="${unvetted#*$'\t'}"
+if [[ -n "$unvetted_path" ]]; then
   advice="the gate and CI still check it."
-  [[ "$why" != "isn't committed as it is" ]] || advice="commit it (or undo the change) and edit the file again; the gate and CI still check it."
+  [[ "$unvetted_why" != "isn't committed as it is" ]] || advice="commit it (or undo the change) and edit the file again; the gate and CI still check it."
   python3 -I -c 'import json, sys; print(json.dumps({"systemMessage": sys.argv[1]}))' \
-    "lint-edited-file.sh: $rel was not linted: its markdownlint config ${unvetted%%$'\t'*} $why, and this hook runs no code it can't vouch for: $advice"
+    "lint-edited-file.sh: $rel was not linted: its markdownlint config $unvetted_path $unvetted_why, and this hook runs no code it can't vouch for: $advice"
   exit 0
 fi
 

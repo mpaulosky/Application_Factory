@@ -127,7 +127,12 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
      makes each worktree's own `.github/hooks/*` the ones that fire; see step 7 of the Sandcastle setup in the
      README.
 - **`scripts/gate.sh`**, also safe to run by hand: lint the Markdown, YAML, workflow and shell files changed since
-  `origin/main`, using CI's configs, and prefer installed tools with pinned fallbacks. Then build and run each test
+  `origin/main`, using CI's configs, and prefer installed tools with pinned fallbacks. The changed files are read NUL-separated
+  (`git diff -z`, or `git ls-files -z` without an `origin/main`; a git that fails stops the gate) and sorted into the lint lists in bash
+  under `LC_ALL=C`, so each name is matched whole and byte for byte: a non-ASCII name, one that isn't valid UTF-8, or one with a tab or
+  newline reaches its linter as it is on disk. Markdown names go to `markdownlint-cli2` as `:<name>`, its literal-path form, so `a[1].md`
+  isn't read as a glob and `-dash.md` isn't read as an option. `tests/owned-gate-files.test.sh` (the Factory's) runs those lines in a throwaway
+  repo, in a UTF-8 locale and in C, and the Markdown step with a stub and, when installed, the real tool. Then build and run each test
   project, where the stack allows it locally. Which steps it runs depends on the repo; what's standard is that
   everything it checks, CI checks too.
   After the lints it runs `python3 -I .github/scripts/check_gh_repo.py --repo`, which refuses a `gh` command in the
@@ -227,8 +232,10 @@ These are the checks the CI lint workflows run; a gate runs `actionlint` and `zi
   inherited from a git hook, are cleared first.
 - A Markdown file is linted only through markdownlint configs the hook can vouch for: each one on the file's path (its folder and each folder above it, up to the
   repository root, where `markdownlint-cli2` stops looking) must be a regular file, tracked and unchanged since `HEAD` (so never in a repository with no commit), and unable to
-  load JavaScript: no `.cjs` or `.mjs` config, and no `customRules`, `markdownItPlugins`, `outputFormatters`, `modulePaths` or `extends` in it, read as text. A `package.json`
-  counts only when it has a `markdownlint-cli2` key, and then only that key is read (all of it when it doesn't parse). Otherwise an agent could write a config, or the code a
+  load JavaScript: no `.cjs` or `.mjs` config, and no `customRules`, `markdownItPlugins`, `outputFormatters`, `modulePaths` or `extends` in it, read as text, byte for byte.
+  A config read as text must hold no backslash either, since a JSON or YAML escape (`\u0075`, `\x52`, a folded line) could spell one of those keys where the text doesn't show
+  it. A file of any of those names that is a symlink, `package.json` included, is refused whatever it holds. A `package.json` counts only when it has a `markdownlint-cli2`
+  key, and then only that key is read, decoded (all of it, as text, when it doesn't parse). Otherwise an agent could write a config, or the code a
   committed one names, and the hook would run it with no Bash prompt. The file is then left unlinted: exit 0, with a `systemMessage` naming the config and why; the
   pre-commit hook, the gate and CI still lint it. The real-linter test block commits its config for this reason.
 - The path reaches the linter whole: from the repo root of the file's own repository, as `./<path>`, and for Markdown with `--no-globs`, so a name with `[`, `*` or a leading `-` is not read as a glob
