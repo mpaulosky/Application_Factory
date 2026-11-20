@@ -4,8 +4,9 @@ No GitHub, no Claude."""
 import io
 import json
 import os
-import shutil
 import re
+import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -48,7 +49,7 @@ def test_the_exit_codes_and_worktree_agree_with_reapply_sh():
     assert reapply_constant("branch") == auto.BRANCH == rollout.BRANCH
 
 
-def test_reapply_sh_reads_the_refusals_in_the_ledgers_own_words():
+def test_reapply_sh_reads_the_refusals_in_the_ledgers_and_the_gates_own_words():
     # reapply.sh tells the two refusals apart by the text checkReview prints at a line's start, on stderr; a reworded
     # message would turn both into a plain failed push.
     ledger = (SKILL / "template/owned/.sandcastle/lib/review-ledger.mts").read_text()
@@ -58,6 +59,8 @@ def test_reapply_sh_reads_the_refusals_in_the_ledgers_own_words():
     assert f"`${{blocking.length}} {reapply_constant('findings_wait_text')}" in check
     assert "process.stderr.write(`${printable(text)}\\n`)" in ledger, "a refusal goes to stderr, which reapply.sh reads"
     gate = (SKILL / "template/owned/scripts/gate.sh").read_text()
+    assert f'step "{reapply_constant("review_step")}"' in gate, "reapply.sh asks only when the gate stopped at this step"
+    assert 'step() { echo -e "\\n${CYAN}▶ $1${RESET}"; }' in gate, "reapply.sh reads this header form"
     assert 'scripts/review.sh check "$BASE"' in gate and 'BASE="$(git merge-base HEAD origin/main' in gate, \
         "reapply.sh asks the check as the gate does"
 
@@ -307,12 +310,14 @@ class FakeSession:
         return self.code
 
 
-def review_once(tmp_path, monkeypatch, popen=None, changes=None, worktree=None, session=None):
+def review_once(tmp_path, monkeypatch, popen=None, changes=None, worktree=None, session=None, end=None):
     seen = {}
     session = session or FakeSession()
+    ended = seen.setdefault("ended", [])
 
     def fake_popen(command, **kwargs):
         seen.update(command=command, **kwargs)
+        kwargs["stdout"].write("the session's own output\n")
         return session
 
     monkeypatch.setenv("GATE_SKIP_REVIEW", "1")
@@ -321,7 +326,7 @@ def review_once(tmp_path, monkeypatch, popen=None, changes=None, worktree=None, 
         worktree.mkdir(parents=True)
     code, log = auto.run_review(TM, str(worktree), popen=popen or fake_popen,
                                 changes=changes or (lambda path: [".github/hooks/pre-push", "scripts/gate.sh"]),
-                                log_dir=str(tmp_path / "logs"))
+                                log_dir=str(tmp_path / "logs"), end=end or (lambda s: ended.append(s) or True))
     return code, log, seen, str(worktree)
 
 
@@ -335,6 +340,8 @@ def test_the_review_session_starts_in_the_worktree_unattended(tmp_path, monkeypa
     assert seen["stdin"] is subprocess.DEVNULL
     assert seen["stderr"] is subprocess.STDOUT
     assert seen["start_new_session"] is True
+    assert "the session's own output" in Path(log).read_text(), "the session's output is the log"
+    assert len(seen["ended"]) == 1, "its group is ended when it exits normally"
     assert "GATE_SKIP_REVIEW" not in seen["env"]
     assert seen["env"]["PATH"] == os.environ["PATH"] and seen["env"]["HOME"] == os.environ["HOME"]
     prompt = command[2]
@@ -366,53 +373,126 @@ def test_the_review_log_is_the_owners_alone(tmp_path, monkeypatch):
     assert auto.LOG_DIR == os.path.expanduser("~/.cache/repo-ci-baseline/logs")
 
 
+def test_an_existing_log_folder_is_set_to_0700_and_a_symlink_is_refused(tmp_path, monkeypatch):
+    (tmp_path / "logs").mkdir(mode=0o755)
+    os.chmod(tmp_path / "logs", 0o755)
+    review_once(tmp_path, monkeypatch)
+    assert stat.S_IMODE(os.stat(tmp_path / "logs").st_mode) == 0o700
+    (tmp_path / "elsewhere").mkdir()
+    link = tmp_path / "linked"
+    link.symlink_to(tmp_path / "elsewhere")
+    code, log = auto.run_review(TM, str(tmp_path), log_dir=str(link))
+    assert code == 127 and "isn't a folder of the user's own" in log
+
+
 def test_the_prompt_says_none_when_no_owned_file_changes():
     assert "These files the branch changes are Owned Baseline files, which the next Apply overwrites: none." in \
         auto.review_command(TM, "/w", [])[2]
 
 
 def test_a_review_session_past_its_time_is_stopped_and_noted(tmp_path, monkeypatch):
-    killed = []
-    monkeypatch.setattr(auto.os, "killpg", lambda pid, sig: killed.append((pid, sig)))
     session = FakeSession(raises=subprocess.TimeoutExpired("claude", 1))
-    code, log, _, _ = review_once(tmp_path, monkeypatch, session=session)
+    code, log, seen, _ = review_once(tmp_path, monkeypatch, session=session)
     assert code == 124
-    assert session.waits == [auto.REVIEW_TIMEOUT_MINUTES * 60, None], "waited its time, then reaped the killed group"
-    assert killed == [(session.pid, auto.signal.SIGKILL)]
+    assert session.waits == [auto.REVIEW_TIMEOUT_MINUTES * 60]
+    assert seen["ended"] == [session]
     assert f"ran past {auto.REVIEW_TIMEOUT_MINUTES} minutes" in Path(log).read_text()
 
 
-def test_an_interrupted_review_session_kills_its_group_and_passes_the_interrupt_on(tmp_path, monkeypatch):
-    killed = []
-    monkeypatch.setattr(auto.os, "killpg", lambda pid, sig: killed.append(pid))
+def test_an_interrupted_review_session_ends_its_group_and_passes_the_interrupt_on(tmp_path, monkeypatch):
     session = FakeSession(raises=KeyboardInterrupt())
+    ended = []
     with pytest.raises(KeyboardInterrupt):
-        review_once(tmp_path, monkeypatch, session=session)
-    assert killed == [session.pid]
+        review_once(tmp_path, monkeypatch, session=session, end=lambda s: ended.append(s) or True)
+    assert ended == [session]
+
+
+def test_a_group_that_does_not_go_away_is_noted_in_the_log(tmp_path, monkeypatch):
+    code, log, _, _ = review_once(tmp_path, monkeypatch, end=lambda s: False)
+    assert code == 0
+    assert f"process group was still there {auto.GROUP_WAIT_SECONDS} s after it was killed" in Path(log).read_text()
+
+
+def wait_gone(pid):
+    """Whether pid ends (gone, or a zombie until its new parent reaps it) within five seconds."""
+    for _ in range(100):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+        if state.startswith("Z") or state == "":
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def real_session(tmp_path, script, timeout):
+    pid_file = tmp_path / "child.pid"
+    worktree = tmp_path / "w"
+    worktree.mkdir(exist_ok=True)
+
+    def popen(command, **kwargs):
+        return subprocess.Popen(["bash", "-c", script.format(pid_file=pid_file)], **kwargs)
+
+    code, log = auto.run_review(TM, str(worktree), popen=popen, changes=lambda path: [], timeout=timeout,
+                                log_dir=str(tmp_path / "logs"))
+    for _ in range(100):
+        if pid_file.exists() and pid_file.read_text().strip():
+            break
+        time.sleep(0.05)
+    return code, log, int(pid_file.read_text())
 
 
 def test_a_timed_out_session_takes_what_it_started_with_it(tmp_path):
-    # A real process group: a shell that starts a child and waits. The timeout must kill the child too.
-    pid_file = tmp_path / "child.pid"
-    worktree = tmp_path / "w"
-    worktree.mkdir()
-
-    def popen(command, **kwargs):
-        return subprocess.Popen(["bash", "-c", f"sleep 60 & echo $! > {pid_file}; wait"], **kwargs)
-
-    code, _ = auto.run_review(TM, str(worktree), popen=popen, changes=lambda path: [], timeout=1, log_dir=str(tmp_path / "logs"))
+    code, _, child = real_session(tmp_path, "sleep 60 & echo $! > {pid_file}; wait", timeout=2)
     assert code == 124
-    child = int(pid_file.read_text())
-    for _ in range(50):  # killed, it is gone, or a zombie until its new parent reaps it
-        try:
-            state = Path(f"/proc/{child}/stat").read_text().rsplit(")", 1)[1].split()[0]
-        except FileNotFoundError:
-            break
-        if state == "Z":
-            break
-        time.sleep(0.05)
-    else:
-        pytest.fail(f"the session's child {child} is still running ({state})")
+    assert wait_gone(child)
+
+
+def test_a_session_that_exits_takes_what_it_left_running_with_it(tmp_path):
+    code, log, child = real_session(tmp_path, "sleep 60 & echo $! > {pid_file}; echo the session said this; exit 0", timeout=60)
+    assert code == 0
+    assert wait_gone(child)
+    assert "the session said this" in Path(log).read_text()
+
+
+def test_a_sigterm_during_a_session_ends_its_group_and_becomes_an_exit(tmp_path):
+    import threading
+    threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+    previous = signal.getsignal(signal.SIGTERM)
+    with pytest.raises(SystemExit) as stop:
+        real_session(tmp_path, "sleep 60 & echo $! > {pid_file}; wait", timeout=60)
+    assert stop.value.code == 128 + signal.SIGTERM
+    assert wait_gone(int((tmp_path / "child.pid").read_text()))
+    assert signal.getsignal(signal.SIGTERM) is previous, "the handler is put back"
+
+
+def test_signals_raise_covers_sigterm_and_sighup_and_restores_the_handlers():
+    before = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGHUP)}
+    for signum in before:
+        with pytest.raises(SystemExit) as stop, auto.signals_raise():
+            os.kill(os.getpid(), signum)
+            time.sleep(1)
+        assert stop.value.code == 128 + signum
+    assert {signum: signal.getsignal(signum) for signum in before} == before
+
+
+def test_end_group_of_a_group_already_gone_returns_at_once():
+    session = subprocess.Popen(["true"], start_new_session=True)
+    session.wait()
+    assert auto.end_group(session) is True
+
+
+def test_end_group_waits_for_the_group_and_gives_up_in_time(monkeypatch):
+    calls, now = [], [0.0]
+    monkeypatch.setattr(auto.os, "killpg", lambda pid, sig: calls.append(sig))
+    session = FakeSession()
+    gone = auto.end_group(session, wait_seconds=1, sleep=lambda s: now.__setitem__(0, now[0] + s), clock=lambda: now[0])
+    assert gone is False
+    assert calls[0] == signal.SIGKILL and set(calls[1:]) == {0} and len(calls) > 2
+    assert 1 <= now[0] < 1.2, "gave up once its time was spent"
+    assert session.waits == [None]
 
 
 def test_a_claude_that_cannot_start_is_127_with_its_reason_in_the_log(tmp_path, monkeypatch):
@@ -492,7 +572,7 @@ class Fleet:
 
     def __init__(self, codes=None, opens=None, prs=None, reviews=None, unlanded=(), still_open=(), unreadable=(),
                  stale=None, problems=(), locked=False, raises=None, failures=None, closes=(), branch_fails=(),
-                 land_raises=None, lock_raises=None, moves=()):
+                 land_raises=None, lock_raises=None, moves=(), unlisted=None, state_failures=None, land_code=None):
         self.codes = {repo: list(seq) for repo, seq in (codes or {}).items()}
         self.opens = dict(opens or {})
         self.prs = {repo: (100, "MERGED", "0" * 40) for repo in LISTED} | dict(prs or {})
@@ -502,7 +582,8 @@ class Fleet:
         self.stale, self.failures = dict(stale or {}), dict(failures or {})
         self.closes, self.branch_fails, self.moves = set(closes), set(branch_fails), set(moves)
         self.problems, self.locked, self.raises = list(problems), locked, dict(raises or {})
-        self.land_raises, self.lock_raises = land_raises, lock_raises
+        self.land_raises, self.lock_raises, self.land_code = land_raises, lock_raises, land_code
+        self.unlisted, self.state_failures = dict(unlisted or {}), dict(state_failures or {})
         self.events, self.reviewed, self.landed, self.sleeps, self.locks = [], [], [], [], []
 
     def repo_of(self, path):
@@ -539,6 +620,8 @@ class Fleet:
                 self.prs[repo] = (number, "CLOSED", head)
             elif ref not in self.unlanded:
                 self.prs[repo] = (number, "MERGED", head)
+        if self.land_code is not None:
+            return self.land_code
         return 1 if self.unlanded & set(refs) else 0
 
     def pr_of(self, repo):
@@ -547,6 +630,9 @@ class Fleet:
         if self.failures.get(repo, 0) > 0:
             self.failures[repo] -= 1
             raise RuntimeError("HTTP 502")
+        if self.ahead.get(repo) and self.unlisted.get(repo, 0) > 0:
+            self.unlisted[repo] -= 1
+            return None  # pushed, and not listed yet
         if self.stale.get(repo, 0) > 0:
             self.stale[repo] -= 1
             return 99, "MERGED", "f" * 40
@@ -555,6 +641,9 @@ class Fleet:
     def pr_state(self, repo, number):
         if repo in self.unreadable:
             raise RuntimeError("HTTP 502")
+        if self.state_failures.get(repo, 0) > 0:
+            self.state_failures[repo] -= 1
+            raise RuntimeError("HTTP 503")
         _, state, _ = self.prs[repo]
         if state == "MERGED" and f"{repo}#{number}" in self.still_open:
             return "OPEN"
@@ -616,11 +705,6 @@ def test_the_lock_is_held_for_the_whole_round_and_released_after():
     assert fleet.locks[0].closed
 
 
-def test_the_lock_is_released_when_the_round_crashes():
-    fleet = Fleet(raises={TM: KeyboardInterrupt()})
-    with pytest.raises(KeyboardInterrupt):
-        run_auto(["--brings", "#82"], fleet)
-    assert fleet.locks[0].closed
 
 
 def test_auto_runs_the_preflight_first_and_lands_ticketmanager_before_any_other_reapply():
@@ -814,10 +898,14 @@ def test_auto_holds_the_rest_when_ticketmanagers_reapply_fails():
 
 
 def test_auto_holds_the_rest_when_ticketmanagers_pr_was_closed():
-    fleet = Fleet(prs={TM: (129, "CLOSED", "0" * 40)})
+    fleet = Fleet(prs={TM: (129, "CLOSED", head_of(TM))})
     code, out, _ = run_auto(["--brings", "#82"], fleet)
     assert code == 1
     assert "TicketManager#129 is CLOSED, not merged" in out
+    # The last round's PR, closed at another head, with nothing pushed: no merged PR to go on from.
+    fleet = Fleet(prs={TM: (129, "CLOSED", "0" * 40)})
+    code, out, _ = run_auto(["--brings", "#82"], fleet)
+    assert code == 1 and "TicketManager: no merged re-Apply PR found, and nothing to push" in out
 
 
 def test_auto_holds_with_the_gh_error_when_ticketmanagers_pr_cannot_be_read():
@@ -832,7 +920,7 @@ def test_auto_holds_when_ticketmanager_has_no_reapply_pr_and_nothing_to_push():
     fleet = Fleet(prs={TM: None})
     code, out, _ = run_auto(["--brings", "#82"], fleet)
     assert code == 1 and fleet.sleeps == []
-    assert "TicketManager: no re-Apply PR found, and nothing to push" in out
+    assert "TicketManager: no merged re-Apply PR found, and nothing to push" in out
 
 
 def test_a_worktree_whose_branch_cannot_be_read_is_a_stop():
@@ -888,8 +976,15 @@ def test_a_rest_repo_with_nothing_to_push_and_no_pr_is_done_at_once():
     assert fleet.sleeps == [] and fleet.landed == []
 
 
-def test_a_rest_repo_whose_pr_was_closed_is_a_stop():
+def test_a_rest_repo_whose_last_rounds_pr_was_closed_with_nothing_to_push_is_done():
     fleet = Fleet(prs={REST[0]: (77, "CLOSED", "0" * 40)})
+    code, out, _ = run_auto(["--brings", "#82"], fleet)
+    assert code == 0, out
+    assert fleet.sleeps == [] and fleet.landed == []
+
+
+def test_a_rest_repo_whose_pr_was_closed_is_a_stop():
+    fleet = Fleet(prs={REST[0]: (77, "CLOSED", head_of(REST[0]))})
     code, out, _ = run_auto(["--brings", "#82"], fleet)
     assert code == 1
     assert "  IssueTracker#77 is CLOSED, not merged" in out and "4 of 5 other repo(s) done" in out
@@ -965,7 +1060,9 @@ def test_the_header_says_what_the_rules_cover_and_what_they_dont():
     assert "the auto permission mode's classifier is the guard for the rest" in doc
 
 
-def test_git_branch_says_whether_the_branch_has_commits_main_lacks(tmp_path):
+def test_git_branch_says_whether_the_branch_has_commits_main_lacks(tmp_path, monkeypatch):
+    monkeypatch.setenv("LC_ALL", "C")
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
     def git(*args):
         return subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True, text=True,
                               env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}).stdout.strip()
@@ -1043,3 +1140,71 @@ def test_owned_changes_reads_a_name_that_isnt_utf_8(tmp_path):
     owned.mkdir(parents=True)
     (owned / "gate.sh").write_text("")
     assert auto.owned_changes(str(tmp_path), owned=str(tmp_path / "owned")) == ["scripts/gate.sh"]
+
+
+@pytest.mark.parametrize("reads, ok", [(auto.LOOKUP_TRIES - 1, True), (auto.LOOKUP_TRIES, False)])
+@pytest.mark.parametrize("repo", [TM, REST[0]])
+def test_a_pushed_pr_the_list_doesnt_show_yet_is_waited_for(repo, reads, ok):
+    fleet = Fleet(opens={repo: 300}, unlisted={repo: reads})
+    code, out, _ = run_auto(["--brings", "#82"], fleet)
+    assert (code == 0) == ok, out
+    if ok:
+        assert any(f"{repo}#300" in refs for refs in fleet.landed)
+    else:
+        assert f"{short(repo)}: can't tell its re-Apply PR (no re-Apply PR shows head {head_of(repo)[:7]})" in out
+        assert not any(f"{repo}#300" in refs for refs in fleet.landed), "never counted as nothing to land"
+
+
+def test_an_open_pr_at_the_worktrees_own_head_with_nothing_ahead_is_landed():
+    # A resume: the push went out in an earlier run, so the branch is level with what the PR shows.
+    fleet = Fleet(prs={TM: (131, "OPEN", head_of(TM))})
+    code, out, _ = run_auto(["--brings", "#82"], fleet)
+    assert code == 0, out
+    assert fleet.landed[0] == (f"{TM}#131",)
+
+
+@pytest.mark.parametrize("fails, ok", [(auto.LOOKUP_TRIES - 1, True), (auto.LOOKUP_TRIES, False)])
+@pytest.mark.parametrize("repo", [TM, REST[0]])
+def test_a_landed_pr_read_that_fails_is_tried_again(repo, fails, ok):
+    fleet = Fleet(opens={repo: 300}, state_failures={repo: fails})
+    code, out, _ = run_auto(["--brings", "#82"], fleet)
+    assert (code == 0) == ok, out
+    if not ok:
+        assert "(gh failed: HTTP 503)" in out
+
+
+def test_a_land_sh_that_exits_non_zero_for_the_rest_says_so():
+    fleet = Fleet(opens={REST[0]: 200}, land_code=1)
+    code, out, _ = run_auto(["--brings", "#82"], fleet)
+    assert "rollout.sh: land.sh exited 1 (see its output above)" in out
+
+
+def test_an_interrupted_round_prints_the_resume_command_and_releases_the_lock():
+    for stop, code in ((KeyboardInterrupt(), 130), (SystemExit(143), 143)):
+        fleet = Fleet(raises={TM: stop})
+        result, out, err = run_auto(["--brings", "#82"], fleet, root="/my repos")
+        assert result == code
+        assert "rollout.sh: interrupted; resume with: rollout.sh --auto --brings '#82' --root '/my repos'" in err
+        assert fleet.locks[0].closed
+
+
+@pytest.mark.parametrize("call", ["gh_pr", "gh_pr_state", "git_branch"])
+def test_gh_and_git_output_that_isnt_utf_8_is_read(call, monkeypatch):
+    seen = []
+
+    def fake(command, **kwargs):
+        seen.append(kwargs)
+        return subprocess.CompletedProcess(command, 1, "", "bad \ufffd byte")
+
+    monkeypatch.setattr(auto.subprocess, "run", fake)
+    with pytest.raises(RuntimeError, match="bad \ufffd byte"):
+        {"gh_pr": lambda: auto.gh_pr(TM), "gh_pr_state": lambda: auto.gh_pr_state(TM, 1),
+         "git_branch": lambda: auto.git_branch("/w")}[call]()
+    assert all(kwargs.get("errors") == "replace" and kwargs.get("text") is True for kwargs in seen)
+
+
+def test_a_read_that_answers_after_a_gh_failure_is_what_the_stop_says():
+    fleet = Fleet(opens={TM: 130}, state_failures={TM: 1}, still_open={f"{TM}#130"})
+    code, out, _ = run_auto(["--brings", "#82"], fleet)
+    assert code == 1
+    assert "TicketManager: can't tell its re-Apply PR (#130 still reads as OPEN)" in out

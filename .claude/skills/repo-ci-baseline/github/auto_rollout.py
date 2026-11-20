@@ -26,14 +26,18 @@ accept-open and a set of gh writes, and the file tools' edits under the Factory
 checkout and ~/.claude; the auto permission mode's classifier is the guard for
 the rest (other spellings, Bash writes, gh api). It isn't given the Template's
 folder (no --add-dir): the prompt names the Owned files the branch changes. It
-runs in a process group of its own, which a timeout or an interrupt kills
-whole, and its log is kept, 0600, under ~/.cache/repo-ci-baseline/logs: it can
-hold the session's report of security findings.
+runs in a process group of its own, which is killed whole however the session
+ends (it exits, it runs past its time, or rollout.sh gets an interrupt, a
+SIGTERM or a SIGHUP; a SIGKILL of rollout.sh can't be caught, and leaves it
+running). Its log is kept, 0600, in a 0700 folder of the user's own,
+~/.cache/repo-ci-baseline/logs: it can hold the session's report of security
+findings.
 
 A PR is the repo's own (never a fork's of the same branch name), and when the
 worktree's branch has commits main lacks, it is the one at the worktree's head:
 the name is the same every round, so the newest PR by name may be the last
-round's. A read that doesn't show it is tried again LOOKUP_TRIES times. Once
+round's. An OPEN PR at another head is never this round's either, and with
+nothing ahead a CLOSED one at another head is the last round's: nothing to land. A read that doesn't show it is tried again LOOKUP_TRIES times. Once
 land.sh has run, the PR is read by its number, since land.sh may update its
 branch.
 
@@ -46,12 +50,14 @@ it: rollout.sh --auto again, which picks up where it stopped (a repo already
 reapplied finds nothing new to push, and its open PR is landed).
 """
 
+import contextlib
 import fcntl
 import os
 import re
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 import time
@@ -65,6 +71,8 @@ OWNED = os.path.join(SKILL_DIR, "template", "owned")
 TEMPLATE_GLOBAL_JSON = os.path.join(OWNED, "global.json")
 LOCK = os.path.expanduser("~/.cache/repo-ci-baseline/rollout-auto.lock")
 LOG_DIR = os.path.expanduser("~/.cache/repo-ci-baseline/logs")
+# How long a killed session's process group may take to be gone before the log says it didn't.
+GROUP_WAIT_SECONDS = 10
 BRANCH = "chore/reapply-baseline"
 WORKTREE = "chore-reapply-baseline"
 # reapply.sh's exit codes for a push its gate's local review check refused (a test holds them equal).
@@ -191,7 +199,7 @@ def take_lock(path=LOCK):
     """An exclusive lock for this --auto run, held while the returned file stays open, or None when another run holds
     it. Raises OSError when it can't be taken at all (an unwritable ~/.cache, a filesystem without locks)."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    handle = open(path, "a")  # noqa: SIM115 - held for the process's life
+    handle = open(path, "a")  # noqa: SIM115 - held until the caller closes it (run's finally)
     try:
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -215,13 +223,59 @@ def review_command(repo, worktree, owned):
     return ["claude", "-p", prompt, "--permission-mode", "auto", "--disallowedTools", *DENIED_TOOLS]
 
 
-def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, timeout=REVIEW_TIMEOUT_MINUTES * 60,
-               log_dir=LOG_DIR):
-    """/pre-push-review headless in worktree: (exit code, the session's log). 124 when it runs past its time, 127 when
-    it can't start. The session leads a process group of its own, so a timeout or an interrupt kills what it started
-    too (its gate, its reviewers' tools), not claude alone. The log is 0600 (mkstemp) in a 0700 folder."""
+def own_log_dir(log_dir):
+    """Make the log folder, or check the one there: a real folder of the user's own, which is then set to 0700. Raises
+    OSError naming what is wrong (a symlink, another owner's folder), since makedirs leaves an existing folder as it is."""
+    os.makedirs(log_dir, mode=0o700, exist_ok=True)
+    found = os.lstat(log_dir)
+    if not stat.S_ISDIR(found.st_mode) or found.st_uid != os.getuid():
+        raise OSError(f"{log_dir} isn't a folder of the user's own")
+    os.chmod(log_dir, 0o700)
+
+
+@contextlib.contextmanager
+def signals_raise(signums=(signal.SIGTERM, signal.SIGHUP)):
+    """While the block runs, SIGTERM and SIGHUP raise SystemExit (128 + the signal), so the cleanup around a session
+    runs: by default either ends Python at once, and a session in its own process group gets neither."""
+    def handler(signum, frame):
+        raise SystemExit(128 + signum)
+
+    old = {signum: signal.signal(signum, handler) for signum in signums}
     try:
-        os.makedirs(log_dir, mode=0o700, exist_ok=True)
+        yield
+    finally:
+        for signum, previous in old.items():
+            signal.signal(signum, previous)
+
+
+def end_group(session, wait_seconds=GROUP_WAIT_SECONDS, sleep=time.sleep, clock=time.monotonic):
+    """Kill the session's whole process group, reap its leader, and wait until no process is left in the group, for at
+    most wait_seconds: whether it is gone. The group's id is the leader's pid, which can't be another group's while a
+    member of this one is left, so a signal to it after the leader is reaped reaches only this group's members."""
+    try:
+        os.killpg(session.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass  # nothing is left in the group
+    session.wait()
+    deadline = clock() + wait_seconds
+    while True:
+        try:
+            os.killpg(session.pid, 0)
+        except ProcessLookupError:
+            return True
+        if clock() >= deadline:
+            return False
+        sleep(0.1)
+
+
+def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, timeout=REVIEW_TIMEOUT_MINUTES * 60,
+               log_dir=LOG_DIR, end=end_group):
+    """/pre-push-review headless in worktree: (exit code, the session's log). 124 when it runs past its time, 127 when
+    it can't start. The session leads a process group of its own, which is killed whole whenever the session ends, so
+    nothing it started (its gate, its reviewers' tools, a process it left behind) outlives it. An interrupt, a SIGTERM
+    or a SIGHUP is passed on after the kill. The log is 0600 (mkstemp) in a 0700 folder of the user's own."""
+    try:
+        own_log_dir(log_dir)
         handle, log = tempfile.mkstemp(prefix=f"review-{short_name(repo)}.", suffix=".log", dir=log_dir)
     except OSError as error:
         return 127, f"(no log: {error})"
@@ -237,30 +291,22 @@ def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, ti
         # The gate's review check must run in the session, so a GATE_SKIP_REVIEW from the caller's shell is dropped.
         env = {name: value for name, value in os.environ.items() if name != "GATE_SKIP_REVIEW"}
         out.flush()
-        try:
-            session = popen(command, cwd=worktree, env=env, stdin=subprocess.DEVNULL, stdout=out,
-                            stderr=subprocess.STDOUT, start_new_session=True)
-        except OSError as error:
-            out.write(f"rollout.sh: can't start claude: {error}\n")
-            return 127, log
-        try:
-            return session.wait(timeout=timeout), log
-        except subprocess.TimeoutExpired:
-            kill_group(session)
-            out.write(f"\nrollout.sh: the review session ran past {timeout // 60} minutes and was stopped\n")
-            return 124, log
-        except BaseException:
-            kill_group(session)
-            raise
-
-
-def kill_group(session):
-    """Kill the session's whole process group, then reap it."""
-    try:
-        os.killpg(session.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    session.wait()
+        with signals_raise():
+            try:
+                session = popen(command, cwd=worktree, env=env, stdin=subprocess.DEVNULL, stdout=out,
+                                stderr=subprocess.STDOUT, start_new_session=True)
+            except OSError as error:
+                out.write(f"rollout.sh: can't start claude: {error}\n")
+                return 127, log
+            try:
+                code = session.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                out.write(f"\nrollout.sh: the review session ran past {timeout // 60} minutes and was stopped\n")
+                code = 124
+            finally:
+                if not end(session):
+                    out.write(f"\nrollout.sh: the session's process group was still there {GROUP_WAIT_SECONDS} s after it was killed\n")
+        return code, log
 
 
 def run_land(refs):
@@ -352,10 +398,9 @@ class PrUnknown(Exception):
     """The re-Apply PR for a worktree's head couldn't be read or found."""
 
 
-def auto_round(order, brings, root_arg, checkout, reapply, review, land, pr_of, pr_state, branch_of, say, err,
+def auto_round(order, brings, resume, checkout, reapply, review, land, pr_of, pr_state, branch_of, say, err,
                sleep=time.sleep):
-    """The round after the preflight; its exit code."""
-    resume = f"rollout.sh --auto --brings {shlex.quote(brings)}{root_arg}"
+    """The round after the preflight; its exit code. resume is the command that resumes it."""
     first, rest = order[0], order[1:]
 
     def find(repo):
@@ -381,6 +426,8 @@ def auto_round(order, brings, root_arg, checkout, reapply, review, land, pr_of, 
                 last = f"no re-Apply PR shows head {head[:7]}"
                 continue
             number, state, pr_head = found
+            if pr_head != head and not ahead and state == "CLOSED":
+                return None  # the last round's PR, closed unmerged: nothing was pushed, so nothing to land
             if pr_head != head and (ahead or state == "OPEN"):
                 # The last round's PR while the list lags the push, or a PR whose branch moved since.
                 last = f"#{number} is at {pr_head[:7]}, the worktree at {head[:7]}"
@@ -402,7 +449,7 @@ def auto_round(order, brings, root_arg, checkout, reapply, review, land, pr_of, 
                 continue
             if state != "OPEN":
                 return state
-            last = f"#{number} still reads as OPEN"
+            last = f"#{number} still reads as OPEN"  # a read that answers replaces an earlier gh failure
         raise PrUnknown(last)
 
     def crashed(repo, error):
@@ -421,7 +468,7 @@ def auto_round(order, brings, root_arg, checkout, reapply, review, land, pr_of, 
             return held(f"{short_name(first)}: {lead.detail}")
         found = find(first)
         if found is None:
-            return held(f"{short_name(first)}: no re-Apply PR found, and nothing to push")
+            return held(f"{short_name(first)}: no merged re-Apply PR found, and nothing to push")
         number, state = found
         if state == "OPEN":
             say(f"── rollout: landing {short_name(first)}#{number}")
@@ -460,9 +507,12 @@ def auto_round(order, brings, root_arg, checkout, reapply, review, land, pr_of, 
         refs = [f"{repo}#{number}" for repo, number in landing]
         say(f"── rollout: landing {' '.join(refs)}")
         try:
-            land(refs)
+            landed = land(refs)
         except Exception as error:  # noqa: BLE001 - each PR's state below says what landed
             say(f"rollout.sh: land.sh failed: {type(error).__name__}: {error}")
+        else:
+            if landed != 0:
+                say(f"rollout.sh: land.sh exited {landed} (see its output above)")
         for repo, number in landing:
             try:
                 state = settle(repo, number)
@@ -485,6 +535,7 @@ def run(order, brings, root, checkout, dry_run, reapply, say, err, default_root,
     """rollout.sh --auto, after rollout.py has read the arguments and found every checkout. default_root is
     rollout.py's DEFAULT_ROOT: the printed commands carry --root only when the round runs with another."""
     root_arg = "" if os.path.normpath(root) == os.path.normpath(default_root) else f" --root {shlex.quote(root)}"
+    resume = f"rollout.sh --auto --brings {shlex.quote(brings)}{root_arg}"
     problems = check()
     for problem in problems:
         err.write(f"rollout.sh: {problem}\n")
@@ -507,7 +558,12 @@ def run(order, brings, root, checkout, dry_run, reapply, say, err, default_root,
         err.write(f"rollout.sh: another rollout.sh --auto holds {LOCK}; nothing run\n")
         return 1
     try:
-        return auto_round(order, brings, root_arg, checkout, reapply, review, land, pr_of, pr_state, branch_of, say, err,
+        return auto_round(order, brings, resume, checkout, reapply, review, land, pr_of, pr_state, branch_of, say, err,
                           sleep)
+    except (KeyboardInterrupt, SystemExit) as stop:
+        # An interrupt, or a SIGTERM or SIGHUP during a review session (signals_raise): the session's group is gone.
+        code = stop.code if isinstance(stop, SystemExit) and isinstance(stop.code, int) else 130
+        err.write(f"rollout.sh: interrupted; resume with: {resume}\n")
+        return code
     finally:
         handle.close()  # the lock is released here, and not before

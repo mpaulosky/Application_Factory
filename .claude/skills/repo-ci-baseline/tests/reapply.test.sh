@@ -165,6 +165,7 @@ cat > "$repo/scripts/review.sh" <<EOF
 echo "\$* GATE_SKIP_REVIEW=\${GATE_SKIP_REVIEW-unset}" >> "$work/stub/check.log"
 if [[ -s "$work/stub/check-says" ]]; then cat "$work/stub/check-says" >&2; exit 1; fi
 if [[ -s "$work/stub/check-notes" ]]; then cat "$work/stub/check-notes" >&2; fi
+if [[ -s "$work/stub/check-stdout" ]]; then cat "$work/stub/check-stdout"; exit 1; fi
 echo "Reviewed clean: 0 finding(s), none blocking."
 EOF
 chmod +x "$repo/scripts/review.sh"
@@ -302,10 +303,12 @@ no_review="No review is recorded for this diff. Run /pre-push-review, which revi
 findings="2 review finding(s) wait for a person. Fix them and run /pre-push-review again, or the person you work for accepts each one (never an agent on their behalf):"
 check_says() { : > "$stub/check-says"; for part in "$@"; do printf '%s\n' "$part" >> "$stub/check-says"; done; }
 gate_says() { : > "$stub/gate-log"; for part in "$@"; do printf '%s\n' "$part" >> "$stub/gate-log"; done; }
+step_line() { printf '\033[0;36m\342\226\266 %s\033[0m' "$1"; }
+review_step="$(step_line "Local review (scripts/review.sh check)")"
 refused() { # <name> <expected exit>: run reapply.sh with the gate failing, as gate_says and check_says set it up
   reset_gh
   echo 7 > "$stub/open"
-  [[ -e "$stub/gate-log" ]] || gate_says "gate: the review check failed"
+  [[ -e "$stub/gate-log" ]] || gate_says "$(step_line "Markdown lint (0 changed file(s))")" "$review_step" "gate: the review check failed"
   : > "$stub/check.log"
   out="$("$reapply" --brings '#83' "$repo" 2>&1)" && rc=0 || rc=$?
   check "$1: exits $2" '[[ $rc -eq '"$2"' ]] || { echo "rc $rc: $out" >&2; false; }'
@@ -328,9 +331,30 @@ refused "both refusal texts at a line's start, many findings" 4
 check_says "  $no_review" "x $findings"
 refused "refusal texts not at a line's start" 1
 # What the gate printed doesn't count: a refusal in the push's log while the check passes is an ordinary failure.
-gate_says "$(printf '\033[0;36m\342\226\266 Local review (scripts/review.sh check)\033[0m')" "$no_review" "$findings"
+gate_says "$review_step" "$no_review" "$findings"
 refused "refusal texts only in the push's log" 1
 check "refusal texts only in the push's log: the check was asked" '[[ -s "$stub/check.log" ]]'
+# A push that failed before the review step, or after it, isn't the review's refusal, however the check would answer:
+# the check isn't even asked.
+for last in "Markdown lint (2 changed file(s))" "Build" "Local review (scripts/review.sh check) again"; do
+  check_says "$no_review"
+  gate_says "$review_step" "Reviewed clean." "$(step_line "$last")" "error: it failed"
+  refused "a push the gate stopped at $last" 1
+  check "a push the gate stopped at $last: the check wasn't asked" '[[ ! -s "$stub/check.log" ]]'
+done
+# Only a line that starts with the marker is a step header: one quoting it inside (a finding's line) isn't.
+check_says "$no_review"
+gate_says "$review_step" "  R1 critical scripts/gate.sh:25 (Shell): step() prints ▶ Build before each step"
+refused "a line after the review step that quotes a header" 3
+check_says "$findings"
+gate_says "error: failed to push some refs (the hook refused it before the gate)"
+refused "a push refused before the gate ran" 1
+# The check's verdict is its stderr: a refusal on stdout alone, or a check that can't run, gives none.
+printf '%s\n' "$no_review" "$findings" > "$stub/check-stdout"
+refused "refusal texts on the check's stdout alone" 1
+command rm -f "$stub/check-stdout"
+check_says "scripts/review.sh: line 1: tsx: command not found"
+refused "a check that can't run" 1
 # A check that passes is an answer, whatever else it printed on the way (an install's notes, say).
 printf '%s\n' "$no_review" > "$stub/check-notes"
 refused "a passing check that printed the no-review text" 1
