@@ -2701,7 +2701,7 @@ describe("main", () => {
     const result = cli(["prepare", dir, "last"]);
 
     assert.equal(result.code, 1);
-    assert.match(result.err, /no fixes since/);
+    assert.match(result.err, /^no fixes since [0-9a-f]{40}: a later round follows a round that fixed something, after its fix commits\.$/m);
   });
 
   it("prepare refuses an earlier HEAD that isn't one of HEAD's commits, whose diff would hold more than the fixes", () => {
@@ -2737,7 +2737,7 @@ describe("main", () => {
     const result = cli(["prepare", dir, before]);
 
     assert.equal(result.code, 1);
-    assert.match(result.err, /no fixes since/);
+    assert.match(result.err, new RegExp(`^no fixes since ${before}: a later round follows a round that fixed something, after its fix commits\\.$`, "m"));
     assert.equal(existsSync(join(dir, "fixes.patch")), false);
   });
 
@@ -2823,7 +2823,7 @@ describe("main", () => {
     const result = cli(["prepare", dir, before]);
 
     assert.equal(result.code, 1);
-    assert.match(result.err, /main was merged in/);
+    assert.match(result.err, /main was merged in since the round before, so the fixes can't be told from main's changes: start again at round 1/);
     assert.equal(existsSync(join(dir, "fixes.patch")), false);
   });
 
@@ -4042,7 +4042,7 @@ describe("prepareRound", () => {
   it("refuses a round with no fixes since", () => {
     const first = prepared();
 
-    assert.throws(() => prepareRound(repo, { since: { commit: first.head, preparedHead: first.head } }), /no fixes since/);
+    assert.throws(() => prepareRound(repo, { since: { commit: first.head, preparedHead: first.head } }), new RegExp(`no fixes since ${first.head}: a later round follows a round that fixed something, after its fix commits\\.$`));
   });
 
   it("writes nothing under the checkout: the host decides where the patches go", () => {
