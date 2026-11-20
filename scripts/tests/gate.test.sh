@@ -7,8 +7,9 @@
 # and --quick (and a missing python3 or a broken checker fails closed), that dependabot.yml watches the root package.json, and the review tests' install step (a missing pnpm, a pnpm that leaves no tsx, a pnpm that installs it).
 # It also checks that .claude/settings.json runs the executable scripts/lint-edited-file.sh after Edit, Write and MultiEdit (ADR 0011), and that the check fails on a dropped matcher, another event or hook type,
 # a command without the quotes around CLAUDE_PROJECT_DIR or naming another script, a non-executable script and a file that is not JSON.
-# It also checks the shfmt step (ADR 0015): every shell file, changed or not and the hooks among them, is formatted in the style .editorconfig gives, a file that is not a shell file is
-# left alone, and a missing shfmt or one older than v3.14 fails the gate.
+# It also checks the shfmt step (ADR 0015): every shell file, changed or not, the three hooks among them, is formatted in the style .editorconfig gives; a file that is not a shell file,
+# a hook name outside .github/hooks, a tracked file deleted from the working tree and an ignored file are left alone; a name with a space, a non-ASCII byte or a leading - is checked as a
+# file; a file shfmt can't parse fails with its error; git failing fails the step; no temp file is left; and shfmt is refused when missing or outside test.sh's version rule, which is the same.
 # It also checks GATE_PART (ADR 0012) and TEST_SH_SHARD (ADR 0013, only the template part runs a shard; test.sh's steps each sit in one shard; the workflow's matrix lists them all): each part runs alone, a bad value, or --quick or --sync with a part, is refused, the Sandcastle check runs in a full gate only when the branch changed
 # a file it reads (and is remembered per clean tree), and the CI workflow has one job per part and a Template tests job that needs them all.
 #
@@ -302,26 +303,89 @@ cp -p "$here/.github/hooks/pre-push" "$repoG/$skill/template/owned/.github/hooks
 printf '%b' "$unformatted" > "$repoG/notes.txt"
 GATE_ARGS=--quick run "$repoG"
 check "a file that is not a shell file is not checked" "$([[ $status == 0 ]] && echo 0 || echo 1)"
+# The extensionless hook names count only in a .github/hooks folder, where .editorconfig gives them the style: the same name elsewhere is not a shell file to either step.
+printf '%b' "$unformatted" > "$repoG/scripts/pre-commit"
+GATE_ARGS=--quick run "$repoG"
+check "a file named like a hook outside .github/hooks is not checked" "$([[ $status == 0 ]] && echo 0 || echo 1)"
+rm -f "$repoG/scripts/pre-commit"
+for hook in pre-commit post-checkout; do
+  printf '%b' "$redirect_tight" > "$repoG/.github/hooks/$hook"
+  printf '%b' "$redirect_tight" > "$repoG/$skill/template/owned/.github/hooks/$hook"
+  GATE_ARGS=--quick run "$repoG"
+  check "the $hook hook is checked too" "$([[ $status == 1 ]] && grep -qF ".github/hooks/$hook.orig" "$repoG/out" && echo 0 || echo 1)"
+  cp -p "$here/.github/hooks/$hook" "$repoG/.github/hooks/$hook"
+  cp -p "$here/.github/hooks/$hook" "$repoG/$skill/template/owned/.github/hooks/$hook"
+done
+# A tracked file deleted from the working tree (not git rm'd) is still listed by git ls-files --cached: it is skipped, not handed to shfmt as a missing file.
+printf '%b' "$unformatted" > "$repoG/scripts/gone.sh"
+commit_all "$repoG" "a file to delete"
+rm "$repoG/scripts/gone.sh"
+GATE_ARGS=--quick run "$repoG"
+check "a tracked shell file deleted from the working tree is skipped" "$([[ $status == 0 ]] && echo 0 || echo 1)"
+git -C "$repoG" checkout -q -- scripts/gone.sh
+git -C "$repoG" rm -q -f scripts/gone.sh
+# An ignored file is not the repo's: --exclude-standard leaves it out.
+printf 'ignored/\n' >> "$repoG/.git/info/exclude"
+mkdir -p "$repoG/ignored"
+printf '%b' "$unformatted" > "$repoG/ignored/x.sh"
+GATE_ARGS=--quick run "$repoG"
+check "an ignored shell file is not checked" "$([[ $status == 0 ]] && echo 0 || echo 1)"
+# A name with a space and a non-ASCII byte is found (-z), and one that starts with - is a file, not an option, to shellcheck and shfmt alike.
+printf '%b' "$unformatted" > "$repoG/scripts/"$'caf\303\251 loose.sh'
+GATE_ARGS=--quick run "$repoG"
+check "a shell file with a non-ASCII name and a space is checked by shfmt" "$([[ $status == 1 ]] && grep -qF $'caf\303\251 loose.sh.orig' "$repoG/out" && echo 0 || echo 1)"
+rm -f "$repoG/scripts/"$'caf\303\251 loose.sh'
+printf '%b' "$unformatted" > "$repoG/-x.sh"
+GATE_ARGS=--quick run "$repoG"
+check "a shell file named like an option is checked as a file" "$([[ $status == 1 ]] && grep -qF -- '-x.sh.orig' "$repoG/out" && ! grep -qiE 'flag provided but not defined|invalid option|unrecognized option' "$repoG/out" && echo 0 || echo 1)"
+rm -f -- "$repoG/-x.sh"
+# A file shfmt can't parse fails the step, showing shfmt's error and a message that names that cause too. It is committed before origin/main, so shellcheck (changed files) never reads it.
+printf '#!/usr/bin/env bash\nif then\n' > "$repoG/scripts/broken.sh"
+commit_all "$repoG" "a file shfmt can't parse"
+git -C "$repoG" update-ref refs/remotes/origin/main HEAD
+GATE_ARGS=--quick run "$repoG"
+check "a shell file shfmt can't parse fails the gate, with shfmt's error and the message" "$([[ $status == 1 ]] && grep -q 'scripts/broken.sh:2' "$repoG/out" && grep -q 'fix the syntax of any file shfmt could not parse' "$repoG/out" && echo 0 || echo 1)"
+git -C "$repoG" rm -q -f scripts/broken.sh
+commit_all "$repoG" "drop it"
+git -C "$repoG" update-ref refs/remotes/origin/main HEAD
+# The gate leaves no file list behind, on a pass and on a failure.
+mkdir -p "$work/gate-tmp"
+TMPDIR="$work/gate-tmp" GATE_ARGS=--quick run "$repoG"
+check "a passing --quick run leaves no temp file" "$([[ $status == 0 && -z "$(ls -A "$work/gate-tmp")" ]] && echo 0 || echo 1)"
+printf '%b' "$unformatted" > "$repoG/scripts/loose.sh"
+TMPDIR="$work/gate-tmp" GATE_ARGS=--quick run "$repoG"
+check "a run the shfmt step fails leaves no temp file" "$([[ $status == 1 && -z "$(ls -A "$work/gate-tmp")" ]] && grep -q '❌ shfmt' "$repoG/out" && echo 0 || echo 1)"
+rm -f "$repoG/scripts/loose.sh"
 # The style is .editorconfig's, not flags in the gate: with a 4-space indent there, the gate's own 2-space scripts fail.
-sed -i 's/^indent_size = 2$/indent_size = 4/' "$repoG/.editorconfig" "$repoG/$skill/template/owned/.editorconfig"
+for f in "$repoG/.editorconfig" "$repoG/$skill/template/owned/.editorconfig"; do
+  sed 's/^indent_size = 2$/indent_size = 4/' "$f" > "$f.new" && mv "$f.new" "$f"
+done
 GATE_ARGS=--quick run "$repoG"
 check "shfmt takes the style from .editorconfig" "$([[ $status == 1 ]] && grep -qF 'scripts/gate.sh.orig' "$repoG/out" && echo 0 || echo 1)"
-# A missing shfmt, and one older than v3.14, fail the gate and say so.
+# A missing shfmt fails the gate and says so; the version rule is test.sh's (v3.14 or a later v3), tried with a stub shfmt on the versions tests/gh_repo/test_shfmt_install.py tries.
 repoH="$(new_repo shfmt-missing)"
-mkdir -p "$work/noshfmt" "$work/oldshfmt"
+mkdir -p "$work/noshfmt" "$work/stubshfmt"
 for tool in bash git python3 markdownlint-cli2 yamllint shellcheck node pnpm env sh cat grep sed awk sort dirname basename mktemp rm cp mv ls tr head tail wc cmp mkdir touch uname date find; do
   tool_path="$(command -v "$tool" 2> /dev/null || true)"
   [[ -z $tool_path ]] || ln -sf "$tool_path" "$work/noshfmt/$tool"
-  [[ -z $tool_path ]] || ln -sf "$tool_path" "$work/oldshfmt/$tool"
+  [[ -z $tool_path ]] || ln -sf "$tool_path" "$work/stubshfmt/$tool"
 done
-printf '#!/usr/bin/env bash\necho v3.13.0\n' > "$work/oldshfmt/shfmt"
-chmod +x "$work/oldshfmt/shfmt"
 status=0
 (cd "$repoH" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/noshfmt" bash scripts/gate.sh --quick > "$repoH/out" 2>&1) || status=$?
 check "a missing shfmt fails the gate and says so" "$([[ $status == 1 ]] && grep -q 'shfmt not found' "$repoH/out" && echo 0 || echo 1)"
-status=0
-(cd "$repoH" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/oldshfmt" bash scripts/gate.sh --quick > "$repoH/out" 2>&1) || status=$?
-check "an shfmt older than v3.14 fails the gate and names its version" "$([[ $status == 1 ]] && grep -qF "not 'v3.13.0'" "$repoH/out" && echo 0 || echo 1)"
+# The stub prints the version for any arguments and exits 0, so an accepted version passes the step and a refused one stops it, naming the version.
+for version in v3.13.9 v3.14.0 v3.14.1 v3.20.0 v3.99.0 v3.100.0 v2.6.4 v4.0.0 v3.14 '(devel)' v3.014.0; do
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" %q\n' "$version" > "$work/stubshfmt/shfmt"
+  chmod +x "$work/stubshfmt/shfmt"
+  status=0
+  (cd "$repoH" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/stubshfmt" bash scripts/gate.sh --quick > "$repoH/out" 2>&1) || status=$?
+  case "$version" in
+    v3.14.0 | v3.14.1 | v3.20.0 | v3.99.0 | v3.100.0) check "shfmt $version is accepted" "$([[ $status == 0 ]] && echo 0 || echo 1)" ;;
+    *) check "shfmt $version is refused, naming it" "$([[ $status == 1 ]] && grep -qF "not '$version'" "$repoH/out" && echo 0 || echo 1)" ;;
+  esac
+done
+version_rule() { grep -oE '"\$\(shfmt --version\)" =~ [^ ]+' "$1"; }
+check "the gate's shfmt version rule is test.sh's" "$([[ -n "$(version_rule "$here/scripts/gate.sh")" && "$(version_rule "$here/scripts/gate.sh")" == "$(version_rule "$here/$skill/test.sh")" ]] && echo 0 || echo 1)"
 
 # test.sh's pass is remembered for a clean tree: the same tree is not tested twice; a new commit, an uncommitted or untracked file, GATE_NO_CACHE=1 and a failure all run it.
 repo9="$(new_repo cache)"
@@ -600,6 +664,12 @@ with_origin "$repo12"
 wrapper_for gitdiff diff
 PATH="$work/gitdiff:$PATH" GATE_ARGS=--quick run "$repo12"
 check "a git that fails listing the changed files fails the gate, saying so" "$([[ $status == 1 ]] && grep -q 'could not list the changed files' "$repo12/out" && echo 0 || echo 1)"
+# With an origin/main the shellcheck step never passes --cached, so a git that fails on it fails only the shfmt step's listing, which must stop the gate too.
+wrapper_for gitcached --cached
+PATH="$work/gitcached:$PATH" GATE_ARGS=--quick run "$repo12"
+check "a git that fails listing every file fails the shfmt step, saying so" "$([[ $status == 1 ]] && grep -q 'could not list the files (git failed)' "$repo12/out" && grep -q 'changed shell file(s) checked' "$repo12/out" && echo 0 || echo 1)"
+GATE_ARGS=--quick run "$repo12"
+check "and the same repo passes with a git that works" "$([[ $status == 0 ]] && echo 0 || echo 1)"
 repo13="$(new_repo git-fails-status)"
 printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo13/.git/info/exclude"
 commit_all "$repo13" base
@@ -640,7 +710,7 @@ done
 
 # --- GATE_PART (ADR 0012): CI runs one part of the gate per job; a full gate runs them all -------------------------------------------------------------------
 # The step headers of each part. A part prints its own and no other part's, so a step that moves to another part, or is dropped, is found here.
-headers_static="Copies of Template files|Issue references in Owned files|git status guards in Owned scripts|markdownlint (whole repo|yamllint (whole repo|shellcheck (changed shell files)"
+headers_static="Copies of Template files|Issue references in Owned files|git status guards in Owned scripts|markdownlint (whole repo|yamllint (whole repo|shellcheck (changed shell files)|shfmt (every shell file)"
 headers_template="Local review (scripts/review.sh check)|▶ test.sh"
 headers_sandcastle="▶ Sandcastle check"
 repoP="$(new_repo parts)"
@@ -1132,7 +1202,7 @@ for l in lines:
             sys.exit(1)
         current = None
         continue
-    # shfmt indents a step inside its shard block; one at column 0 is outside every block.
+    # A step counts whatever its indent (shfmt indents one inside its shard block); it is outside when no block is open.
     if l.lstrip(" ").startswith("step "):
         if current is None:
             sys.exit(1)
@@ -1146,12 +1216,13 @@ check "test.sh's steps are split into the shards it declares, each once, in orde
 mkdir -p "$work/testsh"
 awk '{ print } /^fi # the checks shard$/ { print "step \"stray\"" }' "$testsh" > "$work/testsh/outside.sh"
 awk '{ print } /^fi # the hooks shard$/ { print "step \"between\"" }' "$testsh" > "$work/testsh/between.sh"
+awk '{ print } /^fi # the hooks shard$/ { print "  step \"indented\"" }' "$testsh" > "$work/testsh/indented.sh"
 sed '/^fi # the checks shard$/d' "$testsh" > "$work/testsh/open.sh"
 sed '/^fi # the hooks shard$/d' "$testsh" > "$work/testsh/nested.sh"
 sed 's/^fi # the hooks shard$/fi # the scripts shard/' "$testsh" > "$work/testsh/label.sh"
 sed 's/^if in_shard checks; then$/if in_shard scripts; then/; s/^fi # the checks shard$/fi # the scripts shard/' "$testsh" > "$work/testsh/twice.sh"
 sed 's/^shards=(hooks scripts checks)$/shards=(hooks scripts)/' "$testsh" > "$work/testsh/undeclared.sh"
-for m in outside between open nested label twice undeclared; do
+for m in outside between indented open nested label twice undeclared; do
   check "the shard check fails for a test.sh where $m (the mutant differs from test.sh)" "$(! cmp -s "$testsh" "$work/testsh/$m.sh" && ! testsh_shards_ok "$work/testsh/$m.sh" && echo 0 || echo 1)"
 done
 

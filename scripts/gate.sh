@@ -196,8 +196,22 @@ run_static() {
     echo -e "${RED}❌ yamllint${RESET}" >&2
     exit 1
   }
+  # A shell file, for the shellcheck and shfmt steps: a *.sh, or one of the three git hooks in a .github/hooks folder (the repo's own, or the Template's copy of it), which
+  # have no extension. .editorconfig gives the shell style to *.sh and .github/hooks/* only, so a file named pre-commit anywhere else is not taken for a hook.
+  is_shell_file() {
+    case "$1" in
+      *.sh) return 0 ;;
+      .github/hooks/pre-commit | .github/hooks/pre-push | .github/hooks/post-checkout) return 0 ;;
+      */.github/hooks/pre-commit | */.github/hooks/pre-push | */.github/hooks/post-checkout) return 0 ;;
+    esac
+    return 1
+  }
+  # The two steps' file lists, removed however the gate ends. Both names are set before the trap, so it never reads an unset one under set -u.
+  changed_list=""
+  all_list=""
+  trap 'command rm -f -- ${changed_list:+"$changed_list"} ${all_list:+"$all_list"}' EXIT
   # Lint with ShellCheck the shell files this branch changes (added, copied, modified, renamed or type-changed, committed or not, against its merge base with origin/main; every tracked and untracked
-  # shell file when there is no origin/main or no merge base), so --quick finds what test.sh's shellcheck step would fail in the template part. A shell file is a *.sh or one of the three git hooks.
+  # shell file when there is no origin/main or no merge base), so --quick finds what test.sh's shellcheck step would fail in the template part.
   echo -e "\n${CYAN}▶ shellcheck (changed shell files)${RESET}"
   if ! command -v shellcheck > /dev/null 2>&1; then
     echo -e "${RED}❌ shellcheck not found: the gate needs it (test.sh runs it too).${RESET}" >&2
@@ -206,7 +220,6 @@ run_static() {
   # NUL-separated names (-z): git quotes a name with a non-ASCII byte, a tab or a quote otherwise, and the file would never be found.
   # The list is written to a file first: a git failure inside a process substitution would not stop the gate, and the step would pass having checked nothing.
   changed_list="$(mktemp)"
-  trap 'command rm -f -- "$changed_list"' EXIT
   if git rev-parse -q --verify refs/remotes/origin/main > /dev/null && merge_base="$(git merge-base origin/main HEAD 2> /dev/null)"; then
     { git diff -z --name-only --diff-filter=ACMRT "$merge_base" && git ls-files -z --others --exclude-standard; } > "$changed_list"
   else
@@ -218,19 +231,21 @@ run_static() {
   shell_changed=()
   while IFS= read -r -d '' f; do
     [[ -f "$f" ]] || continue
-    case "${f##*/}" in *.sh | pre-commit | pre-push | post-checkout) shell_changed+=("$f") ;; esac
+    if is_shell_file "$f"; then shell_changed+=("$f"); fi
   done < "$changed_list"
+  # -- ends the options: git lists names relative to the root, so a file named -x.sh would be read as one.
   if ((${#shell_changed[@]})); then
-    shellcheck "${shell_changed[@]}" || {
+    shellcheck -- "${shell_changed[@]}" || {
       echo -e "${RED}❌ shellcheck${RESET}" >&2
       exit 1
     }
   fi
   echo "${#shell_changed[@]} changed shell file(s) checked."
 
-  # Every tracked and untracked shell file (a *.sh or one of the three git hooks) is formatted as shfmt formats it, in the style .editorconfig gives
-  # (a copy of the Template's): shfmt -d reads that file, so the style is written down once. All of them, not only the changed ones: it takes about a second.
-  # The version test.sh needs (v3.14 or a later v3), so a newer shfmt's different output can't fail a file the pinned one passes.
+  # Every tracked and untracked shell file is formatted as shfmt formats it, in the style .editorconfig gives (a copy of the Template's, ADR 0015). shfmt -d is given no
+  # style flags, so it reads that file and the style is written down once. All of them, not only the changed ones: the step takes about a second.
+  # shfmt must be v3.14 or a later v3, the releases test.sh accepts (the same regex): this refuses v2, v4 and a v3 before v3.14. It doesn't make every accepted release format
+  # alike: a later v3 that formats differently fails files CI's pinned one passes, and then the files are reformatted or the pin moves.
   echo -e "\n${CYAN}▶ shfmt (every shell file)${RESET}"
   if ! command -v shfmt > /dev/null 2>&1; then
     echo -e "${RED}❌ shfmt not found: the gate needs v3.14 or a later v3 (test.sh needs it too).${RESET}" >&2
@@ -241,7 +256,6 @@ run_static() {
     exit 1
   fi
   all_list="$(mktemp)"
-  trap 'command rm -f -- "$changed_list" "$all_list"' EXIT
   git ls-files -z --cached --others --exclude-standard > "$all_list" || {
     echo -e "${RED}❌ could not list the files (git failed): the shell files were not checked.${RESET}" >&2
     exit 1
@@ -249,11 +263,12 @@ run_static() {
   shell_all=()
   while IFS= read -r -d '' f; do
     [[ -f "$f" ]] || continue
-    case "${f##*/}" in *.sh | pre-commit | pre-push | post-checkout) shell_all+=("$f") ;; esac
+    if is_shell_file "$f"; then shell_all+=("$f"); fi
   done < "$all_list"
+  # shfmt exits 1 both for a file it would change (it prints the diff) and for one it can't parse (it prints the error), so the message names both.
   if ((${#shell_all[@]})); then
-    shfmt -d "${shell_all[@]}" || {
-      echo -e "${RED}❌ shfmt: run shfmt -w on the files above (it reads .editorconfig; edit the Template's, then scripts/gate.sh --sync).${RESET}" >&2
+    shfmt -d -- "${shell_all[@]}" || {
+      echo -e "${RED}❌ shfmt: run shfmt -w on each file whose diff is shown above (it reads .editorconfig; for the Template's style edit the Template's, then scripts/gate.sh --sync), and fix the syntax of any file shfmt could not parse.${RESET}" >&2
       exit 1
     }
   fi
