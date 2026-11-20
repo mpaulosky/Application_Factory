@@ -3077,19 +3077,97 @@ describe("main", () => {
       assert.match(readFileSync(join(dir, "fixes.patch"), "utf8"), /second/);
     });
 
-    it("breaks a tie in recordedAt by the head, the greater one winning, whatever order the folder lists them in", () => {
-      const at = new Date("2026-01-01T00:00:00Z");
-      record([], 1, at);
-      const first = run(repo, "rev-parse", "HEAD");
-      commit(repo, "other.cs", "second\n", "second commit");
-      record([], 1, at);
-      const second = run(repo, "rev-parse", "HEAD");
+    // R17: ledger file names are diff keys, so a test that records two reviews can't choose the folder's order. These write the
+    // ledgers under chosen names and run both assignments, so dropping a rule fails one of them whatever order readdir gives.
+    // Nothing reads a ledger's name back as its key here: recordedAnchor reads every *.json in the folder.
+    const ledgerJson = (findings: Finding[]) => {
+      const ledger = record(findings);
+      const path = join(ledgerDir(repo), `${ledger.key}.json`);
+      const text = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+      rmSync(path);
+      return text;
+    };
+    const writeNamed = (name: string, ledger: Record<string, unknown>) => writeFileSync(join(ledgerDir(repo), name), JSON.stringify(ledger));
+
+    for (const smallerFirst of [true, false]) {
+      it(`breaks a tie in recordedAt by the head, the greater one winning, with the smaller head in the file that sorts ${smallerFirst ? "first" : "second"}`, () => {
+        const first = ledgerJson([]);
+        commit(repo, "other.cs", "second\n", "second commit");
+        const second = ledgerJson([]);
+        commit(repo, "fix.cs", "the fix\n", "fix");
+        const at = "2026-01-01T00:00:00.000Z";
+        const [smaller, greater] = [first, second].sort((a, b) => (String(a.head) < String(b.head) ? -1 : 1)) as [Record<string, unknown>, Record<string, unknown>];
+        writeNamed(smallerFirst ? "a.json" : "b.json", { ...smaller, recordedAt: at });
+        writeNamed(smallerFirst ? "b.json" : "a.json", { ...greater, recordedAt: at });
+
+        const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+        assert.equal(result.code, 0, result.err);
+        assert.match(result.err, new RegExp(`Fixes since ${String(greater.head)}`));
+      });
+    }
+
+    for (const openInGreater of [true, false]) {
+      it(`breaks a tie in recordedAt and head by the file name, the greater one winning, with the open finding in the ${openInGreater ? "greater" : "smaller"} name`, () => {
+        const clean = ledgerJson([]);
+        const open = ledgerJson([finding({ status: "open", test: null })]);
+        commit(repo, "fix.cs", "the fix\n", "fix");
+        const at = "2026-01-01T00:00:00.000Z";
+        writeNamed("a.json", { ...(openInGreater ? clean : open), recordedAt: at });
+        writeNamed("b.json", { ...(openInGreater ? open : clean), recordedAt: at });
+
+        const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+        if (openInGreater) {
+          assert.equal(result.code, 1);
+          assert.match(result.err, /has 1 finding\(s\) open or accepted/);
+        } else {
+          assert.equal(result.code, 0, result.err);
+        }
+      });
+    }
+
+    // R16: a ledger that doesn't read or parse could be the branch's newest, holding findings left open or accepted; skipping it would
+    // take an older clean review as the anchor and leave them unread. So prepare refuses, naming the file.
+    const malformed: [string, (ledger: Record<string, unknown>) => string | undefined][] = [
+      ["has no findings", (ledger) => JSON.stringify({ ...ledger, findings: undefined })],
+      ["has a finding whose status isn't one of the four", (ledger) => JSON.stringify({ ...ledger, findings: [{ ...(finding() as object), status: "weird" }] })],
+      ["has a field the schema doesn't know", (ledger) => JSON.stringify({ ...ledger, extra: 1 })],
+      ["is damaged JSON", () => '{"version": 1, "branch": "feature/1-thing", "findings": ['],
+      ["is JSON that names no branch", (ledger) => JSON.stringify({ ...ledger, branch: undefined })],
+      ["is JSON that isn't an object", () => "[]"],
+      ["can't be read", () => undefined],
+    ];
+    for (const [what, make] of malformed) {
+      it(`refuses when a ledger in the folder ${what}, beside an older clean review of the branch, and writes no fixes patch`, () => {
+        const clean = ledgerJson([]);
+        writeNamed("older.json", clean);
+        commit(repo, "other.cs", "second\n", "second commit");
+        const newer = { ...clean, head: run(repo, "rev-parse", "HEAD"), recordedAt: "2099-01-01T00:00:00.000Z" };
+        const text = make(newer);
+        const path = join(ledgerDir(repo), "newer.json");
+        if (text === undefined) mkdirSync(path);
+        else writeFileSync(path, text);
+        commit(repo, "fix.cs", "the fix\n", "fix");
+        const dir = fresh("delta");
+
+        const result = cli(["prepare", dir, "recorded"]);
+
+        assert.equal(result.code, 1);
+        assert.equal(result.err, `the ledger ${path} doesn't read or parse as a review, and may be the newest review of feature/1-thing: start again at round 1 with prepare <dir>.\n`);
+        assert.equal(existsSync(join(dir, "fixes.patch")), false);
+      });
+    }
+
+    it("doesn't refuse for another branch's ledger that doesn't parse but names its branch", () => {
+      const clean = ledgerJson([]);
+      writeNamed("mine.json", clean);
+      writeFileSync(join(ledgerDir(repo), "other.json"), JSON.stringify({ ...clean, branch: "feature/2-other", findings: undefined }));
       commit(repo, "fix.cs", "the fix\n", "fix");
 
       const result = cli(["prepare", fresh("delta"), "recorded"]);
 
       assert.equal(result.code, 0, result.err);
-      assert.match(result.err, new RegExp(`Fixes since ${first > second ? first : second}`));
     });
 
     it("refuses a review recorded at a commit main already has, and writes no fixes patch", () => {

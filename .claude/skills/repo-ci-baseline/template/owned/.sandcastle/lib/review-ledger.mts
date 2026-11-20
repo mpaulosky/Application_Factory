@@ -986,6 +986,27 @@ function readLedgers(cwd: string): { ledger: Ledger; name: string }[] {
   return found;
 }
 
+// The first ledger file (`*.json` in the ledger folder, in name order) that can't be read, isn't JSON, or is JSON that fails the
+// schema while its `branch` is `branch` or isn't a string: one recordedAnchor can't rule out as the branch's newest review. A
+// malformed ledger that names another branch can't be this branch's review, so it doesn't count.
+function unreadableLedger(cwd: string, branch: string): string | undefined {
+  const dir = ledgerDir(cwd);
+  if (!existsSync(dir)) return undefined;
+  for (const name of readdirSync(dir).filter((entry) => entry.endsWith(".json")).sort()) {
+    const path = join(dir, name);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(path, "utf8"));
+    } catch {
+      return path;
+    }
+    if (ledgerSchema.safeParse(parsed).success) continue;
+    const named = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as { branch?: unknown }).branch : undefined;
+    if (typeof named !== "string" || named === branch) return path;
+  }
+  return undefined;
+}
+
 // What a refusal that starts the review over tells the person to run.
 const RESTART = "start again at round 1 with prepare <dir>.";
 
@@ -994,10 +1015,14 @@ const RESTART = "start again at round 1 with prepare <dir>.";
 // ancestor: after an amend or a rebase the newest isn't one of HEAD's commits, and an older one is not silently taken instead.
 // Not a commit the caller names either, so the fixes patch holds every commit since the code a review vouched for. The reason
 // there's none, as a message, when no review of the branch is recorded or HEAD has none. A tie in recordedAt goes to the greater
-// head, then the greater file name, so the folder's order never decides. A newer ledger that doesn't read or parse is skipped,
-// which can only make the anchor an older review and the patch wider: no fix goes unread.
+// head, then the greater file name, so the folder's order never decides. A ledger that doesn't read or parse refuses the anchor
+// when it is this branch's or says no branch (unreadableLedger): it may be the newest review, holding findings left open or
+// accepted, and skipping it would take an older clean review instead and leave them unread. readLedgers, which the gate's check
+// and `latest` share, still skips it.
 export function recordedAnchor(cwd: string, base: string, head: string, branch: string): { commit: string; ledger: Ledger } | string {
   if (branch === "") return `HEAD isn't on a branch, so no review recorded for one can be its anchor: ${RESTART}`;
+  const unreadable = unreadableLedger(cwd, branch);
+  if (unreadable !== undefined) return `the ledger ${unreadable} doesn't read or parse as a review, and may be the newest review of ${branch}: ${RESTART}`;
   const newer = (a: { ledger: Ledger; name: string }, b: { ledger: Ledger; name: string }) =>
     a.ledger.recordedAt !== b.ledger.recordedAt ? a.ledger.recordedAt > b.ledger.recordedAt : a.ledger.head !== b.ledger.head ? a.ledger.head > b.ledger.head : a.name > b.name;
   let found: { ledger: Ledger; name: string } | undefined;
