@@ -222,7 +222,8 @@ These are the checks the CI lint workflows run; a gate runs `actionlint` and `zi
   every relative or empty entry goes (it would name a folder of whatever directory a command runs in, the repository once the hook has changed into it), and so does
   every entry inside the project's checkouts (the file's repository, and the project and every worktree `git worktree list` shows, a `node_modules/.bin` among them),
   since an agent can write any of them with no Bash prompt and this hook runs right after a write. It cleans twice: first, before it looks up `python3` or `git`, with
-  the checkouts read from git's own files (`.git`, `commondir`, `worktrees/*/gitdir`) by bash alone, and again with `git worktree list` and the edited file's repository.
+  the checkouts read from git's own files (`.git`, `commondir`, `worktrees/*/gitdir`) by bash alone, read whole and trimmed as git trims them (a relative
+  `worktrees/*/gitdir` from its own folder), and again with `git worktree list` and the edited file's repository.
   A `PATH` left with no entry is set to a folder that can't exist, never to an empty string, which bash would read as the working directory. So no linter (`markdownlint-cli2`, `yamllint`, `actionlint`,
   `zizmor`) and no helper a linter looks up on `PATH` (`node`, `python3`, `bash`, `shellcheck`) comes from there. A linter whose real file is a symlink into a checkout
   is passed over for the next one on `PATH`; one found only in such places is named apart in the note ("found only inside the project or on a relative PATH entry"),
@@ -232,7 +233,7 @@ These are the checks the CI lint workflows run; a gate runs `actionlint` and `zi
   because a person runs those.
 - Exit 1 with a message on stderr when its input is not JSON, `CLAUDE_PROJECT_DIR` is unset, `python3` is missing (or found only where the hook runs nothing from,
   which the message says), or, for a Markdown or YAML file, `git` is missing (the same) or older than 2.36
-  (`git worktree list -z`), so a broken hook is visible and is not read as a clean file.
+  (`git worktree list -z`), or one of those git files is longer than any that names a folder (`GIT_FILE_MAX`), so a broken hook is visible and is not read as a clean file.
 - Only the project's own checkout and the linked worktrees it lists are linted: the file's repository root must be one of the paths `git worktree list` prints for `CLAUDE_PROJECT_DIR`,
   which Claude Code
   sets and the hook requires (unset or empty is exit 1). A linter loads the repository's own config, and `markdownlint-cli2` runs JavaScript from its

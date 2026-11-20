@@ -1072,11 +1072,62 @@ for form in relative no-newline trailing-space; do
     no-newline) printf '%s' "$gitdir_was" > "$admin/gitdir" ;;
     trailing-space) printf '%s \t\r\n' "$gitdir_was" > "$admin/gitdir" ;;
   esac
+  # git reads a relative worktrees/<id>/gitdir only from 2.48 on: an older git (the hook takes 2.36) can't prove the case, so it is skipped there.
+  if [[ "$form" == relative ]] && ! git -C "$vet" worktree list --porcelain 2> /dev/null | grep -qxF "worktree $WORK/vet-wt"; then
+    echo "skip - this git does not read a relative worktrees/<id>/gitdir (git before 2.48), so that form isn't tried"
+    continue
+  fi
   git_file_case "the main checkout as the project, with a worktree's gitdir file $form: the worktree's helpers never run" "$vet" "$vet/docs/deep/main.md" "$WORK/vet-wt/bin"
 done
 printf '%s\n' "$gitdir_was" > "$admin/gitdir"
 rm "$vet/docs/deep/main.md"
 mv "$WORK/vet-wt/bin" "$vet/bin"
+# A .git file padded past any path's length (here with a hundred thousand newlines, which git would trim) stops the hook at once,
+# naming the file, instead of trimming it a character at a time or passing over the main checkout it names.
+{
+  printf 'gitdir: %s' "$admin"
+  head -c 100000 /dev/zero | tr '\0' '\n'
+} > "$WORK/vet-wt/.git"
+started=$SECONDS
+RUN_CWD=/ run_hook "$(edit_json "$WORK/vet-wt/docs/deep/ok.md")" "$vet/bin:$STUBS:$TOOLS" "$WORK/vet-wt"
+p=()
+[[ $STATUS -eq 1 && "$STDERR" == *"$WORK/vet-wt/.git is longer than any git file that names a folder"* ]] || p+=("exit $STATUS, stderr: $STDERR")
+((SECONDS - started < 20)) || p+=("took $((SECONDS - started)) seconds")
+log_empty || p+=("something ran: $(cat "$LOG")")
+check "a .git file padded past any path's length stops the hook at once, and nothing runs" ${p[@]+"${p[@]}"}
+printf '%s\n' "$wt_git" > "$WORK/vet-wt/.git"
+# read_git_file on its own, taken from the script: each trim set at its edge, as git trims, and the length cap at n and n+1.
+rgf="$WORK/rgf"
+mkdir -p "$rgf"
+# rgf_case <label> <want> <file text, printf %b escapes> [all]: what read_git_file sets for that file, or "<1>" when it returns 1.
+rgf_case() {
+  local got
+  printf '%b' "$3" > "$rgf/f"
+  # shellcheck disable=SC2016 # expanded by the inner bash
+  got="$(GIT_FILE_SCRIPT="$SCRIPT" bash -c 'eval "$(sed -n "/^GIT_FILE_MAX=/p; /^read_git_file() {/,/^}/p" "$GIT_FILE_SCRIPT")"
+    if read_git_file "$1" out "${2:-}"; then printf "%s" "$out" | od -An -c | tr -s " "; else echo "<1>"; fi' _ "$rgf/f" "${4:-}")"
+  p=()
+  [[ "$got" == "$2" ]] || p+=("got '$got', want '$2'")
+  check "read_git_file: $1" ${p[@]+"${p[@]}"}
+}
+rgf_case "the default trim keeps a trailing space and tab, as git does for .git and commondir" " a \\t" 'a \t\n'
+rgf_case "the default trim drops every trailing CR and LF" " a" 'a\r\n\n\r'
+rgf_case "the all trim drops trailing spaces, tabs, CRs and LFs" " a" 'a \t\r\n \n' all
+rgf_case "the all trim keeps a trailing VT and FF, which git's table doesn't hold" " a \\v \\f" 'a\v\f\n' all
+rgf_case "a file of only newlines holds nothing" "<1>" '\n\n'
+rgf_case "an empty file holds nothing" "<1>" ''
+max="$(sed -n 's/^GIT_FILE_MAX=//p' "$SCRIPT")"
+head -c "$max" /dev/zero | tr '\0' x > "$rgf/f"
+# shellcheck disable=SC2016 # expanded by the inner bash
+got="$(GIT_FILE_SCRIPT="$SCRIPT" bash -c 'eval "$(sed -n "/^GIT_FILE_MAX=/p; /^read_git_file() {/,/^}/p" "$GIT_FILE_SCRIPT")"; read_git_file "$1" out && echo "${#out}"' _ "$rgf/f" 2>&1)"
+p=()
+[[ "$got" == "$max" ]] || p+=("a file of $max characters: '$got'")
+printf x >> "$rgf/f"
+# shellcheck disable=SC2016 # expanded by the inner bash
+got="$(GIT_FILE_SCRIPT="$SCRIPT" bash -c 'eval "$(sed -n "/^GIT_FILE_MAX=/p; /^read_git_file() {/,/^}/p" "$GIT_FILE_SCRIPT")"; read_git_file "$1" out; echo "reached"' _ "$rgf/f" 2>&1)"
+[[ "$got" == *"is longer than any git file that names a folder (over $max characters)"* && "$got" != *reached* ]] || p+=("a file of $((max + 1)) characters: '$got'")
+check "read_git_file reads a file of GIT_FILE_MAX characters ($max) and stops the hook at one more" ${p[@]+"${p[@]}"}
+rm -r "$rgf"
 rm -r "${vet:?}/bin"
 # A project inside a checkout whose .git file names a gitdir that doesn't exist: the checkout itself is still dropped, though
 # git's files name no other checkout.

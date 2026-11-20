@@ -38,7 +38,8 @@
 # only helps; the commit hook and the gate still check). That config, and a skipped linter, are reported as a systemMessage on stdout, which
 # Claude Code shows to the person. Exit 2: a linter reported a violation; its output goes to stderr, which Claude Code feeds
 # back to the agent. Exit 1: the hook could not run (python3 missing or found only where the hook runs nothing from, CLAUDE_PROJECT_DIR unset, bad JSON, or, for a
-# Markdown or YAML file, git missing, found only where the hook runs nothing from, or older than 2.36); Claude Code shows that to the
+# Markdown or YAML file, git missing, found only where the hook runs nothing from, or older than 2.36, or a git file of the project's
+# checkouts longer than any that names a folder); Claude Code shows that to the
 # person and carries on. A linter that is installed but crashes counts as a violation, not as clean.
 set -uo pipefail
 
@@ -93,12 +94,19 @@ clean_path() {
 # own list, read by in_project once git is safe to run, is the second pass's.
 CHECKOUTS=()
 # read_git_file <file> <var> [all]: sets <var> to the whole of a git file as git reads it: its trailing CRs and LFs dropped (a last line
-# with no newline, or a CRLF one, counts), and with "all" every trailing space, tab, CR, LF, VT and FF too, which git trims from a
-# worktrees/*/gitdir file. 1 when the file can't be read or holds nothing else.
+# with no newline, or a CRLF one, counts), and with "all" every trailing space and tab too, the whitespace git trims from a
+# worktrees/*/gitdir file (git's own table holds no VT or FF). 1 when the file can't be read or holds nothing else. A file longer than
+# GIT_FILE_MAX characters names no folder a path can reach (PATH_MAX is 4096), but git would still trim and read it, so the hook stops
+# (exit 1) rather than pass over a checkout it can't see or trim megabytes a character at a time.
+GIT_FILE_MAX=4352
 read_git_file() {
   local text='' strip=$'\r\n'
-  [[ "${3:-}" != all ]] || strip=$' \t\r\n\v\f'
-  IFS= read -r -d '' text < "$1" || [[ -n "$text" ]] || return 1
+  [[ "${3:-}" != all ]] || strip=$' \t\r\n'
+  IFS= read -r -d '' -n $((GIT_FILE_MAX + 1)) text < "$1" || [[ -n "$text" ]] || return 1
+  if ((${#text} > GIT_FILE_MAX)); then
+    echo "lint-edited-file.sh: $1 is longer than any git file that names a folder (over $GIT_FILE_MAX characters), so the edited file was not linted." >&2
+    exit 1
+  fi
   while [[ -n "$text" && "$strip" == *"${text: -1}"* ]]; do text="${text%?}"; done
   [[ -n "$text" ]] || return 1
   printf -v "$2" '%s' "$text"
