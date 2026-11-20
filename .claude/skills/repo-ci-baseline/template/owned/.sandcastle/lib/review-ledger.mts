@@ -11,7 +11,8 @@
 // nothing else (see isReviewedCode). So a merge of main that leaves every hunk
 // the branch changed as it was keeps the review, close to the rule PR
 // Auto-Merge and Claude Review apply on GitHub, and so does a rebase onto main
-// with no conflict (its tree is that merge's), and a new commit, a conflict
+// with no conflict when its tree is that merge's (one that isn't needs a new
+// review), and a new commit, a conflict
 // resolution or a main change inside one of the branch's hunks needs a new
 // one.
 //

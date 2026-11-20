@@ -71,7 +71,7 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   another writer took is tried again, up to five times; a
   finding whose entry can't be written is a warning, and the other findings are still written.
 - The ledger is keyed by the branch's hunks against its merge base with `origin/main`. A clean merge of `main` keeps the review, and so does a rebase onto
-  `origin/main` with no conflict (the rebased tree is the one that merge gives, and the hunks are the same); a new commit, a conflict
+  `origin/main` with no conflict when the rebased tree is the one that merge gives (`isReviewedCode`; one that isn't needs a new review); a new commit, a conflict
   resolution or a `main` change inside one of the branch's hunks needs a new one. A re-Apply on `chore/reapply-baseline` passes without one only when every
   change is a regular Owned file added or modified, as Apply writes them (`OWNED_PATHS` in the ledger lists them, and a dotfiles test keeps it equal to
   `template/owned/`). A deleted Owned file, a symlink, a submodule, a file of the repo's own, a Seed file the re-Apply writes because the repo lacked it, or one of
