@@ -125,7 +125,8 @@ def told(before, after, exported):
     """Whether the gh between before and after is told its repository.
 
     before is the text of gh's own command up to it (from the syntax tree, with its backslash continuations joined), where a
-    wrapper or an assignment before gh is; after is the rest of gh's line.
+    wrapper or an assignment before gh is. after is, in a script, the rest of gh's line, cut by after_of() when it is longer
+    than AFTER_CHARS; in a skill's snippet (untold_in_code), gh's own words up to the next gh or the end of its command, uncut.
     """
     exported = exported and not wrapped(before)
     # gh closing a quoted word: judge what follows the quote.
@@ -709,11 +710,27 @@ def clears(line):
 
 
 # How many characters of a gh's own command before it are read (joined lines included, without the backslash and newline that
-# join them), and of the rest of its line after it, and how many continued lines before it after a syntax error, and, in a
-# command the tree reads, twice BEFORE_CHARS of its command before it with the continuations: past any of them, the gh is
-# refused, so the text read for one gh stays bounded however long the line or the command is.
+# join them), and how many continued lines before it after a syntax error, and, in a command the tree reads, twice BEFORE_CHARS
+# of its command before it with the continuations: past any of them, the gh is refused. After the gh, at most AFTER_CHARS of the
+# rest of its line are read (see after_of), so the text read for one gh stays bounded however long the line or the command is.
 BEFORE_CHARS = 4096
+AFTER_CHARS = 4096
 JOINED_LINES = 100
+
+
+def after_of(line, end):
+    """The rest of line after a gh that ends at end, as told() reads it: whole when it is at most AFTER_CHARS long.
+
+    told() decides from the first words of the gh's own command (a redirection, the subcommand, repo and its repository) and,
+    for a bare gh, the operator that ends it, so a longer rest (a long --jq filter) is cut back to the last blank in its first
+    AFTER_CHARS characters and ended with "(". Each word left is whole, and "(" is nothing told() reads as the end of the
+    command, a redirection's target, a subcommand or a repository: what told() needs past the cut makes it refuse the gh.
+    """
+    after = line[end:end + AFTER_CHARS + 1]
+    if len(after) <= AFTER_CHARS:
+        return after
+    after = after[:AFTER_CHARS]
+    return after[:max(after.rfind(" "), after.rfind("\t")) + 1] + "("
 
 
 def read_shape(lines):
@@ -818,9 +835,7 @@ def untold(path):
         place = where(number - 1, position)
         if place in ("comment", "data"):
             return None
-        if len(line) - match.end() > BEFORE_CHARS:
-            return False
-        after = line[match.end():]
+        after = after_of(line, match.end())
         if place == "text":
             earlier = earlier_of(number - 1)
             if earlier is None or len(earlier) + match.start() > BEFORE_CHARS:

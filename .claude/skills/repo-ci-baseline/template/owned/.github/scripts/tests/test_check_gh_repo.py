@@ -2277,6 +2277,7 @@ def test_untold_accepts_a_gh_command_told_by_its_own_assignment_after_a_long_cha
 
 @pytest.mark.parametrize("text, refused", [
     ("export GH_REPO=o/r\n# env -i \\\ngh pr view 1\n", []),
+    # A comment's unset ends no export, though the comment ends in a backslash: the export state skips comment lines.
     ("export GH_REPO=o/r\n# unset GH_REPO \\\ngh pr view 1\n", []),
     ("# GH_REPO=o/r \\\ngh pr view 1\n", [2]),
     ("echo # GH_REPO=o/r \\\ngh pr view 1\n", [2]),
@@ -2761,12 +2762,14 @@ def test_untold_reads_at_most_before_chars_of_a_gh_s_own_command_before_it(tmp_p
 
 
 @pytest.mark.parametrize("text, refused", [
-    # A long line of gh words each told by the export, after a syntax error and in code: the first gh past a cap refuses the line.
+    # A long line of gh words each told by the export, after a syntax error and in one command: the first gh past a cap refuses
+    # the line. A long line of short told commands the tree reads passes: each gh reads its own command before it, and at most
+    # AFTER_CHARS after it (mpaulosky/Application_Factory#72).
     ("export GH_REPO=o/r\n(\n" + "gh pr view 1; " * 20000 + "\n", [3]),
     ("export GH_REPO=o/r\necho " + "gh " * 20000 + "\n", [2]),
-    ("export GH_REPO=o/r\n" + "gh pr view 1; " * 20000 + "\n", [2]),
+    ("export GH_REPO=o/r\n" + "gh pr view 1; " * 20000 + "\n", []),
 ])
-def test_untold_refuses_a_long_line_of_gh_words_at_its_first_gh_past_a_cap(tmp_path, text, refused):
+def test_untold_judges_a_long_line_of_gh_words_against_the_caps(tmp_path, text, refused):
     assert lines_of(untold(tmp_path, text)) == refused
 
 
@@ -2797,18 +2800,68 @@ def test_untold_judges_and_tells_every_gh_on_a_line_just_short_of_the_caps(tmp_p
     (4096, []),
     (4097, [1]),
 ])
-def test_untold_refuses_a_gh_with_more_than_before_chars_after_it_on_its_line(tmp_path, length, refused):
-    # The rest of the line, " ||" and spaces, is a lookup's when it is read whole; past BEFORE_CHARS it isn't read, and the gh is refused.
+def test_untold_refuses_a_gh_with_more_than_after_chars_after_it_on_its_line(tmp_path, length, refused):
+    # The rest of the line, " ||" and spaces, is a lookup's when it is read whole; past AFTER_CHARS it is cut, and the gh is refused.
+    assert check_gh_repo.AFTER_CHARS == 4096
     assert lines_of(untold(tmp_path, "command -v gh ||" + " " * (length - 3) + "\n")) == refused
 
 
+JQ = "'" + ".[] | select(.name == \"x\") | .id, " * 150 + ".id'"
+
+
+@pytest.mark.parametrize("text", [
+    # A told gh with a filter longer than AFTER_CHARS after it (mpaulosky/Application_Factory#72): told by the export, its own
+    # GH_REPO= or its repository, in code and after a syntax error.
+    "export GH_REPO=o/r\ngh api repos/o/r/pulls --jq " + JQ + "\n",
+    "GH_REPO=o/r gh api repos/o/r/pulls --jq " + JQ + "\n",
+    "gh repo view o/r --json name --jq " + JQ + "\n",
+    "export GH_REPO=o/r\n(\ngh api repos/o/r/pulls --jq " + JQ + "\n",
+    "(\nGH_REPO=o/r gh pr list --json number --jq " + JQ + "\n",
+    # Cut back to a tab when the words are split by tabs only.
+    "export GH_REPO=o/r\ngh\tapi\trepos/o/r/pulls\t--jq\t'" + ".id," * 1300 + ".id'\n",
+])
+def test_untold_accepts_a_told_gh_whose_own_command_goes_on_past_after_chars(tmp_path, text):
+    assert len(JQ) > check_gh_repo.AFTER_CHARS
+    assert untold(tmp_path, text) == []
+
+
 @pytest.mark.parametrize("text, refused", [
-    # A long redirection target after the gh, which would end the line if the rest were cut: the gh is refused, in code and after
-    # a syntax error.
+    # Past AFTER_CHARS the rest is cut back to whole words and ended with "(", which reads as no end, target, subcommand or
+    # repository: a gh whose subcommand or repository is cut off, or past a run of blanks, is refused, though the export is set.
+    ("export GH_REPO=o/r\ngh" + " " * (4096 - 2) + "repo view " + "y" * 5000 + "\n", [2]),
+    ("export GH_REPO=o/r\ngh" + " " * 5000 + "\"api\"\n", [2]),
+    ("export GH_REPO=o/r\ngh >" + " " * 5000 + "f \"api\"\n", [2]),
+    ("export GH_REPO=o/r\n(\ngh" + " " * (4096 - 2) + "repo view " + "y" * 5000 + "\n", [3]),
+    ("gh repo view" + " " * 5000 + "o/r\n", [1]),
+])
+def test_untold_refuses_a_gh_whose_judged_words_are_past_after_chars(tmp_path, text, refused):
+    assert lines_of(untold(tmp_path, text)) == refused
+
+
+@pytest.mark.parametrize("rest, refused", [
+    # A rest with no blank in its first AFTER_CHARS characters is cut to "(" alone: the gh is refused, though the export tells a
+    # bare gh ended by ; or by a redirection (a false refusal, documented in references/gotchas.md). Its 4095, 4096 and 4097
+    # characters after the gh, the ; or > included.
+    (";" + "x" * 4094, []),
+    (";" + "x" * 4095, []),
+    (";" + "x" * 4096, [2]),
+    (">" + "x" * 4094, []),
+    (">" + "x" * 4095, []),
+    (">" + "x" * 4096, [2]),
+    (";" + "x" * 5000, [2]),
+    (">" + "x" * 5000, [2]),
+])
+def test_untold_refuses_a_gh_whose_rest_has_no_blank_in_its_first_after_chars(tmp_path, rest, refused):
+    assert lines_of(untold(tmp_path, "export GH_REPO=o/r\ngh" + rest + "\n")) == refused
+
+
+@pytest.mark.parametrize("text, refused", [
+    # A redirection target of AFTER_CHARS or more characters right after the gh: the rest is cut before the target ends, and the
+    # gh is refused, in code and after a syntax error. (A long line after a short target is read: only a blank-less word that long refuses.)
     ("export GH_REPO=o/r\ngh >" + "x" * 5000 + " repo view 1\n", [2]),
     ("export GH_REPO=o/r\n(\ngh >" + "x" * 5000 + " repo view 1\n", [3]),
 ])
-def test_untold_refuses_a_gh_whose_line_goes_on_past_before_chars(tmp_path, text, refused):
+def test_untold_refuses_a_gh_whose_redirection_target_goes_on_past_after_chars(tmp_path, text, refused):
     assert lines_of(untold(tmp_path, text)) == refused
 
 
