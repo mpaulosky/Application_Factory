@@ -81,8 +81,49 @@ clean_path() {
     # Kept as its canonical path, which is the folder just checked, so the entry can't be read as another folder later.
     kept+="${kept:+:}$canon_entry"
   done
-  PATH="$kept"
+  # Never empty: bash looks a command up in the working directory when PATH is empty. A folder that can't exist instead.
+  PATH="${kept:-/nonexistent/lint-edited-file/no-usable-path}"
   export PATH
+}
+
+# checkout_roots <dir>: adds to CHECKOUTS the canonical root of the git checkout <dir> is in and of every worktree its repository
+# lists, read from git's own files (.git, gitdir, commondir, worktrees/*/gitdir) by bash alone, before any command is looked up on
+# PATH: the first clean_path pass drops all of them, so python3 and git can't come from a checkout of the project either. git's
+# own list, read by in_project once git is safe to run, is the second pass's.
+CHECKOUTS=()
+checkout_roots() {
+  local d="$1" top gitdir common line wt f
+  while [[ ! -e "$d/.git" ]]; do
+    [[ -n "$d" && "$d" != / ]] || return 0
+    d="${d%/*}"
+  done
+  top="$d"
+  CHECKOUTS+=("$top")
+  gitdir="$top/.git"
+  if [[ -f "$gitdir" ]]; then
+    IFS= read -r line < "$gitdir" || return 0
+    line="${line#gitdir: }"
+    [[ "$line" == /* ]] || line="$top/$line"
+    gitdir="$line"
+  fi
+  common="$gitdir"
+  if [[ -f "$gitdir/commondir" ]]; then
+    IFS= read -r line < "$gitdir/commondir" || line=.
+    [[ "$line" == /* ]] || line="$gitdir/$line"
+    common="$line"
+  fi
+  canon "$common" common || return 0
+  # The main worktree holds the common directory as its .git.
+  if [[ "${common##*/}" == .git ]]; then
+    wt=''
+    ! canon "${common%/*}" wt || CHECKOUTS+=("$wt")
+  fi
+  for f in "$common"/worktrees/*/gitdir; do
+    [[ -f "$f" ]] || continue
+    IFS= read -r line < "$f" || continue
+    wt=''
+    ! canon "${line%/.git}" wt || CHECKOUTS+=("$wt")
+  done
 }
 
 # Fail closed: with no project the boundary below would have nothing to compare with.
@@ -90,13 +131,27 @@ if [[ -z "${CLAUDE_PROJECT_DIR:-}" ]]; then
   echo "lint-edited-file.sh: CLAUDE_PROJECT_DIR is not set, so the edited file was not linted." >&2
   exit 1
 fi
-# First pass, before python3 and git are looked up: the project directory is the one checkout known yet. The second pass, once
-# every worktree of the project is known, is after in_project.
+# First pass, before python3 and git are looked up: the project directory and every checkout of its repository, read from git's
+# files (checkout_roots). The second pass, with git's own worktree list and the edited file's repository, is after in_project.
 project_canon=''
-if canon "$CLAUDE_PROJECT_DIR" project_canon; then clean_path "$project_canon"; else clean_path; fi
+if canon "$CLAUDE_PROJECT_DIR" project_canon; then
+  checkout_roots "$project_canon"
+  clean_path "$project_canon" ${CHECKOUTS[@]+"${CHECKOUTS[@]}"}
+else
+  clean_path
+fi
+
+# missing <tool>: why the hook can't run without it: not installed, or found only where it runs nothing from.
+missing() {
+  if PATH="$ORIG_PATH" type -P -- "$1" > /dev/null 2>&1; then
+    printf '%s found only inside the project or on a relative PATH entry, which this hook runs nothing from (install it outside the project, on an absolute PATH entry)' "$1"
+  else
+    printf '%s not found' "$1"
+  fi
+}
 
 if ! command -v python3 > /dev/null 2>&1; then
-  echo "lint-edited-file.sh: python3 not found, so the edited file was not linted." >&2
+  echo "lint-edited-file.sh: $(missing python3), so the edited file was not linted." >&2
   exit 1
 fi
 
@@ -137,7 +192,7 @@ esac
 [[ -n "$kind" ]] || exit 0
 
 if ! command -v git > /dev/null 2>&1; then
-  echo "lint-edited-file.sh: git not found, so the edited file was not linted." >&2
+  echo "lint-edited-file.sh: $(missing git), so the edited file was not linted." >&2
   exit 1
 fi
 
@@ -379,7 +434,7 @@ if ((${#skipped[@]} > 0)); then
   ((${#missing[@]} == 0)) || note="${missing[*]} not installed"
   if ((${#inside[@]} > 0)); then
     [[ -z "$note" ]] || note+="; "
-    note+="${inside[*]} found only inside the project or on a relative PATH entry, which this hook runs nothing from (install it outside the project, on an absolute PATH entry: see references/git-hooks.md, Edit-time lint)"
+    note+="${inside[*]} found only inside the project or on a relative PATH entry, which this hook runs nothing from (install it outside the project, on an absolute PATH entry, such as pnpm add -g markdownlint-cli2 or uv tool install yamllint; the repo-ci-baseline skill's references/git-hooks.md, Edit-time lint, has the rest)"
   fi
   python3 -I -c 'import json, sys; print(json.dumps({"systemMessage": sys.argv[1]}))' \
     "lint-edited-file.sh: $rel was not fully linted: $note (the gate and CI still check it)."

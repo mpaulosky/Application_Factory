@@ -233,7 +233,7 @@ for entry in "$repo/node_modules/.bin" "link" "node_modules/.bin"; do
   p=()
   [[ $STATUS -eq 0 ]] || p+=("exit $STATUS, want 0 (not installed)")
   ! log_has "local-markdownlint " || p+=("the copy inside the repo ran")
-  [[ "$(system_message "$STDOUT")" == *"markdownlint-cli2 found only inside the project or on a relative PATH entry, which this hook runs nothing from (install it outside the project, on an absolute PATH entry: see references/git-hooks.md, Edit-time lint)"* ]] \
+  [[ "$(system_message "$STDOUT")" == *"markdownlint-cli2 found only inside the project or on a relative PATH entry, which this hook runs nothing from (install it outside the project, on an absolute PATH entry, such as pnpm add -g markdownlint-cli2 or uv tool install yamllint; the repo-ci-baseline skill's references/git-hooks.md, Edit-time lint, has the rest)"* ]] \
     || p+=("no found-inside note with its remedy: $STDOUT")
   [[ "$(system_message "$STDOUT")" != *"not installed"* ]] || p+=("said not installed: $STDOUT")
   check "a markdownlint-cli2 on PATH inside the repo ($entry) is refused, and the note says so with the remedy" ${p[@]+"${p[@]}"}
@@ -252,11 +252,13 @@ p=()
 [[ "$(system_message "$STDOUT")" == *"markdownlint-cli2 not installed"* ]] || p+=("no not-installed note: $STDOUT")
 check "an exported function named markdownlint-cli2 is treated as not installed" ${p[@]+"${p[@]}"}
 rmdir "$WORK/markdownlint-cli2"
-# attacker_stub <path>: a linter named like the real one that logs "attacker <name>" and passes everything.
+# attacker_stub <path>: a linter or helper named like the real one that logs "attacker <name>" and passes everything. It runs
+# under /bin/sh: with an env bash shebang, a stub found while a bash stub is first on PATH would exec that stub, and it again,
+# forever, never logging.
 attacker_stub() {
   mkdir -p "${1%/*}"
   # shellcheck disable=SC2016 # the stub's own code, written as it is
-  printf '#!/usr/bin/env bash\necho "attacker $(basename "$0")" >> "$STUB_LOG"\nexit 0\n' > "$1"
+  printf '#!/bin/sh\necho "attacker $(basename "$0")" >> "$STUB_LOG"\nexit 0\n' > "$1"
   chmod +x "$1"
 }
 found_inside="found only inside the project or on a relative PATH entry, which this hook runs nothing from"
@@ -302,15 +304,35 @@ p=()
 ! log_has "multiplexer " || p+=("run by its target's name")
 check "a linter that is a shim symlink outside the project runs under its own name" ${p[@]+"${p[@]}"}
 rm -r "$WORK/shim" "$WORK/multi"
-# A linter's helpers come from the cleaned PATH too: an agent's python3, bash or node in the repo, ahead on PATH, never runs.
-for helper in python3 bash node env; do attacker_stub "$repo/bin/$helper"; done
-for first in "$repo/bin" bin ""; do
+# A linter's helpers, and the hook's own python3, git and tr, come from the cleaned PATH too: an agent's copy in the repo, ahead on
+# PATH as an absolute, relative, empty or '.' entry, never runs. The empty and '.' entries name the working directory, so those
+# copies sit in it.
+for helper in python3 bash node env git tr; do attacker_stub "$repo/bin/$helper"; attacker_stub "$repo/$helper"; done
+for first in "$repo/bin" bin "" .; do
   RUN_CWD="$repo" run_hook "$(edit_json "$repo/docs/bad.md")" "$first:$STUBS:$TOOLS"
   p=()
   [[ $STATUS -eq 2 && "$(ran markdownlint-cli2)" == 1 ]] || p+=("exit $STATUS, ran $(ran markdownlint-cli2)")
   ! log_has "attacker " || p+=("an in-repo helper ran: $(grep attacker "$LOG")")
   check "helpers in the repo on PATH ('$first') never run, for the hook or its linters" ${p[@]+"${p[@]}"}
 done
+# A PATH that cleans to nothing is never left empty (which bash reads as the working directory): the hook stops, naming why.
+RUN_CWD="$repo" run_hook "$(edit_json "$repo/docs/bad.md")" "bin:.:$repo/bin"
+p=()
+[[ $STATUS -eq 1 ]] || p+=("exit $STATUS, want 1")
+! log_has "attacker " || p+=("a copy in the working directory ran: $(grep attacker "$LOG")")
+[[ "$STDERR" == *"python3 found only inside the project or on a relative PATH entry, which this hook runs nothing from"* ]] || p+=("stderr: $STDERR")
+check "a PATH that cleans to nothing runs nothing, and says python3 was found only where the hook runs nothing from" ${p[@]+"${p[@]}"}
+for helper in python3 bash node env git tr; do rm "$repo/$helper"; done
+# A project that is a folder inside its checkout: the first pass drops the whole checkout, found from git's files with no command,
+# so the hook's python3, git and tr can't come from the checkout's bin either.
+mkdir -p "$repo/sub"
+printf '# T\n\nBAD\n' > "$repo/sub/bad.md"
+run_hook "$(edit_json "$repo/sub/bad.md")" "$repo/bin:$STUBS:$TOOLS" "$repo/sub"
+p=()
+[[ $STATUS -eq 2 && "$(ran markdownlint-cli2)" == 1 ]] || p+=("exit $STATUS, ran $(ran markdownlint-cli2): $STDERR")
+! log_has "attacker " || p+=("the checkout's copy ran: $(grep attacker "$LOG")")
+check "with the project a subfolder of its checkout, the checkout's python3, git and tr never run" ${p[@]+"${p[@]}"}
+rm -r "$repo/sub"
 rm -r "${repo:?}/bin"
 # A PATH folder named with a byte that isn't valid UTF-8 is a folder like any other, in a UTF-8 locale too.
 latin1_dir="$WORK/$(printf 'caf\xe9')"
@@ -987,18 +1009,45 @@ run_hook "$(edit_json "$WORK/vet-wt/docs/deep/ok.md")" "$STUBS:$TOOLS" "$vet"
 p=()
 [[ $STATUS -eq 0 && "$(ran markdownlint-cli2)" == 1 ]] || p+=("exit $STATUS, ran $(ran markdownlint-cli2)")
 check "the worktree's file is linted by a markdownlint-cli2 outside the project" ${p[@]+"${p[@]}"}
-# The second PATH pass: an entry inside the linked worktree, which the first pass (the project directory alone) keeps, is dropped
-# once the worktrees are known, so a helper there (the bash a linter's shebang looks up) never runs.
+# An entry inside a linked worktree is dropped before anything runs (the first pass reads the worktrees from git's files), so
+# neither the hook's python3, git and tr nor a linter's bash comes from there.
 mkdir -p "$WORK/vet-wt/bin"
-# shellcheck disable=SC2016 # the stub's own code, written as it is
-printf '#!/bin/sh\necho "attacker bash" >> "$STUB_LOG"\nexit 0\n' > "$WORK/vet-wt/bin/bash"
-chmod +x "$WORK/vet-wt/bin/bash"
+for helper in bash python3 git tr; do
+  # shellcheck disable=SC2016 # the stub's own code, written as it is
+  printf '#!/bin/sh\necho "attacker %s" >> "$STUB_LOG"\nexit 0\n' "$helper" > "$WORK/vet-wt/bin/$helper"
+  chmod +x "$WORK/vet-wt/bin/$helper"
+done
 run_hook "$(edit_json "$WORK/vet-wt/docs/deep/ok.md")" "$WORK/vet-wt/bin:$STUBS:$TOOLS" "$vet"
 p=()
 [[ $STATUS -eq 0 && "$(ran markdownlint-cli2)" == 1 ]] || p+=("exit $STATUS, ran $(ran markdownlint-cli2)")
-! log_has "attacker " || p+=("the worktree's bash ran")
-check "a PATH entry inside a linked worktree is dropped once the worktrees are known: its helpers never run" ${p[@]+"${p[@]}"}
-rm -r "$WORK/vet-wt/bin"
+! log_has "attacker " || p+=("a helper in the worktree ran: $(grep attacker "$LOG")")
+check "a PATH entry inside a linked worktree is dropped before anything runs: its python3, git, tr and bash never run" ${p[@]+"${p[@]}"}
+mv "$WORK/vet-wt/bin" "$vet/bin"
+# A worktree as the project, its .git file naming its gitdir relative to itself (git worktree add --relative-paths writes
+# that): the first pass resolves it against the worktree, finds the main checkout, and drops the main checkout's bin.
+wt_git="$(cat "$WORK/vet-wt/.git")"
+printf 'gitdir: ../vetted/.git/worktrees/vet-wt\n' > "$WORK/vet-wt/.git"
+p=()
+[[ "$vet" == "$WORK/vetted" && "$(git -C "$WORK/vet-wt" rev-parse --show-toplevel 2> /dev/null)" == "$WORK/vet-wt" ]] ||
+  p+=("git doesn't read the relative gitdir, so this case proves nothing")
+# Run from / so a relative gitdir left unresolved can't happen to name the right folder from the working directory.
+RUN_CWD=/ run_hook "$(edit_json "$WORK/vet-wt/docs/deep/ok.md")" "$vet/bin:$STUBS:$TOOLS" "$WORK/vet-wt"
+[[ $STATUS -eq 0 && "$(ran markdownlint-cli2)" == 1 ]] || p+=("exit $STATUS, ran $(ran markdownlint-cli2)")
+! log_has "attacker " || p+=("a helper in the main checkout ran: $(grep attacker "$LOG")")
+check "a worktree project whose .git names a relative gitdir: the main checkout's python3, git and tr never run" ${p[@]+"${p[@]}"}
+printf '%s\n' "$wt_git" > "$WORK/vet-wt/.git"
+rm -r "${vet:?}/bin"
+# A project inside a checkout whose .git file names a gitdir that doesn't exist: the checkout itself is still dropped, though
+# git's files name no other checkout.
+mkdir -p "$WORK/broken/sub" "$WORK/broken/bin"
+printf 'gitdir: %s/no-such-gitdir\n' "$WORK" > "$WORK/broken/.git"
+printf '# T\n' > "$WORK/broken/sub/ok.md"
+for helper in bash python3 git tr; do attacker_stub "$WORK/broken/bin/$helper"; done
+run_hook "$(edit_json "$WORK/broken/sub/ok.md")" "$WORK/broken/bin:$STUBS:$TOOLS" "$WORK/broken/sub"
+p=()
+! log_has "attacker " || p+=("a helper in the checkout ran: $(grep attacker "$LOG")")
+check "a project in a checkout whose gitdir is missing: the checkout's python3, git and tr never run" ${p[@]+"${p[@]}"}
+rm -r "$WORK/broken"
 rm -r "$vet/node_modules"
 git -C "$vet" worktree remove --force "$WORK/vet-wt"
 # A config that is a symlink can point anywhere, an untracked file among them: never run.
