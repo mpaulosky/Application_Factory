@@ -27,9 +27,10 @@
 # (its folder and each one above it, up to the repository root) is a regular file committed as it is, and none can load JavaScript
 # (a .cjs or .mjs config, or customRules, markdownItPlugins, outputFormatters, modulePaths or extends, or a backslash whose escape
 # could spell one): an agent could write such a config, or the code one names, and have this hook run it with no Bash prompt. The
-# person is told which config and why, and the gate and CI still lint the file (see unvetted_config). For the same reason
-# markdownlint-cli2 itself comes from PATH only, never from the repository (its node_modules/.bin, or a PATH entry that resolves
-# into it): install it outside the repo (pnpm add -g markdownlint-cli2), or the hook reports it as not installed (see path_bin).
+# person is told which config and why, and the gate and CI still lint the file (see unvetted_config). For the same reason every
+# linter comes from PATH and runs by its real path, never from inside the project's checkouts (the file's repository, the project
+# directory and every worktree it lists: a node_modules/.bin, a PATH entry that resolves there, or a symlink into one): install it
+# outside them (pnpm add -g markdownlint-cli2, uv tool install yamllint), or the hook says it was found only inside (see path_bin).
 #
 # Exit 0: the file is clean, is missing, is not Markdown or YAML, is not in the project, is Markdown under a markdownlint config the
 # hook won't run (above), or no linter for it is installed (this hook only helps; the commit hook and the gate still check). That
@@ -113,17 +114,21 @@ canon() {
 # no -z; a damaged repository fails the same way). The list is built from the project's own git directory, so a directory whose .git file or commondir merely names
 # that git directory is not in it. -z gives each path as one field, so a path with a newline in it cannot forge a second
 # "worktree <dir>" line, and canon keeps a trailing newline in the resolved path. A stale entry (its directory removed, not yet pruned) is trusted until `git worktree prune`.
+# It also collects every listed worktree's canonical path in PROJECT_ROOTS, the checkouts an agent can write: path_bin runs no
+# linter from inside any of them. The project directory is always in one of them, even when it is a folder inside a checkout.
+PROJECT_ROOTS=()
 in_project() {
-  local field path=''
+  local field path='' found=1
   git -C "$1" rev-parse --git-dir > /dev/null 2>&1 || return 1
   git -C "$1" worktree list --porcelain -z > /dev/null 2>&1 || return 2
   while IFS= read -r -d '' field; do
     [[ "$field" == "worktree "* ]] || continue
     # canon keeps a trailing newline in the resolved path, which a symlinked entry can have: "X<newline>" is not the directory X.
     canon "${field#worktree }" path || continue
-    [[ "$path" == "$2" ]] && return 0
+    PROJECT_ROOTS+=("$path")
+    [[ "$path" == "$2" ]] && found=0
   done < <(git -C "$1" worktree list --porcelain -z 2> /dev/null)
-  return 1
+  return "$found"
 }
 
 # Not dirname, which also drops trailing newlines: the file is a regular file, so its folder is what precedes the last slash.
@@ -176,23 +181,32 @@ run_linter() {
   fi
 }
 
-# path_bin <name>: the copy on PATH, never one inside the repository. An agent can write the repo's node_modules/.bin (or any file
-# under the repo) with no Bash prompt, and this hook runs right after a write, so a binary found there is not run: the hook needs
-# one installed outside it (pnpm add -g markdownlint-cli2), and reports it as not installed otherwise.
+# path_bin <name> <variable>: sets <variable> to the real, absolute path of the <name> on PATH (every symlink resolved, the folder
+# and the file), or to nothing when there is none the hook may run. An agent can write any file in the project's checkouts with no
+# Bash prompt (the repo's node_modules/.bin among them), and this hook runs right after a write, so a linter whose real file is in
+# the edited file's repository, the project's own checkout or any worktree it lists is not run: install it outside them (pnpm add
+# -g markdownlint-cli2, uv tool install yamllint), or the hook reports it as only runnable from outside the repository. The real
+# path is what run_linter runs, so a relative PATH entry, resolved here against the hook's working directory, can't name another
+# file once run_linter has changed into the repository. A name with no folder (an exported function or an alias) is refused.
+# REFUSED collects the linters found only inside the project.
+REFUSED=()
 path_bin() {
-  local found real_dir
+  local found real trusted
+  printf -v "$2" '%s' ""
   found="$(command -v "$1" 2> /dev/null)" || return 0
-  # Its folder resolved from here, as command -v found it: a relative PATH entry, a symlink into the repo, or a folder of the repo
-  # reached through one is caught. A name with no folder (an exported function or an alias) is refused.
   [[ "$found" == */* ]] || return 0
-  real_dir="$(cd -P -- "${found%/*}/" 2> /dev/null && pwd -P; printf x)" || return 0
-  real_dir="${real_dir%x}"
-  real_dir="${real_dir%$'\n'}"
-  [[ -n "$real_dir" ]] || return 0
-  case "$real_dir/" in
-    "$root"/*) return 0 ;;
-  esac
-  printf '%s' "$found"
+  real="$(python3 -I -c 'import os, sys; sys.stdout.write(os.path.realpath(sys.argv[1]))' "$found" 2> /dev/null && printf x)" || return 0
+  real="${real%x}"
+  [[ "$real" == /* && -f "$real" && -x "$real" ]] || return 0
+  for trusted in "$root" ${PROJECT_ROOTS[@]+"${PROJECT_ROOTS[@]}"}; do
+    case "$real" in
+      "$trusted"/*)
+        REFUSED+=("$1")
+        return 0
+        ;;
+    esac
+  done
+  printf -v "$2" '%s' "$real"
 }
 
 # unvetted_config: sets unvetted_path and unvetted_why for the first markdownlint-cli2 config on the file's path (its folder and each one above it, up
@@ -253,7 +267,7 @@ print("-" if key is None else json.dumps(key))' "$path" 2> /dev/null || true)"
 }
 
 if [[ "$kind" == markdown ]]; then
-  bin="$(path_bin markdownlint-cli2)"
+  path_bin markdownlint-cli2 bin
   # Called directly, not in $(...): it sets unvetted_path and unvetted_why, kept apart so a tab or newline in the path can't blur them.
   if unvetted_config; then
     :
@@ -264,31 +278,35 @@ if [[ "$kind" == markdown ]]; then
     run_linter markdownlint-cli2 "$bin" --no-globs "$target"
   fi
 else
-  if command -v yamllint > /dev/null 2>&1; then
+  path_bin yamllint bin
+  if [[ -n "$bin" ]]; then
     config=()
     [[ -f "$root/.yamllint.yml" ]] && config=(-c .yamllint.yml)
-    run_linter yamllint yamllint ${config[@]+"${config[@]}"} "$target"
+    run_linter yamllint "$bin" ${config[@]+"${config[@]}"} "$target"
   else
     skipped+=("yamllint")
   fi
 
   case "$rel" in
     .github/workflows/*.yml | .github/workflows/*.yaml | */.github/workflows/*.yml | */.github/workflows/*.yaml)
-      if command -v actionlint > /dev/null 2>&1; then
-        run_linter actionlint actionlint -- "$target"
+      path_bin actionlint bin
+      if [[ -n "$bin" ]]; then
+        run_linter actionlint "$bin" -- "$target"
       else
         skipped+=("actionlint")
       fi
-      if command -v zizmor > /dev/null 2>&1; then
+      path_bin zizmor bin
+      if [[ -n "$bin" ]]; then
         # --offline: no GitHub token needed. CI also runs the online audits.
-        run_linter zizmor zizmor --offline --min-severity medium -- "$target"
+        run_linter zizmor "$bin" --offline --min-severity medium -- "$target"
       else
         skipped+=("zizmor")
       fi
       ;;
     .github/dependabot.yml | .github/dependabot.yaml | */.github/dependabot.yml | */.github/dependabot.yaml)
-      if command -v zizmor > /dev/null 2>&1; then
-        run_linter zizmor zizmor --offline --min-severity medium -- "$target"
+      path_bin zizmor bin
+      if [[ -n "$bin" ]]; then
+        run_linter zizmor "$bin" --offline --min-severity medium -- "$target"
       else
         skipped+=("zizmor")
       fi
@@ -315,7 +333,18 @@ if [[ -n "$unvetted_path" ]]; then
 fi
 
 if ((${#skipped[@]} > 0)); then
+  # Those found only inside the project are named apart: they are installed, and this hook won't run them.
+  missing=() inside=()
+  for tool in "${skipped[@]}"; do
+    if [[ " ${REFUSED[*]-} " == *" $tool "* ]]; then inside+=("$tool"); else missing+=("$tool"); fi
+  done
+  note=""
+  ((${#missing[@]} == 0)) || note="${missing[*]} not installed"
+  if ((${#inside[@]} > 0)); then
+    [[ -z "$note" ]] || note+="; "
+    note+="${inside[*]} found only inside the project, which this hook runs nothing from (install it outside, such as pnpm add -g markdownlint-cli2 or uv tool install yamllint)"
+  fi
   python3 -I -c 'import json, sys; print(json.dumps({"systemMessage": sys.argv[1]}))' \
-    "lint-edited-file.sh: $rel was not fully linted: ${skipped[*]} not installed (the gate and CI still check it)."
+    "lint-edited-file.sh: $rel was not fully linted: $note (the gate and CI still check it)."
 fi
 exit 0

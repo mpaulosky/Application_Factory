@@ -118,9 +118,17 @@ template_tools="$skill_dir/../../../.github/actions/template-tools/action.yml"
 grep -qxF '        python -m pip install --require-hashes --no-deps -r .claude/skills/repo-ci-baseline/template/owned/.github/scripts/requirements-tests.txt' "$template_tools" \
   || fail "the template-tools action must install the Template's requirements-tests.txt with --require-hashes --no-deps"
 [[ -f "$owned/.github/scripts/requirements-tests.txt" ]] || fail "the Template's .github/scripts/requirements-tests.txt is missing"
-if grep -nE 'pytest==|PYTEST_VERSION|pyyaml==' "$template_tools"; then
-  fail "the template-tools action must take pytest and PyYAML from requirements-tests.txt only (the lines above pin them again)"
+# Any other line that installs, pins or names a version of pytest or PyYAML, in any case and with any specifier: only the
+# description and comments may mention them.
+second_pin() { grep -nviE '^[[:space:]]*#|requirements-tests\.txt' "$1" | grep -iE '(^|[^a-z0-9_-])(pytest|pyyaml)([^a-z0-9_-]|$)|PYTEST_|PYYAML_' | grep -vE '^[0-9]+:[[:space:]]{2}[^ ]'; }
+if second_pin "$template_tools"; then
+  fail "the template-tools action must take pytest and PyYAML from requirements-tests.txt only (the lines above name them again)"
 fi
+# The guard itself catches each spelling a re-pin is likely to take.
+for spelling in 'pip install pytest "yamllint==1"' '"PyYAML==6.0.3"' 'pytest>=9' 'pyyaml~=6' 'PYTEST_VERSION: "9"' 'pip install Pytest'; do
+  printf 'runs:\n  steps:\n      run: |\n        python -m pip install --require-hashes --no-deps -r x/requirements-tests.txt\n        %s\n' "$spelling" > "$md_tmp/action-pin.yml"
+  second_pin "$md_tmp/action-pin.yml" > /dev/null || fail "the template-tools pin guard misses: $spelling"
+done
 # Dependabot keeps the hashed pins current: the Factory's own entry bumps the Template's copy, the Seed's an Application's.
 for pair in "$skill_dir/../../../.github/dependabot.yml|/.claude/skills/repo-ci-baseline/template/owned/.github/scripts" \
   "$skill_dir/template/seed/.github/dependabot.yml|/.github/scripts"; do
