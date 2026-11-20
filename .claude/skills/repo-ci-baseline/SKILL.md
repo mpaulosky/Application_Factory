@@ -47,6 +47,7 @@ Claude Code settings (`.claude/settings.json`) are not part of the Template: per
 The one rule worth adding to it, denying Claude Code the local review's ledgers and credential files, is in [pre-push-review.md](references/pre-push-review.md#adapting).
 The hooks worth adding by hand are `scripts/check-git-hooks.sh` ([git-hooks.md](references/git-hooks.md#session-start-check))
 and `scripts/lint-edited-file.sh`, which lints a Markdown or YAML file as Claude writes it ([git-hooks.md](references/git-hooks.md#edit-time-lint)).
+The Owned `.claude/rules/markdown-and-yaml-edits.md` goes into every repo, with or without the hook: it tells every session to write those files with Write and Edit, which the hook sees.
 A repo that got a `.claude/settings.json` from an earlier Apply deletes it by hand, since `apply.sh` never deletes.
 The Factory has a `.claude/settings.json` of its own for the edit-time lint hook
 ([the Factory's ADR 0011](../../../docs/adr/0011-markdown-and-yaml-are-linted-as-they-are-written.md)); an Application does not receive it.
@@ -94,7 +95,8 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
    - **One repo:** `reapply.sh --brings '#<n>,#<n>' <repo>` (what `rollout.sh` runs, and the way to retry a repo that failed)
      prepares the `chore/reapply-baseline` worktree, merges the remote branch and `main`, commits `apply.sh`'s output alone,
      pushes through the gate (which asks for a review when Apply writes the coverage threshold,
-     the hand-off rules, an issue template, the reviewer agent, a Sandcastle prompt (intake, critique, plan, review or a role's), the local gate's check.sh or global.json),
+     a rules file that loads in every session (the hand-off or the Markdown and YAML edit rules), an issue template, the reviewer agent,
+     a Sandcastle prompt (intake, critique, plan, review or a role's), the local gate's check.sh or global.json),
      opens the re-Apply PR ready (or adds the commit to the open one) with the `baseline:apply` label, which `owned-files.yml`'s Owned files check needs to exempt it, and requests Copilot;
      it records Copilot's ask on the PR when the request doesn't register, so Claude Review runs (a first re-Apply PR has the old PR Auto-Merge).
      Its header comment has the details; name the head it prints in thread replies.
