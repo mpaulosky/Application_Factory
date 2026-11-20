@@ -2838,13 +2838,30 @@ def test_untold_refuses_a_gh_whose_judged_words_are_past_after_chars(tmp_path, t
     assert lines_of(untold(tmp_path, text)) == refused
 
 
+@pytest.mark.parametrize("rest, refused", [
+    # A rest with no blank in its first AFTER_CHARS characters is cut to "(" alone: the gh is refused, though the export tells a
+    # bare gh ended by ; or by a redirection (a false refusal, documented in references/gotchas.md). Its 4095, 4096 and 4097
+    # characters after the gh, the ; or > included.
+    (";" + "x" * 4094, []),
+    (";" + "x" * 4095, []),
+    (";" + "x" * 4096, [2]),
+    (">" + "x" * 4094, []),
+    (">" + "x" * 4095, []),
+    (">" + "x" * 4096, [2]),
+    (";" + "x" * 5000, [2]),
+    (">" + "x" * 5000, [2]),
+])
+def test_untold_refuses_a_gh_whose_rest_has_no_blank_in_its_first_after_chars(tmp_path, rest, refused):
+    assert lines_of(untold(tmp_path, "export GH_REPO=o/r\ngh" + rest + "\n")) == refused
+
+
 @pytest.mark.parametrize("text, refused", [
-    # A long redirection target after the gh, which would end the line if the rest were cut: the gh is refused, in code and after
-    # a syntax error.
+    # A redirection target of AFTER_CHARS or more characters right after the gh: the rest is cut before the target ends, and the
+    # gh is refused, in code and after a syntax error. (A long line after a short target is read: only a blank-less word that long refuses.)
     ("export GH_REPO=o/r\ngh >" + "x" * 5000 + " repo view 1\n", [2]),
     ("export GH_REPO=o/r\n(\ngh >" + "x" * 5000 + " repo view 1\n", [3]),
 ])
-def test_untold_refuses_a_gh_whose_line_goes_on_past_after_chars(tmp_path, text, refused):
+def test_untold_refuses_a_gh_whose_redirection_target_goes_on_past_after_chars(tmp_path, text, refused):
     assert lines_of(untold(tmp_path, text)) == refused
 
 

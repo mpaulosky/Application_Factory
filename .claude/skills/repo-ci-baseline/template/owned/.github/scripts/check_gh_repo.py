@@ -125,7 +125,8 @@ def told(before, after, exported):
     """Whether the gh between before and after is told its repository.
 
     before is the text of gh's own command up to it (from the syntax tree, with its backslash continuations joined), where a
-    wrapper or an assignment before gh is; after is the rest of gh's line, or its start cut by after_of().
+    wrapper or an assignment before gh is. after is, in a script, the rest of gh's line, cut by after_of() when it is longer
+    than AFTER_CHARS; in a skill's snippet (untold_in_code), gh's own words up to the next gh or the end of its command, uncut.
     """
     exported = exported and not wrapped(before)
     # gh closing a quoted word: judge what follows the quote.

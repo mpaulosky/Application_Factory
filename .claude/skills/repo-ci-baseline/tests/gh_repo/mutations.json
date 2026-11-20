@@ -348,6 +348,24 @@
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "after.rfind(\"\\t\")) + 1] + \"(\"",
+      "new": "after.rfind(\"\\t\"))] + \"(\"",
+      "why": "a cut rest with no blank keeps all but its last character, so gh; and a long word reads as a told bare gh (test_untold_refuses_a_gh_whose_rest_has_no_blank_in_its_first_after_chars)"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "after.rfind(\" \"), after.rfind",
+      "new": "-1, after.rfind",
+      "why": "a cut rest is cut back to a tab only, never to a space (test_untold_accepts_a_told_gh_whose_own_command_goes_on_past_after_chars)"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "max(after.rfind",
+      "new": "min(after.rfind",
+      "why": "a cut rest is cut back to the earlier of its last space and last tab, often to nothing (test_untold_accepts_a_told_gh_whose_own_command_goes_on_past_after_chars)"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
       "old": "+ 1] + \"(\"",
       "new": "+ 1]",
       "why": "a cut rest ends at the cut, which reads as the end of the gh's command"
