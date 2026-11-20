@@ -88,17 +88,34 @@ usage() {
   echo "usage: reapply.sh --brings <owner/repo#n,#n,...> <repo>" >&2
   exit 2
 }
-die() { echo "reapply.sh: $*" >&2; exit 1; }
+die() {
+  echo "reapply.sh: $*" >&2
+  exit 1
+}
 
 brings_arg=""
 target=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --brings) [[ $# -ge 2 ]] || usage; brings_arg="$2"; shift 2 ;;
-    --brings=*) brings_arg="${1#--brings=}"; shift ;;
-    -h|--help) usage ;;
-    -*) echo "reapply.sh: unknown option '$1'" >&2; usage ;;
-    *) [[ -z "$target" ]] || usage; target="$1"; shift ;;
+    --brings)
+      [[ $# -ge 2 ]] || usage
+      brings_arg="$2"
+      shift 2
+      ;;
+    --brings=*)
+      brings_arg="${1#--brings=}"
+      shift
+      ;;
+    -h | --help) usage ;;
+    -*)
+      echo "reapply.sh: unknown option '$1'" >&2
+      usage
+      ;;
+    *)
+      [[ -z "$target" ]] || usage
+      target="$1"
+      shift
+      ;;
   esac
 done
 [[ -n "$target" && -n "$brings_arg" ]] || usage
@@ -128,7 +145,7 @@ done
 skill_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 apply="$skill_dir/apply.sh"
 
-git -C "$target" rev-parse --is-inside-work-tree &>/dev/null || die "'$target' is not a git work tree"
+git -C "$target" rev-parse --is-inside-work-tree &> /dev/null || die "'$target' is not a git work tree"
 # The primary checkout, even when <repo> names one of its linked worktrees.
 common_dir="$(git -C "$target" rev-parse --path-format=absolute --git-common-dir)"
 primary="$(dirname "$common_dir")"
@@ -150,8 +167,8 @@ check_commit_id() { [[ "$1" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || die "gh retur
 # Exit 0 when $1 is an ancestor of $2, 1 when it is not, or when this clone lacks either commit (a tip
 # can't carry a commit it doesn't have). Any other git failure ends the run rather than reading as "not".
 ancestor() {
-  g cat-file -e "$1^{commit}" 2>/dev/null || return 1
-  g cat-file -e "$2^{commit}" 2>/dev/null || return 1
+  g cat-file -e "$1^{commit}" 2> /dev/null || return 1
+  g cat-file -e "$2^{commit}" 2> /dev/null || return 1
   local status=0
   g merge-base --is-ancestor "$1" "$2" || status=$?
   [[ $status -le 1 ]] || die "git merge-base --is-ancestor failed (status $status) for $1 and $2"
@@ -160,7 +177,7 @@ ancestor() {
 
 echo "── $repo_name: fetching"
 g fetch --prune --quiet origin
-g rev-parse --verify --quiet origin/main >/dev/null || die "origin/main not found in $primary"
+g rev-parse --verify --quiet origin/main > /dev/null || die "origin/main not found in $primary"
 g worktree prune
 
 # --head matches the branch name only, so a fork's PR of the same name is left out: it is not this repo's PR.
@@ -178,7 +195,7 @@ if [[ -n "$existing" && -n "$(git -C "$existing" status --porcelain)" ]]; then
   die "$existing has uncommitted work; commit or stash it, then run again"
 fi
 
-if g rev-parse --verify --quiet "refs/heads/$branch" >/dev/null && [[ -z "$open_pr" ]]; then
+if g rev-parse --verify --quiet "refs/heads/$branch" > /dev/null && [[ -z "$open_pr" ]]; then
   # No open PR: the local branch is replaced only when nothing on it is lost,
   # that is, when a merged PR's head carries its tip or main already does.
   tip="$(g rev-parse "refs/heads/$branch")"
@@ -191,7 +208,10 @@ if g rev-parse --verify --quiet "refs/heads/$branch" >/dev/null && [[ -z "$open_
     while IFS= read -r oid; do
       [[ -n "$oid" ]] || continue
       check_commit_id "$oid"
-      if ancestor "$tip" "$oid"; then merged=true; break; fi
+      if ancestor "$tip" "$oid"; then
+        merged=true
+        break
+      fi
     done <<< "$merged_heads"
   fi
   # A branch that was never pushed (the gate refused the first push, before any PR existed) has no
@@ -206,14 +226,17 @@ if g rev-parse --verify --quiet "refs/heads/$branch" >/dev/null && [[ -z "$open_
   # them. The PR lookup, like the merged one, ends the run when gh fails.
   never_pushed=false
   if ! $merged \
-    && ! g rev-parse --verify --quiet "refs/remotes/origin/$branch" >/dev/null \
+    && ! g rev-parse --verify --quiet "refs/remotes/origin/$branch" > /dev/null \
     && [[ "$(g config --get "branch.$branch.merge" || true)" != "refs/heads/$branch" ]]; then
     pr_heads="$(gh_ pr list --head "$branch" --state all --limit 100 --json headRefOid,isCrossRepository --jq '.[] | select(.isCrossRepository == false) | .headRefOid')"
     carried=false
     while IFS= read -r oid; do
       [[ -n "$oid" ]] || continue
       check_commit_id "$oid"
-      if ancestor "$oid" "$tip" && ! ancestor "$oid" origin/main; then carried=true; break; fi
+      if ancestor "$oid" "$tip" && ! ancestor "$oid" origin/main; then
+        carried=true
+        break
+      fi
     done <<< "$pr_heads"
     $carried || never_pushed=true
   fi
@@ -223,7 +246,7 @@ if g rev-parse --verify --quiet "refs/heads/$branch" >/dev/null && [[ -z "$open_
       echo "── $repo_name: replacing $worktree, whose work has merged"
       g worktree remove "$existing"
     fi
-    g branch -D "$branch" >/dev/null
+    g branch -D "$branch" > /dev/null
     existing=""
   else
     echo "── $repo_name: $branch was never pushed; carrying it on"
@@ -234,11 +257,11 @@ if [[ -n "$existing" ]]; then
   echo "── $repo_name: reusing $worktree${open_pr:+ for open PR #$open_pr}"
 else
   base=origin/main
-  if [[ -n "$open_pr" ]] && g rev-parse --verify --quiet "refs/remotes/origin/$branch" >/dev/null; then
+  if [[ -n "$open_pr" ]] && g rev-parse --verify --quiet "refs/remotes/origin/$branch" > /dev/null; then
     base="origin/$branch"
   fi
   mkdir -p "$(dirname "$worktree")"
-  if g rev-parse --verify --quiet "refs/heads/$branch" >/dev/null; then
+  if g rev-parse --verify --quiet "refs/heads/$branch" > /dev/null; then
     g worktree add --quiet "$worktree" "$branch"
     base="the local branch"
   else
@@ -251,11 +274,11 @@ w() { git -C "$worktree" "$@"; }
 
 # ── 2. Up to date with the remote branch and main ───────────────────────────
 for ref in "origin/$branch" origin/main; do
-  w rev-parse --verify --quiet "refs/remotes/$ref" >/dev/null || continue
+  w rev-parse --verify --quiet "refs/remotes/$ref" > /dev/null || continue
   w merge-base --is-ancestor "$ref" HEAD && continue
   echo "── $repo_name: merging $ref"
   if ! w merge --quiet --no-edit "$ref"; then
-    w merge --abort 2>/dev/null || true
+    w merge --abort 2> /dev/null || true
     die "merging $ref into $branch conflicts; resolve it in $worktree by hand"
   fi
 done
@@ -266,7 +289,7 @@ done
 # labels.json's color and description) once, before anything below adds it to a PR (the nothing-to-push path
 # included: gh pr edit --add-label fails in a repo without it) and before the push, so a repo where it can't be
 # made fails here with nothing pushed.
-gh_ label create "$apply_label" --color "$apply_label_color" --description "$apply_label_description" --force >/dev/null
+gh_ label create "$apply_label" --color "$apply_label_color" --description "$apply_label_description" --force > /dev/null
 echo "── $repo_name: apply.sh"
 "$apply" "$worktree"
 w add -A
@@ -275,10 +298,10 @@ if ! w diff --cached --quiet; then
 else
   # Nothing new, but an Apply commit a failed push left behind still goes out.
   pushed=origin/main
-  w rev-parse --verify --quiet "refs/remotes/origin/$branch" >/dev/null && pushed="origin/$branch"
+  w rev-parse --verify --quiet "refs/remotes/origin/$branch" > /dev/null && pushed="origin/$branch"
   if w merge-base --is-ancestor HEAD "$pushed"; then
     # An earlier run that pushed and then failed may have left the open PR without its label.
-    [[ -z "$open_pr" ]] || gh_ pr edit "$open_pr" --add-label "$apply_label" >/dev/null
+    [[ -z "$open_pr" ]] || gh_ pr edit "$open_pr" --add-label "$apply_label" > /dev/null
     echo "reapply.sh: $repo_name already matches the Template; nothing to commit or push"
     exit 0
   fi
@@ -302,7 +325,7 @@ body_file="$(mktemp)"
 trap 'command rm -f "$body_file"' EXIT
 apply_line="- \`$head\` Apply commit, \`apply.sh\` output alone: brings $brings_text."
 if [[ -z "$open_pr" ]]; then
-  cat > "$body_file" <<EOF
+  cat > "$body_file" << EOF
 ## Why
 
 Re-Apply the repo-ci-baseline Template so this repo carries the Template changes from $brings_text.
@@ -332,7 +355,7 @@ else
     { print }
     END { if (!done) { print ""; print line } }' "$body_file.old" > "$body_file"
   command rm -f "$body_file.old"
-  gh_ pr edit "$pr" --body-file "$body_file" --add-label "$apply_label" >/dev/null
+  gh_ pr edit "$pr" --body-file "$body_file" --add-label "$apply_label" > /dev/null
   echo "── $repo_name: added $head to PR #$pr's description"
 fi
 
@@ -360,7 +383,7 @@ ref="$repo_path#$pr"
 owner="${repo_path%%/*}"
 [[ "$owner" =~ ^[A-Za-z0-9-]+$ ]] || die "can't read the repository owner from '$url'"
 records_jq=".comments | map(select((.body // \"\") | contains(\"$asked_marker\")) | select((.author.login // \"\") | ascii_downcase | sub(\"\\\\[bot\\\\]$\"; \"\") | . == \"github-actions\" or . == \"${owner,,}\")) | length"
-records="$(gh_ pr view "$pr" --json comments --jq "$records_jq" 2>/dev/null || true)"
+records="$(gh_ pr view "$pr" --json comments --jq "$records_jq" 2> /dev/null || true)"
 if [[ "${records:-0}" =~ ^[0-9]+$ && "${records:-0}" -gt 0 ]]; then
   echo "reapply.sh: the ask for Copilot's review is already recorded on #$pr" >&2
 elif post_out="$(gh_ pr comment "$pr" --body "$asked_comment" 2>&1)"; then

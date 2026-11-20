@@ -24,7 +24,7 @@ trap 'command rm -rf "$work"' EXIT
 mkdir "$work/no-template"
 export GIT_TEMPLATE_DIR="$work/no-template"
 
-if ! command -v jq >/dev/null 2>&1; then
+if ! command -v jq > /dev/null 2>&1; then
   echo "skip - jq is not installed, and watch-pr.sh needs it"
   exit 0
 fi
@@ -41,7 +41,7 @@ repo=""
 # still to fail; GH_FAKE_GARBAGE=1 prints text that is not JSON.
 fakebin="$work/fakebin"
 mkdir "$fakebin"
-cat > "$fakebin/gh" <<'EOF' # gh-repo: ok
+cat > "$fakebin/gh" << 'EOF' # gh-repo: ok
 #!/usr/bin/env bash
 {
   printf 'GH_REPO=%s ::' "${GH_REPO-}"
@@ -74,7 +74,7 @@ cat "$GH_FIXTURE"
 EOF
 chmod +x "$fakebin/gh" # gh-repo: ok
 # A fake sleep that returns at once and logs how long it was asked to wait.
-cat > "$fakebin/sleep" <<'EOF'
+cat > "$fakebin/sleep" << 'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$SLEEP_LOG"
 EOF
@@ -84,7 +84,7 @@ chmod +x "$fakebin/sleep"
 nojq="$work/nojq"
 mkdir "$nojq"
 for tool in bash env git sed grep cat date mkdir mktemp dirname basename head tail tr sort uniq awk wc cut printf rm mv cp ln touch tee xargs readlink realpath id seq expr test true false; do
-  path="$(command -v "$tool" 2>/dev/null || true)"
+  path="$(command -v "$tool" 2> /dev/null || true)"
   [[ -n "$path" && "$path" == /* ]] && ln -s "$path" "$nojq/$tool"
 done
 cp "$fakebin/gh" "$fakebin/sleep" "$nojq/" # gh-repo: ok
@@ -156,24 +156,27 @@ comment() {
 
 # run <args...>: the script from the scratch repository, standard output and error kept apart.
 run() {
-  out="$(cd "$repo" && PATH="$fakebin:$PATH" bash "$SCRIPT" "$@" 2>"$work/err")"
+  out="$(cd "$repo" && PATH="$fakebin:$PATH" bash "$SCRIPT" "$@" 2> "$work/err")"
   status=$?
-  err="$(<"$work/err")"
+  err="$(< "$work/err")"
 }
 run_in() { # run_in <dir> <args...>
   local dir="$1"
   shift
-  out="$(cd "$dir" && PATH="$fakebin:$PATH" bash "$SCRIPT" "$@" 2>"$work/err")"
+  out="$(cd "$dir" && PATH="$fakebin:$PATH" bash "$SCRIPT" "$@" 2> "$work/err")"
   status=$?
-  err="$(<"$work/err")"
+  err="$(< "$work/err")"
 }
 run_env() { # run_env <VAR=value>... -- <args...>
   local -a vars=()
-  while [[ "$1" != "--" ]]; do vars+=("$1"); shift; done
+  while [[ "$1" != "--" ]]; do
+    vars+=("$1")
+    shift
+  done
   shift
-  out="$(cd "$repo" && env ${vars[@]+"${vars[@]}"} PATH="$fakebin:$PATH" bash "$SCRIPT" "$@" 2>"$work/err")"
+  out="$(cd "$repo" && env ${vars[@]+"${vars[@]}"} PATH="$fakebin:$PATH" bash "$SCRIPT" "$@" 2> "$work/err")"
   status=$?
-  err="$(<"$work/err")"
+  err="$(< "$work/err")"
 }
 # run_bounded <seconds> <VAR=value>... -- <args...>: run_env, killed after <seconds> with status 124, by a watchdog in plain bash (GNU timeout
 # isn't on macOS). The watchdog's own sleep is the real one: the fake is only on the watcher's PATH. The watchdog writes its marker before it
@@ -186,37 +189,43 @@ run_bounded() {
   local secs="$1" pid dog fired="$work/bounded-fired"
   shift
   local -a vars=()
-  while [[ "$1" != "--" ]]; do vars+=("$1"); shift; done
+  while [[ "$1" != "--" ]]; do
+    vars+=("$1")
+    shift
+  done
   shift
   rm -f "$fired" "$work/bounded-nap"
-  (cd "$repo" && exec env ${vars[@]+"${vars[@]}"} PATH="$fakebin:$PATH" bash "$SCRIPT" "$@") >"$work/out" 2>"$work/err" &
+  (cd "$repo" && exec env ${vars[@]+"${vars[@]}"} PATH="$fakebin:$PATH" bash "$SCRIPT" "$@") > "$work/out" 2> "$work/err" &
   pid=$!
   (
     # shellcheck disable=SC2046 # one pid per word
     trap 'kill $(jobs -p) 2>/dev/null; wait; exit 0' TERM
     command sleep "$secs" &
     nap=$!
-    echo "$nap" >"$work/bounded-nap"
+    echo "$nap" > "$work/bounded-nap"
     wait "$nap" || exit 0
-    : >"$fired"
+    : > "$fired"
     kill "$pid"
-  ) >/dev/null 2>&1 &
+  ) > /dev/null 2>&1 &
   dog=$!
   wait "$pid" && status=0 || status=$?
   if [[ -e "$fired" ]]; then status=124; fi
   # The pid file is written after the trap is set: stop the watchdog only once it is, or a TERM before the trap ends it without the trap.
   local tries=0
-  while [[ ! -s "$work/bounded-nap" ]] && ((tries < 50)); do tries=$((tries + 1)); command sleep 0.1; done
-  kill "$dog" 2>/dev/null || true
-  wait "$dog" 2>/dev/null || true
-  out="$(<"$work/out")"
-  err="$(<"$work/err")"
+  while [[ ! -s "$work/bounded-nap" ]] && ((tries < 50)); do
+    tries=$((tries + 1))
+    command sleep 0.1
+  done
+  kill "$dog" 2> /dev/null || true
+  wait "$dog" 2> /dev/null || true
+  out="$(< "$work/out")"
+  err="$(< "$work/err")"
 }
 # sleep_gone: the last run_bounded's watchdog sleep has ended. The watchdog reaps it (its trap waits) before run_bounded's wait returns, so
 # it is gone, not a zombie, at once. False when no pid was written.
 sleep_gone() {
   [[ -s "$work/bounded-nap" ]] || return 1
-  ! kill -0 "$(<"$work/bounded-nap")" 2>/dev/null
+  ! kill -0 "$(< "$work/bounded-nap")" 2> /dev/null
 }
 polls() { grep -c '^GH_REPO=' "$GH_LOG"; }
 sleeps() { grep -c . "$SLEEP_LOG"; }
@@ -225,9 +234,11 @@ check() {
   local description="$1"
   shift
   if "$@"; then
-    PASSED=$((PASSED + 1)); echo "ok   - $description"
+    PASSED=$((PASSED + 1))
+    echo "ok   - $description"
   else
-    FAILED=$((FAILED + 1)); echo "FAIL - $description (exit $status)"
+    FAILED=$((FAILED + 1))
+    echo "FAIL - $description (exit $status)"
     while IFS= read -r line; do echo "       | $line"; done <<< "$out"
     while IFS= read -r line; do echo "       ! $line"; done <<< "$err"
   fi
@@ -619,8 +630,8 @@ new_repo
 comment C1 "$(jq -nc --arg login $'evil\033[2Jx\302\233y' '{__typename: "User", login: $login}')" "Hi."
 run --once 7
 check "a login with control characters: exit 0" status_is 0
-check "control characters in a login are not printed" not grep -q $'[\x01-\x1f\x7f]' <<<"$out"
-check "nor a C1 control character" not grep -qF $'\302\233' <<<"$out"
+check "control characters in a login are not printed" not grep -q $'[\x01-\x1f\x7f]' <<< "$out"
+check "nor a C1 control character" not grep -qF $'\302\233' <<< "$out"
 check "the rest of the login is" out_has "evil [2Jx y: $HIDDEN"
 # NUL, C1 controls (U+0085 NEL, U+009B CSI) and ESC in the owner's login and body, built with jq's escapes since bash can't
 # hold a NUL: none reaches standard output, read raw from a file (command substitution would drop a NUL itself), and the text around them does.
@@ -632,7 +643,7 @@ run_raw() { # run_raw <args...>: the script's standard output into $work/raw, by
   (cd "$repo" && PATH="$fakebin:$PATH" bash "$SCRIPT" "$@" > "$work/raw" 2> "$work/err")
   status=$?
   out="$(tr -d '\000' < "$work/raw")"
-  err="$(<"$work/err")"
+  err="$(< "$work/err")"
 }
 raw_has_no_nul() { [[ $(wc -c < "$work/raw") -eq $(tr -d '\000' < "$work/raw" | wc -c) ]]; }
 raw_lacks() { ! LC_ALL=C grep -qF -- "$1" "$work/raw"; }
@@ -672,8 +683,17 @@ KEPT="20 7e a0 ac ae 34e 350 61b 61d 115e 1161 17b3 17b6 180a 1810 200a 2010 201
 fffc ff9f ffa1 1bc9f 1d172 1d17b e1000 e9 65e5 1f600"
 # chunks <hex code points>: the list cut into lines of 20; body <hex>: a JSON string "w0<c0>w1<c1>...end"; spaced <hex>: the same with
 # each character a space.
-chunks() { local -a cps; read -r -d '' -a cps <<<"$1" || true; local i; for ((i = 0; i < ${#cps[@]}; i += 20)); do echo "${cps[*]:i:20}"; done; }
-cps() { local h out=""; for h in $1; do out+="$((16#$h)),"; done; echo "[${out%,}]"; }
+chunks() {
+  local -a cps
+  read -r -d '' -a cps <<< "$1" || true
+  local i
+  for ((i = 0; i < ${#cps[@]}; i += 20)); do echo "${cps[*]:i:20}"; done
+}
+cps() {
+  local h out=""
+  for h in $1; do out+="$((16#$h)),"; done
+  echo "[${out%,}]"
+}
 body() { jq -nc --argjson c "$(cps "$1")" '[range($c | length) as $i | "w\($i)", ([$c[$i]] | implode)] | add + "end"'; }
 spaced() { jq -nr --argjson c "$(cps "$1")" '[range($c | length) as $i | "w\($i)"] | join(" ") + " end"'; }
 raw_lacks_hiding() { [[ "$(jq -Rs --argjson c "$(cps "$HIDING")" '[explode[] | select(IN($c[]))] | length' "$work/raw")" == 0 ]]; }
@@ -702,7 +722,7 @@ for part in "${kept_parts[@]}"; do
   pr "$(jq -nc --argjson o "$OWNER" --argjson b "$(body "$part")" '{comments: {nodes: [{id: "C1", author: $o, authorAssociation: "OWNER", body: $b}]}}')"
   run_raw --once 7
   check "the owner's comment: each hiding range's neighbours, and accented, CJK and emoji text ($part), are printed as they are" \
-    out_has "watch-pr: comment: owner: $(jq -r . <<<"$(body "$part")")"
+    out_has "watch-pr: comment: owner: $(jq -r . <<< "$(body "$part")")"
 done
 # clean lists every default-ignorable code point by range too, so a jq with older Unicode tables blanks no fewer: every code point this jq
 # calls default-ignorable is matched by the class with the property taken out (the C categories, which some of them are in, taken out too).
@@ -713,9 +733,9 @@ floor_covers_property() {
     | select(test("[\\p{Default_Ignorable_Code_Point}]") and (test($floor) | not)) | explode[0]] | length')" == 0 ]]
 }
 check "clean's class is found" test -n "$clean_floor"
-check "clean's own ranges are taken without the property" not grep -qF Default_Ignorable <<<"$clean_floor"
-check "clean's own ranges are taken without the C categories" not grep -qF 'p{C' <<<"$clean_floor"
-check "clean's own ranges hold a range this test knows" grep -qF 'ufe00-' <<<"$clean_floor"
+check "clean's own ranges are taken without the property" not grep -qF Default_Ignorable <<< "$clean_floor"
+check "clean's own ranges are taken without the C categories" not grep -qF 'p{C' <<< "$clean_floor"
+check "clean's own ranges hold a range this test knows" grep -qF 'ufe00-' <<< "$clean_floor"
 check "clean's own ranges, without the property, hold every code point this jq calls default-ignorable" floor_covers_property
 
 # A seen file that can't be written doesn't end the poll: the reason is printed, the poll exits 0, and stderr says the id wasn't recorded.
@@ -753,7 +773,7 @@ new_repo
 owner_comments 120
 run --once 7
 check "120 reasons: the 'more' line counts the 70 not printed" out_has "watch-pr: more: 70 more not printed"
-check "120 reasons: the 'more' line is the last" test "$(tail -n 1 <<<"$out")" == "watch-pr: more: 70 more not printed; act on these and run again"
+check "120 reasons: the 'more' line is the last" test "$(tail -n 1 <<< "$out")" == "watch-pr: more: 70 more not printed; act on these and run again"
 check "120 reasons: 51 lines" out_line_count_is 51
 check "120 reasons: exit 0" status_is 0
 # The order: a failed check, then the one-shot events, then the threads, whatever order GitHub lists them in.
@@ -792,7 +812,7 @@ mixed 50 1
 run --once 7
 check "50 threads and a comment: exit 0" status_is 0
 check "50 threads and a comment: the comment is printed" out_has "watch-pr: comment: owner: Note 1."
-check "50 threads and a comment: the comment comes first" test "$(head -n 1 <<<"$out")" == "watch-pr: comment: owner: Note 1."
+check "50 threads and a comment: the comment comes first" test "$(head -n 1 <<< "$out")" == "watch-pr: comment: owner: Note 1."
 check "50 threads and a comment: the comment is recorded as seen" grep -qxF C1 "$repo/.git/watch-pr-7.seen"
 check "50 threads and a comment: 49 threads, then 'more: 1'" out_has "watch-pr: more: 1 more not printed"
 check "50 threads and a comment: the 50th thread waits" out_lacks "Thread 50."
@@ -944,7 +964,7 @@ new_repo
 pr '{"mergeStateStatus":"BEHIND"}'
 run --once 7
 check "every gh call is 'api graphql'" test "$(grep -vc ':: api graphql' "$GH_LOG")" -eq 0 # gh-repo: ok
-check "no gh call carries a mutation" log_lacks "mutation" # gh-repo: ok
+check "no gh call carries a mutation" log_lacks "mutation"                                 # gh-repo: ok
 check "the query names the PR number" log_has "7"
 
 new_repo
@@ -1001,9 +1021,9 @@ run_env WATCH_PR_TIMEOUT=abc -- --once 7
 check "a non-numeric WATCH_PR_TIMEOUT: exit 2" status_is 2
 
 new_repo
-out="$(cd "$repo" && PATH="$nojq" bash "$SCRIPT" --once 7 2>"$work/err")"
+out="$(cd "$repo" && PATH="$nojq" bash "$SCRIPT" --once 7 2> "$work/err")"
 status=$?
-err="$(<"$work/err")"
+err="$(< "$work/err")"
 check "no jq on PATH: exit 2" status_is 2
 check "no jq on PATH: the message names jq" err_has "jq"
 check "no jq on PATH: nothing polled" polls_are 0
@@ -1011,13 +1031,13 @@ check "no jq on PATH: nothing polled" polls_are 0
 new_repo
 mkdir "$work/nogh-$n"
 for tool in bash env git jq sed grep cat date mkdir mktemp dirname basename head tail tr sort uniq awk wc cut rm mv; do
-  path="$(command -v "$tool" 2>/dev/null || true)"
+  path="$(command -v "$tool" 2> /dev/null || true)"
   [[ -n "$path" && "$path" == /* ]] && ln -s "$path" "$work/nogh-$n/$tool"
 done
-out="$(cd "$repo" && PATH="$work/nogh-$n" bash "$SCRIPT" --once 7 2>"$work/err")"
+out="$(cd "$repo" && PATH="$work/nogh-$n" bash "$SCRIPT" --once 7 2> "$work/err")"
 status=$?
-err="$(<"$work/err")"
-check "no gh on PATH: exit 2" status_is 2 # gh-repo: ok
+err="$(< "$work/err")"
+check "no gh on PATH: exit 2" status_is 2                # gh-repo: ok
 check "no gh on PATH: the message names gh" err_has "gh" # gh-repo: ok
 
 # ---------------------------------------------------------------------------
@@ -1156,7 +1176,11 @@ page() {
       else {($list): {pageInfo: {hasPreviousPage: $more, startCursor: $cur}, nodes: $nodes}} end
     | . * $over | {data: {repository: {pullRequest: .}}}' > "$GH_PAGES_DIR/$c.json"
 }
-pages_repo() { new_repo; export GH_PAGES_DIR="$work/pages $n"; mkdir -p "$GH_PAGES_DIR"; }
+pages_repo() {
+  new_repo
+  export GH_PAGES_DIR="$work/pages $n"
+  mkdir -p "$GH_PAGES_DIR"
+}
 UNRESOLVED="[{\"isResolved\":false,\"comments\":{\"nodes\":[{\"author\":$PERSON,$PA\"body\":\"on page two\"}]}}]"
 RESOLVED="[{\"isResolved\":true,\"comments\":{\"nodes\":[{\"author\":$PERSON,$PA\"body\":\"done\"}]}}]"
 FAILING='[{"__typename":"CheckRun","name":"late-check","status":"COMPLETED","conclusion":"FAILURE"}]'
@@ -1167,7 +1191,7 @@ pr '{"reviewThreads":{"pageInfo":{"hasNextPage":true,"endCursor":"T1"},"nodes":'
 page T1 threads "$UNRESOLVED" false
 run --once 7
 check "an unresolved thread on the second page of threads is reported" status_is 0
-check "it is reported as a thread" grep -q '^watch-pr: thread:' <<<"$out"
+check "it is reported as a thread" grep -q '^watch-pr: thread:' <<< "$out"
 check "the threads page is asked for after the first page's end cursor" grep -qF 'cursor=T1' "$GH_LOG"
 # shellcheck disable=SC2016 # GraphQL's $cursor, not the shell's
 check "the threads page query reads forward from it" grep -qF 'reviewThreads(first:100,after:$cursor)' "$GH_LOG"
@@ -1176,7 +1200,7 @@ pages_repo
 pr '{"reviews":{"pageInfo":{"hasPreviousPage":true,"startCursor":"R1"},"nodes":[]}}'
 page R1 reviews "[{\"id\":\"PRR_old\",\"state\":\"CHANGES_REQUESTED\",\"author\":$PERSON,$PA\"body\":\"older\"}]" false
 run --once 7
-check "a changes-requested review on an earlier page of reviews is reported" grep -q '^watch-pr: changes-requested:' <<<"$out"
+check "a changes-requested review on an earlier page of reviews is reported" grep -q '^watch-pr: changes-requested:' <<< "$out"
 # shellcheck disable=SC2016 # GraphQL's $cursor, not the shell's
 check "the reviews page query reads back from the start cursor" grep -qF 'reviews(last:100,before:$cursor)' "$GH_LOG"
 
@@ -1184,7 +1208,7 @@ pages_repo
 pr '{"comments":{"pageInfo":{"hasPreviousPage":true,"startCursor":"C1"},"nodes":[]}}'
 page C1 comments "[{\"id\":\"IC_old\",\"author\":$PERSON,$PA\"body\":\"an older comment\"}]" false
 run --once 7
-check "a person's comment on an earlier page of comments is reported" grep -q '^watch-pr: comment:' <<<"$out"
+check "a person's comment on an earlier page of comments is reported" grep -q '^watch-pr: comment:' <<< "$out"
 # shellcheck disable=SC2016 # GraphQL's $cursor, not the shell's
 check "the comments page query reads back from the start cursor" grep -qF 'comments(last:100,before:$cursor)' "$GH_LOG"
 
@@ -1192,7 +1216,7 @@ pages_repo
 pr '{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true,"endCursor":"K1"},"nodes":'"$PASSING"'}}}'
 page K1 checks "$FAILING" false
 run --once 7
-check "a failing check on the second page of checks is reported" grep -q '^watch-pr: check-failed:.*late-check' <<<"$out"
+check "a failing check on the second page of checks is reported" grep -q '^watch-pr: check-failed:.*late-check' <<< "$out"
 
 # A stranger's comment or thread reply on a later page is read without its text, as on the first.
 pages_repo
@@ -1202,7 +1226,7 @@ page T1 threads "[{\"isResolved\":false,\"comments\":{\"nodes\":[{\"author\":$ST
 run --once 7
 check "a stranger's comment on a later page wakes with the fixed phrase" out_has "watch-pr: comment: drive-by: $HIDDEN"
 check "a stranger's marked reply on a later threads page still reports the thread" out_has "watch-pr: thread: drive-by: $HIDDEN"
-check "neither's text is shown" not grep -q 'paged' <<<"$out"
+check "neither's text is shown" not grep -q 'paged' <<< "$out"
 
 # Pages that hold nothing to act on leave the PR quiet: paging is a whole read, not a failed one.
 pages_repo
@@ -1256,31 +1280,31 @@ pages_repo
 pr '{"reviewThreads":{"pageInfo":{"hasNextPage":true,"endCursor":null},"nodes":[]}}'
 run --once 7
 check "more pages with no cursor is a failed poll: exit 2" status_is 2
-check "it says no cursor was given" grep -q 'no cursor' <<<"$err"
+check "it says no cursor was given" grep -q 'no cursor' <<< "$err"
 pages_repo
 pr '{"reviews":{"pageInfo":{"hasPreviousPage":true,"startCursor":"missing"},"nodes":[]}}'
 run --once 7
 check "a page that fails to be read is a failed poll: exit 2" status_is 2
-check "it says which page failed" grep -q "failed reading page 2 of the PR's reviews" <<<"$err"
+check "it says which page failed" grep -q "failed reading page 2 of the PR's reviews" <<< "$err"
 pages_repo
 pr '{"comments":{"pageInfo":{"hasPreviousPage":true,"startCursor":"C1"},"nodes":[]}}'
 echo '{"data":{"repository":{"pullRequest":{"comments":{"nodes":"nope"}}}}}' > "$GH_PAGES_DIR/C1.json"
 run --once 7
 check "a page whose nodes aren't a list is a failed poll: exit 2" status_is 2
-check "it says that page is not a list" grep -q "page 2 of the PR's comments is not a list" <<<"$err"
+check "it says that page is not a list" grep -q "page 2 of the PR's comments is not a list" <<< "$err"
 pages_repo
 pr '{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true,"endCursor":"K1"},"nodes":[]}}}'
 page K1 checks "$PASSING" false "" '{"headRefOid":"another-head","statusCheckRollup":{"commit":{"oid":"another-head"}}}'
 run --once 7
 check "a checks page of another head (a push between pages) is a failed poll: exit 2" status_is 2
-check "it says the head moved" grep -q 'head moved' <<<"$err"
+check "it says the head moved" grep -q 'head moved' <<< "$err"
 pages_repo
 pr '{"reviews":{"pageInfo":{"hasPreviousPage":true,"startCursor":"R1"},"nodes":[]}}'
 page R1 reviews '[]' false
 jq '.data.repository.pullRequest.reviews.pageInfo.hasPreviousPage = "no"' "$GH_PAGES_DIR/R1.json" > "$GH_PAGES_DIR/R1.tmp" && mv "$GH_PAGES_DIR/R1.tmp" "$GH_PAGES_DIR/R1.json"
 run --once 7
 check "a page whose pageInfo flag isn't a boolean is a failed poll: exit 2" status_is 2
-check "it names the page it couldn't read" grep -q "page 2 of the PR's reviews is not a list" <<<"$err"
+check "it names the page it couldn't read" grep -q "page 2 of the PR's reviews is not a list" <<< "$err"
 
 # Pages keep GitHub's order: an earlier page of comments (read back) comes before the first query's newest ones, and a later page of
 # threads (read forward) after the first's, so the reasons are printed oldest first.
@@ -1380,7 +1404,7 @@ pages_repo
 pr "{\"reviews\":{\"pageInfo\":{\"hasPreviousPage\":true,\"startCursor\":\"R1\"},\"nodes\":[{\"id\":\"PRR_1\",\"state\":\"COMMENTED\",\"author\":$PERSON,$PA\"body\":\"once only\"}]}}"
 page R1 reviews "[{\"id\":\"PRR_1\",\"state\":\"COMMENTED\",\"author\":$PERSON,$PA\"body\":\"once only\"}]" false
 run --once 7
-check "a review a later page repeats is printed once" test "$(grep -c 'once only' <<<"$out")" -eq 1
+check "a review a later page repeats is printed once" test "$(grep -c 'once only' <<< "$out")" -eq 1
 
 # A missing or non-string cursor fails the read for every list, with that reason.
 for over in '{"reviews":{"pageInfo":{"hasPreviousPage":true,"startCursor":null},"nodes":[]}}' \
@@ -1390,7 +1414,7 @@ for over in '{"reviews":{"pageInfo":{"hasPreviousPage":true,"startCursor":null},
   pr "$over"
   run --once 7
   check "a list with more pages and cursor $over is a failed poll: exit 2" status_is 2
-  check "it says no cursor was given ($over)" grep -q "no cursor" <<<"$err"
+  check "it says no cursor was given ($over)" grep -q "no cursor" <<< "$err"
 done
 
 # A first rollup not of the head yet is not paged: it is the not-of-head reason, not a head that moved.
@@ -1399,23 +1423,23 @@ pr '{"statusCheckRollup":{"commit":{"oid":"older-commit"},"contexts":{"pageInfo"
 page K1 checks "$PASSING" false
 run --once 7
 check "a first rollup of another commit with a next page is a failed poll: exit 2" status_is 2
-check "it says the checks are not of the head yet" grep -q 'not of its head commit yet' <<<"$err"
-check "not that the head moved" not grep -q 'head moved' <<<"$err"
+check "it says the checks are not of the head yet" grep -q 'not of its head commit yet' <<< "$err"
+check "not that the head moved" not grep -q 'head moved' <<< "$err"
 check "and its checks are not paged" not grep -qF 'cursor=K1' "$GH_LOG"
 # A push between pages whose new head has no rollup yet says the head moved, not that the page is no list.
 pages_repo
 pr '{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true,"endCursor":"K1"},"nodes":[]}}}'
 echo '{"data":{"repository":{"pullRequest":{"headRefOid":"new-head","statusCheckRollup":null}}}}' > "$GH_PAGES_DIR/K1.json"
 run --once 7
-check "a checks page of a new head with no rollup says the head moved" grep -q 'head moved' <<<"$err"
+check "a checks page of a new head with no rollup says the head moved" grep -q 'head moved' <<< "$err"
 # A checks page of the head whose own rollup is of another commit is not merged: it says so, and not that the head moved.
 pages_repo
 pr '{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true,"endCursor":"K1"},"nodes":[]}}}'
 page K1 checks "$FAILING" false "" '{"statusCheckRollup":{"commit":{"oid":"another-commit"}}}'
 run --once 7
 check "a checks page whose rollup is of another commit is a failed poll: exit 2" status_is 2
-check "it says that page is not of the head commit" grep -q "page 2 of the PR's checks is not of its head commit" <<<"$err"
-check "not that the head moved (rollup of another commit)" not grep -q 'head moved' <<<"$err"
+check "it says that page is not of the head commit" grep -q "page 2 of the PR's checks is not of its head commit" <<< "$err"
+check "not that the head moved (rollup of another commit)" not grep -q 'head moved' <<< "$err"
 # A checks page of the head's rollup that names no head is not taken for the head's either.
 pages_repo
 pr '{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true,"endCursor":"K1"},"nodes":[]}}}'
@@ -1423,22 +1447,22 @@ page K1 checks "$PASSING" false
 jq 'del(.data.repository.pullRequest.headRefOid)' "$GH_PAGES_DIR/K1.json" > "$GH_PAGES_DIR/K1.tmp" && mv "$GH_PAGES_DIR/K1.tmp" "$GH_PAGES_DIR/K1.json"
 run --once 7
 check "a checks page naming no head is a failed poll: exit 2" status_is 2
-check "it says that page is not of the head commit (no head named)" grep -q "page 2 of the PR's checks is not of its head commit" <<<"$err"
-check "not that the head moved (no head named)" not grep -q 'head moved' <<<"$err"
+check "it says that page is not of the head commit (no head named)" grep -q "page 2 of the PR's checks is not of its head commit" <<< "$err"
+check "not that the head moved (no head named)" not grep -q 'head moved' <<< "$err"
 # A checks page that is no pull request at all is no list of checks, not a head that moved.
 pages_repo
 pr '{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true,"endCursor":"K1"},"nodes":[]}}}'
 echo '{"data":{"repository":{"pullRequest":null}}}' > "$GH_PAGES_DIR/K1.json"
 run --once 7
-check "a checks page with no pull request says it is not a list" grep -q "page 2 of the PR's checks is not a list" <<<"$err"
-check "not that the head moved (no pull request)" not grep -q 'head moved' <<<"$err"
+check "a checks page with no pull request says it is not a list" grep -q "page 2 of the PR's checks is not a list" <<< "$err"
+check "not that the head moved (no pull request)" not grep -q 'head moved' <<< "$err"
 # Nodes with no id are never taken for repeats of each other: both id-less comments are read.
 pages_repo
 pr "{\"comments\":{\"pageInfo\":{\"hasPreviousPage\":true,\"startCursor\":\"C1\"},\"nodes\":[{\"author\":$PERSON,$PA\"body\":\"idless newer\"}]}}"
 page C1 comments "[{\"author\":$PERSON,$PA\"body\":\"idless older\"}]" false
 run --once 7
-check "an id-less comment on page 2 is read" grep -q 'idless older' <<<"$out"
-check "and the id-less one on page 1 too" grep -q 'idless newer' <<<"$out"
+check "an id-less comment on page 2 is read" grep -q 'idless older' <<< "$out"
+check "and the id-less one on page 1 too" grep -q 'idless newer' <<< "$out"
 
 # The cursors read are kept per list: threads and comments that GitHub hands the same cursor (one page file serves both lists here) are each
 # read from it, once, and the poll is whole, not a cursor already read from.
@@ -1461,7 +1485,13 @@ jq -nc --argjson owner "$OWNER" '
       pageInfo: {hasPreviousPage: ($p < 300), startCursor: (if $p < 300 then "P\($p + 1)" else null end)},
       nodes: [range(0; 400) as $i | {id: "IC_\($p)_\($i)", author: $owner, authorAssociation: "OWNER",
                                      body: "page \($p) item \($i)\n<!-- claude-session -->"}]}}}}}' \
-  | { p=0; while IFS= read -r line; do p=$((p + 1)); printf '%s\n' "$line" > "$GH_PAGES_DIR/P$p.json"; done; }
+  | {
+    p=0
+    while IFS= read -r line; do
+      p=$((p + 1))
+      printf '%s\n' "$line" > "$GH_PAGES_DIR/P$p.json"
+    done
+  }
 run_bounded 60 GH_PAGE_LIMIT=400 -- --once 7
 check "300 pages of 400 comments are read within 60 seconds (not timed out)" not status_is 124
 quiet "300 pages of the session's own comments"
@@ -1512,7 +1542,7 @@ for wanted in 'reviewThreads(first:100,after:$cursor){pageInfo{hasNextPage endCu
   'comments(last:100,before:$cursor){pageInfo{hasPreviousPage startCursor} nodes{id author{__typename login} authorAssociation body}}'; do
   check "a page query reads each author's association: ${wanted%%\{*}" grep -qF -- "$wanted" "$GH_LOG"
 done
-check "the checks page query reads the head and the rollup's commit" grep -qF 'headRefOid statusCheckRollup{commit{oid}' <<<"$checks_query"
+check "the checks page query reads the head and the rollup's commit" grep -qF 'headRefOid statusCheckRollup{commit{oid}' <<< "$checks_query"
 while IFS= read -r logged; do
   query=${logged#*query=}
   query=${query%% -f owner=*}
@@ -1525,12 +1555,12 @@ done < <(grep 'cursor=' "$GH_LOG")
 new_repo
 pr '{"statusCheckRollup":{"commit":{"oid":"not-the-head"}}}'
 run --once 7
-check "a rollup of another commit is reported as an incomplete read" grep -q 'incomplete' <<<"$err"
-check "and not as an answer that isn't a pull request" not grep -q 'not a pull request' <<<"$err"
+check "a rollup of another commit is reported as an incomplete read" grep -q 'incomplete' <<< "$err"
+check "and not as an answer that isn't a pull request" not grep -q 'not a pull request' <<< "$err"
 new_repo
 echo '{"data":{"repository":{"pullRequest":null}}}' > "$GH_FIXTURE"
 run --once 7
-check "an answer with no pull request still says so" grep -q 'not a pull request' <<<"$err"
+check "an answer with no pull request still says so" grep -q 'not a pull request' <<< "$err"
 
 # A merged or closed PR is reported whatever its pageInfo holds: its rollup may be of nothing once the branch is gone, and its lists' pages are never read.
 for done_state in MERGED CLOSED; do
@@ -1576,7 +1606,7 @@ first_query=$(grep -v 'cursor=' "$GH_LOG" | head -n 1)
 for wanted in 'comments(last:1){nodes{author{__typename login} authorAssociation body}}' \
   'reviews(last:100){pageInfo{hasPreviousPage startCursor} nodes{id state author{__typename login} authorAssociation body}}' \
   'comments(last:100){pageInfo{hasPreviousPage startCursor} nodes{id author{__typename login} authorAssociation body}}'; do
-  check "the query reads each author's association: $wanted" grep -qF -- "$wanted" <<<"$first_query"
+  check "the query reads each author's association: $wanted" grep -qF -- "$wanted" <<< "$first_query"
 done
 
 # A PR whose head repository is gone, or a fork, is watched from its own rollup: the query reads no head ref.
@@ -1612,9 +1642,9 @@ check "a failing check on the PR rollup is reported" status_is 0
 # ---------------------------------------------------------------------------
 
 would_skip() { # would_skip <body>: sets status
-  out="$(printf '%s' "$1" | PATH="$fakebin:$PATH" bash "$SCRIPT" --would-skip 2>"$work/err")"
+  out="$(printf '%s' "$1" | PATH="$fakebin:$PATH" bash "$SCRIPT" --would-skip 2> "$work/err")"
   status=$?
-  err="$(<"$work/err")"
+  err="$(< "$work/err")"
 }
 
 new_repo
@@ -1652,11 +1682,11 @@ check "--would-skip: another tool's marker isn't skipped" status_is 1
 check "--would-skip needs no PR number, and polls nothing" polls_are 0
 check "--would-skip prints nothing" out_is_empty
 
-out="$(printf '%s' '<!-- my-session -->' | WATCH_PR_MARKER='<!-- my-session -->' PATH="$fakebin:$PATH" bash "$SCRIPT" --would-skip 2>/dev/null)"
+out="$(printf '%s' '<!-- my-session -->' | WATCH_PR_MARKER='<!-- my-session -->' PATH="$fakebin:$PATH" bash "$SCRIPT" --would-skip 2> /dev/null)"
 status=$?
 check "--would-skip honours WATCH_PR_MARKER" status_is 0
 would_skip $'Fixed.\n<!-- claude-session -->'
-out="$(printf '%s' $'Fixed.\n<!-- claude-session -->' | WATCH_PR_MARKER='<!-- my-session -->' PATH="$fakebin:$PATH" bash "$SCRIPT" --would-skip 2>/dev/null)"
+out="$(printf '%s' $'Fixed.\n<!-- claude-session -->' | WATCH_PR_MARKER='<!-- my-session -->' PATH="$fakebin:$PATH" bash "$SCRIPT" --would-skip 2> /dev/null)"
 status=$?
 check "--would-skip: with WATCH_PR_MARKER set, the default marker is no longer the session's" status_is 1
 

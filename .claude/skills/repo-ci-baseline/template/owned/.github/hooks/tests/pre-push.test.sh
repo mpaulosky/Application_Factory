@@ -25,7 +25,7 @@ LOG="$WORK/gates.log"
 
 # make_stub <dir> <tool>: a stub that logs its call and fails on a FAIL match.
 make_stub() {
-  cat > "$1/$2" <<EOF
+  cat > "$1/$2" << EOF
 #!/usr/bin/env bash
 call="$2 \$*"
 echo "\$call" >> "$LOG"
@@ -70,7 +70,7 @@ STATUS=0
 # switch_to <branch>: check out the branch, creating it from origin/main if new.
 # Existing branches keep their commits.
 switch_to() {
-  git -C "$REPO" switch -q "$1" 2>/dev/null || git -C "$REPO" switch -q -c "$1" origin/main
+  git -C "$REPO" switch -q "$1" 2> /dev/null || git -C "$REPO" switch -q -c "$1" origin/main
 }
 
 # run_hook <checked-out branch> <stdin>
@@ -374,7 +374,7 @@ git -C "$REPO" switch -q feature/1-x
 # without the ledger code has no review to check, and with no origin/main there is
 # nothing to diff against, so the push is refused rather than waved through.
 commit_on feature/12-local-review .sandcastle/lib/review-ledger.mts "// a placeholder: the stub below stands for the ledger"
-cat > "$REPO/scripts/review.sh" <<EOF
+cat > "$REPO/scripts/review.sh" << EOF
 #!/usr/bin/env bash
 echo "review.sh \$*" >> "$LOG"
 [[ -z "\${GATE_SKIP_SELF_TEST:-}" ]] || echo "GATE_SKIP_SELF_TEST=\$GATE_SKIP_SELF_TEST" >> "$LOG"

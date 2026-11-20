@@ -7,6 +7,8 @@
 # and --quick (and a missing python3 or a broken checker fails closed), that dependabot.yml watches the root package.json, and the review tests' install step (a missing pnpm, a pnpm that leaves no tsx, a pnpm that installs it).
 # It also checks that .claude/settings.json runs the executable scripts/lint-edited-file.sh after Edit, Write and MultiEdit (ADR 0011), and that the check fails on a dropped matcher, another event or hook type,
 # a command without the quotes around CLAUDE_PROJECT_DIR or naming another script, a non-executable script and a file that is not JSON.
+# It also checks the shfmt step (ADR 0015): every shell file, changed or not and the hooks among them, is formatted in the style .editorconfig gives, a file that is not a shell file is
+# left alone, and a missing shfmt or one older than v3.14 fails the gate.
 # It also checks GATE_PART (ADR 0012) and TEST_SH_SHARD (ADR 0013, only the template part runs a shard; test.sh's steps each sit in one shard; the workflow's matrix lists them all): each part runs alone, a bad value, or --quick or --sync with a part, is refused, the Sandcastle check runs in a full gate only when the branch changed
 # a file it reads (and is remembered per clean tree), and the CI workflow has one job per part and a Template tests job that needs them all.
 #
@@ -15,16 +17,25 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 work="$(mktemp -d)"
-trap 'chmod -R u+w "$work" 2>/dev/null || true; rm -rf "$work"' EXIT # a case that makes a folder read-only is cleaned up even when it is interrupted
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH GATE_PART STUB_SANDCASTLE_EXIT RUN_PART TEST_SH_SHARD RUN_SHARD STUB_DURING MKDIR_LOG MKDIR_FAIL_ONCE MKDIR_RELEASE CAT_MARK RMDIR_MARK RMDIR_SIG RMDIR_TAKE RMDIR_WAIT # a caller's GATE_NO_CACHE=1 must not reach the stub gate runs; the tests set it themselves where they need it
+# a case that makes a folder read-only is cleaned up even when it is interrupted
+trap 'chmod -R u+w "$work" 2>/dev/null || true; rm -rf "$work"' EXIT
+# a caller's GATE_NO_CACHE=1 must not reach the stub gate runs; the tests set it themselves where they need it
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH GATE_PART STUB_SANDCASTLE_EXIT RUN_PART TEST_SH_SHARD RUN_SHARD STUB_DURING MKDIR_LOG MKDIR_FAIL_ONCE MKDIR_RELEASE CAT_MARK RMDIR_MARK RMDIR_SIG RMDIR_TAKE RMDIR_WAIT
 
-pass=0; failed=0
+pass=0
+failed=0
 check() { # check <description> <condition: 0 for ok>
-  if [[ "$2" == 0 ]]; then echo "ok   - $1"; pass=$((pass + 1)); else echo "FAIL - $1"; failed=$((failed + 1)); fi
+  if [[ "$2" == 0 ]]; then
+    echo "ok   - $1"
+    pass=$((pass + 1))
+  else
+    echo "FAIL - $1"
+    failed=$((failed + 1))
+  fi
 }
 
 skill=".claude/skills/repo-ci-baseline"
-copies=(.github/hooks/pre-commit .github/hooks/pre-push .github/hooks/post-checkout scripts/check-branch-name.sh .github/workflows/claude-review.yml .github/workflows/pr-automerge.yml .github/workflows/pr-review-submitted.yml .github/scripts/post_claude_review.py .github/ISSUE_TEMPLATE/bug_report.md .github/ISSUE_TEMPLATE/feature_request.md .github/ISSUE_TEMPLATE/config.yml .github/pull_request_template.md .github/workflows/pr-title.yml scripts/check-pr-title.sh .github/workflows/lint-markdown.yml .github/workflows/lint-yaml.yml .github/workflows/lint-actions.yml scripts/review.sh scripts/lint-edited-file.sh .sandcastle/lib/review-ledger.mts .sandcastle/lib/security-record.mts .sandcastle/lib/errors.mts .sandcastle/lib/host-limit.mts .sandcastle/lib/plain-text.mts .sandcastle/lib/review-ledger.test.mts .sandcastle/lib/security-record.test.mts .sandcastle/lib/plain-text.test.mts .claude/skills/pre-push-review/SKILL.md .claude/skills/pre-push-review/lenses.md .claude/skills/pre-push-review/review-bar.md .claude/agents/pre-push-reviewer.md .security/README.md)
+copies=(.github/hooks/pre-commit .github/hooks/pre-push .github/hooks/post-checkout scripts/check-branch-name.sh .github/workflows/claude-review.yml .github/workflows/pr-automerge.yml .github/workflows/pr-review-submitted.yml .github/scripts/post_claude_review.py .github/ISSUE_TEMPLATE/bug_report.md .github/ISSUE_TEMPLATE/feature_request.md .github/ISSUE_TEMPLATE/config.yml .github/pull_request_template.md .github/workflows/pr-title.yml scripts/check-pr-title.sh .github/workflows/lint-markdown.yml .github/workflows/lint-yaml.yml .github/workflows/lint-actions.yml scripts/review.sh scripts/lint-edited-file.sh .sandcastle/lib/review-ledger.mts .sandcastle/lib/security-record.mts .sandcastle/lib/errors.mts .sandcastle/lib/host-limit.mts .sandcastle/lib/plain-text.mts .sandcastle/lib/review-ledger.test.mts .sandcastle/lib/security-record.test.mts .sandcastle/lib/plain-text.test.mts .claude/skills/pre-push-review/SKILL.md .claude/skills/pre-push-review/lenses.md .claude/skills/pre-push-review/review-bar.md .claude/agents/pre-push-reviewer.md .security/README.md .editorconfig)
 
 # A repo shaped like the Factory: gate.sh, the Template's Owned originals, matching copies, and a stub test.sh that records
 # that it ran and exits with $STUB_EXIT.
@@ -43,18 +54,24 @@ new_repo() {
   cp -p "$here/$skill/template/owned/.markdownlint-cli2.jsonc" "$repo/$skill/template/owned/"
   mkdir -p "$repo/$skill/tests"
   cp -p "$here/$skill/tests/check-issue-refs.py" "$here/$skill/tests/check-git-status.sh" "$here/$skill/tests/check-git-status.py" "$repo/$skill/tests/"
-  cat > "$repo/$skill/test.sh" <<'STUB'
+  cat > "$repo/$skill/test.sh" << 'STUB'
 #!/usr/bin/env bash
 touch "$(dirname "${BASH_SOURCE[0]}")/ran"
 printf '%s\n' "${TEST_SH_SHARD-unset}" >> "$(git rev-parse --git-common-dir)/test-sh-shards"
 # STUB_DURING: a command run while this test.sh runs (once: the runs it starts don't see it), standing in for another gate run on the same tree.
-if [[ -n "${STUB_DURING:-}" ]]; then during="$STUB_DURING"; (unset STUB_DURING; eval "$during") || true; fi
+if [[ -n "${STUB_DURING:-}" ]]; then
+  during="$STUB_DURING"
+  (
+    unset STUB_DURING
+    eval "$during"
+  ) || true
+fi
 [[ -z "${STUB_TOUCH:-}" ]] || : > "$STUB_TOUCH"
 exit "${STUB_EXIT:-0}"
 STUB
   chmod +x "$repo/$skill/test.sh"
   # The Sandcastle check's stub marks that it ran inside .git, so it never makes the tree look changed (the cache cases need a clean tree).
-  cat > "$repo/$skill/tests/sandcastle-check.test.sh" <<'STUB'
+  cat > "$repo/$skill/tests/sandcastle-check.test.sh" << 'STUB'
 #!/usr/bin/env bash
 touch "$(dirname "${BASH_SOURCE[0]}")/../../../../.git/ran-sandcastle"
 exit "${STUB_SANDCASTLE_EXIT:-0}"
@@ -68,7 +85,7 @@ STUB
 stub_review() {
   local repo="$1" f
   for f in "$repo/scripts/review.sh" "$repo/$skill/template/owned/scripts/review.sh"; do
-    cat > "$f" <<'STUB'
+    cat > "$f" << 'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" > "$(dirname "${BASH_SOURCE[0]}")/../review-args"
 exit "${REVIEW_EXIT:-0}"
@@ -97,11 +114,14 @@ run() {
   rm -f "$1/$skill/ran" "$1/review-args" "$1/.git/ran-sandcastle"
   status=0
   local skip=(GATE_SKIP_REVIEW=1)
-  if [[ -n "${REVIEW_SKIP+x}" ]]; then skip=(); [[ -z "$REVIEW_SKIP" ]] || skip=(GATE_SKIP_REVIEW="$REVIEW_SKIP"); fi
+  if [[ -n "${REVIEW_SKIP+x}" ]]; then
+    skip=()
+    [[ -z "$REVIEW_SKIP" ]] || skip=(GATE_SKIP_REVIEW="$REVIEW_SKIP")
+  fi
   # $GATE_ARGS is the gate's arguments, split on spaces.
   local gate_args=()
-  [[ -z "${GATE_ARGS:-}" ]] || read -ra gate_args <<<"$GATE_ARGS"
-  (cd "$1" && env -u GATE_SKIP_REVIEW "${skip[@]+"${skip[@]}"}" GATE_SKIP_SELF_TEST=1 STUB_EXIT="${STUB_EXIT:-0}" STUB_SANDCASTLE_EXIT="${STUB_SANDCASTLE_EXIT:-0}" REVIEW_EXIT="${REVIEW_EXIT:-0}" ${RUN_PART:+GATE_PART="$RUN_PART"} ${RUN_SHARD:+TEST_SH_SHARD="$RUN_SHARD"} bash scripts/gate.sh "${gate_args[@]+"${gate_args[@]}"}" >"$1/out" 2>&1) || status=$?
+  [[ -z "${GATE_ARGS:-}" ]] || read -ra gate_args <<< "$GATE_ARGS"
+  (cd "$1" && env -u GATE_SKIP_REVIEW "${skip[@]+"${skip[@]}"}" GATE_SKIP_SELF_TEST=1 STUB_EXIT="${STUB_EXIT:-0}" STUB_SANDCASTLE_EXIT="${STUB_SANDCASTLE_EXIT:-0}" REVIEW_EXIT="${REVIEW_EXIT:-0}" ${RUN_PART:+GATE_PART="$RUN_PART"} ${RUN_SHARD:+TEST_SH_SHARD="$RUN_SHARD"} bash scripts/gate.sh "${gate_args[@]+"${gate_args[@]}"}" > "$1/out" 2>&1) || status=$?
   [[ -e "$1/$skill/ran" ]] && ran=yes || ran=no
   [[ -e "$1/.git/ran-sandcastle" ]] && ran_sc=yes || ran_sc=no
 }
@@ -141,7 +161,9 @@ run "$repo"
 check "a copy executable where the original isn't fails the gate" "$([[ $status == 1 ]] && echo 0 || echo 1)"
 
 # --quick stops after the lint, before the review check and test.sh, and never passes the gate for a push: only the bare script does.
-repo="$(new_repo quick)"; stub_review "$repo"; with_origin "$repo"
+repo="$(new_repo quick)"
+stub_review "$repo"
+with_origin "$repo"
 GATE_ARGS=--quick STUB_EXIT=3 REVIEW_EXIT=1 REVIEW_SKIP='' run "$repo"
 check "--quick passes without running test.sh" "$([[ $status == 0 && $ran == no ]] && echo 0 || echo 1)"
 check "--quick doesn't call review.sh" "$([[ ! -e $repo/review-args ]] && echo 0 || echo 1)"
@@ -149,19 +171,29 @@ check "--quick runs the Markdown and YAML lint" "$(grep -q 'markdownlint (whole 
 check "--quick says it is not the gate" "$(grep -q 'Run scripts/gate.sh, with no argument, before pushing' "$repo/out" && echo 0 || echo 1)"
 # A Markdown or YAML lint failure stops --quick too.
 repo2="$(new_repo quick-lint)"
-{ printf '# T\n\n'; printf 'word %.0s' $(seq 1 80); printf '\n'; } > "$repo2/bad.md"
+{
+  printf '# T\n\n'
+  printf 'word %.0s' $(seq 1 80)
+  printf '\n'
+} > "$repo2/bad.md"
 GATE_ARGS=--quick run "$repo2"
 check "--quick fails on a Markdown lint error" "$([[ $status == 1 ]] && grep -q 'MD013' "$repo2/out" && echo 0 || echo 1)"
-rm "$repo2/bad.md"; printf 'a: [\n' > "$repo2/bad.yml"
+rm "$repo2/bad.md"
+printf 'a: [\n' > "$repo2/bad.yml"
 GATE_ARGS=--quick run "$repo2"
 check "--quick fails on a YAML lint error" "$([[ $status == 1 && $ran == no ]] && grep -q 'bad.yml' "$repo2/out" && grep -q 'syntax error' "$repo2/out" && echo 0 || echo 1)"
 # The ShellCheck step over the shell files the branch changes. The scripts' own text: $unquoted must reach the file as written (SC2086 is what shellcheck then says).
 # shellcheck disable=SC2016
 bad_script='#!/usr/bin/env bash\necho $unquoted\n'
-commit_all() { git -C "$1" add -A; git -C "$1" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m "$2"; }
+commit_all() {
+  git -C "$1" add -A
+  git -C "$1" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m "$2"
+}
 
 # An uncommitted file, a committed one and a hook without the .sh suffix stop --quick and the full gate; the full gate fails in this step, before test.sh.
-repo3="$(new_repo quick-shellcheck)"; stub_review "$repo3"; with_origin "$repo3"
+repo3="$(new_repo quick-shellcheck)"
+stub_review "$repo3"
+with_origin "$repo3"
 printf '%b' "$bad_script" > "$repo3/scripts/bad.sh"
 GATE_ARGS=--quick run "$repo3"
 check "--quick fails on a shellcheck finding in an uncommitted shell file" "$([[ $status == 1 && $ran == no ]] && grep -q 'SC2086' "$repo3/out" && echo 0 || echo 1)"
@@ -171,25 +203,33 @@ commit_all "$repo3" bad
 GATE_ARGS=--quick run "$repo3"
 check "a committed shell file with a finding fails too" "$([[ $status == 1 ]] && grep -q 'SC2086' "$repo3/out" && echo 0 || echo 1)"
 git -C "$repo3" rm -q -f scripts/bad.sh
-printf '%b' "$bad_script" > "$repo3/.github/hooks/pre-push"; printf '%b' "$bad_script" > "$repo3/$skill/template/owned/.github/hooks/pre-push"
+printf '%b' "$bad_script" > "$repo3/.github/hooks/pre-push"
+printf '%b' "$bad_script" > "$repo3/$skill/template/owned/.github/hooks/pre-push"
 GATE_ARGS=--quick run "$repo3"
 check "a hook without the .sh suffix is checked" "$([[ $status == 1 ]] && grep -qF 'In .github/hooks/pre-push' "$repo3/out" && grep -q 'SC2086' "$repo3/out" && echo 0 || echo 1)"
-cp -p "$here/.github/hooks/pre-push" "$repo3/.github/hooks/pre-push"; cp -p "$here/.github/hooks/pre-push" "$repo3/$skill/template/owned/.github/hooks/pre-push"
+cp -p "$here/.github/hooks/pre-push" "$repo3/.github/hooks/pre-push"
+cp -p "$here/.github/hooks/pre-push" "$repo3/$skill/template/owned/.github/hooks/pre-push"
 printf '%b' "$bad_script" > "$repo3/notes.txt"
 GATE_ARGS=--quick run "$repo3"
 check "a deleted shell file is not checked, nor a file that is not a shell file, and clean ones pass" "$([[ $status == 0 ]] && grep -q '[1-9][0-9]* changed shell file(s) checked' "$repo3/out" && echo 0 || echo 1)"
 
 # A file with a non-ASCII name is found (git quotes it without -z).
-repo4="$(new_repo quick-shellcheck-name)"; stub_review "$repo4"; with_origin "$repo4"
+repo4="$(new_repo quick-shellcheck-name)"
+stub_review "$repo4"
+with_origin "$repo4"
 printf '%b' "$bad_script" > "$repo4/scripts/"$'caf\303\251 bad.sh'
 GATE_ARGS=--quick run "$repo4"
 check "a shell file with a non-ASCII name and a space is checked" "$([[ $status == 1 ]] && grep -q 'SC2086' "$repo4/out" && echo 0 || echo 1)"
 
 # The scope is what the branch changes: a file with a finding that is already in origin/main's history, and a deleted one, are left alone.
-repo5="$(new_repo quick-shellcheck-scope)"; stub_review "$repo5"
-printf '%b' "$bad_script" > "$repo5/scripts/old-bad.sh"; printf '%b' "$bad_script" > "$repo5/scripts/deleted-bad.sh"
-commit_all "$repo5" base; git -C "$repo5" update-ref refs/remotes/origin/main HEAD
-git -C "$repo5" rm -q -f scripts/deleted-bad.sh; commit_all "$repo5" "branch: a deletion"
+repo5="$(new_repo quick-shellcheck-scope)"
+stub_review "$repo5"
+printf '%b' "$bad_script" > "$repo5/scripts/old-bad.sh"
+printf '%b' "$bad_script" > "$repo5/scripts/deleted-bad.sh"
+commit_all "$repo5" base
+git -C "$repo5" update-ref refs/remotes/origin/main HEAD
+git -C "$repo5" rm -q -f scripts/deleted-bad.sh
+commit_all "$repo5" "branch: a deletion"
 GATE_ARGS=--quick run "$repo5"
 check "a finding in a file the branch did not change, and a deleted file, are not reported" "$([[ $status == 0 ]] && grep -q '0 changed shell file(s) checked' "$repo5/out" && echo 0 || echo 1)"
 printf '%b' "$bad_script" >> "$repo5/scripts/old-bad.sh"
@@ -197,54 +237,123 @@ GATE_ARGS=--quick run "$repo5"
 check "the same file fails once the branch changes it" "$([[ $status == 1 ]] && grep -q 'old-bad.sh' "$repo5/out" && echo 0 || echo 1)"
 
 # A tracked symlink replaced by a regular script is a type change in git's diff: its new contents are checked.
-repo5b="$(new_repo quick-shellcheck-typechange)"; stub_review "$repo5b"
-printf 'echo ok\n' > "$repo5b/scripts/real.sh"; ln -s real.sh "$repo5b/scripts/link.sh"
-commit_all "$repo5b" base; git -C "$repo5b" update-ref refs/remotes/origin/main HEAD
-rm "$repo5b/scripts/link.sh"; printf '%b' "$bad_script" > "$repo5b/scripts/link.sh"
+repo5b="$(new_repo quick-shellcheck-typechange)"
+stub_review "$repo5b"
+printf 'echo ok\n' > "$repo5b/scripts/real.sh"
+ln -s real.sh "$repo5b/scripts/link.sh"
+commit_all "$repo5b" base
+git -C "$repo5b" update-ref refs/remotes/origin/main HEAD
+rm "$repo5b/scripts/link.sh"
+printf '%b' "$bad_script" > "$repo5b/scripts/link.sh"
 GATE_ARGS=--quick run "$repo5b"
 check "a symlink replaced by a shell script with a finding is checked (a type change)" "$([[ $status == 1 ]] && grep -q 'SC2086' "$repo5b/out" && echo 0 || echo 1)"
 
 # With no origin/main, or one that shares no history with HEAD, every shell file is checked.
-repo6="$(new_repo quick-shellcheck-nomain)"; printf '%b' "$bad_script" > "$repo6/scripts/bad.sh"
+repo6="$(new_repo quick-shellcheck-nomain)"
+printf '%b' "$bad_script" > "$repo6/scripts/bad.sh"
 GATE_ARGS=--quick run "$repo6"
 check "with no origin/main every shell file is checked" "$([[ $status == 1 ]] && grep -q 'SC2086' "$repo6/out" && echo 0 || echo 1)"
-repo7="$(new_repo quick-shellcheck-unrelated)"; printf '%b' "$bad_script" > "$repo7/scripts/bad.sh"; tcommit "$repo7" base
+repo7="$(new_repo quick-shellcheck-unrelated)"
+printf '%b' "$bad_script" > "$repo7/scripts/bad.sh"
+tcommit "$repo7" base
 git -C "$repo7" update-ref refs/remotes/origin/main "$(git -C "$repo7" -c user.name=t -c user.email=t@example.com commit-tree -m other "$(git -C "$repo7" hash-object -t tree -w /dev/null)")"
 GATE_ARGS=--quick run "$repo7"
 check "with an origin/main that shares no history every shell file is checked" "$([[ $status == 1 ]] && grep -q 'SC2086' "$repo7/out" && echo 0 || echo 1)"
 
 # A missing shellcheck fails the gate and says so.
-repo8="$(new_repo quick-no-shellcheck)"; mkdir -p "$work/noshellcheck"
-for tool in bash git python3 markdownlint-cli2 yamllint node pnpm env sh cat grep sed awk sort dirname basename mktemp rm cp mv ls tr head tail wc cmp mkdir touch uname date find; do
-  tool_path="$(command -v "$tool" 2>/dev/null || true)"; [[ -z $tool_path ]] || ln -sf "$tool_path" "$work/noshellcheck/$tool"
+repo8="$(new_repo quick-no-shellcheck)"
+mkdir -p "$work/noshellcheck"
+for tool in bash git python3 markdownlint-cli2 yamllint shfmt node pnpm env sh cat grep sed awk sort dirname basename mktemp rm cp mv ls tr head tail wc cmp mkdir touch uname date find; do
+  tool_path="$(command -v "$tool" 2> /dev/null || true)"
+  [[ -z $tool_path ]] || ln -sf "$tool_path" "$work/noshellcheck/$tool"
 done
 status=0
-(cd "$repo8" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/noshellcheck" bash scripts/gate.sh --quick >"$repo8/out" 2>&1) || status=$?
+(cd "$repo8" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/noshellcheck" bash scripts/gate.sh --quick > "$repo8/out" 2>&1) || status=$?
 check "a missing shellcheck fails the gate and says so" "$([[ $status == 1 ]] && grep -q 'shellcheck not found' "$repo8/out" && echo 0 || echo 1)"
 
+# The shfmt step (ADR 0015): every shell file, changed or not, formatted as shfmt formats it in the style .editorconfig gives. The scripts pass shellcheck, so only shfmt can fail them.
+unformatted='#!/usr/bin/env bash\nif true; then\n    echo a\nfi\n'
+redirect_tight='#!/usr/bin/env bash\necho a >/dev/null\n'
+repoF="$(new_repo shfmt)"
+stub_review "$repoF"
+with_origin "$repoF"
+printf '%b' "$unformatted" > "$repoF/scripts/loose.sh"
+GATE_ARGS=--quick run "$repoF"
+check "--quick fails on an untracked shell file shfmt would change, naming it" "$([[ $status == 1 && $ran == no ]] && grep -qF 'scripts/loose.sh.orig' "$repoF/out" && grep -q '❌ shfmt' "$repoF/out" && echo 0 || echo 1)"
+run "$repoF"
+check "the full gate fails in the shfmt step too, before test.sh" "$([[ $status == 1 && $ran == no ]] && grep -q '❌ shfmt' "$repoF/out" && echo 0 || echo 1)"
+printf '#!/usr/bin/env bash\nif true; then\n  echo a\nfi\n' > "$repoF/scripts/loose.sh"
+GATE_ARGS=--quick run "$repoF"
+check "the same file passes once formatted, and the step counts every shell file" "$([[ $status == 0 ]] && grep -qE '^[1-9][0-9]* shell file\(s\) formatted as shfmt formats them' "$repoF/out" && echo 0 || echo 1)"
+repoG="$(new_repo shfmt-unchanged)"
+stub_review "$repoG"
+printf '%b' "$unformatted" > "$repoG/scripts/old-loose.sh"
+commit_all "$repoG" base
+git -C "$repoG" update-ref refs/remotes/origin/main HEAD
+GATE_ARGS=--quick run "$repoG"
+check "a file the branch did not change is checked too (unlike shellcheck)" "$([[ $status == 1 ]] && grep -q '0 changed shell file(s) checked' "$repoG/out" && grep -qF 'scripts/old-loose.sh.orig' "$repoG/out" && echo 0 || echo 1)"
+git -C "$repoG" rm -q -f scripts/old-loose.sh
+printf '%b' "$redirect_tight" > "$repoG/.github/hooks/pre-push"
+printf '%b' "$redirect_tight" > "$repoG/$skill/template/owned/.github/hooks/pre-push"
+GATE_ARGS=--quick run "$repoG"
+check "a hook gets the shell style too (a redirection needs its space)" "$([[ $status == 1 ]] && grep -qF '.github/hooks/pre-push.orig' "$repoG/out" && echo 0 || echo 1)"
+cp -p "$here/.github/hooks/pre-push" "$repoG/.github/hooks/pre-push"
+cp -p "$here/.github/hooks/pre-push" "$repoG/$skill/template/owned/.github/hooks/pre-push"
+printf '%b' "$unformatted" > "$repoG/notes.txt"
+GATE_ARGS=--quick run "$repoG"
+check "a file that is not a shell file is not checked" "$([[ $status == 0 ]] && echo 0 || echo 1)"
+# The style is .editorconfig's, not flags in the gate: with a 4-space indent there, the gate's own 2-space scripts fail.
+sed -i 's/^indent_size = 2$/indent_size = 4/' "$repoG/.editorconfig" "$repoG/$skill/template/owned/.editorconfig"
+GATE_ARGS=--quick run "$repoG"
+check "shfmt takes the style from .editorconfig" "$([[ $status == 1 ]] && grep -qF 'scripts/gate.sh.orig' "$repoG/out" && echo 0 || echo 1)"
+# A missing shfmt, and one older than v3.14, fail the gate and say so.
+repoH="$(new_repo shfmt-missing)"
+mkdir -p "$work/noshfmt" "$work/oldshfmt"
+for tool in bash git python3 markdownlint-cli2 yamllint shellcheck node pnpm env sh cat grep sed awk sort dirname basename mktemp rm cp mv ls tr head tail wc cmp mkdir touch uname date find; do
+  tool_path="$(command -v "$tool" 2> /dev/null || true)"
+  [[ -z $tool_path ]] || ln -sf "$tool_path" "$work/noshfmt/$tool"
+  [[ -z $tool_path ]] || ln -sf "$tool_path" "$work/oldshfmt/$tool"
+done
+printf '#!/usr/bin/env bash\necho v3.13.0\n' > "$work/oldshfmt/shfmt"
+chmod +x "$work/oldshfmt/shfmt"
+status=0
+(cd "$repoH" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/noshfmt" bash scripts/gate.sh --quick > "$repoH/out" 2>&1) || status=$?
+check "a missing shfmt fails the gate and says so" "$([[ $status == 1 ]] && grep -q 'shfmt not found' "$repoH/out" && echo 0 || echo 1)"
+status=0
+(cd "$repoH" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/oldshfmt" bash scripts/gate.sh --quick > "$repoH/out" 2>&1) || status=$?
+check "an shfmt older than v3.14 fails the gate and names its version" "$([[ $status == 1 ]] && grep -qF "not 'v3.13.0'" "$repoH/out" && echo 0 || echo 1)"
+
 # test.sh's pass is remembered for a clean tree: the same tree is not tested twice; a new commit, an uncommitted or untracked file, GATE_NO_CACHE=1 and a failure all run it.
-repo9="$(new_repo cache)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo9/.git/info/exclude"; commit_all "$repo9" base
+repo9="$(new_repo cache)"
+printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo9/.git/info/exclude"
+commit_all "$repo9" base
 run "$repo9"
 check "test.sh runs on a clean tree it has not passed on" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
 run "$repo9"
 check "and is skipped the second time, saying so, with the same exit status" "$([[ $status == 0 && $ran == no ]] && grep -q 'already passed on this tree' "$repo9/out" && echo 0 || echo 1)"
 GATE_NO_CACHE=1 run "$repo9"
 check "GATE_NO_CACHE=1 runs it again" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
-echo more > "$repo9/extra.txt"; run "$repo9"
+echo more > "$repo9/extra.txt"
+run "$repo9"
 check "an untracked file makes the tree dirty, so test.sh runs" "$([[ $ran == yes ]] && echo 0 || echo 1)"
-rm "$repo9/extra.txt"; run "$repo9"
+rm "$repo9/extra.txt"
+run "$repo9"
 check "the pass of the clean tree is still remembered after that" "$([[ $ran == no ]] && echo 0 || echo 1)"
-echo more > "$repo9/extra.txt"; commit_all "$repo9" "a new tree"
+echo more > "$repo9/extra.txt"
+commit_all "$repo9" "a new tree"
 STUB_EXIT=3 run "$repo9"
 check "a new commit's tree runs test.sh, and a failure is the gate's status" "$([[ $status == 3 && $ran == yes ]] && echo 0 || echo 1)"
 run "$repo9"
 check "a failure was not remembered: the next run runs test.sh again" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
-repo10="$(new_repo cache-nocommit)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo10/.git/info/exclude"
-run "$repo10"; run "$repo10"
+repo10="$(new_repo cache-nocommit)"
+printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo10/.git/info/exclude"
+run "$repo10"
+run "$repo10"
 check "a repo with no commit has no tree to remember, so test.sh runs every time" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
 
 # A bare git status --porcelain in an Owned script fails the full gate and --quick, before test.sh.
-repo11="$(new_repo git-status)"; mkdir -p "$repo11/$skill/tests" "$repo11/$skill/template/owned/scripts"
+repo11="$(new_repo git-status)"
+mkdir -p "$repo11/$skill/tests" "$repo11/$skill/template/owned/scripts"
 cp -p "$here/$skill/tests/check-git-status.sh" "$repo11/$skill/tests/"
 # shellcheck disable=SC2016 # the script's own text
 printf '%s\n' '[[ -z "$(git status --porcelain)" ]] || exit 1' > "$repo11/$skill/template/owned/scripts/guard.sh"
@@ -308,10 +417,11 @@ check "the gate passes after that --sync" "$([[ $status == 0 && $ran == yes ]] &
 repo="$(new_repo no-python)"
 mkdir -p "$work/nopy"
 for tool in bash cat cmp dirname env git markdownlint-cli2 node pnpm rm yamllint; do
-  tool_path="$(command -v "$tool" 2>/dev/null || true)"; [[ -z $tool_path ]] || ln -sf "$tool_path" "$work/nopy/$tool"
+  tool_path="$(command -v "$tool" 2> /dev/null || true)"
+  [[ -z $tool_path ]] || ln -sf "$tool_path" "$work/nopy/$tool"
 done
 status=0
-(cd "$repo" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/nopy" bash scripts/gate.sh >"$repo/out" 2>&1) || status=$?
+(cd "$repo" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/nopy" bash scripts/gate.sh > "$repo/out" 2>&1) || status=$?
 check "a missing python3 fails the gate and says so" "$([[ $status == 1 ]] && grep -q 'python3 not found' "$repo/out" && echo 0 || echo 1)"
 repo="$(new_repo broken-checker)"
 printf 'import sys\nsys.exit(2)\n' > "$repo/$skill/tests/check-issue-refs.py"
@@ -322,30 +432,38 @@ check "a checker that fails without checking fails the gate with its own message
 check "the pre-push hook runs the gate with no argument" "$(grep -E 'scripts/gate\.sh' "$here/.github/hooks/pre-push" | grep -vE '^#' | grep -qE 'gate\.sh"?$' && echo 0 || echo 1)"
 # grep exits 1 for no match and 2 for an error (a moved folder): only 1 passes, so the guard can't go quiet when its paths move.
 quick_rc=0
-grep -rqE -e '--(quick|sync)' "$here/.github/hooks" "$here/.github/workflows" 2>/dev/null && quick_rc=0 || quick_rc=$?
+grep -rqE -e '--(quick|sync)' "$here/.github/hooks" "$here/.github/workflows" 2> /dev/null && quick_rc=0 || quick_rc=$?
 check "no hook or workflow passes --quick or --sync" "$([[ -d $here/.github/hooks && -d $here/.github/workflows && $quick_rc == 1 ]] && echo 0 || echo 1)"
-check "the Factory's CI runs the gate with no argument" "$(grep -E 'run: bash "scripts/gate\.sh"$' "$here/.github/workflows/template-tests.yml" >/dev/null && echo 0 || echo 1)"
+check "the Factory's CI runs the gate with no argument" "$(grep -E 'run: bash "scripts/gate\.sh"$' "$here/.github/workflows/template-tests.yml" > /dev/null && echo 0 || echo 1)"
 
 # The local review check (ADR 0010). The stub review.sh stands for scripts/review.sh; GATE_SKIP_REVIEW=1 skips it, anything else doesn't.
-repo="$(new_repo review-skipped)"; stub_review "$repo"; with_origin "$repo"
+repo="$(new_repo review-skipped)"
+stub_review "$repo"
+with_origin "$repo"
 REVIEW_EXIT=1 run "$repo"
 check "GATE_SKIP_REVIEW=1 skips the review check and passes" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
 check "GATE_SKIP_REVIEW=1 doesn't call review.sh" "$([[ ! -e $repo/review-args ]] && echo 0 || echo 1)"
 check "GATE_SKIP_REVIEW=1 says the check was skipped" "$(grep -q 'Local review check skipped' "$repo/out" && echo 0 || echo 1)"
 
 for skip in true 0 yes; do
-  repo="$(new_repo "review-skip-$skip")"; stub_review "$repo"; with_origin "$repo"
+  repo="$(new_repo "review-skip-$skip")"
+  stub_review "$repo"
+  with_origin "$repo"
   REVIEW_SKIP="$skip" REVIEW_EXIT=1 run "$repo"
   check "GATE_SKIP_REVIEW=$skip doesn't skip the review check" "$([[ $status == 1 && -e $repo/review-args ]] && echo 0 || echo 1)"
 done
 
-repo="$(new_repo review-passes)"; stub_review "$repo"; with_origin "$repo"
+repo="$(new_repo review-passes)"
+stub_review "$repo"
+with_origin "$repo"
 REVIEW_SKIP="" REVIEW_EXIT=0 run "$repo"
 check "a passing review check lets the gate run test.sh" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
 check "review.sh is called as check <merge base with origin/main>" "$([[ "$(cat "$repo/review-args")" == "check $base" ]] && echo 0 || echo 1)"
 
 # An origin/main that shares no history with HEAD (a shallow clone, or unrelated histories) is named as that, not as a missing origin/main.
-repo="$(new_repo review-unrelated)"; stub_review "$repo"; tcommit "$repo" base
+repo="$(new_repo review-unrelated)"
+stub_review "$repo"
+tcommit "$repo" base
 unrelated="$(git -C "$repo" -c user.name=t -c user.email=t@example.com commit-tree -m unrelated "$(git -C "$repo" hash-object -t tree -w /dev/null)")"
 git -C "$repo" update-ref refs/remotes/origin/main "$unrelated"
 REVIEW_SKIP="" run "$repo"
@@ -354,37 +472,48 @@ check "unrelated histories are named, not reported as a missing origin/main" "$(
 check "unrelated histories don't call review.sh" "$([[ ! -e $repo/review-args ]] && echo 0 || echo 1)"
 
 # The review's stand-alone tests need tsx: without it and without pnpm the gate says how to get it, before anything else.
-repo="$(new_repo no-pnpm)"; mkdir -p "$repo/scripts/tests"; printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/scripts/tests/gate.test.sh"
+repo="$(new_repo no-pnpm)"
+mkdir -p "$repo/scripts/tests"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/scripts/tests/gate.test.sh"
 chmod +x "$repo/scripts/tests/gate.test.sh"
-bare="$work/bare-bin"; mkdir -p "$bare"
+bare="$work/bare-bin"
+mkdir -p "$bare"
 for tool in git env bash dirname mkdir chmod; do ln -sf "$(command -v "$tool")" "$bare/$tool"; done
 status=0
-(cd "$repo" && env -u GATE_SKIP_SELF_TEST PATH="$bare" "$(command -v bash)" scripts/gate.sh >"$repo/out" 2>&1) || status=$?
+(cd "$repo" && env -u GATE_SKIP_SELF_TEST PATH="$bare" "$(command -v bash)" scripts/gate.sh > "$repo/out" 2>&1) || status=$?
 check "a missing pnpm fails the gate" "$([[ $status == 1 ]] && echo 0 || echo 1)"
 check "a missing pnpm says to run corepack enable pnpm" "$(grep -q 'corepack enable pnpm' "$repo/out" && echo 0 || echo 1)"
 
 # A pnpm that installs nothing leaves no tsx: the gate says so instead of dying on a missing binary; one that installs it gets past this step.
-repo="$(new_repo pnpm-no-tsx)"; mkdir -p "$repo/scripts/tests"; printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/scripts/tests/gate.test.sh"
+repo="$(new_repo pnpm-no-tsx)"
+mkdir -p "$repo/scripts/tests"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/scripts/tests/gate.test.sh"
 chmod +x "$repo/scripts/tests/gate.test.sh"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$bare/pnpm"; chmod +x "$bare/pnpm"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$bare/pnpm"
+chmod +x "$bare/pnpm"
 status=0
-(cd "$repo" && env -u GATE_SKIP_SELF_TEST PATH="$bare" "$(command -v bash)" scripts/gate.sh >"$repo/out" 2>&1) || status=$?
+(cd "$repo" && env -u GATE_SKIP_SELF_TEST PATH="$bare" "$(command -v bash)" scripts/gate.sh > "$repo/out" 2>&1) || status=$?
 check "a pnpm that installs no tsx fails the gate" "$([[ $status == 1 ]] && echo 0 || echo 1)"
 check "a pnpm that installs no tsx says so" "$(grep -q 'pnpm install did not install node_modules/.bin/tsx' "$repo/out" && echo 0 || echo 1)"
-repo="$(new_repo pnpm-with-tsx)"; mkdir -p "$repo/scripts/tests"; printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/scripts/tests/gate.test.sh"
+repo="$(new_repo pnpm-with-tsx)"
+mkdir -p "$repo/scripts/tests"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/scripts/tests/gate.test.sh"
 chmod +x "$repo/scripts/tests/gate.test.sh"
 printf '#!/usr/bin/env bash\nmkdir -p node_modules/.bin && printf "#!/usr/bin/env bash\\nexit 0\\n" > node_modules/.bin/tsx && chmod +x node_modules/.bin/tsx\n' > "$bare/pnpm"
 status=0
-(cd "$repo" && env -u GATE_SKIP_SELF_TEST PATH="$bare" "$(command -v bash)" scripts/gate.sh >"$repo/out" 2>&1) || status=$?
+(cd "$repo" && env -u GATE_SKIP_SELF_TEST PATH="$bare" "$(command -v bash)" scripts/gate.sh > "$repo/out" 2>&1) || status=$?
 check "a pnpm that installs tsx gets the gate past the install step" "$(! grep -qE 'did not install|pnpm isn.t installed' "$repo/out" && grep -q 'Copies of Template files' "$repo/out" && echo 0 || echo 1)"
 rm -f "$bare/pnpm"
 
-repo="$(new_repo review-fails)"; stub_review "$repo"; with_origin "$repo"
+repo="$(new_repo review-fails)"
+stub_review "$repo"
+with_origin "$repo"
 REVIEW_SKIP="" REVIEW_EXIT=1 run "$repo"
 check "a failing review check fails the gate" "$([[ $status != 0 ]] && echo 0 || echo 1)"
 check "a failing review check stops before test.sh" "$([[ $ran == no ]] && echo 0 || echo 1)"
 
-repo="$(new_repo review-no-origin)"; stub_review "$repo"
+repo="$(new_repo review-no-origin)"
+stub_review "$repo"
 tcommit "$repo" base
 REVIEW_SKIP="" REVIEW_EXIT=0 run "$repo"
 check "no origin/main fails the gate" "$([[ $status == 1 ]] && echo 0 || echo 1)"
@@ -399,7 +528,9 @@ for f in "${copies[@]}"; do
 done
 
 # Every run that runs test.sh takes the trust from the remembered pass first (a new token in its stamp), so a failure (a forced run's, say) leaves nothing for the next ordinary run to trust.
-repo16="$(new_repo cache-forced-failure)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo16/.git/info/exclude"; commit_all "$repo16" base
+repo16="$(new_repo cache-forced-failure)"
+printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo16/.git/info/exclude"
+commit_all "$repo16" base
 run "$repo16"
 GATE_NO_CACHE=1 STUB_EXIT=3 run "$repo16"
 check "a forced run that fails is the gate's status" "$([[ $status == 3 && $ran == yes ]] && echo 0 || echo 1)"
@@ -414,13 +545,18 @@ check "so the ordinary run after it is skipped" "$([[ $ran == no ]] && echo 0 ||
 
 # A pass is never stored for a tree that test.sh left changed.
 # moved.txt, the file the stub adds, stays visible to git (it is not in the exclude file): that is what makes the tree changed.
-repo17="$(new_repo cache-changed)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo17/.git/info/exclude"; commit_all "$repo17" base
+repo17="$(new_repo cache-changed)"
+printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo17/.git/info/exclude"
+commit_all "$repo17" base
 STUB_TOUCH="$repo17/moved.txt" run "$repo17"
 check "a test.sh that leaves the tree changed passes the gate, saying its pass is not remembered" "$([[ $status == 0 && $ran == yes ]] && grep -q 'the tree changed while test.sh ran' "$repo17/out" && echo 0 || echo 1)"
-command rm -f "$repo17/moved.txt"; run "$repo17"
+command rm -f "$repo17/moved.txt"
+run "$repo17"
 check "so the next run on the clean tree tests again" "$([[ $ran == yes ]] && echo 0 || echo 1)"
 # A remembered pass that can't be removed (a read-only cache folder) is still not trusted after a run that disproves it: the run's token in the stamp takes the trust away.
-repo18="$(new_repo cache-unclearable)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo18/.git/info/exclude"; commit_all "$repo18" base
+repo18="$(new_repo cache-unclearable)"
+printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo18/.git/info/exclude"
+commit_all "$repo18" base
 run "$repo18"
 if [[ "$(id -u)" != 0 ]]; then
   chmod 555 "$repo18/.git/gate-cache"
@@ -431,9 +567,13 @@ if [[ "$(id -u)" != 0 ]]; then
   run "$repo18"
   check "a remembered pass that can't be removed is not trusted after a forced run that failed: test.sh runs" "$([[ $ran == yes ]] && ! grep -q "test.sh already passed" "$repo18/out" && echo 0 || echo 1)"
   # The same in a linked worktree of a clone whose path holds glob characters (there the cache folder's path is absolute): files are named literally, not read as patterns.
-  repo18b="$(new_repo 'cache-[x]-unclearable')"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo18b/.git/info/exclude"; commit_all "$repo18b" base
-  wt18b="$work/cache-[x]-worktree"; git -C "$repo18b" worktree add -q --detach "$wt18b"
-  run "$wt18b"; run "$wt18b"
+  repo18b="$(new_repo 'cache-[x]-unclearable')"
+  printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo18b/.git/info/exclude"
+  commit_all "$repo18b" base
+  wt18b="$work/cache-[x]-worktree"
+  git -C "$repo18b" worktree add -q --detach "$wt18b"
+  run "$wt18b"
+  run "$wt18b"
   check "a pass is remembered and trusted in a worktree of a clone whose path holds [ and ]" "$([[ $ran == no ]] && grep -q "test.sh already passed" "$wt18b/out" && echo 0 || echo 1)"
   chmod 555 "$repo18b/.git/gate-cache"
   GATE_NO_CACHE=1 STUB_EXIT=3 run "$wt18b"
@@ -454,22 +594,32 @@ wrapper_for() {
   printf '#!/usr/bin/env bash\nfor a in "$@"; do [[ "$a" == %q ]] && exit 1; done\nexec %q "$@"\n' "$2" "$real_git" > "$work/$1/git"
   chmod +x "$work/$1/git"
 }
-repo12="$(new_repo git-fails-diff)"; stub_review "$repo12"; with_origin "$repo12"; wrapper_for gitdiff diff
+repo12="$(new_repo git-fails-diff)"
+stub_review "$repo12"
+with_origin "$repo12"
+wrapper_for gitdiff diff
 PATH="$work/gitdiff:$PATH" GATE_ARGS=--quick run "$repo12"
 check "a git that fails listing the changed files fails the gate, saying so" "$([[ $status == 1 ]] && grep -q 'could not list the changed files' "$repo12/out" && echo 0 || echo 1)"
-repo13="$(new_repo git-fails-status)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo13/.git/info/exclude"; commit_all "$repo13" base; wrapper_for gitstatus status
+repo13="$(new_repo git-fails-status)"
+printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo13/.git/info/exclude"
+commit_all "$repo13" base
+wrapper_for gitstatus status
 PATH="$work/gitstatus:$PATH" run "$repo13"
 check "a git status that fails is not a clean tree: test.sh runs and no pass is stored" "$([[ $ran == yes && ! -e $repo13/.git/gate-cache ]] && echo 0 || echo 1)"
 run "$repo13"
 check "so the next run, with a working git, runs test.sh again" "$([[ $ran == yes ]] && echo 0 || echo 1)"
 # the cache is shared by the worktrees of the clone, and a cache folder that can't be written does not fail a passing test.sh
-repo14="$(new_repo cache-worktree)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo14/.git/info/exclude"; commit_all "$repo14" base
+repo14="$(new_repo cache-worktree)"
+printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo14/.git/info/exclude"
+commit_all "$repo14" base
 run "$repo14"
 git -C "$repo14" worktree add -q --detach "$work/cache-worktree-2" HEAD
 printf 'out\nreview-args\n%s/ran\n' "$skill" >> "$repo14/.git/info/exclude"
 run "$work/cache-worktree-2"
 check "a linked worktree of the clone shares the remembered pass" "$([[ $status == 0 && $ran == no ]] && grep -q 'already passed on this tree' "$work/cache-worktree-2/out" && echo 0 || echo 1)"
-repo15="$(new_repo cache-readonly)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo15/.git/info/exclude"; commit_all "$repo15" base
+repo15="$(new_repo cache-readonly)"
+printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo15/.git/info/exclude"
+commit_all "$repo15" base
 : > "$repo15/.git/gate-cache"
 run "$repo15"
 check "a cache folder that can't be made leaves a passing test.sh passing, with a note" "$([[ $status == 0 && $ran == yes ]] && grep -q 'could not record the test.sh pass' "$repo15/out" && echo 0 || echo 1)"
@@ -493,10 +643,13 @@ done
 headers_static="Copies of Template files|Issue references in Owned files|git status guards in Owned scripts|markdownlint (whole repo|yamllint (whole repo|shellcheck (changed shell files)"
 headers_template="Local review (scripts/review.sh check)|▶ test.sh"
 headers_sandcastle="▶ Sandcastle check"
-repoP="$(new_repo parts)"; stub_review "$repoP"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoP/.git/info/exclude"
+repoP="$(new_repo parts)"
+stub_review "$repoP"
+printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoP/.git/info/exclude"
 mkdir -p "$repoP/$skill/references" "$repoP/$skill/template/owned"
 echo "# sandcastle" > "$repoP/$skill/references/sandcastle.md"
-commit_all "$repoP" files; with_origin "$repoP"
+commit_all "$repoP" files
+with_origin "$repoP"
 tipP="$(git -C "$repoP" rev-parse HEAD)"
 touch_path() { # touch_path <path>: adds a line to the file (made if missing), valid for the linters the gate runs over it
   mkdir -p "$repoP/$(dirname "$1")"
@@ -504,7 +657,10 @@ touch_path() { # touch_path <path>: adds a line to the file (made if missing), v
   [[ "$1" != *.md || -s "$repoP/$1" ]] || printf '# T\n' > "$repoP/$1"
   case "$1" in *.md) printf '\n%s\n' "text for $1" >> "$repoP/$1" ;; *.sh) echo "# $1" >> "$repoP/$1" ;; *) echo "$1" >> "$repoP/$1" ;; esac
 }
-reset_parts() { git -C "$repoP" reset -q --hard "$tipP"; git -C "$repoP" clean -fdq; }
+reset_parts() {
+  git -C "$repoP" reset -q --hard "$tipP"
+  git -C "$repoP" clean -fdq
+}
 part_check() { # part_check <part> <test.sh ran> <sandcastle ran>: GATE_PART=<part> passes, runs its own steps and no other part's
   local part="$1" group headers h problems=()
   GATE_NO_CACHE=1 REVIEW_SKIP="" RUN_PART="$part" run "$repoP"
@@ -513,11 +669,13 @@ part_check() { # part_check <part> <test.sh ran> <sandcastle ran>: GATE_PART=<pa
     case "$group" in static) headers="$headers_static" ;; template) headers="$headers_template" ;; sandcastle) headers="$headers_sandcastle" ;; esac
     local IFS='|'
     for h in $headers; do
-      if [[ "$group" == "$part" ]]; then grep -qF "$h" "$repoP/out" || problems+=("part $part did not print '$h'")
+      if [[ "$group" == "$part" ]]; then
+        grep -qF "$h" "$repoP/out" || problems+=("part $part did not print '$h'")
       else ! grep -qF "$h" "$repoP/out" || problems+=("part $part printed '$h', a step of the $group part"); fi
     done
   done
-  if [[ "$part" == template ]]; then [[ "$(cat "$repoP/review-args" 2>/dev/null)" == "check $base" ]] || problems+=("the template part did not call review.sh check <merge base>")
+  if [[ "$part" == template ]]; then
+    [[ "$(cat "$repoP/review-args" 2> /dev/null)" == "check $base" ]] || problems+=("the template part did not call review.sh check <merge base>")
   else [[ ! -e "$repoP/review-args" ]] || problems+=("part $part called review.sh"); fi
   ((${#problems[@]} == 0)) || printf '       | %s\n' "${problems[@]}"
   check "GATE_PART=$part runs exactly the $part steps" "$((${#problems[@]} == 0 ? 0 : 1))"
@@ -539,25 +697,27 @@ GATE_NO_CACHE=1 STUB_EXIT=1 RUN_PART=template run "$repoP"
 check "a failing test.sh fails the template part" "$([[ $status == 1 && $ran == yes ]] && echo 0 || echo 1)"
 
 # The self part runs the gate's own test and the review's tests, which the other cases skip with GATE_SKIP_SELF_TEST=1.
-repoS="$(new_repo parts-self)"; mkdir -p "$repoS/scripts/tests" "$repoS/node_modules/.bin"
+repoS="$(new_repo parts-self)"
+mkdir -p "$repoS/scripts/tests" "$repoS/node_modules/.bin"
 printf '#!/usr/bin/env bash\ntouch "%s/.git/ran-self-test"\n' "$repoS" > "$repoS/scripts/tests/gate.test.sh"
 printf '#!/usr/bin/env bash\necho "tsx $*" >> "%s/.git/tsx-args"\n' "$repoS" > "$repoS/node_modules/.bin/tsx"
 chmod +x "$repoS/scripts/tests/gate.test.sh" "$repoS/node_modules/.bin/tsx"
 status=0
-(cd "$repoS" && env -u GATE_SKIP_SELF_TEST GATE_PART=self bash scripts/gate.sh >"$repoS/out" 2>&1) || status=$?
+(cd "$repoS" && env -u GATE_SKIP_SELF_TEST GATE_PART=self bash scripts/gate.sh > "$repoS/out" 2>&1) || status=$?
 check "GATE_PART=self runs the gate's own test, and not the review's tests or any other part" "$([[ $status == 0 && -e $repoS/.git/ran-self-test && ! -e $repoS/.git/tsx-args ]] && ! grep -q "Copies of Template files" "$repoS/out" && [[ ! -e $repoS/$skill/ran && ! -e $repoS/.git/ran-sandcastle ]] && echo 0 || echo 1)"
 rm -f "$repoS/.git/ran-self-test"
 status=0
-(cd "$repoS" && env -u GATE_SKIP_SELF_TEST GATE_PART=review bash scripts/gate.sh >"$repoS/out" 2>&1) || status=$?
+(cd "$repoS" && env -u GATE_SKIP_SELF_TEST GATE_PART=review bash scripts/gate.sh > "$repoS/out" 2>&1) || status=$?
 check "GATE_PART=review runs the review's tests, and not the gate's own test or any other part" "$([[ $status == 0 && ! -e $repoS/.git/ran-self-test ]] && grep -q "review-ledger.test.mts" "$repoS/.git/tsx-args" && ! grep -q "Copies of Template files" "$repoS/out" && [[ ! -e $repoS/$skill/ran && ! -e $repoS/.git/ran-sandcastle ]] && echo 0 || echo 1)"
 rm -f "$repoS/.git/tsx-args"
 status=0
-(cd "$repoS" && env -u GATE_SKIP_SELF_TEST GATE_SKIP_REVIEW=1 bash scripts/gate.sh --quick >"$repoS/out" 2>&1) || status=$?
-check "a quick gate still runs both the gate's own test and the review's tests" "$([[ -e $repoS/.git/ran-self-test ]] && grep -q "review-ledger.test.mts" "$repoS/.git/tsx-args" 2>/dev/null && echo 0 || echo 1)"
+(cd "$repoS" && env -u GATE_SKIP_SELF_TEST GATE_SKIP_REVIEW=1 bash scripts/gate.sh --quick > "$repoS/out" 2>&1) || status=$?
+check "a quick gate still runs both the gate's own test and the review's tests" "$([[ -e $repoS/.git/ran-self-test ]] && grep -q "review-ledger.test.mts" "$repoS/.git/tsx-args" 2> /dev/null && echo 0 || echo 1)"
 
 # TEST_SH_SHARD (ADR 0013): only the template part, run by name, runs one shard of test.sh; a full gate runs all of it. Each shard's pass is remembered on its own.
-shards_seen() { tail -n 1 "$repoP/.git/test-sh-shards" 2>/dev/null; }
-reset_parts; rm -rf "$repoP/.git/gate-cache" "$repoP/.git/test-sh-shards"
+shards_seen() { tail -n 1 "$repoP/.git/test-sh-shards" 2> /dev/null; }
+reset_parts
+rm -rf "$repoP/.git/gate-cache" "$repoP/.git/test-sh-shards"
 RUN_PART=template RUN_SHARD=hooks run "$repoP"
 check "GATE_PART=template with TEST_SH_SHARD runs that shard of test.sh" "$([[ $status == 0 && $ran == yes && "$(shards_seen)" == hooks ]] && grep -qF "test.sh (hooks shard)" "$repoP/out" && echo 0 || echo 1)"
 RUN_PART=template RUN_SHARD=hooks run "$repoP"
@@ -570,7 +730,7 @@ RUN_PART=template run "$repoP"
 check "the template part with no TEST_SH_SHARD shares the whole run's remembered pass, not a shard's" "$([[ $status == 0 ]] && grep -q "test.sh already passed on this tree" "$repoP/out" && echo 0 || echo 1)"
 rm -f "$repoP/.git/test-sh-shards" "$repoP/$skill/ran"
 GATE_NO_CACHE=1 RUN_PART=template run "$repoP"
-check "the template part with no TEST_SH_SHARD runs all of test.sh" "$([[ $status == 0 && $ran == yes && "$(cat "$repoP/.git/test-sh-shards" 2>/dev/null)" == unset ]] && ! grep -q "shard" "$repoP/out" && echo 0 || echo 1)"
+check "the template part with no TEST_SH_SHARD runs all of test.sh" "$([[ $status == 0 && $ran == yes && "$(cat "$repoP/.git/test-sh-shards" 2> /dev/null)" == unset ]] && ! grep -q "shard" "$repoP/out" && echo 0 || echo 1)"
 rm -rf "$repoP/.git/gate-cache"
 STUB_EXIT=1 RUN_PART=template RUN_SHARD=checks run "$repoP"
 check "a failing shard fails the template part" "$([[ $status == 1 && "$(shards_seen)" == checks ]] && echo 0 || echo 1)"
@@ -578,12 +738,14 @@ check "a failing shard fails the template part" "$([[ $status == 1 && "$(shards_
 # A run of test.sh takes the trust from the passes it overlaps for the tree: a whole run from every shard's, a shard from the whole run's (Copilot's review of PR 65).
 # Shards don't overlap each other, so one shard's failure leaves another's pass.
 rm -rf "$repoP/.git/gate-cache" "$repoP/.git/test-sh-shards"
-run "$repoP"; RUN_PART=template RUN_SHARD=scripts run "$repoP"
+run "$repoP"
+RUN_PART=template RUN_SHARD=scripts run "$repoP"
 GATE_NO_CACHE=1 STUB_EXIT=1 RUN_PART=template RUN_SHARD=hooks run "$repoP"
 check "a forced shard that fails fails the template part" "$([[ $status == 1 && "$(shards_seen)" == hooks ]] && echo 0 || echo 1)"
 RUN_PART=template RUN_SHARD=scripts run "$repoP"
 check "another shard's pass still stands: one shard's failure says nothing about it" "$([[ $status == 0 && "$(shards_seen)" == hooks ]] && grep -q "test.sh (scripts shard) already passed" "$repoP/out" && echo 0 || echo 1)"
-rm -f "$repoP/$skill/ran"; run "$repoP"
+rm -f "$repoP/$skill/ran"
+run "$repoP"
 check "and the next full gate runs all of test.sh instead of trusting the whole run's old pass" "$([[ $status == 0 && $ran == yes && "$(shards_seen)" == unset ]] && echo 0 || echo 1)"
 RUN_PART=template RUN_SHARD=hooks run "$repoP"
 GATE_NO_CACHE=1 STUB_EXIT=1 run "$repoP"
@@ -597,7 +759,8 @@ rm -rf "$repoP/.git/gate-cache" "$repoP/.git/test-sh-shards"
 overlap='GATE_PART=template TEST_SH_SHARD=hooks STUB_EXIT=1 GATE_NO_CACHE=1 bash scripts/gate.sh > "$(git rev-parse --git-common-dir)/overlap-out" 2>&1'
 STUB_DURING="$overlap" run "$repoP"
 check "a whole run that a failing shard run overlapped passes, saying its pass will not be trusted" "$([[ $status == 0 && "$(sed -n 2p "$repoP/.git/test-sh-shards")" == hooks ]] && grep -q "test.sh (hooks shard)" "$repoP/.git/overlap-out" && grep -q "another run of test.sh, or of a part it overlaps, started on this tree" "$repoP/out" && echo 0 || echo 1)"
-rm -f "$repoP/$skill/ran"; run "$repoP"
+rm -f "$repoP/$skill/ran"
+run "$repoP"
 check "and the next full gate runs test.sh instead of trusting that pass" "$([[ $status == 0 && $ran == yes && "$(shards_seen)" == unset ]] && ! grep -q "already passed" "$repoP/out" && echo 0 || echo 1)"
 RUN_PART=template RUN_SHARD=hooks run "$repoP"
 STUB_DURING="${overlap/STUB_EXIT=1/STUB_EXIT=0}" RUN_PART=template RUN_SHARD=scripts run "$repoP"
@@ -609,16 +772,20 @@ if [[ "$(id -u)" != 0 ]]; then
   # shellcheck disable=SC2016 # run later by the stub, in the repo
   STUB_DURING='chmod 444 "$(git rev-parse --git-common-dir)/gate-cache/"started.test-sh-*; '"$overlap" run "$repoP"
   check "a whole run overlapped by a failing shard run that could not write the whole's stamp says its pass will not be trusted" "$([[ $status == 0 ]] && grep -q "this pass will not be trusted" "$repoP/out" && echo 0 || echo 1)"
-  rm -f "$repoP/$skill/ran"; run "$repoP"
+  rm -f "$repoP/$skill/ran"
+  run "$repoP"
   check "and the next full gate runs test.sh" "$([[ $ran == yes ]] && ! grep -q "test.sh already passed" "$repoP/out" && echo 0 || echo 1)"
 else
   echo "skip - the unwritable-stamp case needs a user other than root"
 fi
 # A pass is trusted only while its token is still in its own stamp. A later run that overlaps it writes its own token there as it starts, so the pass stops being trusted
 # at once, even if that run is then killed before it fails, and even for a gate that reads the pass before anything removes it.
-repoT="$(new_repo cache-token)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoT/.git/info/exclude"; commit_all "$repoT" base
+repoT="$(new_repo cache-token)"
+printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoT/.git/info/exclude"
+commit_all "$repoT" base
 treeT="$(git -C "$repoT" rev-parse 'HEAD^{tree}')"
-run "$repoT"; run "$repoT"
+run "$repoT"
+run "$repoT"
 check "a pass holding the token in its stamp is trusted" "$([[ $ran == no ]] && grep -q "test.sh already passed" "$repoT/out" && echo 0 || echo 1)"
 echo later > "$repoT/.git/gate-cache/started.test-sh-$treeT"
 run "$repoT"
@@ -629,12 +796,15 @@ check "a pass whose stamp is gone is not trusted" "$([[ $ran == yes ]] && echo 0
 : > "$repoT/.git/gate-cache/test-sh-$treeT"
 run "$repoT"
 check "an empty pass file (the format before tokens) is not trusted" "$([[ $ran == yes ]] && echo 0 || echo 1)"
-command rm -f "$repoT/.git/gate-cache/started.test-sh-$treeT"; : > "$repoT/.git/gate-cache/test-sh-$treeT"
+command rm -f "$repoT/.git/gate-cache/started.test-sh-$treeT"
+: > "$repoT/.git/gate-cache/test-sh-$treeT"
 run "$repoT"
 check "an empty pass file with no stamp either is not trusted (empty is never a token)" "$([[ $ran == yes ]] && ! grep -q "test.sh already passed" "$repoT/out" && echo 0 || echo 1)"
 if [[ "$(id -u)" != 0 ]]; then
   # A run that can't write its own stamp (a read-only stamp in a writable folder) removes it and stores no pass, saying so.
-  echo earlier > "$repoT/.git/gate-cache/started.test-sh-$treeT"; chmod 444 "$repoT/.git/gate-cache/started.test-sh-$treeT"; command rm -f "$repoT/.git/gate-cache/test-sh-$treeT"
+  echo earlier > "$repoT/.git/gate-cache/started.test-sh-$treeT"
+  chmod 444 "$repoT/.git/gate-cache/started.test-sh-$treeT"
+  command rm -f "$repoT/.git/gate-cache/test-sh-$treeT"
   run "$repoT"
   check "a run that can't write its own stamp stores no pass, saying it couldn't record it" "$([[ $status == 0 && $ran == yes && ! -e $repoT/.git/gate-cache/test-sh-$treeT && ! -e $repoT/.git/gate-cache/started.test-sh-$treeT ]] && grep -q "could not record the test.sh pass" "$repoT/out" && ! grep -q "will not be trusted" "$repoT/out" && echo 0 || echo 1)"
 fi
@@ -642,10 +812,13 @@ fi
 # after the shard's, would leave both passes trusted though each run may fail.
 own_first="$(awk '/^run_cached\(\) \{/ { f = 1 } f && /stamp_write "\$label" "\$dir\/started\.\$name-\$tree"/ && !o { o = NR } f && /for s in "\$dir\/started\.\$whole\."\*/ && !g { g = NR } f && /^\}/ { f = 0 } END { print (o && g && o < g) ? 0 : 1 }' "$here/scripts/gate.sh")"
 check "run_cached writes a run's own stamp before it lists the shard stamps" "$own_first"
-RUN_PART=template RUN_SHARD=hooks run "$repoT"; run "$repoT"
+RUN_PART=template RUN_SHARD=hooks run "$repoT"
+run "$repoT"
 RUN_PART=template RUN_SHARD=hooks run "$repoT"
 check "a whole run takes the trust from a shard's pass" "$([[ $ran == yes ]] && ! grep -q "test.sh already passed" "$repoT/out" && echo 0 || echo 1)"
-run "$repoT"; RUN_PART=template RUN_SHARD=scripts run "$repoT"; run "$repoT"
+run "$repoT"
+RUN_PART=template RUN_SHARD=scripts run "$repoT"
+run "$repoT"
 check "a shard run takes the trust from the whole run's pass" "$([[ $ran == yes ]] && ! grep -q "test.sh already passed" "$repoT/out" && echo 0 || echo 1)"
 if [[ "$(id -u)" != 0 ]]; then
   # The same when the old pass files can't be removed (a read-only cache folder), so only the tokens decide.
@@ -666,31 +839,40 @@ if [[ "$(id -u)" != 0 ]]; then
 fi
 # The cache lock: the hit check and a run's stamp writes hold it, so no check reads a run's own stamp written and the stamps it overlaps not yet. lock_held <repo>: the
 # messages a run gives when it can't take the lock (each such run waits about 2 seconds for it first).
-repoL="$(new_repo cache-lock)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoL/.git/info/exclude"; commit_all "$repoL" base
-treeL="$(git -C "$repoL" rev-parse 'HEAD^{tree}')"; cacheL="$repoL/.git/gate-cache"
+repoL="$(new_repo cache-lock)"
+printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoL/.git/info/exclude"
+commit_all "$repoL" base
+treeL="$(git -C "$repoL" rev-parse 'HEAD^{tree}')"
+cacheL="$repoL/.git/gate-cache"
 lock_held() { grep -q "the cache lock .*lock-$treeL has been held for over 2 seconds" "$1/out" && grep -q "could not record the test.sh\( (hooks shard)\)\? pass" "$1/out"; }
-run "$repoL"; run "$repoL"
+run "$repoL"
+run "$repoL"
 check "a run and a cache hit leave no cache lock behind" "$([[ $ran == no && ! -e $cacheL/lock-$treeL ]] && echo 0 || echo 1)"
 # A shard run paused after writing its own stamp, before the whole run's: the whole pass's token is still in its stamp, so only the lock it holds keeps the pass untrusted.
 echo shard-token > "$cacheL/started.test-sh.hooks-$treeL"
 run "$repoL"
 check "(a shard's own stamp alone leaves the whole pass trusted: the window the lock closes)" "$([[ $ran == no ]] && echo 0 || echo 1)"
-mkdir "$cacheL/lock-$treeL"; run "$repoL"
+mkdir "$cacheL/lock-$treeL"
+run "$repoL"
 check "a whole run doesn't trust its pass while a shard run holds the lock between its stamp writes: test.sh runs, stores no pass, and leaves the lock" "$([[ $status == 0 && $ran == yes && -d $cacheL/lock-$treeL ]] && lock_held "$repoL" && ! grep -q "test.sh already passed" "$repoL/out" && echo 0 || echo 1)"
 rmdir "$cacheL/lock-$treeL"
 # A whole run paused after writing its own stamp, before the shards': the shard pass's token is still in its stamp.
-run "$repoL"; RUN_PART=template RUN_SHARD=hooks run "$repoL"
+run "$repoL"
+RUN_PART=template RUN_SHARD=hooks run "$repoL"
 echo whole-token > "$cacheL/started.test-sh-$treeL"
 RUN_PART=template RUN_SHARD=hooks run "$repoL"
 check "(the whole run's own stamp alone leaves a shard pass trusted)" "$([[ $ran == no ]] && echo 0 || echo 1)"
-mkdir "$cacheL/lock-$treeL"; RUN_PART=template RUN_SHARD=hooks run "$repoL"
+mkdir "$cacheL/lock-$treeL"
+RUN_PART=template RUN_SHARD=hooks run "$repoL"
 check "a shard run doesn't trust its pass while a whole run holds the lock between its stamp writes: test.sh runs and stores no pass" "$([[ $status == 0 && $ran == yes && -d $cacheL/lock-$treeL ]] && lock_held "$repoL" && ! grep -q "test.sh (hooks shard) already passed" "$repoL/out" && echo 0 || echo 1)"
 rmdir "$cacheL/lock-$treeL"
 # The lock's tries, counted by a mkdir on PATH: it logs each try on a lock folder to $MKDIR_LOG and, with $MKDIR_FAIL_ONCE naming a file that doesn't exist yet, fails the
 # first try without making the folder (a lock released just after a failed try); with $MKDIR_RELEASE naming a file that doesn't exist yet, it
 # removes the lock folder 0.5 seconds after the first try (a holder that releases the lock while the run waits).
-mkdir_shim="$work/mkdir-shim"; mkdir -p "$mkdir_shim"; real_mkdir="$(command -v mkdir)"
-cat > "$mkdir_shim/mkdir" <<EOF
+mkdir_shim="$work/mkdir-shim"
+mkdir -p "$mkdir_shim"
+real_mkdir="$(command -v mkdir)"
+cat > "$mkdir_shim/mkdir" << EOF
 #!/usr/bin/env bash
 for a in "\$@"; do
   if [[ "\$a" == */lock-* ]]; then
@@ -704,26 +886,35 @@ EOF
 chmod +x "$mkdir_shim/mkdir"
 # Each counted run is the template part alone: a full gate takes the lock again for the Sandcastle check.
 tries() { if [[ -f "$work/mkdir-tries" ]]; then wc -l < "$work/mkdir-tries" | tr -d ' '; else echo 0; fi; }
-run "$repoL"; run "$repoL"
+run "$repoL"
+run "$repoL"
 command rm -f "$work/mkdir-tries" "$work/mkdir-failed"
 RUN_PART=template PATH="$mkdir_shim:$PATH" MKDIR_LOG="$work/mkdir-tries" MKDIR_FAIL_ONCE="$work/mkdir-failed" run "$repoL"
 check "a lock released just after a failed try is tried again and taken: the pass is trusted" "$([[ $status == 0 && $ran == no && "$(tries)" == 2 && ! -e $cacheL/lock-$treeL ]] && grep -q "test.sh already passed" "$repoL/out" && ! grep -q "the cache lock" "$repoL/out" && echo 0 || echo 1)"
-mkdir "$cacheL/lock-$treeL"; command rm -f "$work/mkdir-released"
+mkdir "$cacheL/lock-$treeL"
+command rm -f "$work/mkdir-released"
 RUN_PART=template PATH="$mkdir_shim:$PATH" MKDIR_RELEASE="$work/mkdir-released" run "$repoL"
 check "a lock released while a run waits for it is taken: the pass is trusted and no lock is left" "$([[ $status == 0 && $ran == no && ! -e $cacheL/lock-$treeL ]] && grep -q "test.sh already passed" "$repoL/out" && ! grep -q "the cache lock" "$repoL/out" && echo 0 || echo 1)"
-mkdir "$cacheL/lock-$treeL"; command rm -f "$work/mkdir-tries"
+mkdir "$cacheL/lock-$treeL"
+command rm -f "$work/mkdir-tries"
 RUN_PART=template PATH="$mkdir_shim:$PATH" MKDIR_LOG="$work/mkdir-tries" run "$repoL"
 check "a lock that stays held is tried 20 times before the run goes on without it" "$([[ $status == 0 && $ran == yes && "$(tries)" == 20 ]] && lock_held "$repoL" && echo 0 || echo 1)"
 rmdir "$cacheL/lock-$treeL"
 if [[ "$(id -u)" != 0 ]]; then
   # A cache folder that can't hold a lock gives up after one try, saying nothing about a held lock, even with an old lock left in it (it didn't wait for one).
-  run "$repoL"; chmod 555 "$cacheL"; command rm -f "$work/mkdir-tries"
+  run "$repoL"
+  chmod 555 "$cacheL"
+  command rm -f "$work/mkdir-tries"
   RUN_PART=template PATH="$mkdir_shim:$PATH" MKDIR_LOG="$work/mkdir-tries" run "$repoL"
   check "a lock that can't be made in a read-only cache folder is given up at once: test.sh runs, saying nothing of a held lock" "$([[ $status == 0 && $ran == yes && "$(tries)" == 1 ]] && ! grep -q "the cache lock" "$repoL/out" && echo 0 || echo 1)"
-  chmod 755 "$cacheL"; mkdir "$cacheL/lock-$treeL"; chmod 555 "$cacheL"; command rm -f "$work/mkdir-tries"
+  chmod 755 "$cacheL"
+  mkdir "$cacheL/lock-$treeL"
+  chmod 555 "$cacheL"
+  command rm -f "$work/mkdir-tries"
   RUN_PART=template PATH="$mkdir_shim:$PATH" MKDIR_LOG="$work/mkdir-tries" run "$repoL"
   check "and one holding an old lock gives up at once too, without saying it waited for it" "$([[ $status == 0 && $ran == yes && "$(tries)" == 1 ]] && ! grep -q "the cache lock" "$repoL/out" && echo 0 || echo 1)"
-  chmod 755 "$cacheL"; rmdir "$cacheL/lock-$treeL"
+  chmod 755 "$cacheL"
+  rmdir "$cacheL/lock-$treeL"
   # A pass file that can't be written after the lock and stamps were: the run passes and says the pass isn't recorded, and the next run tests again.
   # shellcheck disable=SC2016 # run later by the stub, in the repo
   STUB_DURING='chmod 555 "$(git rev-parse --git-common-dir)/gate-cache"' run "$repoL"
@@ -733,17 +924,20 @@ if [[ "$(id -u)" != 0 ]]; then
   check "so the next run tests again" "$([[ $ran == yes ]] && echo 0 || echo 1)"
 fi
 # A cache folder path that is a file, not a folder, can't hold a lock either: one try.
-mv "$cacheL" "$cacheL.aside"; : > "$cacheL"; command rm -f "$work/mkdir-tries"
+mv "$cacheL" "$cacheL.aside"
+: > "$cacheL"
+command rm -f "$work/mkdir-tries"
 RUN_PART=template PATH="$mkdir_shim:$PATH" MKDIR_LOG="$work/mkdir-tries" run "$repoL"
 check "a cache folder path that is a file gives the lock up at once" "$([[ $status == 0 && $ran == yes && "$(tries)" == 1 ]] && ! grep -q "the cache lock" "$repoL/out" && echo 0 || echo 1)"
-command rm -f "$cacheL"; mv "$cacheL.aside" "$cacheL"
+command rm -f "$cacheL"
+mv "$cacheL.aside" "$cacheL"
 # A gate given INT, TERM or HUP while it holds the lock releases it and ends by that signal; one given any of them after it released the lock ends by it too, at once.
 # signal_gate <repo> <signal> <marker> [VAR=value...]: runs the template part in <repo> with those variables, sends <signal> once <marker> exists (never when it is "-"),
 # then writes <marker>.sent, and prints how the gate ended: "signal N" or "exit N", then "prompt" or "late" (1.5 seconds or more after the signal), or "hung" when it hadn't ended 20 seconds later.
 # Python starts it in its own process group with the three signals at their default (a shell's background job would ignore INT, which bash then can't trap), sends the signal to the whole group
 # as a terminal's Ctrl-C does (bash waiting on a child goes on after an INT the child didn't die of), and tells an end by a signal from an exit.
 signal_gate() {
-  python3 -I - "$@" <<'PY'
+  python3 -I - "$@" << 'PY'
 import os, signal, subprocess, sys, time
 repo, sig, marker, *pairs = sys.argv[1:]
 env = dict(os.environ)
@@ -772,8 +966,10 @@ print((f"signal {-rc}" if rc < 0 else f"exit {rc}") + (" late" if time.monotonic
 PY
 }
 # A cat on PATH stands in for the hit check's read of the pass: it writes to its mark whether the lock is held as it runs, and waits, so the signal comes while it is.
-cat_shim="$work/cat-shim"; mkdir -p "$cat_shim"; real_cat="$(command -v cat)"
-cat > "$cat_shim/cat" <<EOF
+cat_shim="$work/cat-shim"
+mkdir -p "$cat_shim"
+real_cat="$(command -v cat)"
+cat > "$cat_shim/cat" << EOF
 #!/usr/bin/env bash
 last="\${!#}"
 if [[ "\$last" == */gate-cache/test-sh-* && -n "\${CAT_MARK:-}" ]]; then
@@ -789,8 +985,8 @@ run "$repoL"
 for sig in INT TERM HUP; do
   command rm -f "$work/cat-marked"
   ended="$(signal_gate "$repoL" "$sig" "$work/cat-marked" PATH="$cat_shim:$PATH" CAT_MARK="$work/cat-marked" GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 GATE_PART=template)"
-  check "a gate given $sig while it holds the cache lock releases it and ends by that signal" "$([[ "$(cat "$work/cat-marked" 2>/dev/null)" == held && ${ended% *} == "signal $(kill -l "$sig")" && ! -e $cacheL/lock-$treeL ]] && echo 0 || echo 1)"
-  rmdir "$cacheL/lock-$treeL" 2>/dev/null || true # a failed case leaves no lock to fail the next ones
+  check "a gate given $sig while it holds the cache lock releases it and ends by that signal" "$([[ "$(cat "$work/cat-marked" 2> /dev/null)" == held && ${ended% *} == "signal $(kill -l "$sig")" && ! -e $cacheL/lock-$treeL ]] && echo 0 || echo 1)"
+  rmdir "$cacheL/lock-$treeL" 2> /dev/null || true # a failed case leaves no lock to fail the next ones
 done
 # The stub test.sh runs after the lock is released: it marks that it runs and waits 3 seconds, so the signal comes then. A trap left set would hold the gate until the
 # stub ended.
@@ -798,7 +994,7 @@ for sig in INT TERM HUP; do
   command rm -f "$work/stub-running"
   ended="$(signal_gate "$repoL" "$sig" "$work/stub-running" STUB_DURING=": > '$work/stub-running'; sleep 3" GATE_NO_CACHE=1 GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 GATE_PART=template)"
   check "a gate given $sig while test.sh runs, after it released the lock, ends by that signal at once" "$([[ -e $work/stub-running && $ended == "signal $(kill -l "$sig") prompt" && ! -e $cacheL/lock-$treeL ]] && echo 0 || echo 1)"
-  rmdir "$cacheL/lock-$treeL" 2>/dev/null || true
+  rmdir "$cacheL/lock-$treeL" 2> /dev/null || true
 done
 # cache_unlock sets the signals back to their default before it forgets the lock: in the other order, a signal between the two would find the handler set and no lock
 # named, and the handler's own signal would catch it again and again.
@@ -808,8 +1004,10 @@ check "cache_unlock sets the signals back before it forgets the lock" "$reset_fi
 # waits (10 seconds at most) until signal_gate has sent its signal, writing RMDIR_MARK.waited if it was, so the signal provably comes while it runs.
 # Then it removes the lock, has another gate take it at once when RMDIR_TAKE is set, and sends each signal of RMDIR_SIG, in order, to the gate it runs for.
 # signal_gate starts every case (with "-" as the marker when only the rmdir sends signals), so a test run with INT or HUP ignored, as a background job is, still tests the traps.
-rmdir_shim="$work/rmdir-shim"; mkdir -p "$rmdir_shim"; real_rmdir="$(command -v rmdir)"
-cat > "$rmdir_shim/rmdir" <<EOF
+rmdir_shim="$work/rmdir-shim"
+mkdir -p "$rmdir_shim"
+real_rmdir="$(command -v rmdir)"
+cat > "$rmdir_shim/rmdir" << EOF
 #!/usr/bin/env bash
 last="\${!#}"
 if [[ "\$last" != */gate-cache/lock-* || -z "\${RMDIR_MARK:-}" || -e "\$RMDIR_MARK" ]]; then exec "$real_rmdir" "\$@"; fi
@@ -837,7 +1035,7 @@ rmdir_gate() {
   command rm -f "$work/rmdir-marked" "$work/rmdir-marked.sent" "$work/rmdir-marked.waited" "$work/cat-marked" "$work/cat-marked.sent" "$repoL/$skill/ran"
   ended="$(signal_gate "$repoL" "$sig" "$marker" PATH="$cat_shim:$rmdir_shim:$PATH" RMDIR_MARK="$work/rmdir-marked" GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 GATE_PART=template "${pairs[@]}")"
   check "$desc" "$([[ -e $work/rmdir-marked && ${ended% *} == "$want" && ! -e $repoL/$skill/ran ]] && { [[ $lock == held && -d $cacheL/lock-$treeL ]] || [[ $lock == gone && ! -e $cacheL/lock-$treeL ]]; } && echo 0 || echo 1)"
-  "$real_rmdir" "$cacheL/lock-$treeL" 2>/dev/null || true
+  "$real_rmdir" "$cacheL/lock-$treeL" 2> /dev/null || true
 }
 for sig in INT TERM HUP; do
   n="$(kill -l "$sig")"
@@ -862,7 +1060,7 @@ rmdir_gate "a gate given TERM while it holds the cache lock, and HUP while its h
 # a signal noted during a release ends the gate once, by the first noted, and not again at the next release; a signal while a later lock is held releases that one at
 # once (the release before left no mark behind); and a TERM sent while the handler of an INT removes the lock leaves INT the signal that ends the gate.
 # unlock_harness <gate.sh>: runs them on the functions taken out of that gate.sh, printing each kill's signal, or "extraction failed" when the functions aren't all there.
-cat > "$work/unlock-harness.sh" <<'EOF'
+cat > "$work/unlock-harness.sh" << 'EOF'
 src="$(awk '/^cache_locked=""$/ { f = 1 } f { print } f && /^cache_unlock\(\) \{/ { u = 1 } u && /^\}$/ { ok = 1; exit } END { exit !ok }' "$1")" || { echo "extraction failed"; exit 1; }
 eval "$src"
 declare -F cache_lock cache_signal cache_unlock >/dev/null || { echo "extraction failed"; exit 1; }
@@ -880,12 +1078,16 @@ unlock_harness() { bash "$work/unlock-harness.sh" "$1"; }
 unlock_log="$(unlock_harness "$here/scripts/gate.sh")"
 check "a signal noted during a release ends the gate by the first noted, once, and one while a later lock is held releases it at once, the first kept" "$([[ "$unlock_log" == $'INT\nHUP\nHUP\nINT\nINT' ]] && echo 0 || echo 1)"
 # The harness refuses a gate.sh it can't take the three functions out of whole: cache_unlock before the span's start (the awk would print the rest of gate.sh), or one renamed.
-{ sed -n '/^cache_unlock() {/,/^}$/p' "$here/scripts/gate.sh"; sed '/^cache_unlock() {/,/^}$/d' "$here/scripts/gate.sh"; } > "$work/gate-unlock-first.sh"
+{
+  sed -n '/^cache_unlock() {/,/^}$/p' "$here/scripts/gate.sh"
+  sed '/^cache_unlock() {/,/^}$/d' "$here/scripts/gate.sh"
+} > "$work/gate-unlock-first.sh"
 sed 's/^cache_signal() {/cache_signal_renamed() {/' "$here/scripts/gate.sh" > "$work/gate-renamed.sh"
 check "the unlock harness refuses a gate.sh whose cache_unlock comes before the span" "$([[ "$(unlock_harness "$work/gate-unlock-first.sh")" == "extraction failed" ]] && echo 0 || echo 1)"
 check "the unlock harness refuses a gate.sh without one of the three functions" "$([[ "$(unlock_harness "$work/gate-renamed.sh")" == "extraction failed" ]] && echo 0 || echo 1)"
 # A stamp stuck as a folder can be neither written nor removed, even in a writable cache folder: the gate fails, and releases the lock it took.
-command rm -f "$cacheL/started.test-sh-$treeL"; mkdir -p "$cacheL/started.test-sh-$treeL/stuck"
+command rm -f "$cacheL/started.test-sh-$treeL"
+mkdir -p "$cacheL/started.test-sh-$treeL/stuck"
 RUN_PART=template run "$repoL"
 check "a run whose start stamp is stuck fails the gate and leaves no cache lock" "$([[ $status == 1 && $ran == no && ! -e $cacheL/lock-$treeL ]] && grep -q "could not write or remove the test.sh start stamp" "$repoL/out" && echo 0 || echo 1)"
 command rm -rf "$cacheL/started.test-sh-$treeL"
@@ -893,9 +1095,13 @@ locked_order="$(awk '/^run_cached\(\) \{/ { f = 1 } f && /cache_lock "\$dir\/loc
 check "run_cached takes the lock before the hit check, which needs it, and releases it after the last stamp write and before the command runs" "$locked_order"
 if [[ "$(id -u)" != 0 ]]; then
   # A start stamp that can be neither written nor removed fails the gate before test.sh: an earlier run could otherwise keep its token and a pass this run disproves.
-  repoW="$(new_repo cache-stamp-stuck)"; printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoW/.git/info/exclude"; commit_all "$repoW" base
-  mkdir -p "$repoW/.git/gate-cache"; echo earlier > "$repoW/.git/gate-cache/started.test-sh-$(git -C "$repoW" rev-parse 'HEAD^{tree}')"
-  chmod 444 "$repoW/.git/gate-cache/"started.*; chmod 555 "$repoW/.git/gate-cache"
+  repoW="$(new_repo cache-stamp-stuck)"
+  printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoW/.git/info/exclude"
+  commit_all "$repoW" base
+  mkdir -p "$repoW/.git/gate-cache"
+  echo earlier > "$repoW/.git/gate-cache/started.test-sh-$(git -C "$repoW" rev-parse 'HEAD^{tree}')"
+  chmod 444 "$repoW/.git/gate-cache/"started.*
+  chmod 555 "$repoW/.git/gate-cache"
   RUN_PART=template run "$repoW"
   check "a start stamp that can be neither written nor removed fails the gate before test.sh, saying so" "$([[ $status == 1 && $ran == no ]] && grep -q "could not write or remove the test.sh start stamp" "$repoW/out" && echo 0 || echo 1)"
   chmod 755 "$repoW/.git/gate-cache"
@@ -905,7 +1111,7 @@ fi
 
 # test.sh's shards: every step sits in exactly one shard block, the blocks are the declared shards in order, and a bad shard is refused.
 testsh_shards_ok() { # testsh_shards_ok <test.sh>: 0 when its steps are split into the shards it declares, each block once, nothing outside
-  python3 -I - "$1" <<'PY'
+  python3 -I - "$1" << 'PY'
 import re, sys
 lines = open(sys.argv[1]).read().split("\n")
 declared = [m.group(1).split() for l in lines if (m := re.fullmatch(r"shards=\(([a-z ]+)\)", l))]
@@ -926,7 +1132,8 @@ for l in lines:
             sys.exit(1)
         current = None
         continue
-    if l.startswith("step "):
+    # shfmt indents a step inside its shard block; one at column 0 is outside every block.
+    if l.lstrip(" ").startswith("step "):
         if current is None:
             sys.exit(1)
         steps += 1
@@ -956,13 +1163,15 @@ inshard_problems=()
 for block in hooks scripts checks; do
   [[ "$(inshard_rc "" "$block")" == 0 ]] || inshard_problems+=("no shard skips $block")
   for s in hooks scripts checks; do
-    want=1; [[ "$s" != "$block" ]] || want=0
+    want=1
+    [[ "$s" != "$block" ]] || want=0
     [[ "$(inshard_rc "$s" "$block")" == "$want" ]] || inshard_problems+=("shard $s on block $block")
   done
 done
 ((${#inshard_problems[@]} == 0)) || printf '       | %s\n' "${inshard_problems[@]}"
 check "in_shard runs every block with no shard, and only the named shard's block with one" "$((${#inshard_problems[@]} == 0 ? 0 : 1))"
-mkdir -p "$work/testsh-bin"; for tool in dirname mktemp rm; do ln -sf "$(command -v "$tool")" "$work/testsh-bin/$tool"; done
+mkdir -p "$work/testsh-bin"
+for tool in dirname mktemp rm; do ln -sf "$(command -v "$tool")" "$work/testsh-bin/$tool"; done
 for value in bogus "hooks scripts" "scripts checks" "hooks scripts checks" " hooks" "hooks " "*"; do
   status=0
   (PATH="$work/testsh-bin" TEST_SH_SHARD="$value" "$(command -v bash)" "$testsh") > "$work/testsh/bogus.out" 2>&1 || status=$?
@@ -980,49 +1189,72 @@ reset_parts
 GATE_NO_CACHE=1 run "$repoP"
 check "a full gate on a branch that changed nothing skips the Sandcastle check, saying so" "$([[ $status == 0 && $ran == yes && $ran_sc == no ]] && grep -q "changed nothing Sandcastle's check reads" "$repoP/out" && echo 0 || echo 1)"
 for changed in "${sc_paths_yes[@]}"; do
-  reset_parts; touch_path "$changed"; commit_all "$repoP" "touch $changed"
+  reset_parts
+  touch_path "$changed"
+  commit_all "$repoP" "touch $changed"
   GATE_NO_CACHE=1 run "$repoP"
   check "a full gate runs the Sandcastle check when the branch changed ${changed#"$skill"/}" "$([[ $status == 0 && $ran_sc == yes ]] && echo 0 || echo 1)"
 done
 for changed in "${sc_paths_no[@]}"; do
-  reset_parts; touch_path "$changed"; commit_all "$repoP" "touch $changed"
+  reset_parts
+  touch_path "$changed"
+  commit_all "$repoP" "touch $changed"
   GATE_NO_CACHE=1 run "$repoP"
   check "a full gate skips the Sandcastle check when the branch changed only ${changed#"$skill"/}, which it does not read" "$([[ $status == 0 && $ran_sc == no ]] && echo 0 || echo 1)"
 done
 # Changes git sees in other ways than a commit on the branch.
-reset_parts; touch_path "$skill/references/sandcastle.md"
+reset_parts
+touch_path "$skill/references/sandcastle.md"
 GATE_NO_CACHE=1 run "$repoP"
 check "an uncommitted edit of a tracked file the check reads makes a full gate run it" "$([[ $status == 0 && $ran_sc == yes ]] && echo 0 || echo 1)"
-reset_parts; echo "# new" > "$repoP/$skill/template/owned/new.txt"
+reset_parts
+echo "# new" > "$repoP/$skill/template/owned/new.txt"
 GATE_NO_CACHE=1 run "$repoP"
 check "an untracked file the check reads makes a full gate run it" "$([[ $status == 0 && $ran_sc == yes ]] && echo 0 || echo 1)"
-reset_parts; mkdir -p "$repoP/docs"; git -C "$repoP" mv "$skill/references/sandcastle.md" docs/moved.md; commit_all "$repoP" "move it out"
+reset_parts
+mkdir -p "$repoP/docs"
+git -C "$repoP" mv "$skill/references/sandcastle.md" docs/moved.md
+commit_all "$repoP" "move it out"
 GATE_NO_CACHE=1 run "$repoP"
 check "a file moved out of a folder the check reads makes a full gate run it (the old path counts)" "$([[ $status == 0 && $ran_sc == yes ]] && echo 0 || echo 1)"
-reset_parts; printf '# t\n' > "$repoP/$skill/references/é ü.md"; commit_all "$repoP" "non-ASCII name"
+reset_parts
+printf '# t\n' > "$repoP/$skill/references/é ü.md"
+commit_all "$repoP" "non-ASCII name"
 GATE_NO_CACHE=1 run "$repoP"
 check "a file with non-ASCII characters in its name under a folder the check reads makes a full gate run it" "$([[ $status == 0 && $ran_sc == yes ]] && echo 0 || echo 1)"
-reset_parts; touch_path "$skill/SKILL.md"; commit_all "$repoP" "skill"
+reset_parts
+touch_path "$skill/SKILL.md"
+commit_all "$repoP" "skill"
 rm -rf "$repoP/.git/gate-cache"
-run "$repoP"; run "$repoP"
+run "$repoP"
+run "$repoP"
 check "and the Sandcastle pass is remembered for the clean tree, as test.sh's is" "$([[ $ran_sc == no ]] && grep -q "Sandcastle check already passed on this tree" "$repoP/out" && echo 0 || echo 1)"
 GATE_NO_CACHE=1 STUB_SANDCASTLE_EXIT=1 run "$repoP"
 check "a failing Sandcastle check fails the full gate when it runs" "$([[ $status == 1 ]] && echo 0 || echo 1)"
-repoQ="$(new_repo parts-noorigin)"; stub_review "$repoQ"; run "$repoQ"
+repoQ="$(new_repo parts-noorigin)"
+stub_review "$repoQ"
+run "$repoQ"
 check "with no origin/main to tell what changed, a full gate runs the Sandcastle check" "$([[ $status == 0 && $ran_sc == yes ]] && echo 0 || echo 1)"
 
 # sandcastle_changed on its own: when it can't tell (a git that fails on diff or ls-files, no merge base) it says "changed", so the check runs.
 sc_changed_rc() { # sc_changed_rc <repo> <PATH>: the function's status, taken out of gate.sh, run in <repo>
-  (cd "$1" && PATH="$2" bash -euo pipefail -c 'source <(sed -n "/^sandcastle_changed() {/,/^}/p" "$1"); sandcastle_changed' _ "$here/scripts/gate.sh" > /dev/null 2>&1; echo $?)
+  (
+    cd "$1" && PATH="$2" bash -euo pipefail -c 'source <(sed -n "/^sandcastle_changed() {/,/^}/p" "$1"); sandcastle_changed' _ "$here/scripts/gate.sh" > /dev/null 2>&1
+    echo $?
+  )
 }
 reset_parts
 check "sandcastle_changed says unchanged for a branch with no change in a watched path" "$([[ "$(sc_changed_rc "$repoP" "$PATH")" == 1 ]] && echo 0 || echo 1)"
-wrapper_for sc-diff diff; wrapper_for sc-lsfiles ls-files; wrapper_for sc-mergebase merge-base
+wrapper_for sc-diff diff
+wrapper_for sc-lsfiles ls-files
+wrapper_for sc-mergebase merge-base
 for pair in "sc-diff:git diff" "sc-lsfiles:git ls-files" "sc-mergebase:git merge-base"; do
   check "sandcastle_changed says changed when ${pair#*:} fails, so the check is not skipped on a guess" "$([[ "$(sc_changed_rc "$repoP" "$work/${pair%%:*}:$PATH")" == 0 ]] && echo 0 || echo 1)"
 done
 
-mkdir -p "$work/sc-grep"; printf '#!/usr/bin/env bash\nexit 2\n' > "$work/sc-grep/grep"; chmod +x "$work/sc-grep/grep"
+mkdir -p "$work/sc-grep"
+printf '#!/usr/bin/env bash\nexit 2\n' > "$work/sc-grep/grep"
+chmod +x "$work/sc-grep/grep"
 check "sandcastle_changed says changed when grep itself fails (exit 2), so the check is not skipped on a guess" "$([[ "$(sc_changed_rc "$repoP" "$work/sc-grep:$PATH")" == 0 ]] && echo 0 || echo 1)"
 
 # The workflow checks read YAML. PyYAML may be only in a user site or in yamllint's own environment, which python3 -I does not see, so pick an
@@ -1045,12 +1277,15 @@ check "the workflow checks use uvx with pyyaml when python3 cannot import yaml" 
 rm "$work/noyaml/uvx"
 check "the workflow checks fail, not pass, when there is no Python with PyYAML and no uvx" "$(PATH="$work/noyaml" yaml_python 2> /dev/null && echo 1 || echo 0)"
 mapfile -t yaml_py < <(yaml_python)
-[[ ${#yaml_py[@]} -gt 0 ]] || { echo "gate.test.sh: no Python with PyYAML and no uvx for the workflow checks" >&2; exit 1; }
+[[ ${#yaml_py[@]} -gt 0 ]] || {
+  echo "gate.test.sh: no Python with PyYAML and no uvx for the workflow checks" >&2
+  exit 1
+}
 
 # The CI workflow: one job per part, and the job the ruleset requires needs them all, so a part cannot go missing from CI without this test failing.
 workflow_ok() { # workflow_ok <workflow file> <gate.sh> <test.sh>: 0 when its jobs run each GATE_PART once, through scripts/gate.sh, the template job every test.sh shard once,
   # and "Template tests" always runs and needs every one of them
-  "${yaml_py[@]}" - "$1" "$2" "$3" <<'PY'
+  "${yaml_py[@]}" - "$1" "$2" "$3" << 'PY'
 import re, sys, yaml
 wf = yaml.safe_load(open(sys.argv[1]))
 gate = open(sys.argv[2]).read()
@@ -1103,7 +1338,10 @@ PY
 }
 aggregator_ok() { # aggregator_ok <workflow file>: 0 when the Template tests step passes for five successes and fails for a failure, a cancelled or a skipped job, a missing job and nothing
   local script ok=0 case_json result job
-  command -v jq > /dev/null || { echo "aggregator_ok needs jq" >&2; return 1; }
+  command -v jq > /dev/null || {
+    echo "aggregator_ok needs jq" >&2
+    return 1
+  }
   script="$("${yaml_py[@]}" -c 'import sys, yaml; j = yaml.safe_load(open(sys.argv[1]))["jobs"]; print([x for x in j.values() if x.get("name") == "Template tests"][0]["steps"][-1]["run"])' "$1")" || return 1
   agg() { NEEDS="$1" bash -e -c "$script" > /dev/null 2>&1; }
   local all='{"self":{"result":"success"},"review":{"result":"success"},"static":{"result":"success"},"template":{"result":"success"},"sandcastle":{"result":"success"}}'
@@ -1126,7 +1364,7 @@ check "the CI workflow has one job per GATE_PART, run through gate.sh, and a Tem
 check "the Template tests step passes for five successes and fails for a failed, cancelled or skipped part, a missing part and no parts" "$(aggregator_ok "$wf" && echo 0 || echo 1)"
 mkdir -p "$work/wf"
 mutate_wf() { # mutate_wf <name> <python statement on the loaded workflow `wf`>: writes $work/wf/<name>.yml
-  "${yaml_py[@]}" - "$wf" "$work/wf/$1.yml" "$2" <<'PY'
+  "${yaml_py[@]}" - "$wf" "$work/wf/$1.yml" "$2" << 'PY'
 import sys, yaml
 wf = yaml.safe_load(open(sys.argv[1]))
 exec(sys.argv[3])
@@ -1185,14 +1423,18 @@ sys.exit(1)
 ' "$1"
 }
 check ".claude/settings.json runs scripts/lint-edited-file.sh after Edit, Write and MultiEdit" "$(settings_ok "$here" && echo 0 || echo 1)"
-settings_root="$work/settings"; mkdir -p "$settings_root/.claude" "$settings_root/scripts"; touch "$settings_root/scripts/lint-edited-file.sh"; chmod +x "$settings_root/scripts/lint-edited-file.sh"
+settings_root="$work/settings"
+mkdir -p "$settings_root/.claude" "$settings_root/scripts"
+touch "$settings_root/scripts/lint-edited-file.sh"
+chmod +x "$settings_root/scripts/lint-edited-file.sh"
 cp "$here/.claude/settings.json" "$settings_root/.claude/settings.json"
 check "the settings check passes on a good file" "$(settings_ok "$settings_root" && echo 0 || echo 1)"
 sed 's/Edit|Write|MultiEdit/Edit|Write/' "$here/.claude/settings.json" > "$settings_root/.claude/settings.json"
 check "the settings check fails on a matcher that drops MultiEdit" "$(settings_ok "$settings_root" && echo 1 || echo 0)"
 sed 's/lint-edited-file.sh/lint-edit.sh/' "$here/.claude/settings.json" > "$settings_root/.claude/settings.json"
 check "the settings check fails on a command that names another script" "$(settings_ok "$settings_root" && echo 1 || echo 0)"
-cp "$here/.claude/settings.json" "$settings_root/.claude/settings.json"; chmod -x "$settings_root/scripts/lint-edited-file.sh"
+cp "$here/.claude/settings.json" "$settings_root/.claude/settings.json"
+chmod -x "$settings_root/scripts/lint-edited-file.sh"
 check "the settings check fails when the script is not executable" "$(settings_ok "$settings_root" && echo 1 || echo 0)"
 chmod +x "$settings_root/scripts/lint-edited-file.sh" # restored, so every mutant below fails for its own reason
 check "the settings check passes again once the script is executable" "$(settings_ok "$settings_root" && echo 0 || echo 1)"

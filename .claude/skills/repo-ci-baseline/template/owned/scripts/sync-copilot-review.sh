@@ -20,10 +20,13 @@ ROOT="$(git rev-parse --show-toplevel)"
 SKILL="$ROOT/.claude/skills/code-review/SKILL.md"
 TARGET="$ROOT/.github/copilot-instructions.md"
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; RESET='\033[0m'
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+RESET='\033[0m'
 
 # Refused before looking for the skill, so a bad call fails in every repo.
-if [[ $# -gt 1 || ( $# -eq 1 && "$1" != "--check" ) ]]; then
+if [[ $# -gt 1 || ($# -eq 1 && "$1" != "--check") ]]; then
   echo "Usage: scripts/sync-copilot-review.sh [--check]" >&2
   exit 2
 fi
@@ -35,7 +38,7 @@ fi
 
 # expected: the header, then the skill with its leading front matter block removed.
 expected() {
-  cat <<'HEADER'
+  cat << 'HEADER'
 <!-- Generated from .claude/skills/code-review/SKILL.md by scripts/sync-copilot-review.sh.
      Edit the skill and rerun the script; scripts/gate.sh and CI fail when this file drifts. -->
 

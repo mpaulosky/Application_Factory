@@ -11,8 +11,15 @@ gate="$here/../template/owned/scripts/gate.sh"
 work="$(mktemp -d)" || exit 1
 [[ -n "$work" && -d "$work" ]] || exit 1
 trap 'command rm -rf -- "$work"' EXIT
-PASSED=0; FAILED=0
-check() { if eval "$2"; then PASSED=$((PASSED + 1)); echo "ok   - $1"; else FAILED=$((FAILED + 1)); echo "FAIL - $1"; fi; }
+PASSED=0
+FAILED=0
+check() { if eval "$2"; then
+  PASSED=$((PASSED + 1))
+  echo "ok   - $1"
+else
+  FAILED=$((FAILED + 1))
+  echo "FAIL - $1"
+fi; }
 
 block="$work/lists.sh"
 sed -n '/^# Files added, copied, modified or renamed/,/^mapfile -d .* SHELL_FILES/p' "$gate" > "$block"
@@ -89,11 +96,30 @@ lists() {
   )
 }
 # run_lists [<git wrapper>]: lists, into the array OUT and its status into st.
-run_lists() { local raw="$work/out"; lists "$@" > "$raw" 2> "$work/err"; st=$?; mapfile -d '' -t OUT < "$raw"; }
-has() { local want="$1"$'\t'"$2" entry; for entry in ${OUT[@]+"${OUT[@]}"}; do [[ "$entry" == "$want" ]] && return 0; done; return 1; }
-count() { local n=0 entry; for entry in ${OUT[@]+"${OUT[@]}"}; do [[ "$entry" == "$1"$'\t'* ]] && n=$((n + 1)); done; echo "$n"; }
+run_lists() {
+  local raw="$work/out"
+  lists "$@" > "$raw" 2> "$work/err"
+  st=$?
+  mapfile -d '' -t OUT < "$raw"
+}
+has() {
+  local want="$1"$'\t'"$2" entry
+  for entry in ${OUT[@]+"${OUT[@]}"}; do [[ "$entry" == "$want" ]] && return 0; done
+  return 1
+}
+count() {
+  local n=0 entry
+  for entry in ${OUT[@]+"${OUT[@]}"}; do [[ "$entry" == "$1"$'\t'* ]] && n=$((n + 1)); done
+  echo "$n"
+}
 # first <prefix>: the first argument recorded under that prefix.
-first() { local entry; for entry in ${OUT[@]+"${OUT[@]}"}; do [[ "$entry" != "$1"$'\t'* ]] || { echo "${entry#*$'\t'}"; return; }; done; }
+first() {
+  local entry
+  for entry in ${OUT[@]+"${OUT[@]}"}; do [[ "$entry" != "$1"$'\t'* ]] || {
+    echo "${entry#*$'\t'}"
+    return
+  }; done
+}
 
 check "the gate's Markdown step is found" "grep -q 'markdownlint-cli2' '$md_step' && [[ \$(wc -l < '$md_step') -gt 5 ]]"
 check "the gate's YAML and shell steps and run_tool are found" \

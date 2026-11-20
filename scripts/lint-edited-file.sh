@@ -183,7 +183,8 @@ fi
 # (Python's surrogateescape); any other lone surrogate becomes its three-byte UTF-8 form (surrogatepass). So every path is
 # written; one that names no file is not linted (exit 0), as for any missing file.
 # The sentinel x keeps a trailing newline in the name: "a.md<newline>" is not "a.md".
-if ! file="$(python3 -I -c '
+if ! file="$(
+  python3 -I -c '
 import codecs, json, sys
 def lone_surrogate(err):
     chars = err.object[err.start:err.end]
@@ -194,7 +195,11 @@ data = json.load(sys.stdin)
 tool_input = data.get("tool_input") if isinstance(data, dict) else None
 path = tool_input.get("file_path") if isinstance(tool_input, dict) else None
 sys.stdout.buffer.write(path.encode("utf-8", "lone_surrogate") if isinstance(path, str) else b"")
-'; rc=$?; printf x; exit "$rc")"; then
+'
+  rc=$?
+  printf x
+  exit "$rc"
+)"; then
   echo "lint-edited-file.sh: could not read the edited file path from the hook input, so the file was not linted." >&2
   exit 1
 fi
@@ -218,7 +223,6 @@ if ! command -v git > /dev/null 2>&1; then
   echo "lint-edited-file.sh: $(missing git), so the edited file was not linted." >&2
   exit 1
 fi
-
 
 # in_project <project> <root>: 0 when <root> is the project's own checkout or a linked worktree the project's repository
 # lists, 1 when it is not (or the project is no git repository), 2 when git cannot list worktrees (git older than 2.36 has
@@ -249,7 +253,10 @@ folder="${file%/*}"
 dir='' root='' # set by canon
 canon "$folder" dir || exit 0
 # The repository the file is in, which in a linked worktree is that worktree: its configs are the ones that apply.
-top="$(git -C "$dir" rev-parse --show-toplevel 2> /dev/null; printf x)"
+top="$(
+  git -C "$dir" rev-parse --show-toplevel 2> /dev/null
+  printf x
+)"
 top="${top%x}"
 top="${top%$'\n'}"
 [[ -n "$top" ]] || exit 0

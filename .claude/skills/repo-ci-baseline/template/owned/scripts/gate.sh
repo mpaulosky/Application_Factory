@@ -20,7 +20,10 @@ cd "$ROOT"
 # shellcheck disable=SC2046 # one variable name per word, on purpose
 unset $(git rev-parse --local-env-vars)
 
-GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; RESET='\033[0m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+RESET='\033[0m'
 
 step() { echo -e "\n${CYAN}▶ $1${RESET}"; }
 
@@ -30,7 +33,7 @@ step() { echo -e "\n${CYAN}▶ $1${RESET}"; }
 # file first, so a git that fails stops the gate here (set -e) instead of leaving every list empty.
 CHANGED_FILE="$(mktemp)"
 trap 'rm -f "$CHANGED_FILE"' EXIT
-if BASE="$(git merge-base HEAD origin/main 2>/dev/null)"; then
+if BASE="$(git merge-base HEAD origin/main 2> /dev/null)"; then
   git diff --name-only -z --diff-filter=ACMR "$BASE" HEAD > "$CHANGED_FILE"
 else
   BASE=""
@@ -68,22 +71,26 @@ SHELLCHECK_VERSION="v0.11.0"
 
 # Fallback probes: can the fallback actually run here? A docker binary with a
 # stopped daemon can't, and must skip rather than fail the gate.
-have_docker() { docker info &>/dev/null; }
-have_uvx() { command -v uvx &>/dev/null; }
+have_docker() { docker info &> /dev/null; }
+have_uvx() { command -v uvx &> /dev/null; }
 
 # Runs an installed tool, else its fallback command, else warns that the check
 # is skipped locally (CI's Lint Actions workflow still runs it).
 # Usage: run_tool <name> <install hint> <probe function> <fallback command...> -- <args...>
 run_tool() {
-  local name="$1" hint="$2" probe="$3"; shift 3
+  local name="$1" hint="$2" probe="$3"
+  shift 3
   local fallback=()
-  while [[ $# -gt 0 && "$1" != "--" ]]; do fallback+=("$1"); shift; done
+  while [[ $# -gt 0 && "$1" != "--" ]]; do
+    fallback+=("$1")
+    shift
+  done
   if [[ $# -eq 0 ]]; then
     echo "run_tool ${name}: missing -- before the tool arguments" >&2
     exit 2
   fi
   shift
-  if command -v "$name" &>/dev/null; then
+  if command -v "$name" &> /dev/null; then
     "$name" "$@"
   elif "$probe"; then
     "${fallback[@]}" "$@"
@@ -100,9 +107,9 @@ if [[ ${#MD_FILES[@]} -gt 0 ]]; then
   MD_PATHS=("${MD_FILES[@]/#/:}")
   if [[ -x "$ROOT/node_modules/.bin/markdownlint-cli2" ]]; then
     "$ROOT/node_modules/.bin/markdownlint-cli2" "${MD_PATHS[@]}"
-  elif command -v markdownlint-cli2 &>/dev/null; then
+  elif command -v markdownlint-cli2 &> /dev/null; then
     markdownlint-cli2 "${MD_PATHS[@]}"
-  elif command -v pnpm &>/dev/null; then
+  elif command -v pnpm &> /dev/null; then
     pnpm dlx "markdownlint-cli2@${MARKDOWNLINT_CLI2_VERSION}" "${MD_PATHS[@]}"
   else
     # Every repo uses pnpm, never npm or npx, so without pnpm there is no way to lint.
@@ -113,7 +120,7 @@ fi
 
 step "YAML lint (${#YAML_FILES[@]} changed file(s))"
 if [[ ${#YAML_FILES[@]} -gt 0 ]]; then
-  if command -v yamllint &>/dev/null; then
+  if command -v yamllint &> /dev/null; then
     YAMLLINT_ARGS=()
     [[ -f .yamllint.yml ]] && YAMLLINT_ARGS=(-c .yamllint.yml)
     # '--' keeps a name that starts with '-' from being read as an option.

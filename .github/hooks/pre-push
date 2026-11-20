@@ -5,7 +5,11 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; RESET='\033[0m'
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+RESET='\033[0m'
 
 echo -e "${CYAN}━━━ Pre-Push Gate ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
 
@@ -71,7 +75,7 @@ if [[ -n "$PUSH_REFS" ]]; then
   fi
 else
   # Run by hand: there are no refs on stdin, so gate the checked-out branch.
-  check_branch_name "$(git symbolic-ref --short HEAD 2>/dev/null || echo "")"
+  check_branch_name "$(git symbolic-ref --short HEAD 2> /dev/null || echo "")"
 fi
 
 # Every pushed branch is the checked-out commit (checked above). The gate
@@ -89,12 +93,12 @@ fi
 # behind origin/main couldn't merge as pushed, and the gate would test it
 # against an old main. Fetch main first, so the check sees what merged since
 # the last fetch; offline, it compares with the last fetched copy.
-if ! git fetch --quiet origin main 2>/dev/null; then
+if ! git fetch --quiet origin main 2> /dev/null; then
   echo -e "${YELLOW}⚠️  Couldn't fetch origin/main; checking against the last fetched copy.${RESET}"
 fi
-if git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null; then
+if git rev-parse --verify --quiet refs/remotes/origin/main > /dev/null; then
   BEHIND="$(git rev-list --count HEAD..refs/remotes/origin/main)"
-  if (( BEHIND > 0 )); then
+  if ((BEHIND > 0)); then
     echo -e "${RED}❌ The branch is ${BEHIND} commit(s) behind origin/main, so its PR couldn't merge as pushed.${RESET}"
     echo -e "   Bring main in, then push again: ${YELLOW}git merge origin/main${RESET}"
     exit 1
