@@ -27,14 +27,15 @@
 # (its folder and each one above it, up to the repository root) is a regular file committed as it is, and none can load JavaScript
 # (a .cjs or .mjs config, or customRules, markdownItPlugins, outputFormatters, modulePaths or extends, or a backslash whose escape
 # could spell one): an agent could write such a config, or the code one names, and have this hook run it with no Bash prompt. The
-# person is told which config and why, and the gate and CI still lint the file (see unvetted_config). For the same reason every
-# linter comes from PATH and runs by its real path, never from inside the project's checkouts (the file's repository, the project
-# directory and every worktree it lists: a node_modules/.bin, a PATH entry that resolves there, or a symlink into one): install it
-# outside them (pnpm add -g markdownlint-cli2, uv tool install yamllint), or the hook says it was found only inside (see path_bin).
+# person is told which config and why, and the gate and CI still lint the file (see unvetted_config). For the same reason the hook
+# cleans PATH before it runs anything (clean_path): every relative or empty entry goes, and every entry inside the project's
+# checkouts (the file's repository, the project directory and every worktree it lists, a node_modules/.bin among them), so no
+# linter and no helper a linter looks up (node, python3, bash) comes from there, and a linter whose real file is a symlink into
+# one is passed over for the next on PATH (path_bin). Install the linters outside the project, on an absolute PATH entry.
 #
 # Exit 0: the file is clean, is missing, is not Markdown or YAML, is not in the project, is Markdown under a markdownlint config the
-# hook won't run (above), or no linter for it is installed (this hook only helps; the commit hook and the gate still check). That
-# config, and a skipped linter, are reported as a systemMessage on stdout, which
+# hook won't run (above), or a linter for it is not installed or is found only where the hook runs nothing from (above) (this hook
+# only helps; the commit hook and the gate still check). That config, and a skipped linter, are reported as a systemMessage on stdout, which
 # Claude Code shows to the person. Exit 2: a linter reported a violation; its output goes to stderr, which Claude Code feeds
 # back to the agent. Exit 1: the hook could not run (python3 missing, CLAUDE_PROJECT_DIR unset, bad JSON, or, for a Markdown or YAML file, git missing or older than 2.36); Claude Code shows that to the
 # person and carries on. A linter that is installed but crashes counts as a violation, not as clean.
@@ -46,14 +47,56 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR CDPATH
 # The most a linter's output may add to the message the agent reads; a generated file can have thousands of violations.
 MAX_OUTPUT=6000
 
-if ! command -v python3 > /dev/null 2>&1; then
-  echo "lint-edited-file.sh: python3 not found, so the edited file was not linted." >&2
-  exit 1
-fi
+# canon <dir> <variable>: sets <variable> to the canonical path of <dir>, keeping trailing newlines in it. $(...) drops them, which
+# would turn the folder "docs<newline>" into "docs", a different folder whose file (or symlink) would be linted instead.
+canon() {
+  local out
+  # Some bash versions let `cd ""` succeed and stay where they are, which would lint a file in the working directory instead.
+  [[ -n "$1" ]] || return 1
+  out="$(cd -P -- "$1" 2> /dev/null && pwd -P && printf x)" || return 1
+  out="${out%x}"
+  printf -v "$2" '%s' "${out%$'\n'}"
+}
+
+# clean_path <root>...: drops from PATH every entry that is empty or relative (it would name a folder of whatever directory a command
+# runs in, the repository included once run_linter has changed into it), every one that isn't a directory, and every one whose
+# canonical path is inside a <root>; the entries kept are written canonical. An agent can write any file in the project's checkouts
+# with no Bash prompt and this hook runs right after a write, so nothing it runs, a linter or a helper a linter looks up on PATH
+# (node, python3, bash, shellcheck), may come from there. ORIG_PATH keeps the PATH the hook was given, to tell "found only where the
+# hook runs nothing from" apart from "not installed".
+ORIG_PATH="$PATH"
+clean_path() {
+  local rest="$PATH:" entry canon_entry trusted kept=""
+  while [[ -n "$rest" ]]; do
+    entry="${rest%%:*}"
+    rest="${rest#*:}"
+    [[ "$entry" == /* ]] || continue
+    canon_entry=''
+    canon "$entry" canon_entry || continue
+    for trusted in "$@"; do
+      case "$canon_entry/" in
+        "$trusted"/*) continue 2 ;;
+      esac
+    done
+    # Kept as its canonical path, which is the folder just checked, so the entry can't be read as another folder later.
+    kept+="${kept:+:}$canon_entry"
+  done
+  PATH="$kept"
+  export PATH
+}
 
 # Fail closed: with no project the boundary below would have nothing to compare with.
 if [[ -z "${CLAUDE_PROJECT_DIR:-}" ]]; then
   echo "lint-edited-file.sh: CLAUDE_PROJECT_DIR is not set, so the edited file was not linted." >&2
+  exit 1
+fi
+# First pass, before python3 and git are looked up: the project directory is the one checkout known yet. The second pass, once
+# every worktree of the project is known, is after in_project.
+project_canon=''
+if canon "$CLAUDE_PROJECT_DIR" project_canon; then clean_path "$project_canon"; else clean_path; fi
+
+if ! command -v python3 > /dev/null 2>&1; then
+  echo "lint-edited-file.sh: python3 not found, so the edited file was not linted." >&2
   exit 1
 fi
 
@@ -98,24 +141,14 @@ if ! command -v git > /dev/null 2>&1; then
   exit 1
 fi
 
-# canon <dir> <variable>: sets <variable> to the canonical path of <dir>, keeping trailing newlines in it. $(...) drops them, which
-# would turn the folder "docs<newline>" into "docs", a different folder whose file (or symlink) would be linted instead.
-canon() {
-  local out
-  # Some bash versions let `cd ""` succeed and stay where they are, which would lint a file in the working directory instead.
-  [[ -n "$1" ]] || return 1
-  out="$(cd -P -- "$1" 2> /dev/null && pwd -P && printf x)" || return 1
-  out="${out%x}"
-  printf -v "$2" '%s' "${out%$'\n'}"
-}
 
 # in_project <project> <root>: 0 when <root> is the project's own checkout or a linked worktree the project's repository
 # lists, 1 when it is not (or the project is no git repository), 2 when git cannot list worktrees (git older than 2.36 has
 # no -z; a damaged repository fails the same way). The list is built from the project's own git directory, so a directory whose .git file or commondir merely names
 # that git directory is not in it. -z gives each path as one field, so a path with a newline in it cannot forge a second
 # "worktree <dir>" line, and canon keeps a trailing newline in the resolved path. A stale entry (its directory removed, not yet pruned) is trusted until `git worktree prune`.
-# It also collects every listed worktree's canonical path in PROJECT_ROOTS, the checkouts an agent can write: path_bin runs no
-# linter from inside any of them. The project directory is always in one of them, even when it is a folder inside a checkout.
+# It also collects every listed worktree's canonical path in PROJECT_ROOTS, the checkouts an agent can write: clean_path and path_bin
+# run nothing from inside any of them. The project directory is always in one of them, even when it is a folder inside a checkout.
 PROJECT_ROOTS=()
 in_project() {
   local field path='' found=1
@@ -145,7 +178,10 @@ top="${top%$'\n'}"
 canon "$top" root || exit 0
 in_project "$CLAUDE_PROJECT_DIR" "$root"
 case $? in
-  0) ;;
+  0)
+    # Second pass: no entry inside the file's repository or any worktree of the project.
+    clean_path "$root" ${PROJECT_ROOTS[@]+"${PROJECT_ROOTS[@]}"} ${project_canon:+"$project_canon"}
+    ;;
   2)
     echo "lint-edited-file.sh: git cannot list worktrees (git 2.36 or later is needed, or the repository is damaged), so the edited file was not linted." >&2
     exit 1
@@ -181,32 +217,33 @@ run_linter() {
   fi
 }
 
-# path_bin <name> <variable>: sets <variable> to the real, absolute path of the <name> on PATH (every symlink resolved, the folder
-# and the file), or to nothing when there is none the hook may run. An agent can write any file in the project's checkouts with no
-# Bash prompt (the repo's node_modules/.bin among them), and this hook runs right after a write, so a linter whose real file is in
-# the edited file's repository, the project's own checkout or any worktree it lists is not run: install it outside them (pnpm add
-# -g markdownlint-cli2, uv tool install yamllint), or the hook reports it as only runnable from outside the repository. The real
-# path is what run_linter runs, so a relative PATH entry, resolved here against the hook's working directory, can't name another
-# file once run_linter has changed into the repository. A name with no folder (an exported function or an alias) is refused.
-# REFUSED collects the linters found only inside the project.
+# path_bin <name> <variable>: sets <variable> to the first <name> on the cleaned PATH (clean_path) whose real file, every symlink
+# resolved, is outside the file's repository and every worktree of the project, as PATH found it: an absolute path in a canonical
+# folder with its own name, so a shim that picks its program by that name (mise, busybox) still works. Sets nothing when there is
+# none. One found only where the hook runs nothing from (inside the project, through a symlink into it, or on a PATH entry
+# clean_path dropped) is added to REFUSED, so the note tells it apart from a linter that isn't installed.
 REFUSED=()
 path_bin() {
   local found real trusted
   printf -v "$2" '%s' ""
-  found="$(command -v "$1" 2> /dev/null)" || return 0
-  [[ "$found" == */* ]] || return 0
-  real="$(python3 -I -c 'import os, sys; sys.stdout.write(os.path.realpath(sys.argv[1]))' "$found" 2> /dev/null && printf x)" || return 0
-  real="${real%x}"
-  [[ "$real" == /* && -f "$real" && -x "$real" ]] || return 0
-  for trusted in "$root" ${PROJECT_ROOTS[@]+"${PROJECT_ROOTS[@]}"}; do
-    case "$real" in
-      "$trusted"/*)
-        REFUSED+=("$1")
-        return 0
-        ;;
-    esac
-  done
-  printf -v "$2" '%s' "$real"
+  while IFS= read -r found; do
+    [[ "$found" == /*/* ]] || continue
+    # Bytes, not text: a folder named with bytes that aren't valid UTF-8 would make Python's strict stdout fail.
+    real="$(python3 -I -c 'import os, sys; sys.stdout.buffer.write(os.fsencode(os.path.realpath(sys.argv[1])))' "$found" 2> /dev/null && printf x)" || continue
+    real="${real%x}"
+    [[ "$real" == /* && -f "$real" && -x "$real" && -x "$found" ]] || continue
+    for trusted in "$root" ${PROJECT_ROOTS[@]+"${PROJECT_ROOTS[@]}"}; do
+      case "$real" in
+        "$trusted"/*) continue 2 ;;
+      esac
+    done
+    printf -v "$2" '%s' "$found"
+    return 0
+  done < <(type -aP -- "$1" 2> /dev/null)
+  if PATH="$ORIG_PATH" type -P -- "$1" > /dev/null 2>&1; then
+    REFUSED+=("$1")
+  fi
+  return 0
 }
 
 # unvetted_config: sets unvetted_path and unvetted_why for the first markdownlint-cli2 config on the file's path (its folder and each one above it, up
@@ -342,7 +379,7 @@ if ((${#skipped[@]} > 0)); then
   ((${#missing[@]} == 0)) || note="${missing[*]} not installed"
   if ((${#inside[@]} > 0)); then
     [[ -z "$note" ]] || note+="; "
-    note+="${inside[*]} found only inside the project, which this hook runs nothing from (install it outside, such as pnpm add -g markdownlint-cli2 or uv tool install yamllint)"
+    note+="${inside[*]} found only inside the project or on a relative PATH entry, which this hook runs nothing from (install it outside the project, on an absolute PATH entry: see references/git-hooks.md, Edit-time lint)"
   fi
   python3 -I -c 'import json, sys; print(json.dumps({"systemMessage": sys.argv[1]}))' \
     "lint-edited-file.sh: $rel was not fully linted: $note (the gate and CI still check it)."

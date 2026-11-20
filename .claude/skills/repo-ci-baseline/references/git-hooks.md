@@ -218,12 +218,16 @@ These are the checks the CI lint workflows run; a gate runs `actionlint` and `zi
   telling the agent to hand a broken linter (a usage error, an old version) to the person.
 - Exit 0 and no output for a file that is neither Markdown nor YAML, one that no longer exists, a directory, a symlink, one under `node_modules/`, and one outside the project (below).
 - Exit 0 with a `systemMessage` on stdout, which Claude Code shows to the person, when a linter is not installed: the file is skipped for that linter, the hook only helps, and the pre-commit hook,
-  the gate and CI still check. Plain stderr on exit 0 is not shown, which is why the note is JSON. Every linter (`markdownlint-cli2`, `yamllint`, `actionlint`, `zizmor`) comes from `PATH`
-  and runs by its
-  real path, every symlink resolved, so a relative `PATH` entry can't name another file once the hook has changed into the repository. One whose real file is inside the project's checkouts (the
-  file's repository, and the project and every worktree `git worktree list` shows, its `node_modules/.bin` among them) is not run, since an agent can write any of them with no Bash prompt and this hook
-  runs right after a write: the note says it was found only inside the project, apart from those not installed at all, and an exported function of that name counts as not installed. Install them
-  outside (`pnpm add -g markdownlint-cli2`, `uv tool install yamllint`); the pre-commit hook and the gate still use the repo's copy, because a person runs those.
+  the gate and CI still check. Plain stderr on exit 0 is not shown, which is why the note is JSON. Before it runs anything the hook cleans `PATH`:
+  every relative or empty entry goes (it would name a folder of whatever directory a command runs in, the repository once the hook has changed into it), and so does
+  every entry inside the project's checkouts (the file's repository, and the project and every worktree `git worktree list` shows, a `node_modules/.bin` among them),
+  since an agent can write any of them with no Bash prompt and this hook runs right after a write. So no linter (`markdownlint-cli2`, `yamllint`, `actionlint`,
+  `zizmor`) and no helper a linter looks up on `PATH` (`node`, `python3`, `bash`, `shellcheck`) comes from there. A linter whose real file is a symlink into a checkout
+  is passed over for the next one on `PATH`; one found only in such places is named apart in the note ("found only inside the project or on a relative PATH entry"),
+  and an exported function of that name counts as not installed. Each linter runs by the path `PATH` found it under, so a shim that picks its program by name (mise)
+  still works. Install them outside the project, on an absolute `PATH` entry: `pnpm add -g markdownlint-cli2`, `uv tool install yamllint`, `uv tool install zizmor`,
+  and actionlint from its release binaries or a package manager. The pre-commit hook and the gate still use the repo's own `markdownlint-cli2` (only it has one),
+  because a person runs those.
 - Exit 1 with a message on stderr when its input is not JSON, `CLAUDE_PROJECT_DIR` is unset, `python3` is missing, or, for a Markdown or YAML file, `git` is missing or older than 2.36
   (`git worktree list -z`), so a broken hook is visible and is not read as a clean file.
 - Only the project's own checkout and the linked worktrees it lists are linted: the file's repository root must be one of the paths `git worktree list` prints for `CLAUDE_PROJECT_DIR`,

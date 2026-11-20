@@ -60,6 +60,7 @@ local review catches the kinds of finding Copilot raised on past pull requests, 
 
 The hook no longer runs what an agent could have written with no Bash prompt: a Markdown file is linted only through markdownlint configs that are regular files,
 committed as they are, and unable to load JavaScript (no `.cjs` or `.mjs` config; no `customRules`, `markdownItPlugins`, `outputFormatters`, `modulePaths` or `extends`;
-no backslash in one read as text), and every linter comes from `PATH` by its real path, never from inside the project's checkouts (the repository's
-`node_modules/.bin`, or another worktree's). Otherwise the file is left unlinted with a `systemMessage` saying why; the pre-commit hook, the gate and CI still lint it. The
+no backslash in one read as text), and the hook cleans `PATH` before it runs anything: no relative or empty entry, and none inside the project's checkouts (the
+repository's `node_modules/.bin`, or another worktree's), so no linter or helper a linter looks up comes from there. Otherwise the file is left unlinted with a `systemMessage` saying why;
+the pre-commit hook, the gate and CI still lint it. The
 Template's `references/git-hooks.md` (Edit-time lint) has the detail.

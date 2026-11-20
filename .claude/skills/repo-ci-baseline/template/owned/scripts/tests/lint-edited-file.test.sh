@@ -209,7 +209,8 @@ p=()
 check "a folder whose name only contains node_modules is linted" ${p[@]+"${p[@]}"}
 
 # The repo's own node_modules/.bin copy never runs: an agent can write it with no Bash prompt. The PATH copy runs instead, and a
-# PATH entry that leads into the repo (directly, through a symlink, or relative) counts as no markdownlint-cli2 at all.
+# PATH entry that leads into the repo (directly, through a symlink, or relative) is dropped: the note says the linter was found only
+# where the hook runs nothing from, with where to install it, never that it isn't installed.
 mkdir -p "$repo/node_modules/.bin"
 cat > "$repo/node_modules/.bin/markdownlint-cli2" << 'EOF'
 #!/usr/bin/env bash
@@ -232,7 +233,7 @@ for entry in "$repo/node_modules/.bin" "link" "node_modules/.bin"; do
   p=()
   [[ $STATUS -eq 0 ]] || p+=("exit $STATUS, want 0 (not installed)")
   ! log_has "local-markdownlint " || p+=("the copy inside the repo ran")
-  [[ "$(system_message "$STDOUT")" == *"markdownlint-cli2 found only inside the project, which this hook runs nothing from (install it outside, such as pnpm add -g markdownlint-cli2"* ]] \
+  [[ "$(system_message "$STDOUT")" == *"markdownlint-cli2 found only inside the project or on a relative PATH entry, which this hook runs nothing from (install it outside the project, on an absolute PATH entry: see references/git-hooks.md, Edit-time lint)"* ]] \
     || p+=("no found-inside note with its remedy: $STDOUT")
   [[ "$(system_message "$STDOUT")" != *"not installed"* ]] || p+=("said not installed: $STDOUT")
   check "a markdownlint-cli2 on PATH inside the repo ($entry) is refused, and the note says so with the remedy" ${p[@]+"${p[@]}"}
@@ -258,18 +259,76 @@ attacker_stub() {
   printf '#!/usr/bin/env bash\necho "attacker $(basename "$0")" >> "$STUB_LOG"\nexit 0\n' > "$1"
   chmod +x "$1"
 }
-found_inside="found only inside the project, which this hook runs nothing from"
-# A relative PATH entry is resolved once, from the hook's working directory, and that file is what runs: the same relative name
-# under the repo root, where run_linter changes to, never does.
+found_inside="found only inside the project or on a relative PATH entry, which this hook runs nothing from"
+# A relative or empty PATH entry is dropped whatever it names, from the hook's working directory or, after run_linter changes into
+# the repo, from the repo root: neither copy runs, and the note says why.
 mkdir -p "$WORK/relcwd/tools"
 cp "$STUBS/markdownlint-cli2" "$WORK/relcwd/tools/markdownlint-cli2"
 attacker_stub "$repo/tools/markdownlint-cli2"
-RUN_CWD="$WORK/relcwd" run_hook "$(edit_json "$repo/docs/bad.md")" "tools:$TOOLS"
+attacker_stub "$repo/markdownlint-cli2"
+for entry in tools "" .; do
+  RUN_CWD="$WORK/relcwd" run_hook "$(edit_json "$repo/docs/bad.md")" "$entry:$TOOLS"
+  p=()
+  [[ $STATUS -eq 0 && "$(ran markdownlint-cli2)" == 0 ]] || p+=("exit $STATUS, ran $(ran markdownlint-cli2)")
+  ! log_has "attacker " || p+=("a copy in the repo ran")
+  [[ "$(system_message "$STDOUT")" == *"markdownlint-cli2 $found_inside"* || -z "$entry" || "$entry" == . ]] || p+=("note: $STDOUT")
+  check "a relative or empty PATH entry ('$entry') is dropped: nothing it names runs" ${p[@]+"${p[@]}"}
+  RUN_CWD="$repo" run_hook "$(edit_json "$repo/docs/bad.md")" "$entry:$TOOLS"
+  p=()
+  ! log_has "attacker " || p+=("an attacker copy ran")
+  check "a relative or empty PATH entry ('$entry') run from the repo root runs nothing in it" ${p[@]+"${p[@]}"}
+done
+rm -r "$WORK/relcwd" "$repo/tools" "$repo/markdownlint-cli2"
+# A copy that is refused doesn't hide a good one later on PATH: the first usable one runs, and nothing is noted.
+attacker_stub "$repo/node_modules/.bin/markdownlint-cli2"
+mkdir -p "$WORK/into"
+ln -s "$repo/node_modules/.bin/markdownlint-cli2" "$WORK/into/markdownlint-cli2"
+for first in "$repo/node_modules/.bin" "$WORK/into"; do
+  run_hook "$(edit_json "$repo/docs/bad.md")" "$first:$STUBS:$TOOLS"
+  p=()
+  [[ $STATUS -eq 2 && "$(ran markdownlint-cli2)" == 1 ]] || p+=("exit $STATUS, ran $(ran markdownlint-cli2)")
+  ! log_has "attacker " || p+=("the refused copy ran")
+  [[ -z "$STDOUT" ]] || p+=("a note: $STDOUT")
+  check "a refused copy first on PATH ($first) doesn't hide the good one after it" ${p[@]+"${p[@]}"}
+done
+rm -r "$WORK/into" "$repo/node_modules"
+# A shim that picks its program by the name it was run as still works: the hook runs the PATH entry, not its target.
+mkdir -p "$WORK/shim" "$WORK/multi"
+make_stub "$WORK/multi" multiplexer
+ln -s "$WORK/multi/multiplexer" "$WORK/shim/markdownlint-cli2"
+run_hook "$(edit_json "$repo/docs/bad.md")" "$WORK/shim:$TOOLS"
 p=()
-[[ $STATUS -eq 2 && "$(ran markdownlint-cli2)" == 1 ]] || p+=("exit $STATUS, ran $(ran markdownlint-cli2): the checked copy didn't run")
-! log_has "attacker " || p+=("the repo's same-named copy ran")
-check "a relative PATH entry runs the file it resolved to, not the same name under the repo root" ${p[@]+"${p[@]}"}
-rm -r "$WORK/relcwd" "$repo/tools"
+[[ $STATUS -eq 2 && "$(ran markdownlint-cli2)" == 1 ]] || p+=("exit $STATUS, ran $(ran markdownlint-cli2): $(cat "$LOG")")
+! log_has "multiplexer " || p+=("run by its target's name")
+check "a linter that is a shim symlink outside the project runs under its own name" ${p[@]+"${p[@]}"}
+rm -r "$WORK/shim" "$WORK/multi"
+# A linter's helpers come from the cleaned PATH too: an agent's python3, bash or node in the repo, ahead on PATH, never runs.
+for helper in python3 bash node env; do attacker_stub "$repo/bin/$helper"; done
+for first in "$repo/bin" bin ""; do
+  RUN_CWD="$repo" run_hook "$(edit_json "$repo/docs/bad.md")" "$first:$STUBS:$TOOLS"
+  p=()
+  [[ $STATUS -eq 2 && "$(ran markdownlint-cli2)" == 1 ]] || p+=("exit $STATUS, ran $(ran markdownlint-cli2)")
+  ! log_has "attacker " || p+=("an in-repo helper ran: $(grep attacker "$LOG")")
+  check "helpers in the repo on PATH ('$first') never run, for the hook or its linters" ${p[@]+"${p[@]}"}
+done
+rm -r "${repo:?}/bin"
+# A PATH folder named with a byte that isn't valid UTF-8 is a folder like any other, in a UTF-8 locale too.
+latin1_dir="$WORK/$(printf 'caf\xe9')"
+if mkdir -p "$latin1_dir" 2> /dev/null; then
+  cp "$STUBS/markdownlint-cli2" "$latin1_dir/markdownlint-cli2"
+  # en_US.UTF-8 first: there Python's stdout is strict, which is where a text write of the name fails (under C.UTF-8 it isn't).
+  utf8_locale="$(locale -a 2> /dev/null | grep -ixE 'en_US\.utf-?8' | head -n 1 || true)"
+  [[ -n "$utf8_locale" ]] || utf8_locale="$(locale -a 2> /dev/null | grep -ixE 'C\.utf-?8' | head -n 1 || true)"
+  RUN_ENV=("LC_ALL=${utf8_locale:-C}")
+  run_hook "$(edit_json "$repo/docs/bad.md")" "$latin1_dir:$TOOLS"
+  RUN_ENV=(RUN_ENV_UNUSED=1)
+  p=()
+  [[ $STATUS -eq 2 && "$(ran markdownlint-cli2)" == 1 ]] || p+=("exit $STATUS, ran $(ran markdownlint-cli2): $STDOUT")
+  check "a markdownlint-cli2 in a folder whose name isn't valid UTF-8 runs (${utf8_locale:-C})" ${p[@]+"${p[@]}"}
+  rm -r "$latin1_dir"
+else
+  echo "skip - this file system refuses a folder name that isn't valid UTF-8"
+fi
 # A sibling folder whose name starts with the repo's isn't inside it; the repo root itself is.
 mkdir -p "$repo-bin"
 cp "$STUBS/markdownlint-cli2" "$repo-bin/markdownlint-cli2"
@@ -295,7 +354,7 @@ p=()
 [[ "$(system_message "$STDOUT")" == *"markdownlint-cli2 $found_inside"* ]] || p+=("note: $STDOUT")
 check "a markdownlint-cli2 outside the repo that is a symlink into it is refused" ${p[@]+"${p[@]}"}
 rm -r "$WORK/outside" "$repo/node_modules"
-# The YAML linters are held to the same rule. With one missing and others inside, the note names both.
+# The YAML linters are held to the same rule.
 for tool in yamllint actionlint zizmor; do attacker_stub "$repo/bin/$tool"; done
 run_hook "$(edit_json "$repo/.github/workflows/bad.yml")" "$repo/bin:$TOOLS"
 p=()
@@ -303,12 +362,24 @@ p=()
 msg="$(system_message "$STDOUT")"
 [[ "$msg" == *"yamllint actionlint zizmor $found_inside"* ]] || p+=("note: $msg")
 check "yamllint, actionlint and zizmor inside the repo are refused for a workflow" ${p[@]+"${p[@]}"}
+# With one missing and others found only inside, the note names both, apart.
 rm "$repo/bin/actionlint"
 run_hook "$(edit_json "$repo/.github/workflows/bad.yml")" "$repo/bin:$TOOLS"
 msg="$(system_message "$STDOUT")"
 p=()
 [[ "$msg" == *"actionlint not installed; yamllint zizmor $found_inside"* ]] || p+=("note: $msg")
 check "the note names a missing linter and the ones found only inside the project apart" ${p[@]+"${p[@]}"}
+# The other YAML branches: .github/dependabot.yml (yamllint and zizmor) and a plain YAML file (yamllint alone).
+attacker_stub "$repo/bin/actionlint"
+for case in ".github/dependabot.yml|yamllint zizmor" "bad.yml|yamllint"; do
+  edited="${case%%|*}" want="${case#*|}"
+  run_hook "$(edit_json "$repo/$edited")" "$repo/bin:$TOOLS"
+  p=()
+  [[ $STATUS -eq 0 ]] && ! log_has "attacker " || p+=("exit $STATUS, or an in-repo linter ran: $(cat "$LOG")")
+  msg="$(system_message "$STDOUT")"
+  [[ "$msg" == *"was not fully linted: $want $found_inside"* ]] || p+=("note: $msg")
+  check "the linters for $edited inside the repo are refused ($want)" ${p[@]+"${p[@]}"}
+done
 rm -r "${repo:?}/bin"
 
 # The output cap (6000 characters): n-1, n and n+1.
@@ -916,6 +987,18 @@ run_hook "$(edit_json "$WORK/vet-wt/docs/deep/ok.md")" "$STUBS:$TOOLS" "$vet"
 p=()
 [[ $STATUS -eq 0 && "$(ran markdownlint-cli2)" == 1 ]] || p+=("exit $STATUS, ran $(ran markdownlint-cli2)")
 check "the worktree's file is linted by a markdownlint-cli2 outside the project" ${p[@]+"${p[@]}"}
+# The second PATH pass: an entry inside the linked worktree, which the first pass (the project directory alone) keeps, is dropped
+# once the worktrees are known, so a helper there (the bash a linter's shebang looks up) never runs.
+mkdir -p "$WORK/vet-wt/bin"
+# shellcheck disable=SC2016 # the stub's own code, written as it is
+printf '#!/bin/sh\necho "attacker bash" >> "$STUB_LOG"\nexit 0\n' > "$WORK/vet-wt/bin/bash"
+chmod +x "$WORK/vet-wt/bin/bash"
+run_hook "$(edit_json "$WORK/vet-wt/docs/deep/ok.md")" "$WORK/vet-wt/bin:$STUBS:$TOOLS" "$vet"
+p=()
+[[ $STATUS -eq 0 && "$(ran markdownlint-cli2)" == 1 ]] || p+=("exit $STATUS, ran $(ran markdownlint-cli2)")
+! log_has "attacker " || p+=("the worktree's bash ran")
+check "a PATH entry inside a linked worktree is dropped once the worktrees are known: its helpers never run" ${p[@]+"${p[@]}"}
+rm -r "$WORK/vet-wt/bin"
 rm -r "$vet/node_modules"
 git -C "$vet" worktree remove --force "$WORK/vet-wt"
 # A config that is a symlink can point anywhere, an untracked file among them: never run.

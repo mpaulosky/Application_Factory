@@ -115,20 +115,31 @@ fi
 # The Factory's template-tools action installs the same hashed file, so a bump's PR runs the Template's Python tests on its pins
 # (R22), and no second pytest pin can drift from it.
 template_tools="$skill_dir/../../../.github/actions/template-tools/action.yml"
-grep -qxF '        python -m pip install --require-hashes --no-deps -r .claude/skills/repo-ci-baseline/template/owned/.github/scripts/requirements-tests.txt' "$template_tools" \
+hashed_install='        python -m pip install --require-hashes --no-deps -r .claude/skills/repo-ci-baseline/template/owned/.github/scripts/requirements-tests.txt'
+grep -qxF -- "$hashed_install" "$template_tools" \
   || fail "the template-tools action must install the Template's requirements-tests.txt with --require-hashes --no-deps"
 [[ -f "$owned/.github/scripts/requirements-tests.txt" ]] || fail "the Template's .github/scripts/requirements-tests.txt is missing"
-# Any other line that installs, pins or names a version of pytest or PyYAML, in any case and with any specifier: only the
-# description and comments may mention them.
-second_pin() { grep -nviE '^[[:space:]]*#|requirements-tests\.txt' "$1" | grep -iE '(^|[^a-z0-9_-])(pytest|pyyaml)([^a-z0-9_-]|$)|PYTEST_|PYYAML_' | grep -vE '^[0-9]+:[[:space:]]{2}[^ ]'; }
+# Any other line that names pytest or PyYAML, in any case: only the exact hashed install line, comment lines and the top-level
+# description block may. A pin on the hashed line's own copy, or after a trailing comment, is on another line and is caught.
+second_pin() {
+  awk '/^description:/ { desc = 1; next } /^[^ ]/ { desc = 0 } !desc { print NR ":" $0 }' "$1" \
+    | grep -vxF -- "$(grep -nxF -- "$hashed_install" "$1" | head -n 1)" \
+    | grep -vE '^[0-9]+:[[:space:]]*#' \
+    | grep -iE '(^|[^a-z0-9_-])(pytest|pyyaml)([^a-z0-9_-]|$)|PYTEST_|PYYAML_'
+}
 if second_pin "$template_tools"; then
   fail "the template-tools action must take pytest and PyYAML from requirements-tests.txt only (the lines above name them again)"
 fi
-# The guard itself catches each spelling a re-pin is likely to take.
-for spelling in 'pip install pytest "yamllint==1"' '"PyYAML==6.0.3"' 'pytest>=9' 'pyyaml~=6' 'PYTEST_VERSION: "9"' 'pip install Pytest'; do
-  printf 'runs:\n  steps:\n      run: |\n        python -m pip install --require-hashes --no-deps -r x/requirements-tests.txt\n        %s\n' "$spelling" > "$md_tmp/action-pin.yml"
+# The guard itself catches each spelling a re-pin is likely to take, and passes the description and the hashed line.
+pin_fixture() { printf 'description: >\n  pytest and PyYAML from requirements-tests.txt\nruns:\n  steps:\n      run: |\n%s\n%s\n' "$hashed_install" "$1" > "$md_tmp/action-pin.yml"; }
+for spelling in '        pip install pytest "yamllint==1"' '        "PyYAML==6.0.3"' '        pytest>=9' '        pyyaml~=6' '        PYTEST_VERSION: "9"' '        pip install Pytest' \
+  '        python -m pip install pytest==9 -r x/requirements-tests.txt' '        pip install -r requirements-tests.txt pyyaml==5' '        pip install pytest==9  # requirements-tests.txt' \
+  "${hashed_install} pytest==9" '  pytest: "9"' '    pytest==9'; do
+  pin_fixture "$spelling"
   second_pin "$md_tmp/action-pin.yml" > /dev/null || fail "the template-tools pin guard misses: $spelling"
 done
+pin_fixture '        # pytest and PyYAML come from the line above'
+! second_pin "$md_tmp/action-pin.yml" > /dev/null || fail "the template-tools pin guard flags the description, a comment or the hashed line"
 # Dependabot keeps the hashed pins current: the Factory's own entry bumps the Template's copy, the Seed's an Application's.
 for pair in "$skill_dir/../../../.github/dependabot.yml|/.claude/skills/repo-ci-baseline/template/owned/.github/scripts" \
   "$skill_dir/template/seed/.github/dependabot.yml|/.github/scripts"; do
