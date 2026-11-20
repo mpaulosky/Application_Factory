@@ -46,6 +46,14 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   Every finding is named, with no "all", so a review recorded again since the list, or a fix asked meanwhile, can't be accepted unseen.
   `record` and `stage` refuse `fixAsked`: only the person asks.
   Advisory findings never block: one that needs a person goes to one follow-up issue per branch.
+- A fix made after the review was recorded (for a PR thread, say) gets a delta review in a new run: `scripts/review.sh prepare <run> recorded` writes
+  `<run>/fixes.patch` against the commit the branch's last recorded review vouched for (`recordedAnchor`: the newest ledger recorded on this branch, by
+  `recordedAt`, and its `head`), and that run's first round is a later round. The anchor is never a commit the caller names, so the patch holds every commit
+  after it and no fix goes unread. `prepare` refuses, and the run starts at round 1, on a detached HEAD, with no review of the branch recorded in this clone,
+  when that commit isn't one of HEAD's (an amend or a rebase since: an older review that still is one is not taken instead), when `main` has it, after a merge
+  of `main` since (as for a later round in one run), and with no commits since. Nothing carries over (issue 54, the owner's decision): the earlier review's
+  findings and acceptances are raised again through `<run>/decisions.md`, and the new record holds only the new run's findings. `record`, `check` and the gate
+  are unchanged: the record vouches for HEAD's whole diff key, as any other.
 - A run's findings are staged, not held in the session. Each round's triage goes to `scripts/review.sh stage <run> <file>`: each finding is checked as `record` checks it (an
   `accepted` one is refused), and one staged again under the same id replaces the earlier. The file is owner-only and replaced whole, and a second `stage` at the same time is
   refused. `stage` refuses a run folder that is a symlink (a trailing slash doesn't hide one), another user's or writable by the group or others. `stage` and `record --staged` refuse a
@@ -338,6 +346,3 @@ A branch Sandcastle builds gets this review's rounds after the reviewer role and
 - **Claude Review reviewing only what a push changed.** Claude Review now opens findings only for what a local review can't check and reads the PR's
   `## Review notes` as accepted findings ([ADR 0004](../docs/adr/0004-claude-review-as-copilots-backup.md#claude-review-after-the-local-review)),
   but it still reads the PR's whole diff on every push. A delta needs the diff step's exclusion and holding rules applied to a second diff.
-- **A delta review of a fix made after the review was recorded** (issue 54). A later round inside one run reviews only that round's fixes (`prepare <run> last`), but a fix
-  for a PR thread made after the run ended starts a new run, whose round 1 reads the whole diff again: `prepare <since>` takes only the HEAD a round in the same run folder
-  printed, so no fix goes unread. Anchoring a delta at the last recorded review's HEAD needs a decision on what carries over from that review (its findings, a person's acceptances).

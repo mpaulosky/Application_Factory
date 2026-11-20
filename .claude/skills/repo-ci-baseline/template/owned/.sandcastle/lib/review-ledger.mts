@@ -961,23 +961,49 @@ export function latestLedger(cwd: string, base: string, head: string = headCommi
 // Every review recorded at one of the branch's own commits (HEAD's ancestors
 // that main doesn't have), with how many commits each is behind HEAD.
 function branchLedgers(cwd: string, base: string, head: string): { ledger: Ledger; distance: number }[] {
-  const dir = ledgerDir(cwd);
-  if (!existsSync(dir)) return [];
   const found: { ledger: Ledger; distance: number }[] = [];
-  for (const name of readdirSync(dir)) {
-    if (!name.endsWith(".json")) continue;
-    let ledger: Ledger;
-    try {
-      const parsed = ledgerSchema.safeParse(JSON.parse(readFileSync(join(dir, name), "utf8")));
-      if (!parsed.success) continue;
-      ledger = parsed.data;
-    } catch {
-      continue;
-    }
+  for (const ledger of readLedgers(cwd)) {
     if (!isAncestor(cwd, ledger.head, head) || isAncestor(cwd, ledger.head, base)) continue;
     found.push({ ledger, distance: Number(git(cwd, "rev-list", "--count", `${ledger.head}..${head}`)) });
   }
   return found;
+}
+
+// Every ledger of the clone that reads and parses; a file that doesn't is skipped.
+function readLedgers(cwd: string): Ledger[] {
+  const dir = ledgerDir(cwd);
+  if (!existsSync(dir)) return [];
+  const found: Ledger[] = [];
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith(".json")) continue;
+    try {
+      const parsed = ledgerSchema.safeParse(JSON.parse(readFileSync(join(dir, name), "utf8")));
+      if (parsed.success) found.push(parsed.data);
+    } catch {
+      continue;
+    }
+  }
+  return found;
+}
+
+// The anchor of a delta review: the commit the newest review recorded on `branch` vouched for (its `head`), so a fix made after
+// the review was recorded (for a PR thread, say) is reviewed alone in a new run. The newest by recordedAt, never the nearest
+// ancestor: after an amend or a rebase the newest isn't one of HEAD's commits, and an older one is not silently taken instead.
+// Not a commit the caller names either, so the fixes patch holds every commit since the code a review vouched for. The reason
+// there's none, as a message, when no review of the branch is recorded or HEAD has none.
+export function recordedAnchor(cwd: string, base: string, head: string, branch: string): { commit: string; ledger: Ledger } | string {
+  const restart = "start again at round 1 (prepare without <since>).";
+  if (branch === "") return `HEAD isn't on a branch, so no review recorded for one can be its anchor: ${restart}`;
+  let newest: Ledger | undefined;
+  for (const ledger of readLedgers(cwd)) {
+    if (ledger.branch === branch && (newest === undefined || ledger.recordedAt > newest.recordedAt)) newest = ledger;
+  }
+  if (newest === undefined) return `no review of ${branch} is recorded in this clone: ${restart}`;
+  if (!isAncestor(cwd, newest.head, head)) {
+    return `the last review of ${branch} was recorded at ${newest.head}, which isn't one of HEAD's commits (an amend or a rebase since): ${restart}`;
+  }
+  if (isAncestor(cwd, newest.head, base)) return `the last review of ${branch} was recorded at ${newest.head}, which main already has: ${restart}`;
+  return { commit: newest.head, ledger: newest };
 }
 
 // The highest id a review had taken, its own or one it held from earlier
@@ -1002,22 +1028,49 @@ export function takenIds(cwd: string, base: string, head: string = headCommit(cw
 // prepareRound, so they cannot diverge. `patch` and `fixes` are whole: they feed the key and the size warning. `readPatch` and
 // `readFixes` leave out the verbatim Template mirrors (readerPatch) and are what the reviewers read, what the size limit and the lens choice
 // apply to, and what gets written to disk.
-export type PreparedRound = { patch: Buffer; fixes: Buffer | undefined; readPatch: Buffer; readFixes: Buffer | undefined; key: string; head: string; base: string };
+export type PreparedRound = { patch: Buffer; fixes: Buffer | undefined; readPatch: Buffer; readFixes: Buffer | undefined; key: string; head: string; base: string; since?: string };
+
+// The fixes a later round reads: since the HEAD the round before in the same run printed (`commit` and `preparedHead`), or, with
+// `recorded`, since the commit the branch's last recorded review vouched for (recordedAnchor), for a new run that reviews a fix
+// made after the review was recorded.
+export type FixesSince = { commit: string; preparedHead: string | undefined } | { recorded: true };
 
 // The body of `prepare` without its file I/O: `head` (HEAD by default) against
 // where it left `main` (origin/main by default), plus, for a later round, the
 // fixes since `since.commit`. `since.preparedHead` is the HEAD the round before
-// read, which `fixesPatch` checks `since.commit` against. Throws an Error with
+// read, which `fixesPatch` checks `since.commit` against. With `since.recorded`
+// the fixes are those since recordedAnchor, on `branch` (the checkout's by
+// default), and `since` in the result names that commit. Throws an Error with
 // `prepare`'s message when the fixes can't be told.
 export function prepareRound(
   cwd: string,
-  { main = "origin/main", head = headCommit(cwd), since }: { main?: string; head?: string; since?: { commit: string; preparedHead: string | undefined } },
+  { main = "origin/main", head = headCommit(cwd), since, branch }: { main?: string; head?: string; since?: FixesSince; branch?: string },
 ): PreparedRound {
   const base = mergeBase(cwd, main, head);
   const patch = reviewPatch(cwd, base, head);
-  const fixes = since === undefined ? undefined : fixesPatch(cwd, since.preparedHead, since.commit, base, head, main);
+  let anchor: string | undefined;
+  let fixes: Buffer | string | undefined;
+  if (since === undefined) {
+    fixes = undefined;
+  } else if ("recorded" in since) {
+    const found = recordedAnchor(cwd, base, head, branch ?? git(cwd, "branch", "--show-current"));
+    if (typeof found === "string") throw new Error(found);
+    anchor = found.commit;
+    fixes = fixesSince(cwd, anchor, base, head, main, "the review was recorded");
+  } else {
+    fixes = fixesPatch(cwd, since.preparedHead, since.commit, base, head, main);
+  }
   if (typeof fixes === "string") throw new Error(fixes);
-  return { patch, fixes, readPatch: readerPatch(patch), readFixes: fixes === undefined ? undefined : readerPatch(fixes), key: patchKey(patch), head, base };
+  return {
+    patch,
+    fixes,
+    readPatch: readerPatch(patch),
+    readFixes: fixes === undefined ? undefined : readerPatch(fixes),
+    key: patchKey(patch),
+    head,
+    base,
+    ...(anchor === undefined ? {} : { since: anchor }),
+  };
 }
 
 // Record a review of HEAD's diff, replacing any ledger at the same diff.
@@ -1499,8 +1552,14 @@ function fixesPatch(cwd: string, preparedHead: string | undefined, since: string
   if (before === undefined || !isAncestor(cwd, since, before)) {
     return `${since} is later than the HEAD prepare printed in the round before (${before ?? "none in this folder"}): give that one, so no fix goes unread.`;
   }
+  return fixesSince(cwd, since, base, head, main, "the round before");
+}
+
+// The patch from `since`, one of HEAD's commits, to `head`, for both kinds of later round; `after` says what `since` is, for the
+// messages. Refused, as a message, after a merge of main since (the patch would hold main's changes) or with no fixes at all.
+function fixesSince(cwd: string, since: string, base: string, head: string, main: string, after: string): Buffer | string {
   if (git(cwd, "merge-base", main, since) !== base) {
-    return "main was merged in since the round before, so the fixes can't be told from main's changes: start again at round 1.";
+    return `main was merged in since ${after}, so the fixes can't be told from main's changes: start again at round 1.`;
   }
   const fixes = reviewPatch(cwd, since, head);
   if (fixes.length === 0) return `no fixes since ${since}: a later round follows a round that fixed something, after its fix commits.`;
@@ -1544,10 +1603,11 @@ function sameFile(cwd: string, a: string, b: string): boolean {
 }
 
 const USAGE = `Usage: scripts/review.sh <command>
-  prepare <absolute dir> [<since>|last]
+  prepare <absolute dir> [<since>|last|recorded]
                          write HEAD's diff to <dir>/diff.patch for the reviewers, and with <since> (the HEAD
                          the round before printed, which "last" reads from <dir>/head) the fixes since to <dir>/fixes.patch, both without the
-                         Template mirrors that are verbatim copies of a root file in the same patch; print
+                         Template mirrors that are verbatim copies of a root file in the same patch; with "recorded", the fixes since the
+                         commit the branch's last recorded review vouched for, for a new run that reviews only a fix made after it; print
                          the key of the whole diff, then HEAD
   key                    print the ledger key of HEAD's diff against origin/main
   check [<base>]         the gate's check: exit 1 unless HEAD's diff was reviewed clean
@@ -1717,8 +1777,12 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         const preparedHead = existsSync(headFile) ? readFileSync(headFile, "utf8").trim() : undefined;
         // `last` is the HEAD the round before printed, which this folder's `head` file holds: no HEAD to copy from the last round's output.
         if (rest[1] === "last" && preparedHead === undefined) return fail("prepare <dir> last: no round was prepared in this folder yet, so there is no HEAD to read the fixes since. Run prepare <dir> first.");
+        if (rest.length > 2) return fail(USAGE);
+        // `recorded`: the fixes since the commit the branch's last recorded review vouched for (recordedAnchor), in a new run.
         const sinceCommit = rest[1] === "last" ? preparedHead : rest[1];
-        const round = prepareRound(cwd, sinceCommit === undefined ? {} : { since: { commit: sinceCommit, preparedHead } });
+        const since: FixesSince | undefined = rest[1] === "recorded" ? { recorded: true } : sinceCommit === undefined ? undefined : { commit: sinceCommit, preparedHead };
+        const round = prepareRound(cwd, since === undefined ? {} : { since });
+        if (round.since !== undefined) process.stderr.write(`Fixes since ${round.since}, the commit the last recorded review of this branch vouched for.\n`);
         mkdirSync(rest[0], { recursive: true });
         // What the reviewers read, without the verbatim Template mirrors; the key printed below is that of the whole diff.
         writeFileSync(join(rest[0], "diff.patch"), round.readPatch);
@@ -1726,7 +1790,7 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         // The HEAD this round reads, for the next round's fixesPatch.
         writeFileSync(join(rest[0], "head"), `${round.head}\n`);
         // On stderr, since callers read the two lines on stdout. Round 1 only: a later round is the same branch.
-        const size = sinceCommit === undefined ? sizeWarning(round.patch) : undefined;
+        const size = since === undefined ? sizeWarning(round.patch) : undefined;
         if (size !== undefined) process.stderr.write(`⚠ ${size}\n`);
         out(`${round.key}\n${round.head}`);
         return 0;

@@ -97,7 +97,10 @@ post, word for word. Keep it current: after every follow-up commit, update it so
 - **Required checks:** Build Solution, Test Suite, Branch name, PR title, actionlint, zizmor, shellcheck, markdownlint
   and yamllint. A docs-only PR skips the build and tests, and so does a Dependabot GitHub Actions bump; a skipped check
   counts as passing.
-- **Copilot reviews every push**, drafts included. Fix a thread you agree with, push the fix, then reply naming the fixing
+- **Copilot reviews every push**, drafts included. Fix a thread you agree with in the branch's worktree and review the fix before you push it: `/pre-push-review`
+  reviews only what changed since the branch's last recorded review (`scripts/review.sh prepare <run> recorded`), and the whole diff again only when
+  there's none, the branch was amended or rebased since, or `main` was merged in since. Nothing of the earlier review carries over: what it accepted
+  or left open is raised again. Push the fix, then reply naming the fixing
   commit by its short SHA (7 characters) and saying what changed (`Fixed in 1a2b3c4: <what changed>.`), so the PR documents
   its fixes. Resolve it if Copilot or Claude Review opened it; leave a person's thread for them. A Copilot or Claude Review
   thread resolved without a reply is flagged, in PR Auto-Merge's log and in `status.sh` and `land.sh`, but it doesn't hold the merge. Don't resolve a thread

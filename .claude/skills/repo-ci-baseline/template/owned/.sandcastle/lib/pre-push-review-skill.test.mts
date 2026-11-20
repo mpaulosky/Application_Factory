@@ -658,6 +658,15 @@ describe("the pre-push-review skill's fewer-rounds rules", () => {
     assert.match(skill.replace(/\s+/g, " "), /`scripts\/review\.sh prepare <run> last` \(`last` is the HEAD the round before printed, which `prepare` keeps in `<run>\/head`/);
   });
 
+  // Issue 54: a fix made after the review was recorded is reviewed alone, and nothing of the earlier review carries over.
+  it("has a run for a fix made after the review was recorded start with prepare recorded, as a later round, and carry nothing over", () => {
+    const flat = skill.replace(/\s+/g, " ");
+    assert.match(flat, /A run for a fix made after the branch's review was recorded \(a fix for a PR thread, say\) starts with `scripts\/review\.sh prepare <run> recorded` instead/);
+    assert.match(flat, /the run's first round is a later round/);
+    assert.match(flat, /starts at round 1 with `prepare <run>`, when no review of the branch is recorded in this clone, when that commit isn't one of HEAD's \(an amend or a rebase since\), or when `main` was merged in since/);
+    assert.match(flat, /nothing of it carries either: its accepted and open findings are raised again for this code, and the new record holds only this run's findings/);
+  });
+
   it("has the fixer check its fix before committing, and replace a function that two rounds in a row fixed", () => {
     assert.match(skill, /Check the fix before committing it/);
     assert.match(skill, /Write n-1, n and n\+1 boundary tests for each/);

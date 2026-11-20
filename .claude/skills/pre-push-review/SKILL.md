@@ -77,7 +77,8 @@ what was left open, is raised again for the person to decide for this code:
 - `scripts/review.sh latest`: the nearest earlier review of this branch's own commits, whatever the branch was called
   then, with every finding and what became of it (`{}` when there's none). It's context for the reviewers: nothing in it
   is carried into this review's record. It reaches reviewers only through `<run>/decisions.md` (step 4), never as its
-  raw output.
+  raw output. In a run started with `prepare <run> recorded` (step 4) it is normally the review the fixes follow, and nothing
+  of it carries either: its accepted and open findings are raised again for this code, and the new record holds only this run's findings.
 - `scripts/review.sh security`: lists the local security record, `.security/` in the main checkout, which every worktree of the
   clone shares: one line per entry with its number, status, lens, finding path and file (`No security entries.` when there's
   none). The entries are what earlier branches decided about a weakness: the policy that resolves it and the test or gate check
@@ -128,7 +129,12 @@ the sections must match in order), and prints two lines on stdout, the diff's
 key and HEAD: keep both, since they name exactly the code this round reviews. The key is that of the whole diff, mirrors included, so a change in a
 mirror alone still needs a new review. In a later round, run `scripts/review.sh prepare <run> last`
 (`last` is the HEAD the round before printed, which `prepare` keeps in `<run>/head`; that HEAD, given as the argument, does the same): it also writes the
-diff of that round's fixes to `<run>/fixes.patch`, filtered the same way. Write to `<run>/decisions.md`, with the Write tool and not a shell heredoc (the text quotes code such as `$(...)`,
+diff of that round's fixes to `<run>/fixes.patch`, filtered the same way. A run for a fix made after the branch's review was recorded (a fix
+for a PR thread, say) starts with `scripts/review.sh prepare <run> recorded` instead: it writes to `<run>/fixes.patch` every change since the commit
+the branch's last recorded review vouched for, which it names on stderr, and the run's first round is a later round. It refuses, and the run
+starts at round 1 with `prepare <run>`, when no review of the branch is recorded in this clone, when that commit isn't one of HEAD's (an amend or
+a rebase since), or when `main` was merged in since. Then go on with `prepare <run> last` as in any run.
+Write to `<run>/decisions.md`, with the Write tool and not a shell heredoc (the text quotes code such as `$(...)`,
 which a safety check may block), the earlier decisions from step 3 and every finding this run's earlier rounds
 raised, each with its id, outcome and reason, so no round raises again what an earlier one dismissed. A fixed item stays settled only until
 a reviewer reads the code at its `path:line` and finds the problem still there, then it is raised again. Label
@@ -147,7 +153,8 @@ or more than 3,000 lines, a file and its Template mirror counting once, `prepare
 (the host review logs the same one). Tell the person and suggest splitting the branch; it only
 advises, and the review goes on.
 
-Round 1 reviews the whole branch. A later round reviews the fixes, not the whole branch again: its reviewers get
+Round 1 reviews the whole branch. A later round reviews the fixes, not the whole branch again (so does the first round of a run
+started with `prepare <run> recorded`): its reviewers get
 `<run>/fixes.patch` to review and `<run>/diff.patch` as context, and raise only problems on the lines the fixes changed or
 problems the fixes cause elsewhere, such as a caller a changed function now breaks. Give them the whole function around
 each changed line and its callers to read, not only the patch: a fix's lines are judged by what they sit in. Choose a later round's reviewers by

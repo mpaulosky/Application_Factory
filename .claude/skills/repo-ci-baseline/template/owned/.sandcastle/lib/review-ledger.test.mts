@@ -2844,6 +2844,157 @@ describe("main", () => {
     assert.doesNotMatch(fixes, /main moves on/);
   });
 
+  // Issue 54: a fix made after the review was recorded (for a PR thread, say) is reviewed alone, in a new run, against the commit
+  // the branch's last recorded review vouched for. Nothing of that review carries into the new record.
+  describe("prepare <dir> recorded", () => {
+    const fresh = (name: string) => join(root, name);
+
+    it("writes the fixes since the commit the last recorded review vouched for, beside the whole diff, and says which commit", () => {
+      record([]);
+      const recordedAt = run(repo, "rev-parse", "HEAD");
+      commit(repo, "fix.cs", "the thread's fix\n", "fix a PR thread");
+      commit(repo, "other.cs", "a second fix\n", "fix another thread");
+      const dir = fresh("delta");
+
+      const result = cli(["prepare", dir, "recorded"]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.deepEqual(result.out.trim().split("\n"), [diffKey(repo, mergeBase(repo)), run(repo, "rev-parse", "HEAD")]);
+      assert.match(result.err, new RegExp(`Fixes since ${recordedAt}`));
+      const fixes = readFileSync(join(dir, "fixes.patch"), "utf8");
+      assert.match(fixes, /^\+the thread's fix$/m);
+      assert.match(fixes, /^\+a second fix$/m);
+      assert.doesNotMatch(fixes, /^\+changed$/m);
+      assert.equal(fixes, run(repo, "diff", "--full-index", recordedAt, "HEAD") + "\n");
+      assert.match(readFileSync(join(dir, "diff.patch"), "utf8"), /^\+changed$/m);
+      assert.equal(readFileSync(join(dir, "head"), "utf8"), `${run(repo, "rev-parse", "HEAD")}\n`);
+    });
+
+    it("gives prepareRound's since the anchor, and leaves the round 1 size warning out", () => {
+      record([]);
+      const recordedAt = run(repo, "rev-parse", "HEAD");
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      const round = prepareRound(repo, { since: { recorded: true } });
+
+      assert.equal(round.since, recordedAt);
+      assert.match(round.fixes?.toString("utf8") ?? "", /^\+the fix$/m);
+    });
+
+    it("lets the run go on with prepare <dir> last, and records only the new run's findings, none of the earlier review's", () => {
+      record([finding({ status: "open", test: null })]);
+      assert.equal(checkReview(repo, mergeBase(repo), {}).ok, false);
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      const dir = fresh("delta");
+      assert.equal(cli(["prepare", dir, "recorded"]).code, 0);
+      commit(repo, "fix.cs", "the fix, fixed\n", "fix the fix");
+
+      const later = cli(["prepare", dir, "last"]);
+      assert.equal(later.code, 0, later.err);
+      assert.match(readFileSync(join(dir, "fixes.patch"), "utf8"), /^\+the fix, fixed$/m);
+      const ledger = record([finding({ id: "R2", path: "fix.cs", line: 1 })], 2);
+
+      assert.deepEqual(ledger.findings.map((found) => found.id), ["R2"]);
+      assert.equal(checkReview(repo, mergeBase(repo), {}).ok, true);
+    });
+
+    it("refuses when no review of the branch is recorded, and writes no fixes patch", () => {
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      const dir = fresh("delta");
+
+      const result = cli(["prepare", dir, "recorded"]);
+
+      assert.equal(result.code, 1);
+      assert.match(result.err, /no review of feature\/1-thing is recorded in this clone: start again at round 1/);
+      assert.equal(existsSync(join(dir, "fixes.patch")), false);
+    });
+
+    it("refuses a review recorded on another branch, though it is one of HEAD's commits", () => {
+      record([]);
+      run(repo, "switch", "--quiet", "-c", "feature/2-other");
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+      assert.equal(result.code, 1);
+      assert.match(result.err, /no review of feature\/2-other is recorded/);
+    });
+
+    it("refuses on a detached HEAD", () => {
+      record([]);
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      run(repo, "switch", "--quiet", "--detach", "HEAD");
+
+      const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+      assert.equal(result.code, 1);
+      assert.match(result.err, /HEAD isn't on a branch/);
+    });
+
+    it("refuses after an amend, rather than fall back to an earlier review that is still one of HEAD's commits", () => {
+      record([], 1, new Date("2026-01-01T00:00:00Z"));
+      commit(repo, "other.cs", "second\n", "second commit");
+      record([], 1, new Date("2026-01-02T00:00:00Z"));
+      writeFileSync(join(repo, "other.cs"), "second, amended\n");
+      run(repo, "-c", "core.editor=true", "commit", "--quiet", "--amend", "--no-edit", "-a");
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+      assert.equal(result.code, 1);
+      assert.match(result.err, /isn't one of HEAD's commits \(an amend or a rebase since\): start again at round 1/);
+    });
+
+    it("refuses after a rebase onto main since the review was recorded", () => {
+      record([]);
+      commit(upstream, "main.cs", "main moves on\n", "main moves on");
+      run(repo, "fetch", "--quiet", "origin");
+      run(repo, "rebase", "--quiet", "origin/main");
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+      assert.equal(result.code, 1);
+      assert.match(result.err, /an amend or a rebase since/);
+    });
+
+    it("refuses after a merge of main since the review was recorded, whose fixes patch would hold main's changes", () => {
+      record([]);
+      commit(upstream, "main.cs", "main moves on\n", "main moves on");
+      mergeMain();
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      const dir = fresh("delta");
+
+      const result = cli(["prepare", dir, "recorded"]);
+
+      assert.equal(result.code, 1);
+      assert.match(result.err, /main was merged in since the review was recorded/);
+      assert.equal(existsSync(join(dir, "fixes.patch")), false);
+    });
+
+    it("takes the fixes after a fetch moved origin/main without a merge, and they hold only the fix", () => {
+      record([]);
+      commit(upstream, "main.cs", "main moves on\n", "main moves on");
+      run(repo, "fetch", "--quiet", "origin");
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      const dir = fresh("delta");
+
+      assert.equal(cli(["prepare", dir, "recorded"]).code, 0);
+      const fixes = readFileSync(join(dir, "fixes.patch"), "utf8");
+      assert.match(fixes, /the fix/);
+      assert.doesNotMatch(fixes, /main moves on/);
+    });
+
+    it("refuses with no commits since the review was recorded", () => {
+      record([]);
+
+      const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+      assert.equal(result.code, 1);
+      assert.match(result.err, /no fixes since/);
+    });
+  });
+
   for (const dir of ["", "relative/run"]) {
     it(`prepare refuses a folder that isn't absolute: ${JSON.stringify(dir)}`, () => {
       assert.equal(cli(["prepare", dir]).code, 1);
