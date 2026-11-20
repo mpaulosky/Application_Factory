@@ -16,7 +16,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 work="$(mktemp -d)"
 trap 'chmod -R u+w "$work" 2>/dev/null || true; rm -rf "$work"' EXIT # a case that makes a folder read-only is cleaned up even when it is interrupted
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH GATE_PART STUB_SANDCASTLE_EXIT RUN_PART TEST_SH_SHARD RUN_SHARD STUB_DURING MKDIR_LOG MKDIR_FAIL_ONCE MKDIR_RELEASE CAT_MARK RMDIR_MARK RMDIR_SIG RMDIR_TAKE RMDIR_SLEEP # a caller's GATE_NO_CACHE=1 must not reach the stub gate runs; the tests set it themselves where they need it
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH GATE_PART STUB_SANDCASTLE_EXIT RUN_PART TEST_SH_SHARD RUN_SHARD STUB_DURING MKDIR_LOG MKDIR_FAIL_ONCE MKDIR_RELEASE CAT_MARK RMDIR_MARK RMDIR_SIG RMDIR_TAKE RMDIR_WAIT # a caller's GATE_NO_CACHE=1 must not reach the stub gate runs; the tests set it themselves where they need it
 
 pass=0; failed=0
 check() { # check <description> <condition: 0 for ok>
@@ -739,7 +739,7 @@ check "a cache folder path that is a file gives the lock up at once" "$([[ $stat
 command rm -f "$cacheL"; mv "$cacheL.aside" "$cacheL"
 # A gate given INT, TERM or HUP while it holds the lock releases it and ends by that signal; one given any of them after it released the lock ends by it too, at once.
 # signal_gate <repo> <signal> <marker> [VAR=value...]: runs the template part in <repo> with those variables, sends <signal> once <marker> exists (never when it is "-"),
-# and prints how the gate ended: "signal N" or "exit N", then "prompt" or "late" (1.5 seconds or more after the signal), or "hung" when it hadn't ended 20 seconds later.
+# then writes <marker>.sent, and prints how the gate ended: "signal N" or "exit N", then "prompt" or "late" (1.5 seconds or more after the signal), or "hung" when it hadn't ended 20 seconds later.
 # Python starts it in its own process group with the three signals at their default (a shell's background job would ignore INT, which bash then can't trap), sends the signal to the whole group
 # as a terminal's Ctrl-C does (bash waiting on a child goes on after an INT the child didn't die of), and tells an end by a signal from an exit.
 signal_gate() {
@@ -760,6 +760,7 @@ with open(os.path.join(repo, "out"), "w") as out:
     sent = time.monotonic()
     if p.poll() is None and marker != "-":
         os.killpg(p.pid, getattr(signal, "SIG" + sig))
+        open(marker + ".sent", "w").close()
     try:
         rc = p.wait(timeout=20)
     except subprocess.TimeoutExpired:
@@ -803,8 +804,8 @@ done
 # named, and the handler's own signal would catch it again and again.
 reset_first="$(awk '/^cache_unlock\(\) \{/ { f = 1 } f && /trap - INT TERM HUP/ && !t { t = NR } f && /cache_locked=""/ && !c { c = NR } f && /^\}/ { f = 0 } END { print (t && c && t < c) ? 0 : 1 }' "$here/scripts/gate.sh")"
 check "cache_unlock sets the signals back before it forgets the lock" "$reset_first"
-# A signal while cache_unlock removes the lock. An rmdir on PATH stands in for its rmdir, once, for the cache lock only: it writes RMDIR_MARK, waits RMDIR_SLEEP seconds,
-# removes the lock, has another gate take it at once when RMDIR_TAKE is set, then sends each signal of RMDIR_SIG, in order, to the gate it runs for. signal_gate starts
+# A signal while cache_unlock removes the lock. An rmdir on PATH stands in for its rmdir, once, for the cache lock only: it writes RMDIR_MARK, and when RMDIR_WAIT is set
+# waits (10 seconds at most) until signal_gate has sent its signal, writing RMDIR_MARK.waited if it was, so the signal provably comes while it runs; then it removes the lock, has another gate take it at once when RMDIR_TAKE is set, then sends each signal of RMDIR_SIG, in order, to the gate it runs for. signal_gate starts
 # every case (with "-" as the marker when only the rmdir sends signals), so a test run with INT or HUP ignored, as a background job is, still tests the traps.
 rmdir_shim="$work/rmdir-shim"; mkdir -p "$rmdir_shim"; real_rmdir="$(command -v rmdir)"
 cat > "$rmdir_shim/rmdir" <<EOF
@@ -812,7 +813,12 @@ cat > "$rmdir_shim/rmdir" <<EOF
 last="\${!#}"
 if [[ "\$last" != */gate-cache/lock-* || -z "\${RMDIR_MARK:-}" || -e "\$RMDIR_MARK" ]]; then exec "$real_rmdir" "\$@"; fi
 : > "\$RMDIR_MARK"
-[[ -z "\${RMDIR_SLEEP:-}" ]] || sleep "\$RMDIR_SLEEP"
+if [[ -n "\${RMDIR_WAIT:-}" ]]; then
+  for ((i = 0; i < 100; i++)); do
+    if [[ -e "\$RMDIR_MARK.sent" ]]; then : > "\$RMDIR_MARK.waited"; break; fi
+    sleep 0.1
+  done
+fi
 "$real_rmdir" "\$@" || exit
 [[ -z "\${RMDIR_TAKE:-}" ]] || mkdir -- "\$last"
 for s in \${RMDIR_SIG:-}; do kill -s "\$s" "\$PPID"; done
@@ -827,7 +833,7 @@ rmdir_gate() {
   for p in "$@"; do
     case "$p" in MARKER=*) marker="${p#MARKER=}" ;; SIG=*) sig="${p#SIG=}" ;; *) pairs+=("$p") ;; esac
   done
-  command rm -f "$work/rmdir-marked" "$work/cat-marked" "$repoL/$skill/ran"
+  command rm -f "$work/rmdir-marked" "$work/rmdir-marked.sent" "$work/rmdir-marked.waited" "$work/cat-marked" "$work/cat-marked.sent" "$repoL/$skill/ran"
   ended="$(signal_gate "$repoL" "$sig" "$marker" PATH="$cat_shim:$rmdir_shim:$PATH" RMDIR_MARK="$work/rmdir-marked" GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 GATE_PART=template "${pairs[@]}")"
   check "$desc" "$([[ -e $work/rmdir-marked && ${ended% *} == "$want" && ! -e $repoL/$skill/ran ]] && { [[ $lock == held && -d $cacheL/lock-$treeL ]] || [[ $lock == gone && ! -e $cacheL/lock-$treeL ]]; } && echo 0 || echo 1)"
   "$real_rmdir" "$cacheL/lock-$treeL" 2>/dev/null || true
@@ -843,22 +849,40 @@ for sig in INT TERM HUP; do
   run "$repoL"
   rmdir_gate "a gate given $sig while it holds the cache lock, and again while its handler removes it, leaves no lock of its own" "signal $n" gone SIG="$sig" MARKER="$work/cat-marked" CAT_MARK="$work/cat-marked" RMDIR_SIG="$sig"
   # A signal to the whole group while the rmdir runs reaches the rmdir too: it must still remove the lock.
-  rmdir_gate "a gate given $sig while its rmdir of the cache lock runs, the rmdir given it too, leaves no lock of its own and ends by that signal" "signal $n" gone SIG="$sig" RMDIR_SLEEP=1 GATE_NO_CACHE=1
+  rmdir_gate "a gate given $sig while its rmdir of the cache lock runs, the rmdir given it too, leaves no lock of its own and ends by that signal" "signal $n" gone SIG="$sig" RMDIR_WAIT=1 GATE_NO_CACHE=1
+  check "the $sig of the last case came while the rmdir ran" "$([[ -e $work/rmdir-marked.waited ]] && echo 0 || echo 1)"
 done
 # Two signals while cache_unlock removes the lock: the gate ends by the first its traps run (bash runs them lowest-numbered first; HUP is sent first here too, so both agree).
 rmdir_gate "a gate given HUP and then TERM while it removes the cache lock ends by HUP" "signal 1" gone MARKER=- RMDIR_SIG="HUP TERM" GATE_NO_CACHE=1
-# cache_signal and cache_unlock alone, kill only logged: a signal noted during a release ends the gate once, by the first noted, and not again at the next release; a
-# signal while a later lock is held releases that one at once (the release before left no mark behind).
-unlock_log="$(bash -c '
-  eval "$(awk "/^cache_locked=\"\"\$/ { f = 1 } f { print } f && /^cache_unlock\\(\\) \\{/ { u = 1 } u && /^\\}\$/ { exit }" "$1")"
-  kill() { echo "$2"; }
-  mkdir "$2/one" "$2/two" 2>/dev/null
-  cache_lock "$2/one/lock"; cache_unlocking=1; cache_signal INT; cache_signal TERM; cache_unlocking=""; cache_unlock
-  cache_lock "$2/two/lock"; cache_unlock
-  mkdir "$2/three" 2>/dev/null; cache_lock "$2/three/lock"; cache_signal HUP
-  if [[ -e "$2/one/lock" || -e "$2/two/lock" || -e "$2/three/lock" ]]; then echo left; fi
-' _ "$here/scripts/gate.sh" "$work")"
-check "a signal noted during a release ends the gate by the first noted, once, and one while a later lock is held releases it at once" "$([[ "$unlock_log" == $'INT\nHUP' ]] && echo 0 || echo 1)"
+# The first signal is kept when a handler starts the release too: a TERM while the lock is held, then a HUP while its handler removes it, ends the gate by TERM.
+run "$repoL"
+rmdir_gate "a gate given TERM while it holds the cache lock, and HUP while its handler removes it, ends by TERM" "signal 15" gone SIG=TERM MARKER="$work/cat-marked" CAT_MARK="$work/cat-marked" RMDIR_SIG=HUP
+# cache_signal and cache_unlock alone, kill only logged (so the handler's own kill, which the gate never reaches once cache_unlock's has ended it, logs a second time):
+# a signal noted during a release ends the gate once, by the first noted, and not again at the next release; a signal while a later lock is held releases that one at
+# once (the release before left no mark behind); and a TERM sent while the handler of an INT removes the lock leaves INT the signal that ends the gate.
+# unlock_harness <gate.sh>: runs them on the functions taken out of that gate.sh, printing each kill's signal, or "extraction failed" when the functions aren't all there.
+cat > "$work/unlock-harness.sh" <<'EOF'
+src="$(awk '/^cache_locked=""$/ { f = 1 } f { print } f && /^cache_unlock\(\) \{/ { u = 1 } u && /^\}$/ { ok = 1; exit } END { exit !ok }' "$1")" || { echo "extraction failed"; exit 1; }
+eval "$src"
+declare -F cache_lock cache_signal cache_unlock >/dev/null || { echo "extraction failed"; exit 1; }
+kill() { echo "$2"; }
+d="$(mktemp -d)"; mkdir "$d/one" "$d/two" "$d/three" "$d/four" "$d/bin"
+cache_lock "$d/one/lock"; cache_unlocking=1; cache_signal INT; cache_signal TERM; cache_unlocking=""; cache_unlock
+cache_lock "$d/two/lock"; cache_unlock
+cache_lock "$d/three/lock"; cache_signal HUP
+printf '#!/usr/bin/env bash\n"%s" "$@"; command kill -s TERM "$PPID"\n' "$(command -v rmdir)" > "$d/bin/rmdir"; chmod +x "$d/bin/rmdir"
+cache_lock "$d/four/lock"; PATH="$d/bin:$PATH" cache_signal INT
+if [[ -e "$d/one/lock" || -e "$d/two/lock" || -e "$d/three/lock" || -e "$d/four/lock" ]]; then echo left; fi
+rm -rf "$d"
+EOF
+unlock_harness() { bash "$work/unlock-harness.sh" "$1"; }
+unlock_log="$(unlock_harness "$here/scripts/gate.sh")"
+check "a signal noted during a release ends the gate by the first noted, once, and one while a later lock is held releases it at once, the first kept" "$([[ "$unlock_log" == $'INT\nHUP\nHUP\nINT\nINT' ]] && echo 0 || echo 1)"
+# The harness refuses a gate.sh it can't take the three functions out of whole: cache_unlock before the span's start (the awk would print the rest of gate.sh), or one renamed.
+{ sed -n '/^cache_unlock() {/,/^}$/p' "$here/scripts/gate.sh"; sed '/^cache_unlock() {/,/^}$/d' "$here/scripts/gate.sh"; } > "$work/gate-unlock-first.sh"
+sed 's/^cache_signal() {/cache_signal_renamed() {/' "$here/scripts/gate.sh" > "$work/gate-renamed.sh"
+check "the unlock harness refuses a gate.sh whose cache_unlock comes before the span" "$([[ "$(unlock_harness "$work/gate-unlock-first.sh")" == "extraction failed" ]] && echo 0 || echo 1)"
+check "the unlock harness refuses a gate.sh without one of the three functions" "$([[ "$(unlock_harness "$work/gate-renamed.sh")" == "extraction failed" ]] && echo 0 || echo 1)"
 # A stamp stuck as a folder can be neither written nor removed, even in a writable cache folder: the gate fails, and releases the lock it took.
 command rm -f "$cacheL/started.test-sh-$treeL"; mkdir -p "$cacheL/started.test-sh-$treeL/stuck"
 RUN_PART=template run "$repoL"

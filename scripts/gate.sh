@@ -209,7 +209,8 @@ run_static() {
 # reset finds cache_signal seeing the mark: it only notes the signal (the first, if more come), and cache_unlock ends the gate by it once the lock is gone. So the rmdir is
 # run once only: a second could remove a lock another gate took in that instant (R30). That rmdir runs with INT, TERM and HUP ignored, so a signal sent to the whole process
 # group (a terminal's Ctrl-C) can't kill it before it removes the lock, which nothing would then remove (R27); only a signal in the instant between its fork and the
-# ignore can. A signal before the mark runs the whole release in the handler, the lock still named; one after the reset ends the gate as by default, the lock already gone.
+# ignore can. A signal before the mark runs the whole release in the handler, the lock still named, and is noted first there too, so it is the one the gate ends by; one
+# after the reset ends the gate as by default, the lock already gone.
 cache_locked=""
 cache_unlocking=""
 cache_pending=""
@@ -229,13 +230,12 @@ cache_lock() {
   done
   return 1
 }
-# cache_signal <signal>: the handler of a signal while the lock is held. It releases the lock and ends the gate by that signal, unless cache_unlock is already releasing
-# it: then it only notes the signal, keeping the first noted, for cache_unlock to end the gate by once the lock is gone.
+# cache_signal <signal>: the handler of a signal while the lock is held. It notes the signal, keeping the first noted, for cache_unlock to end the gate by once the lock is
+# gone; and when cache_unlock isn't already releasing the lock, it starts the release itself. So a second signal while that release runs doesn't take the first's place.
+# Its own kill is a fallback, for a release that didn't end the gate.
 cache_signal() {
-  if [[ -n "$cache_unlocking" ]]; then
-    [[ -n "$cache_pending" ]] || cache_pending="$1"
-    return 0
-  fi
+  [[ -n "$cache_pending" ]] || cache_pending="$1"
+  if [[ -n "$cache_unlocking" ]]; then return 0; fi
   cache_unlock
   kill -s "$1" "$BASHPID"
 }
