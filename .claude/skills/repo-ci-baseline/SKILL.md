@@ -93,8 +93,9 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
      Start with `--dry-run`. It ends with the `land.sh` command for the PRs it left open.
    - **Roll out unattended:** `rollout.sh --auto --brings '#<n>,#<n>'` does all of that in one run ([ADR 0015](../../../docs/adr/0015-a-rollout-runs-each-applications-review-headless-in-its-worktree.md)).
      It checks the tools and the Template's `global.json` SDK first (`--dry-run` stops there and prints the plan). When the gate asks for a review it runs
-     `/pre-push-review` headless in the repo's re-Apply worktree (`claude -p`, `--permission-mode auto`, with deny rules for the common spellings of pushing, deciding findings,
-     GitHub writes and editing the Factory; the classifier guards the rest), then reapplies. It lands TicketManager's PR before the rest start, and the rest's PRs together.
+     `/pre-push-review` headless in the repo's re-Apply worktree (`claude -p`, `--permission-mode auto`, no GitHub sign-in and no push, deny rules for deciding findings
+     and editing the Factory; the classifier guards the rest, and the round stops when a session broke a rule it can check),
+     then reapplies. It lands TicketManager's PR before the rest start, and the rest's PRs together.
      Its lock keeps a second `--auto` run out, not a person: don't run `reapply.sh` or the review by hand in a re-Apply worktree while it runs. It stops only where a person decides
      (findings that wait for one, a PR that doesn't land or can't be read, a failed reapply or review session), printing the command that decides it and the one that resumes.
      A finding in an Owned file stops it too: fix it Template first, then add that PR to `--brings` and resume. `github/auto_rollout.py`'s header has the details.

@@ -20,11 +20,15 @@ checkout's `scripts/review.sh`. Then it runs `reapply.sh` again to push and open
 never this round's, and with nothing ahead a CLOSED one there is the last round's, so there is nothing to land. After `land.sh` it reads the PR by its number. It stops only where a person
 must decide, and prints the command that decides it and the one that resumes.
 
-The session runs with `--permission-mode auto` and deny rules (`--disallowedTools`) for the common spellings of `git push`, `scripts/review.sh accept` and `accept-open`, a set of
+The session gets no GitHub sign-in and can't push: `gh` points at an empty config, the environment drops every token, secret, key and credential (Claude Code's own sign-in
+aside), and git sends any push to an address that doesn't resolve. It runs with `--permission-mode auto` and deny rules (`--disallowedTools`) for the common spellings of `git push`,
+`scripts/review.sh accept` and `accept-open`, a set of
 `gh` writes (PRs, issues, labels, releases, repos, secrets, workflows), and the file tools' edits under the Factory checkout and `~/.claude`. It isn't given the Template's folder (no
 `--add-dir`): its prompt names the Owned files the branch changes, says it runs unattended, and says a finding in an Owned file stays open for a person, since its fix goes into the
-Template first. It runs in a process group of its own, which is killed whole however the session ends: it exits, runs past three hours, or `rollout.sh` gets an interrupt, a
-SIGTERM or a SIGHUP (a SIGKILL can't be caught). Its log is kept, `0600`, in a `0700` folder of the user's own, `~/.cache/repo-ci-baseline/logs`, since it can hold the session's report of
+Template first. After the session the round checks what those can't prevent: a session that moved the remote branch, changed the Factory checkout, left an Owned file unlike the
+Template's, or wrote a ledger holding an accepted finding stops the round for the person. It runs in a process group of its own, which is killed whole however the session ends
+(it exits, or runs past three hours); an interrupt, a SIGTERM or a SIGHUP while it runs is held until the group is gone, then passed on (a SIGKILL can't be caught). Its log is kept, `0600`,
+in a `0700` folder of the user's own, `~/.cache/repo-ci-baseline/logs`, since it can hold the session's report of
 security findings. The gate, the ledger and the review's rules are unchanged: the push still needs a recorded review with no open
 Critical or Warning finding, and only the person accepts one.
 
@@ -46,6 +50,7 @@ Critical or Warning finding, and only the person accepts one.
 - Findings in Owned files still stop the round for a person: the Template-first fix is a Factory branch of its own. Making that fix automatically is a follow-up, not this decision.
 - `reapply.sh` knows the gate stopped at its Local review step by the step's name, and how the check refuses by the ledger's own text on its stderr; a test holds them equal to
   `gate.sh`'s and `checkReview`'s, so rewording either fails `test.sh` until both change.
-- The deny rules match command prefixes, and Edit and Write rules bind the file tools, not Bash: a command written another way (`git -C . push`, `GH_REPO=x gh pr edit`, `gh api`
-  with a method, a Bash write, an edit to the ledger's JSON) is left to the classifier. The session runs as the person's Claude Code login and `gh` sign-in, with their environment;
-  the rules and the classifier are the guard, not a sandbox. A session that ends without recording a review is run once more, then the round stops.
+- The deny rules match command prefixes, and Edit and Write rules bind the file tools, not Bash; without a GitHub sign-in nothing the session runs can write to GitHub or push
+  there, however it is spelled, and the checks after it catch a Bash write to the Factory, an Owned file or the ledger. They catch it after the fact, not before: the session
+  runs as the person's Claude Code login on their machine, and this is not a sandbox. With no sign-in, the review reads no PR threads or issue, which a re-Apply reviewed
+  before its first push hasn't got. A session that ends without recording a review is run once more, then the round stops.

@@ -310,7 +310,8 @@ class FakeSession:
         return self.code
 
 
-def review_once(tmp_path, monkeypatch, popen=None, changes=None, worktree=None, session=None, end=None):
+def review_once(tmp_path, monkeypatch, popen=None, changes=None, worktree=None, session=None, end=None, broke=(),
+                clock=None):
     seen = {}
     session = session or FakeSession()
     ended = seen.setdefault("ended", [])
@@ -324,9 +325,11 @@ def review_once(tmp_path, monkeypatch, popen=None, changes=None, worktree=None, 
     if worktree is None:
         worktree = tmp_path / "TicketManager-worktrees" / "chore-reapply-baseline"
         worktree.mkdir(parents=True)
-    code, log = auto.run_review(TM, str(worktree), popen=popen or fake_popen,
-                                changes=changes or (lambda path: [".github/hooks/pre-push", "scripts/gate.sh"]),
-                                log_dir=str(tmp_path / "logs"), end=end or (lambda s: ended.append(s) or True))
+    code, log, _ = auto.run_review(TM, str(worktree), popen=popen or fake_popen,
+                                   changes=changes or (lambda path: [".github/hooks/pre-push", "scripts/gate.sh"]),
+                                   log_dir=str(tmp_path / "logs"), end=end or (lambda s: ended.append(s) or True),
+                                   guard=lambda w: seen.setdefault("guarded", w), check=lambda g: list(broke),
+                                   **({"clock": clock} if clock else {}))
     return code, log, seen, str(worktree)
 
 
@@ -344,11 +347,14 @@ def test_the_review_session_starts_in_the_worktree_unattended(tmp_path, monkeypa
     assert len(seen["ended"]) == 1, "its group is ended when it exits normally"
     assert "GATE_SKIP_REVIEW" not in seen["env"]
     assert seen["env"]["PATH"] == os.environ["PATH"] and seen["env"]["HOME"] == os.environ["HOME"]
+    assert seen["env"]["GH_CONFIG_DIR"] != os.environ.get("GH_CONFIG_DIR") and seen["env"]["GIT_CONFIG_COUNT"] == "5"
+    assert seen["guarded"] == worktree, "what the session may not change is read before it starts"
     prompt = command[2]
     assert prompt.startswith("/pre-push-review ")
     assert worktree in prompt and TM in prompt
     assert ".github/hooks/pre-push, scripts/gate.sh" in prompt
     assert "Never edit an Owned file" in prompt and "Don't push" in prompt and "never ask one" in prompt
+    assert "gh isn't signed in here, and git can't push" in prompt
 
 
 def test_the_review_session_gets_no_access_to_the_template_and_every_deny_rule(tmp_path, monkeypatch):
@@ -381,7 +387,7 @@ def test_an_existing_log_folder_is_set_to_0700_and_a_symlink_is_refused(tmp_path
     (tmp_path / "elsewhere").mkdir()
     link = tmp_path / "linked"
     link.symlink_to(tmp_path / "elsewhere")
-    code, log = auto.run_review(TM, str(tmp_path), log_dir=str(link))
+    code, log, _ = auto.run_review(TM, str(tmp_path), log_dir=str(link))
     assert code == 127 and "isn't a folder of the user's own" in log
 
 
@@ -392,9 +398,16 @@ def test_the_prompt_says_none_when_no_owned_file_changes():
 
 def test_a_review_session_past_its_time_is_stopped_and_noted(tmp_path, monkeypatch):
     session = FakeSession(raises=subprocess.TimeoutExpired("claude", 1))
-    code, log, seen, _ = review_once(tmp_path, monkeypatch, session=session)
+    now = [0.0]
+
+    def clock():
+        now[0] += 60  # a minute a look
+        return now[0]
+
+    code, log, seen, _ = review_once(tmp_path, monkeypatch, session=session, clock=clock)
     assert code == 124
-    assert session.waits == [auto.REVIEW_TIMEOUT_MINUTES * 60]
+    assert now[0] >= auto.REVIEW_TIMEOUT_MINUTES * 60 > now[0] - 3 * 60, "it polls until its time is spent, and stops"
+    assert len(session.waits) > 1 and max(session.waits) <= 0.5
     assert seen["ended"] == [session]
     assert f"ran past {auto.REVIEW_TIMEOUT_MINUTES} minutes" in Path(log).read_text()
 
@@ -435,8 +448,8 @@ def real_session(tmp_path, script, timeout):
     def popen(command, **kwargs):
         return subprocess.Popen(["bash", "-c", script.format(pid_file=pid_file)], **kwargs)
 
-    code, log = auto.run_review(TM, str(worktree), popen=popen, changes=lambda path: [], timeout=timeout,
-                                log_dir=str(tmp_path / "logs"))
+    code, log, _ = auto.run_review(TM, str(worktree), popen=popen, changes=lambda path: [], timeout=timeout,
+                                   log_dir=str(tmp_path / "logs"), guard=lambda w: None, check=lambda g: [])
     for _ in range(100):
         if pid_file.exists() and pid_file.read_text().strip():
             break
@@ -468,14 +481,171 @@ def test_a_sigterm_during_a_session_ends_its_group_and_becomes_an_exit(tmp_path)
     assert signal.getsignal(signal.SIGTERM) is previous, "the handler is put back"
 
 
-def test_signals_raise_covers_sigterm_and_sighup_and_restores_the_handlers():
-    before = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGHUP)}
-    for signum in before:
-        with pytest.raises(SystemExit) as stop, auto.signals_raise():
-            os.kill(os.getpid(), signum)
-            time.sleep(1)
-        assert stop.value.code == 128 + signum
-    assert {signum: signal.getsignal(signum) for signum in before} == before
+def test_a_signal_while_the_session_starts_still_ends_its_group(tmp_path, monkeypatch):
+    session = FakeSession(code=0)
+
+    def popen(command, **kwargs):
+        os.kill(os.getpid(), signal.SIGHUP)  # lands between starting the session and holding it
+        return session
+
+    ended = []
+    with pytest.raises(SystemExit) as stop:
+        review_once(tmp_path, monkeypatch, popen=popen, end=lambda s: ended.append(s) or True)
+    assert ended == [session] and stop.value.code == 128 + signal.SIGHUP
+
+
+def test_a_second_signal_during_the_cleanup_neither_stops_it_nor_replaces_the_first(tmp_path, monkeypatch):
+    killed = []
+
+    def end(session):
+        os.kill(os.getpid(), signal.SIGTERM)
+        killed.append(session)  # the kill goes on past the second signal
+        return True
+
+    session = FakeSession(code=0)
+
+    def popen(command, **kwargs):
+        os.kill(os.getpid(), signal.SIGINT)
+        return session
+
+    with pytest.raises(KeyboardInterrupt):
+        review_once(tmp_path, monkeypatch, popen=popen, end=end)
+    assert killed == [session]
+
+
+@pytest.mark.parametrize("signum, raised", [(signal.SIGINT, KeyboardInterrupt), (signal.SIGTERM, SystemExit),
+                                            (signal.SIGHUP, SystemExit)])
+def test_deferred_signals_hold_each_signal_and_restore_the_handlers(signum, raised):
+    before = signal.getsignal(signum)
+    with auto.deferred_signals() as got:
+        os.kill(os.getpid(), signum)
+        os.kill(os.getpid(), signal.SIGTERM if signum != signal.SIGTERM else signal.SIGHUP)
+        time.sleep(0.05)
+    assert got == [signum], "the first signal is the one held"
+    assert signal.getsignal(signum) is before
+    assert isinstance(auto.passed_on(signum), raised)
+    if raised is SystemExit:
+        assert auto.passed_on(signum).code == 128 + signum
+
+
+def test_wait_for_stops_at_a_signal_or_the_deadline():
+    session = FakeSession(raises=subprocess.TimeoutExpired("claude", 1))
+    assert auto.wait_for(session, 3600, [signal.SIGTERM]) is None and len(session.waits) == 1
+    now = [0.0]
+    session = FakeSession(raises=subprocess.TimeoutExpired("claude", 1))
+    assert auto.wait_for(session, 2, [], clock=lambda: now.__setitem__(0, now[0] + 0.5) or now[0]) is None
+    assert session.waits and max(session.waits) <= 0.5
+    assert auto.wait_for(FakeSession(code=7), 2, []) == 7
+
+
+def test_a_session_that_broke_a_rule_is_its_own_code_and_says_what(tmp_path, monkeypatch):
+    code, log, _, _ = review_once(tmp_path, monkeypatch, broke=["the remote chore/reapply-baseline moved"])
+    assert code == auto.SESSION_BROKE_A_RULE
+    assert "rollout.sh: the session broke a rule: the remote chore/reapply-baseline moved" in Path(log).read_text()
+
+
+def test_the_sessions_environment_has_no_sign_in_but_claudes():
+    base = {"PATH": "/bin", "HOME": "/h", "GH_TOKEN": "t", "GITHUB_TOKEN": "t", "RELEASE_PR_PAT": "p", "AWS_PROFILE": "x",
+            "MY_API_KEY": "k", "NPM_TOKEN": "n", "DB_PASSWORD": "p", "SSH_AUTH_SOCK": "/s", "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "credential.helper", "GIT_CONFIG_VALUE_0": "store", "GIT_CONFIG_KEY_9": "x",
+            "GIT_CONFIG_VALUE_9": "y", "GATE_SKIP_REVIEW": "1",
+            "ANTHROPIC_API_KEY": "a", "CLAUDE_CODE_OAUTH_TOKEN": "c", "LANG": "C.UTF-8"}
+    env = auto.session_env(base, "/empty")
+    assert {name for name in base if name in env} == {"PATH", "HOME", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "LANG",
+                                                      "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"}
+    assert env["GH_CONFIG_DIR"] == "/empty"
+    pairs = [(env[f"GIT_CONFIG_KEY_{n}"], env[f"GIT_CONFIG_VALUE_{n}"]) for n in range(int(env["GIT_CONFIG_COUNT"]))]
+    assert pairs == list(auto.SESSION_GIT_CONFIG), "the caller's GIT_CONFIG_ entries are replaced, not kept"
+
+
+def test_git_in_the_sessions_environment_cannot_push_to_github(tmp_path):
+    def git(*args, env=None):
+        return subprocess.run(["git", "-C", str(tmp_path), *args], capture_output=True, text=True,
+                              env={**(env or os.environ), "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
+
+    git("init", "-q", "-b", "main")
+    for url in ("https://github.com/acme/widget.git", "git@github.com:acme/widget.git", "ssh://git@github.com/acme/widget"):
+        git("remote", "remove", "origin")
+        git("remote", "add", "origin", url)
+        env = auto.session_env(dict(os.environ), str(tmp_path / "gh"))
+        push = git("remote", "get-url", "--push", "origin", env=env).stdout.strip()
+        fetch = git("remote", "get-url", "origin", env=env).stdout.strip()
+        assert push.startswith(auto.NO_PUSH) and fetch == url
+
+
+def git_repo(path):
+    def git(*args):
+        return subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True, text=True,
+                              env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+                                   "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+                                   "GIT_COMMITTER_EMAIL": "t@t"}).stdout.strip()
+    path.mkdir(parents=True, exist_ok=True)
+    git("init", "-q", "-b", "main")
+    git("commit", "-q", "--allow-empty", "-m", "one")
+    return git
+
+
+def guarded(tmp_path):
+    """A worktree with an Owned file equal to the Template's, a Factory checkout, and a ledger folder; the remote read
+    is faked, the rest is real git."""
+    worktree, factory, owned = tmp_path / "w", tmp_path / "factory", tmp_path / "owned"
+    git_repo(worktree)
+    git_repo(factory)
+    (owned / "scripts").mkdir(parents=True)
+    (owned / "scripts" / "gate.sh").write_text("gate\n")
+    (worktree / "scripts").mkdir()
+    (worktree / "scripts" / "gate.sh").write_text("gate\n")
+    remote = {"sha": "abc refs/heads/chore/reapply-baseline"}
+
+    def read(command, cwd=None):
+        if "ls-remote" in command:
+            return remote["sha"]
+        return auto.run_text(command, cwd)
+
+    guard = auto.session_guard(str(worktree), factory=str(factory), read=read, clock=lambda: time.time() - 1)
+
+    def check():
+        return auto.broken_rules(guard, factory=str(factory), read=read, changes=lambda w: ["scripts/gate.sh"],
+                                 owned=str(owned))
+
+    return worktree, factory, remote, guard, check
+
+
+def test_a_session_that_kept_the_rules_broke_none(tmp_path):
+    *_, check = guarded(tmp_path)
+    assert check() == []
+
+
+def test_a_session_that_pushed_is_caught(tmp_path):
+    _, _, remote, _, check = guarded(tmp_path)
+    remote["sha"] = "def refs/heads/chore/reapply-baseline"
+    assert check() == ["the remote chore/reapply-baseline moved: the session isn't to push"]
+
+
+def test_a_session_that_changed_the_factory_is_caught(tmp_path):
+    _, factory, _, _, check = guarded(tmp_path)
+    (factory / "new.md").write_text("x")
+    assert check()[0].startswith(f"the Factory checkout {factory} changed")
+
+
+def test_a_session_that_edited_an_owned_file_is_caught(tmp_path):
+    worktree, *_, check = guarded(tmp_path)
+    (worktree / "scripts" / "gate.sh").write_text("gate, edited\n")
+    assert check() == ["scripts/gate.sh is an Owned file and no longer the Template's: edit the Template, not the copy"]
+
+
+def test_a_session_that_accepted_a_finding_in_the_ledger_is_caught(tmp_path):
+    worktree, _, _, guard, check = guarded(tmp_path)
+    assert guard.ledgers == str(worktree / ".git" / "review")
+    os.makedirs(guard.ledgers)
+    old = Path(guard.ledgers) / "old.json"
+    old.write_text(json.dumps({"findings": [{"id": "R1", "status": "accepted"}]}))
+    os.utime(old, (guard.started - 60, guard.started - 60))  # the person's, from before the session
+    (Path(guard.ledgers) / "new.json").write_text(json.dumps({"findings": [{"id": "R2", "status": "fixed"},
+                                                                          {"id": "R3", "status": "accepted"}]}))
+    (Path(guard.ledgers) / "bad.json").write_text("{")
+    assert check() == [f"{guard.ledgers}/bad.json was written during the session and doesn't read",
+                       f"{guard.ledgers}/new.json was written during the session with R3 accepted: only the person accepts"]
 
 
 def test_end_group_of_a_group_already_gone_returns_at_once():
@@ -531,7 +701,7 @@ def test_a_log_that_cannot_be_made_is_127(tmp_path, monkeypatch):
         raise OSError(28, "No space left on device")
 
     monkeypatch.setattr(auto.tempfile, "mkstemp", full)
-    code, log = auto.run_review(TM, str(tmp_path), log_dir=str(tmp_path / "logs"))
+    code, log, _ = auto.run_review(TM, str(tmp_path), log_dir=str(tmp_path / "logs"))
     assert code == 127 and "No space left on device" in log
 
 
@@ -572,7 +742,8 @@ class Fleet:
 
     def __init__(self, codes=None, opens=None, prs=None, reviews=None, unlanded=(), still_open=(), unreadable=(),
                  stale=None, problems=(), locked=False, raises=None, failures=None, closes=(), branch_fails=(),
-                 land_raises=None, lock_raises=None, moves=(), unlisted=None, state_failures=None, land_code=None):
+                 land_raises=None, lock_raises=None, moves=(), unlisted=None, state_failures=None, land_code=None,
+                 broke=None):
         self.codes = {repo: list(seq) for repo, seq in (codes or {}).items()}
         self.opens = dict(opens or {})
         self.prs = {repo: (100, "MERGED", "0" * 40) for repo in LISTED} | dict(prs or {})
@@ -584,6 +755,7 @@ class Fleet:
         self.problems, self.locked, self.raises = list(problems), locked, dict(raises or {})
         self.land_raises, self.lock_raises, self.land_code = land_raises, lock_raises, land_code
         self.unlisted, self.state_failures = dict(unlisted or {}), dict(state_failures or {})
+        self.broke = dict(broke or {})
         self.events, self.reviewed, self.landed, self.sleeps, self.locks = [], [], [], [], []
 
     def repo_of(self, path):
@@ -604,7 +776,7 @@ class Fleet:
     def review(self, repo, worktree):
         self.events.append(("review", short(repo)))
         self.reviewed.append((repo, worktree))
-        return self.review_codes.get(repo, 0), f"/tmp/review-{short(repo)}.log"
+        return self.review_codes.get(repo, 0), f"/tmp/review-{short(repo)}.log", list(self.broke.get(repo, []))
 
     def land(self, refs):
         self.events.append(("land", tuple(refs)))
@@ -703,8 +875,6 @@ def test_the_lock_is_held_for_the_whole_round_and_released_after():
     assert len(fleet.locks) == 1
     assert all(event[4] == [False] for event in fleet.events if event[0] == "reapply"), "held while each repo runs"
     assert fleet.locks[0].closed
-
-
 
 
 def test_auto_runs_the_preflight_first_and_lands_ticketmanager_before_any_other_reapply():
@@ -1208,3 +1378,26 @@ def test_a_read_that_answers_after_a_gh_failure_is_what_the_stop_says():
     code, out, _ = run_auto(["--brings", "#82"], fleet)
     assert code == 1
     assert "TicketManager: can't tell its re-Apply PR (#130 still reads as OPEN)" in out
+
+
+def test_a_session_that_broke_a_rule_stops_for_the_person_without_reapplying():
+    fleet = Fleet(codes={TM: [auto.REVIEW_NEEDED]}, reviews={TM: auto.SESSION_BROKE_A_RULE},
+                  broke={TM: ["the remote chore/reapply-baseline moved: the session isn't to push", "x"]})
+    code, out, _ = run_auto(["--brings", "#82"], fleet)
+    assert code == 1 and len(reapplied(fleet)) == 1
+    assert ("TicketManager: the review session broke a rule: the remote chore/reapply-baseline moved: the session isn't to"
+            " push (and 1 more); see /tmp/review-TicketManager.log, put it right in"
+            " /r/TicketManager-worktrees/chore-reapply-baseline, then resume") in out
+
+
+def test_a_signal_during_a_session_is_not_called_a_timeout(tmp_path, monkeypatch):
+    session = FakeSession(raises=subprocess.TimeoutExpired("claude", 1))
+
+    def popen(command, **kwargs):
+        os.kill(os.getpid(), signal.SIGTERM)
+        return session
+
+    with pytest.raises(SystemExit):
+        review_once(tmp_path, monkeypatch, popen=popen)
+    (log,) = (tmp_path / "logs").iterdir()
+    assert "ran past" not in log.read_text()

@@ -19,17 +19,22 @@
 3. It lands TicketManager's re-Apply PR with land.sh before it starts the rest,
    and the rest's PRs together once each has been reapplied.
 
-The session runs unattended with the owner's sign-ins, reading text people
-without write access may have written. The prompt states the skill's Rules,
---disallowedTools denies the common spellings of git push, review.sh accept and
-accept-open and a set of gh writes, and the file tools' edits under the Factory
-checkout and ~/.claude; the auto permission mode's classifier is the guard for
-the rest (other spellings, Bash writes, gh api). It isn't given the Template's
+The session runs unattended, reading text people without write access may have
+written, so it gets no GitHub sign-in and can't push: gh points at an empty
+config, the environment drops every token, secret, key and credential (Claude
+Code's own sign-in aside), and git sends any push to an address that doesn't
+resolve. The prompt states the skill's Rules, --disallowedTools denies the
+common spellings of git push, review.sh accept and accept-open and a set of gh
+writes, and the file tools' edits under the Factory checkout and ~/.claude; the
+auto permission mode's classifier is the guard for the rest. After the session
+the round checks what it can't prevent: a session that moved the remote branch,
+changed the Factory checkout, left an Owned file unlike the Template's or wrote
+a ledger holding an accepted finding stops the round for the person. It isn't given the Template's
 folder (no --add-dir): the prompt names the Owned files the branch changes. It
 runs in a process group of its own, which is killed whole however the session
-ends (it exits, it runs past its time, or rollout.sh gets an interrupt, a
-SIGTERM or a SIGHUP; a SIGKILL of rollout.sh can't be caught, and leaves it
-running). Its log is kept, 0600, in a 0700 folder of the user's own,
+ends (it exits, or runs past its time). An interrupt, a SIGTERM or a SIGHUP
+while it runs is held until its group is gone, then passed on; a SIGKILL of
+rollout.sh can't be caught, and leaves it running. Its log is kept, 0600, in a 0700 folder of the user's own,
 ~/.cache/repo-ci-baseline/logs: it can hold the session's report of security
 findings.
 
@@ -37,9 +42,10 @@ A PR is the repo's own (never a fork's of the same branch name), and when the
 worktree's branch has commits main lacks, it is the one at the worktree's head:
 the name is the same every round, so the newest PR by name may be the last
 round's. An OPEN PR at another head is never this round's either, and with
-nothing ahead a CLOSED one at another head is the last round's: nothing to land. A read that doesn't show it is tried again LOOKUP_TRIES times. Once
-land.sh has run, the PR is read by its number, since land.sh may update its
-branch.
+nothing ahead a CLOSED one at another head is the last round's: nothing to
+land. A read that doesn't show the PR at the worktree's head is tried again
+LOOKUP_TRIES times. Once land.sh has run, the PR is read by its number, since
+land.sh may update its branch.
 
 It stops for a person only where one must decide: review findings that wait for
 a person (reapply.sh exits 4), a PR that doesn't land, a reapply or review
@@ -52,6 +58,7 @@ reapplied finds nothing new to push, and its open PR is landed).
 
 import contextlib
 import fcntl
+import json
 import os
 import re
 import shlex
@@ -111,7 +118,24 @@ Nobody will answer a question: never ask one or wait for a reply; where the skil
 These files the branch changes are Owned Baseline files, which the next Apply overwrites: {owned}.
 Never edit an Owned file here. A finding in one is needsPerson: record it open, with a fix that says what to change in the Factory's template/owned/.
 Fix only findings in this repository's own files, as the skill says. Don't push, don't file the follow-up issue, and don't edit a PR: write the advisory body to the run folder and name its path.
+gh isn't signed in here, and git can't push: skip the skill's GitHub reads (the PR's threads, the issue) and say you did.
 End with the output of scripts/review.sh report."""
+# A name the session's environment leaves out: a token, secret, password, key or credential of any tool, and an SSH
+# agent, since the session reads text people without write access wrote. Claude Code's own sign-in is kept.
+SECRET_NAME = re.compile(r"TOKEN|SECRET|PASSW|CREDENTIAL|_PAT$|_KEY$|^SSH_AUTH_SOCK$|^AWS_|^AZURE_|^GOOGLE_|^GIT_CONFIG_", re.I)
+CLAUDE_SIGN_IN = re.compile(r"^(ANTHROPIC_|CLAUDE_)")
+# git settings for the session, through GIT_CONFIG_COUNT: no credential helper (gh's, with no sign-in, has none to
+# give anyway), and every push to GitHub sent to an address that doesn't resolve, whatever remote or URL it names.
+NO_PUSH = "https://push.invalid/"
+SESSION_GIT_CONFIG = (
+    ("credential.helper", ""),
+    ("credential.https://github.com.helper", ""),
+    (f"url.{NO_PUSH}.pushInsteadOf", "https://github.com/"),
+    (f"url.{NO_PUSH}.pushInsteadOf", "git@github.com:"),
+    (f"url.{NO_PUSH}.pushInsteadOf", "ssh://git@github.com/"),
+)
+# run_review's code for a session that broke one of the Rules the round checks after it.
+SESSION_BROKE_A_RULE = 126
 
 
 def short_name(repo):
@@ -233,24 +257,113 @@ def own_log_dir(log_dir):
     os.chmod(log_dir, 0o700)
 
 
+def session_env(base, gh_config_dir):
+    """The review session's environment: base without GATE_SKIP_REVIEW (the gate's review check must run in it), the
+    secrets SECRET_NAME names, or any GIT_CONFIG_ of the caller's; gh pointed at an empty config, so it is signed out;
+    and SESSION_GIT_CONFIG, so git can't push."""
+    env = {name: value for name, value in base.items()
+           if name != "GATE_SKIP_REVIEW" and (CLAUDE_SIGN_IN.match(name) or not SECRET_NAME.search(name))}
+    env["GH_CONFIG_DIR"] = gh_config_dir
+    env["GIT_CONFIG_COUNT"] = str(len(SESSION_GIT_CONFIG))
+    for index, (key, value) in enumerate(SESSION_GIT_CONFIG):
+        env[f"GIT_CONFIG_KEY_{index}"], env[f"GIT_CONFIG_VALUE_{index}"] = key, value
+    return env
+
+
+def run_text(command, cwd=None):
+    """A command's stdout, stripped, or None when it fails or can't run."""
+    code, out, _ = run_quiet(command, cwd=cwd)
+    return out.strip() if code == 0 else None
+
+
+@dataclass(frozen=True)
+class Guard:
+    """What a review session may not change, read before it starts (session_guard), checked after (broken_rules)."""
+
+    worktree: str
+    remote_branch: str | None
+    factory: tuple
+    ledgers: str | None
+    started: float
+
+
+def session_guard(worktree, factory=FACTORY, read=run_text, clock=time.time):
+    """Read what the session may not change: the remote branch (the session doesn't push), the Factory checkout (its
+    fixes go Template first, by a person), and where the clone keeps its review ledgers (only the person accepts)."""
+    common = read(["git", "-C", worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"])
+    return Guard(worktree=worktree,
+                 remote_branch=read(["git", "-C", worktree, "ls-remote", "origin", f"refs/heads/{BRANCH}"]),
+                 factory=(read(["git", "-C", factory, "rev-parse", "HEAD"]), read(["git", "-C", factory, "status", "--porcelain"])),
+                 ledgers=os.path.join(common, "review") if common else None, started=clock())
+
+
+def broken_rules(guard, factory=FACTORY, read=run_text, changes=owned_changes, owned=OWNED):
+    """The Rules a finished session broke, as a list of what it did (empty when it broke none): pushed, changed the
+    Factory, left an Owned file unlike the Template's, or wrote a ledger that holds an accepted finding."""
+    broke = []
+    if read(["git", "-C", guard.worktree, "ls-remote", "origin", f"refs/heads/{BRANCH}"]) != guard.remote_branch:
+        broke.append(f"the remote {BRANCH} moved: the session isn't to push")
+    if (read(["git", "-C", factory, "rev-parse", "HEAD"]), read(["git", "-C", factory, "status", "--porcelain"])) != guard.factory:
+        broke.append(f"the Factory checkout {factory} changed: a Template fix is a person's Factory branch")
+    try:
+        changed = changes(guard.worktree)
+    except (OSError, RuntimeError) as error:
+        broke.append(f"can't list the Owned files the branch changes: {error}")
+        changed = []
+    for path in changed:
+        try:
+            with open(os.path.join(guard.worktree, path), "rb") as mine, open(os.path.join(owned, path), "rb") as template:
+                same = mine.read() == template.read()
+        except OSError:
+            same = False
+        if not same:
+            broke.append(f"{path} is an Owned file and no longer the Template's: edit the Template, not the copy")
+    if guard.ledgers and os.path.isdir(guard.ledgers):
+        for name in sorted(os.listdir(guard.ledgers)):
+            path = os.path.join(guard.ledgers, name)
+            if not name.endswith(".json") or os.path.getmtime(path) < guard.started:
+                continue
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    findings = json.load(handle).get("findings") or []
+            except (OSError, ValueError, AttributeError):
+                broke.append(f"{path} was written during the session and doesn't read")
+                continue
+            accepted = [str(finding.get("id")) for finding in findings if isinstance(finding, dict) and finding.get("status") == "accepted"]
+            if accepted:
+                broke.append(f"{path} was written during the session with {', '.join(accepted)} accepted: only the person accepts")
+    return broke
+
+
 @contextlib.contextmanager
-def signals_raise(signums=(signal.SIGTERM, signal.SIGHUP)):
-    """While the block runs, SIGTERM and SIGHUP raise SystemExit (128 + the signal), so the cleanup around a session
-    runs: by default either ends Python at once, and a session in its own process group gets neither."""
+def deferred_signals(signums=(signal.SIGINT, signal.SIGTERM, signal.SIGHUP)):
+    """While the block runs, SIGINT, SIGTERM and SIGHUP are only recorded (the first one, in the list it yields), never
+    raised: a signal can't land between starting the session and holding it, or in the middle of ending its group.
+    The caller acts on it once the group is gone."""
+    got = []
+
     def handler(signum, frame):
-        raise SystemExit(128 + signum)
+        if not got:
+            got.append(signum)
 
     old = {signum: signal.signal(signum, handler) for signum in signums}
     try:
-        yield
+        yield got
     finally:
         for signum, previous in old.items():
             signal.signal(signum, previous)
 
 
+def passed_on(signum):
+    """The exception that passes a deferred signal on: an interrupt for SIGINT, an exit (128 + the signal) otherwise."""
+    return KeyboardInterrupt() if signum == signal.SIGINT else SystemExit(128 + signum)
+
+
 def end_group(session, wait_seconds=GROUP_WAIT_SECONDS, sleep=time.sleep, clock=time.monotonic):
     """Kill the session's whole process group, reap its leader, and wait until no process is left in the group, for at
-    most wait_seconds: whether it is gone. The group's id is the leader's pid, which can't be another group's while a
+    most wait_seconds: whether it is gone. A killed member stays in the group until it is reaped (by init, once its
+    parent is gone), so where nothing reaps orphans, a container without an init, the wait runs out though all of
+    them were killed. The group's id is the leader's pid, which can't be another group's while a
     member of this one is left, so a signal to it after the leader is reaped reaches only this group's members."""
     try:
         os.killpg(session.pid, signal.SIGKILL)
@@ -269,44 +382,62 @@ def end_group(session, wait_seconds=GROUP_WAIT_SECONDS, sleep=time.sleep, clock=
 
 
 def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, timeout=REVIEW_TIMEOUT_MINUTES * 60,
-               log_dir=LOG_DIR, end=end_group):
-    """/pre-push-review headless in worktree: (exit code, the session's log). 124 when it runs past its time, 127 when
-    it can't start. The session leads a process group of its own, which is killed whole whenever the session ends, so
-    nothing it started (its gate, its reviewers' tools, a process it left behind) outlives it. An interrupt, a SIGTERM
-    or a SIGHUP is passed on after the kill. The log is 0600 (mkstemp) in a 0700 folder of the user's own."""
+               log_dir=LOG_DIR, end=end_group, clock=time.monotonic, guard=session_guard, check=broken_rules):
+    """/pre-push-review headless in worktree: (exit code, the session's log, the Rules it broke). 124 when it runs past
+    its time, 127 when it can't start, SESSION_BROKE_A_RULE when it broke one (they are listed, and in the log too).
+    The session leads a process group of its own, which is killed whole whenever it ends; a SIGINT, SIGTERM or SIGHUP
+    while it runs is held until the group is gone, then passed on. It has no GitHub sign-in and can't push
+    (session_env). The log is 0600 (mkstemp) in a 0700 folder of the user's own."""
     try:
         own_log_dir(log_dir)
         handle, log = tempfile.mkstemp(prefix=f"review-{short_name(repo)}.", suffix=".log", dir=log_dir)
     except OSError as error:
-        return 127, f"(no log: {error})"
-    with os.fdopen(handle, "w") as out:
+        return 127, f"(no log: {error})", []
+    with os.fdopen(handle, "w") as out, tempfile.TemporaryDirectory(prefix="rollout-gh.") as gh_config:
         if not os.path.isdir(worktree):
             out.write(f"rollout.sh: the re-Apply worktree {worktree} doesn't exist\n")
-            return 127, log
+            return 127, log, []
         try:
             command = review_command(repo, worktree, changes(worktree))
         except (OSError, RuntimeError) as error:
             out.write(f"rollout.sh: can't list the Owned files the branch changes: {error}\n")
-            return 127, log
-        # The gate's review check must run in the session, so a GATE_SKIP_REVIEW from the caller's shell is dropped.
-        env = {name: value for name, value in os.environ.items() if name != "GATE_SKIP_REVIEW"}
+            return 127, log, []
+        before = guard(worktree)
         out.flush()
-        with signals_raise():
+        with deferred_signals() as got:
             try:
-                session = popen(command, cwd=worktree, env=env, stdin=subprocess.DEVNULL, stdout=out,
-                                stderr=subprocess.STDOUT, start_new_session=True)
+                session = popen(command, cwd=worktree, env=session_env(os.environ, gh_config), stdin=subprocess.DEVNULL,
+                                stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
             except OSError as error:
                 out.write(f"rollout.sh: can't start claude: {error}\n")
-                return 127, log
+                return 127, log, []
             try:
-                code = session.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                out.write(f"\nrollout.sh: the review session ran past {timeout // 60} minutes and was stopped\n")
-                code = 124
+                code = wait_for(session, timeout, got, clock)
+                if code is None and not got:
+                    out.write(f"\nrollout.sh: the review session ran past {timeout // 60} minutes and was stopped\n")
+                    code = 124
             finally:
                 if not end(session):
-                    out.write(f"\nrollout.sh: the session's process group was still there {GROUP_WAIT_SECONDS} s after it was killed\n")
-        return code, log
+                    out.write(f"\nrollout.sh: the session's process group was still there {GROUP_WAIT_SECONDS} s after it was"
+                              " killed (or its members wait for init to reap them)\n")
+        if got:
+            raise passed_on(got[0])
+        broke = check(before)
+        for rule in broke:
+            out.write(f"rollout.sh: the session broke a rule: {rule}\n")
+        return (SESSION_BROKE_A_RULE if broke else code), log, broke
+
+
+def wait_for(session, timeout, got, clock=time.monotonic):
+    """The session's exit code, or None once timeout seconds pass or a deferred signal arrives (got holds it). It polls,
+    since with the signals deferred nothing interrupts a wait."""
+    deadline = clock() + timeout
+    while True:
+        try:
+            return session.wait(timeout=max(0.0, min(0.5, deadline - clock())))
+        except subprocess.TimeoutExpired:
+            if got or clock() >= deadline:
+                return None
 
 
 def run_land(refs):
@@ -387,8 +518,12 @@ def drive(repo, path, brings, reapply, review, say):
                            f" moved since the last one (see {log}); run /pre-push-review in {shlex.quote(worktree)}, then resume")
         reviews += 1
         say(f"── rollout: {short_name(repo)}: the gate asks for a review; running /pre-push-review headless in {worktree}")
-        code, log = review(repo, worktree)
+        code, log, broke = review(repo, worktree)
         say(f"── rollout: {short_name(repo)}: review session exited {code}; log: {log}")
+        if broke:
+            return Outcome("person", f"the review session broke a rule: {broke[0]}"
+                           + (f" (and {len(broke) - 1} more)" if len(broke) > 1 else "") + f"; see {log}, put it right in"
+                           f" {shlex.quote(worktree)}, then resume")
         if code != 0:
             return Outcome("failed", f"the review session exited {code} (see {log}); run /pre-push-review in"
                            f" {shlex.quote(worktree)}, then resume")
@@ -561,7 +696,7 @@ def run(order, brings, root, checkout, dry_run, reapply, say, err, default_root,
         return auto_round(order, brings, resume, checkout, reapply, review, land, pr_of, pr_state, branch_of, say, err,
                           sleep)
     except (KeyboardInterrupt, SystemExit) as stop:
-        # An interrupt, or a SIGTERM or SIGHUP during a review session (signals_raise): the session's group is gone.
+        # An interrupt, or a SIGTERM or SIGHUP held through a review session (deferred_signals): its group is gone.
         code = stop.code if isinstance(stop, SystemExit) and isinstance(stop.code, int) else 130
         err.write(f"rollout.sh: interrupted; resume with: {resume}\n")
         return code
