@@ -120,7 +120,7 @@ else
     fail "scripts/lint-edited-file.sh's header no longer gives the settings entry's \"matcher\", which .claude/rules/markdown-and-yaml-edits.md is checked against"
   else
     IFS='|' read -r -a edit_rule_tools <<< "$edit_rule_matcher"
-    # A trailing `|` gives no field to read, so count the separators: an empty last field still fails below.
+    # read -a drops the empty field after a trailing `|`, so add it back: an empty last field still fails below.
     [[ "$edit_rule_matcher" != *'|' ]] || edit_rule_tools+=("")
     for tool in "${edit_rule_tools[@]}"; do
       if [[ ! "$tool" =~ ^[A-Za-z0-9_]+$ ]]; then
