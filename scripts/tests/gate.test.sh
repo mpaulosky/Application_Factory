@@ -805,8 +805,9 @@ done
 reset_first="$(awk '/^cache_unlock\(\) \{/ { f = 1 } f && /trap - INT TERM HUP/ && !t { t = NR } f && /cache_locked=""/ && !c { c = NR } f && /^\}/ { f = 0 } END { print (t && c && t < c) ? 0 : 1 }' "$here/scripts/gate.sh")"
 check "cache_unlock sets the signals back before it forgets the lock" "$reset_first"
 # A signal while cache_unlock removes the lock. An rmdir on PATH stands in for its rmdir, once, for the cache lock only: it writes RMDIR_MARK, and when RMDIR_WAIT is set
-# waits (10 seconds at most) until signal_gate has sent its signal, writing RMDIR_MARK.waited if it was, so the signal provably comes while it runs; then it removes the lock, has another gate take it at once when RMDIR_TAKE is set, then sends each signal of RMDIR_SIG, in order, to the gate it runs for. signal_gate starts
-# every case (with "-" as the marker when only the rmdir sends signals), so a test run with INT or HUP ignored, as a background job is, still tests the traps.
+# waits (10 seconds at most) until signal_gate has sent its signal, writing RMDIR_MARK.waited if it was, so the signal provably comes while it runs.
+# Then it removes the lock, has another gate take it at once when RMDIR_TAKE is set, and sends each signal of RMDIR_SIG, in order, to the gate it runs for.
+# signal_gate starts every case (with "-" as the marker when only the rmdir sends signals), so a test run with INT or HUP ignored, as a background job is, still tests the traps.
 rmdir_shim="$work/rmdir-shim"; mkdir -p "$rmdir_shim"; real_rmdir="$(command -v rmdir)"
 cat > "$rmdir_shim/rmdir" <<EOF
 #!/usr/bin/env bash

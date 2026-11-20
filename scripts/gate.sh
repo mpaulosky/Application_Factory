@@ -232,7 +232,8 @@ cache_lock() {
 }
 # cache_signal <signal>: the handler of a signal while the lock is held. It notes the signal, keeping the first noted, for cache_unlock to end the gate by once the lock is
 # gone; and when cache_unlock isn't already releasing the lock, it starts the release itself. So a second signal while that release runs doesn't take the first's place.
-# Its own kill is a fallback, for a release that didn't end the gate.
+# Its own kill is defensive: a handler runs only while the lock is named (the traps are reset before it is forgotten), so cache_unlock's own kill of the noted signal
+# ends the gate first. It would end the gate by its signal if a handler ever ran with no lock named.
 cache_signal() {
   [[ -n "$cache_pending" ]] || cache_pending="$1"
   if [[ -n "$cache_unlocking" ]]; then return 0; fi
