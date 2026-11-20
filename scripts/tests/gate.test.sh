@@ -297,7 +297,9 @@ git -C "$repoG" rm -q -f scripts/old-loose.sh
 printf '%b' "$redirect_tight" > "$repoG/.github/hooks/pre-push"
 printf '%b' "$redirect_tight" > "$repoG/$skill/template/owned/.github/hooks/pre-push"
 GATE_ARGS=--quick run "$repoG"
-check "a hook gets the shell style too (a redirection needs its space)" "$([[ $status == 1 ]] && grep -qF '.github/hooks/pre-push.orig' "$repoG/out" && echo 0 || echo 1)"
+# The root's hook and the Template's copy are both named, each as its own diff header line: a substring match would let one stand for the other.
+hook_checked() { grep -qxF -- "--- .github/hooks/$1.orig" "$repoG/out" && grep -qxF -- "--- $skill/template/owned/.github/hooks/$1.orig" "$repoG/out"; }
+check "a hook gets the shell style too (a redirection needs its space), the root's and the Template's" "$([[ $status == 1 ]] && hook_checked pre-push && echo 0 || echo 1)"
 cp -p "$here/.github/hooks/pre-push" "$repoG/.github/hooks/pre-push"
 cp -p "$here/.github/hooks/pre-push" "$repoG/$skill/template/owned/.github/hooks/pre-push"
 printf '%b' "$unformatted" > "$repoG/notes.txt"
@@ -312,7 +314,7 @@ for hook in pre-commit post-checkout; do
   printf '%b' "$redirect_tight" > "$repoG/.github/hooks/$hook"
   printf '%b' "$redirect_tight" > "$repoG/$skill/template/owned/.github/hooks/$hook"
   GATE_ARGS=--quick run "$repoG"
-  check "the $hook hook is checked too" "$([[ $status == 1 ]] && grep -qF ".github/hooks/$hook.orig" "$repoG/out" && echo 0 || echo 1)"
+  check "the $hook hook is checked too, the root's and the Template's" "$([[ $status == 1 ]] && hook_checked "$hook" && echo 0 || echo 1)"
   cp -p "$here/.github/hooks/$hook" "$repoG/.github/hooks/$hook"
   cp -p "$here/.github/hooks/$hook" "$repoG/$skill/template/owned/.github/hooks/$hook"
 done
