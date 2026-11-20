@@ -1855,3 +1855,12 @@ def test_the_guard_of_a_linked_worktree_reads_the_primary_checkouts_ledgers(tmp_
     broke = auto.broken_rules(guard, owned=str(owned), read=lambda c, cwd=None: "", changes=lambda w: [])
     assert broke == [f"{primary / '.git' / 'review' / 'l.json'} gained R1 accepted during the session: only the person accepts"], \
         "the real is_ours: its head is one of the worktree's commits"
+
+
+def test_the_adr_says_what_the_sandbox_doesnt_cover():
+    adr = next((SKILL.parents[2] / "docs" / "adr").glob("0015-*.md")).read_text()
+    text = " ".join(adr.split())
+    assert "The sandbox holds only as far as Claude Code enforces it" in text
+    assert "a host on the allowed list (GitHub, the registries) is reachable for anything" in text
+    assert "A SIGKILL of `rollout.sh` can't be caught" in text
+    assert "however it is spelled" not in text and "this is not a sandbox" not in text, "the earlier overclaims are gone"
