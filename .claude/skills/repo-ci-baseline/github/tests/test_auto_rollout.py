@@ -1828,3 +1828,30 @@ def test_a_sigterm_while_a_repo_is_reapplied_ends_the_round_with_its_resume_comm
     assert code == 128 + signal.SIGTERM
     assert "rollout.sh: interrupted; resume with: rollout.sh --auto --brings '#82'" in err
     assert fleet.locks[0].closed
+
+
+def test_a_session_that_broke_one_rule_names_it_alone():
+    fleet = Fleet(codes={TM: [auto.REVIEW_NEEDED]}, reviews={TM: auto.SESSION_BROKE_A_RULE}, broke={TM: ["just this"]})
+    _, out, _ = run_auto(["--brings", "#82"], fleet)
+    assert "the review session broke a rule: just this; see " in out and "(and" not in out
+
+
+def test_the_guard_of_a_linked_worktree_reads_the_primary_checkouts_ledgers(tmp_path):
+    primary = tmp_path / "Repo"
+    git = git_repo(primary)
+    worktree = tmp_path / "Repo-worktrees" / "chore-reapply-baseline"
+    git("worktree", "add", "-q", "-b", "chore/reapply-baseline", str(worktree))
+    (primary / ".git" / "review").mkdir()
+    (primary / ".git" / "review" / "l.json").write_text(json.dumps({"branch": "chore/reapply-baseline", "findings": []}))
+    owned = tmp_path / "owned"
+    owned.mkdir()
+    guard = auto.session_guard(str(worktree), owned=str(owned),
+                               read=lambda c, cwd=None: "" if "ls-remote" in c else auto.run_text(c, cwd))
+    assert guard.ledgers == str(primary / ".git" / "review")
+    assert set(guard.ledgers_before) == {"l.json"}
+    head = subprocess.run(["git", "-C", str(worktree), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    (primary / ".git" / "review" / "l.json").write_text(json.dumps({"branch": "x", "head": head,
+                                                                    "findings": [{"id": "R1", "status": "accepted"}]}))
+    broke = auto.broken_rules(guard, owned=str(owned), read=lambda c, cwd=None: "", changes=lambda w: [])
+    assert broke == [f"{primary / '.git' / 'review' / 'l.json'} gained R1 accepted during the session: only the person accepts"], \
+        "the real is_ours: its head is one of the worktree's commits"
