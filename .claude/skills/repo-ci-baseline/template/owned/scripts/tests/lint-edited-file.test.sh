@@ -922,6 +922,13 @@ git -C "$vet" config core.fsmonitor "$WORK/vet-config-cmd"
 git -C "$vet" config filter.vet.clean "$WORK/vet-config-cmd"
 printf '* filter=vet\n' > "$vet/.git/info/attributes"
 touch "$vet/.markdownlint-cli2.jsonc" "$vet/package.json"
+# The control: this git does run them, for the check the hook used to make.
+git -C "$vet" diff --quiet HEAD -- .markdownlint-cli2.jsonc < /dev/null > /dev/null 2>&1
+p=()
+[[ -s "$ran_marker" ]] || p+=("git diff HEAD ran neither, so the case below proves nothing")
+check "control: git diff HEAD runs the repository's core.fsmonitor or clean filter" ${p[@]+"${p[@]}"}
+rm -f "$ran_marker"
+touch "$vet/.markdownlint-cli2.jsonc" "$vet/package.json"
 vetted_case "with a core.fsmonitor and a clean filter in the repository's config: linted" ""
 p=()
 [[ ! -e "$ran_marker" ]] || p+=("ran: $(cat "$ran_marker")")
@@ -929,6 +936,14 @@ check "the committed check runs no core.fsmonitor command or clean filter from t
 git -C "$vet" config --unset core.fsmonitor
 git -C "$vet" config --unset filter.vet.clean
 rm "$vet/.git/info/attributes"
+# A checkout that converts line endings holds a committed LF config as CRLF: it is committed as it is. CRLF in a config that
+# differs from HEAD's otherwise is not.
+cp "$vet/.markdownlint-cli2.jsonc" "$WORK/vet-config-lf"
+python3 -I -c 'import sys; d = open(sys.argv[1], "rb").read(); open(sys.argv[1], "wb").write(d.replace(b"\n", b"\r\n"))' "$vet/.markdownlint-cli2.jsonc"
+vetted_case "a committed config checked out with CRLF line endings: linted" ""
+printf '{ "config": { "default": false } }\r\n' > "$vet/.markdownlint-cli2.jsonc"
+vetted_case "a changed config with CRLF line endings: not linted" .markdownlint-cli2.jsonc
+cp "$WORK/vet-config-lf" "$vet/.markdownlint-cli2.jsonc"
 # A committed config that can load code is never run: the code it names isn't vetted.
 for key in customRules markdownItPlugins outputFormatters modulePaths extends; do
   printf '{ "%s": ["./x.js"] }\n' "$key" > "$vet/docs/.markdownlint-cli2.jsonc"

@@ -125,7 +125,8 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     reads them. It needs shfmt v3.14 or a later v3 release on `PATH`: CI's `gh-repo`, `python-tests` and `hook-tests` jobs and the Seed Sandcastle `Dockerfile` install the pinned
     release, and on your machine it comes from your package manager (`pacman -S shfmt`, `brew install shfmt`, `apt install shfmt` where the package is v3.14 or later)
     or the release binaries at <https://github.com/mvdan/sh/releases>. Without it, or with an older or newer one, the checker fails with exit 2 and says why. A file or folder it
-    can't read or decode also ends in exit 2, with `check_gh_repo.py: can't read <path>: <reason>`, never in a traceback or exit 1 (which means an untold `gh` command was found). It runs
+    can't read or decode also ends in exit 2, with `check_gh_repo.py: can't read <path>: <reason>` when the error names the file and `check_gh_repo.py: failed: <reason>`
+    when it doesn't (a decode error), never in a traceback or exit 1 (which means an untold `gh` command was found). It runs
     shfmt in an empty folder of its own with only `PATH` set, so no file of the PR's (an `.editorconfig`) reaches it; a version manager's shim (asdf, mise)
     that needs more than `PATH` fails there, so put the release binary on `PATH` instead.
     An `export GH_REPO=...` counts when it is alone on its line, at its start, and runs in the

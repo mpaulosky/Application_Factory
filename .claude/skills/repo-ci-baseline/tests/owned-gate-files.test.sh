@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Tests for the Owned scripts/gate.sh's lists of changed files (the lines from "# Files added" to the SHELL_FILES mapfile), run in a
-# throwaway repo, and the Markdown step with a stub linter: every name reaches its list and the linter as it is on disk (non-ASCII, not
-# valid UTF-8, a tab or a newline among them), in a UTF-8 locale and in C, and a git that fails stops the gate. The gate's other steps
-# need a .NET repo, so only these lines are run.
+# throwaway repo, and the Markdown, YAML and shell steps with stub linters: every name reaches its list and its linter as it is on disk
+# (non-ASCII, not valid UTF-8, a tab, a newline or a leading '-' among them), in a UTF-8 locale and in C, and a git that fails stops the
+# gate. The gate's other steps need a .NET repo, so only these lines are run.
 # Usage: bash tests/owned-gate-files.test.sh
 set -uo pipefail
 
@@ -129,6 +129,15 @@ for loc in ${utf8:+"$utf8"} C; do
     "[[ \$(first SC_ARG) == -- ]] && has SC_ARG -dash.sh && [[ \$(count SC_ARG) == 5 ]]"
 done
 unset LC_ALL
+
+# With a .yamllint.yml the YAML step passes it first, then '--', then the names.
+printf 'extends: default\n' > "$repo/.yamllint.yml"
+run_lists
+yl=()
+for entry in ${OUT[@]+"${OUT[@]}"}; do [[ "$entry" != YL_ARG$'\t'* ]] || yl+=("${entry#*$'\t'}"); done
+check "with a .yamllint.yml, yamllint gets -c .yamllint.yml, then '--', then the names" \
+  "[[ $st == 0 && \"\${yl[0]:-}\" == -c && \"\${yl[1]:-}\" == .yamllint.yml && \"\${yl[2]:-}\" == -- && \${#yl[@]} == 8 ]]"
+rm "$repo/.yamllint.yml"
 
 # A branch with no change, and one whose only change no list takes: the block and the steps run, and every list is empty.
 g "$repo" checkout -q -b chore/empty origin/main

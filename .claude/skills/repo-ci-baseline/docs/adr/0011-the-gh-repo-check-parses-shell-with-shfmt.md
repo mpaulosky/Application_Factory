@@ -40,7 +40,7 @@ Sandcastle's sandbox, which runs the gate. CI's `python-tests` job runs the chec
   The Factory's `template-tools` action installs the same release only so `test.sh` and the Template's tests can run: the Factory's own gate runs no gh check, so
   this adds no Baseline piece to the Factory. A developer installs shfmt with their package manager or from the release binaries. Without shfmt, or with one
   older or newer, the checker fails with exit 2 and says which it found: the gate can't pass a script it didn't read. So does a file or folder it can't
-  read or decode, with `can't read <path>`. A tree of another shape than the checker reads
+  read or decode, with `can't read <path>` (or `failed: <reason>` for an error that names no file, such as a decode error). A tree of another shape than the checker reads
   fails the same way. A repo whose files in scope are all skills (Markdown) never needs it.
 - **shfmt reads nothing of the PR's but the script:** it runs in an empty folder of the checker's own, with only `PATH` in its environment. A version
   manager's shim that needs more than `PATH` fails there; the release binary on `PATH` doesn't.

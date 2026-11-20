@@ -133,7 +133,7 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
   newline reaches its linter as it is on disk. Markdown names go to `markdownlint-cli2` as `:<name>`, its literal-path form, so `a[1].md`
   isn't read as a glob and `-dash.md` isn't read as an option; YAML and shell names go to `yamllint` and `shellcheck` after a `--`, so
   `-dash.yml` and `-dash.sh` aren't either. `tests/owned-gate-files.test.sh` (the Factory's) runs those lines in a throwaway
-  repo, in a UTF-8 locale and in C, and the Markdown step with a stub and, when installed, the real tool. Then build and run each test
+  repo, in a UTF-8 locale and in C, the YAML and shell steps with stubs, and the Markdown step with a stub and, when installed, the real tool. Then build and run each test
   project, where the stack allows it locally. Which steps it runs depends on the repo; what's standard is that
   everything it checks, CI checks too.
   After the lints it runs `python3 -I .github/scripts/check_gh_repo.py --repo`, which refuses a `gh` command in the
@@ -246,7 +246,8 @@ These are the checks the CI lint workflows run; a gate runs `actionlint` and `zi
   `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_PREFIX`, `GIT_COMMON_DIR` and `CDPATH`,
   inherited from a git hook, are cleared first.
 - A Markdown file is linted only through markdownlint configs the hook can vouch for: each one on the file's path (its folder and each folder above it, up to the
-  repository root, where `markdownlint-cli2` stops looking) must be a regular file whose bytes are the blob `HEAD` holds at its path
+  repository root, where `markdownlint-cli2` stops looking) must be a regular file whose bytes, as they are or with each CRLF made LF (a checkout
+  that converts line endings), are the blob `HEAD` holds at its path
   (`git rev-parse HEAD:<path>` against `git hash-object --no-filters`, which read neither the index nor the working tree's status, so no
   `core.fsmonitor` command or clean filter from the repository's config runs; never in a repository with no commit), and unable to
   load JavaScript: no `.cjs` or `.mjs` config, and no `customRules`, `markdownItPlugins`, `outputFormatters`, `modulePaths` or `extends` in it, read as text, byte for byte.

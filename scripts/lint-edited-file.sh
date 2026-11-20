@@ -326,7 +326,7 @@ path_bin() {
 
 # unvetted_config: sets unvetted_path and unvetted_why for the first markdownlint-cli2 config on the file's path (its folder and each one above it, up
 # to the repository root, where markdownlint-cli2 stops looking) that the hook must not run, and returns 1 when there is none. A config
-# is run only when it is a regular file git holds as committed (its bytes are the blob HEAD holds at its path) and can't
+# is run only when it is a regular file git holds as committed (its bytes, or its bytes with each CRLF made LF, are the blob HEAD holds at its path) and can't
 # load JavaScript: no .cjs or .mjs config, and no customRules, markdownItPlugins, outputFormatters, modulePaths or extends in it (read as
 # text, byte for byte, so even a mention in a comment counts), and no backslash in it, since a JSON or YAML escape (\u0075, \x52, a
 # folded line) could spell one of those keys where the text doesn't show it. A file of any of these names that is a symlink or not a
@@ -360,10 +360,13 @@ print("-" if key is None else json.dumps(key))' "$path" 2> /dev/null || true)"
       else
         text="$(cat -- "$path")"
       fi
-      # Committed as it is: the file's bytes hash to the blob HEAD holds at that path. Neither command reads the index or the
-      # working tree's status, so neither runs a core.fsmonitor command or a clean filter from the repository's own config.
+      # Committed as it is: the file's bytes hash to the blob HEAD holds at that path, as they are or with each CRLF made LF (a
+      # checkout that converts line endings, core.autocrlf or eol=crlf). No command here reads the index or the working tree's
+      # status, so none runs a core.fsmonitor command or a clean filter from the repository's own config.
       if ! head_blob="$(git -C "$root" rev-parse --verify --quiet "HEAD:$relp" 2> /dev/null)" \
-        || [[ "$(git -C "$root" hash-object --no-filters -- "$path" 2> /dev/null)" != "$head_blob" ]]; then
+        || { [[ "$(git -C "$root" hash-object --no-filters -- "$path" 2> /dev/null)" != "$head_blob" ]] \
+          && [[ "$(python3 -I -c 'import sys; sys.stdout.buffer.write(open(sys.argv[1], "rb").read().replace(b"\r\n", b"\n"))' "$path" 2> /dev/null \
+            | git -C "$root" hash-object --no-filters --stdin 2> /dev/null)" != "$head_blob" ]]; }; then
         unvetted_path="$relp" unvetted_why="isn't committed as it is"
         return 0
       fi
