@@ -80,3 +80,9 @@ to `main`, a bad branch name, a dirty tree or a branch behind `origin/main`. In 
 Start a branch with `git worktree add --no-track -b <branch> ../Application_Factory-worktrees/<folder> origin/main`, where `<folder>` is the branch with `/` as `-`.
 
 Markdown is linted with `.markdownlint-cli2.jsonc` (lines up to 200 characters).
+
+Write and edit Markdown and YAML files with the Write and Edit tools, never with a shell command (`cat <<EOF >`, `sed -i`, `tee`, `echo >>`, a `python`
+or `node` one-liner, a script). The edit-time lint (ADR 0011) is a `PostToolUse` hook on Write, Edit and MultiEdit: it lints the file the moment the tool
+writes it, so a violation is fixed in the same turn. A Bash command doesn't name the files it wrote, so the hook never sees them, and the violation turns up
+later: at the commit for Markdown (the `pre-commit` hook lints no YAML), otherwise at the gate, in CI or in a review. A script or test that writes Markdown
+as its own output is fine; the rule is about the files you are editing.
