@@ -196,13 +196,13 @@ run_static() {
     echo -e "${RED}❌ yamllint${RESET}" >&2
     exit 1
   }
-  # A shell file, for the shellcheck and shfmt steps: a *.sh, or one of the three git hooks in a .github/hooks folder (the repo's own, or the Template's copy of it), which
-  # have no extension. .editorconfig gives the shell style to *.sh and .github/hooks/* only, so a file named pre-commit anywhere else is not taken for a hook.
+  # A shell file, for the shellcheck and shfmt steps: a *.sh, or one of the three git hooks, which have no extension, in the repo's .github/hooks or the Template's copy of it
+  # ($owned/.github/hooks). Those two are the hooks folders an .editorconfig gives the shell style to, so a file named pre-commit anywhere else is not taken for a hook.
   is_shell_file() {
     case "$1" in
       *.sh) return 0 ;;
       .github/hooks/pre-commit | .github/hooks/pre-push | .github/hooks/post-checkout) return 0 ;;
-      */.github/hooks/pre-commit | */.github/hooks/pre-push | */.github/hooks/post-checkout) return 0 ;;
+      "$owned"/.github/hooks/pre-commit | "$owned"/.github/hooks/pre-push | "$owned"/.github/hooks/post-checkout) return 0 ;;
     esac
     return 1
   }
@@ -243,7 +243,7 @@ run_static() {
   echo "${#shell_changed[@]} changed shell file(s) checked."
 
   # Every tracked and untracked shell file is formatted as shfmt formats it, in the style .editorconfig gives (a copy of the Template's, ADR 0015). shfmt -d is given no
-  # style flags, so it reads that file and the style is written down once. All of them, not only the changed ones: the step takes about a second.
+  # style flags, so it reads that file and the style is written down once. All of them, not only the changed ones: the step takes well under a second.
   # shfmt must be v3.14 or a later v3, the releases test.sh accepts (the same regex): this refuses v2, v4 and a v3 before v3.14. It doesn't make every accepted release format
   # alike: a later v3 that formats differently fails files CI's pinned one passes, and then the files are reformatted or the pin moves.
   echo -e "\n${CYAN}▶ shfmt (every shell file)${RESET}"

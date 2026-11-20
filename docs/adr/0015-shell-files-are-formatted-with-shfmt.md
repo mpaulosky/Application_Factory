@@ -30,8 +30,8 @@ Formatting is a choice a reviewer should not have to read or argue about. This A
   the same way. The Factory carries a copy of the whole file (`scripts/gate.sh` lists it with the other copies, and `--sync` copies a file whole), its C# and .NET sections included, which match
   nothing in the Factory; its own scripts get the same style.
 - Every tracked and untracked shell file was formatted with `shfmt -w`, and the gate's `static` part runs `shfmt -d` on all of them, not only the ones a branch changed: the check takes well
-  under a second. A shell file is a `*.sh`, or a `pre-commit`, `pre-push` or `post-checkout` in a `.github/hooks` folder, the files `.editorconfig` gives the style to; the shellcheck step uses
-  the same rule.
+  under a second. A shell file is a `*.sh`, or a `pre-commit`, `pre-push` or `post-checkout` in the repo's `.github/hooks` or the Template's copy of it, the hooks folders an
+  `.editorconfig` gives the style to; the shellcheck step uses the same rule.
 - The gate needs shfmt v3.14 or a later v3, the releases `test.sh` accepts (the same regular expression, which the gate's test compares). That refuses v2, v4 and a v3 before v3.14. It doesn't
   make every accepted release format alike: a later v3 that formats differently would fail files that CI's pinned release passes, and then the files are reformatted or the pin moves.
 - The gh check is unaffected: it runs shfmt in an empty folder of its own, so no `.editorconfig` reaches it (the skill's `references/gotchas.md`).

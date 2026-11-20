@@ -8,7 +8,7 @@
 # It also checks that .claude/settings.json runs the executable scripts/lint-edited-file.sh after Edit, Write and MultiEdit (ADR 0011), and that the check fails on a dropped matcher, another event or hook type,
 # a command without the quotes around CLAUDE_PROJECT_DIR or naming another script, a non-executable script and a file that is not JSON.
 # It also checks the shfmt step (ADR 0015): every shell file, changed or not, the three hooks among them, is formatted in the style .editorconfig gives; a file that is not a shell file,
-# a hook name outside .github/hooks, a tracked file deleted from the working tree and an ignored file are left alone; a name with a space, a non-ASCII byte or a leading - is checked as a
+# a hook name outside the root's and the Template's .github/hooks, a tracked file deleted from the working tree and an ignored file are left alone; a name with a space, a non-ASCII byte or a leading - is checked as a
 # file; a file shfmt can't parse fails with its error; git failing fails the step; no temp file is left; and shfmt is refused when missing or outside test.sh's version rule, which is the same.
 # It also checks GATE_PART (ADR 0012) and TEST_SH_SHARD (ADR 0013, only the template part runs a shard; test.sh's steps each sit in one shard; the workflow's matrix lists them all): each part runs alone, a bad value, or --quick or --sync with a part, is refused, the Sandcastle check runs in a full gate only when the branch changed
 # a file it reads (and is remembered per clean tree), and the CI workflow has one job per part and a Template tests job that needs them all.
@@ -306,10 +306,22 @@ printf '%b' "$unformatted" > "$repoG/notes.txt"
 GATE_ARGS=--quick run "$repoG"
 check "a file that is not a shell file is not checked" "$([[ $status == 0 ]] && echo 0 || echo 1)"
 # The extensionless hook names count only in a .github/hooks folder, where .editorconfig gives them the style: the same name elsewhere is not a shell file to either step.
-printf '%b' "$unformatted" > "$repoG/scripts/pre-commit"
+# The file has a shellcheck finding and a 4-space indent, so neither step may take it; nor a hook in another .github/hooks folder, which no .editorconfig styles.
+# shellcheck disable=SC2016 # the script's own text: $unquoted must reach the file as written
+bad_unformatted='#!/usr/bin/env bash\nif true; then\n    echo $unquoted\nfi\n'
+printf '%b' "$bad_unformatted" > "$repoG/scripts/pre-commit"
+mkdir -p "$repoG/tests/fixture/.github/hooks"
+printf '%b' "$bad_unformatted" > "$repoG/tests/fixture/.github/hooks/pre-push"
 GATE_ARGS=--quick run "$repoG"
-check "a file named like a hook outside .github/hooks is not checked" "$([[ $status == 0 ]] && echo 0 || echo 1)"
-rm -f "$repoG/scripts/pre-commit"
+check "a file named like a hook outside the two hooks folders is checked by neither step" "$([[ $status == 0 ]] && grep -q '^0 changed shell file(s) checked' "$repoG/out" && echo 0 || echo 1)"
+rm -rf "$repoG/scripts/pre-commit" "$repoG/tests/fixture"
+# The shellcheck step takes the root's hook and the Template's copy too: a finding in each is reported under its own path.
+printf '%b' "$bad_script" > "$repoG/.github/hooks/pre-push"
+printf '%b' "$bad_script" > "$repoG/$skill/template/owned/.github/hooks/pre-push"
+GATE_ARGS=--quick run "$repoG"
+check "shellcheck checks the root's hook and the Template's copy" "$([[ $status == 1 ]] && grep -qxF 'In .github/hooks/pre-push line 2:' "$repoG/out" && grep -qxF "In $skill/template/owned/.github/hooks/pre-push line 2:" "$repoG/out" && echo 0 || echo 1)"
+cp -p "$here/.github/hooks/pre-push" "$repoG/.github/hooks/pre-push"
+cp -p "$here/.github/hooks/pre-push" "$repoG/$skill/template/owned/.github/hooks/pre-push"
 for hook in pre-commit post-checkout; do
   printf '%b' "$redirect_tight" > "$repoG/.github/hooks/$hook"
   printf '%b' "$redirect_tight" > "$repoG/$skill/template/owned/.github/hooks/$hook"
@@ -350,14 +362,19 @@ check "a shell file shfmt can't parse fails the gate, with shfmt's error and the
 git -C "$repoG" rm -q -f scripts/broken.sh
 commit_all "$repoG" "drop it"
 git -C "$repoG" update-ref refs/remotes/origin/main HEAD
-# The gate leaves no file list behind, on a pass and on a failure.
-mkdir -p "$work/gate-tmp"
-TMPDIR="$work/gate-tmp" GATE_ARGS=--quick run "$repoG"
-check "a passing --quick run leaves no temp file" "$([[ $status == 0 && -z "$(ls -A "$work/gate-tmp")" ]] && echo 0 || echo 1)"
+# The gate leaves no file list behind, on a pass and on a failure in either step (the git failures are below). The folder's name has a space, which the trap's quoting must keep.
+gate_tmp="$work/gate tmp"
+mkdir -p "$gate_tmp"
+TMPDIR="$gate_tmp" GATE_ARGS=--quick run "$repoG"
+check "a passing --quick run leaves no temp file" "$([[ $status == 0 && -z "$(ls -A "$gate_tmp")" ]] && echo 0 || echo 1)"
 printf '%b' "$unformatted" > "$repoG/scripts/loose.sh"
-TMPDIR="$work/gate-tmp" GATE_ARGS=--quick run "$repoG"
-check "a run the shfmt step fails leaves no temp file" "$([[ $status == 1 && -z "$(ls -A "$work/gate-tmp")" ]] && grep -q '❌ shfmt' "$repoG/out" && echo 0 || echo 1)"
+TMPDIR="$gate_tmp" GATE_ARGS=--quick run "$repoG"
+check "a run the shfmt step fails leaves no temp file" "$([[ $status == 1 && -z "$(ls -A "$gate_tmp")" ]] && grep -q '❌ shfmt' "$repoG/out" && echo 0 || echo 1)"
 rm -f "$repoG/scripts/loose.sh"
+printf '%b' "$bad_script" > "$repoG/scripts/bad.sh"
+TMPDIR="$gate_tmp" GATE_ARGS=--quick run "$repoG"
+check "a run the shellcheck step fails leaves no temp file" "$([[ $status == 1 && -z "$(ls -A "$gate_tmp")" ]] && grep -q '❌ shellcheck' "$repoG/out" && echo 0 || echo 1)"
+rm -f "$repoG/scripts/bad.sh"
 # The style is .editorconfig's, not flags in the gate: with a 4-space indent there, the gate's own 2-space scripts fail.
 for f in "$repoG/.editorconfig" "$repoG/$skill/template/owned/.editorconfig"; do
   sed 's/^indent_size = 2$/indent_size = 4/' "$f" > "$f.new" && mv "$f.new" "$f"
@@ -664,12 +681,12 @@ repo12="$(new_repo git-fails-diff)"
 stub_review "$repo12"
 with_origin "$repo12"
 wrapper_for gitdiff diff
-PATH="$work/gitdiff:$PATH" GATE_ARGS=--quick run "$repo12"
-check "a git that fails listing the changed files fails the gate, saying so" "$([[ $status == 1 ]] && grep -q 'could not list the changed files' "$repo12/out" && echo 0 || echo 1)"
+TMPDIR="$gate_tmp" PATH="$work/gitdiff:$PATH" GATE_ARGS=--quick run "$repo12"
+check "a git that fails listing the changed files fails the gate, saying so, and leaves no temp file" "$([[ $status == 1 && -z "$(ls -A "$gate_tmp")" ]] && grep -q 'could not list the changed files' "$repo12/out" && echo 0 || echo 1)"
 # With an origin/main the shellcheck step never passes --cached, so a git that fails on it fails only the shfmt step's listing, which must stop the gate too.
 wrapper_for gitcached --cached
-PATH="$work/gitcached:$PATH" GATE_ARGS=--quick run "$repo12"
-check "a git that fails listing every file fails the shfmt step, saying so" "$([[ $status == 1 ]] && grep -q 'could not list the files (git failed)' "$repo12/out" && grep -q 'changed shell file(s) checked' "$repo12/out" && echo 0 || echo 1)"
+TMPDIR="$gate_tmp" PATH="$work/gitcached:$PATH" GATE_ARGS=--quick run "$repo12"
+check "a git that fails listing every file fails the shfmt step, saying so, and leaves no temp file" "$([[ $status == 1 && -z "$(ls -A "$gate_tmp")" ]] && grep -q 'could not list the files (git failed)' "$repo12/out" && grep -q 'changed shell file(s) checked' "$repo12/out" && echo 0 || echo 1)"
 GATE_ARGS=--quick run "$repo12"
 check "and the same repo passes with a git that works" "$([[ $status == 0 ]] && echo 0 || echo 1)"
 repo13="$(new_repo git-fails-status)"
