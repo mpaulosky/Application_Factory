@@ -962,23 +962,23 @@ export function latestLedger(cwd: string, base: string, head: string = headCommi
 // that main doesn't have), with how many commits each is behind HEAD.
 function branchLedgers(cwd: string, base: string, head: string): { ledger: Ledger; distance: number }[] {
   const found: { ledger: Ledger; distance: number }[] = [];
-  for (const ledger of readLedgers(cwd)) {
+  for (const { ledger } of readLedgers(cwd)) {
     if (!isAncestor(cwd, ledger.head, head) || isAncestor(cwd, ledger.head, base)) continue;
     found.push({ ledger, distance: Number(git(cwd, "rev-list", "--count", `${ledger.head}..${head}`)) });
   }
   return found;
 }
 
-// Every ledger of the clone that reads and parses; a file that doesn't is skipped.
-function readLedgers(cwd: string): Ledger[] {
+// Every ledger of the clone that reads and parses, with its file name; a file that doesn't is skipped.
+function readLedgers(cwd: string): { ledger: Ledger; name: string }[] {
   const dir = ledgerDir(cwd);
   if (!existsSync(dir)) return [];
-  const found: Ledger[] = [];
+  const found: { ledger: Ledger; name: string }[] = [];
   for (const name of readdirSync(dir)) {
     if (!name.endsWith(".json")) continue;
     try {
       const parsed = ledgerSchema.safeParse(JSON.parse(readFileSync(join(dir, name), "utf8")));
-      if (parsed.success) found.push(parsed.data);
+      if (parsed.success) found.push({ ledger: parsed.data, name });
     } catch {
       continue;
     }
@@ -990,14 +990,19 @@ function readLedgers(cwd: string): Ledger[] {
 // the review was recorded (for a PR thread, say) is reviewed alone in a new run. The newest by recordedAt, never the nearest
 // ancestor: after an amend or a rebase the newest isn't one of HEAD's commits, and an older one is not silently taken instead.
 // Not a commit the caller names either, so the fixes patch holds every commit since the code a review vouched for. The reason
-// there's none, as a message, when no review of the branch is recorded or HEAD has none.
+// there's none, as a message, when no review of the branch is recorded or HEAD has none. A tie in recordedAt goes to the greater
+// head, then the greater file name, so the folder's order never decides. A newer ledger that doesn't read or parse is skipped,
+// which can only make the anchor an older review and the patch wider: no fix goes unread.
 export function recordedAnchor(cwd: string, base: string, head: string, branch: string): { commit: string; ledger: Ledger } | string {
   const restart = "start again at round 1 (prepare without <since>).";
   if (branch === "") return `HEAD isn't on a branch, so no review recorded for one can be its anchor: ${restart}`;
-  let newest: Ledger | undefined;
-  for (const ledger of readLedgers(cwd)) {
-    if (ledger.branch === branch && (newest === undefined || ledger.recordedAt > newest.recordedAt)) newest = ledger;
+  const newer = (a: { ledger: Ledger; name: string }, b: { ledger: Ledger; name: string }) =>
+    a.ledger.recordedAt !== b.ledger.recordedAt ? a.ledger.recordedAt > b.ledger.recordedAt : a.ledger.head !== b.ledger.head ? a.ledger.head > b.ledger.head : a.name > b.name;
+  let found: { ledger: Ledger; name: string } | undefined;
+  for (const entry of readLedgers(cwd)) {
+    if (entry.ledger.branch === branch && (found === undefined || newer(entry, found))) found = entry;
   }
+  const newest = found?.ledger;
   if (newest === undefined) return `no review of ${branch} is recorded in this clone: ${restart}`;
   if (!isAncestor(cwd, newest.head, head)) {
     return `the last review of ${branch} was recorded at ${newest.head}, which isn't one of HEAD's commits (an amend or a rebase since): ${restart}`;

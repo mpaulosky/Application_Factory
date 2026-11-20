@@ -2994,6 +2994,53 @@ describe("main", () => {
       assert.match(result.err, /no fixes since/);
     });
 
+    it("takes the newer of two reviews that are both HEAD's commits, by recordedAt, and names it", () => {
+      record([], 1, new Date("2026-01-01T00:00:00Z"));
+      commit(repo, "other.cs", "second\n", "second commit");
+      record([], 1, new Date("2026-01-02T00:00:00Z"));
+      const newer = run(repo, "rev-parse", "HEAD");
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      const dir = fresh("delta");
+
+      const result = cli(["prepare", dir, "recorded"]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.match(result.err, new RegExp(`Fixes since ${newer}`));
+      assert.doesNotMatch(readFileSync(join(dir, "fixes.patch"), "utf8"), /second/);
+    });
+
+    it("takes the review recorded later though an earlier one was recorded at a later commit: recordedAt decides, not ancestry", () => {
+      const first = run(repo, "rev-parse", "HEAD");
+      commit(repo, "other.cs", "second\n", "second commit");
+      record([], 1, new Date("2026-01-01T00:00:00Z"));
+      run(repo, "reset", "--quiet", "--hard", first);
+      record([], 1, new Date("2026-01-02T00:00:00Z"));
+      run(repo, "merge", "--quiet", "--ff-only", "HEAD@{1}");
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      const dir = fresh("delta");
+
+      const result = cli(["prepare", dir, "recorded"]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.match(result.err, new RegExp(`Fixes since ${first}`));
+      assert.match(readFileSync(join(dir, "fixes.patch"), "utf8"), /second/);
+    });
+
+    it("breaks a tie in recordedAt by the head, the greater one winning, whatever order the folder lists them in", () => {
+      const at = new Date("2026-01-01T00:00:00Z");
+      record([], 1, at);
+      const first = run(repo, "rev-parse", "HEAD");
+      commit(repo, "other.cs", "second\n", "second commit");
+      record([], 1, at);
+      const second = run(repo, "rev-parse", "HEAD");
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.match(result.err, new RegExp(`Fixes since ${first > second ? first : second}`));
+    });
+
     it("refuses a review recorded at a commit main already has, and writes no fixes patch", () => {
       record([]);
       run(upstream, "pull", "--quiet", "--ff-only", repo, "feature/1-thing");
