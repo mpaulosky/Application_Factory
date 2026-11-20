@@ -4,8 +4,11 @@
 # on PATH. The stand-in Template's pre-push hook stands in for the gate: it
 # logs each run, and fails while $stub/fail-push exists. While $stub/gate-log
 # exists it prints that file and fails. The repo's main carries a stand-in
-# scripts/review.sh, whose `check` logs its call and refuses with the text in
-# $stub/check-says while that file has any.
+# scripts/review.sh, whose `check` logs where and how it was called and refuses
+# with the text in $stub/check-says while that file has any; $stub/check-notes
+# adds text to a passing check's stderr, and $stub/check-stdout makes it print
+# that file on stdout and fail. $stub/signed-out makes gh label create exit 4
+# (signed out), and $stub/create-exits-3 makes gh pr create exit 3.
 # check() evals its condition string later, so the single quotes are deliberate
 # and the variables it reads look unused to shellcheck.
 # shellcheck disable=SC2016,SC2034
@@ -162,7 +165,7 @@ printf '# Widget\n' > "$repo/README.md"
 mkdir -p "$repo/scripts"
 cat > "$repo/scripts/review.sh" <<EOF
 #!/usr/bin/env bash
-echo "\$* GATE_SKIP_REVIEW=\${GATE_SKIP_REVIEW-unset}" >> "$work/stub/check.log"
+echo "\$PWD \$* GATE_SKIP_REVIEW=\${GATE_SKIP_REVIEW-unset}" >> "$work/stub/check.log"
 if [[ -s "$work/stub/check-says" ]]; then cat "$work/stub/check-says" >&2; exit 1; fi
 if [[ -s "$work/stub/check-notes" ]]; then cat "$work/stub/check-notes" >&2; fi
 if [[ -s "$work/stub/check-stdout" ]]; then cat "$work/stub/check-stdout"; exit 1; fi
@@ -319,7 +322,7 @@ check_says "$no_review"
 GATE_SKIP_REVIEW=1 refused "no review recorded" 3
 check "no review recorded: names the worktree to review in" 'grep -qF "needs a review: run /pre-push-review in $wt" <<< "$out"'
 check "the check runs against the merge base with main, without GATE_SKIP_REVIEW" \
-  '[[ "$(cat "$stub/check.log")" == "check $(git -C "$wt" merge-base HEAD origin/main) GATE_SKIP_REVIEW=unset" ]]'
+  '[[ "$(cat "$stub/check.log")" == "$wt check $(git -C "$wt" merge-base HEAD origin/main) GATE_SKIP_REVIEW=unset" ]]'
 check_says "$findings" "  R1 critical src/a.cs:1 (Tests): an untested branch"
 refused "findings wait for a person" 4
 check "findings wait for a person: names the command that decides them" 'grep -qF "cd $wt && scripts/review.sh accept-open" <<< "$out"'
@@ -330,6 +333,17 @@ check_says "$no_review" "12 review finding(s) wait for a person."
 refused "both refusal texts at a line's start, many findings" 4
 check_says "  $no_review" "x $findings"
 refused "refusal texts not at a line's start" 1
+check_says " $findings"
+refused "a findings line with a space before its count" 1
+check_says " review finding(s) wait for a person."
+refused "a findings line with a space and no count" 1
+check_says "review finding(s) wait for a person."
+refused "a findings line with no count" 1
+check_says "1 review finding(s) wait for a person."
+refused "a findings line with a one-digit count" 4
+check_says "$no_review"
+printf '%s\n%s' "$review_step" "gate: the review check failed, and the log ends here" > "$stub/gate-log"
+refused "a gate log with no final newline" 3
 # What the gate printed doesn't count: a refusal in the push's log while the check passes is an ordinary failure.
 gate_says "$review_step" "$no_review" "$findings"
 refused "refusal texts only in the push's log" 1
@@ -728,6 +742,29 @@ out="$("$reapply" --brings '#83' "$repo" 2>&1)" && rc=0 || rc=$?
 check "gh pr create exiting 3 after the push: reapply.sh exits 1" '[[ $rc -eq 1 ]] || { echo "rc $rc: $out" >&2; false; }'
 check "gh pr create exiting 3 after the push: it was the PR create that failed" 'grep -q "^pr create" "$stub/gh.log" && grep -q "something odd" <<< "$out"'
 command rm -f "$stub/create-exits-3"
+
+# ── A checkout whose path holds a space: the printed commands quote it ────────
+spaced="$work/Wid get"
+git_q clone -q "$origin" "$spaced" 2>/dev/null
+spaced_wt="$work/Wid get-worktrees/chore-reapply-baseline"
+printf 'name: CI v10\n' > "$skill/template/owned/.github/workflows/ci.yml"
+for case in none findings; do
+  reset_gh
+  : > "$stub/open"
+  # The first case leaves an unpushed branch behind: count its work as merged, so the second starts fresh.
+  git -C "$spaced" rev-parse --verify --quiet refs/heads/chore/reapply-baseline > "$stub/merged" || : > "$stub/merged"
+  if [[ $case == none ]]; then check_says "$no_review"; else check_says "$findings"; fi
+  gate_says "$review_step" "gate: refused"
+  out="$("$reapply" --brings '#83' "$spaced" 2>&1)" && rc=0 || rc=$?
+  command rm -f "$stub/gate-log" "$stub/check-says"
+  if [[ $case == none ]]; then
+    check "a path with a space: the review hint quotes it" \
+      '[[ $rc -eq 3 ]] && grep -qF "run /pre-push-review in $(printf %q "$spaced_wt"), then" <<< "$out" || { echo "rc $rc: $out" >&2; false; }'
+  else
+    check "a path with a space: the accept-open hint quotes it" \
+      '[[ $rc -eq 4 ]] && grep -qF "cd $(printf %q "$spaced_wt") && scripts/review.sh accept-open" <<< "$out" || { echo "rc $rc: $out" >&2; false; }'
+  fi
+done
 
 # ── Bad arguments ───────────────────────────────────────────────────────────
 check "args: --brings required" '! "$reapply" "$repo" >/dev/null 2>&1'

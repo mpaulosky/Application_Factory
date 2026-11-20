@@ -117,7 +117,8 @@ def main(argv=None, listed=None, reapply=run_reapply, latest_pr=gh_latest_pr, ex
                         help="the Factory PRs this round brings in, as reapply.sh takes them: '#80,#81' (quoted) or mpaulosky/Application_Factory#80,#81")
     parser.add_argument("--root", default=DEFAULT_ROOT,
                         help="the directory holding each repo's checkout (default ~/github)")
-    parser.add_argument("--dry-run", action="store_true", help="print the reapply.sh calls instead of making them")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="print the reapply.sh calls instead of making them (with --auto: check the tools, print the plan)")
     parser.add_argument("--auto", action="store_true",
                         help="check the tools, then reapply, review and land each repo with no person between the steps (ADR 0015)")
     args = parser.parse_args(argv)
@@ -162,6 +163,8 @@ def main(argv=None, listed=None, reapply=run_reapply, latest_pr=gh_latest_pr, ex
 
     if args.auto:
         import auto_rollout  # noqa: PLC0415 - only --auto needs it
+        # Under --auto, reapply.sh runs in a process group of its own, which a SIGTERM or SIGHUP kills whole.
+        reapply = auto_rollout.run_reapply if reapply is run_reapply else reapply
         return auto_rollout.run(order, args.brings, args.root, checkout, args.dry_run, reapply=reapply, say=say,
                                 err=err, **({"default_root": DEFAULT_ROOT} | (auto or {})))
 

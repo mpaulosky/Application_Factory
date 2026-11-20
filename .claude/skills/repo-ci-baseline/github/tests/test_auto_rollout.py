@@ -57,7 +57,10 @@ def test_reapply_sh_reads_the_refusals_in_the_ledgers_and_the_gates_own_words():
     check = check[:check.index("\n}\n")]
     assert f"message: `{reapply_constant('no_review_text')}" in check
     assert f"`${{blocking.length}} {reapply_constant('findings_wait_text')}" in check
-    assert "process.stderr.write(`${printable(text)}\\n`)" in ledger, "a refusal goes to stderr, which reapply.sh reads"
+    assert "process.stderr.write(`${printable(text)}\\n`)" in ledger, "fail() writes to stderr, which reapply.sh reads"
+    command = ledger[ledger.index('case "check": {'):]
+    command = command[:command.index("\n      }\n")]
+    assert "if (!result.ok) return fail(result.message);" in command, "the check's refusal goes through fail()"
     gate = (SKILL / "template/owned/scripts/gate.sh").read_text()
     assert f'step "{reapply_constant("review_step")}"' in gate, "reapply.sh asks only when the gate stopped at this step"
     assert 'step() { echo -e "\\n${CYAN}▶ $1${RESET}"; }' in gate, "reapply.sh reads this header form"
@@ -84,19 +87,6 @@ def test_the_documented_limits():
     assert auto.MAX_REVIEWS == 2
     assert auto.REVIEW_TIMEOUT_MINUTES == 180
     assert (auto.LOOKUP_TRIES, auto.LOOKUP_WAIT_SECONDS) == (5, 10)
-
-
-def test_the_deny_rules_word_for_word():
-    assert auto.DENIED_TOOLS == (
-        "Bash(git push:*)",
-        "Bash(scripts/review.sh accept:*)",
-        "Bash(scripts/review.sh accept-open:*)",
-        "Bash(gh pr create:*)", "Bash(gh pr edit:*)", "Bash(gh pr comment:*)", "Bash(gh pr review:*)",
-        "Bash(gh pr merge:*)", "Bash(gh pr ready:*)", "Bash(gh pr close:*)",
-        "Bash(gh issue create:*)", "Bash(gh issue comment:*)", "Bash(gh issue edit:*)", "Bash(gh issue close:*)",
-        "Bash(gh label:*)", "Bash(gh release:*)", "Bash(gh repo:*)", "Bash(gh secret:*)", "Bash(gh workflow:*)",
-        f"Edit(/{auto.FACTORY}/**)", f"Write(/{auto.FACTORY}/**)", "Edit(~/.claude/**)", "Write(~/.claude/**)",
-    )
 
 
 # ── The preflight ───────────────────────────────────────────────────────────
@@ -134,7 +124,7 @@ def test_sdk_hint_finds_a_plain_version_only(text, version):
     assert auto.sdk_hint(text) == version
 
 
-def fake_preflight(on_path=auto.TOOLS + ("dotnet",), answers=None, global_json='{"sdk": {"version": "10.0.403"}}',
+def fake_preflight(on_path=auto.TOOLS + auto.SANDBOX_TOOLS + ("dotnet",), answers=None, global_json='{"sdk": {"version": "10.0.403"}}',
                    tmp_path=None):
     answers = {"shfmt": (0, "v3.14.1\n", ""), "gh": (0, "", ""), "dotnet": (0, "10.0.404\n", "")} | dict(answers or {})
     calls = []
@@ -172,14 +162,34 @@ def test_preflight_runs_shfmt_with_path_alone_as_the_gh_check_does(tmp_path, mon
 
 @pytest.mark.parametrize("tool", auto.TOOLS)
 def test_preflight_names_each_missing_tool_and_runs_nothing_of_it(tool, tmp_path):
-    problems, calls = fake_preflight(on_path=tuple(t for t in auto.TOOLS + ("dotnet",) if t != tool), tmp_path=tmp_path)
+    problems, calls = fake_preflight(on_path=tuple(t for t in auto.TOOLS + auto.SANDBOX_TOOLS + ("dotnet",) if t != tool),
+                                     tmp_path=tmp_path)
     assert problems == [f"{tool} isn't on PATH"]
     assert not any(call["command"][0] == tool for call in calls)
 
 
-def test_preflight_refuses_an_old_shfmt_and_a_signed_out_gh(tmp_path):
-    problems, _ = fake_preflight(answers={"shfmt": (0, "v3.13.0\n", ""), "gh": (1, "", "not logged in")}, tmp_path=tmp_path)
-    assert problems == ["shfmt is v3.13.0; the gate needs v3.14 or a later v3 release", "gh isn't signed in: gh auth login"]
+def test_preflight_refuses_an_old_shfmt_and_a_gh_that_fails(tmp_path):
+    problems, _ = fake_preflight(answers={"shfmt": (0, "v3.13.0\n", ""), "gh": (1, "", "not logged in\n")}, tmp_path=tmp_path)
+    assert problems == ["shfmt is v3.13.0; the gate needs v3.14 or a later v3 release",
+                        "gh auth status failed (exit 1): not logged in; if it says you're signed out: gh auth login"]
+    problems, _ = fake_preflight(answers={"gh": (1, "", "")}, tmp_path=tmp_path)
+    assert problems == ["gh auth status failed (exit 1): no answer; if it says you're signed out: gh auth login"]
+
+
+def test_preflight_names_each_missing_sandbox_tool(tmp_path):
+    if not auto.SANDBOX_TOOLS:
+        pytest.skip("the sandbox needs no tools here")
+    problems, _ = fake_preflight(on_path=auto.TOOLS + ("dotnet",), tmp_path=tmp_path)
+    assert problems == [f"{tool} isn't on PATH: the review session's sandbox needs it" for tool in auto.SANDBOX_TOOLS]
+
+
+def test_preflight_names_an_sdk_it_cant_check(tmp_path, monkeypatch):
+    def no_room(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(auto.tempfile, "TemporaryDirectory", no_room)
+    problems, _ = fake_preflight(tmp_path=tmp_path)
+    assert problems == ["can't check the .NET SDK (no temporary folder to check it in): [Errno 28] No space left on device"]
 
 
 def test_preflight_reads_shfmts_version_from_stdout_alone(tmp_path):
@@ -209,8 +219,8 @@ def test_preflight_never_builds_an_install_command_from_an_unreadable_version(tm
 
 
 def test_preflight_wants_dotnet_only_when_the_template_has_a_global_json(tmp_path):
-    assert fake_preflight(on_path=auto.TOOLS, global_json=None, tmp_path=tmp_path)[0] == []
-    problems, _ = fake_preflight(on_path=auto.TOOLS, tmp_path=tmp_path)
+    assert fake_preflight(on_path=auto.TOOLS + auto.SANDBOX_TOOLS, global_json=None, tmp_path=tmp_path)[0] == []
+    problems, _ = fake_preflight(on_path=auto.TOOLS + auto.SANDBOX_TOOLS, tmp_path=tmp_path)
     assert problems == ["the Template's global.json names .NET SDK 10.0.403, and dotnet isn't on PATH"]
 
 
@@ -300,8 +310,8 @@ def test_owned_changes_lists_only_the_owned_files_the_branch_changes(tmp_path):
 # ── The review session ──────────────────────────────────────────────────────
 
 class FakeSession:
-    def __init__(self, code=0, raises=None):
-        self.code, self.raises, self.pid, self.waits = code, raises, os.getpid(), []
+    def __init__(self, code=0, raises=None, pid=None):
+        self.code, self.raises, self.pid, self.waits = code, raises, pid or 999999, []
 
     def wait(self, timeout=None):
         self.waits.append(timeout)
@@ -310,14 +320,26 @@ class FakeSession:
         return self.code
 
 
+def fake_guard(tmp_path):
+    common = tmp_path / "clone" / ".git"
+    (common / "review").mkdir(parents=True, exist_ok=True)
+    return auto.Guard(worktree="w", remote_branch="", template={}, ledgers=str(common / "review"), ledgers_before={})
+
+
+SKILL_TEXT = "# Pre-push review\n\nThe skill's own steps.\n"
+AGENTS = {"pre-push-reviewer": {"description": "d", "prompt": "p", "tools": ["Read"]}}
+
+
 def review_once(tmp_path, monkeypatch, popen=None, changes=None, worktree=None, session=None, end=None, broke=(),
-                clock=None):
+                clock=None, guard=None):
     seen = {}
     session = session or FakeSession()
     ended = seen.setdefault("ended", [])
 
     def fake_popen(command, **kwargs):
         seen.update(command=command, **kwargs)
+        seen["settings"] = json.loads(Path(command[command.index("--settings") + 1]).read_text())
+        seen["gh_config"] = sorted(os.listdir(kwargs["env"]["GH_CONFIG_DIR"]))
         kwargs["stdout"].write("the session's own output\n")
         return session
 
@@ -328,47 +350,122 @@ def review_once(tmp_path, monkeypatch, popen=None, changes=None, worktree=None, 
     code, log, _ = auto.run_review(TM, str(worktree), popen=popen or fake_popen,
                                    changes=changes or (lambda path: [".github/hooks/pre-push", "scripts/gate.sh"]),
                                    log_dir=str(tmp_path / "logs"), end=end or (lambda s: ended.append(s) or True),
-                                   guard=lambda w: seen.setdefault("guarded", w), check=lambda g: list(broke),
+                                   guard=guard or (lambda w: seen.setdefault("guarded", w) and fake_guard(tmp_path)),
+                                   check=lambda g: list(broke), skill=lambda: SKILL_TEXT, agents=lambda: AGENTS,
                                    **({"clock": clock} if clock else {}))
     return code, log, seen, str(worktree)
 
 
-def test_the_review_session_starts_in_the_worktree_unattended(tmp_path, monkeypatch):
+def test_the_review_session_runs_sandboxed_in_the_worktree_with_the_templates_skill(tmp_path, monkeypatch):
     code, log, seen, worktree = review_once(tmp_path, monkeypatch)
     assert code == 0
     command = seen["command"]
     assert command[:2] == ["claude", "-p"]
-    assert command[command.index("--permission-mode") + 1] == "auto"
-    assert seen["cwd"] == worktree
-    assert seen["stdin"] is subprocess.DEVNULL
-    assert seen["stderr"] is subprocess.STDOUT
-    assert seen["start_new_session"] is True
+    flag = lambda name: command[command.index(name) + 1]  # noqa: E731
+    assert flag("--permission-mode") == "dontAsk", "anything not allowed is refused"
+    assert flag("--setting-sources") == "user", "the repository's settings, hooks and permission rules aren't loaded"
+    assert "--strict-mcp-config" in command and "--mcp-config" not in command, "no MCP server"
+    assert json.loads(flag("--agents")) == AGENTS
+    assert "--add-dir" not in command and "--bare" not in command
+    assert seen["settings"]["sandbox"]["enabled"] is True
+    assert seen["cwd"] == worktree and seen["start_new_session"] is True
+    assert seen["stdin"] is subprocess.DEVNULL and seen["stderr"] is subprocess.STDOUT
     assert "the session's own output" in Path(log).read_text(), "the session's output is the log"
     assert len(seen["ended"]) == 1, "its group is ended when it exits normally"
-    assert "GATE_SKIP_REVIEW" not in seen["env"]
-    assert seen["env"]["PATH"] == os.environ["PATH"] and seen["env"]["HOME"] == os.environ["HOME"]
-    assert seen["env"]["GH_CONFIG_DIR"] != os.environ.get("GH_CONFIG_DIR") and seen["env"]["GIT_CONFIG_COUNT"] == "5"
     assert seen["guarded"] == worktree, "what the session may not change is read before it starts"
+    env = seen["env"]
+    assert "GATE_SKIP_REVIEW" not in env and env["PATH"] == os.environ["PATH"] and env["HOME"] == os.environ["HOME"]
+    assert seen["gh_config"] == [], "gh gets an empty config: signed out"
     prompt = command[2]
-    assert prompt.startswith("/pre-push-review ")
-    assert worktree in prompt and TM in prompt
-    assert ".github/hooks/pre-push, scripts/gate.sh" in prompt
-    assert "Never edit an Owned file" in prompt and "Don't push" in prompt and "never ask one" in prompt
-    assert "gh isn't signed in here, and git can't push" in prompt
+    assert prompt.endswith(SKILL_TEXT), "the skill's text is the Template's, carried in the prompt"
+    assert worktree in prompt and TM in prompt and ".github/hooks/pre-push, scripts/gate.sh" in prompt
+    assert os.path.join(worktree, ".claude", "skills", "pre-push-review") in prompt
+    for rule in ("never ask one", "Never edit an Owned file", "record it open", "template/owned/", "Don't push",
+                 "don't file the follow-up issue", "don't edit a PR", "skip the skill's GitHub reads",
+                 "if git fetch fails, go on with origin/main", "End with the output of scripts/review.sh report"):
+        assert rule in prompt, rule
 
 
-def test_the_review_session_gets_no_access_to_the_template_and_every_deny_rule(tmp_path, monkeypatch):
+def test_the_sessions_folders_and_settings_are_gone_after_it(tmp_path, monkeypatch):
     _, _, seen, _ = review_once(tmp_path, monkeypatch)
-    command = seen["command"]
-    assert "--add-dir" not in command and auto.OWNED not in " ".join(command[3:])
-    denied = command[command.index("--disallowedTools") + 1:]
-    assert tuple(denied) == auto.DENIED_TOOLS
-    for rule in ("Bash(git push:*)", "Bash(scripts/review.sh accept:*)", "Bash(scripts/review.sh accept-open:*)",
-                 "Bash(gh pr create:*)", "Bash(gh pr edit:*)", "Bash(gh pr comment:*)", "Bash(gh pr merge:*)",
-                 "Bash(gh issue create:*)", "Bash(gh issue comment:*)", f"Edit(/{auto.FACTORY}/**)",
-                 f"Write(/{auto.FACTORY}/**)", "Edit(~/.claude/**)", "Write(~/.claude/**)"):
-        assert rule in denied
-    assert auto.FACTORY.startswith("/") and f"Edit(//{auto.FACTORY.lstrip('/')}/**)" in denied, "an absolute path rule is //path"
+    assert not os.path.exists(seen["env"]["GH_CONFIG_DIR"]) and not os.path.exists(seen["env"]["TMPDIR"])
+
+
+def test_the_session_settings_sandbox_its_bash_and_fence_its_file_tools(tmp_path):
+    home = str(tmp_path / "home")
+    common = str(tmp_path / "clone" / ".git")
+    settings = auto.session_settings("/w/wt", common, "/t/session", home=home)
+    sandbox = settings["sandbox"]
+    assert (sandbox["enabled"], sandbox["failIfUnavailable"], sandbox["allowUnsandboxedCommands"],
+            sandbox["excludedCommands"]) == (True, True, False, [])
+    guarded = [os.path.join(common, name) for name in ("config", "config.worktree", "hooks", "info")]
+    assert sandbox["filesystem"] == {
+        "allowWrite": [common, str(tmp_path / "clone" / ".security"), "/t/session"],
+        "denyWrite": guarded,
+        "denyRead": [path.replace("~", home, 1) for path in auto.CREDENTIAL_PATHS],
+    }
+    assert sandbox["network"] == {"allowedDomains": list(auto.SANDBOX_DOMAINS)}
+    permissions = settings["permissions"]
+    assert permissions["allow"] == [*auto.SESSION_TOOLS, "Edit(//w/wt/**)", "Edit(//t/session/**)"]
+    deny = permissions["deny"]
+    assert deny[:len(auto.DENIED_TOOLS)] == list(auto.DENIED_TOOLS)
+    for path in auto.CREDENTIAL_PATHS:
+        assert f"Read(/{path.replace('~', home, 1)})" in deny and f"Read(/{path.replace('~', home, 1)}/**)" in deny
+    for path in guarded:
+        assert f"Edit(/{path})" in deny and f"Edit(/{path}/**)" in deny
+    assert not any(rule.startswith("Write(") for rule in permissions["allow"] + deny), "Edit rules cover every file-editing tool"
+
+
+def test_the_sandbox_and_session_lists_word_for_word():
+    assert auto.SESSION_TOOLS == ("Read", "Glob", "Grep", "Bash", "Agent", "Task", "TodoWrite")
+    assert auto.CREDENTIAL_PATHS == (
+        "~/.ssh", "~/.config/gh", "~/.git-credentials", "~/.config/git/credentials", "~/.netrc", "~/.gnupg",
+        "~/.docker", "~/.npmrc", "~/.aws", "~/.azure", "~/.config/gcloud", "~/.kube", "~/.local/share/keyrings",
+        "~/.password-store", "~/.claude/.credentials.json", "~/.cache/repo-ci-baseline")
+    assert auto.SANDBOX_DOMAINS == ("registry.npmjs.org", "api.nuget.org", "github.com", "pypi.org", "files.pythonhosted.org")
+    assert auto.SANDBOX_TOOLS == (("bwrap", "socat") if sys.platform.startswith("linux") else ())
+    assert auto.TOOLS == ("git", "gh", "python3", "node", "pnpm", "shfmt", "claude")
+    assert (auto.GROUP_WAIT_SECONDS, auto.SESSION_BROKE_A_RULE) == (10, 126)
+
+
+def test_the_agent_comes_from_the_templates_file():
+    agents = auto.agent_definition()
+    assert set(agents) == {"pre-push-reviewer"}
+    agent = agents["pre-push-reviewer"]
+    assert agent["tools"] == ["Read", "Grep", "Glob"] and agent["model"] == "sonnet"
+    assert agent["description"].startswith("A read-only reviewer for the pre-push-review skill") and "\n" not in agent["description"]
+    assert agent["prompt"].startswith("# Pre-push reviewer")
+    assert auto.AGENT_FILE == os.path.join(auto.OWNED, ".claude", "agents", "pre-push-reviewer.md")
+
+
+@pytest.mark.parametrize("text, problem", [
+    ("# no front matter\n", "has no front matter"),
+    ("---\nname: x\ndescription: y\n---\nbody\n", "has no tools"),
+    ("---\nname: x\ntools: Read\n---\nbody\n", "has no description"),
+])
+def test_an_agent_file_that_doesnt_read_is_refused(tmp_path, text, problem):
+    (tmp_path / "a.md").write_text(text)
+    with pytest.raises(ValueError, match=problem):
+        auto.agent_definition(str(tmp_path / "a.md"))
+
+
+def test_the_skill_comes_from_the_templates_file_without_its_front_matter():
+    text = auto.read_skill()
+    assert not text.startswith("---") and text.startswith("# Pre-push review")
+    assert auto.SKILL_FILE == os.path.join(auto.OWNED, ".claude", "skills", "pre-push-review", "SKILL.md")
+
+
+def test_the_deny_rules_word_for_word():
+    assert auto.DENIED_TOOLS == (
+        "Bash(git push:*)",
+        "Bash(scripts/review.sh accept:*)",
+        "Bash(scripts/review.sh accept-open:*)",
+        "Bash(gh pr create:*)", "Bash(gh pr edit:*)", "Bash(gh pr comment:*)", "Bash(gh pr review:*)",
+        "Bash(gh pr merge:*)", "Bash(gh pr ready:*)", "Bash(gh pr close:*)",
+        "Bash(gh issue create:*)", "Bash(gh issue comment:*)", "Bash(gh issue edit:*)", "Bash(gh issue close:*)",
+        "Bash(gh label:*)", "Bash(gh release:*)", "Bash(gh repo:*)", "Bash(gh secret:*)", "Bash(gh workflow:*)",
+        f"Edit(/{auto.FACTORY}/**)", "Edit(~/.claude/**)",
+    )
 
 
 def test_the_review_log_is_the_owners_alone(tmp_path, monkeypatch):
@@ -392,8 +489,8 @@ def test_an_existing_log_folder_is_set_to_0700_and_a_symlink_is_refused(tmp_path
 
 
 def test_the_prompt_says_none_when_no_owned_file_changes():
-    assert "These files the branch changes are Owned Baseline files, which the next Apply overwrites: none." in \
-        auto.review_command(TM, "/w", [])[2]
+    prompt = auto.review_command(TM, "/w", [], "/s.json", AGENTS, SKILL_TEXT)[2]
+    assert "These files the branch changes are Owned Baseline files, which the next Apply overwrites: none." in prompt
 
 
 def test_a_review_session_past_its_time_is_stopped_and_noted(tmp_path, monkeypatch):
@@ -410,6 +507,15 @@ def test_a_review_session_past_its_time_is_stopped_and_noted(tmp_path, monkeypat
     assert len(session.waits) > 1 and max(session.waits) <= 0.5
     assert seen["ended"] == [session]
     assert f"ran past {auto.REVIEW_TIMEOUT_MINUTES} minutes" in Path(log).read_text()
+
+
+def test_a_broken_rule_outranks_a_timeout(tmp_path, monkeypatch):
+    now = [0.0]
+    code, log, _, _ = review_once(tmp_path, monkeypatch, session=FakeSession(raises=subprocess.TimeoutExpired("c", 1)),
+                                  clock=lambda: now.__setitem__(0, now[0] + 3600) or now[0], broke=["x"])
+    assert code == auto.SESSION_BROKE_A_RULE
+    text = Path(log).read_text()
+    assert "ran past" in text and "the session broke a rule: x" in text
 
 
 def test_an_interrupted_review_session_ends_its_group_and_passes_the_interrupt_on(tmp_path, monkeypatch):
@@ -433,36 +539,53 @@ def wait_gone(pid):
             os.kill(pid, 0)
         except ProcessLookupError:
             return True
-        state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
-        if state.startswith("Z") or state == "":
+        try:
+            state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+        except (FileNotFoundError, IndexError):
+            return True
+        if state == "Z":
             return True
         time.sleep(0.05)
     return False
 
 
-def real_session(tmp_path, script, timeout):
+def read_pid(path):
+    for _ in range(200):
+        if path.exists() and path.read_text().strip():
+            return int(path.read_text())
+        time.sleep(0.025)
+    raise AssertionError(f"{path} was never written")
+
+
+needs_proc = pytest.mark.skipif(not os.path.isdir("/proc"), reason="needs /proc to see a process end")
+
+
+def real_session(tmp_path, script, timeout, signal_after_start=None):
     pid_file = tmp_path / "child.pid"
     worktree = tmp_path / "w"
     worktree.mkdir(exist_ok=True)
 
     def popen(command, **kwargs):
-        return subprocess.Popen(["bash", "-c", script.format(pid_file=pid_file)], **kwargs)
+        child = subprocess.Popen(["bash", "-c", script.format(pid_file=pid_file)], **kwargs)
+        if signal_after_start is not None:
+            read_pid(pid_file)
+            os.kill(os.getpid(), signal_after_start)
+        return child
 
     code, log, _ = auto.run_review(TM, str(worktree), popen=popen, changes=lambda path: [], timeout=timeout,
-                                   log_dir=str(tmp_path / "logs"), guard=lambda w: None, check=lambda g: [])
-    for _ in range(100):
-        if pid_file.exists() and pid_file.read_text().strip():
-            break
-        time.sleep(0.05)
-    return code, log, int(pid_file.read_text())
+                                   log_dir=str(tmp_path / "logs"), guard=lambda w: fake_guard(tmp_path),
+                                   check=lambda g: [], skill=lambda: SKILL_TEXT, agents=lambda: AGENTS)
+    return code, log, read_pid(pid_file)
 
 
+@needs_proc
 def test_a_timed_out_session_takes_what_it_started_with_it(tmp_path):
     code, _, child = real_session(tmp_path, "sleep 60 & echo $! > {pid_file}; wait", timeout=2)
     assert code == 124
     assert wait_gone(child)
 
 
+@needs_proc
 def test_a_session_that_exits_takes_what_it_left_running_with_it(tmp_path):
     code, log, child = real_session(tmp_path, "sleep 60 & echo $! > {pid_file}; echo the session said this; exit 0", timeout=60)
     assert code == 0
@@ -470,14 +593,13 @@ def test_a_session_that_exits_takes_what_it_left_running_with_it(tmp_path):
     assert "the session said this" in Path(log).read_text()
 
 
+@needs_proc
 def test_a_sigterm_during_a_session_ends_its_group_and_becomes_an_exit(tmp_path):
-    import threading
-    threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
     previous = signal.getsignal(signal.SIGTERM)
     with pytest.raises(SystemExit) as stop:
-        real_session(tmp_path, "sleep 60 & echo $! > {pid_file}; wait", timeout=60)
+        real_session(tmp_path, "sleep 60 & echo $! > {pid_file}; wait", timeout=60, signal_after_start=signal.SIGTERM)
     assert stop.value.code == 128 + signal.SIGTERM
-    assert wait_gone(int((tmp_path / "child.pid").read_text()))
+    assert wait_gone(read_pid(tmp_path / "child.pid"))
     assert signal.getsignal(signal.SIGTERM) is previous, "the handler is put back"
 
 
@@ -492,6 +614,16 @@ def test_a_signal_while_the_session_starts_still_ends_its_group(tmp_path, monkey
     with pytest.raises(SystemExit) as stop:
         review_once(tmp_path, monkeypatch, popen=popen, end=lambda s: ended.append(s) or True)
     assert ended == [session] and stop.value.code == 128 + signal.SIGHUP
+
+
+def test_a_signal_while_claude_fails_to_start_is_still_passed_on(tmp_path, monkeypatch):
+    def popen(command, **kwargs):
+        os.kill(os.getpid(), signal.SIGTERM)
+        raise FileNotFoundError(2, "No such file", "claude")
+
+    with pytest.raises(SystemExit) as stop:
+        review_once(tmp_path, monkeypatch, popen=popen)
+    assert stop.value.code == 128 + signal.SIGTERM
 
 
 def test_a_second_signal_during_the_cleanup_neither_stops_it_nor_replaces_the_first(tmp_path, monkeypatch):
@@ -513,6 +645,19 @@ def test_a_second_signal_during_the_cleanup_neither_stops_it_nor_replaces_the_fi
     assert killed == [session]
 
 
+def test_a_signal_during_a_session_is_not_called_a_timeout(tmp_path, monkeypatch):
+    session = FakeSession(raises=subprocess.TimeoutExpired("claude", 1))
+
+    def popen(command, **kwargs):
+        os.kill(os.getpid(), signal.SIGTERM)
+        return session
+
+    with pytest.raises(SystemExit):
+        review_once(tmp_path, monkeypatch, popen=popen)
+    (log,) = (tmp_path / "logs").iterdir()
+    assert "ran past" not in log.read_text()
+
+
 @pytest.mark.parametrize("signum, raised", [(signal.SIGINT, KeyboardInterrupt), (signal.SIGTERM, SystemExit),
                                             (signal.SIGHUP, SystemExit)])
 def test_deferred_signals_hold_each_signal_and_restore_the_handlers(signum, raised):
@@ -528,6 +673,81 @@ def test_deferred_signals_hold_each_signal_and_restore_the_handlers(signum, rais
         assert auto.passed_on(signum).code == 128 + signum
 
 
+@pytest.mark.parametrize("hold", [auto.deferred_signals, auto.round_signals])
+def test_an_ignored_signal_stays_ignored(hold):
+    previous = signal.signal(signal.SIGHUP, signal.SIG_IGN)  # nohup's
+    try:
+        with hold():
+            assert signal.getsignal(signal.SIGHUP) is signal.SIG_IGN
+            os.kill(os.getpid(), signal.SIGHUP)
+            time.sleep(0.05)
+        assert signal.getsignal(signal.SIGHUP) is signal.SIG_IGN
+    finally:
+        signal.signal(signal.SIGHUP, previous)
+
+
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGHUP])
+def test_round_signals_turn_sigterm_and_sighup_into_an_exit(signum):
+    before = signal.getsignal(signum)
+    with pytest.raises(SystemExit) as stop, auto.round_signals():
+        os.kill(os.getpid(), signum)
+        time.sleep(1)
+    assert stop.value.code == 128 + signum
+    assert signal.getsignal(signum) is before
+
+
+def test_run_in_group_starts_its_own_group_and_ends_it_on_an_interrupt():
+    seen, ended = {}, []
+
+    def popen(command, **kwargs):
+        seen.update(command=command, **kwargs)
+        return FakeSession(code=3)
+
+    assert auto.run_in_group(["x"], popen=popen) == 3
+    assert seen == {"command": ["x"], "start_new_session": True}
+    with pytest.raises(SystemExit):
+        auto.run_in_group(["x"], popen=lambda c, **k: _Raising(), end=ended.append)
+    assert len(ended) == 1
+
+
+class _Raising(FakeSession):
+    def wait(self, timeout=None):
+        raise SystemExit(143)
+
+
+@needs_proc
+def test_a_sigterm_of_the_round_ends_reapply_and_what_it_started(tmp_path):
+    pid_file = tmp_path / "child.pid"
+
+    def popen(command, **kwargs):
+        child = subprocess.Popen(["bash", "-c", f"sleep 60 & echo $! > {pid_file}; wait"], **kwargs)
+        read_pid(pid_file)
+        os.kill(os.getpid(), signal.SIGTERM)
+        return child
+
+    with pytest.raises(SystemExit) as stop, auto.round_signals():
+        auto.run_in_group(["reapply.sh"], popen=popen)
+    assert stop.value.code == 143
+    assert wait_gone(read_pid(pid_file))
+
+
+def test_run_land_and_run_reapply_run_in_groups_of_their_own(monkeypatch):
+    seen = []
+    monkeypatch.setattr(auto, "run_in_group", lambda command: seen.append(command) or 5)
+    assert auto.run_land([f"{TM}#130", f"{REST[0]}#5"]) == 5
+    assert auto.run_reapply("#82", "/r/TicketManager") == 5
+    assert seen == [[auto.LAND, f"{TM}#130", f"{REST[0]}#5"], [auto.REAPPLY, "--brings", "#82", "/r/TicketManager"]]
+    assert auto.REAPPLY == rollout.REAPPLY
+
+
+def test_rollout_hands_auto_the_reapply_that_runs_in_a_group(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(auto, "run", lambda *a, **k: seen.update(k) or 0)
+    rollout.main(["--auto", "--brings", "#82", "--root", "/r"], listed=LISTED, exists=lambda path: True,
+                 out=io.StringIO(), err=io.StringIO())
+    assert seen["reapply"] is auto.run_reapply
+
+
 def test_wait_for_stops_at_a_signal_or_the_deadline():
     session = FakeSession(raises=subprocess.TimeoutExpired("claude", 1))
     assert auto.wait_for(session, 3600, [signal.SIGTERM]) is None and len(session.waits) == 1
@@ -538,39 +758,69 @@ def test_wait_for_stops_at_a_signal_or_the_deadline():
     assert auto.wait_for(FakeSession(code=7), 2, []) == 7
 
 
+def test_wait_for_stops_at_the_deadline_itself():
+    # The clock reads exactly the deadline on the look after a poll: that is past its time.
+    ticks = iter([0.0, 1.0, 2.0])
+    session = FakeSession(raises=subprocess.TimeoutExpired("claude", 1))
+    assert auto.wait_for(session, 2, [], clock=lambda: next(ticks)) is None
+
+
 def test_a_session_that_broke_a_rule_is_its_own_code_and_says_what(tmp_path, monkeypatch):
     code, log, _, _ = review_once(tmp_path, monkeypatch, broke=["the remote chore/reapply-baseline moved"])
     assert code == auto.SESSION_BROKE_A_RULE
     assert "rollout.sh: the session broke a rule: the remote chore/reapply-baseline moved" in Path(log).read_text()
 
 
-def test_the_sessions_environment_has_no_sign_in_but_claudes():
-    base = {"PATH": "/bin", "HOME": "/h", "GH_TOKEN": "t", "GITHUB_TOKEN": "t", "RELEASE_PR_PAT": "p", "AWS_PROFILE": "x",
-            "MY_API_KEY": "k", "NPM_TOKEN": "n", "DB_PASSWORD": "p", "SSH_AUTH_SOCK": "/s", "GIT_CONFIG_COUNT": "1",
-            "GIT_CONFIG_KEY_0": "credential.helper", "GIT_CONFIG_VALUE_0": "store", "GIT_CONFIG_KEY_9": "x",
-            "GIT_CONFIG_VALUE_9": "y", "GATE_SKIP_REVIEW": "1",
-            "ANTHROPIC_API_KEY": "a", "CLAUDE_CODE_OAUTH_TOKEN": "c", "LANG": "C.UTF-8"}
-    env = auto.session_env(base, "/empty")
-    assert {name for name in base if name in env} == {"PATH", "HOME", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "LANG",
-                                                      "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"}
-    assert env["GH_CONFIG_DIR"] == "/empty"
+DROPPED = ("GH_TOKEN", "GITHUB_TOKEN", "gh_token", "RELEASE_PR_PAT", "AWS_PROFILE", "MY_API_KEY", "NPM_TOKEN",
+           "DB_PASSWORD", "SSH_AUTH_SOCK", "SSH_AGENT_PID", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+           "GIT_CONFIG_KEY_9", "GIT_CONFIG_PARAMETERS", "GATE_SKIP_REVIEW", "CLIENT_SECRET", "GOOGLE_APPLICATION_CREDENTIALS",
+           "AZURE_CLIENT_ID", "NPM_CONFIG__AUTH", "DOCKER_AUTH_CONFIG", "STRIPE_APIKEY", "API_KEY_PROD", "DATABASE_URL",
+           "SENTRY_DSN", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH_COMMAND", "GIT_SSH", "DBUS_SESSION_BUS_ADDRESS",
+           "GPG_PASSPHRASE", "SESSION_COOKIE", "MY_BEARER", "DOCKER_CREDENTIAL", "XSSH_AUTH_SOCK", "XAUTHORITY")
+KEPT = ("PATH", "HOME", "LANG", "LD_LIBRARY_PATH", "MONKEY", "KEYBOARD", "MYAWS_X", "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM", "GIT_AUTHOR_NAME", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "XSSH_X")
+
+
+def test_the_sessions_environment_has_no_secrets_but_claudes_sign_in(tmp_path):
+    base = {name: "x" for name in DROPPED + KEPT}
+    env = auto.session_env(base, str(tmp_path))
+    assert {name for name in base if name in env and env[name] == "x"} == set(KEPT)
     pairs = [(env[f"GIT_CONFIG_KEY_{n}"], env[f"GIT_CONFIG_VALUE_{n}"]) for n in range(int(env["GIT_CONFIG_COUNT"]))]
     assert pairs == list(auto.SESSION_GIT_CONFIG), "the caller's GIT_CONFIG_ entries are replaced, not kept"
+    assert "GIT_CONFIG_KEY_9" not in env
+
+
+def test_the_sessions_caches_and_temporary_folders_are_its_own(tmp_path):
+    env = auto.session_env({"PATH": "/bin"}, str(tmp_path))
+    for name, folder in (("GH_CONFIG_DIR", "gh"), ("TMPDIR", "tmp"), ("NUGET_PACKAGES", "nuget-packages"),
+                         ("NUGET_HTTP_CACHE_PATH", "nuget-http"), ("npm_config_store_dir", "pnpm-store"),
+                         ("XDG_CACHE_HOME", "cache"), ("DOTNET_CLI_HOME", "dotnet-home")):
+        assert env[name] == str(tmp_path / folder) and (tmp_path / folder).is_dir(), name
+    assert env["DOTNET_NOLOGO"] == env["DOTNET_CLI_TELEMETRY_OPTOUT"] == "1"
+
+
+@pytest.mark.parametrize("flag, prefix", list(auto.CLOUD_SIGN_IN.items()))
+def test_a_cloud_sign_in_keeps_its_own_variables(tmp_path, flag, prefix):
+    env = auto.session_env({flag: "1", f"{prefix}PROFILE": "p", "GH_TOKEN": "t"}, str(tmp_path))
+    assert env[f"{prefix}PROFILE"] == "p" and "GH_TOKEN" not in env
 
 
 def test_git_in_the_sessions_environment_cannot_push_to_github(tmp_path):
     def git(*args, env=None):
-        return subprocess.run(["git", "-C", str(tmp_path), *args], capture_output=True, text=True,
+        return subprocess.run(["git", "-C", str(tmp_path / "r"), *args], capture_output=True, text=True,
                               env={**(env or os.environ), "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
 
+    (tmp_path / "r").mkdir()
     git("init", "-q", "-b", "main")
+    env = auto.session_env(dict(os.environ), str(tmp_path / "s"))
     for url in ("https://github.com/acme/widget.git", "git@github.com:acme/widget.git", "ssh://git@github.com/acme/widget"):
         git("remote", "remove", "origin")
         git("remote", "add", "origin", url)
-        env = auto.session_env(dict(os.environ), str(tmp_path / "gh"))
         push = git("remote", "get-url", "--push", "origin", env=env).stdout.strip()
         fetch = git("remote", "get-url", "origin", env=env).stdout.strip()
         assert push.startswith(auto.NO_PUSH) and fetch == url
+    helpers = git("config", "--get-all", "credential.helper", env=env).stdout.splitlines()
+    assert helpers == [""], "the credential helpers are emptied"
 
 
 def git_repo(path):
@@ -585,67 +835,166 @@ def git_repo(path):
     return git
 
 
-def guarded(tmp_path):
-    """A worktree with an Owned file equal to the Template's, a Factory checkout, and a ledger folder; the remote read
-    is faked, the rest is real git."""
-    worktree, factory, owned = tmp_path / "w", tmp_path / "factory", tmp_path / "owned"
-    git_repo(worktree)
-    git_repo(factory)
-    (owned / "scripts").mkdir(parents=True)
-    (owned / "scripts" / "gate.sh").write_text("gate\n")
-    (worktree / "scripts").mkdir()
-    (worktree / "scripts" / "gate.sh").write_text("gate\n")
-    remote = {"sha": "abc refs/heads/chore/reapply-baseline"}
+class Guarded:
+    """A real worktree repo with an Owned file equal to the Template's, and its ledger folder; the remote read is
+    faked, the rest is real git."""
 
-    def read(command, cwd=None):
+    def __init__(self, tmp_path):
+        self.worktree, self.owned = tmp_path / "w", tmp_path / "owned"
+        self.git = git_repo(self.worktree)
+        (self.owned / "scripts").mkdir(parents=True)
+        (self.owned / "scripts" / "gate.sh").write_text("gate\n")
+        (self.worktree / "scripts").mkdir()
+        (self.worktree / "scripts" / "gate.sh").write_text("gate\n")
+        self.ledgers = self.worktree / ".git" / "review"
+        self.ledgers.mkdir()
+        self.remote = {"sha": "abc\trefs/heads/chore/reapply-baseline"}
+        self.changed = ["scripts/gate.sh"]
+
+    def read(self, command, cwd=None):
         if "ls-remote" in command:
-            return remote["sha"]
+            return self.remote["sha"]
         return auto.run_text(command, cwd)
 
-    guard = auto.session_guard(str(worktree), factory=str(factory), read=read, clock=lambda: time.time() - 1)
+    def guard(self):
+        self.taken = auto.session_guard(str(self.worktree), owned=str(self.owned), read=self.read)
+        return self.taken
 
-    def check():
-        return auto.broken_rules(guard, factory=str(factory), read=read, changes=lambda w: ["scripts/gate.sh"],
-                                 owned=str(owned))
+    def check(self, **kwargs):
+        changes = kwargs.pop("changes", lambda w: list(self.changed))
+        return auto.broken_rules(self.taken, owned=str(self.owned), read=self.read, changes=changes, **kwargs)
 
-    return worktree, factory, remote, guard, check
+    def ledger(self, name, findings, branch="chore/reapply-baseline", head="0" * 40, raw=None):
+        path = self.ledgers / name
+        path.write_text(raw if raw is not None else json.dumps({"branch": branch, "head": head, "findings": findings}))
+        return path
 
 
 def test_a_session_that_kept_the_rules_broke_none(tmp_path):
-    *_, check = guarded(tmp_path)
-    assert check() == []
+    g = Guarded(tmp_path)
+    g.guard()
+    assert g.check() == []
+    assert g.taken.ledgers == str(g.worktree / ".git" / "review")
 
 
-def test_a_session_that_pushed_is_caught(tmp_path):
-    _, _, remote, _, check = guarded(tmp_path)
-    remote["sha"] = "def refs/heads/chore/reapply-baseline"
-    assert check() == ["the remote chore/reapply-baseline moved: the session isn't to push"]
+def test_a_guard_that_cant_read_the_remote_or_the_git_folder_starts_no_session(tmp_path):
+    g = Guarded(tmp_path)
+    g.remote["sha"] = None
+    with pytest.raises(auto.GuardUnreadable, match="can't read the remote chore/reapply-baseline before the session"):
+        g.guard()
+    with pytest.raises(auto.GuardUnreadable, match="can't find the git folder"):
+        auto.session_guard(str(tmp_path / "not-a-repo"), owned=str(g.owned), read=lambda c, cwd=None: "" if "ls-remote" in c else None)
 
 
-def test_a_session_that_changed_the_factory_is_caught(tmp_path):
-    _, factory, _, _, check = guarded(tmp_path)
-    (factory / "new.md").write_text("x")
-    assert check()[0].startswith(f"the Factory checkout {factory} changed")
+def test_a_remote_branch_that_doesnt_exist_yet_is_a_reading_not_a_failure(tmp_path):
+    g = Guarded(tmp_path)
+    g.remote["sha"] = ""
+    g.guard()
+    assert g.check() == []
+    g.remote["sha"] = "abc\trefs/heads/chore/reapply-baseline"
+    assert g.check() == ["the remote chore/reapply-baseline moved during the session (the session, or anyone who pushed to it meanwhile)"]
 
 
-def test_a_session_that_edited_an_owned_file_is_caught(tmp_path):
-    worktree, *_, check = guarded(tmp_path)
-    (worktree / "scripts" / "gate.sh").write_text("gate, edited\n")
-    assert check() == ["scripts/gate.sh is an Owned file and no longer the Template's: edit the Template, not the copy"]
+def test_a_session_after_which_the_remote_moved_or_cant_be_read_is_a_stop(tmp_path):
+    g = Guarded(tmp_path)
+    g.guard()
+    g.remote["sha"] = "def\trefs/heads/chore/reapply-baseline"
+    assert g.check() == ["the remote chore/reapply-baseline moved during the session (the session, or anyone who pushed to it meanwhile)"]
+    g.remote["sha"] = None
+    assert g.check() == ["can't read the remote chore/reapply-baseline after the session, so whether it was pushed can't be told"]
 
 
-def test_a_session_that_accepted_a_finding_in_the_ledger_is_caught(tmp_path):
-    worktree, _, _, guard, check = guarded(tmp_path)
-    assert guard.ledgers == str(worktree / ".git" / "review")
-    os.makedirs(guard.ledgers)
-    old = Path(guard.ledgers) / "old.json"
-    old.write_text(json.dumps({"findings": [{"id": "R1", "status": "accepted"}]}))
-    os.utime(old, (guard.started - 60, guard.started - 60))  # the person's, from before the session
-    (Path(guard.ledgers) / "new.json").write_text(json.dumps({"findings": [{"id": "R2", "status": "fixed"},
-                                                                          {"id": "R3", "status": "accepted"}]}))
-    (Path(guard.ledgers) / "bad.json").write_text("{")
-    assert check() == [f"{guard.ledgers}/bad.json was written during the session and doesn't read",
-                       f"{guard.ledgers}/new.json was written during the session with R3 accepted: only the person accepts"]
+def test_a_template_that_changed_during_the_session_is_a_stop(tmp_path):
+    g = Guarded(tmp_path)
+    g.guard()
+    (g.owned / "new.md").write_text("x")
+    assert g.check() == ["the Template changed during the session (the session, or your own edit in the Factory checkout)"]
+
+
+def test_an_owned_file_edited_or_deleted_by_the_session_is_caught(tmp_path):
+    g = Guarded(tmp_path)
+    g.guard()
+    (g.worktree / "scripts" / "gate.sh").write_text("gate, edited\n")
+    assert g.check() == ["scripts/gate.sh is an Owned file and no longer the Template's: edit the Template, not the copy"]
+    (g.worktree / "scripts" / "gate.sh").unlink()
+    assert g.check() == ["scripts/gate.sh is an Owned file and no longer the Template's: edit the Template, not the copy"]
+
+
+def test_an_owned_list_that_fails_after_the_session_is_a_stop(tmp_path):
+    g = Guarded(tmp_path)
+    g.guard()
+
+    def broken(worktree):
+        raise RuntimeError("git diff failed")
+
+    assert g.check(changes=broken) == ["can't list the Owned files the branch changes: git diff failed"]
+
+
+def test_a_ledger_of_this_branch_that_gained_an_accepted_finding_is_caught_whatever_its_mtime(tmp_path):
+    g = Guarded(tmp_path)
+    g.ledger("before.json", [{"id": "R1", "status": "accepted"}])
+    g.guard()
+    path = g.ledger("new.json", [{"id": "R2", "status": "fixed"}, {"id": "R3", "status": "accepted"}])
+    os.utime(path, (0, 0))  # backdated: still caught, by content
+    assert g.check() == [f"{path} gained R3 accepted during the session: only the person accepts"]
+
+
+def test_a_ledger_that_kept_its_accepted_findings_breaks_nothing(tmp_path):
+    g = Guarded(tmp_path)
+    g.ledger("l.json", [{"id": "R1", "status": "accepted"}])
+    g.guard()
+    g.ledger("l.json", [{"id": "R1", "status": "accepted"}, {"id": "R2", "status": "fixed"}])
+    assert g.check() == []
+
+
+def test_a_ledger_of_this_branch_gaining_an_accepted_finding_in_place_is_caught(tmp_path):
+    g = Guarded(tmp_path)
+    g.ledger("l.json", [{"id": "R1", "status": "open"}])
+    g.guard()
+    path = g.ledger("l.json", [{"id": "R1", "status": "accepted"}])
+    assert g.check() == [f"{path} gained R1 accepted during the session: only the person accepts"]
+
+
+def test_the_persons_own_accept_on_another_branch_of_the_clone_is_not_the_sessions(tmp_path):
+    g = Guarded(tmp_path)
+    g.guard()
+    g.ledger("other.json", [{"id": "R9", "status": "accepted"}], branch="feature/7-x", head="1" * 40)
+    assert g.check() == []
+
+
+def test_a_ledger_at_one_of_the_worktrees_commits_is_this_branchs_whatever_branch_it_names(tmp_path):
+    g = Guarded(tmp_path)
+    g.guard()
+    head = g.git("rev-parse", "HEAD")
+    path = g.ledger("renamed.json", [{"id": "R4", "status": "accepted"}], branch="something-else", head=head)
+    assert g.check() == [f"{path} gained R4 accepted during the session: only the person accepts"]
+
+
+@pytest.mark.parametrize("raw", ['{"findings": 5}', '{"findings": "x"}', "[]", "{", '{"findings": null}'])
+def test_a_ledger_that_stops_reading_during_the_session_is_caught(tmp_path, raw):
+    g = Guarded(tmp_path)
+    g.guard()
+    path = g.ledger("bad.json", [], raw=raw)
+    assert g.check() == [f"{path} changed during the session and doesn't read as a ledger"]
+
+
+def test_a_dangling_ledger_link_and_other_files_dont_crash_the_check(tmp_path):
+    g = Guarded(tmp_path)
+    g.guard()
+    (g.ledgers / "gone.json").symlink_to(tmp_path / "nowhere.json")
+    (g.ledgers / "notes.txt").write_text(json.dumps({"findings": [{"id": "R1", "status": "accepted"}]}))
+    assert g.check() == [f"{g.ledgers / 'gone.json'} changed during the session and doesn't read as a ledger"]
+
+
+def test_a_ledger_finding_that_isnt_an_object_is_skipped(tmp_path):
+    g = Guarded(tmp_path)
+    g.guard()
+    g.ledger("l.json", ["R1", {"id": "R2", "status": "fixed"}])
+    assert g.check() == []
+
+
+def test_a_missing_ledger_folder_reads_as_no_ledgers(tmp_path):
+    assert auto.ledger_state(str(tmp_path / "none")) == {}
 
 
 def test_end_group_of_a_group_already_gone_returns_at_once():
@@ -654,15 +1003,50 @@ def test_end_group_of_a_group_already_gone_returns_at_once():
     assert auto.end_group(session) is True
 
 
-def test_end_group_waits_for_the_group_and_gives_up_in_time(monkeypatch):
+def test_end_group_waits_for_a_live_member_and_gives_up_in_time(monkeypatch):
     calls, now = [], [0.0]
     monkeypatch.setattr(auto.os, "killpg", lambda pid, sig: calls.append(sig))
     session = FakeSession()
-    gone = auto.end_group(session, wait_seconds=1, sleep=lambda s: now.__setitem__(0, now[0] + s), clock=lambda: now[0])
-    assert gone is False
-    assert calls[0] == signal.SIGKILL and set(calls[1:]) == {0} and len(calls) > 2
+    gone = auto.end_group(session, wait_seconds=1, sleep=lambda s: now.__setitem__(0, now[0] + s), clock=lambda: now[0],
+                          alive=lambda pgid: True)
+    assert gone is False and calls == [signal.SIGKILL]
+    assert session.waits == [1]
     assert 1 <= now[0] < 1.2, "gave up once its time was spent"
-    assert session.waits == [None]
+
+
+def test_end_group_gives_up_on_a_leader_that_wont_die(monkeypatch):
+    monkeypatch.setattr(auto.os, "killpg", lambda pid, sig: None)
+    session = FakeSession(raises=subprocess.TimeoutExpired("claude", 10))
+    assert auto.end_group(session, wait_seconds=10) is False and session.waits == [10]
+
+
+def test_end_group_needs_no_kill_for_a_group_already_gone(monkeypatch):
+    def gone(pid, sig):
+        raise ProcessLookupError
+
+    monkeypatch.setattr(auto.os, "killpg", gone)
+    assert auto.end_group(FakeSession(), alive=lambda pgid: False) is True
+
+
+def test_group_alive_counts_live_members_only(tmp_path):
+    proc = tmp_path / "proc"
+
+    def member(pid, state, pgrp):
+        (proc / str(pid)).mkdir(parents=True)
+        (proc / str(pid) / "stat").write_text(f"{pid} (some (odd) name) {state} 1 {pgrp} {pgrp} 0 -1\n")
+
+    member(10, "Z", 77)
+    member(11, "S", 88)
+    (proc / "self").mkdir()
+    assert auto.group_alive(77, proc=str(proc)) is False, "a zombie alone is gone"
+    member(12, "R", 77)
+    assert auto.group_alive(77, proc=str(proc)) is True
+
+
+def test_group_alive_without_proc_asks_the_kernel(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(auto.os, "killpg", lambda pid, sig: seen.append((pid, sig)))
+    assert auto.group_alive(77, proc=str(tmp_path / "no-proc")) is True and seen == [(77, 0)]
 
 
 def test_a_claude_that_cannot_start_is_127_with_its_reason_in_the_log(tmp_path, monkeypatch):
@@ -686,14 +1070,17 @@ def test_a_missing_worktree_is_named_and_nothing_starts(tmp_path, monkeypatch):
     assert f"the re-Apply worktree {tmp_path / 'gone'} doesn't exist" in Path(log).read_text()
 
 
-def test_an_owned_list_that_fails_stops_the_session_before_it_starts(tmp_path, monkeypatch):
+@pytest.mark.parametrize("where", ["changes", "guard"])
+def test_a_session_that_cant_be_set_up_never_starts(tmp_path, monkeypatch, where):
     started = []
 
     def broken(path):
-        raise RuntimeError("git diff failed")
+        raise (auto.GuardUnreadable("can't read the remote") if where == "guard" else RuntimeError("git diff failed"))
 
-    code, log, _, _ = review_once(tmp_path, monkeypatch, popen=lambda *a, **k: started.append(a), changes=broken)
-    assert code == 127 and started == [] and "git diff failed" in Path(log).read_text()
+    code, log, _, _ = review_once(tmp_path, monkeypatch, popen=lambda *a, **k: started.append(a),
+                                  **{where: broken})
+    assert code == 127 and started == []
+    assert ("can't read the remote; the session wasn't started" if where == "guard" else "git diff failed") in Path(log).read_text()
 
 
 def test_a_log_that_cannot_be_made_is_127(tmp_path, monkeypatch):
@@ -704,15 +1091,6 @@ def test_a_log_that_cannot_be_made_is_127(tmp_path, monkeypatch):
     code, log, _ = auto.run_review(TM, str(tmp_path), log_dir=str(tmp_path / "logs"))
     assert code == 127 and "No space left on device" in log
 
-
-def test_run_land_runs_land_sh_on_the_prs(monkeypatch):
-    seen = []
-    monkeypatch.setattr(auto.subprocess, "run", lambda command: seen.append(command) or subprocess.CompletedProcess(command, 3))
-    assert auto.run_land([f"{TM}#130", f"{REST[0]}#5"]) == 3
-    assert seen == [[auto.LAND, f"{TM}#130", f"{REST[0]}#5"]]
-
-
-# ── The round ───────────────────────────────────────────────────────────────
 
 def head_of(repo):
     return f"{short(repo).lower():0<40}"[:40]
@@ -962,7 +1340,7 @@ def test_auto_gives_up_after_two_review_sessions_when_the_gate_still_asks():
     assert code == 1
     assert len(fleet.reviewed) == 2 and len(reapplied(fleet)) == 3
     assert "the gate still asks for a review after 2 review session(s): main or the Template may have moved" in out
-    assert "(see /tmp/review-TicketManager.log)" in out
+    assert "stopped short in its sandbox (no GitHub sign-in, few hosts; see /tmp/review-TicketManager.log)" in out
 
 
 def test_auto_reviews_a_second_time_when_the_first_session_left_no_record():
@@ -1224,10 +1602,13 @@ def test_the_round_without_auto_is_unchanged():
     assert code == 0 and ("check",) not in fleet.events
 
 
-def test_the_header_says_what_the_rules_cover_and_what_they_dont():
+def test_the_header_says_what_holds_and_what_only_backs_it_up():
     doc = " ".join(auto.__doc__.split())
-    assert "denies the common spellings of git push, review.sh accept and accept-open and a set of gh writes" in doc
-    assert "the auto permission mode's classifier is the guard for the rest" in doc
+    assert "it runs in Claude Code's sandbox (session_settings; ADR 0015)" in doc
+    assert "can't leave the sandbox; the session refuses to start without bubblewrap" in doc
+    assert "the repository's hooks and permission rules never apply" in doc
+    assert "git's push is sent nowhere: layers behind the sandbox" in doc
+    assert "a SIGKILL of rollout.sh can't be caught, and leaves the session running" in doc
 
 
 def test_git_branch_says_whether_the_branch_has_commits_main_lacks(tmp_path, monkeypatch):
@@ -1401,3 +1782,49 @@ def test_a_signal_during_a_session_is_not_called_a_timeout(tmp_path, monkeypatch
         review_once(tmp_path, monkeypatch, popen=popen)
     (log,) = (tmp_path / "logs").iterdir()
     assert "ran past" not in log.read_text()
+
+
+def test_rollouts_reapply_path_has_its_symlinks_resolved(tmp_path):
+    link = tmp_path / "skill"
+    link.symlink_to(SKILL)
+    script = f"import runpy, sys; sys.path.insert(0, {str(link / 'github')!r}); print(runpy.run_path({str(link / 'github' / 'rollout.py')!r})['REAPPLY'])"
+    out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True).stdout.strip()
+    assert out == os.path.realpath(SKILL / "reapply.sh")
+
+
+def test_a_round_with_ticketmanager_alone_holds_none():
+    out = io.StringIO()
+    code = auto.auto_round((TM,), "#82", "rollout.sh --auto --brings '#82'", lambda repo: f"/r/{short(repo)}",
+                           lambda brings, path: 1, None, None, None, None, None, lambda text: out.write(text + "\n"),
+                           io.StringIO())
+    assert code == 1 and "held: none" in out.getvalue()
+
+
+def test_git_branch_gives_up_on_a_git_that_hangs(monkeypatch):
+    seen = []
+    monkeypatch.setattr(auto.subprocess, "run", lambda command, **kwargs: seen.append(kwargs) or subprocess.CompletedProcess(command, 0, "abc\n", ""))
+    auto.git_branch("/w")
+    assert all(kwargs.get("timeout") == 120 for kwargs in seen) and len(seen) == 2
+
+
+def test_a_ledger_that_didnt_read_before_and_is_unchanged_is_not_the_sessions(tmp_path):
+    g = Guarded(tmp_path)
+    g.ledger("old-bad.json", [], raw="{")
+    g.guard()
+    assert g.check() == []
+
+
+def test_a_sigterm_while_a_repo_is_reapplied_ends_the_round_with_its_resume_command():
+    fleet = Fleet()
+    reapply = fleet.reapply
+
+    def terminated(brings, path):
+        os.kill(os.getpid(), signal.SIGTERM)
+        time.sleep(1)
+        return reapply(brings, path)
+
+    fleet.reapply = terminated
+    code, out, err = run_auto(["--brings", "#82"], fleet)
+    assert code == 128 + signal.SIGTERM
+    assert "rollout.sh: interrupted; resume with: rollout.sh --auto --brings '#82'" in err
+    assert fleet.locks[0].closed
