@@ -37,7 +37,8 @@
 # hook won't run (above), or a linter for it is not installed or is found only where the hook runs nothing from (above) (this hook
 # only helps; the commit hook and the gate still check). That config, and a skipped linter, are reported as a systemMessage on stdout, which
 # Claude Code shows to the person. Exit 2: a linter reported a violation; its output goes to stderr, which Claude Code feeds
-# back to the agent. Exit 1: the hook could not run (python3 missing, CLAUDE_PROJECT_DIR unset, bad JSON, or, for a Markdown or YAML file, git missing or older than 2.36); Claude Code shows that to the
+# back to the agent. Exit 1: the hook could not run (python3 missing or found only where the hook runs nothing from, CLAUDE_PROJECT_DIR unset, bad JSON, or, for a
+# Markdown or YAML file, git missing, found only where the hook runs nothing from, or older than 2.36); Claude Code shows that to the
 # person and carries on. A linter that is installed but crashes counts as a violation, not as clean.
 set -uo pipefail
 
@@ -91,6 +92,17 @@ clean_path() {
 # PATH: the first clean_path pass drops all of them, so python3 and git can't come from a checkout of the project either. git's
 # own list, read by in_project once git is safe to run, is the second pass's.
 CHECKOUTS=()
+# read_git_file <file> <var> [all]: sets <var> to the whole of a git file as git reads it: its trailing CRs and LFs dropped (a last line
+# with no newline, or a CRLF one, counts), and with "all" every trailing space, tab, CR, LF, VT and FF too, which git trims from a
+# worktrees/*/gitdir file. 1 when the file can't be read or holds nothing else.
+read_git_file() {
+  local text='' strip=$'\r\n'
+  [[ "${3:-}" != all ]] || strip=$' \t\r\n\v\f'
+  IFS= read -r -d '' text < "$1" || [[ -n "$text" ]] || return 1
+  while [[ -n "$text" && "$strip" == *"${text: -1}"* ]]; do text="${text%?}"; done
+  [[ -n "$text" ]] || return 1
+  printf -v "$2" '%s' "$text"
+}
 checkout_roots() {
   local d="$1" top gitdir common line wt f
   while [[ ! -e "$d/.git" ]]; do
@@ -101,14 +113,14 @@ checkout_roots() {
   CHECKOUTS+=("$top")
   gitdir="$top/.git"
   if [[ -f "$gitdir" ]]; then
-    IFS= read -r line < "$gitdir" || return 0
+    read_git_file "$gitdir" line || return 0
     line="${line#gitdir: }"
     [[ "$line" == /* ]] || line="$top/$line"
     gitdir="$line"
   fi
   common="$gitdir"
   if [[ -f "$gitdir/commondir" ]]; then
-    IFS= read -r line < "$gitdir/commondir" || line=.
+    read_git_file "$gitdir/commondir" line || line=.
     [[ "$line" == /* ]] || line="$gitdir/$line"
     common="$line"
   fi
@@ -120,7 +132,9 @@ checkout_roots() {
   fi
   for f in "$common"/worktrees/*/gitdir; do
     [[ -f "$f" ]] || continue
-    IFS= read -r line < "$f" || continue
+    read_git_file "$f" line all || continue
+    # Relative to its own folder, worktrees/<id>, as git writes it with worktree.useRelativePaths (git 2.48 and later).
+    [[ "$line" == /* ]] || line="${f%/*}/$line"
     wt=''
     ! canon "${line%/.git}" wt || CHECKOUTS+=("$wt")
   done

@@ -1036,6 +1036,47 @@ RUN_CWD=/ run_hook "$(edit_json "$WORK/vet-wt/docs/deep/ok.md")" "$vet/bin:$STUB
 ! log_has "attacker " || p+=("a helper in the main checkout ran: $(grep attacker "$LOG")")
 check "a worktree project whose .git names a relative gitdir: the main checkout's python3, git and tr never run" ${p[@]+"${p[@]}"}
 printf '%s\n' "$wt_git" > "$WORK/vet-wt/.git"
+# git_file_case <label> <project> <edited file> <bin>: with git's files as the caller just wrote them, which git must still read (or
+# the case proves nothing), the hook run from / with <bin> first on PATH lints the file and runs none of <bin>'s helpers.
+git_file_case() {
+  p=()
+  [[ "$(git -C "$WORK/vet-wt" rev-parse --show-toplevel 2> /dev/null)" == "$WORK/vet-wt" ]] \
+    && git -C "$vet" worktree list --porcelain 2> /dev/null | grep -qxF "worktree $WORK/vet-wt" \
+    || p+=("git doesn't read the files as written, so this case proves nothing")
+  RUN_CWD=/ run_hook "$(edit_json "$3")" "$4:$STUBS:$TOOLS" "$2"
+  [[ $STATUS -eq 0 && "$(ran markdownlint-cli2)" == 1 ]] || p+=("exit $STATUS, ran $(ran markdownlint-cli2)")
+  ! log_has "attacker " || p+=("a helper in the other checkout ran: $(grep attacker "$LOG")")
+  check "$1" ${p[@]+"${p[@]}"}
+}
+# Git reads its files whole and drops trailing CRs and LFs, so a .git file or commondir with no final newline, or a CRLF one, names
+# the same folders: the first pass still finds the main checkout from the worktree.
+admin="$vet/.git/worktrees/vet-wt"
+for ending in '' $'\r\n'; do
+  if [[ -z "$ending" ]]; then how='with no newline'; else how='in CRLF'; fi
+  printf 'gitdir: %s%s' "$admin" "$ending" > "$WORK/vet-wt/.git"
+  git_file_case "a worktree project whose .git ends $how: the main checkout's helpers never run" "$WORK/vet-wt" "$WORK/vet-wt/docs/deep/ok.md" "$vet/bin"
+  printf '%s\n' "$wt_git" > "$WORK/vet-wt/.git"
+  common_was="$(cat "$admin/commondir")"
+  printf '%s%s' "$common_was" "$ending" > "$admin/commondir"
+  git_file_case "a worktree project whose commondir ends $how: the main checkout's helpers never run" "$WORK/vet-wt" "$WORK/vet-wt/docs/deep/ok.md" "$vet/bin"
+  printf '%s\n' "$common_was" > "$admin/commondir"
+done
+# The main checkout as the project: a worktrees/<id>/gitdir that is relative to its own folder (worktree.useRelativePaths), has no
+# final newline, or ends in spaces and a CRLF (git trims them all) still names the worktree, whose bin is dropped.
+mv "$vet/bin" "$WORK/vet-wt/bin"
+printf '# T\n' > "$vet/docs/deep/main.md"
+gitdir_was="$(cat "$admin/gitdir")"
+for form in relative no-newline trailing-space; do
+  case "$form" in
+    relative) printf '../../../../vet-wt/.git\n' > "$admin/gitdir" ;;
+    no-newline) printf '%s' "$gitdir_was" > "$admin/gitdir" ;;
+    trailing-space) printf '%s \t\r\n' "$gitdir_was" > "$admin/gitdir" ;;
+  esac
+  git_file_case "the main checkout as the project, with a worktree's gitdir file $form: the worktree's helpers never run" "$vet" "$vet/docs/deep/main.md" "$WORK/vet-wt/bin"
+done
+printf '%s\n' "$gitdir_was" > "$admin/gitdir"
+rm "$vet/docs/deep/main.md"
+mv "$WORK/vet-wt/bin" "$vet/bin"
 rm -r "${vet:?}/bin"
 # A project inside a checkout whose .git file names a gitdir that doesn't exist: the checkout itself is still dropped, though
 # git's files name no other checkout.
@@ -1204,6 +1245,17 @@ p=()
 [[ $STATUS -eq 1 && "$STDERR" == *"git not found"* && -z "$STDOUT" ]] || p+=("exit $STATUS, stderr: $STDERR")
 log_empty || p+=("a linter ran without git: $(cat "$LOG")")
 check "without git, the hook exits 1 with a message" ${p[@]+"${p[@]}"}
+# A git only in the repo's bin, or on a relative entry: never run, and the message says it was found only where the hook runs nothing from.
+attacker_stub "$repo/bin/git"
+for entry in "$repo/bin" bin; do
+  RUN_CWD="$repo" run_hook "$(edit_json "$repo/docs/bad.md")" "$entry:$STUBS:$NOGIT"
+  p=()
+  [[ $STATUS -eq 1 && -z "$STDOUT" ]] || p+=("exit $STATUS, stdout: $STDOUT")
+  [[ "$STDERR" == *"git found only inside the project or on a relative PATH entry, which this hook runs nothing from"* ]] || p+=("stderr: $STDERR")
+  log_empty || p+=("something ran: $(cat "$LOG")")
+  check "with git only in the repo ('$entry'), the hook exits 1 and says it was found only where it runs nothing from" ${p[@]+"${p[@]}"}
+done
+rm -r "${repo:?}/bin"
 
 run_hook "$(edit_json "$repo/script.sh")" "$STUBS:$NOGIT"
 p=()
