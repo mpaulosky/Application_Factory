@@ -305,7 +305,8 @@ cp -p "$here/.github/hooks/pre-push" "$repoG/$skill/template/owned/.github/hooks
 printf '%b' "$unformatted" > "$repoG/notes.txt"
 GATE_ARGS=--quick run "$repoG"
 check "a file that is not a shell file is not checked" "$([[ $status == 0 ]] && echo 0 || echo 1)"
-# The extensionless hook names count only in a .github/hooks folder, where .editorconfig gives them the style: the same name elsewhere is not a shell file to either step.
+# The extensionless hook names count only in the repo's .github/hooks and the Template's copy of it, the folders an .editorconfig gives the style to: the same name
+# elsewhere, even in another .github/hooks folder, is not a shell file to either step.
 # The file has a shellcheck finding and a 4-space indent, so neither step may take it; nor a hook in another .github/hooks folder, which no .editorconfig styles.
 # shellcheck disable=SC2016 # the script's own text: $unquoted must reach the file as written
 bad_unformatted='#!/usr/bin/env bash\nif true; then\n    echo $unquoted\nfi\n'
