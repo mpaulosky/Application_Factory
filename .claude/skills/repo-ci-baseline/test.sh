@@ -621,6 +621,7 @@ grep -qF -- 'prepare <run> recorded' "$owned/docs/PROCESS.md" \
   || fail "docs/PROCESS.md must say a fix after a recorded review is reviewed with scripts/review.sh prepare <run> recorded"
 grep -qF -- 'git push --force-with-lease' "$owned/docs/PROCESS.md" \
   || fail "docs/PROCESS.md must say a pushed branch rebased onto main needs git push --force-with-lease"
+# shellcheck disable=SC2016 # the backticks are PROCESS.md's Markdown, matched as they are
 grep -qF -- 'review the fix before you merge `main`' "$owned/docs/PROCESS.md" \
   || fail "docs/PROCESS.md must say to review a thread's fix before merging main into the branch"
 grep -qF -- 'a clean merge keeps the record' "$owned/docs/PROCESS.md" \
