@@ -870,10 +870,14 @@ describe("checkReview", () => {
 
     assert.notEqual(run(repo, "rev-parse", "HEAD"), reviewedHead);
     assert.equal(mergeBase(repo), run(repo, "rev-parse", "origin/main"));
+    // A rebase, not a merge: no merge commit, and the branch's two commits sit straight on origin/main.
+    assert.equal(run(repo, "rev-list", "--parents", "-n", "1", "HEAD").split(" ").length, 2);
+    assert.equal(run(repo, "rev-parse", "HEAD~2"), run(repo, "rev-parse", "origin/main"));
     assert.equal(checkReview(repo, mergeBase(repo), {}).ok, true);
   });
 
-  it("fails after a clean rebase onto a main that changed a line inside one of the branch's hunks", () => {
+  // A main change to a line the branch changed itself conflicts instead: the next test.
+  it("fails after a clean rebase onto a main that changed a line in the context of one of the branch's hunks", () => {
     record([]);
     commit(upstream, "app.cs", lines(50, (index) => (index === 4 ? "main's change" : undefined)), "main edits line 5");
     run(repo, "fetch", "--quiet", "origin");
