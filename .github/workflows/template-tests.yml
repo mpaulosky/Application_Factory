@@ -61,7 +61,7 @@ jobs:
         run: bash "scripts/gate.sh"
 
   static:
-    name: Gate - copies, lint, shellcheck
+    name: Gate - copies, lint, shellcheck, shfmt
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

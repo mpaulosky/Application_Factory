@@ -184,10 +184,11 @@ verdict() {
       exit 1
     }
   [[ -z "$prs" ]] || rows="$(grep -c '' <<< "$prs")"
+  # --limit 100 may have cut the branch's own PR off: it can't be judged
   if [[ "$rows" -ge 100 ]]; then
     echo capped
     return
-  fi # --limit 100 may have cut the branch's own PR off: it can't be judged
+  fi
   while read -r state oid base head; do
     [[ -n "$state" && "$(lc "$head")" == "$origin_slug" ]] || continue
     if [[ "$state" == OPEN ]]; then

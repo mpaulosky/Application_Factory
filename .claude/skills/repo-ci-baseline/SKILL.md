@@ -17,6 +17,8 @@ Why it works this way is in [ADR 0001](docs/adr/0001-standardize-by-copying-a-te
   Per-repo CI setup goes in the Seed `.github/ci/prepare.sh`, which `ci.yml` calls; per-repo gate checks go in the Seed `.github/ci/gate-checks.sh`, which `scripts/gate.sh` calls.
   The gate itself refuses a `gh` command in a repo's own scripts and skills that isn't told its repository (`check_gh_repo.py --repo`),
   which parses the scripts with shfmt: every Application needs shfmt v3.14 or a later v3 installed ([ADR 0011](docs/adr/0011-the-gh-repo-check-parses-shell-with-shfmt.md)).
+  The Owned `.editorconfig` also carries the shell style shfmt reads (`-i 2 -ci -bn -sr`), which the Owned scripts follow; an Application's gate doesn't check its own scripts' format
+  ([references/adapt.md](references/adapt.md)).
 
 **Template first.**
 A fix to an Owned file is made in `template/`, then Applied to the repo that needed it.

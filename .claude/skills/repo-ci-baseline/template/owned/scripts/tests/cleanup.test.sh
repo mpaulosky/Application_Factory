@@ -29,10 +29,11 @@ export HOME="$work" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 # a develo
 
 if ! command -v jq > /dev/null 2>&1; then                                  # gh-repo: ok
   echo "jq is not installed, and the fake gh runs cleanup.sh's jq with it" # gh-repo: ok
+  # a developer machine may skip; CI must not
   [[ -z "${CI:-}" ]] && {
     echo "skip"
     exit 0
-  } # a developer machine may skip; CI must not
+  }
   exit 1
 fi
 
@@ -93,8 +94,9 @@ git init -q --bare -b main "$work/origin.git"
 git clone -q "$work/origin.git" "$work/repo" 2> /dev/null
 repo="$work/repo"
 cd "$repo" || exit 1
+# a user's own config must not prune for the script: only its --prune may
 git config fetch.prune false
-git config remote.origin.prune false # a user's own config must not prune for the script: only its --prune may
+git config remote.origin.prune false
 git checkout -q -b main
 mkdir scripts
 cp "$SCRIPTS/check-branch-name.sh" "$SCRIPTS/cleanup.sh" scripts/
@@ -285,9 +287,10 @@ wt_at chore/apply-busy "$work/wt/chore-apply-busy"
   echo "setup failed: the apply rebase did not stop"
   exit 1
 }
+# clean branches whose names are a prefix of (or extend) a busy one's
 wt_at chore/rebasing-2 "$work/wt/chore-rebasing-2"
 wt_at chore/apply "$work/wt/chore-apply"
-wt_at chore/bisect "$work/wt/chore-bisect" # clean branches whose names are a prefix of (or extend) a busy one's
+wt_at chore/bisect "$work/wt/chore-bisect"
 # A bisect that moved HEAD off the branch: the worktree list shows it detached, BISECT_START still holds the branch's name
 { git worktree add -q -b chore/bisecting2 "$work/wt/chore-bisecting2" main && for i in 1 2 3; do echo "$i" > "$work/wt/chore-bisecting2/b$i" && git -C "$work/wt/chore-bisecting2" add . && git -C "$work/wt/chore-bisecting2" commit -q -m "c$i"; done \
   && git -C "$work/wt/chore-bisecting2" push -q origin chore/bisecting2 2> /dev/null; } || exit 1

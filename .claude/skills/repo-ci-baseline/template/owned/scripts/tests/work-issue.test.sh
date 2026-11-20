@@ -42,10 +42,11 @@ check "the not-found guard records a command that does not exist" "[[ -s \"\$not
 
 if ! command -v jq > /dev/null 2>&1; then                                     # gh-repo: ok
   echo "jq is not installed, and the fake gh runs work-issue.sh's jq with it" # gh-repo: ok
+  # a developer machine may skip; CI must not
   [[ -z "${CI:-}" ]] && {
     echo "skip"
     exit 0
-  } # a developer machine may skip; CI must not
+  }
   exit 1
 fi
 export GH_FIX="$work/fix"
@@ -62,11 +63,11 @@ GH
 chmod +x "$work/bin/gh" # gh-repo: ok
 export PATH="$work/bin:$PATH"
 export GITHUB_REPOSITORY=o/r
-issue() {
+issue() { # issue <n> <title> [label...]
   local n="$1" t="$2"
   shift 2
   jq -nc --arg t "$t" '$ARGS.positional as $l | {title: $t, labels: [$l[] | {name: .}]}' --args "$@" > "$GH_FIX/$n.json"
-} # issue <n> <title> [label...]
+}
 issue 54 "[Feature] Start work in a worktree, review once!"
 issue 55 "Null children crash the   grid" enhancement Bug
 issue 56 "bugfix" bugfix
@@ -105,8 +106,9 @@ issue 123456789 "Nine digits"
 git init -q --bare -b main "$work/origin.git"
 git clone -q "$work/origin.git" "$work/Repo" 2> /dev/null
 cd "$work/Repo" || exit 1
+# a user's own config must not prune for the script: only its --prune may
 git config fetch.prune false
-git config remote.origin.prune false # a user's own config must not prune for the script: only its --prune may
+git config remote.origin.prune false
 git checkout -q -b main
 mkdir scripts
 cp "$SCRIPTS/check-branch-name.sh" "$SCRIPTS/work-issue.sh" scripts/
