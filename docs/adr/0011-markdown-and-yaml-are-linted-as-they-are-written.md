@@ -62,3 +62,16 @@ doesn't name the files it wrote, so the hook would have to diff the tree after e
 The Template carries the same rule for Applications as the Owned `.claude/rules/markdown-and-yaml-edits.md`, which Apply writes into every repo, with or without the hook
 wired in, and which loads in every session. In a repo that runs Sandcastle, where the review ledger is, a re-Apply that rewrites it needs a local review (`REVIEWED_ON_REAPPLY`),
 as the hand-off rules do; elsewhere the re-Apply PR's own review is the check. It reaches the Fleet by a Rollout.
+
+The hook lints shell files too, with the gate's two shell checks: `shellcheck`, and `shfmt -d` with no style flags, so it reads `.editorconfig` ([ADR 0015](0015-shell-files-are-formatted-with-shfmt.md),
+whose Update makes an Application's gate check the changed shell files' format). A shell file is one the gate takes for one: a `*.sh`, an extensionless file in the root's
+`scripts/`, or a git hook in the root's `.github/hooks`, or in a `.github/hooks` under a folder that holds an `.editorconfig` (the Template's copy in the Factory). shfmt skips the
+extensionless `scripts/` files, which no `.editorconfig` section styles, and runs only when it is v3.14 or a later v3 release, as the gate needs; another is named in the
+`systemMessage`. Neither tool runs code from the repository (shellcheck reports only on the file it is given, and shfmt reads only `.editorconfig`), so neither config is vetted
+as a markdownlint one is. `test.sh` keeps the hook's hook-name and shfmt release rules equal to the gate's. The report's first line now says only that the gate checks the same
+file before the push, which is true of every kind; the pre-commit hook lints only Markdown, and an Application's CI doesn't check shell format.
+
+The Owned `.claude/rules/script-edits.md` says the same for scripts as the Markdown and YAML rule does, and lists the checks reviewers keep raising on script changes: a test
+that fails without each new branch, the header or docstring updated in the same edit, the edge cases that keep coming back (a missing tool or another release, an empty, relative
+or odd path, CRLF or a byte-order mark, a symlink, a variable a caller left set), and the script's error contract. Its `paths:` front matter loads it when a session works on a shell
+or Python script, not in every session. It is in `REVIEWED_ON_REAPPLY` too, since it steers how an agent writes code, and the Factory carries a copy of it (`scripts/gate.sh` lists it).

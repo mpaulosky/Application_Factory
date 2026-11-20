@@ -62,6 +62,8 @@ mkdir -p "$skill/template/owned/.claude/rules"
 printf '# Hand a pull request off to Sandcastle\n' > "$skill/template/owned/.claude/rules/sandcastle-hand-off.md"
 # The Markdown and YAML edit rule: an Owned rules file every repo gets, Sandcastle or not.
 printf '# Editing Markdown and YAML\n' > "$skill/template/owned/.claude/rules/markdown-and-yaml-edits.md"
+# The script edit rule: an Owned rules file every repo gets, Sandcastle or not.
+printf -- '---\npaths:\n  - "**/*.sh"\n---\n\n# Editing scripts\n' > "$skill/template/owned/.claude/rules/script-edits.md"
 # The security record's README: Owned in every repo, while its entries are left alone by a re-Apply.
 mkdir -p "$skill/template/owned/.security"
 printf '# The security record\n' > "$skill/template/owned/.security/README.md"
@@ -207,6 +209,7 @@ check "sandcastle, no .sandcastle/: other Seed file written" '[[ -f "$repo/docs/
 check "sandcastle, no .sandcastle/: a neighbouring script is written" '[[ -f "$repo/scripts/other.sh" ]]'
 check "sandcastle, no .sandcastle/: a neighbouring skill is written" '[[ -f "$repo/.claude/skills/other/SKILL.md" ]]'
 check "sandcastle, no .sandcastle/: the Markdown and YAML edit rule is written" '[[ -f "$repo/.claude/rules/markdown-and-yaml-edits.md" ]]'
+check "sandcastle, no .sandcastle/: the script edit rule is written" '[[ -f "$repo/.claude/rules/script-edits.md" ]]'
 check "sandcastle, no .sandcastle/: the fifteen are reported as left out" 'grep -q "Sandcastle files left out.*: 15" <<< "$out"'
 check "sandcastle, no .sandcastle/: the report says how to add them" 'grep -q "create it and Apply again" <<< "$out"'
 check "sandcastle, no .sandcastle/: no .sandcastle/ folder made" '[[ ! -e "$repo/.sandcastle" ]]'

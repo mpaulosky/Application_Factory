@@ -59,7 +59,7 @@ RESET='\033[0m'
 skill=".claude/skills/repo-ci-baseline"
 owned="$skill/template/owned"
 
-# The Factory carries these Owned files as copies, for its git hooks, review layer, issue and PR process and shell style (.editorconfig). Edit the Template's file, then run scripts/gate.sh --sync to copy it over.
+# The Factory carries these Owned files as copies, for its git hooks, review layer, issue and PR process, edit-time lint and its script rule, and shell style (.editorconfig). Edit the Template's file, then run scripts/gate.sh --sync to copy it over.
 # Keep this list in step with ADR 0006, ADR 0008, ADR 0009, ADR 0010, ADR 0011, ADR 0015 and CLAUDE.md.
 copies=(
   .github/hooks/pre-commit
@@ -95,6 +95,7 @@ copies=(
   .claude/agents/pre-push-reviewer.md
   .security/README.md
   .editorconfig
+  .claude/rules/script-edits.md
 )
 
 if ((sync)); then

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Tests for scripts/lint-edited-file.sh, the Claude Code PostToolUse hook that lints the Markdown or YAML file a tool just wrote.
+# Tests for scripts/lint-edited-file.sh, the Claude Code PostToolUse hook that lints the Markdown, YAML or shell file a tool just wrote.
 # Wiring it in (.claude/settings.json) is each repo's own.
 #
 # The linters are stubs on PATH, so the suite needs none of them: each stub fails when the file it is given holds the word BAD
 # (CRASH: exit 3), and logs its arguments and working directory, which is how the cases tell which linter ran, on which path,
-# with which config. A last block runs the real markdownlint-cli2 when it is installed; an Application's hook-tests job has none,
-# so there that block is skipped. A self-test runs the suite once more with a TMPDIR that does not exist (LINT_TEST_NESTED=1 keeps
+# with which config. The shfmt stub answers --version with $SHFMT_STUB_VERSION (v3.14.1 when unset), and a stub named in
+# $STUB_PASS passes whatever the file holds. Last blocks run the real markdownlint-cli2, shellcheck and shfmt when each is installed;
+# an Application's hook-tests job may have none, so there those blocks are skipped. A self-test runs the suite once more with a TMPDIR that does not exist (LINT_TEST_NESTED=1 keeps
 # that run from starting another).
 # Usage: scripts/tests/lint-edited-file.test.sh
 set -uo pipefail
@@ -65,12 +66,18 @@ LOG="$WORK/linters.log"
 STUBS="$WORK/stubs"
 mkdir -p "$STUBS"
 # make_stub <dir> <name>: a linter that logs "<name> <cwd> <args>"; exit 4 when its last argument is not a file, 3 when the file
-# holds CRASH, 1 when it holds BAD (BIG<n>: after printing n characters), else 0.
+# holds CRASH, 1 when it holds BAD (BIG<n>: after printing n characters), else 0. Named in $STUB_PASS, it logs and passes.
+# shfmt --version prints $SHFMT_STUB_VERSION and logs nothing.
 make_stub() {
   cat > "$1/$2" << 'EOF'
 #!/usr/bin/env bash
 name="$(basename "$0")"
+if [[ "$name" == shfmt && "${1:-}" == --version ]]; then
+  echo "${SHFMT_STUB_VERSION-v3.14.1}"
+  exit 0
+fi
 echo "$name $(pwd -P) $*" >> "$STUB_LOG"
+[[ " ${STUB_PASS:-} " != *" $name "* ]] || exit 0
 file="${!#}"
 [[ -f "$file" ]] || { echo "$name: $file: no such file" >&2; exit 4; }
 if grep -q CRASH "$file"; then echo "$name crashed" >&2; exit 3; fi
@@ -84,7 +91,7 @@ exit 0
 EOF
   chmod +x "$1/$2"
 }
-for tool in markdownlint-cli2 yamllint actionlint zizmor; do make_stub "$STUBS" "$tool"; done
+for tool in markdownlint-cli2 yamllint actionlint zizmor shellcheck shfmt; do make_stub "$STUBS" "$tool"; done
 
 # A PATH holding the stubs and the basic tools the script and stubs need, and no real linter.
 link_tools() {
@@ -527,14 +534,176 @@ log_line "yamllint $repo ./config.yml" || p+=("log: $(cat "$LOG")")
 check "without a .yamllint.yml, yamllint runs with its defaults" ${p[@]+"${p[@]}"}
 printf 'rules: {}\n' > "$repo/.yamllint.yml"
 
+# --- Shell ----------------------------------------------------------------
+mkdir -p "$repo/scripts/sub" "$repo/.github/hooks" "$repo/tools/.github/hooks" "$repo/tmpl/.github/hooks" "$repo/notes"
+printf 'echo ok\n' > "$repo/scripts/ok.sh"
+printf 'BAD\n' > "$repo/scripts/bad.sh"
+printf 'echo ok\n' > "$repo/scripts/tool"
+: > "$repo/tmpl/.editorconfig"
+sh_both() { log_line "shellcheck $repo -- ./$1" && log_line "shfmt $repo -d -- ./$1" && [[ "$(ran shellcheck)" == 1 && "$(ran shfmt)" == 1 ]]; }
+
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+sh_both scripts/ok.sh || p+=("want shellcheck and shfmt -d once each, from the repo root, after --: $(cat "$LOG")")
+[[ "$(ran markdownlint-cli2)" == 0 && "$(ran yamllint)" == 0 ]] || p+=("a Markdown or YAML linter ran on a shell file")
+check "a clean .sh passes silently, through shellcheck and shfmt -d (no style flags) from the repo root" ${p[@]+"${p[@]}"}
+
+run_hook "$(edit_json "$repo/scripts/bad.sh")"
+p=()
+[[ $STATUS -eq 2 && -z "$STDOUT" ]] || p+=("exit $STATUS, want 2 with nothing on stdout")
+[[ "$STDERR" == "Lint found problems in scripts/bad.sh. Fix them now; the gate checks the same file before the push."* ]] || p+=("the header: $STDERR")
+[[ "$STDERR" == *"shellcheck (exit 1):"* && "$STDERR" == *"shfmt (exit 1):"* ]] || p+=("not both linters' findings")
+[[ "$STDERR" == *"run shfmt -w ./scripts/bad.sh from the repository root, with no style flags"* ]] || p+=("no shfmt -w hint")
+check "a .sh both linters fail exits 2 with both reports and the shfmt -w hint" ${p[@]+"${p[@]}"}
+
+RUN_ENV=(STUB_PASS=shfmt)
+run_hook "$(edit_json "$repo/scripts/bad.sh")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ $STATUS -eq 2 && "$STDERR" == *"shellcheck (exit 1):"* && "$STDERR" != *"shfmt (exit"* ]] || p+=("exit $STATUS, stderr: $STDERR")
+[[ "$STDERR" != *"run shfmt -w"* ]] || p+=("the shfmt -w hint without a shfmt finding")
+check "a shellcheck finding alone gets no shfmt -w hint" ${p[@]+"${p[@]}"}
+
+RUN_ENV=(STUB_PASS=shellcheck)
+run_hook "$(edit_json "$repo/scripts/bad.sh")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ $STATUS -eq 2 && "$STDERR" == *"shfmt (exit 1):"* && "$STDERR" != *"shellcheck (exit"* ]] || p+=("exit $STATUS, stderr: $STDERR")
+[[ "$STDERR" == *"run shfmt -w ./scripts/bad.sh"* ]] || p+=("no shfmt -w hint")
+check "a shfmt finding alone exits 2 with the shfmt -w hint" ${p[@]+"${p[@]}"}
+
+run_hook "$(edit_json "$repo/scripts/tool")"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+log_line "shellcheck $repo -- ./scripts/tool" || p+=("shellcheck did not run: $(cat "$LOG")")
+[[ "$(ran shfmt)" == 0 ]] || p+=("shfmt ran on a file no .editorconfig section styles")
+check "an extensionless script in scripts/ goes through shellcheck only" ${p[@]+"${p[@]}"}
+
+# The hook names the gate takes for a shell file, in the root's .github/hooks and in one under a folder that holds an .editorconfig.
+for hook in pre-commit pre-push post-checkout post-rewrite commit-msg prepare-commit-msg; do
+  for at in .github/hooks tmpl/.github/hooks; do
+    printf 'echo ok\n' > "$repo/$at/$hook"
+    run_hook "$(edit_json "$repo/$at/$hook")"
+    p=()
+    [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+    sh_both "$at/$hook" || p+=("not linted and formatted: $(cat "$LOG")")
+    check "the git hook $at/$hook goes through shellcheck and shfmt" ${p[@]+"${p[@]}"}
+  done
+done
+
+# What is not a shell file the gate checks: each left alone, with nothing run and nothing said.
+printf 'BAD\n' > "$repo/tools/.github/hooks/pre-push"
+printf 'BAD\n' > "$repo/scripts/sub/tool"
+printf 'BAD\n' > "$repo/.github/hooks/README"
+printf 'BAD\n' > "$repo/.github/hooks/Pre-push"
+printf 'BAD\n' > "$repo/.github/hooks/pre-"
+printf 'BAD\n' > "$repo/.github/hooks/pré-push"
+printf 'BAD\n' > "$repo/.github/hooks/my-pre-push"
+printf 'BAD\n' > "$repo/.github/hooks/commit-msgs"
+printf 'BAD\n' > "$repo/notes/pre-push"
+printf 'BAD\n' > "$repo/UPPER.SH"
+printf 'BAD\n' > "$repo/scripts/tool.py"
+printf 'BAD\n' > "$repo/script.bash"
+for edited in tools/.github/hooks/pre-push scripts/sub/tool .github/hooks/README .github/hooks/Pre-push .github/hooks/pre- .github/hooks/pré-push \
+  .github/hooks/my-pre-push .github/hooks/commit-msgs \
+  notes/pre-push UPPER.SH scripts/tool.py script.bash; do
+  run_hook "$(edit_json "$repo/$edited")"
+  p=()
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+  log_empty || p+=("linted: $(cat "$LOG")")
+  check "$edited is no shell file the gate checks, so it is left alone" ${p[@]+"${p[@]}"}
+done
+# A .github/hooks under a folder with a directory named .editorconfig is not styled by it.
+rm "$repo/tmpl/.editorconfig"
+mkdir "$repo/tmpl/.editorconfig"
+run_hook "$(edit_json "$repo/tmpl/.github/hooks/pre-push")"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_empty || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+check "a hook under a folder whose .editorconfig is a directory is left alone" ${p[@]+"${p[@]}"}
+rmdir "$repo/tmpl/.editorconfig"
+: > "$repo/tmpl/.editorconfig"
+
+printf 'BAD\n' > "$repo/-dash.sh"
+run_hook "$(edit_json "$repo/-dash.sh")"
+p=()
+log_line "shellcheck $repo -- ./-dash.sh" && log_line "shfmt $repo -d -- ./-dash.sh" || p+=("a name starting with - is not guarded: $(cat "$LOG")")
+check "a shell file whose name starts with - reaches both linters as a file" ${p[@]+"${p[@]}"}
+
+# A relative path with no slash, from the scripts/ folder: the folder is resolved before the name is matched.
+RUN_CWD="$repo/scripts"
+run_hook "$(edit_json "tool")"
+RUN_CWD=
+p=()
+log_line "shellcheck $repo -- ./scripts/tool" || p+=("not linted as ./scripts/tool: $(cat "$LOG")")
+check "a relative path with no slash in scripts/ is linted as scripts/<name>" ${p[@]+"${p[@]}"}
+
+# shfmt runs only when it is v3.14 or a later v3 release, as the gate needs; another is noted, not run, and shellcheck still runs.
+for version in v3.14.0 v3.14.1 v3.15.2 v3.20.0 v3.100.0; do
+  RUN_ENV=(SHFMT_STUB_VERSION="$version")
+  run_hook "$(edit_json "$repo/scripts/ok.sh")"
+  RUN_ENV=(RUN_ENV_UNUSED=1)
+  p=()
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] && sh_both scripts/ok.sh || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+  check "shfmt $version is run" ${p[@]+"${p[@]}"}
+done
+for version in v3.13.9 v3.1.0 v2.7.0 v4.0.0 3.14.1 "" "v3.14.1 extra" "v3.14.1
+v3.14.1"; do
+  RUN_ENV=(SHFMT_STUB_VERSION="$version")
+  run_hook "$(edit_json "$repo/scripts/ok.sh")"
+  RUN_ENV=(RUN_ENV_UNUSED=1)
+  msg="$(system_message "$STDOUT")"
+  p=()
+  [[ $STATUS -eq 0 && -z "$STDERR" ]] || p+=("exit $STATUS, stderr: $STDERR")
+  [[ "$(ran shellcheck)" == 1 && "$(ran shfmt)" == 0 ]] || p+=("want shellcheck alone: $(cat "$LOG")")
+  [[ "$msg" == "lint-edited-file.sh: scripts/ok.sh was not fully linted: shfmt '$version' is not v3.14 or a later v3 release, whose format the gate checks (the gate still checks it before the push)." ]] \
+    || p+=("note: $msg")
+  check "shfmt '${version//$'\n'/\\n}' is noted and not run" ${p[@]+"${p[@]}"}
+done
+RUN_ENV=(SHFMT_STUB_VERSION="v3.$(printf '%060d' 1).0")
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ "$(system_message "$STDOUT")" == *"shfmt 'v3.$(printf '%037d' 0)' is not"* ]] || p+=("the version was not cut at 40 characters: $STDOUT")
+check "a long shfmt version is cut at 40 characters in the note" ${p[@]+"${p[@]}"}
+RUN_ENV=(SHFMT_STUB_VERSION=v3.13.0)
+run_hook "$(edit_json "$repo/scripts/bad.sh")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ $STATUS -eq 2 && "$STDERR" == *"shellcheck (exit 1):"* && "$STDERR" != *"run shfmt -w"* && -z "$STDOUT" ]] || p+=("exit $STATUS, stderr: $STDERR")
+check "with an old shfmt, a shellcheck finding still exits 2, with no shfmt -w hint" ${p[@]+"${p[@]}"}
+RUN_ENV=(SHFMT_STUB_VERSION=v3.13.0)
+run_hook "$(edit_json "$repo/scripts/tool")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("an extensionless script, which shfmt doesn't format, noted the release: $OUTPUT")
+check "an old shfmt is not noted for a file shfmt doesn't format" ${p[@]+"${p[@]}"}
+
+# The shell linters found only inside the project are refused, and named apart from a missing one.
+attacker_stub "$repo/bin/shellcheck"
+attacker_stub "$repo/bin/shfmt"
+run_hook "$(edit_json "$repo/scripts/bad.sh")" "$repo/bin:$TOOLS"
+msg="$(system_message "$STDOUT")"
+p=()
+[[ $STATUS -eq 0 ]] && ! log_has "attacker " || p+=("exit $STATUS, or an in-repo shell linter ran: $(cat "$LOG")")
+[[ "$msg" == *"was not fully linted: shellcheck shfmt $found_inside"* ]] || p+=("note: $msg")
+check "shellcheck and shfmt inside the repo are refused" ${p[@]+"${p[@]}"}
+rm "$repo/bin/shfmt"
+run_hook "$(edit_json "$repo/scripts/bad.sh")" "$repo/bin:$TOOLS"
+msg="$(system_message "$STDOUT")"
+p=()
+[[ "$msg" == *"shfmt not installed; shellcheck $found_inside"* ]] || p+=("note: $msg")
+check "a missing shfmt and a shellcheck found only inside are named apart" ${p[@]+"${p[@]}"}
+rm -r "${repo:?}/bin"
+
 # --- Not linted -----------------------------------------------------------
-printf 'BAD\n' > "$repo/script.sh"
-run_hook "$(edit_json "$repo/script.sh")"
+printf 'BAD\n' > "$repo/script.py"
+run_hook "$(edit_json "$repo/script.py")"
 p=()
 [[ $STATUS -eq 0 ]] || p+=("exit $STATUS, want 0")
-log_empty || p+=("a .sh file was linted: $(cat "$LOG")")
+log_empty || p+=("a .py file was linted: $(cat "$LOG")")
 [[ -z "$OUTPUT" ]] || p+=("output: $OUTPUT")
-check "a file that is neither Markdown nor YAML is left alone" ${p[@]+"${p[@]}"}
+check "a file that is not Markdown, YAML or shell is left alone" ${p[@]+"${p[@]}"}
 
 run_hook "$(edit_json "$repo/docs/missing.md")"
 p=()
@@ -1339,6 +1508,17 @@ p=()
 [[ "$msg" == *"yamllint actionlint zizmor not installed"* ]] || p+=("the note doesn't name all three: $STDOUT")
 check "without the YAML linters, the note names each missing one" ${p[@]+"${p[@]}"}
 
+run_hook "$(edit_json "$repo/scripts/bad.sh")" "$NOLINT"
+msg="$(system_message "$STDOUT")"
+p=()
+[[ $STATUS -eq 0 && -z "$STDERR" ]] || p+=("exit $STATUS, stderr: $STDERR")
+[[ "$msg" == "lint-edited-file.sh: scripts/bad.sh was not fully linted: shellcheck shfmt not installed (the gate still checks it before the push)." ]] || p+=("note: $STDOUT")
+check "without the shell linters, the note names both" ${p[@]+"${p[@]}"}
+run_hook "$(edit_json "$repo/scripts/tool")" "$NOLINT"
+p=()
+[[ "$(system_message "$STDOUT")" == *"was not fully linted: shellcheck not installed (the gate"* ]] || p+=("note: $STDOUT")
+check "without shellcheck, an extensionless script's note names shellcheck alone" ${p[@]+"${p[@]}"}
+
 # Only zizmor missing.
 NOZIZ="$WORK/noziz"
 link_tools "$NOZIZ"
@@ -1376,10 +1556,15 @@ for entry in "$repo/bin" bin; do
 done
 rm -r "${repo:?}/bin"
 
-run_hook "$(edit_json "$repo/script.sh")" "$STUBS:$NOGIT"
+run_hook "$(edit_json "$repo/script.py")" "$STUBS:$NOGIT"
 p=()
-[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT: a file that is not Markdown or YAML needs no git")
-check "without git, a file that is neither Markdown nor YAML still exits 0 silently" ${p[@]+"${p[@]}"}
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT: a file that is not Markdown, YAML or shell needs no git")
+check "without git, a file that is not Markdown, YAML or shell still exits 0 silently" ${p[@]+"${p[@]}"}
+run_hook "$(edit_json "$repo/scripts/bad.sh")" "$STUBS:$NOGIT"
+p=()
+[[ $STATUS -eq 1 && "$STDERR" == *"git not found"* && -z "$STDOUT" ]] || p+=("exit $STATUS, stderr: $STDERR")
+log_empty || p+=("a linter ran without git: $(cat "$LOG")")
+check "without git, a shell file makes the hook exit 1 with a message" ${p[@]+"${p[@]}"}
 
 # A git that cannot list worktrees with -z (before 2.36): the hook says so and does not lint, instead of silently skipping.
 OLDGIT="$WORK/oldgit"
@@ -1454,6 +1639,38 @@ EOF
   check "markdownlint-cli2 itself: a name with * is linted, not matched as a glob" ${p[@]+"${p[@]}"}
 else
   echo "skip - markdownlint-cli2 is not installed (or does not run), so its own run is not tested"
+fi
+
+# --- The real shellcheck and shfmt, when installed ---------------------------
+# The repo's own .editorconfig gives the style, as in every repo the Template is Applied to.
+# shellcheck disable=SC2016 # the scripts' own text, and shfmt's diff of it, written as they are
+if PATH="$REAL_PATH" shellcheck --version > /dev/null 2>&1 \
+  && [[ "$(PATH="$REAL_PATH" shfmt --version 2> /dev/null)" =~ ^v3\.(1[4-9]|[2-9][0-9]|[1-9][0-9]{2,})\.[0-9]+$ ]] && [[ -f "$ROOT/.editorconfig" ]]; then
+  realsh="$(new_repo realsh)"
+  cp "$ROOT/.editorconfig" "$realsh/.editorconfig"
+  mkdir -p "$realsh/scripts" "$realsh/.github/hooks"
+  printf '#!/usr/bin/env bash\nif true; then\n  echo "$1"\nfi\n' > "$realsh/scripts/good.sh"
+  printf '#!/usr/bin/env bash\nif true; then\n    echo "$1"\nfi\n' > "$realsh/scripts/indented.sh"
+  printf '#!/usr/bin/env bash\necho $1\n' > "$realsh/scripts/unquoted.sh"
+  printf '#!/usr/bin/env bash\nif true; then\n    echo "$1"\nfi\n' > "$realsh/.github/hooks/pre-push"
+  run_hook "$(edit_json "$realsh/scripts/good.sh")" "$REAL_PATH" "$realsh"
+  p=()
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+  check "shellcheck and shfmt themselves: a clean script exits 0" ${p[@]+"${p[@]}"}
+  run_hook "$(edit_json "$realsh/scripts/indented.sh")" "$REAL_PATH" "$realsh"
+  p=()
+  [[ $STATUS -eq 2 && "$STDERR" == *"shfmt (exit 1):"* && "$STDERR" == *'+  echo "$1"'* && "$STDERR" != *"shellcheck (exit"* ]] || p+=("exit $STATUS, stderr: $STDERR")
+  check "shfmt itself: a 4-space indent is a diff to the .editorconfig style" ${p[@]+"${p[@]}"}
+  run_hook "$(edit_json "$realsh/scripts/unquoted.sh")" "$REAL_PATH" "$realsh"
+  p=()
+  [[ $STATUS -eq 2 && "$STDERR" == *SC2086* && "$STDERR" != *"shfmt (exit"* ]] || p+=("exit $STATUS, stderr: $STDERR")
+  check "shellcheck itself: an unquoted \$1 is SC2086" ${p[@]+"${p[@]}"}
+  run_hook "$(edit_json "$realsh/.github/hooks/pre-push")" "$REAL_PATH" "$realsh"
+  p=()
+  [[ $STATUS -eq 2 && "$STDERR" == *'+  echo "$1"'* ]] || p+=("exit $STATUS, stderr: $STDERR")
+  check "shfmt itself: a git hook takes the .editorconfig style of its own section" ${p[@]+"${p[@]}"}
+else
+  echo "skip - shellcheck, or shfmt v3.14 or a later v3, is not installed (or there is no .editorconfig), so their own runs are not tested"
 fi
 
 if [[ -x "$SCRIPT" ]]; then

@@ -2,6 +2,7 @@
 # Local quality gate, run by .github/hooks/pre-push and safe to run by hand.
 # Lints the Markdown, YAML, workflow and shell files changed since origin/main
 # (every unpushed commit, with the same configs as CI), checks that the
+# changed shell files are formatted as shfmt formats them, checks that the
 # branch's diff passed the local review (/pre-push-review), that its own
 # scripts and skills tell every gh command its repository, that
 # .github/copilot-instructions.md matches the repo's code-review skill (when
@@ -58,6 +59,9 @@ mapfile -d '' -t YAML_FILES < <(pick '\.ya?ml$' '(^|/)pnpm-lock\.yaml$')
 mapfile -d '' -t WORKFLOW_FILES < <(pick '^\.github/(workflows/[^/]+\.ya?ml|dependabot\.ya?ml|actionlint\.ya?ml|zizmor\.ya?ml)$')
 # Shell scripts, plus extensionless scripts and git hooks.
 mapfile -d '' -t SHELL_FILES < <(pick '\.sh$|^scripts/[^/.]+$|^\.github/hooks/((pre|post)-[a-z-]+|(prepare-)?commit-msg)$')
+# The shell files shfmt formats: those .editorconfig gives the shell style to (its [*.sh] and [.github/hooks/*] sections). An
+# extensionless scripts/ file is in no section, so shfmt would format it in its own defaults: shellcheck alone checks it.
+mapfile -d '' -t SHFMT_FILES < <(pick '\.sh$|^\.github/hooks/((pre|post)-[a-z-]+|(prepare-)?commit-msg)$')
 
 # An installed markdownlint-cli2 (as the pre-commit hook uses) when there is
 # one; otherwise this pinned version, never whatever the registry serves at push time.
@@ -152,6 +156,27 @@ if [[ ${#SHELL_FILES[@]} -gt 0 ]]; then
   run_tool shellcheck "install shellcheck, or Docker" have_docker \
     docker run --rm -v "$ROOT:/mnt" -w /mnt "koalaman/shellcheck:${SHELLCHECK_VERSION}" \
     -- -- "${SHELL_FILES[@]}"
+fi
+
+# Each changed shell file is formatted as shfmt formats it, in the style .editorconfig gives, so a repo's own scripts take the
+# style as they are touched, with no one-off reformat. shfmt gets no style flags, so it reads that file. It must be v3.14 or a later
+# v3 release, the one check_gh_repo.py below needs too: another release can format the same file differently.
+step "Shell format (${#SHFMT_FILES[@]} changed file(s))"
+if [[ ${#SHFMT_FILES[@]} -gt 0 ]]; then
+  if ! command -v shfmt &> /dev/null; then
+    echo "❌ Shell format needs shfmt v3.14 or a later v3 release (check_gh_repo.py needs it too): install it on PATH." >&2
+    exit 1
+  fi
+  SHFMT_FOUND="$(shfmt --version 2>&1)" || SHFMT_FOUND=""
+  if ! [[ "$SHFMT_FOUND" =~ ^v3\.(1[4-9]|[2-9][0-9]|[1-9][0-9]{2,})\.[0-9]+$ ]]; then
+    echo "❌ Shell format needs shfmt v3.14 or a later v3 release, not '${SHFMT_FOUND:0:80}'." >&2
+    exit 1
+  fi
+  # shfmt exits 1 both for a file it would change (it prints the diff) and for one it can't parse (it prints the error).
+  shfmt -d -- "${SHFMT_FILES[@]}" || {
+    echo "❌ shfmt: run shfmt -w on each file whose diff is shown above (with no style flags, so it reads .editorconfig), and fix the syntax of any file it could not parse." >&2
+    exit 1
+  }
 fi
 
 # A gh command not told its repository reaches gh's default one, a fork in a

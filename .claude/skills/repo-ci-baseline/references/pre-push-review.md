@@ -96,7 +96,8 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   change is a regular Owned file added or modified, as Apply writes them (`OWNED_PATHS` in the ledger lists them, and a dotfiles test keeps it equal to
   `template/owned/`). A deleted Owned file, a symlink, a submodule, a file of the repo's own, a Seed file the re-Apply writes because the repo lacked it, or one of
   the Owned files that carry behaviour (`REVIEWED_ON_REAPPLY`: `.github/ci/coverage-threshold`, which ci.yml enforces at any value,
-  `.claude/rules/sandcastle-hand-off.md` and `.claude/rules/markdown-and-yaml-edits.md`, which load into every session, the three `.github/ISSUE_TEMPLATE/` files, whose front matter sets labels and assignees,
+  `.claude/rules/sandcastle-hand-off.md` and `.claude/rules/markdown-and-yaml-edits.md`, which load into every session, `.claude/rules/script-edits.md`, which loads into every session
+  that works on a script, the three `.github/ISSUE_TEMPLATE/` files, whose front matter sets labels and assignees,
   `.claude/agents/pre-push-reviewer.md`, whose `tools:` front matter keeps reviewers read-only, the `pre-push-review` skill's `SKILL.md`, `lenses.md` and `review-bar.md`,
   which the host reads into the unattended reviewers' prompts (the bar, the lenses and the severities), `.sandcastle/critique-prompt.md` and `intake-prompt.md`,
   and `plan-prompt.md`, `review-prompt.md` and the role prompts under `.sandcastle/roles/`
