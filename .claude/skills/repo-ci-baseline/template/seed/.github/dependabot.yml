@@ -122,3 +122,29 @@ updates:
       all-npm:
         patterns:
           - "*"
+
+  # Maintain the Python tests' hashed pins (.github/scripts/requirements-tests.txt, which CI
+  # installs with --require-hashes). The file is Owned and the Factory bumps the Template's
+  # copy too: mirror a bump into the Template, or the next Apply overwrites it.
+  - package-ecosystem: "pip"
+    directory: "/.github/scripts"
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "16:00"
+    open-pull-requests-limit: 10
+    # Conventional commits, like the repo's own: "chore(deps): bump ...".
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    # Wait a week before proposing a new release, so a compromised or broken
+    # one is usually caught upstream before it reaches a PR here.
+    cooldown:
+      default-days: 7
+    labels:
+      - "dependencies"
+    groups:
+      all-pip:
+        patterns:
+          - "*"

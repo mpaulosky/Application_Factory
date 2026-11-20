@@ -96,6 +96,71 @@ bash "$owned/scripts/tests/check-git-hooks.test.sh" || fail "check-git-hooks.tes
 bash "$owned/scripts/tests/lint-edited-file.test.sh" || fail "lint-edited-file.test.sh"
 grep -qxF '        run: bash scripts/tests/lint-edited-file.test.sh' "$owned/.github/workflows/ci.yml" \
   || fail "the Owned ci.yml's hook-tests job must run scripts/tests/lint-edited-file.test.sh, so every repo tests its copy"
+bash "$skill_dir/tests/owned-gate-files.test.sh" || fail "owned-gate-files.test.sh"
+# CI's Branch name job passes the PR's author, from the event payload (which a pusher can't set), so only dependabot[bot]'s own PR
+# gets any dependabot/* name (R42 of TicketManager's re-Apply review).
+# shellcheck disable=SC2016 # the workflow's own text, which must not expand here
+grep -qxF '          PR_AUTHOR: ${{ github.event.pull_request.user.login }}' "$owned/.github/workflows/ci.yml" \
+  || fail "the Owned ci.yml's Branch name job must set PR_AUTHOR from github.event.pull_request.user.login"
+# shellcheck disable=SC2016 # the workflow's own text
+grep -qxF '        run: bash scripts/check-branch-name.sh --pr --author "$PR_AUTHOR" "$HEAD_REF"' "$owned/.github/workflows/ci.yml" \
+  || fail "the Owned ci.yml's Branch name job must run: bash scripts/check-branch-name.sh --pr --author \"\$PR_AUTHOR\" \"\$HEAD_REF\""
+# Every pip install in an Owned workflow takes only hashed pins (R43 of TicketManager's re-Apply review): the python-tests job installs
+# requirements-tests.txt with --require-hashes, and every pin there is exact and carries a hash. --only-binary=:all: makes pip refuse a source
+# archive, whose build would fetch its build backend unhashed.
+grep -qxF '          python -m pip install --require-hashes --no-deps --only-binary=:all: -r .github/scripts/requirements-tests.txt' "$owned/.github/workflows/ci.yml" \
+  || fail "the Owned ci.yml's python-tests job must install .github/scripts/requirements-tests.txt with --require-hashes --no-deps --only-binary=:all:"
+if grep -nE 'pip install' "$owned"/.github/workflows/*.yml | grep -v -- '--require-hashes.*--only-binary=:all:'; then
+  fail "every pip install in an Owned workflow must use --require-hashes and --only-binary=:all: (the lines above don't)"
+fi
+# The Factory's template-tools action installs the same hashed file, so a bump's PR runs the Template's Python tests on its pins
+# (R22), and no second pytest pin can drift from it.
+template_tools="$skill_dir/../../../.github/actions/template-tools/action.yml"
+hashed_install='        python -m pip install --require-hashes --no-deps --only-binary=:all: -r .claude/skills/repo-ci-baseline/template/owned/.github/scripts/requirements-tests.txt'
+grep -qxF -- "$hashed_install" "$template_tools" \
+  || fail "the template-tools action must install the Template's requirements-tests.txt with --require-hashes --no-deps --only-binary=:all:"
+[[ -f "$owned/.github/scripts/requirements-tests.txt" ]] || fail "the Template's .github/scripts/requirements-tests.txt is missing"
+# Any other line that names pytest or PyYAML, in any case: only the exact hashed install line, comment lines and the top-level
+# description block may. A pin on the hashed line's own copy, or after a trailing comment, is on another line and is caught.
+second_pin() {
+  awk '/^description:/ { desc = 1; next } /^[^ ]/ { desc = 0 } !desc { print NR ":" $0 }' "$1" \
+    | grep -vxF -- "$(grep -nxF -- "$hashed_install" "$1" | head -n 1)" \
+    | grep -vE '^[0-9]+:[[:space:]]*#' \
+    | grep -iE '(^|[^a-z0-9_-])(pytest|pyyaml)([^a-z0-9_-]|$)|PYTEST_|PYYAML_'
+}
+if second_pin "$template_tools"; then
+  fail "the template-tools action must take pytest and PyYAML from requirements-tests.txt only (the lines above name them again)"
+fi
+# The guard itself catches each spelling a re-pin is likely to take, and passes the description and the hashed line.
+pin_fixture() { printf 'description: >\n  pytest and PyYAML from requirements-tests.txt\nruns:\n  steps:\n      run: |\n%s\n%s\n' "$hashed_install" "$1" > "$md_tmp/action-pin.yml"; }
+for spelling in '        pip install pytest "yamllint==1"' '        "PyYAML==6.0.3"' '        pytest>=9' '        pyyaml~=6' '        PYTEST_VERSION: "9"' '        pip install Pytest' \
+  '        python -m pip install pytest==9 -r x/requirements-tests.txt' '        pip install -r requirements-tests.txt pyyaml==5' '        pip install pytest==9  # requirements-tests.txt' \
+  "${hashed_install} pytest==9" '  pytest: "9"' '    pytest==9'; do
+  pin_fixture "$spelling"
+  second_pin "$md_tmp/action-pin.yml" > /dev/null || fail "the template-tools pin guard misses: $spelling"
+done
+pin_fixture '        # pytest and PyYAML come from the line above'
+! second_pin "$md_tmp/action-pin.yml" > /dev/null || fail "the template-tools pin guard flags the description, a comment or the hashed line"
+# Dependabot keeps the hashed pins current: the Factory's own entry bumps the Template's copy, the Seed's an Application's.
+for pair in "$skill_dir/../../../.github/dependabot.yml|/.claude/skills/repo-ci-baseline/template/owned/.github/scripts" \
+  "$skill_dir/template/seed/.github/dependabot.yml|/.github/scripts"; do
+  file="${pair%%|*}" dir="${pair#*|}"
+  awk -v dir="$dir" '/package-ecosystem: "pip"/ { pip = 1; next } /package-ecosystem:/ { pip = 0 } pip && $0 ~ "directory: \"" dir "\"" { found = 1 } END { exit !found }' "$file" \
+    || fail "$file must have a pip entry for $dir, so Dependabot bumps requirements-tests.txt"
+done
+python3 - "$owned/.github/scripts/requirements-tests.txt" <<'PY_REQ' || fail "requirements-tests.txt must pin each package exactly, with at least one sha256 hash, pytest and pyyaml among them"
+import re, sys
+text = open(sys.argv[1]).read()
+entries = re.split(r"\n(?=[A-Za-z])", re.sub(r"^#.*\n|^\n", "", text, flags=re.M))
+names = set()
+for entry in filter(str.strip, entries):
+    first = entry.split()[0]
+    match = re.fullmatch(r"([a-z0-9][a-z0-9._-]*)==[0-9][^\s\\]*", first)
+    assert match, f"not an exact pin: {first}"
+    assert re.search(r"--hash=sha256:[0-9a-f]{64}", entry), f"no hash: {first}"
+    names.add(match.group(1))
+assert {"pytest", "pyyaml"} <= names, names
+PY_REQ
 fi # the hooks shard
 
 if in_shard scripts; then
@@ -156,6 +221,7 @@ shell_files=(
   "$skill_dir/tests/apply.test.sh" "$skill_dir/tests/reapply.test.sh"
   "$skill_dir/tests/seed-check.test.sh" "$skill_dir/tests/seed-dependabot.test.sh"
   "$skill_dir/tests/seed-dockerfile.test.sh" "$skill_dir/tests/doc-single-source.test.sh" "$skill_dir/tests/no-dotfiles-dependency.test.sh"
+  "$skill_dir/tests/owned-gate-files.test.sh"
   "$skill_dir/tests/sandcastle-check.test.sh" "$skill_dir/tests/repos-scope.test.sh"
   "$skill_dir/tests/check-git-status.sh" "$skill_dir/tests/check-git-status.test.sh" "$skill_dir/tests/mutations/check-spec.test.sh"
   "$owned/scripts/gate.sh" "$owned/scripts/check-branch-name.sh" "$owned/scripts/tests/check-branch-name.test.sh"

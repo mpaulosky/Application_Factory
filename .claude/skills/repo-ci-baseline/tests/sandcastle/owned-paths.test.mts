@@ -256,6 +256,7 @@ const EXEMPT_GLOBS_AUDITED: Readonly<Record<string, GlobEntry>> = {
       ".github/scripts/post_claude_review.py",
       ".github/scripts/release_post.py",
       ".github/scripts/release_queue.py",
+      ".github/scripts/requirements-tests.txt",
       ".github/scripts/tests/conftest.py",
       ".github/scripts/tests/pr-automerge.test.mjs",
       ".github/scripts/tests/test_backfill_blog_posts.py",
@@ -276,7 +277,8 @@ const EXEMPT_GLOBS_AUDITED: Readonly<Record<string, GlobEntry>> = {
       ".github/scripts/tests/test_pr_automerge_triggers.py",
       ".github/scripts/tests/test_release_post.py",
       ".github/scripts/tests/test_release_queue.py",
-    ], why: "pytest and node --test run over them; they run in CI with tokens, so a new script is a decision" },
+    ], why: "pytest and node --test run over them; they run in CI with tokens, so a new script is a decision. requirements-tests.txt runs nothing: " +
+      "it is the python-tests job's pin list, which test.sh holds to exact, hashed pins installed as wheels only" },
   ".github/instructions/*.md": {
     files: [".github/instructions/blog.instructions.md", ".github/instructions/git-commit-instructions.md", ".github/instructions/markdown.instructions.md"],
     why: "steer Copilot's review and commit messages, linted by markdownlint; they widen no tool and run no code, so a wrong instruction can only shape advice",

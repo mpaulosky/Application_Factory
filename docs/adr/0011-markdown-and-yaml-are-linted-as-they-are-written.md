@@ -45,3 +45,12 @@ stderr (cut at 6,000 characters per linter), which Claude Code returns to the ag
 - A hook that lints with the wrong config would pass what CI fails. The test therefore checks the working directory, the config argument and the exact arguments each linter receives, which stream the
   report is on, and the repository boundary. It also runs the real `markdownlint-cli2` against a config with an `ignores` entry and names containing `[` and `*`, but only where that tool is installed
   (the Factory's CI and a developer's machine), not in an Application's hook-tests job.
+
+## Update
+
+The hook no longer runs what an agent could have written with no Bash prompt: a Markdown file is linted only through markdownlint configs that are regular files,
+committed as they are, and unable to load JavaScript (no `.cjs` or `.mjs` config; no `customRules`, `markdownItPlugins`, `outputFormatters`, `modulePaths` or `extends`;
+no backslash in one read as text), and the hook cleans `PATH` before it runs anything: no relative or empty entry, and none inside the project's checkouts (the
+repository's `node_modules/.bin`, or another worktree's), so no linter or helper a linter looks up comes from there. Otherwise the file is left unlinted with a `systemMessage` saying why;
+the pre-commit hook, the gate and CI still lint it. The
+Template's `references/git-hooks.md` (Edit-time lint) has the detail.

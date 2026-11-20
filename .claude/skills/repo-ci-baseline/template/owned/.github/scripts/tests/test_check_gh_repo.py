@@ -246,6 +246,50 @@ def test_main_fails_when_a_root_isnt_a_directory(tmp_path, capsys):
     assert "missing" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("mode", [[], ["--repo"]], ids=["dirs", "repo"])
+def test_main_exits_2_not_1_on_a_file_it_cant_read(tmp_path, capsys, monkeypatch, mode):
+    # Arrange: a script in scope that can't be read (chmod is no barrier to root, so the read itself fails).
+    (tmp_path / "scripts").mkdir()
+    script = tmp_path / "scripts" / "run.sh"
+    script.write_text("gh pr view 1\n")
+    real = check_gh_repo.Path.read_bytes
+
+    def refuse(self):
+        if self.name == "run.sh":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real(self)
+
+    monkeypatch.setattr(check_gh_repo.Path, "read_bytes", refuse)
+
+    # Act
+    code = check_gh_repo.main([*mode, str(tmp_path)])
+
+    # Assert
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "check_gh_repo.py: can't read" in err and "run.sh" in err and "Permission denied" in err
+    assert "Traceback" not in err
+
+
+def test_main_exits_2_on_a_decode_error_and_escapes_what_it_prints(tmp_path, capsys, monkeypatch):
+    # Arrange
+    (tmp_path / "run.sh").write_text("gh pr view 1\n")
+
+    def broken(path):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte\n::error::x")
+
+    monkeypatch.setattr(check_gh_repo, "untold", broken)
+
+    # Act
+    code = check_gh_repo.main([str(tmp_path)])
+
+    # Assert
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "check_gh_repo.py: failed: " in err and "can't read" not in err
+    assert "\n::error::" not in err
+
+
 # --- mpaulosky/dotfiles#321: the gate checks a repo's own scripts and skills ---
 
 CHECKER = Path(__file__).resolve().parents[1] / "check_gh_repo.py"

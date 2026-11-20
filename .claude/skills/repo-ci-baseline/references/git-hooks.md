@@ -40,9 +40,11 @@ standard in the first place.
 The check guards the process, not against a hostile PR. Under `pull_request` the job runs the PR's own copy of the
 script and of `ci.yml`, so a PR can change either, as it can for `Build Solution`; such an edit shows in its review.
 
-The CI job also accepts the branches that only Actions and Dependabot create, which no hook sees:
-`docs/release-notes` (`release.yml`), `docs/backfill-blog-posts` (`backfill-blog-posts.yml`) and any `dependabot/*`, whatever its characters, since CI quotes the name.
-The hook accepts a `dependabot/*` branch too, in shell-safe ASCII characters only (`A-Za-z0-9._@+-` per segment), so a person can push a fix to a Dependabot PR.
+The CI job also accepts the branches that only Actions and Dependabot create, which no hook sees: `docs/release-notes` (`release.yml`),
+`docs/backfill-blog-posts` (`backfill-blog-posts.yml`) and, from a PR `dependabot[bot]` opened, any `dependabot/*` whatever its characters (its branch can't be renamed).
+The job runs `check-branch-name.sh --pr --author "$PR_AUTHOR" "$HEAD_REF"`, with the author from `github.event.pull_request.user.login`, which a pusher can't set; `test.sh` pins both lines.
+The hook, and the CI job for anyone else's PR, accept a `dependabot/*` branch in shell-safe ASCII characters only (`A-Za-z0-9._@+-` per segment), so a person can push a fix to a Dependabot PR.
+A refused name is printed with its control characters escaped (`printf %q`), so a newline in it can't start a line of its own in the log.
 Fork PRs skip the job, which a required check counts as passing.
 
 ## Worktree standard
@@ -125,7 +127,13 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
      makes each worktree's own `.github/hooks/*` the ones that fire; see step 7 of the Sandcastle setup in the
      README.
 - **`scripts/gate.sh`**, also safe to run by hand: lint the Markdown, YAML, workflow and shell files changed since
-  `origin/main`, using CI's configs, and prefer installed tools with pinned fallbacks. Then build and run each test
+  `origin/main`, using CI's configs, and prefer installed tools with pinned fallbacks. The changed files are read NUL-separated
+  (`git diff -z`, or `git ls-files -z` without an `origin/main`; a git that fails stops the gate) and sorted into the lint lists in bash
+  under `LC_ALL=C`, so each name is matched whole and byte for byte: a non-ASCII name, one that isn't valid UTF-8, or one with a tab or
+  newline reaches its linter as it is on disk. Markdown names go to `markdownlint-cli2` as `:<name>`, its literal-path form, so `a[1].md`
+  isn't read as a glob and `-dash.md` isn't read as an option; YAML and shell names go to `yamllint` and `shellcheck` after a `--`, so
+  `-dash.yml` and `-dash.sh` aren't either. `tests/owned-gate-files.test.sh` (the Factory's) runs those lines in a throwaway
+  repo, in a UTF-8 locale and in C, the YAML and shell steps with stubs, and the Markdown step with a stub and, when installed, the real tool. Then build and run each test
   project, where the stack allows it locally. Which steps it runs depends on the repo; what's standard is that
   everything it checks, CI checks too.
   After the lints it runs `python3 -I .github/scripts/check_gh_repo.py --repo`, which refuses a `gh` command in the
@@ -165,8 +173,11 @@ checkout and from a subfolder of it (refused, before the lint), the opt-out, a l
 and `git commit` end to end, which runs the hook with `GIT_DIR` set.
 
 `scripts/tests/check-branch-name.test.sh` covers the script's push form and its `--pr` form, which the CI job uses: the Actions
-branches (`docs/release-notes`, `docs/backfill-blog-posts`, refused for a push) and any `dependabot/*` allowed with `--pr`, only a shell-safe `dependabot/*` allowed for a push
-(a backtick, quote, `|` or `&` refused), non-ASCII names (`fix/1-café`, `dependabot/aé`) refused under `LC_ALL=C`, under `C.UTF-8` and `en_US.UTF-8` when installed, and under every
+branches (`docs/release-notes`, `docs/backfill-blog-posts`, refused for a push), any `dependabot/*` allowed with `--pr --author 'dependabot[bot]'` and only a
+shell-safe one for any other author, none or an empty one (and `--author` before `--pr` read as the branch), a missing `--author` value or branch refused with the usual message,
+a refused name's control characters printed escaped on one line,
+only a shell-safe `dependabot/*` allowed for a push (a backtick, quote, `|` or `&` refused),
+non-ASCII names (`fix/1-café`, `dependabot/aé`) refused under `LC_ALL=C`, under `C.UTF-8` and `en_US.UTF-8` when installed, and under every
 other UTF-8 locale of the machine where `[a-z]` matches an accented letter (a skip line says when there is none), with `fix/1-cafe` still allowed,
 and a check that the script exports `LC_ALL=C` before its first regex match, which holds on any machine (so the hook, CI, `cleanup.sh` and
 `work-issue.sh` agree on a name whatever the caller's locale),
@@ -208,18 +219,43 @@ These are the checks the CI lint workflows run; a gate runs `actionlint` and `zi
   telling the agent to hand a broken linter (a usage error, an old version) to the person.
 - Exit 0 and no output for a file that is neither Markdown nor YAML, one that no longer exists, a directory, a symlink, one under `node_modules/`, and one outside the project (below).
 - Exit 0 with a `systemMessage` on stdout, which Claude Code shows to the person, when a linter is not installed: the file is skipped for that linter, the hook only helps, and the pre-commit hook,
-  the gate and CI still check. Plain stderr on exit 0 is not shown, which is why the note is JSON.
-- Exit 1 with a message on stderr when its input is not JSON, `CLAUDE_PROJECT_DIR` is unset, `python3` is missing, or, for a Markdown or YAML file, `git` is missing or older than 2.36
+  the gate and CI still check. Plain stderr on exit 0 is not shown, which is why the note is JSON. Before it runs anything the hook cleans `PATH`:
+  every relative or empty entry goes (it would name a folder of whatever directory a command runs in, the repository once the hook has changed into it), and so does
+  every entry inside the project's checkouts (the file's repository, and the project and every worktree `git worktree list` shows, a `node_modules/.bin` among them),
+  since an agent can write any of them with no Bash prompt and this hook runs right after a write. It cleans twice: first, before it looks up `python3` or `git`, with
+  the checkouts read from git's own files (`.git`, `commondir`, `worktrees/*/gitdir`) by bash alone, read whole and trimmed as git trims them (a relative
+  `worktrees/*/gitdir` from its own folder), and again with `git worktree list` and the edited file's repository.
+  A `PATH` left with no entry is set to a folder that can't exist, never to an empty string, which bash would read as the working directory. So no linter (`markdownlint-cli2`, `yamllint`, `actionlint`,
+  `zizmor`) and no helper a linter looks up on `PATH` (`node`, `python3`, `bash`, `shellcheck`) comes from there. A linter whose real file is a symlink into a checkout
+  is passed over for the next one on `PATH`; one found only in such places is named apart in the note ("found only inside the project or on a relative PATH entry"),
+  and an exported function of that name counts as not installed. Each linter runs by the path `PATH` found it under, so a shim that picks its program by name (mise)
+  still works. Install them outside the project, on an absolute `PATH` entry: `pnpm add -g markdownlint-cli2`, `uv tool install yamllint`, `uv tool install zizmor`,
+  and actionlint from its release binaries or a package manager. The pre-commit hook and the gate still use the repo's own `markdownlint-cli2` (only it has one),
+  because a person runs those.
+- Exit 1 with a message on stderr when `CLAUDE_PROJECT_DIR` is unset or one of those git files is longer than any that names a folder (`GIT_FILE_MAX`), for any edit,
+  since both are checked before the input is read; when its input is not JSON, `python3` is missing (or found only where the hook runs nothing from,
+  which the message says), or, for a Markdown or YAML file, `git` is missing (the same) or older than 2.36
   (`git worktree list -z`), so a broken hook is visible and is not read as a clean file.
 - Only the project's own checkout and the linked worktrees it lists are linted: the file's repository root must be one of the paths `git worktree list` prints for `CLAUDE_PROJECT_DIR`,
   which Claude Code
-  sets and the hook requires (unset or empty is exit 1). A linter loads the repository's own config and, for Markdown, its `node_modules/.bin` copy, and `markdownlint-cli2` runs JavaScript from its
+  sets and the hook requires (unset or empty is exit 1). A linter loads the repository's own config, and `markdownlint-cli2` runs JavaScript from its
   config, so a file in another clone, a nested repository, or a directory whose `.git` file or `commondir` merely names the project's git directory (git reports the project's common directory for it)
   is left alone. A project that is not a git repository lints nothing. A worktree entry git still lists after its directory was removed is trusted until `git worktree prune` removes it.
   `-z` keeps a worktree path with a newline from forging a second entry,
   and the file's name, folder, repository root and each listed worktree's resolved path keep a trailing newline (`$(...)` would drop it and lint the sibling folder).
   `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_PREFIX`, `GIT_COMMON_DIR` and `CDPATH`,
   inherited from a git hook, are cleared first.
+- A Markdown file is linted only through markdownlint configs the hook can vouch for: each one on the file's path (its folder and each folder above it, up to the
+  repository root, where `markdownlint-cli2` stops looking) must be a regular file whose bytes, as they are or with each CRLF made LF (a checkout
+  that converts line endings), are the blob `HEAD` holds at its path
+  (`git rev-parse HEAD:<path>` against `git hash-object --no-filters`, which read neither the index nor the working tree's status, so no
+  `core.fsmonitor` command or clean filter from the repository's config runs; never in a repository with no commit), and unable to
+  load JavaScript: no `.cjs` or `.mjs` config, and no `customRules`, `markdownItPlugins`, `outputFormatters`, `modulePaths` or `extends` in it, read as text, byte for byte.
+  A config read as text must hold no backslash either, since a JSON or YAML escape (`\u0075`, `\x52`, a folded line) could spell one of those keys where the text doesn't show
+  it. A file of any of those names that is a symlink, `package.json` included, is refused whatever it holds. A `package.json` counts only when it has a `markdownlint-cli2`
+  key, and then only that key is read, decoded (all of it, as text, when it doesn't parse). Otherwise an agent could write a config, or the code a
+  committed one names, and the hook would run it with no Bash prompt. The file is then left unlinted: exit 0, with a `systemMessage` naming the config and why; the
+  pre-commit hook, the gate and CI still lint it. The real-linter test block commits its config for this reason.
 - The path reaches the linter whole: from the repo root of the file's own repository, as `./<path>`, and for Markdown with `--no-globs`, so a name with `[`, `*` or a leading `-` is not read as a glob
   or an option (checked against the real tool: `a[1].md` and `x*y.md` are linted as those files). The config's `ignores` still apply.
 - A `file_path` holding a lone surrogate (valid JSON, but no UTF-8) is still read, not an exit 1: `\udc80` to `\udcff` stand for the raw bytes `0x80` to `0xff`

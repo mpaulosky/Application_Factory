@@ -26,19 +26,35 @@ step() { echo -e "\n${CYAN}▶ $1${RESET}"; }
 
 # Files added, copied, modified or renamed since this branch left origin/main.
 # Without an origin/main (a fresh clone of a fork, say) lint every tracked file.
+# NUL-separated, so a name git would quote (non-ASCII, a tab, a newline, a quote) reaches the linters as it is on disk. Written to a
+# file first, so a git that fails stops the gate here (set -e) instead of leaving every list empty.
+CHANGED_FILE="$(mktemp)"
+trap 'rm -f "$CHANGED_FILE"' EXIT
 if BASE="$(git merge-base HEAD origin/main 2>/dev/null)"; then
-  CHANGED="$(git diff --name-only --diff-filter=ACMR "$BASE" HEAD)"
+  git diff --name-only -z --diff-filter=ACMR "$BASE" HEAD > "$CHANGED_FILE"
 else
   BASE=""
-  CHANGED="$(git ls-files)"
+  git ls-files -z > "$CHANGED_FILE"
 fi
+mapfile -d '' -t CHANGED < "$CHANGED_FILE"
+# pick <regex> [<regex>]: the changed files matching the extended regex $1, and not $2 when it's given, NUL-separated. Matched in bash,
+# not grep: grep in a UTF-8 locale drops a name that isn't valid UTF-8, and its ^ and $ also match at a newline inside a name. With
+# LC_ALL=C a name is matched byte for byte, and ^ and $ anchor at its two ends only. Nothing here can fail.
+pick() {
+  local LC_ALL=C name
+  for name in ${CHANGED[@]+"${CHANGED[@]}"}; do
+    [[ "$name" =~ $1 ]] || continue
+    [[ $# -lt 2 || ! "$name" =~ $2 ]] || continue
+    printf '%s\0' "$name"
+  done
+}
 
-mapfile -t MD_FILES < <(grep -E '\.md$' <<< "$CHANGED" | grep -Ev '^docs/blogs/' || true)
+mapfile -d '' -t MD_FILES < <(pick '\.md$' '^docs/blogs/')
 # pnpm writes its lockfile in its own YAML style; it isn't hand-edited.
-mapfile -t YAML_FILES < <(grep -E '\.ya?ml$' <<< "$CHANGED" | grep -Ev '(^|/)pnpm-lock\.yaml$' || true)
-mapfile -t WORKFLOW_FILES < <(grep -E '^\.github/(workflows/[^/]+\.ya?ml|dependabot\.ya?ml|actionlint\.ya?ml|zizmor\.ya?ml)$' <<< "$CHANGED" || true)
+mapfile -d '' -t YAML_FILES < <(pick '\.ya?ml$' '(^|/)pnpm-lock\.yaml$')
+mapfile -d '' -t WORKFLOW_FILES < <(pick '^\.github/(workflows/[^/]+\.ya?ml|dependabot\.ya?ml|actionlint\.ya?ml|zizmor\.ya?ml)$')
 # Shell scripts, plus extensionless scripts and git hooks.
-mapfile -t SHELL_FILES < <(grep -E '\.sh$|^scripts/[^/.]+$|^\.github/hooks/((pre|post)-[a-z-]+|(prepare-)?commit-msg)$' <<< "$CHANGED" || true)
+mapfile -d '' -t SHELL_FILES < <(pick '\.sh$|^scripts/[^/.]+$|^\.github/hooks/((pre|post)-[a-z-]+|(prepare-)?commit-msg)$')
 
 # An installed markdownlint-cli2 (as the pre-commit hook uses) when there is
 # one; otherwise this pinned version, never whatever the registry serves at push time.
@@ -79,12 +95,15 @@ run_tool() {
 
 step "Markdown lint (${#MD_FILES[@]} changed file(s))"
 if [[ ${#MD_FILES[@]} -gt 0 ]]; then
+  # markdownlint-cli2 reads each argument as a glob, so a[1].md would match a1.md: a leading ':' makes it a literal path (and keeps
+  # a name that starts with '-' from being read as an option).
+  MD_PATHS=("${MD_FILES[@]/#/:}")
   if [[ -x "$ROOT/node_modules/.bin/markdownlint-cli2" ]]; then
-    "$ROOT/node_modules/.bin/markdownlint-cli2" "${MD_FILES[@]}"
+    "$ROOT/node_modules/.bin/markdownlint-cli2" "${MD_PATHS[@]}"
   elif command -v markdownlint-cli2 &>/dev/null; then
-    markdownlint-cli2 "${MD_FILES[@]}"
+    markdownlint-cli2 "${MD_PATHS[@]}"
   elif command -v pnpm &>/dev/null; then
-    pnpm dlx "markdownlint-cli2@${MARKDOWNLINT_CLI2_VERSION}" "${MD_FILES[@]}"
+    pnpm dlx "markdownlint-cli2@${MARKDOWNLINT_CLI2_VERSION}" "${MD_PATHS[@]}"
   else
     # Every repo uses pnpm, never npm or npx, so without pnpm there is no way to lint.
     echo "Markdown lint needs pnpm: corepack enable pnpm, or pnpm add -g markdownlint-cli2." >&2
@@ -97,7 +116,8 @@ if [[ ${#YAML_FILES[@]} -gt 0 ]]; then
   if command -v yamllint &>/dev/null; then
     YAMLLINT_ARGS=()
     [[ -f .yamllint.yml ]] && YAMLLINT_ARGS=(-c .yamllint.yml)
-    yamllint "${YAMLLINT_ARGS[@]}" "${YAML_FILES[@]}"
+    # '--' keeps a name that starts with '-' from being read as an option.
+    yamllint ${YAMLLINT_ARGS[@]+"${YAMLLINT_ARGS[@]}"} -- "${YAML_FILES[@]}"
   else
     echo -e "${YELLOW}⚠️  yamllint not found — skipping. CI's Lint YAML workflow still checks these files.${RESET}"
     echo -e "   To enable: ${CYAN}pipx install yamllint${RESET}"
@@ -124,7 +144,7 @@ step "Shell lint (${#SHELL_FILES[@]} changed file(s))"
 if [[ ${#SHELL_FILES[@]} -gt 0 ]]; then
   run_tool shellcheck "install shellcheck, or Docker" have_docker \
     docker run --rm -v "$ROOT:/mnt" -w /mnt "koalaman/shellcheck:${SHELLCHECK_VERSION}" \
-    -- "${SHELL_FILES[@]}"
+    -- -- "${SHELL_FILES[@]}"
 fi
 
 # A gh command not told its repository reaches gh's default one, a fork in a

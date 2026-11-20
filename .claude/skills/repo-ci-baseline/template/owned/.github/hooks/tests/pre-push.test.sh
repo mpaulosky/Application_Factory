@@ -294,7 +294,7 @@ run_hook_with_path() {
 run_hook_with_path "$NO_LINT_STUBS" feature/2-two-commits \
   "refs/heads/feature/2-two-commits @HEAD@ refs/heads/feature/2-two-commits $ZERO"
 expect "without markdownlint-cli2, the gate lints through pnpm" allowed tests-ran
-expect_log "without markdownlint-cli2, the gate runs pnpm dlx markdownlint-cli2" ran 'pnpm dlx markdownlint-cli2@* first.md'
+expect_log "without markdownlint-cli2, the gate runs pnpm dlx markdownlint-cli2" ran 'pnpm dlx markdownlint-cli2@* :first.md'
 expect_log "without markdownlint-cli2, the gate never runs npx" not-ran 'npx*'
 
 rm "$NO_LINT_STUBS/pnpm"
