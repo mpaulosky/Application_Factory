@@ -23,6 +23,9 @@ there too, until the PR merges (a branch it makes from `origin/main` has no upst
 wt="$(scripts/work-issue.sh 42)" && cd "$wt"   # e.g. fix/42-null-children in ../<Repo>-worktrees/fix-42-null-children
 ```
 
+Start a task for an issue, by hand or as an agent, with `scripts/work-issue.sh <n>` before reading or changing any code, and work only in the folder it
+prints: the pre-commit hook refuses a commit in the primary checkout.
+
 For work without an issue, make it by hand: `git worktree add --no-track -b chore/upgrade-net10 ../<Repo>-worktrees/chore-upgrade-net10 origin/main`.
 The folder is the branch name with `/` turned into `-`.
 
@@ -73,9 +76,9 @@ post, word for word. Keep it current: after every follow-up commit, update it so
 
 - **Review before you push** (in a repo with Sandcastle, where `.sandcastle/lib/review-ledger.mts` exists: the review and its gate
   step are added only there). `/pre-push-review` (`.claude/skills/pre-push-review/`) reviews the branch's whole diff
-  against `origin/main` with parallel read-only reviewers, fixes each Critical and Warning finding behind a regression test and each
-  Advisory one in the review, reviews the fixes again until a round fixes nothing, and records the result under `.git/review/`. GitHub's
-  reviewers are then a backstop that finds little. A Critical or Warning finding left open blocks the push until it is
+  against `origin/main` (or, for a fix made after a review that left nothing open or accepted, only that fix) with parallel read-only reviewers,
+  fixes each Critical and Warning finding behind a regression test and each Advisory one in the review, reviews the fixes again until a round fixes nothing,
+  and records the result under `.git/review/`. GitHub's reviewers are then a backstop that finds little. A Critical or Warning finding left open blocks the push until it is
   fixed or the person accepts it with `scripts/review.sh accept R3 "<reason>"`, never on their behalf (`scripts/review.sh accept-open` lists
   the open ones and decides several at once, accepting or asking for a fix). Advisory findings
   (docs, comments, conventions) never block: one that needs a person goes to one follow-up issue per branch. For a large or
@@ -83,15 +86,23 @@ post, word for word. Keep it current: after every follow-up commit, update it so
   passes until one fixes nothing, then records once: the gate asks for that one record all the same.
 - **Before a push**, the pre-push hook refuses a branch that is behind `origin/main` (it fetches main first), because
   the PR couldn't merge until it's up to date: bring main in with `git merge origin/main`. Then it runs
-  `scripts/gate.sh`: the lints, the local review's check (a clean record for the diff; a clean merge of `main` keeps
-  it, a new commit needs a new one), the build and the tests CI runs. `GATE_SKIP_REVIEW=1` skips the review check for
+  `scripts/gate.sh`: the lints, the local review's check (a clean record for the diff; a clean merge of `main` keeps it, and so does a
+  rebase onto `origin/main` with no conflict when it gives the tree that merge would; a new commit or a resolved conflict needs a new one), the build and the tests CI runs.
+  The gate only checks that record: it never reviews again. A rebase keeps only the local review: a pushed branch then needs
+  `git push --force-with-lease`, its rebased commits are new to Copilot, Claude Review and PR Auto-Merge (each counts as a new round to review, where a merge of
+  `main` never does), and a force-push stops Sandcastle's follow-up of a handed-off PR until the label is added again. So merge `main` into a pushed branch, and
+  into a branch Sandcastle built, rather than rebase it. `GATE_SKIP_REVIEW=1` skips the review check for
   gate runs while iterating, never for a push. Sandcastle's sandboxes set it: the host runs the review's rounds on a built branch itself (`lib/host-review.mts`).
   The gate needs shfmt v3.14 or a later v3 on `PATH`: its check that each `gh` command is told its repository parses every script with shfmt, and it fails,
   naming shfmt, when shfmt is missing or another release (`pacman -S shfmt`, `brew install shfmt`, or the release binaries at <https://github.com/mvdan/sh/releases>).
 - **Required checks:** Build Solution, Test Suite, Branch name, PR title, actionlint, zizmor, shellcheck, markdownlint
   and yamllint. A docs-only PR skips the build and tests, and so does a Dependabot GitHub Actions bump; a skipped check
   counts as passing.
-- **Copilot reviews every push**, drafts included. Fix a thread you agree with, push the fix, then reply naming the fixing
+- **Copilot reviews every push**, drafts included. Fix a thread you agree with in the branch's worktree and review the fix before you push it: `/pre-push-review`
+  reviews only what changed since the branch's last recorded review (`scripts/review.sh prepare <run> recorded`) when that review left no finding
+  open or accepted. Otherwise it reviews the whole diff again and raises those findings again; so it does when there's no recorded review, the branch
+  was amended or rebased since, or `main` was merged in since. So review the fix before you merge `main` into the branch, and merge it after, before
+  the push: a clean merge keeps the record. Push the fix, then reply naming the fixing
   commit by its short SHA (7 characters) and saying what changed (`Fixed in 1a2b3c4: <what changed>.`), so the PR documents
   its fixes. Resolve it if Copilot or Claude Review opened it; leave a person's thread for them. A Copilot or Claude Review
   thread resolved without a reply is flagged, in PR Auto-Merge's log and in `status.sh` and `land.sh`, but it doesn't hold the merge. Don't resolve a thread

@@ -3,7 +3,8 @@ name: pre-push-review
 description: >-
   The heavy local review every branch passes before it's pushed. Reviews the branch's whole diff against origin/main
   with parallel reviewers, grades each finding Critical, Warning or Advisory, fixes all of them behind a regression
-  test or check as they're found, reviews the fixes again, and records the result the gate checks. Use
+  test or check as they're found, reviews the fixes again, or, for a fix made after a review that left nothing open or
+  accepted, only that fix, and records the result the gate checks. Use
   before every push (the first and every fix), when asked to review a branch before pushing, or when the gate says no
   review is recorded for this diff.
 ---
@@ -14,8 +15,9 @@ Most of the threads GitHub's reviewers open on a PR are about behaviour a review
 
 `scripts/gate.sh` refuses a diff this review hasn't passed: its Local review step reads the ledger
 `scripts/review.sh` keeps under `.git/review/`. The ledger is keyed by the branch's own hunks against its merge base with
-`origin/main`. A merge of `main` that leaves those hunks as they were keeps the review; a new commit, a conflict
-resolution, or a `main` change inside one of the branch's hunks needs a new one.
+`origin/main`. A merge of `main` that leaves those hunks as they were keeps the review, and so does a rebase onto `origin/main` with no
+conflict when it gives the tree that merge would (otherwise it needs a new one); a new commit, a conflict resolution, or a `main` change inside
+one of the branch's hunks needs a new one.
 
 ## Severities
 
@@ -53,7 +55,9 @@ review-only round raises (step 7), goes to the branch's follow-up issue (step 9)
 ### 1. Get ready
 
 Work in the branch's worktree. Run `git fetch origin main`. If the branch is behind `origin/main`, merge it now
-(`git merge origin/main`), so the review covers what will be pushed. The ledger refuses a dirty worktree: commit your own
+(`git merge origin/main`), so the review covers what will be pushed. A run for a fix made after a review was recorded (step 4's
+`prepare <run> recorded`) is the exception: a merge of `main` since that review makes it start at round 1, so review the fix first and
+merge `main` after, before the push. A clean merge keeps the record the run makes. The ledger refuses a dirty worktree: commit your own
 changes for the branch. When the worktree holds changes you didn't make, stop and ask the person what to do with them;
 never discard or stash their work unasked.
 
@@ -76,7 +80,8 @@ what was left open, is raised again for the person to decide for this code:
 - `scripts/review.sh latest`: the nearest earlier review of this branch's own commits, whatever the branch was called
   then, with every finding and what became of it (`{}` when there's none). It's context for the reviewers: nothing in it
   is carried into this review's record. It reaches reviewers only through `<run>/decisions.md` (step 4), never as its
-  raw output.
+  raw output. In a run started with `prepare <run> recorded` (step 4) it is normally the review the fixes follow. That review
+  left nothing open or accepted (`prepare` refuses one that did), so there is nothing of it to raise again, and the new record holds only this run's findings.
 - `scripts/review.sh security`: lists the local security record, `.security/` in the main checkout, which every worktree of the
   clone shares: one line per entry with its number, status, lens, finding path and file (`No security entries.` when there's
   none). The entries are what earlier branches decided about a weakness: the policy that resolves it and the test or gate check
@@ -127,7 +132,22 @@ the sections must match in order), and prints two lines on stdout, the diff's
 key and HEAD: keep both, since they name exactly the code this round reviews. The key is that of the whole diff, mirrors included, so a change in a
 mirror alone still needs a new review. In a later round, run `scripts/review.sh prepare <run> last`
 (`last` is the HEAD the round before printed, which `prepare` keeps in `<run>/head`; that HEAD, given as the argument, does the same): it also writes the
-diff of that round's fixes to `<run>/fixes.patch`, filtered the same way. Write to `<run>/decisions.md`, with the Write tool and not a shell heredoc (the text quotes code such as `$(...)`,
+diff of that round's fixes to `<run>/fixes.patch`, filtered the same way. A run for a fix made after the branch's review was recorded (a fix
+for a PR thread, say) starts with `scripts/review.sh prepare <run> recorded` instead: it writes to `<run>/fixes.patch` every change since the commit
+the branch's last recorded review vouched for, which it names on stderr, and the run's first round is a later round. The branch's reviews are those
+of its own commits, whatever branch name they were recorded under (a detached HEAD, a rename), and the last is the one whose head has every other review's head as an
+ancestor, not the latest by the clock. A finding an earlier head's review left open or accepted is superseded by a review of a descendant head recorded after it, which
+read that code too; a review at an earlier head recorded after the last one's was never read by it, so it refuses when it holds a finding open or accepted. It refuses,
+and the run starts at round 1 with
+`prepare <run>`, on a detached HEAD, when no
+review of the branch's own commits is recorded in this clone, when a ledger file that may be one of them doesn't read or parse, or names this branch or none and a head
+that isn't a full lower-case object id (it counts as no review, and round 1 and record leave it in place: delete or move it to let recorded runs anchor again), when the
+reviews' heads don't form one line,
+when a review at the last one's head, or one at an earlier head recorded after it, holds a finding open or accepted (whatever its severity, `fixAsked` included: the
+fixes alone wouldn't raise it again), when a later review under the branch's name is at a commit that isn't one of HEAD's (an amend or a rebase since), when `main` already has the
+last review's commit, or when `main` was merged in since. With no changes since (no commits, or commits that change nothing), it refuses too: the
+recorded review already vouches for this code, so there is nothing to review. Then go on with `prepare <run> last` as in any run.
+Write to `<run>/decisions.md`, with the Write tool and not a shell heredoc (the text quotes code such as `$(...)`,
 which a safety check may block), the earlier decisions from step 3 and every finding this run's earlier rounds
 raised, each with its id, outcome and reason, so no round raises again what an earlier one dismissed. A fixed item stays settled only until
 a reviewer reads the code at its `path:line` and finds the problem still there, then it is raised again. Label
@@ -141,12 +161,13 @@ source at the pinned commit into `<run>/actions/<owner>/<repo>/<path>`, as the r
 (`repo="$(scripts/review.sh repo)" && GH_REPO="$repo" gh api -H 'Accept: application/vnd.github.raw' 'repos/<action owner>/<action repo>/contents/<path>?ref=<sha>'`), since reviewers
 can't.
 
-In round 1, when the branch changes more than 30 files
+In a run's first round, when it reviews the whole branch and the branch changes more than 30 files
 or more than 3,000 lines, a file and its Template mirror counting once, `prepare` also writes a warning to stderr, so stdout stays the two lines
 (the host review logs the same one). Tell the person and suggest splitting the branch; it only
 advises, and the review goes on.
 
-Round 1 reviews the whole branch. A later round reviews the fixes, not the whole branch again: its reviewers get
+Round 1 reviews the whole branch. A later round reviews the fixes, not the whole branch again (so does the first round of a run
+started with `prepare <run> recorded`): its reviewers get
 `<run>/fixes.patch` to review and `<run>/diff.patch` as context, and raise only problems on the lines the fixes changed or
 problems the fixes cause elsewhere, such as a caller a changed function now breaks. Give them the whole function around
 each changed line and its callers to read, not only the patch: a fix's lines are judged by what they sit in. Choose a later round's reviewers by
@@ -346,7 +367,8 @@ either accepts it, with `scripts/review.sh accept R3 "<reason>"` or several at o
 (`--reason "<reason>"` for one reason across the ids named; every finding is named, there is no "all"), or asks you to fix it, by saying so or with
 `scripts/review.sh accept-open --fix R3`, which marks it `fixAsked` and leaves it open (and blocking, unless it's an Advisory one that isn't a security
 finding): fix it as in step 6, then start a new run at step 1, in which the record just made is step 3's
-earlier review. Never run `accept` or `accept-open` with ids yourself: only the person decides. The
+earlier review. That review holds the open finding, so the run starts at round 1 with `prepare <run>`: `prepare <run> recorded` (step 4) refuses a
+review that left a finding open or accepted. Never run `accept` or `accept-open` with ids yourself: only the person decides. The
 Advisory findings left open never block. For a branch Sandcastle builds, the host runs these rounds itself (`.sandcastle/lib/host-review.mts`), with these
 reviewers, the Bar and lenses, and `prepare` and `record` run by the host in the main checkout, so no session records for it and no agent reaches `.git/review`;
 its sandboxes still skip the gate's review check and see an empty `.git/review`.

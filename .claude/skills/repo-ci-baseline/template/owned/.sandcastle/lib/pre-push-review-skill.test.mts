@@ -658,6 +658,32 @@ describe("the pre-push-review skill's fewer-rounds rules", () => {
     assert.match(skill.replace(/\s+/g, " "), /`scripts\/review\.sh prepare <run> last` \(`last` is the HEAD the round before printed, which `prepare` keeps in `<run>\/head`/);
   });
 
+  // Issue 54: a fix made after the review was recorded is reviewed alone, and nothing of the earlier review carries over.
+  it("has a run for a fix made after the review was recorded start with prepare recorded, as a later round, and carry nothing over", () => {
+    const flat = skill.replace(/\s+/g, " ");
+    assert.match(flat, /A run for a fix made after the branch's review was recorded \(a fix for a PR thread, say\) starts with `scripts\/review\.sh prepare <run> recorded` instead/);
+    assert.match(flat, /the run's first round is a later round/);
+    assert.match(flat, /The branch's reviews are those of its own commits, whatever branch name they were recorded under \(a detached HEAD, a rename\), and the last is the one whose head has every other review's head as an ancestor, not the latest by the clock\./);
+    // R37: an earlier head's finding is superseded only by a review of a descendant head recorded after it.
+    assert.match(flat, /A finding an earlier head's review left open or accepted is superseded by a review of a descendant head recorded after it, which read that code too; a review at an earlier head recorded after the last one's was never read by it, so it refuses when it holds a finding open or accepted\./);
+    assert.match(flat, /starts at round 1 with `prepare <run>`, on a detached HEAD, when no review of the branch's own commits is recorded in this clone, when a ledger file that may be one of them doesn't read or parse, or names this branch or none and a head that isn't a full lower-case object id \(it counts as no review, and round 1 and record leave it in place: delete or move it to let recorded runs anchor again\), when the reviews' heads don't form one line, when a review at the last one's head, or one at an earlier head recorded after it, holds a finding open or accepted \(whatever its severity, `fixAsked` included: the fixes alone wouldn't raise it again\), when a later review under the branch's name is at a commit that isn't one of HEAD's \(an amend or a rebase since\), when `main` already has the last review's commit, or when `main` was merged in since\. With no changes since \(no commits, or commits that change nothing\), it refuses too: the recorded review already vouches for this code, so there is nothing to review\./);
+    assert.match(flat, /That review left nothing open or accepted \(`prepare` refuses one that did\), so there is nothing of it to raise again, and the new record holds only this run's findings/);
+    // R26: the rebase rule in the intro, and (R28) step 1's exception for a recorded run.
+    assert.match(flat, /A merge of `main` that leaves those hunks as they were keeps the review, and so does a rebase onto `origin\/main` with no conflict when it gives the tree that merge would \(otherwise it needs a new one\)/);
+    assert.match(flat, /A run for a fix made after a review was recorded \(step 4's `prepare <run> recorded`\) is the exception: a merge of `main` since that review makes it start at round 1, so review the fix first and merge `main` after, before the push\. A clean merge keeps the record the run makes\./);
+  });
+
+  // Issue 54 (R13, R15): the first round of a recorded run reads the fixes with the whole diff as context, the run goes on as any other, and the
+  // description, step 9 and the size warning say so.
+  it("gives a recorded run's first round fixes.patch with diff.patch as context, goes on with last, and says so in the description, step 9 and the size warning", () => {
+    const flat = skill.replace(/\s+/g, " ");
+    assert.match(flat, /A later round reviews the fixes, not the whole branch again \(so does the first round of a run started with `prepare <run> recorded`\): its reviewers get `<run>\/fixes\.patch` to review and `<run>\/diff\.patch` as context/);
+    assert.match(flat, /Then go on with `prepare <run> last` as in any run\./);
+    assert.match(flat, /description: >- The heavy local review[^]*?reviews the fixes again, or, for a fix made after a review that left nothing open or accepted, only that fix, and records/);
+    assert.match(flat, /then start a new run at step 1, in which the record just made is step 3's earlier review\. That review holds the open finding, so the run starts at round 1 with `prepare <run>`: `prepare <run> recorded` \(step 4\) refuses a review that left a finding open or accepted\./);
+    assert.match(flat, /In a run's first round, when it reviews the whole branch and the branch changes more than 30 files/);
+  });
+
   it("has the fixer check its fix before committing, and replace a function that two rounds in a row fixed", () => {
     assert.match(skill, /Check the fix before committing it/);
     assert.match(skill, /Write n-1, n and n\+1 boundary tests for each/);
