@@ -53,7 +53,7 @@ import {
   type ReviewInput,
 } from "./review-ledger.mts";
 import { NOT_OWNED_BASELINE_PATHS } from "./repo-config.mts";
-import { fingerprint } from "./security-record.mts";
+import { fingerprint, replaceFile } from "./security-record.mts";
 
 // Only the config each test sets: a machine's global or system git config
 // (commit signing, a hooks path, merge.ff=only, colour) mustn't decide these
@@ -813,6 +813,54 @@ describe("checkReview", () => {
     assert.equal(checkReview(repo, mergeBase(repo), {}).ok, false);
   });
 
+  // R44: a ledger's head is text anyone can write, so isAncestor refuses a name that starts with a dash before git sees it, rather
+  // than pass --end-of-options, which an older git may not take. Under a git that rejects --end-of-options (exit 129, as for an unknown
+  // option), "--all" is still no ancestor, a real ancestor still is, and a recorded run still anchors.
+  describe("under a git that rejects --end-of-options", () => {
+    // Every call's arguments go to `calls`, one line each, so a test can see what reached git.
+    let calls: string[] = [];
+    function withStrictGit<T>(body: () => T): T {
+      const bin = mkdtempSync(join(tmpdir(), "strict-git-"));
+      const log = join(bin, "calls");
+      const real = execFileSync("bash", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+      writeFileSync(
+        join(bin, "git"),
+        `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nfor a in "$@"; do [ "$a" = --end-of-options ] && { echo "error: unknown option" >&2; exit 129; }; done\nexec '${real}' "$@"\n`,
+      );
+      chmodSync(join(bin, "git"), 0o755);
+      const path = process.env.PATH;
+      process.env.PATH = `${bin}:${path ?? ""}`;
+      try {
+        return body();
+      } finally {
+        process.env.PATH = path;
+        calls = existsSync(log) ? readFileSync(log, "utf8").split("\n").filter((line) => line !== "") : [];
+        rmSync(bin, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    }
+
+    it("isAncestor takes a name that starts with a dash as no ancestor, and a real ancestor as one", () => {
+      withStrictGit(() => {
+        assert.equal(isAncestor(repo, "--all", "HEAD"), false);
+        assert.equal(isAncestor(repo, "HEAD", "--all"), false);
+        assert.equal(isAncestor(repo, mergeBase(repo), "HEAD"), true);
+      });
+      // The dash names never reach git: every git exits 129 on them too, so only the calls can tell.
+      assert.deepEqual(calls.filter((line) => line.includes("--all")), []);
+    });
+
+    it("prepare <dir> recorded still anchors at the recorded review", () => {
+      record([]);
+      const recordedAt = run(repo, "rev-parse", "HEAD");
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      const result = withStrictGit(() => cli(["prepare", join(root, "delta"), "recorded"]));
+
+      assert.equal(result.code, 0, result.err);
+      assert.equal(result.err, `Fixes since ${recordedAt}, the commit the last recorded review of this branch vouched for.\n`);
+    });
+  });
+
   // Run `check` with a git 2.34 on the PATH, which has no merge-tree --write-tree.
   function checkWithOldGit(): ReturnType<typeof checkReview> {
     const bin = mkdtempSync(join(tmpdir(), "old-git-"));
@@ -838,7 +886,7 @@ describe("checkReview", () => {
 
     assert.equal(result.ok, false);
     assert.match(result.message, /git 2\.38 or later/);
-    assert.match(result.message, /^git version 2\.34\.1 can't check/);
+    assert.match(result.message, /^git version 2\.34\.1 can't check the review across a merge of main or a rebase onto it: that needs git 2\.38 or later/);
   });
 
   it("passes the reviewed commit itself on a git too old to check across a merge, which it doesn't need", () => {
@@ -855,6 +903,59 @@ describe("checkReview", () => {
     mergeMain();
 
     assert.equal(checkReview(repo, mergeBase(repo), {}).ok, true);
+  });
+
+  // Issue 54: a rebase onto origin/main with no conflict keeps the review, as a clean merge does. The rebased
+  // commits are new, but their tree is what merging main into the reviewed commit gives, and the hunks are the same.
+  it("passes the reviewed branch rebased cleanly onto a main that moved on, in another file and far down the branch's file", () => {
+    commit(repo, "app.cs", lines(50, (index) => (index === 2 ? "changed" : index === 29 ? "deep change" : undefined)), "a second commit");
+    record([]);
+    const reviewedHead = run(repo, "rev-parse", "HEAD");
+    commit(upstream, "other.cs", "y\n", "main moves on");
+    commit(upstream, "app.cs", lines(50, (index) => (index === 44 ? "main's change" : undefined)), "main edits line 45");
+    run(repo, "fetch", "--quiet", "origin");
+    run(repo, "rebase", "--quiet", "origin/main");
+
+    assert.notEqual(run(repo, "rev-parse", "HEAD"), reviewedHead);
+    assert.equal(mergeBase(repo), run(repo, "rev-parse", "origin/main"));
+    // A rebase, not a merge: no merge commit, and the branch's two commits sit straight on origin/main.
+    assert.equal(run(repo, "rev-list", "--parents", "-n", "1", "HEAD").split(" ").length, 2);
+    assert.equal(run(repo, "rev-parse", "HEAD~2"), run(repo, "rev-parse", "origin/main"));
+    assert.equal(checkReview(repo, mergeBase(repo), {}).ok, true);
+  });
+
+  // A main change to a line the branch changed itself conflicts instead: the next test.
+  it("fails after a clean rebase onto a main that changed a line in the context of one of the branch's hunks", () => {
+    record([]);
+    commit(upstream, "app.cs", lines(50, (index) => (index === 4 ? "main's change" : undefined)), "main edits line 5");
+    run(repo, "fetch", "--quiet", "origin");
+    run(repo, "rebase", "--quiet", "origin/main");
+
+    assert.equal(checkReview(repo, mergeBase(repo), {}).ok, false);
+  });
+
+  it("fails after a rebase whose conflict was resolved, even back to the branch's own line", () => {
+    record([]);
+    commit(upstream, "app.cs", lines(50, (index) => (index === 2 ? "main's change" : undefined)), "main edits line 3");
+    run(repo, "fetch", "--quiet", "origin");
+    assert.throws(() => run(repo, "rebase", "--quiet", "origin/main"));
+    writeFileSync(join(repo, "app.cs"), lines(50, (index) => (index === 2 ? "changed" : undefined)));
+    run(repo, "add", "app.cs");
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "core.editor=true", "rebase", "--continue"], { cwd: repo, stdio: "pipe" });
+
+    assert.equal(checkReview(repo, mergeBase(repo), {}).ok, false);
+  });
+
+  it("fails after a clean rebase that also changed a commit of the branch", () => {
+    commit(repo, "app.cs", lines(50, (index) => (index === 2 ? "changed" : index === 29 ? "deep change" : undefined)), "a second commit");
+    record([]);
+    commit(upstream, "other.cs", "y\n", "main moves on");
+    run(repo, "fetch", "--quiet", "origin");
+    run(repo, "rebase", "--quiet", "origin/main");
+    writeFileSync(join(repo, "app.cs"), lines(50, (index) => (index === 2 ? "changed" : index === 29 ? "deeper change" : undefined)));
+    run(repo, "-c", "core.editor=true", "commit", "--quiet", "--amend", "--no-edit", "-a");
+
+    assert.equal(checkReview(repo, mergeBase(repo), {}).ok, false);
   });
 
   it("throws, naming the file, on a ledger that doesn't match the schema, rather than pass it", () => {
@@ -2648,7 +2749,7 @@ describe("main", () => {
     const result = cli(["prepare", dir, "last"]);
 
     assert.equal(result.code, 1);
-    assert.match(result.err, /no fixes since/);
+    assert.match(result.err, /^no fixes since [0-9a-f]{40}: a later round follows a round that fixed something, after its fix commits\.$/m);
   });
 
   it("prepare refuses an earlier HEAD that isn't one of HEAD's commits, whose diff would hold more than the fixes", () => {
@@ -2674,7 +2775,7 @@ describe("main", () => {
     const result = cli(["prepare", dir, before]);
 
     assert.equal(result.code, 1);
-    assert.match(result.err, /After an amend or a rebase there's none: start again at round 1/);
+    assert.match(result.err, /After an amend or a rebase there's none: start again at round 1 with prepare <dir>\.$/m);
   });
 
   it("prepare refuses the HEAD it just printed when nothing was committed since, whose fixes patch would be empty", () => {
@@ -2684,7 +2785,7 @@ describe("main", () => {
     const result = cli(["prepare", dir, before]);
 
     assert.equal(result.code, 1);
-    assert.match(result.err, /no fixes since/);
+    assert.match(result.err, new RegExp(`^no fixes since ${before}: a later round follows a round that fixed something, after its fix commits\\.$`, "m"));
     assert.equal(existsSync(join(dir, "fixes.patch")), false);
   });
 
@@ -2746,7 +2847,9 @@ describe("main", () => {
 
   for (const [what, args] of [
     ["without a since", (_since: string) => [] as string[]],
-    ["with a since it refuses", (since: string) => [`${since}x`]],
+    // A commit, so prepare reads it, but later than the HEAD the round before printed, so it refuses it (R33 refuses a since that
+    // isn't a commit before touching the folder).
+    ["with a since it refuses", (_since: string) => [run(repo, "rev-parse", "HEAD")]],
   ] as const) {
     it(`prepare ${what} leaves no earlier round's fixes patch behind for the reviewers to read`, () => {
       const dir = join(root, "run");
@@ -2770,7 +2873,7 @@ describe("main", () => {
     const result = cli(["prepare", dir, before]);
 
     assert.equal(result.code, 1);
-    assert.match(result.err, /main was merged in/);
+    assert.match(result.err, /main was merged in since the round before, so the fixes can't be told from main's changes: start again at round 1/);
     assert.equal(existsSync(join(dir, "fixes.patch")), false);
   });
 
@@ -2790,6 +2893,720 @@ describe("main", () => {
     assert.match(fixes, /the fix/);
     assert.doesNotMatch(fixes, /main moves on/);
   });
+
+  // Issue 54: a fix made after the review was recorded (for a PR thread, say) is reviewed alone, in a new run, against the commit
+  // the branch's last recorded review vouched for. Nothing of that review carries into the new record.
+  describe("prepare <dir> recorded", () => {
+    const fresh = (name: string) => join(root, name);
+    const head = () => run(repo, "rev-parse", "HEAD");
+    const fixesLine = (commit: string) => `Fixes since ${commit}, the commit the last recorded review of this branch vouched for.\n`;
+    // Ledger file names are diff keys, so a test that records reviews can't choose the folder's order. These take a review's ledger as
+    // record writes it and write it again under a chosen name, so a test can run both ways. Nothing reads a ledger's name back as its key.
+    const ledgerJson = (findings: Finding[]) => {
+      const ledger = record(findings);
+      const path = join(ledgerDir(repo), `${ledger.key}.json`);
+      const text = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+      rmSync(path);
+      return text;
+    };
+    // As writeLedger writes a ledger: indented JSON with a closing newline, owner-only, through replaceFile's temp file.
+    const asWritten = (ledger: unknown) => `${JSON.stringify(ledger, null, 2)}\n`;
+    const writeNamed = (name: string, ledger: Record<string, unknown>) => replaceFile(join(ledgerDir(repo), name), asWritten(ledger));
+    // A recordedAt as record writes one, from a Date, as the tests that record pass `now`.
+    const at = (when: string) => new Date(when).toISOString();
+
+    it("writes the fixes since the commit the last recorded review vouched for, beside the whole diff, and says which commit", () => {
+      record([]);
+      const recordedAt = run(repo, "rev-parse", "HEAD");
+      commit(repo, "fix.cs", "the thread's fix\n", "fix a PR thread");
+      commit(repo, "other.cs", "a second fix\n", "fix another thread");
+      const dir = fresh("delta");
+
+      const result = cli(["prepare", dir, "recorded"]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.deepEqual(result.out.trim().split("\n"), [diffKey(repo, mergeBase(repo)), run(repo, "rev-parse", "HEAD")]);
+      assert.equal(result.err, fixesLine(recordedAt));
+      const fixes = readFileSync(join(dir, "fixes.patch"), "utf8");
+      assert.match(fixes, /^\+the thread's fix$/m);
+      assert.match(fixes, /^\+a second fix$/m);
+      assert.doesNotMatch(fixes, /^\+changed$/m);
+      assert.equal(fixes, run(repo, "diff", "--full-index", recordedAt, "HEAD") + "\n");
+      assert.match(readFileSync(join(dir, "diff.patch"), "utf8"), /^\+changed$/m);
+      assert.equal(readFileSync(join(dir, "head"), "utf8"), `${run(repo, "rev-parse", "HEAD")}\n`);
+    });
+
+    it("gives prepareRound's since the anchor", () => {
+      record([]);
+      const recordedAt = run(repo, "rev-parse", "HEAD");
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      const round = prepareRound(repo, { since: { recorded: true } });
+
+      assert.equal(round.since, recordedAt);
+      assert.match(round.fixes?.toString("utf8") ?? "", /^\+the fix$/m);
+    });
+
+    it("lets the run go on with prepare <dir> last, and records only the new run's findings, none of the earlier review's", () => {
+      record([finding(), finding({ id: "R2", status: "dismissed", test: null, reason: "The guard trims first." })]);
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      const dir = fresh("delta");
+      assert.equal(cli(["prepare", dir, "recorded"]).code, 0);
+      commit(repo, "fix.cs", "the fix, fixed\n", "fix the fix");
+
+      const later = cli(["prepare", dir, "last"]);
+      assert.equal(later.code, 0, later.err);
+      assert.match(readFileSync(join(dir, "fixes.patch"), "utf8"), /^\+the fix, fixed$/m);
+      const ledger = record([finding({ id: "R3", path: "fix.cs", line: 1 })], 2);
+
+      assert.deepEqual(ledger.findings.map((found) => found.id), ["R3"]);
+      assert.equal(checkReview(repo, mergeBase(repo), {}).ok, true);
+    });
+
+    // R7: the reviewers of a recorded run read only the fixes, so a finding the earlier review left open or a person accepted would
+    // never be raised again for this code. Only a review that left nothing open or accepted can be the anchor.
+    const refusedFor = (n: number) =>
+      `the last review of feature/1-thing, recorded at ${run(repo, "rev-parse", "HEAD~1")}, has ${n} finding(s) open or accepted, which a review of the fixes alone would not raise again: start again at round 1 with prepare <dir>.\n`;
+    const cases: [string, () => void, number][] = [
+      ["an open Critical finding", () => record([finding(), finding({ id: "R2", status: "open", test: null })]), 1],
+      ["an open Advisory finding", () => record([finding({ severity: "advisory", status: "open", test: null })]), 1],
+      ["an accepted finding", () => record([finding({ status: "accepted", test: null, reason: "Fine here." })]), 1],
+      [
+        "an open finding the person asked to be fixed",
+        () => {
+          record([finding({ status: "open", test: null }), finding({ id: "R2", severity: "advisory", status: "open", test: null })]);
+          decideOpen(repo, mergeBase(repo), { accept: [], fix: ["R1", "R2"] });
+        },
+        2,
+      ],
+    ];
+    for (const [what, recordIt, count] of cases) {
+      it(`refuses an anchor whose review holds ${what}, and writes no fixes patch`, () => {
+        recordIt();
+        commit(repo, "fix.cs", "the fix\n", "fix");
+        const dir = fresh("delta");
+
+        const result = cli(["prepare", dir, "recorded"]);
+
+        assert.equal(result.code, 1);
+        assert.equal(result.err, refusedFor(count));
+        assert.equal(existsSync(join(dir, "fixes.patch")), false);
+      });
+    }
+
+    it("takes an anchor whose review holds only fixed and dismissed findings", () => {
+      record([finding(), finding({ id: "R2", status: "dismissed", test: null, reason: "The guard trims first." })]);
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      assert.equal(cli(["prepare", fresh("delta"), "recorded"]).code, 0);
+    });
+
+    it("refuses a newer review with an open finding though an older clean one is one of HEAD's commits, rather than fall back to it", () => {
+      record([], 1, new Date("2026-01-01T00:00:00Z"));
+      commit(repo, "other.cs", "second\n", "second commit");
+      record([finding({ status: "open", test: null })], 1, new Date("2026-01-02T00:00:00Z"));
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      const dir = fresh("delta");
+
+      const result = cli(["prepare", dir, "recorded"]);
+
+      assert.equal(result.code, 1);
+      assert.equal(result.err, refusedFor(1));
+      assert.equal(existsSync(join(dir, "fixes.patch")), false);
+    });
+
+    it("refuses when no review of the branch is recorded, and writes no fixes patch", () => {
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      const dir = fresh("delta");
+
+      const result = cli(["prepare", dir, "recorded"]);
+
+      assert.equal(result.code, 1);
+      assert.equal(result.err, "no review of feature/1-thing's own commits is recorded in this clone: start again at round 1 with prepare <dir>.\n");
+      assert.equal(existsSync(join(dir, "fixes.patch")), false);
+    });
+
+    // R27: the branch's reviews are every review of its own commits, whatever name it was recorded under.
+    it("takes a review recorded before the branch was renamed as the anchor", () => {
+      record([]);
+      const recordedAt = head();
+      run(repo, "branch", "-m", "feature/1-renamed");
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.equal(result.err, fixesLine(recordedAt));
+    });
+
+    it("refuses a review recorded under another branch name at a commit that isn't one of HEAD's", () => {
+      run(repo, "switch", "--quiet", "-c", "feature/2-other");
+      commit(repo, "elsewhere.cs", "elsewhere\n", "elsewhere");
+      record([]);
+      run(repo, "switch", "--quiet", "feature/1-thing");
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+      assert.equal(result.code, 1);
+      assert.equal(result.err, "no review of feature/1-thing's own commits is recorded in this clone: start again at round 1 with prepare <dir>.\n");
+    });
+
+    it("refuses on a detached HEAD", () => {
+      record([]);
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      run(repo, "switch", "--quiet", "--detach", "HEAD");
+
+      const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+      assert.equal(result.code, 1);
+      assert.equal(result.err, "HEAD isn't on a branch, so no review recorded for one can be its anchor: start again at round 1 with prepare <dir>.\n");
+    });
+
+    it("refuses after an amend, rather than fall back to an earlier review that is still one of HEAD's commits", () => {
+      record([], 1, new Date("2026-01-01T00:00:00Z"));
+      commit(repo, "other.cs", "second\n", "second commit");
+      record([], 1, new Date("2026-01-02T00:00:00Z"));
+      const amended = head();
+      writeFileSync(join(repo, "other.cs"), "second, amended\n");
+      run(repo, "-c", "core.editor=true", "commit", "--quiet", "--amend", "--no-edit", "-a");
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+      assert.equal(result.code, 1);
+      assert.equal(result.err, `the last review of feature/1-thing was recorded at ${amended}, which isn't one of HEAD's commits (an amend or a rebase since): start again at round 1 with prepare <dir>.\n`);
+    });
+
+    it("refuses after a rebase onto main since the review was recorded", () => {
+      record([]);
+      const rebased = head();
+      commit(upstream, "main.cs", "main moves on\n", "main moves on");
+      run(repo, "fetch", "--quiet", "origin");
+      run(repo, "rebase", "--quiet", "origin/main");
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+      assert.equal(result.code, 1);
+      assert.equal(result.err, `the last review of feature/1-thing was recorded at ${rebased}, which isn't one of HEAD's commits (an amend or a rebase since): start again at round 1 with prepare <dir>.\n`);
+    });
+
+    it("refuses after a merge of main since the review was recorded, whose fixes patch would hold main's changes", () => {
+      record([]);
+      commit(upstream, "main.cs", "main moves on\n", "main moves on");
+      mergeMain();
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      const dir = fresh("delta");
+
+      const result = cli(["prepare", dir, "recorded"]);
+
+      assert.equal(result.code, 1);
+      assert.equal(result.err, "main was merged in since the review was recorded, so the fixes can't be told from main's changes: start again at round 1 with prepare <dir>.\n");
+      assert.equal(existsSync(join(dir, "fixes.patch")), false);
+    });
+
+    it("takes the fixes after a fetch moved origin/main without a merge, and they hold only the fix", () => {
+      record([]);
+      commit(upstream, "main.cs", "main moves on\n", "main moves on");
+      run(repo, "fetch", "--quiet", "origin");
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      const dir = fresh("delta");
+
+      assert.equal(cli(["prepare", dir, "recorded"]).code, 0);
+      const fixes = readFileSync(join(dir, "fixes.patch"), "utf8");
+      assert.match(fixes, /the fix/);
+      assert.doesNotMatch(fixes, /main moves on/);
+    });
+
+    // R34: a merge of main made before the review was recorded is part of what it vouched for, so it doesn't stop a recorded run.
+    for (const fetchedLater of [false, true]) {
+      it(`takes a review recorded after a merge of main, with a patch holding only the fix${fetchedLater ? ", after a later fetch of a newer main too" : ""}`, () => {
+        commit(upstream, "main.cs", "main moves on\n", "main moves on");
+        mergeMain();
+        record([]);
+        const recordedAt = head();
+        commit(repo, "fix.cs", "the fix\n", "fix");
+        if (fetchedLater) {
+          commit(upstream, "later.cs", "main moves again\n", "main moves again");
+          run(repo, "fetch", "--quiet", "origin");
+        }
+        const dir = fresh("delta");
+
+        const result = cli(["prepare", dir, "recorded"]);
+
+        assert.equal(result.code, 0, result.err);
+        assert.equal(result.err, fixesLine(recordedAt));
+        assert.equal(readFileSync(join(dir, "fixes.patch"), "utf8"), run(repo, "diff", "--full-index", recordedAt, "HEAD") + "\n");
+      });
+    }
+
+    it("refuses with no commits since the review was recorded", () => {
+      record([]);
+
+      const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+      assert.equal(result.code, 1);
+      assert.equal(result.err, "no changes since the review was recorded: it already vouches for this code.\n");
+    });
+
+    // R30: commits that change nothing leave nothing to review either.
+    for (const [what, change] of [
+      ["an empty commit", () => run(repo, "commit", "--quiet", "--allow-empty", "-m", "empty")],
+      ["a commit and its revert", () => (commit(repo, "fix.cs", "the fix\n", "fix"), run(repo, "revert", "--no-edit", "HEAD"))],
+    ] as [string, () => unknown][]) {
+      it(`refuses when the commits since the review was recorded are ${what}, which change nothing`, () => {
+        record([]);
+        change();
+
+        const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+        assert.equal(result.code, 1);
+        assert.equal(result.err, "no changes since the review was recorded: it already vouches for this code.\n");
+      });
+    }
+
+    it("takes the later of two reviews that are both HEAD's commits, and names it", () => {
+      record([], 1, new Date("2026-01-01T00:00:00Z"));
+      commit(repo, "other.cs", "second\n", "second commit");
+      record([], 1, new Date("2026-01-02T00:00:00Z"));
+      const newer = head();
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      const dir = fresh("delta");
+
+      const result = cli(["prepare", dir, "recorded"]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.equal(result.err, fixesLine(newer));
+      assert.doesNotMatch(readFileSync(join(dir, "fixes.patch"), "utf8"), /second/);
+    });
+
+    // R27: ancestry decides which review is the last, not recordedAt, which a clock can get wrong. Each runs with the two ledgers under
+    // the names both ways, so the folder's order can't decide.
+    for (const swap of [false, true]) {
+      const names = swap ? ["b.json", "a.json"] : ["a.json", "b.json"];
+
+      it(`takes the descendant review as the anchor though it carries the earlier recordedAt (${names.join(", ")})`, () => {
+        const first = ledgerJson([]);
+        commit(repo, "other.cs", "second\n", "second commit");
+        const second = ledgerJson([]);
+        commit(repo, "fix.cs", "the fix\n", "fix");
+        writeNamed(names[0] as string, { ...first, recordedAt: at("2026-01-02T00:00:00Z") });
+        writeNamed(names[1] as string, { ...second, recordedAt: at("2026-01-01T00:00:00Z") });
+
+        const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+        assert.equal(result.code, 0, result.err);
+        assert.equal(result.err, fixesLine(String(second.head)));
+      });
+
+      it(`refuses a review recorded on a detached HEAD with an open finding, after a clean review of the branch (${names.join(", ")})`, () => {
+        const clean = ledgerJson([]);
+        commit(repo, "other.cs", "second\n", "second commit");
+        const detached: Record<string, unknown> = { ...ledgerJson([finding({ status: "open", test: null })]), branch: "" };
+        commit(repo, "fix.cs", "the fix\n", "fix");
+        writeNamed(names[0] as string, { ...clean, recordedAt: at("2026-01-01T00:00:00Z") });
+        writeNamed(names[1] as string, { ...detached, recordedAt: at("2026-01-02T00:00:00Z") });
+
+        const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+        assert.equal(result.code, 1);
+        assert.equal(
+          result.err,
+          `the last review of feature/1-thing, recorded at ${String(detached.head)}, has 1 finding(s) open or accepted, which a review of the fixes alone would not raise again: start again at round 1 with prepare <dir>.\n`,
+        );
+      });
+
+      // R35, R36: an earlier head's open finding is superseded by a review of a descendant head recorded after it, and only then.
+      for (const [order, earlierAt, laterAt, refused] of [
+        ["recorded before the descendant's review", "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z", false],
+        ["recorded at the same time as the descendant's review", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", false],
+        ["recorded after the descendant's review", "2026-01-02T00:00:00Z", "2026-01-01T00:00:00Z", true],
+      ] as [string, string, string, boolean][]) {
+        it(`${refused ? "refuses" : "takes the descendant review"} when a review at an earlier head with an open finding was ${order} (${names.join(", ")})`, () => {
+          const earlier = ledgerJson([finding({ status: "open", test: null })]);
+          commit(repo, "other.cs", "second\n", "second commit");
+          const descendant = ledgerJson([]);
+          commit(repo, "fix.cs", "the fix\n", "fix");
+          writeNamed(names[0] as string, { ...earlier, recordedAt: at(earlierAt) });
+          writeNamed(names[1] as string, { ...descendant, recordedAt: at(laterAt) });
+
+          const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+          if (refused) {
+            assert.equal(result.code, 1);
+            assert.equal(
+              result.err,
+              `a review of feature/1-thing at ${String(earlier.head)}, recorded at ${at(earlierAt)}, after the last review (at ${String(descendant.head)}), has 1 finding(s) open or accepted, which the last review never read and a review of the fixes alone would not raise again: start again at round 1 with prepare <dir>.\n`,
+            );
+          } else {
+            assert.equal(result.code, 0, result.err);
+            assert.equal(result.err, fixesLine(String(descendant.head)));
+          }
+        });
+      }
+
+      // R47: two reviews at the earlier head, both recorded after the descendant's, count together, whatever order the folder gives.
+      it(`counts every finding open in the reviews at an earlier head recorded after the descendant's (${names.join(", ")})`, () => {
+        const one = ledgerJson([finding({ status: "open", test: null })]);
+        const two = ledgerJson([finding({ id: "R2", status: "open", test: null }), finding({ id: "R3", status: "accepted", test: null, reason: "Fine." })]);
+        commit(repo, "other.cs", "second\n", "second commit");
+        const descendant = ledgerJson([]);
+        commit(repo, "fix.cs", "the fix\n", "fix");
+        const after = at("2026-01-02T00:00:00Z");
+        writeNamed(names[0] as string, { ...one, recordedAt: after });
+        writeNamed(names[1] as string, { ...two, recordedAt: after });
+        writeNamed("descendant.json", { ...descendant, recordedAt: at("2026-01-01T00:00:00Z") });
+
+        const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+        assert.equal(result.code, 1);
+        assert.equal(
+          result.err,
+          `a review of feature/1-thing at ${String(one.head)}, recorded at ${after}, after the last review (at ${String(descendant.head)}), has 3 finding(s) open or accepted, which the last review never read and a review of the fixes alone would not raise again: start again at round 1 with prepare <dir>.\n`,
+        );
+      });
+
+      // R36: a review under the branch's name off HEAD's history counts as an amend or a rebase only when it is later than every review on it.
+      for (const [order, goneAt, refused] of [
+        ["before", "2026-01-01T00:00:00Z", false],
+        ["at the same time as", "2026-01-02T00:00:00Z", false],
+        ["after", "2026-01-03T00:00:00Z", true],
+      ] as [string, string, boolean][]) {
+        it(`${refused ? "refuses" : "takes the review on HEAD's history"} when a review under the branch's name off it was recorded ${order} it (${names.join(", ")})`, () => {
+          const start = head();
+          commit(repo, "abandoned.cs", "abandoned\n", "abandoned");
+          const gone = ledgerJson([]);
+          run(repo, "reset", "--quiet", "--hard", start);
+          commit(repo, "other.cs", "second\n", "second commit");
+          const kept = ledgerJson([]);
+          commit(repo, "fix.cs", "the fix\n", "fix");
+          writeNamed(names[0] as string, { ...gone, recordedAt: at(goneAt) });
+          writeNamed(names[1] as string, { ...kept, recordedAt: at("2026-01-02T00:00:00Z") });
+
+          const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+          if (refused) {
+            assert.equal(result.code, 1);
+            assert.equal(result.err, `the last review of feature/1-thing was recorded at ${String(gone.head)}, which isn't one of HEAD's commits (an amend or a rebase since): start again at round 1 with prepare <dir>.\n`);
+          } else {
+            assert.equal(result.code, 0, result.err);
+            assert.equal(result.err, fixesLine(String(kept.head)));
+          }
+        });
+      }
+
+      // R42: two reviews off HEAD's history at one recordedAt: the message names the greater head, whatever order the folder gives.
+      // R46: the lesser head is always in a.json, the name listed first, so a tie-break that kept the first would name the wrong commit every run.
+      if (!swap) it("names the greater head of two reviews off HEAD's history recorded at the same time, the lesser in the file listed first", () => {
+        const start = head();
+        commit(repo, "abandoned.cs", "abandoned\n", "abandoned");
+        const one = ledgerJson([]);
+        run(repo, "reset", "--quiet", "--hard", start);
+        commit(repo, "abandoned.cs", "abandoned again\n", "abandoned again");
+        const other = ledgerJson([]);
+        run(repo, "reset", "--quiet", "--hard", start);
+        commit(repo, "fix.cs", "the fix\n", "fix");
+        const tie = at("2026-01-01T00:00:00Z");
+        const [lesser, greaterLedger] = [one, other].sort((a, b) => (String(a.head) < String(b.head) ? -1 : 1)) as [Record<string, unknown>, Record<string, unknown>];
+        writeNamed("a.json", { ...lesser, recordedAt: tie });
+        writeNamed("b.json", { ...greaterLedger, recordedAt: tie });
+        const greater = String(greaterLedger.head);
+
+        const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+        assert.equal(result.code, 1);
+        assert.equal(result.err, `the last review of feature/1-thing was recorded at ${greater}, which isn't one of HEAD's commits (an amend or a rebase since): start again at round 1 with prepare <dir>.\n`);
+      });
+
+      it(`refuses two reviews at one head when one holds an open finding (${names.join(", ")})`, () => {
+        const clean = ledgerJson([]);
+        const open = ledgerJson([finding({ status: "open", test: null })]);
+        commit(repo, "fix.cs", "the fix\n", "fix");
+        const tie = at("2026-01-01T00:00:00Z");
+        writeNamed(names[0] as string, { ...clean, recordedAt: tie });
+        writeNamed(names[1] as string, { ...open, recordedAt: tie });
+
+        const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+        assert.equal(result.code, 1);
+        assert.equal(
+          result.err,
+          `the last review of feature/1-thing, recorded at ${String(clean.head)}, has 1 finding(s) open or accepted, which a review of the fixes alone would not raise again: start again at round 1 with prepare <dir>.\n`,
+        );
+      });
+
+      it(`refuses reviews whose heads don't form one line, both HEAD's commits (${names.join(", ")})`, () => {
+        commit(repo, "x.cs", "x\n", "one side");
+        const one = ledgerJson([]);
+        run(repo, "switch", "--quiet", "-c", "side", "HEAD~1");
+        commit(repo, "y.cs", "y\n", "other side");
+        const other = ledgerJson([]);
+        run(repo, "switch", "--quiet", "feature/1-thing");
+        run(repo, "merge", "--quiet", "--no-edit", "side");
+        commit(repo, "fix.cs", "the fix\n", "fix");
+        writeNamed(names[0] as string, one);
+        writeNamed(names[1] as string, other);
+
+        const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+        assert.equal(result.code, 1);
+        assert.equal(
+          result.err,
+          `the reviews of feature/1-thing's own commits were recorded at ${[String(one.head), String(other.head)].sort().join(", ")}, which don't form one line (none has every other as an ancestor), so none is the last: start again at round 1 with prepare <dir>.\n`,
+        );
+      });
+    }
+
+    // R25: a recorded run reads the checkout's branch, so it takes only the checkout's HEAD.
+    it("prepareRound refuses a recorded run of a head that isn't the checkout's HEAD, and takes HEAD named by its id", () => {
+      record([]);
+      const recordedAt = head();
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      commit(repo, "fix.cs", "the fix, fixed\n", "fix the fix");
+
+      assert.throws(() => prepareRound(repo, { head: run(repo, "rev-parse", "HEAD~1"), since: { recorded: true } }), /a recorded run reads the checkout's branch, so it reviews the checkout's HEAD, not [0-9a-f]{40}\.$/);
+      assert.equal(prepareRound(repo, { head: head(), since: { recorded: true } }).since, recordedAt);
+    });
+
+    // R16: a ledger that doesn't read or parse could be the branch's newest, holding findings left open or accepted; skipping it would
+    // take an older clean review as the anchor and leave them unread. So prepare refuses, naming the file.
+    const malformed: [string, (ledger: Record<string, unknown>) => string | undefined][] = [
+      ["has no findings", (ledger) => asWritten({ ...ledger, findings: undefined })],
+      ["has a finding whose status isn't one of the four", (ledger) => asWritten({ ...ledger, findings: [{ ...(finding() as object), status: "weird" }] })],
+      ["has a field the schema doesn't know", (ledger) => asWritten({ ...ledger, extra: 1 })],
+      ["is damaged JSON", () => '{"version": 1, "branch": "feature/1-thing", "findings": ['],
+      ["is empty, as a truncated write leaves it", () => ""],
+      ["is JSON that names no branch", (ledger) => asWritten({ ...ledger, branch: undefined })],
+      ["is JSON that isn't an object", () => "[]\n"],
+      ["is JSON null", () => "null\n"],
+      // A head main has, which isn't one of this branch's commits: only the branch that isn't a string makes these refuse.
+      ["names its branch with a number", (ledger) => asWritten({ ...ledger, branch: 1, head: run(repo, "rev-parse", "origin/main"), findings: undefined })],
+      ["names its branch with an array", (ledger) => asWritten({ ...ledger, branch: ["feature/2-other"], head: run(repo, "rev-parse", "origin/main"), findings: undefined })],
+      ["names another branch but one of this branch's commits as its head", (ledger) => asWritten({ ...ledger, branch: "feature/2-other", findings: undefined })],
+      ["can't be read", () => undefined],
+    ];
+    const refusedBy = (path: string) =>
+      `the ledger ${path} doesn't read or parse as a review, and may be the newest review of feature/1-thing, so a recorded run can't anchor while it is there. ` +
+      "It counts as no review, and round 1 and record leave it in place: delete or move it to let recorded runs anchor again, or start again at round 1 with prepare <dir>.\n";
+    for (const [what, make] of malformed) {
+      it(`refuses when a ledger in the folder ${what}, beside an older clean review of the branch, and writes no fixes patch`, () => {
+        const clean = ledgerJson([]);
+        writeNamed("older.json", clean);
+        commit(repo, "other.cs", "second\n", "second commit");
+        const newer = { ...clean, head: run(repo, "rev-parse", "HEAD"), recordedAt: at("2099-01-01T00:00:00Z") };
+        const text = make(newer);
+        const path = join(ledgerDir(repo), "newer.json");
+        if (text === undefined) mkdirSync(path);
+        else replaceFile(path, text);
+        commit(repo, "fix.cs", "the fix\n", "fix");
+        const dir = fresh("delta");
+
+        const result = cli(["prepare", dir, "recorded"]);
+
+        assert.equal(result.code, 1);
+        assert.equal(result.err, refusedBy(path));
+        assert.equal(existsSync(join(dir, "fixes.patch")), false);
+      });
+    }
+
+    // R23: with several ledgers that don't parse, the refusal names the first by name, whatever order the folder lists them in.
+    for (const swap of [false, true]) {
+      it(`names the first of several ledgers that don't parse, by name (${swap ? "damaged JSON first" : "a schema failure first"})`, () => {
+        const clean = ledgerJson([]);
+        writeNamed("older.json", clean);
+        const bad = [asWritten({ ...clean, findings: undefined }), "{"];
+        if (swap) bad.reverse();
+        for (const [index, name] of ["c.json", "e.json", "a.json", "d.json", "b.json"].entries()) replaceFile(join(ledgerDir(repo), name), bad[index % 2] as string);
+        commit(repo, "fix.cs", "the fix\n", "fix");
+
+        const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+        assert.equal(result.code, 1);
+        assert.equal(result.err, refusedBy(join(ledgerDir(repo), "a.json")));
+      });
+    }
+
+    // R20: what else the ledger folder holds beside the ledgers doesn't block: a crashed write's temp file (replaceFile's name), a
+    // security entry map, the lock, and files whose name doesn't end in exactly ".json", each holding text that isn't JSON.
+    it("doesn't refuse for the other files a ledger folder holds, or a name that only ends in .JSON or .txt", () => {
+      const clean = ledgerJson([]);
+      writeNamed("mine.json", clean);
+      const folder = ledgerDir(repo);
+      const key = String(clean.key);
+      for (const name of [`${key}.json.${process.pid}.0a1b2c3d.tmp`, `${key}.entries`, ".lock", "x.JSON", "x.txt"]) writeFileSync(join(folder, name), "{");
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+      assert.equal(result.code, 0, result.err);
+    });
+
+    it("doesn't refuse for a lock held as a folder", () => {
+      writeNamed("mine.json", ledgerJson([]));
+      mkdirSync(join(ledgerDir(repo), ".lock"));
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      assert.equal(cli(["prepare", fresh("delta"), "recorded"]).code, 0);
+    });
+
+    // A symlink is read through, as readLedgers reads it: one to a valid ledger is that ledger, and a dangling one can't be read, so it
+    // may be the newest review and refuses.
+    it("reads a *.json symlink to a valid ledger as that ledger", () => {
+      const clean = ledgerJson([]);
+      const target = join(root, "kept-ledger.json");
+      replaceFile(target, asWritten(clean));
+      symlinkSync(target, join(ledgerDir(repo), "linked.json"));
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.match(result.err, new RegExp(`Fixes since ${String(clean.head)}`));
+    });
+
+    it("refuses beside a dangling *.json symlink, which can't be read", () => {
+      writeNamed("older.json", ledgerJson([]));
+      const path = join(ledgerDir(repo), "dangling.json");
+      symlinkSync(join(root, "gone.json"), path);
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      const dir = fresh("delta");
+
+      const result = cli(["prepare", dir, "recorded"]);
+
+      assert.equal(result.code, 1);
+      assert.equal(result.err, refusedBy(path));
+      assert.equal(existsSync(join(dir, "fixes.patch")), false);
+    });
+
+    it("doesn't refuse for another branch's ledger that doesn't parse but names its branch and a head that isn't one of this branch's commits", () => {
+      const clean = ledgerJson([]);
+      writeNamed("mine.json", clean);
+      replaceFile(join(ledgerDir(repo), "other.json"), asWritten({ ...clean, branch: "feature/2-other", head: run(repo, "rev-parse", "origin/main"), findings: undefined }));
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+      assert.equal(result.code, 0, result.err);
+    });
+
+    // R38: a head that isn't a full object id names no commit for certain, so a review of this branch's, or of none, with one counts as no review.
+    for (const [badHead, branchOf] of [
+      ["HEAD", "feature/1-thing"],
+      ["feature/1-thing", "feature/1-thing"],
+      ["abc1234", "feature/1-thing"],
+      ["-x", "feature/1-thing"],
+      ["HEAD", ""],
+    ] as [string, string][]) {
+      it(`refuses a review ${branchOf === "" ? "naming no branch" : "of this branch"} whose head is ${JSON.stringify(badHead)}, which isn't a full object id`, () => {
+        writeNamed("older.json", ledgerJson([]));
+        const bad = { ...ledgerJson([finding({ status: "open", test: null })]), head: badHead, branch: branchOf };
+        writeNamed("bad.json", bad);
+        commit(repo, "fix.cs", "the fix\n", "fix");
+        const dir = fresh("delta");
+
+        const result = cli(["prepare", dir, "recorded"]);
+
+        assert.equal(result.code, 1);
+        assert.equal(
+          result.err,
+          `the ledger ${join(ledgerDir(repo), "bad.json")} names its head ${JSON.stringify(badHead)}, which isn't a full object id, and may be the newest review of feature/1-thing, so a recorded run can't anchor while it is there. ` +
+            "It counts as no review, and round 1 and record leave it in place: delete or move it to let recorded runs anchor again, or start again at round 1 with prepare <dir>.\n",
+        );
+        assert.equal(existsSync(join(dir, "fixes.patch")), false);
+      });
+    }
+
+    it("doesn't refuse for another branch's review whose head isn't a full object id", () => {
+      const clean = ledgerJson([]);
+      writeNamed("mine.json", clean);
+      writeNamed("other.json", { ...clean, head: "HEAD", branch: "feature/2-other" });
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.equal(result.err, fixesLine(String(clean.head)));
+    });
+
+    it("refuses a review recorded at a commit main already has, and writes no fixes patch", () => {
+      record([]);
+      const recordedAt = head();
+      run(upstream, "pull", "--quiet", "--ff-only", repo, "feature/1-thing");
+      run(repo, "fetch", "--quiet", "origin");
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      const dir = fresh("delta");
+
+      const result = cli(["prepare", dir, "recorded"]);
+
+      assert.equal(result.code, 1);
+      assert.equal(result.err, `the last review of feature/1-thing was recorded at ${recordedAt}, which main already has: start again at round 1 with prepare <dir>.\n`);
+      assert.equal(existsSync(join(dir, "fixes.patch")), false);
+    });
+
+    it("gives no round 1 size warning, though the branch is past the size it warns about", () => {
+      for (let index = 0; index <= REVIEW_SIZE_MAX_FILES; index++) writeFileSync(join(repo, `big${index}.cs`), `${index}\n`);
+      run(repo, "add", ".");
+      run(repo, "commit", "--quiet", "-m", "a big branch");
+      const whole = cli(["prepare", fresh("round1")]);
+      assert.match(whole.err, /⚠/, "the branch is past the size round 1 warns about");
+      record([]);
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.doesNotMatch(result.err, /⚠/);
+    });
+  });
+
+  // A third argument is refused before prepare removes or writes anything in the folder.
+  for (const third of ["recorded", "last", "sha"]) {
+    it(`prepare refuses an argument after ${third}, and leaves the run folder as it was`, () => {
+      const dir = join(root, "run");
+      const head = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
+      record([]);
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      writeFileSync(join(dir, "fixes.patch"), "an earlier round's fixes\n");
+      const before = Object.fromEntries(["diff.patch", "fixes.patch", "head"].map((name) => [name, readFileSync(join(dir, name), "utf8")]));
+
+      const result = cli(["prepare", dir, third === "sha" ? head : third, "extra"]);
+
+      assert.equal(result.code, 1);
+      assert.match(result.err, /^Usage: scripts\/review\.sh <command>/);
+      for (const [name, text] of Object.entries(before)) assert.equal(readFileSync(join(dir, name), "utf8"), text, name);
+    });
+  }
+
+  // R33: the second argument is `last`, `recorded` or a commit, checked before the folder is touched.
+  for (const second of ["recordd", "", "-v", "HEAD:app.cs", "HEAD", "origin/main", "feature/1-thing", "a-tag", "SHORT", "UPPER", "ZERO", "TREE", "BLOB", "SHA256"]) {
+    it(`prepare refuses ${JSON.stringify(second)} as its second argument, and leaves the run folder as it was`, () => {
+      const dir = join(root, "run");
+      const printed = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
+      record([]);
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      run(repo, "tag", "a-tag", printed);
+      writeFileSync(join(dir, "fixes.patch"), "an earlier round's fixes\n");
+      const before = Object.fromEntries(["diff.patch", "fixes.patch", "head"].map((name) => [name, readFileSync(join(dir, name), "utf8")]));
+      // A tag, a short id and an upper-case id all name the commit the round before printed; only its full lower-case id is taken.
+      // R45: full ids that pass the pattern but name no commit this clone has: all zeros, a tree, a blob, and a SHA-256-long id in a SHA-1 repo.
+      const ids: Record<string, string> = {
+        SHORT: printed.slice(0, 12),
+        UPPER: printed.toUpperCase(),
+        ZERO: "0".repeat(40),
+        TREE: run(repo, "rev-parse", "HEAD^{tree}"),
+        BLOB: run(repo, "rev-parse", "HEAD:app.cs"),
+        SHA256: "a".repeat(64),
+      };
+      const given = ids[second] ?? second;
+
+      const result = cli(["prepare", dir, given]);
+
+      assert.equal(result.code, 1);
+      assert.ok(result.err.startsWith(`prepare: ${JSON.stringify(given)} is none of last, recorded and the full id of a commit this clone has.\nUsage: scripts/review.sh <command>`), result.err);
+      for (const [name, text] of Object.entries(before)) assert.equal(readFileSync(join(dir, name), "utf8"), text, name);
+    });
+  }
 
   for (const dir of ["", "relative/run"]) {
     it(`prepare refuses a folder that isn't absolute: ${JSON.stringify(dir)}`, () => {
@@ -3744,7 +4561,7 @@ describe("prepareRound", () => {
   it("refuses a round with no fixes since", () => {
     const first = prepared();
 
-    assert.throws(() => prepareRound(repo, { since: { commit: first.head, preparedHead: first.head } }), /no fixes since/);
+    assert.throws(() => prepareRound(repo, { since: { commit: first.head, preparedHead: first.head } }), new RegExp(`no fixes since ${first.head}: a later round follows a round that fixed something, after its fix commits\\.$`));
   });
 
   it("writes nothing under the checkout: the host decides where the patches go", () => {

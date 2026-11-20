@@ -46,6 +46,26 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   Every finding is named, with no "all", so a review recorded again since the list, or a fix asked meanwhile, can't be accepted unseen.
   `record` and `stage` refuse `fixAsked`: only the person asks.
   Advisory findings never block: one that needs a person goes to one follow-up issue per branch.
+- A fix made after a review that left nothing open or accepted (for a PR thread, say) gets a delta review in a new run: `scripts/review.sh prepare <run> recorded` writes
+  `<run>/fixes.patch` against the commit the branch's last recorded review vouched for, and that run's first round is a later round. The branch's reviews are taken as `latest` takes
+  them (`recordedAnchor`): every readable ledger whose `head` is one of the branch's own commits (HEAD or an ancestor that main doesn't have, from one `git rev-list`; a commit the
+  clone doesn't have is not one), whatever name it was recorded under (a detached HEAD, a rename, a fast-forward from a sibling). The last of them is the one every other's head is an
+  ancestor of, never the latest by `recordedAt`, which a clock can get wrong. A finding a review at an earlier head left open or accepted is superseded by a review of a descendant
+  head recorded after it: that review read the earlier head's code too (round 1 reads the whole diff, and a recorded run anchors only at a review that left nothing open or accepted),
+  so it raised the finding again or found it gone. That holds only in that order, so a review at an earlier head recorded after the last one's refuses when it holds a finding open or
+  accepted. `recordedAt` decides only that order and whether a review under the branch's name off HEAD's history is later than the reviews on it, and it orders the messages (at one
+  `recordedAt`, the greater head). The anchor is never a commit the caller names, so the patch holds every commit after it and no fix goes unread. `prepare` refuses, and the run
+  starts at round 1 with `prepare <run>`, on a detached HEAD; when no review of the branch's own commits is recorded in this clone (saying so when the last review under the branch's
+  name is at a commit main already has); when a ledger file that may be one of them doesn't read or parse, or names this branch or none with a head that isn't a full lower-case
+  object id (any but one that names another branch and a head that isn't one of the branch's commits: it counts as no review, and round 1 and record leave it in place, so delete or
+  move it to let recorded runs anchor again; readLedgers still skips it for branchLedgers, which `latest` and the id check use, and the gate's check reads only the diff's own ledger,
+  with readLedger, and refuses a damaged one); when the reviews' heads don't form one line; when any review at the last one's head, or one at an earlier head recorded after it, holds
+  a finding open or accepted (any severity, security and `fixAsked` included: the reviewers read only the fixes, so the fixes alone wouldn't raise it again; no older clean review is
+  taken instead); when a review under the branch's name is at a commit that isn't one of HEAD's and was recorded after every review that is (an amend or a rebase since); or when
+  `main` was merged in since the last review (as for a later round in one run; a merge before it is part of what it vouched for). With no changes since (no commits, or commits that
+  change nothing), it refuses too: the recorded review already vouches for this code, so there is nothing to review. Nothing carries over (issue 54, the owner's decision): the
+  earlier review left nothing open or accepted to raise again, and the new record holds only the new run's findings; a review that did leave something is followed by a full round 1,
+  which raises it again through `<run>/decisions.md`. `record`, `check` and the gate are unchanged: the record vouches for HEAD's whole diff key, as any other.
 - A run's findings are staged, not held in the session. Each round's triage goes to `scripts/review.sh stage <run> <file>`: each finding is checked as `record` checks it (an
   `accepted` one is refused), and one staged again under the same id replaces the earlier. The file is owner-only and replaced whole, and a second `stage` at the same time is
   refused. `stage` refuses a run folder that is a symlink (a trailing slash doesn't hide one), another user's or writable by the group or others. `stage` and `record --staged` refuse a
@@ -70,7 +90,8 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   (on a file system that can't link, it is written in place instead), so a reader never sees a half-written file where links work and a symlink put at the name is replaced, not written through. A number
   another writer took is tried again, up to five times; a
   finding whose entry can't be written is a warning, and the other findings are still written.
-- The ledger is keyed by the branch's hunks against its merge base with `origin/main`. A clean merge of `main` keeps the review; a new commit, a conflict
+- The ledger is keyed by the branch's hunks against its merge base with `origin/main`. A clean merge of `main` keeps the review, and so does a rebase onto
+  `origin/main` with no conflict when the rebased tree is the one that merge gives (`isReviewedCode`; one that isn't needs a new review); a new commit, a conflict
   resolution or a `main` change inside one of the branch's hunks needs a new one. A re-Apply on `chore/reapply-baseline` passes without one only when every
   change is a regular Owned file added or modified, as Apply writes them (`OWNED_PATHS` in the ledger lists them, and a dotfiles test keeps it equal to
   `template/owned/`). A deleted Owned file, a symlink, a submodule, a file of the repo's own, a Seed file the re-Apply writes because the repo lacked it, or one of

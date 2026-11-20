@@ -10,7 +10,9 @@
 // is the reviewed commit, or that commit with a clean merge of main and
 // nothing else (see isReviewedCode). So a merge of main that leaves every hunk
 // the branch changed as it was keeps the review, close to the rule PR
-// Auto-Merge and Claude Review apply on GitHub, and a new commit, a conflict
+// Auto-Merge and Claude Review apply on GitHub, and so does a rebase onto main
+// with no conflict when its tree is that merge's (one that isn't needs a new
+// review), and a new commit, a conflict
 // resolution or a main change inside one of the branch's hunks needs a new
 // one.
 //
@@ -440,9 +442,29 @@ function endedByLimit(error: unknown): boolean {
 
 const git = (cwd: string, ...args: string[]) => gitBytes(cwd, args).toString("utf8").trim();
 
+// A full object id, SHA-1 or SHA-256, in lower case: what a ledger's `head` and a commit `prepare` takes as `<since>` must be.
+const OBJECT_ID = /^([0-9a-f]{40}|[0-9a-f]{64})$/;
+
+// Whether `id` is a full object id (OBJECT_ID) of a commit this clone has. Not a tag, a branch name or a short id, which can name
+// another commit tomorrow. The pattern lets no option through: an id can't start with a dash.
+function isCommitId(cwd: string, id: string): boolean {
+  if (!OBJECT_ID.test(id)) return false;
+  try {
+    gitBytes(cwd, ["rev-parse", "--quiet", "--verify", `${id}^{commit}`]);
+    return true;
+  } catch (error) {
+    if (endedByLimit(error)) throw error;
+    return false;
+  }
+}
+
 // Whether `ancestor` is an ancestor of (or is) `commit`. A commit git doesn't
-// have counts as not.
+// have counts as not, and so does a name that starts with a dash: a ledger's
+// head is text anyone can write, and git would read it as an option. That is
+// checked here rather than with --end-of-options, which not every git the
+// Template runs on may take for merge-base.
 export function isAncestor(cwd: string, ancestor: string, commit: string): boolean {
+  if (ancestor.startsWith("-") || commit.startsWith("-")) return false;
   try {
     gitBytes(cwd, ["merge-base", "--is-ancestor", ancestor, commit]);
     return true;
@@ -734,7 +756,9 @@ export function sizeWarning(patch: Buffer | string): string | undefined {
 export const diffKey = (cwd: string, base: string, head: string = headCommit(cwd)) => patchKey(reviewPatch(cwd, base, head));
 
 // Whether `head` is the code reviewed at `reviewedHead`: that commit, or it
-// with a clean merge of `base` and nothing else. The key alone can't tell: an
+// with a clean merge of `base` and nothing else. A rebase onto `base` with no
+// conflict passes too when its tree is that merge's, which is the tree this
+// compares. The key alone can't tell: an
 // edit moved to an identical block elsewhere in a file keeps it. Anything git
 // can't answer (a commit it doesn't have, a conflict) counts as not.
 export function isReviewedCode(cwd: string, reviewedHead: string, base: string, head: string): boolean {
@@ -749,7 +773,8 @@ export function isReviewedCode(cwd: string, reviewedHead: string, base: string, 
 }
 
 // Whether this git has `merge-tree --write-tree` (2.38 and later), which
-// isReviewedCode needs to see a merge of main as the reviewed code.
+// isReviewedCode needs to see a merge of main, or a rebase onto it, as the
+// reviewed code.
 export function mergeTreeWorks(cwd: string): boolean {
   const head = headCommit(cwd);
   try {
@@ -959,23 +984,140 @@ export function latestLedger(cwd: string, base: string, head: string = headCommi
 // Every review recorded at one of the branch's own commits (HEAD's ancestors
 // that main doesn't have), with how many commits each is behind HEAD.
 function branchLedgers(cwd: string, base: string, head: string): { ledger: Ledger; distance: number }[] {
-  const dir = ledgerDir(cwd);
-  if (!existsSync(dir)) return [];
   const found: { ledger: Ledger; distance: number }[] = [];
-  for (const name of readdirSync(dir)) {
-    if (!name.endsWith(".json")) continue;
-    let ledger: Ledger;
-    try {
-      const parsed = ledgerSchema.safeParse(JSON.parse(readFileSync(join(dir, name), "utf8")));
-      if (!parsed.success) continue;
-      ledger = parsed.data;
-    } catch {
-      continue;
-    }
+  for (const { ledger } of readLedgers(cwd)) {
     if (!isAncestor(cwd, ledger.head, head) || isAncestor(cwd, ledger.head, base)) continue;
     found.push({ ledger, distance: Number(git(cwd, "rev-list", "--count", `${ledger.head}..${head}`)) });
   }
   return found;
+}
+
+// Every ledger of the clone that reads and parses, with its file name; a file that doesn't is skipped.
+function readLedgers(cwd: string): { ledger: Ledger; name: string }[] {
+  const dir = ledgerDir(cwd);
+  if (!existsSync(dir)) return [];
+  const found: { ledger: Ledger; name: string }[] = [];
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith(".json")) continue;
+    try {
+      const parsed = ledgerSchema.safeParse(JSON.parse(readFileSync(join(dir, name), "utf8")));
+      if (parsed.success) found.push({ ledger: parsed.data, name });
+    } catch {
+      continue;
+    }
+  }
+  return found;
+}
+
+// The branch's own commits: HEAD and its ancestors that main (`base`) doesn't have, from one `git rev-list`, so a ledger's head is
+// looked up rather than asked of git once per ledger. A commit this clone doesn't have, or text that isn't a full object id, is not
+// among them, so it counts as not the branch's.
+function branchCommits(cwd: string, base: string, head: string): Set<string> {
+  return new Set(git(cwd, "rev-list", head, `^${base}`).split("\n").filter((line) => line !== ""));
+}
+
+// The first ledger file (`*.json` in the ledger folder, in name order) that can't be read, isn't JSON, or is JSON that fails the
+// schema and may be one of the branch's reviews: recordedAnchor can't rule it out as the review it should anchor at, which may
+// hold findings left open or accepted. A malformed ledger rules itself out only when it names another branch and a `head` that
+// isn't one of the branch's own commits (branchCommits), as a review recordedAnchor would not take either.
+function unreadableLedger(cwd: string, branch: string, own: Set<string>): string | undefined {
+  const dir = ledgerDir(cwd);
+  if (!existsSync(dir)) return undefined;
+  for (const name of readdirSync(dir).filter((entry) => entry.endsWith(".json")).sort()) {
+    const path = join(dir, name);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(path, "utf8"));
+    } catch {
+      return path;
+    }
+    if (ledgerSchema.safeParse(parsed).success) continue;
+    const fields = typeof parsed === "object" && parsed !== null ? (parsed as { branch?: unknown; head?: unknown }) : {};
+    const elsewhere = typeof fields.branch === "string" && fields.branch !== branch && typeof fields.head === "string" && !own.has(fields.head);
+    if (!elsewhere) return path;
+  }
+  return undefined;
+}
+
+// What a refusal that starts the review over tells the person to run.
+const RESTART = "start again at round 1 with prepare <dir>.";
+
+// The anchor of a delta review: the commit the branch's last review vouched for (its ledger's `head`), so a fix made after the
+// review was recorded (for a PR thread, say) is reviewed alone in a new run. The branch's reviews are taken as branchLedgers takes
+// them, whatever name they were recorded under (a detached HEAD, a rename, a fast-forward from a sibling): every readable ledger
+// whose head is one of the branch's own commits (branchCommits). The anchor is the last of them by ancestry, the head every other
+// head is an ancestor of (`git merge-base --independent` gives it alone), never by recordedAt; heads that don't form one line
+// refuse. Never a commit the caller names either, so the fixes patch holds every commit since the code a review vouched for.
+//
+// A finding left open or accepted by a review at an earlier head is superseded by a review of a descendant head recorded after it:
+// that review read the earlier head's code too (round 1 reads the whole diff, and a recorded run anchors only at a review that left
+// nothing open or accepted), so it raised the finding again or found it gone. That holds only in that order: a review at an earlier
+// head recorded after the anchor's (out of order) was never read by it, so its open or accepted findings refuse. recordedAt decides
+// only that order and whether a review off HEAD's history is later than the reviews on it, and it orders the messages.
+//
+// Refused, as a message, also:
+// - on a detached HEAD, and when a ledger file may be one of these reviews but doesn't read or parse (unreadableLedger), or names
+//   this branch or none with a head that isn't a full object id: it counts as no review, and round 1 and record leave it in place.
+//   readLedgers still skips the first kind for branchLedgers, which latestLedger and takenIds use; the gate's check reads only the
+//   diff's own ledger, with readLedger, and refuses a damaged one.
+// - when a review recorded under this branch's name isn't one of HEAD's commits and was recorded after every review that is:
+//   an amend or a rebase since, whose reviewed code is gone. An older review is not taken instead.
+// - when no review of the branch's own commits is recorded, saying so when the last one of this name is at a commit main has.
+// - when any review at the anchor's head holds a finding open or accepted (blocking or not, asked to be fixed or not, security
+//   or not): the reviewers of a recorded run read only the fixes, so it would never be raised again for this code. Round 1
+//   reads the whole diff and raises it again.
+export function recordedAnchor(cwd: string, base: string, head: string, branch: string): { commit: string } | string {
+  if (branch === "") return `HEAD isn't on a branch, so no review recorded for one can be its anchor: ${RESTART}`;
+  const own = branchCommits(cwd, base, head);
+  const noReview = (path: string, what: string) =>
+    `the ledger ${path} ${what}, and may be the newest review of ${branch}, so a recorded run can't anchor while it is there. ` +
+    `It counts as no review, and round 1 and record leave it in place: delete or move it to let recorded runs anchor again, or ${RESTART}`;
+  const unreadable = unreadableLedger(cwd, branch, own);
+  if (unreadable !== undefined) return noReview(unreadable, "doesn't read or parse as a review");
+  const all = readLedgers(cwd);
+  const badHead = all.find(({ ledger }) => !OBJECT_ID.test(ledger.head) && (ledger.branch === branch || ledger.branch === ""));
+  if (badHead !== undefined) {
+    return noReview(join(ledgerDir(cwd), badHead.name), `names its head ${JSON.stringify(printable(badHead.ledger.head))}, which isn't a full object id`);
+  }
+  const reviews = all.map(({ ledger }) => ledger).filter((ledger) => own.has(ledger.head));
+  // The latest recorded; at one recordedAt, the greater head, so a message names the same commit whatever order the folder gives.
+  const later = (a: Ledger, b: Ledger) => (a.recordedAt !== b.recordedAt ? a.recordedAt > b.recordedAt : a.head > b.head);
+  const latestOf = (ledgers: Ledger[]) => ledgers.reduce<Ledger | undefined>((found, ledger) => (found === undefined || later(ledger, found) ? ledger : found), undefined);
+  const named = all.map(({ ledger }) => ledger).filter((ledger) => ledger.branch === branch);
+  const gone = latestOf(named.filter((ledger) => !isAncestor(cwd, ledger.head, head)));
+  const newestReview = latestOf(reviews);
+  if (gone !== undefined && (newestReview === undefined || gone.recordedAt > newestReview.recordedAt)) {
+    return `the last review of ${branch} was recorded at ${gone.head}, which isn't one of HEAD's commits (an amend or a rebase since): ${RESTART}`;
+  }
+  if (newestReview === undefined) {
+    const merged = latestOf(named);
+    if (merged !== undefined) return `the last review of ${branch} was recorded at ${merged.head}, which main already has: ${RESTART}`;
+    return `no review of ${branch}'s own commits is recorded in this clone: ${RESTART}`;
+  }
+  const heads = [...new Set(reviews.map((ledger) => ledger.head))].sort();
+  const independent = heads.length === 1 ? heads : git(cwd, "merge-base", "--independent", ...heads).split("\n").filter((line) => line !== "");
+  if (independent.length !== 1) {
+    return `the reviews of ${branch}'s own commits were recorded at ${heads.join(", ")}, which don't form one line (none has every other as an ancestor), so none is the last: ${RESTART}`;
+  }
+  const last = independent[0] as string;
+  const undecided = (ledger: Ledger) => ledger.findings.filter((finding) => finding.status === "open" || finding.status === "accepted").length;
+  const atLast = reviews.filter((ledger) => ledger.head === last);
+  const open = atLast.reduce((sum, ledger) => sum + undecided(ledger), 0);
+  if (open > 0) {
+    return `the last review of ${branch}, recorded at ${last}, has ${open} finding(s) open or accepted, which a review of the fixes alone would not raise again: ${RESTART}`;
+  }
+  // R35: a review at an earlier head recorded after the anchor's was never read by it.
+  const anchorRecorded = (latestOf(atLast) as Ledger).recordedAt;
+  const unread = latestOf(reviews.filter((ledger) => ledger.head !== last && undecided(ledger) > 0 && ledger.recordedAt > anchorRecorded));
+  if (unread !== undefined) {
+    // Every review at that head recorded after the anchor's counts, so the number doesn't depend on the folder's order.
+    const count = reviews.filter((ledger) => ledger.head === unread.head && ledger.recordedAt > anchorRecorded).reduce((sum, ledger) => sum + undecided(ledger), 0);
+    return (
+      `a review of ${branch} at ${unread.head}, recorded at ${unread.recordedAt}, after the last review (at ${last}), has ${count} finding(s) open or accepted, ` +
+      `which the last review never read and a review of the fixes alone would not raise again: ${RESTART}`
+    );
+  }
+  return { commit: last };
 }
 
 // The highest id a review had taken, its own or one it held from earlier
@@ -1000,22 +1142,50 @@ export function takenIds(cwd: string, base: string, head: string = headCommit(cw
 // prepareRound, so they cannot diverge. `patch` and `fixes` are whole: they feed the key and the size warning. `readPatch` and
 // `readFixes` leave out the verbatim Template mirrors (readerPatch) and are what the reviewers read, what the size limit and the lens choice
 // apply to, and what gets written to disk.
-export type PreparedRound = { patch: Buffer; fixes: Buffer | undefined; readPatch: Buffer; readFixes: Buffer | undefined; key: string; head: string; base: string };
+export type PreparedRound = { patch: Buffer; fixes: Buffer | undefined; readPatch: Buffer; readFixes: Buffer | undefined; key: string; head: string; base: string; since?: string };
+
+// The fixes a later round reads: since the HEAD the round before in the same run printed (`commit` and `preparedHead`), or, with
+// `recorded`, since the commit the branch's last recorded review vouched for (recordedAnchor), for a new run that reviews a fix
+// made after the review was recorded.
+export type FixesSince = { commit: string; preparedHead: string | undefined } | { recorded: true };
 
 // The body of `prepare` without its file I/O: `head` (HEAD by default) against
 // where it left `main` (origin/main by default), plus, for a later round, the
 // fixes since `since.commit`. `since.preparedHead` is the HEAD the round before
-// read, which `fixesPatch` checks `since.commit` against. Throws an Error with
-// `prepare`'s message when the fixes can't be told.
-export function prepareRound(
-  cwd: string,
-  { main = "origin/main", head = headCommit(cwd), since }: { main?: string; head?: string; since?: { commit: string; preparedHead: string | undefined } },
-): PreparedRound {
+// read, which `fixesPatch` checks `since.commit` against. With `since.recorded`
+// the fixes are those since recordedAnchor, on the checkout's branch, so `head`
+// must be the checkout's HEAD; `since` in the result names that commit. Throws an
+// Error with `prepare`'s message when the fixes can't be told.
+export function prepareRound(cwd: string, { main = "origin/main", head = headCommit(cwd), since }: { main?: string; head?: string; since?: FixesSince }): PreparedRound {
   const base = mergeBase(cwd, main, head);
   const patch = reviewPatch(cwd, base, head);
-  const fixes = since === undefined ? undefined : fixesPatch(cwd, since.preparedHead, since.commit, base, head, main);
+  let anchor: string | undefined;
+  let fixes: Buffer | string | undefined;
+  if (since === undefined) {
+    fixes = undefined;
+  } else if ("recorded" in since) {
+    // The branch is the checkout's, so the head must be too: another commit's branch can't be told.
+    if (head !== headCommit(cwd)) throw new Error(`a recorded run reads the checkout's branch, so it reviews the checkout's HEAD, not ${head}.`);
+    const found = recordedAnchor(cwd, base, head, git(cwd, "branch", "--show-current"));
+    if (typeof found === "string") throw new Error(found);
+    anchor = found.commit;
+    // Nothing to review: the recorded review already vouches for this code (no commits since, or commits that change nothing, such
+    // as an empty commit or a change and its revert), so the gate passes without a new one.
+    fixes = fixesSince(cwd, anchor, base, head, main, "the review was recorded", "no changes since the review was recorded: it already vouches for this code.");
+  } else {
+    fixes = fixesPatch(cwd, since.preparedHead, since.commit, base, head, main);
+  }
   if (typeof fixes === "string") throw new Error(fixes);
-  return { patch, fixes, readPatch: readerPatch(patch), readFixes: fixes === undefined ? undefined : readerPatch(fixes), key: patchKey(patch), head, base };
+  return {
+    patch,
+    fixes,
+    readPatch: readerPatch(patch),
+    readFixes: fixes === undefined ? undefined : readerPatch(fixes),
+    key: patchKey(patch),
+    head,
+    base,
+    ...(anchor === undefined ? {} : { since: anchor }),
+  };
 }
 
 // Record a review of HEAD's diff, replacing any ledger at the same diff.
@@ -1275,7 +1445,7 @@ export function checkReview(cwd: string, base: string, env: NodeJS.ProcessEnv = 
   if (ledger !== undefined && ledger.head !== head && !mergeTreeWorks(cwd)) {
     return {
       ok: false,
-      message: `${git(cwd, "version")} can't check the review across a merge of main: that needs git 2.38 or later (merge-tree --write-tree). Upgrade git.`,
+      message: `${git(cwd, "version")} can't check the review across a merge of main or a rebase onto it: that needs git 2.38 or later (merge-tree --write-tree). Upgrade git.`,
     };
   }
   if (ledger === undefined || !isReviewedCode(cwd, ledger.head, base, head)) {
@@ -1491,17 +1661,24 @@ export function spliceReviewNotes(body: string, notes: string): string {
 // CLI), and `main` what the branch is compared with.
 function fixesPatch(cwd: string, preparedHead: string | undefined, since: string, base: string, head: string, main: string): Buffer | string {
   if (!isAncestor(cwd, since, head)) {
-    return `${since} isn't one of HEAD's commits: give the HEAD prepare printed in the round before. After an amend or a rebase there's none: start again at round 1 (prepare without <since>).`;
+    return `${since} isn't one of HEAD's commits: give the HEAD prepare printed in the round before. After an amend or a rebase there's none: ${RESTART}`;
   }
   const before = preparedHead;
   if (before === undefined || !isAncestor(cwd, since, before)) {
     return `${since} is later than the HEAD prepare printed in the round before (${before ?? "none in this folder"}): give that one, so no fix goes unread.`;
   }
+  return fixesSince(cwd, since, base, head, main, "the round before", `no fixes since ${since}: a later round follows a round that fixed something, after its fix commits.`);
+}
+
+// The patch from `since`, one of HEAD's commits, to `head`, for both kinds of later round; `after` says what `since` is, for the
+// messages. Refused, as a message, after a merge of main since (the patch would hold main's changes) or, with `noFixes`, when
+// there are no fixes at all.
+function fixesSince(cwd: string, since: string, base: string, head: string, main: string, after: string, noFixes: string): Buffer | string {
   if (git(cwd, "merge-base", main, since) !== base) {
-    return "main was merged in since the round before, so the fixes can't be told from main's changes: start again at round 1.";
+    return `main was merged in since ${after}, so the fixes can't be told from main's changes: ${RESTART}`;
   }
   const fixes = reviewPatch(cwd, since, head);
-  if (fixes.length === 0) return `no fixes since ${since}: a later round follows a round that fixed something, after its fix commits.`;
+  if (fixes.length === 0) return noFixes;
   return fixes;
 }
 
@@ -1542,10 +1719,11 @@ function sameFile(cwd: string, a: string, b: string): boolean {
 }
 
 const USAGE = `Usage: scripts/review.sh <command>
-  prepare <absolute dir> [<since>|last]
-                         write HEAD's diff to <dir>/diff.patch for the reviewers, and with <since> (the HEAD
+  prepare <absolute dir> [<since>|last|recorded]
+                         write HEAD's diff to <dir>/diff.patch for the reviewers, and with <since> (the full id of the HEAD
                          the round before printed, which "last" reads from <dir>/head) the fixes since to <dir>/fixes.patch, both without the
-                         Template mirrors that are verbatim copies of a root file in the same patch; print
+                         Template mirrors that are verbatim copies of a root file in the same patch; with "recorded", the fixes since the
+                         commit the branch's last recorded review vouched for, for a new run that reviews only a fix made after it; print
                          the key of the whole diff, then HEAD
   key                    print the ledger key of HEAD's diff against origin/main
   check [<base>]         the gate's check: exit 1 unless HEAD's diff was reviewed clean
@@ -1706,6 +1884,12 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         // An absolute folder only: an empty shell variable would otherwise
         // write the diff somewhere no reviewer is told to look.
         if (rest[0] === undefined || !isAbsolute(rest[0])) return fail(USAGE);
+        // Refused before anything in the folder is removed or written: a third argument, or a second that is none of `last`,
+        // `recorded` and a commit.
+        if (rest.length > 2) return fail(USAGE);
+        if (rest[1] !== undefined && rest[1] !== "last" && rest[1] !== "recorded" && !isCommitId(cwd, rest[1])) {
+          return fail(`prepare: ${JSON.stringify(printable(rest[1]))} is none of last, recorded and the full id of a commit this clone has.\n${USAGE}`);
+        }
         // One prepareRound gives both: the key is that of the whole diff, and the files written below hold what the reviewers read (readPatch
         // and readFixes), which leave out the verbatim Template mirrors.
         // A fixes patch is only ever this prepare's: an earlier round's would
@@ -1715,8 +1899,11 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         const preparedHead = existsSync(headFile) ? readFileSync(headFile, "utf8").trim() : undefined;
         // `last` is the HEAD the round before printed, which this folder's `head` file holds: no HEAD to copy from the last round's output.
         if (rest[1] === "last" && preparedHead === undefined) return fail("prepare <dir> last: no round was prepared in this folder yet, so there is no HEAD to read the fixes since. Run prepare <dir> first.");
+        // `recorded`: the fixes since the commit the branch's last recorded review vouched for (recordedAnchor), in a new run.
         const sinceCommit = rest[1] === "last" ? preparedHead : rest[1];
-        const round = prepareRound(cwd, sinceCommit === undefined ? {} : { since: { commit: sinceCommit, preparedHead } });
+        const since: FixesSince | undefined = rest[1] === "recorded" ? { recorded: true } : sinceCommit === undefined ? undefined : { commit: sinceCommit, preparedHead };
+        const round = prepareRound(cwd, since === undefined ? {} : { since });
+        if (round.since !== undefined) process.stderr.write(`Fixes since ${round.since}, the commit the last recorded review of this branch vouched for.\n`);
         mkdirSync(rest[0], { recursive: true });
         // What the reviewers read, without the verbatim Template mirrors; the key printed below is that of the whole diff.
         writeFileSync(join(rest[0], "diff.patch"), round.readPatch);
@@ -1724,7 +1911,7 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         // The HEAD this round reads, for the next round's fixesPatch.
         writeFileSync(join(rest[0], "head"), `${round.head}\n`);
         // On stderr, since callers read the two lines on stdout. Round 1 only: a later round is the same branch.
-        const size = sinceCommit === undefined ? sizeWarning(round.patch) : undefined;
+        const size = since === undefined ? sizeWarning(round.patch) : undefined;
         if (size !== undefined) process.stderr.write(`⚠ ${size}\n`);
         out(`${round.key}\n${round.head}`);
         return 0;

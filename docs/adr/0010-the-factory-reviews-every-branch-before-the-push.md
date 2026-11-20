@@ -38,10 +38,9 @@ Still not carried: the rest of Sandcastle (the host pipeline, roles, prompts), `
 
 ## Consequences
 
-- Every push of a branch with a new hunk needs a review: the ledger is keyed by the branch's hunks against its merge base with `origin/main`, a clean merge of `main` keeps the review, and a
-  new commit needs
-  a new one. Its exemptions cover only a re-Apply branch (`chore/reapply-baseline`), which the Factory never makes, so a docs-only or ADR-only branch is reviewed like any other. The
-reviewers run on Sonnet
+- Every push of a branch with a new hunk needs a review: the ledger is keyed by the branch's hunks against its merge base with `origin/main`, a clean merge of `main` keeps the review, and so
+  does a rebase onto `origin/main` with no conflict that gives the tree the merge would, and a new commit needs a new one. Its exemptions cover only a re-Apply branch
+  (`chore/reapply-baseline`), which the Factory never makes, so a docs-only or ADR-only branch is reviewed like any other. The reviewers run on Sonnet
   at high effort and use your Claude usage; that cost buys the guarantee, and an exemption list in a repo that has drifted before is what would rot.
 - `GATE_SKIP_REVIEW=1` skips the check for gate runs started by hand while iterating, never for a push: the `pre-push` hook runs the gate without it. Copilot and Claude Review stay as a
   backstop on the PR.
