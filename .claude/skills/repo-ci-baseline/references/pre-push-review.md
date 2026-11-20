@@ -49,11 +49,12 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
 - A fix made after the review was recorded (for a PR thread, say) gets a delta review in a new run: `scripts/review.sh prepare <run> recorded` writes
   `<run>/fixes.patch` against the commit the branch's last recorded review vouched for (`recordedAnchor`: the newest ledger recorded on this branch, by
   `recordedAt`, and its `head`), and that run's first round is a later round. The anchor is never a commit the caller names, so the patch holds every commit
-  after it and no fix goes unread. `prepare` refuses, and the run starts at round 1, on a detached HEAD, with no review of the branch recorded in this clone,
-  when that commit isn't one of HEAD's (an amend or a rebase since: an older review that still is one is not taken instead), when `main` has it, after a merge
-  of `main` since (as for a later round in one run), and with no commits since. Nothing carries over (issue 54, the owner's decision): the earlier review's
-  findings and acceptances are raised again through `<run>/decisions.md`, and the new record holds only the new run's findings. `record`, `check` and the gate
-  are unchanged: the record vouches for HEAD's whole diff key, as any other.
+  after it and no fix goes unread. `prepare` refuses, and the run starts at round 1 with `prepare <run>`, on a detached HEAD, when no review of the branch is
+  recorded in this clone, when that commit isn't one of HEAD's (an amend or a rebase since: an older review that still is one is not taken instead), when `main`
+  already has it, or when `main` was merged in since (as for a later round in one run). With no commits since, it refuses too: the recorded review already
+  vouches for this code, so there is nothing to review. A tie in `recordedAt` goes to the greater `head`, then the greater file name. Nothing carries over
+  (issue 54, the owner's decision): the earlier review's findings and acceptances are raised again through `<run>/decisions.md`, and the new record holds
+  only the new run's findings. `record`, `check` and the gate are unchanged: the record vouches for HEAD's whole diff key, as any other.
 - A run's findings are staged, not held in the session. Each round's triage goes to `scripts/review.sh stage <run> <file>`: each finding is checked as `record` checks it (an
   `accepted` one is refused), and one staged again under the same id replaces the earlier. The file is owner-only and replaced whole, and a second `stage` at the same time is
   refused. `stage` refuses a run folder that is a symlink (a trailing slash doesn't hide one), another user's or writable by the group or others. `stage` and `record --staged` refuse a

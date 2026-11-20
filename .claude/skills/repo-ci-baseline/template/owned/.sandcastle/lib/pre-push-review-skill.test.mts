@@ -663,7 +663,7 @@ describe("the pre-push-review skill's fewer-rounds rules", () => {
     const flat = skill.replace(/\s+/g, " ");
     assert.match(flat, /A run for a fix made after the branch's review was recorded \(a fix for a PR thread, say\) starts with `scripts\/review\.sh prepare <run> recorded` instead/);
     assert.match(flat, /the run's first round is a later round/);
-    assert.match(flat, /starts at round 1 with `prepare <run>`, when no review of the branch is recorded in this clone, when that commit isn't one of HEAD's \(an amend or a rebase since\), or when `main` was merged in since/);
+    assert.match(flat, /starts at round 1 with `prepare <run>`, on a detached HEAD, when no review of the branch is recorded in this clone, when that commit isn't one of HEAD's \(an amend or a rebase since\), when `main` already has it, or when `main` was merged in since\. With no commits since, it refuses too: the recorded review already vouches for this code, so there is nothing to review\./);
     assert.match(flat, /nothing of it carries either: its accepted and open findings are raised again for this code, and the new record holds only this run's findings/);
   });
 

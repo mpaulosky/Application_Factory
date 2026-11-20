@@ -132,8 +132,9 @@ mirror alone still needs a new review. In a later round, run `scripts/review.sh 
 diff of that round's fixes to `<run>/fixes.patch`, filtered the same way. A run for a fix made after the branch's review was recorded (a fix
 for a PR thread, say) starts with `scripts/review.sh prepare <run> recorded` instead: it writes to `<run>/fixes.patch` every change since the commit
 the branch's last recorded review vouched for, which it names on stderr, and the run's first round is a later round. It refuses, and the run
-starts at round 1 with `prepare <run>`, when no review of the branch is recorded in this clone, when that commit isn't one of HEAD's (an amend or
-a rebase since), or when `main` was merged in since. Then go on with `prepare <run> last` as in any run.
+starts at round 1 with `prepare <run>`, on a detached HEAD, when no review of the branch is recorded in this clone, when that commit isn't one of
+HEAD's (an amend or a rebase since), when `main` already has it, or when `main` was merged in since. With no commits since, it refuses too: the
+recorded review already vouches for this code, so there is nothing to review. Then go on with `prepare <run> last` as in any run.
 Write to `<run>/decisions.md`, with the Write tool and not a shell heredoc (the text quotes code such as `$(...)`,
 which a safety check may block), the earlier decisions from step 3 and every finding this run's earlier rounds
 raised, each with its id, outcome and reason, so no round raises again what an earlier one dismissed. A fixed item stays settled only until

@@ -2727,7 +2727,7 @@ describe("main", () => {
     const result = cli(["prepare", dir, before]);
 
     assert.equal(result.code, 1);
-    assert.match(result.err, /After an amend or a rebase there's none: start again at round 1/);
+    assert.match(result.err, /After an amend or a rebase there's none: start again at round 1 with prepare <dir>\.$/m);
   });
 
   it("prepare refuses the HEAD it just printed when nothing was committed since, whose fixes patch would be empty", () => {
@@ -2905,7 +2905,7 @@ describe("main", () => {
       const result = cli(["prepare", dir, "recorded"]);
 
       assert.equal(result.code, 1);
-      assert.match(result.err, /no review of feature\/1-thing is recorded in this clone: start again at round 1/);
+      assert.equal(result.err, "no review of feature/1-thing is recorded in this clone: start again at round 1 with prepare <dir>.\n");
       assert.equal(existsSync(join(dir, "fixes.patch")), false);
     });
 
@@ -2968,7 +2968,7 @@ describe("main", () => {
       const result = cli(["prepare", dir, "recorded"]);
 
       assert.equal(result.code, 1);
-      assert.match(result.err, /main was merged in since the review was recorded/);
+      assert.equal(result.err, "main was merged in since the review was recorded, so the fixes can't be told from main's changes: start again at round 1 with prepare <dir>.\n");
       assert.equal(existsSync(join(dir, "fixes.patch")), false);
     });
 
@@ -2991,7 +2991,7 @@ describe("main", () => {
       const result = cli(["prepare", fresh("delta"), "recorded"]);
 
       assert.equal(result.code, 1);
-      assert.match(result.err, /no fixes since/);
+      assert.equal(result.err, "no commits since the review was recorded: it already vouches for this code.\n");
     });
 
     it("takes the newer of two reviews that are both HEAD's commits, by recordedAt, and names it", () => {

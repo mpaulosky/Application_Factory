@@ -986,6 +986,9 @@ function readLedgers(cwd: string): { ledger: Ledger; name: string }[] {
   return found;
 }
 
+// What a refusal that starts the review over tells the person to run.
+const RESTART = "start again at round 1 with prepare <dir>.";
+
 // The anchor of a delta review: the commit the newest review recorded on `branch` vouched for (its `head`), so a fix made after
 // the review was recorded (for a PR thread, say) is reviewed alone in a new run. The newest by recordedAt, never the nearest
 // ancestor: after an amend or a rebase the newest isn't one of HEAD's commits, and an older one is not silently taken instead.
@@ -994,8 +997,7 @@ function readLedgers(cwd: string): { ledger: Ledger; name: string }[] {
 // head, then the greater file name, so the folder's order never decides. A newer ledger that doesn't read or parse is skipped,
 // which can only make the anchor an older review and the patch wider: no fix goes unread.
 export function recordedAnchor(cwd: string, base: string, head: string, branch: string): { commit: string; ledger: Ledger } | string {
-  const restart = "start again at round 1 (prepare without <since>).";
-  if (branch === "") return `HEAD isn't on a branch, so no review recorded for one can be its anchor: ${restart}`;
+  if (branch === "") return `HEAD isn't on a branch, so no review recorded for one can be its anchor: ${RESTART}`;
   const newer = (a: { ledger: Ledger; name: string }, b: { ledger: Ledger; name: string }) =>
     a.ledger.recordedAt !== b.ledger.recordedAt ? a.ledger.recordedAt > b.ledger.recordedAt : a.ledger.head !== b.ledger.head ? a.ledger.head > b.ledger.head : a.name > b.name;
   let found: { ledger: Ledger; name: string } | undefined;
@@ -1003,11 +1005,11 @@ export function recordedAnchor(cwd: string, base: string, head: string, branch: 
     if (entry.ledger.branch === branch && (found === undefined || newer(entry, found))) found = entry;
   }
   const newest = found?.ledger;
-  if (newest === undefined) return `no review of ${branch} is recorded in this clone: ${restart}`;
+  if (newest === undefined) return `no review of ${branch} is recorded in this clone: ${RESTART}`;
   if (!isAncestor(cwd, newest.head, head)) {
-    return `the last review of ${branch} was recorded at ${newest.head}, which isn't one of HEAD's commits (an amend or a rebase since): ${restart}`;
+    return `the last review of ${branch} was recorded at ${newest.head}, which isn't one of HEAD's commits (an amend or a rebase since): ${RESTART}`;
   }
-  if (isAncestor(cwd, newest.head, base)) return `the last review of ${branch} was recorded at ${newest.head}, which main already has: ${restart}`;
+  if (isAncestor(cwd, newest.head, base)) return `the last review of ${branch} was recorded at ${newest.head}, which main already has: ${RESTART}`;
   return { commit: newest.head, ledger: newest };
 }
 
@@ -1061,7 +1063,8 @@ export function prepareRound(
     const found = recordedAnchor(cwd, base, head, branch ?? git(cwd, "branch", "--show-current"));
     if (typeof found === "string") throw new Error(found);
     anchor = found.commit;
-    fixes = fixesSince(cwd, anchor, base, head, main, "the review was recorded");
+    // Nothing to review: the recorded review already vouches for HEAD, so the gate passes without a new one.
+    fixes = fixesSince(cwd, anchor, base, head, main, "the review was recorded", "no commits since the review was recorded: it already vouches for this code.");
   } else {
     fixes = fixesPatch(cwd, since.preparedHead, since.commit, base, head, main);
   }
@@ -1551,23 +1554,24 @@ export function spliceReviewNotes(body: string, notes: string): string {
 // CLI), and `main` what the branch is compared with.
 function fixesPatch(cwd: string, preparedHead: string | undefined, since: string, base: string, head: string, main: string): Buffer | string {
   if (!isAncestor(cwd, since, head)) {
-    return `${since} isn't one of HEAD's commits: give the HEAD prepare printed in the round before. After an amend or a rebase there's none: start again at round 1 (prepare without <since>).`;
+    return `${since} isn't one of HEAD's commits: give the HEAD prepare printed in the round before. After an amend or a rebase there's none: ${RESTART}`;
   }
   const before = preparedHead;
   if (before === undefined || !isAncestor(cwd, since, before)) {
     return `${since} is later than the HEAD prepare printed in the round before (${before ?? "none in this folder"}): give that one, so no fix goes unread.`;
   }
-  return fixesSince(cwd, since, base, head, main, "the round before");
+  return fixesSince(cwd, since, base, head, main, "the round before", `no fixes since ${since}: a later round follows a round that fixed something, after its fix commits.`);
 }
 
 // The patch from `since`, one of HEAD's commits, to `head`, for both kinds of later round; `after` says what `since` is, for the
-// messages. Refused, as a message, after a merge of main since (the patch would hold main's changes) or with no fixes at all.
-function fixesSince(cwd: string, since: string, base: string, head: string, main: string, after: string): Buffer | string {
+// messages. Refused, as a message, after a merge of main since (the patch would hold main's changes) or, with `noFixes`, when
+// there are no fixes at all.
+function fixesSince(cwd: string, since: string, base: string, head: string, main: string, after: string, noFixes: string): Buffer | string {
   if (git(cwd, "merge-base", main, since) !== base) {
-    return `main was merged in since ${after}, so the fixes can't be told from main's changes: start again at round 1.`;
+    return `main was merged in since ${after}, so the fixes can't be told from main's changes: ${RESTART}`;
   }
   const fixes = reviewPatch(cwd, since, head);
-  if (fixes.length === 0) return `no fixes since ${since}: a later round follows a round that fixed something, after its fix commits.`;
+  if (fixes.length === 0) return noFixes;
   return fixes;
 }
 
