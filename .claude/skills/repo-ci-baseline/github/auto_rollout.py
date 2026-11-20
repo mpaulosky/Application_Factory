@@ -8,6 +8,8 @@
    every re-Apply worktree and the gate builds with it). One problem stops the
    round before anything runs. A second --auto run while one holds the lock
    stops too, since both would work the same worktrees and review ledgers.
+   The lock keeps --auto runs apart only: while a round runs, don't run
+   reapply.sh or /pre-push-review by hand in a re-Apply worktree.
 2. reapply.sh on each repo, TicketManager first. When the gate asks for a
    review (reapply.sh exits 3), it runs /pre-push-review headless: `claude -p`
    started in the repo's re-Apply worktree, so Claude Code loads that
@@ -18,15 +20,22 @@
    and the rest's PRs together once each has been reapplied.
 
 The session runs unattended with the owner's sign-ins, reading text people
-without write access may have written, so the skill's Rules don't rest on the
-prompt alone: --disallowedTools denies pushing, deciding findings, writing to
-GitHub and editing the Factory or ~/.claude, and the auto permission mode's
-classifier stands behind that. It gets no access to the Template: the prompt
-names the Owned files the branch changes instead.
+without write access may have written. The prompt states the skill's Rules,
+--disallowedTools denies the common spellings of git push, review.sh accept and
+accept-open and a set of gh writes, and the file tools' edits under the Factory
+checkout and ~/.claude; the auto permission mode's classifier is the guard for
+the rest (other spellings, Bash writes, gh api). It isn't given the Template's
+folder (no --add-dir): the prompt names the Owned files the branch changes. It
+runs in a process group of its own, which a timeout or an interrupt kills
+whole, and its log is kept, 0600, under ~/.cache/repo-ci-baseline/logs: it can
+hold the session's report of security findings.
 
-A PR is read for the head the worktree has, never only by the branch's name:
+A PR is the repo's own (never a fork's of the same branch name), and when the
+worktree's branch has commits main lacks, it is the one at the worktree's head:
 the name is the same every round, so the newest PR by name may be the last
-round's. A read that doesn't show the head is tried again LOOKUP_TRIES times.
+round's. A read that doesn't show it is tried again LOOKUP_TRIES times. Once
+land.sh has run, the PR is read by its number, since land.sh may update its
+branch.
 
 It stops for a person only where one must decide: review findings that wait for
 a person (reapply.sh exits 4), a PR that doesn't land, a reapply or review
@@ -42,9 +51,11 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
+import traceback
 from dataclasses import dataclass
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -53,6 +64,7 @@ LAND = os.path.join(SKILL_DIR, "land.sh")
 OWNED = os.path.join(SKILL_DIR, "template", "owned")
 TEMPLATE_GLOBAL_JSON = os.path.join(OWNED, "global.json")
 LOCK = os.path.expanduser("~/.cache/repo-ci-baseline/rollout-auto.lock")
+LOG_DIR = os.path.expanduser("~/.cache/repo-ci-baseline/logs")
 BRANCH = "chore/reapply-baseline"
 WORKTREE = "chore-reapply-baseline"
 # reapply.sh's exit codes for a push its gate's local review check refused (a test holds them equal).
@@ -72,7 +84,8 @@ TOOLS = ("git", "gh", "python3", "node", "pnpm", "shfmt", "claude")
 SHFMT_RELEASE = re.compile(r"v3\.(0|[1-9][0-9]*)\.[0-9]+")
 SHFMT_OLDEST_MINOR = 14
 # What the session may never do, whatever text it reads: the skill's Rules, and the Template-first rule (the Factory's
-# CLAUDE.md). Deny rules hold in every permission mode; the auto mode's classifier covers what a prefix can't name.
+# CLAUDE.md). Deny rules hold in every permission mode, but they match command prefixes, and Edit and Write rules bind
+# the file tools only: the auto mode's classifier covers what they can't name (ADR 0015).
 DENIED_TOOLS = (
     "Bash(git push:*)",
     "Bash(scripts/review.sh accept:*)",
@@ -123,8 +136,8 @@ def sdk_hint(text):
 def run_quiet(command, cwd=None, env=None):
     """(exit code, stdout, stderr) of a command; 127 when it can't start, 124 when it runs past two minutes."""
     try:
-        done = subprocess.run(command, cwd=cwd, env=env, capture_output=True, text=True, timeout=120,
-                              stdin=subprocess.DEVNULL)
+        done = subprocess.run(command, cwd=cwd, env=env, capture_output=True, text=True, errors="replace",
+                              timeout=120, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return 124, "", f"{command[0]} didn't answer in 120 s"
     except OSError as error:
@@ -147,7 +160,7 @@ def preflight(which=shutil.which, run=run_quiet, template_global_json=TEMPLATE_G
             problems.append(f"gh auth status didn't run: {error.strip()}")
         elif code != 0:
             problems.append("gh isn't signed in: gh auth login")
-    if os.path.isfile(template_global_json):
+    if os.path.lexists(template_global_json):
         problems += sdk_problems(template_global_json, which, run)
     return problems
 
@@ -175,7 +188,8 @@ def sdk_problems(global_json, which, run):
 # ── The outside world ───────────────────────────────────────────────────────
 
 def take_lock(path=LOCK):
-    """An exclusive lock for this --auto run, held until the process ends, or None when another run holds it."""
+    """An exclusive lock for this --auto run, held while the returned file stays open, or None when another run holds
+    it. Raises OSError when it can't be taken at all (an unwritable ~/.cache, a filesystem without locks)."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     handle = open(path, "a")  # noqa: SIM115 - held for the process's life
     try:
@@ -188,7 +202,8 @@ def take_lock(path=LOCK):
 
 def owned_changes(worktree, run=run_quiet, owned=OWNED):
     """The Owned files the worktree's branch changes against origin/main, for the review's prompt."""
-    code, out, error = run(["git", "-C", worktree, "diff", "--name-only", "-z", "origin/main...HEAD"])
+    # --no-renames, as checkReview's own diff: a renamed Owned file is a change to the Owned path too.
+    code, out, error = run(["git", "-C", worktree, "diff", "--no-renames", "--name-only", "-z", "origin/main...HEAD"])
     if code != 0:
         raise RuntimeError(f"git diff in {worktree} failed: {error.strip()}")
     return sorted(path for path in out.split("\0") if path and os.path.isfile(os.path.join(owned, path)))
@@ -200,11 +215,14 @@ def review_command(repo, worktree, owned):
     return ["claude", "-p", prompt, "--permission-mode", "auto", "--disallowedTools", *DENIED_TOOLS]
 
 
-def run_review(repo, worktree, run=subprocess.run, changes=owned_changes, timeout=REVIEW_TIMEOUT_MINUTES * 60):
+def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, timeout=REVIEW_TIMEOUT_MINUTES * 60,
+               log_dir=LOG_DIR):
     """/pre-push-review headless in worktree: (exit code, the session's log). 124 when it runs past its time, 127 when
-    it can't start. The log is the caller's own (mkstemp makes it 0600): it holds what the session printed."""
+    it can't start. The session leads a process group of its own, so a timeout or an interrupt kills what it started
+    too (its gate, its reviewers' tools), not claude alone. The log is 0600 (mkstemp) in a 0700 folder."""
     try:
-        handle, log = tempfile.mkstemp(prefix=f"review-{short_name(repo)}.", suffix=".log")
+        os.makedirs(log_dir, mode=0o700, exist_ok=True)
+        handle, log = tempfile.mkstemp(prefix=f"review-{short_name(repo)}.", suffix=".log", dir=log_dir)
     except OSError as error:
         return 127, f"(no log: {error})"
     with os.fdopen(handle, "w") as out:
@@ -220,14 +238,29 @@ def run_review(repo, worktree, run=subprocess.run, changes=owned_changes, timeou
         env = {name: value for name, value in os.environ.items() if name != "GATE_SKIP_REVIEW"}
         out.flush()
         try:
-            return run(command, cwd=worktree, env=env, stdin=subprocess.DEVNULL, stdout=out,
-                       stderr=subprocess.STDOUT, timeout=timeout).returncode, log
-        except subprocess.TimeoutExpired:
-            out.write(f"\nrollout.sh: the review session ran past {timeout // 60} minutes and was stopped\n")
-            return 124, log
+            session = popen(command, cwd=worktree, env=env, stdin=subprocess.DEVNULL, stdout=out,
+                            stderr=subprocess.STDOUT, start_new_session=True)
         except OSError as error:
             out.write(f"rollout.sh: can't start claude: {error}\n")
             return 127, log
+        try:
+            return session.wait(timeout=timeout), log
+        except subprocess.TimeoutExpired:
+            kill_group(session)
+            out.write(f"\nrollout.sh: the review session ran past {timeout // 60} minutes and was stopped\n")
+            return 124, log
+        except BaseException:
+            kill_group(session)
+            raise
+
+
+def kill_group(session):
+    """Kill the session's whole process group, then reap it."""
+    try:
+        os.killpg(session.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    session.wait()
 
 
 def run_land(refs):
@@ -236,11 +269,11 @@ def run_land(refs):
 
 
 def gh_pr(repo):
-    """(number, state, head commit) of repo's newest re-Apply PR, or None; raises when gh fails."""
-    done = subprocess.run(["gh", "pr", "list", "-R", repo, "--head", BRANCH, "--state", "all", "--limit", "1",
-                           "--json", "number,state,headRefOid",
-                           "--jq", '.[0] // empty | "\\(.number) \\(.state) \\(.headRefOid)"'],
-                          capture_output=True, text=True, timeout=120)
+    """(number, state, head commit) of repo's newest re-Apply PR from repo itself, or None; raises when gh fails.
+    --head matches the branch name only, so a fork's PR of the same name is left out, as reapply.sh leaves it out."""
+    done = subprocess.run(["gh", "pr", "list", "-R", repo, "--head", BRANCH, "--state", "all", "--limit", "100",
+                           "--json", "number,state,headRefOid,isCrossRepository", "--jq", PR_JQ],
+                          capture_output=True, text=True, errors="replace", timeout=120)
     if done.returncode != 0:
         raise RuntimeError(done.stderr.strip() or f"gh pr list exited {done.returncode}")
     if not done.stdout.strip():
@@ -249,15 +282,33 @@ def gh_pr(repo):
     return int(number), state, head
 
 
+# gh pr list's newest first: the first PR from the repo itself, as "<number> <state> <head>".
+PR_JQ = '[.[] | select(.isCrossRepository == false)][0] // empty | "\\(.number) \\(.state) \\(.headRefOid)"'
+
+
+def gh_pr_state(repo, number):
+    """The state of repo's PR number (OPEN, MERGED or CLOSED); raises when gh fails."""
+    done = subprocess.run(["gh", "pr", "view", str(number), "-R", repo, "--json", "state", "--jq", ".state"],
+                          capture_output=True, text=True, errors="replace", timeout=120)
+    if done.returncode != 0 or not done.stdout.strip():
+        raise RuntimeError(done.stderr.strip() or f"gh pr view exited {done.returncode}")
+    return done.stdout.strip()
+
+
 def git_branch(worktree):
-    """(HEAD, whether the branch has commits main lacks) of the re-Apply worktree; raises when git fails."""
-    head = subprocess.run(["git", "-C", worktree, "rev-parse", "HEAD"], capture_output=True, text=True, check=True,
-                          timeout=120).stdout.strip()
-    on_main = subprocess.run(["git", "-C", worktree, "merge-base", "--is-ancestor", "HEAD", "origin/main"],
-                             capture_output=True, timeout=120).returncode
-    if on_main not in (0, 1):
-        raise RuntimeError(f"git merge-base in {worktree} exited {on_main}")
-    return head, on_main == 1
+    """(HEAD, whether the branch has commits main lacks) of the re-Apply worktree; raises with git's own words."""
+    def git(*args):
+        done = subprocess.run(["git", "-C", worktree, *args], capture_output=True, text=True, errors="replace",
+                              timeout=120)
+        return done.returncode, done.stdout.strip(), done.stderr.strip()
+
+    code, head, error = git("rev-parse", "HEAD")
+    if code != 0:
+        raise RuntimeError(f"git rev-parse HEAD in {worktree} exited {code}: {error}")
+    code, _, error = git("merge-base", "--is-ancestor", "HEAD", "origin/main")
+    if code not in (0, 1):
+        raise RuntimeError(f"git merge-base in {worktree} exited {code}: {error}")
+    return head, code == 1
 
 
 # ── The round ───────────────────────────────────────────────────────────────
@@ -301,38 +352,63 @@ class PrUnknown(Exception):
     """The re-Apply PR for a worktree's head couldn't be read or found."""
 
 
-def auto_round(order, brings, root_arg, checkout, reapply, review, land, pr_of, branch_of, say, sleep=time.sleep):
+def auto_round(order, brings, root_arg, checkout, reapply, review, land, pr_of, pr_state, branch_of, say, err,
+               sleep=time.sleep):
     """The round after the preflight; its exit code."""
     resume = f"rollout.sh --auto --brings {shlex.quote(brings)}{root_arg}"
     first, rest = order[0], order[1:]
 
-    def read(repo, landed=False):
-        """(number, state) of the PR for the worktree's head. With landed, it waits for the read to leave OPEN, since
-        land.sh reads a PR directly and a list can lag it. Raises PrUnknown."""
+    def find(repo):
+        """(number, state) of the repo's re-Apply PR for its worktree, or None when nothing was pushed and it has
+        none. Raises PrUnknown when gh keeps failing, or no PR shows the head the worktree pushed."""
         worktree = review_worktree(checkout(repo))
         try:
             head, ahead = branch_of(worktree)
         except Exception as error:  # noqa: BLE001 - reported as the stop
             raise PrUnknown(f"can't read {worktree}'s branch: {error}") from error
+        last = "no re-Apply PR found"
         for attempt in range(LOOKUP_TRIES):
             if attempt:
                 sleep(LOOKUP_WAIT_SECONDS)
             try:
                 found = pr_of(repo)
             except Exception as error:  # noqa: BLE001 - tried again, then reported
-                found, last = None, f"gh failed: {error}"
-            else:
-                last = f"no re-Apply PR shows head {head[:7]}" if ahead else "no re-Apply PR found"
+                last = f"gh failed: {error}"
+                continue
             if found is None:
+                if not ahead:
+                    return None  # nothing pushed, so no list can lag: there is no PR
+                last = f"no re-Apply PR shows head {head[:7]}"
                 continue
             number, state, pr_head = found
-            if ahead and pr_head != head:
-                continue  # the last round's PR, or a list that lags the push
-            if landed and state == "OPEN":
-                last = f"#{number} still reads as OPEN"
+            if pr_head != head and (ahead or state == "OPEN"):
+                # The last round's PR while the list lags the push, or a PR whose branch moved since.
+                last = f"#{number} is at {pr_head[:7]}, the worktree at {head[:7]}"
                 continue
             return number, state
         raise PrUnknown(last)
+
+    def settle(repo, number):
+        """The state of a PR land.sh has finished with, read by its number (land.sh may have updated its branch), once
+        it no longer reads as OPEN. Raises PrUnknown."""
+        last = f"#{number} still reads as OPEN"
+        for attempt in range(LOOKUP_TRIES):
+            if attempt:
+                sleep(LOOKUP_WAIT_SECONDS)
+            try:
+                state = pr_state(repo, number)
+            except Exception as error:  # noqa: BLE001 - tried again, then reported
+                last = f"gh failed: {error}"
+                continue
+            if state != "OPEN":
+                return state
+            last = f"#{number} still reads as OPEN"
+        raise PrUnknown(last)
+
+    def crashed(repo, error):
+        """A crash still ends with a stop: the traceback goes to stderr, so a bug can be told from the world."""
+        err.write(f"rollout.sh: {short_name(repo)} crashed:\n{traceback.format_exc()}")
+        return f"{short_name(repo)}: {type(error).__name__}: {error} (traceback on stderr)"
 
     def held(reason):
         say(f"rollout: {reason}; held: {', '.join(short_name(repo) for repo in rest) or 'none'}")
@@ -343,18 +419,21 @@ def auto_round(order, brings, root_arg, checkout, reapply, review, land, pr_of, 
         lead = drive(first, checkout(first), brings, reapply, review, say)
         if lead.status != "ok":
             return held(f"{short_name(first)}: {lead.detail}")
-        number, state = read(first)
+        found = find(first)
+        if found is None:
+            return held(f"{short_name(first)}: no re-Apply PR found, and nothing to push")
+        number, state = found
         if state == "OPEN":
             say(f"── rollout: landing {short_name(first)}#{number}")
             if land([f"{first}#{number}"]) != 0:
                 return held(f"{short_name(first)}#{number} didn't land (see land.sh's output above): land.sh {first}#{number}")
-            number, state = read(first, landed=True)
+            state = settle(first, number)
         if state != "MERGED":
             return held(f"{short_name(first)}#{number} is {state}, not merged")
     except PrUnknown as error:
         return held(f"{short_name(first)}: can't tell its re-Apply PR ({error}): land it with land.sh {first}")
     except Exception as error:  # noqa: BLE001 - a crash still ends with the stop and the resume command
-        return held(f"{short_name(first)}: {type(error).__name__}: {error}")
+        return held(crashed(first, error))
 
     stops, landing = [], []
     for repo in rest:
@@ -363,25 +442,30 @@ def auto_round(order, brings, root_arg, checkout, reapply, review, land, pr_of, 
             if outcome.status != "ok":
                 stops.append(f"{short_name(repo)}: {outcome.detail}")
                 continue
-            number, state = read(repo)
+            found = find(repo)
         except PrUnknown as error:
             stops.append(f"{short_name(repo)}: can't tell its re-Apply PR ({error}): land it with land.sh {repo}")
             continue
         except Exception as error:  # noqa: BLE001 - reported, and the round goes on
-            stops.append(f"{short_name(repo)}: {type(error).__name__}: {error}")
+            stops.append(crashed(repo, error))
             continue
+        if found is None:
+            continue  # nothing to push and never a re-Apply PR: nothing to land
+        number, state = found
         if state == "OPEN":
             landing.append((repo, number))
+        elif state != "MERGED":
+            stops.append(f"{short_name(repo)}#{number} is {state}, not merged")
     if landing:
         refs = [f"{repo}#{number}" for repo, number in landing]
         say(f"── rollout: landing {' '.join(refs)}")
         try:
             land(refs)
         except Exception as error:  # noqa: BLE001 - each PR's state below says what landed
-            say(f"rollout.sh: land.sh failed: {error}")
+            say(f"rollout.sh: land.sh failed: {type(error).__name__}: {error}")
         for repo, number in landing:
             try:
-                state = read(repo, landed=True)[1]
+                state = settle(repo, number)
             except PrUnknown as error:
                 stops.append(f"{short_name(repo)}#{number} didn't land ({error}): land.sh {repo}#{number}")
                 continue
@@ -396,11 +480,10 @@ def auto_round(order, brings, root_arg, checkout, reapply, review, land, pr_of, 
     return 1 if stops else 0
 
 
-def run(order, brings, root, checkout, dry_run, reapply, say, err, review=run_review, land=run_land, pr_of=gh_pr,
-        branch_of=git_branch, check=preflight, lock=take_lock, sleep=time.sleep, default_root=None):
-    """rollout.sh --auto, after rollout.py has read the arguments and found every checkout."""
-    if default_root is None:
-        default_root = os.path.expanduser("~/github")
+def run(order, brings, root, checkout, dry_run, reapply, say, err, default_root, review=run_review, land=run_land,
+        pr_of=gh_pr, pr_state=gh_pr_state, branch_of=git_branch, check=preflight, lock=take_lock, sleep=time.sleep):
+    """rollout.sh --auto, after rollout.py has read the arguments and found every checkout. default_root is
+    rollout.py's DEFAULT_ROOT: the printed commands carry --root only when the round runs with another."""
     root_arg = "" if os.path.normpath(root) == os.path.normpath(default_root) else f" --root {shlex.quote(root)}"
     problems = check()
     for problem in problems:
@@ -415,8 +498,16 @@ def run(order, brings, root, checkout, dry_run, reapply, say, err, review=run_re
                 f" headless in {review_worktree(checkout(repo))} when its gate asks for one")
         say(f"then land {short_name(order[0])}'s re-Apply PR with land.sh before the rest start, and the rest's together")
         return 0
-    handle = lock()  # held while the round runs
+    try:
+        handle = lock()
+    except OSError as error:
+        err.write(f"rollout.sh: can't take the lock {LOCK}: {error}; nothing run\n")
+        return 1
     if handle is None:
         err.write(f"rollout.sh: another rollout.sh --auto holds {LOCK}; nothing run\n")
         return 1
-    return auto_round(order, brings, root_arg, checkout, reapply, review, land, pr_of, branch_of, say, sleep)
+    try:
+        return auto_round(order, brings, root_arg, checkout, reapply, review, land, pr_of, pr_state, branch_of, say, err,
+                          sleep)
+    finally:
+        handle.close()  # the lock is released here, and not before

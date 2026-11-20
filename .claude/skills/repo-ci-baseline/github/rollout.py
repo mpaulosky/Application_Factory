@@ -163,7 +163,7 @@ def main(argv=None, listed=None, reapply=run_reapply, latest_pr=gh_latest_pr, ex
     if args.auto:
         import auto_rollout  # noqa: PLC0415 - only --auto needs it
         return auto_rollout.run(order, args.brings, args.root, checkout, args.dry_run, reapply=reapply, say=say,
-                                err=err, **(auto or {}))
+                                err=err, **({"default_root": DEFAULT_ROOT} | (auto or {})))
 
     first = order[0]
     lead = Lead(apply(first), *lookup(first))

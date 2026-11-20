@@ -10,16 +10,20 @@ repo could stop at the review again. A missing tool, such as the .NET SDK the Te
 ## Decision
 
 `rollout.sh --auto` (`github/auto_rollout.py`) drives a round to the end. Before anything runs it checks the tools the gates, `reapply.sh` and the review need, an shfmt the gate's gh
-check accepts, `gh`'s sign-in and the SDK the Template's `global.json` names, and takes a lock so a second run can't work the same worktrees. When the gate refuses the push for want of
-a review, `reapply.sh` exits 3 (and 4 when one is recorded but findings in it wait for a person), read from the gate's Local review step alone; every other failure exits 1. On a 3
+check accepts, `gh`'s sign-in and the SDK the Template's `global.json` names, and takes a lock so a second `--auto` run can't work the same worktrees (a person running `reapply.sh`
+or the review by hand there meanwhile isn't kept out). When the gate refuses the push for want of a review, `reapply.sh` exits 3 (and 4 when one is recorded but findings in it wait
+for a person), asked of the worktree's own `scripts/review.sh check`, never read from the push's log; every other failure exits 1. On a 3
 the Rollout runs `/pre-push-review` headless: `claude -p` started in the repo's re-Apply worktree, so Claude Code loads that checkout's `pre-push-reviewer` agent and the skill runs that
-checkout's `scripts/review.sh`. Then it runs `reapply.sh` again to push and open the PR, and lands TicketManager's PR with `land.sh` before it starts the rest. It reads a PR for the head
-the worktree has, not by the branch's name alone, which every round shares. It stops only where a person must decide, and prints the command that decides it and the one that resumes.
+checkout's `scripts/review.sh`. Then it runs `reapply.sh` again to push and open the PR, and lands TicketManager's PR with `land.sh` before it starts the rest. It reads only the repo's own PRs
+(not a fork's of the same name), the one at the worktree's head when the branch has commits main lacks, since every round shares the branch's name, and after `land.sh` it reads
+the PR by its number. It stops only where a person must decide, and prints the command that decides it and the one that resumes.
 
-The session runs with `--permission-mode auto` and deny rules (`--disallowedTools`) for `git push`, `scripts/review.sh accept` and `accept-open`, `gh` writes (PRs, issues, labels,
-releases, repos, secrets, workflows) and edits under the Factory and `~/.claude`. It gets no access to the Template: its prompt names the Owned files the branch changes, says it runs
-unattended, and says a finding in an Owned file stays open for a person, since its fix goes into the Template first. A session stops after three hours. The gate, the ledger and the
-review's rules are unchanged: the push still needs a recorded review with no open Critical or Warning finding, and only the person accepts one.
+The session runs with `--permission-mode auto` and deny rules (`--disallowedTools`) for the common spellings of `git push`, `scripts/review.sh accept` and `accept-open`, a set of
+`gh` writes (PRs, issues, labels, releases, repos, secrets, workflows), and the file tools' edits under the Factory checkout and `~/.claude`. It isn't given the Template's folder (no
+`--add-dir`): its prompt names the Owned files the branch changes, says it runs unattended, and says a finding in an Owned file stays open for a person, since its fix goes into the
+Template first. It runs in a process group of its own, which a three-hour timeout or an interrupt kills whole, and its log is kept, `0600`, under `~/.cache/repo-ci-baseline/logs`,
+since it can hold the session's report of security findings. The gate, the ledger and the review's rules are unchanged: the push still needs a recorded review with no open
+Critical or Warning finding, and only the person accepts one.
 
 ## Considered Options
 
@@ -39,5 +43,6 @@ review's rules are unchanged: the push still needs a recorded review with no ope
 - Findings in Owned files still stop the round for a person: the Template-first fix is a Factory branch of its own. Making that fix automatically is a follow-up, not this decision.
 - `reapply.sh` reads the gate's refusal by the ledger's own text under the gate's own step header; a test holds them equal, so rewording `checkReview`'s messages or the step fails
   `test.sh` until both change.
-- The deny rules match command prefixes, so a command written another way (inside `bash -c`, say) is left to the classifier. The session runs as the person's Claude Code login and
-  `gh` sign-in; the rules and the classifier are the guard, not a sandbox. A session that ends without recording a review is run once more, then the round stops.
+- The deny rules match command prefixes, and Edit and Write rules bind the file tools, not Bash: a command written another way (`git -C . push`, `GH_REPO=x gh pr edit`, `gh api`
+  with a method, a Bash write, an edit to the ledger's JSON) is left to the classifier. The session runs as the person's Claude Code login and `gh` sign-in, with their environment;
+  the rules and the classifier are the guard, not a sandbox. A session that ends without recording a review is run once more, then the round stops.

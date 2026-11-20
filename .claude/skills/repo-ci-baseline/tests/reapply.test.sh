@@ -3,8 +3,9 @@
 # bare repo, a copy of the skill with a small stand-in Template, and a fake gh
 # on PATH. The stand-in Template's pre-push hook stands in for the gate: it
 # logs each run, and fails while $stub/fail-push exists. While $stub/gate-log
-# exists it prints that file, as the gate prints its steps, and fails: the
-# review-refusal tests write the gate's own Local review step into it.
+# exists it prints that file and fails. The repo's main carries a stand-in
+# scripts/review.sh, whose `check` logs its call and refuses with the text in
+# $stub/check-says while that file has any.
 # check() evals its condition string later, so the single quotes are deliberate
 # and the variables it reads look unused to shellcheck.
 # shellcheck disable=SC2016,SC2034
@@ -96,7 +97,8 @@ case "$1 $2" in
         if [[ -e "$stub/all-fails" ]]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi
         if [[ -s "$stub/all-prs" ]]; then jq -r "$(arg_after --jq "$@")" "$stub/all-prs"; fi ;;
     esac ;;
-  "pr create") label_made_or_fail --label "$@"; body_from "$@"; echo "https://github.com/acme/Widget/pull/7" ;;
+  "pr create") if [[ -e "$stub/create-exits-3" ]]; then echo "something odd" >&2; exit 3; fi
+    label_made_or_fail --label "$@"; body_from "$@"; echo "https://github.com/acme/Widget/pull/7" ;;
   "label create")
     if [[ -e "$stub/label-fails" ]]; then echo "HTTP 403: Resource not accessible" >&2; exit 1; fi
     if [[ -e "$stub/signed-out" ]]; then echo "To get started with GitHub CLI, please run:  gh auth login" >&2; exit 4; fi ;;
@@ -157,6 +159,15 @@ repo="$work/Widget"
 git_q clone -q "$origin" "$repo" 2>/dev/null
 git -C "$repo" switch -q -c main 2>/dev/null || true
 printf '# Widget\n' > "$repo/README.md"
+mkdir -p "$repo/scripts"
+cat > "$repo/scripts/review.sh" <<EOF
+#!/usr/bin/env bash
+echo "\$* GATE_SKIP_REVIEW=\${GATE_SKIP_REVIEW-unset}" >> "$work/stub/check.log"
+if [[ -s "$work/stub/check-says" ]]; then cat "$work/stub/check-says" >&2; exit 1; fi
+if [[ -s "$work/stub/check-notes" ]]; then cat "$work/stub/check-notes" >&2; fi
+echo "Reviewed clean: 0 finding(s), none blocking."
+EOF
+chmod +x "$repo/scripts/review.sh"
 git_q -C "$repo" add -A
 git_q -C "$repo" commit -q -m "init"
 git_q -C "$repo" push -q origin main
@@ -285,45 +296,45 @@ check "push fails: names its log" '[[ -n "$log" && -f "$log" ]] && grep -q "the 
 check "push fails: PR untouched" '! grep -q "^pr \(create\|edit\)" "$stub/gh.log"'
 check "push fails: any other failure exits 1" '[[ $rc -eq 1 ]]'
 command rm -f "$stub/fail-push"
-# The gate's review check refused the push: 3 when no review is recorded, 4 when findings wait for a person, read only
-# from the gate's last step, the Local review one (gate.sh's step header, colour codes and all), at a line's start.
-step_line() { printf '\n\033[0;36m\342\226\266 %s\033[0m\n' "$1"; }
-gate_says() { : > "$stub/gate-log"; for part in "$@"; do printf '%b\n' "$part" >> "$stub/gate-log"; done; }
-review_step="$(step_line "Local review (scripts/review.sh check)")"
+# The gate's review check refused the push: 3 when no review is recorded, 4 when findings wait for a person. reapply.sh
+# asks the worktree's scripts/review.sh check itself, never the push's log, so what the gate printed can't pose as one.
 no_review="No review is recorded for this diff. Run /pre-push-review, which reviews, fixes and records it."
 findings="2 review finding(s) wait for a person. Fix them and run /pre-push-review again, or the person you work for accepts each one (never an agent on their behalf):"
-refused() { # <name> <expected exit>: run reapply.sh against the gate log gate_says wrote
+check_says() { : > "$stub/check-says"; for part in "$@"; do printf '%s\n' "$part" >> "$stub/check-says"; done; }
+gate_says() { : > "$stub/gate-log"; for part in "$@"; do printf '%s\n' "$part" >> "$stub/gate-log"; done; }
+refused() { # <name> <expected exit>: run reapply.sh with the gate failing, as gate_says and check_says set it up
   reset_gh
   echo 7 > "$stub/open"
+  [[ -e "$stub/gate-log" ]] || gate_says "gate: the review check failed"
+  : > "$stub/check.log"
   out="$("$reapply" --brings '#83' "$repo" 2>&1)" && rc=0 || rc=$?
   check "$1: exits $2" '[[ $rc -eq '"$2"' ]] || { echo "rc $rc: $out" >&2; false; }'
   check "$1: PR untouched" '! grep -q "^pr \(create\|edit\)" "$stub/gh.log"'
+  command rm -f "$stub/gate-log" "$stub/check-says"
 }
-gate_says "$review_step" "$no_review"
-refused "no review recorded" 3
+check_says "$no_review"
+GATE_SKIP_REVIEW=1 refused "no review recorded" 3
 check "no review recorded: names the worktree to review in" 'grep -qF "needs a review: run /pre-push-review in $wt" <<< "$out"'
-gate_says "$review_step" "$findings" "  R1 critical src/a.cs:1 (Tests): an untested branch"
+check "the check runs against the merge base with main, without GATE_SKIP_REVIEW" \
+  '[[ "$(cat "$stub/check.log")" == "check $(git -C "$wt" merge-base HEAD origin/main) GATE_SKIP_REVIEW=unset" ]]'
+check_says "$findings" "  R1 critical src/a.cs:1 (Tests): an untested branch"
 refused "findings wait for a person" 4
 check "findings wait for a person: names the command that decides them" 'grep -qF "cd $wt && scripts/review.sh accept-open" <<< "$out"'
-# A finding's summary can quote the no-review text; it is indented, and the findings refusal wins.
-gate_says "$review_step" "$findings" "  R1 critical a:1 (Tests): $no_review"
+# A finding's summary can quote anything: it is indented, so only the ledger's own line counts, and findings win.
+check_says "$findings" "  R1 critical a:1 (Tests): $no_review" "  R2 warning scripts/gate.sh:25 (Shell): step() prints ▶ Local review"
 refused "findings quoting the no-review text" 4
-# Output the repository controls can't pose as a refusal: from an earlier step, from a later one, or indented.
-gate_says "$(step_line "Tests")" "$no_review" "$(step_line "Build")" "error CS1002"
-refused "no-review text in an earlier step" 1
-gate_says "$review_step" "Reviewed clean." "$(step_line "Tests")" "$no_review" "$findings"
-refused "refusal texts in a step after the review check" 1
-gate_says "$review_step" "  $no_review" "x $findings"
+check_says "$no_review" "12 review finding(s) wait for a person."
+refused "both refusal texts at a line's start, many findings" 4
+check_says "  $no_review" "x $findings"
 refused "refusal texts not at a line's start" 1
-gate_says "$(step_line "Local review (scripts/review.sh check) again")" "$no_review"
-refused "a step header that only starts like the review step" 1
-# Both refusals at a line's start: the findings one wins, since a review is recorded.
-gate_says "$review_step" "$no_review" "$findings"
-refused "both refusal texts" 4
-# Only the last step counts: a refusal in an earlier run of the same step, followed by a pass, is not one.
-gate_says "$review_step" "$no_review" "$review_step" "Reviewed clean." "error: failed to push some refs"
-refused "a refusal followed by the step passing" 1
-command rm -f "$stub/gate-log"
+# What the gate printed doesn't count: a refusal in the push's log while the check passes is an ordinary failure.
+gate_says "$(printf '\033[0;36m\342\226\266 Local review (scripts/review.sh check)\033[0m')" "$no_review" "$findings"
+refused "refusal texts only in the push's log" 1
+check "refusal texts only in the push's log: the check was asked" '[[ -s "$stub/check.log" ]]'
+# A check that passes is an answer, whatever else it printed on the way (an install's notes, say).
+printf '%s\n' "$no_review" > "$stub/check-notes"
+refused "a passing check that printed the no-review text" 1
+command rm -f "$stub/check-notes"
 # A failure that isn't the push still exits 1 when its command exits 3 or 4: gh exits 4 when signed out.
 reset_gh
 echo 7 > "$stub/open"
@@ -681,6 +692,18 @@ ahead="$(git -C "$repo" commit-tree -p "$cur_tip" -m "added in the PR after the 
 echo "$ahead" > "$stub/merged"
 out="$("$reapply" --brings '#89' "$repo" 2>&1)" && rc=0 || rc=$?
 check "a merged head ahead of the tip: the branch is replaced" '[[ $rc -eq 0 ]] && grep -q "replacing" <<< "$out"'
+
+# ── A command after the push exiting 3: still 1 ─────────────────────────────
+# The ERR trap covers every command, so gh pr create exiting 3 must not read as "needs a review".
+reset_gh
+: > "$stub/open"
+git -C "$repo" rev-parse refs/heads/chore/reapply-baseline > "$stub/merged"  # its work merged: a fresh branch from main
+touch "$stub/create-exits-3"
+printf 'name: CI v9\n' > "$skill/template/owned/.github/workflows/ci.yml"
+out="$("$reapply" --brings '#83' "$repo" 2>&1)" && rc=0 || rc=$?
+check "gh pr create exiting 3 after the push: reapply.sh exits 1" '[[ $rc -eq 1 ]] || { echo "rc $rc: $out" >&2; false; }'
+check "gh pr create exiting 3 after the push: it was the PR create that failed" 'grep -q "^pr create" "$stub/gh.log" && grep -q "something odd" <<< "$out"'
+command rm -f "$stub/create-exits-3"
 
 # ── Bad arguments ───────────────────────────────────────────────────────────
 check "args: --brings required" '! "$reapply" "$repo" >/dev/null 2>&1'
