@@ -35,6 +35,8 @@ cat > "$skill/template/owned/.github/hooks/pre-push" <<EOF
 #!/usr/bin/env bash
 echo gate >> "$stub/push.log"
 if [[ -e "$stub/fail-push" ]]; then echo "gate: the build failed"; exit 1; fi
+if [[ -e "$stub/no-review" ]]; then echo "No review is recorded for this diff. Run /pre-push-review, which reviews, fixes and records it." >&2; exit 1; fi
+if [[ -e "$stub/findings-wait" ]]; then echo "2 review finding(s) wait for a person. Fix them and run /pre-push-review again" >&2; exit 1; fi
 EOF
 chmod +x "$skill/template/owned/.github/hooks/pre-push"
 reapply="$skill/reapply.sh"
@@ -279,7 +281,20 @@ log="$(sed -n 's/.*push failed for Widget; log: //p' <<< "$out")"
 check "push fails: exits non-zero" '[[ $rc -ne 0 ]]'
 check "push fails: names its log" '[[ -n "$log" && -f "$log" ]] && grep -q "the build failed" "$log"'
 check "push fails: PR untouched" '! grep -q "^pr \(create\|edit\)" "$stub/gh.log"'
+check "push fails: any other failure exits 1" '[[ $rc -eq 1 ]]'
 command rm -f "$stub/fail-push"
+# The gate's review check refused the push: 3 when no review is recorded, 4 when findings wait for a person.
+touch "$stub/no-review"
+out="$("$reapply" --brings '#83' "$repo" 2>&1)" && rc=0 || rc=$?
+check "no review recorded: exits 3" '[[ $rc -eq 3 ]] || { echo "rc $rc: $out" >&2; false; }'
+check "no review recorded: names the worktree to review in" 'grep -qF "needs a review: run /pre-push-review in $wt" <<< "$out"'
+check "no review recorded: PR untouched" '! grep -q "^pr \(create\|edit\)" "$stub/gh.log"'
+command rm -f "$stub/no-review"
+touch "$stub/findings-wait"
+out="$("$reapply" --brings '#83' "$repo" 2>&1)" && rc=0 || rc=$?
+check "findings wait for a person: exits 4" '[[ $rc -eq 4 ]] || { echo "rc $rc: $out" >&2; false; }'
+check "findings wait for a person: names the command that decides them" 'grep -qF "cd $wt && scripts/review.sh accept-open" <<< "$out"'
+command rm -f "$stub/findings-wait"
 # The unpushed Apply commit goes out with the next run.
 reset_gh
 echo 7 > "$stub/open"

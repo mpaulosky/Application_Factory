@@ -35,7 +35,10 @@
 #      threshold, the hand-off rules, an issue template, the reviewer agent, a
 #      Sandcastle prompt (intake, critique, plan, review or a role's), the local gate's check.sh or global.json, the gate asks for one
 #      (its message names them): run /pre-push-review in the worktree, then run
-#      this again.
+#      this again. A push the gate's local review check refused exits 3 when no
+#      review is recorded for the diff, and 4 when one is but findings in it wait
+#      for a person, so rollout.sh --auto can run the review or stop for the
+#      person; any other failed push exits 1.
 #   5. Open the re-Apply PR (ready, not a draft), or add a line for this Apply
 #      commit to the open one's description, with the baseline:apply label either
 #      way (owned-files.yml's Owned files check exempts an Apply PR only with it;
@@ -70,6 +73,12 @@ commit_subject="chore: Apply repo-ci-baseline Template"
 co_author="Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 pr_title="chore: Re-apply the repo-ci-baseline Template"
 footer="🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+# The texts the gate prints when its local review check refuses the push (review-ledger.mts's checkReview, word for
+# word: test.sh holds them equal), and the exit codes they map to, which rollout.py's REVIEW_NEEDED and FINDINGS_WAIT equal.
+no_review_text="No review is recorded for this diff."
+findings_wait_text="review finding(s) wait for a person."
+review_needed_exit=3
+findings_wait_exit=4
 # The label owned-files.yml's Owned files check exempts an Apply PR by, with github/labels.json's color and
 # description (a test holds them equal), so this and github-settings.sh --fix never fight over it.
 apply_label="baseline:apply"
@@ -290,6 +299,15 @@ echo "── $repo_name: pushing through the pre-push gate (log: $log)"
 if ! w push -u origin HEAD > "$log" 2>&1; then
   echo "reapply.sh: push failed for $repo_name; log: $log" >&2
   tail -n 20 "$log" >&2
+  # The gate's local review check, in the Owned ledger's own words (test.sh holds them equal to review-ledger.mts).
+  if grep -qF "$no_review_text" "$log"; then
+    echo "reapply.sh: $repo_name needs a review: run /pre-push-review in $worktree, then run this again" >&2
+    exit "$review_needed_exit"
+  fi
+  if grep -qF "$findings_wait_text" "$log"; then
+    echo "reapply.sh: review findings on $repo_name wait for a person: cd $worktree && scripts/review.sh accept-open" >&2
+    exit "$findings_wait_exit"
+  fi
   exit 1
 fi
 # The pushed head, from the local branch: the API lags behind the push.
