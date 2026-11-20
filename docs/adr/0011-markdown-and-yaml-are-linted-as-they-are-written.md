@@ -55,3 +55,10 @@ local review catches the kinds of finding Copilot raised on past pull requests, 
   report is on, and the repository boundary. It also runs the real `markdownlint-cli2` against a config with an `ignores` entry and names containing `[` and `*`, but only where that tool is installed
   (the Factory's CI and a developer's machine), not in an Application's hook-tests job.
 - Removing `copilot_code_review` later reduces review latency and the Fleet's Copilot usage; it also removes a second pair of eyes. The replay's recall number is what decides, not this ADR.
+
+## Update
+
+The hook no longer runs what an agent could have written with no Bash prompt: a Markdown file is linted only through markdownlint configs that are regular files,
+committed as they are, and unable to load JavaScript (no `.cjs` or `.mjs` config; no `customRules`, `markdownItPlugins`, `outputFormatters`, `modulePaths` or `extends`;
+no backslash in one read as text), and `markdownlint-cli2` comes from `PATH` only, never from the repository's `node_modules/.bin`. Otherwise the file is left
+unlinted with a `systemMessage` saying why; the pre-commit hook, the gate and CI still lint it. The Template's `references/git-hooks.md` (Edit-time lint) has the detail.

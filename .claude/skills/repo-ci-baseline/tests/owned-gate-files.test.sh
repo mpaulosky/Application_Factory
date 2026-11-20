@@ -114,7 +114,8 @@ done
 unset LC_ALL
 
 # The real markdownlint-cli2, when installed, reads the gate's ':<name>' as that file: a[1].md is linted, not a1.md beside it, and
-# -dash.md is a file, not an option. An Application's hook-tests job has none, so there this block is skipped.
+# -dash.md is a file, not an option. Each failing check asks for the planted MD012, so a usage error or a missing file can't pass
+# it. Skipped, with a skip line, where markdownlint-cli2 isn't installed (the Factory's template-tools action installs it).
 if command -v markdownlint-cli2 > /dev/null 2>&1; then
   real="$work/real"
   mkdir -p "$real"
@@ -143,15 +144,15 @@ if command -v markdownlint-cli2 > /dev/null 2>&1; then
   printf "$bad" > "$real/a[1].md"
   printf '# T\n' > "$real/a1.md"
   real_md 'a[1].md'
-  check "markdownlint-cli2 itself: a violation in a[1].md is reported" "[[ $rst != 0 ]] && [[ \"\$rout\" == *'a[1].md'* ]]"
+  check "markdownlint-cli2 itself: a violation in a[1].md is reported" "[[ $rst != 0 ]] && [[ \"\$rout\" == *'a[1].md'*MD012* ]]"
   # shellcheck disable=SC2059
   printf "$bad" > "$real/-dash.md"
   real_md -dash.md
-  check "markdownlint-cli2 itself: -dash.md is linted as a file" "[[ $rst != 0 ]] && [[ \"\$rout\" == *'-dash.md'* ]]"
+  check "markdownlint-cli2 itself: -dash.md is linted as a file" "[[ $rst != 0 ]] && [[ \"\$rout\" == *'-dash.md'*MD012* ]]"
   # shellcheck disable=SC2059
   printf "$bad" > "$real/line${newline}break.md"
   real_md "line${newline}break.md"
-  check "markdownlint-cli2 itself: a name with a newline is linted as that file" "[[ $rst != 0 ]]"
+  check "markdownlint-cli2 itself: a name with a newline is linted as that file" "[[ $rst != 0 ]] && [[ \"\$rout\" == *'break.md'*MD012* ]]"
 else
   echo "skip - markdownlint-cli2 isn't installed, so the gate's ':<name>' form isn't tried with the real tool"
 fi

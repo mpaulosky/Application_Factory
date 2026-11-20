@@ -25,9 +25,11 @@
 # repository's own config and binaries, and markdownlint-cli2 runs JavaScript from its config. A project that is not a git
 # repository has nothing to lint. In the project too, a Markdown file is linted only while every markdownlint config on its path
 # (its folder and each one above it, up to the repository root) is a regular file committed as it is, and none can load JavaScript
-# (a .cjs or .mjs config, or customRules, markdownItPlugins, outputFormatters, modulePaths or extends): an agent could write such a
-# config, or the code one names, and have this hook run it with no Bash prompt. The person is told which config and why, and the
-# gate and CI still lint the file (see unvetted_config).
+# (a .cjs or .mjs config, or customRules, markdownItPlugins, outputFormatters, modulePaths or extends, or a backslash whose escape
+# could spell one): an agent could write such a config, or the code one names, and have this hook run it with no Bash prompt. The
+# person is told which config and why, and the gate and CI still lint the file (see unvetted_config). For the same reason
+# markdownlint-cli2 itself comes from PATH only, never from the repository (its node_modules/.bin, or a PATH entry that resolves
+# into it): install it outside the repo (pnpm add -g markdownlint-cli2), or the hook reports it as not installed (see path_bin).
 #
 # Exit 0: the file is clean, is missing, is not Markdown or YAML, is not in the project, is Markdown under a markdownlint config the
 # hook won't run (above), or no linter for it is installed (this hook only helps; the commit hook and the gate still check). That
@@ -174,14 +176,23 @@ run_linter() {
   fi
 }
 
-# local_bin <name>: the repo's own node_modules/.bin copy first, as the pre-commit hook probes it, then PATH. The repo is
-# the project's own by now, so its binary is as trusted as this script.
-local_bin() {
-  if [[ -x "$root/node_modules/.bin/$1" ]]; then
-    printf '%s' "$root/node_modules/.bin/$1"
-  elif command -v "$1" > /dev/null 2>&1; then
-    command -v "$1"
-  fi
+# path_bin <name>: the copy on PATH, never one inside the repository. An agent can write the repo's node_modules/.bin (or any file
+# under the repo) with no Bash prompt, and this hook runs right after a write, so a binary found there is not run: the hook needs
+# one installed outside it (pnpm add -g markdownlint-cli2), and reports it as not installed otherwise.
+path_bin() {
+  local found real_dir
+  found="$(command -v "$1" 2> /dev/null)" || return 0
+  # Its folder resolved from here, as command -v found it: a relative PATH entry, a symlink into the repo, or a folder of the repo
+  # reached through one is caught. A name with no folder (an exported function or an alias) is refused.
+  [[ "$found" == */* ]] || return 0
+  real_dir="$(cd -P -- "${found%/*}/" 2> /dev/null && pwd -P; printf x)" || return 0
+  real_dir="${real_dir%x}"
+  real_dir="${real_dir%$'\n'}"
+  [[ -n "$real_dir" ]] || return 0
+  case "$real_dir/" in
+    "$root"/*) return 0 ;;
+  esac
+  printf '%s' "$found"
 }
 
 # unvetted_config: sets unvetted_path and unvetted_why for the first markdownlint-cli2 config on the file's path (its folder and each one above it, up
@@ -242,7 +253,7 @@ print("-" if key is None else json.dumps(key))' "$path" 2> /dev/null || true)"
 }
 
 if [[ "$kind" == markdown ]]; then
-  bin="$(local_bin markdownlint-cli2)"
+  bin="$(path_bin markdownlint-cli2)"
   # Called directly, not in $(...): it sets unvetted_path and unvetted_why, kept apart so a tab or newline in the path can't blur them.
   if unvetted_config; then
     :

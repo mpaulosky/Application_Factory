@@ -112,6 +112,15 @@ grep -qxF '        run: python -m pip install --require-hashes --no-deps -r .git
 if grep -nE 'pip install' "$owned"/.github/workflows/*.yml | grep -v -- '--require-hashes'; then
   fail "every pip install in an Owned workflow must use --require-hashes (the lines above don't)"
 fi
+# The Factory's template-tools action installs the same hashed file, so a bump's PR runs the Template's Python tests on its pins
+# (R22), and no second pytest pin can drift from it.
+template_tools="$skill_dir/../../../.github/actions/template-tools/action.yml"
+grep -qxF '        python -m pip install --require-hashes --no-deps -r .claude/skills/repo-ci-baseline/template/owned/.github/scripts/requirements-tests.txt' "$template_tools" \
+  || fail "the template-tools action must install the Template's requirements-tests.txt with --require-hashes --no-deps"
+[[ -f "$owned/.github/scripts/requirements-tests.txt" ]] || fail "the Template's .github/scripts/requirements-tests.txt is missing"
+if grep -nE 'pytest==|PYTEST_VERSION|pyyaml==' "$template_tools"; then
+  fail "the template-tools action must take pytest and PyYAML from requirements-tests.txt only (the lines above pin them again)"
+fi
 # Dependabot keeps the hashed pins current: the Factory's own entry bumps the Template's copy, the Seed's an Application's.
 for pair in "$skill_dir/../../../.github/dependabot.yml|/.claude/skills/repo-ci-baseline/template/owned/.github/scripts" \
   "$skill_dir/template/seed/.github/dependabot.yml|/.github/scripts"; do

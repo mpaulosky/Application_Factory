@@ -208,7 +208,8 @@ p=()
 [[ $STATUS -eq 2 && "$(ran markdownlint-cli2)" == 1 ]] || p+=("exit $STATUS: a folder merely containing node_modules in its name was skipped")
 check "a folder whose name only contains node_modules is linted" ${p[@]+"${p[@]}"}
 
-# The repo's own node_modules/.bin copy wins over PATH, as in the pre-commit hook; one that is not executable does not.
+# The repo's own node_modules/.bin copy never runs: an agent can write it with no Bash prompt. The PATH copy runs instead, and a
+# PATH entry that leads into the repo (directly, through a symlink, or relative) counts as no markdownlint-cli2 at all.
 mkdir -p "$repo/node_modules/.bin"
 cat > "$repo/node_modules/.bin/markdownlint-cli2" << 'EOF'
 #!/usr/bin/env bash
@@ -218,16 +219,36 @@ EOF
 chmod +x "$repo/node_modules/.bin/markdownlint-cli2"
 run_hook "$(edit_json "$repo/docs/bad.md")"
 p=()
-[[ $STATUS -eq 0 ]] || p+=("exit $STATUS, want 0 from the local copy")
-log_has "local-markdownlint " || p+=("the node_modules copy did not run")
-[[ "$(ran markdownlint-cli2)" == 0 ]] || p+=("the PATH copy ran as well")
-check "the repo's node_modules/.bin/markdownlint-cli2 is preferred" ${p[@]+"${p[@]}"}
-chmod -x "$repo/node_modules/.bin/markdownlint-cli2"
-run_hook "$(edit_json "$repo/docs/bad.md")"
-p=()
-[[ $STATUS -eq 2 && "$(ran markdownlint-cli2)" == 1 ]] || p+=("exit $STATUS: a non-executable local copy was not skipped for the PATH one")
-check "a node_modules/.bin copy that is not executable falls back to PATH" ${p[@]+"${p[@]}"}
+[[ $STATUS -eq 2 && "$(ran markdownlint-cli2)" == 1 ]] || p+=("exit $STATUS, want 2 from the PATH copy")
+! log_has "local-markdownlint " || p+=("the repo's node_modules copy ran")
+check "the repo's node_modules/.bin/markdownlint-cli2 never runs; the PATH one does" ${p[@]+"${p[@]}"}
+for entry in "$repo/node_modules/.bin" "link" "node_modules/.bin"; do
+  path_entry="$entry"
+  if [[ "$entry" == link ]]; then
+    ln -s "$repo/node_modules/.bin" "$WORK/link-into-repo"
+    path_entry="$WORK/link-into-repo"
+  fi
+  RUN_CWD="$repo" run_hook "$(edit_json "$repo/docs/bad.md")" "$path_entry:$TOOLS"
+  p=()
+  [[ $STATUS -eq 0 ]] || p+=("exit $STATUS, want 0 (not installed)")
+  ! log_has "local-markdownlint " || p+=("the copy inside the repo ran")
+  [[ "$(system_message "$STDOUT")" == *"markdownlint-cli2 not installed"* ]] || p+=("no not-installed note: $STDOUT")
+  check "a markdownlint-cli2 on PATH inside the repo ($entry) is treated as not installed" ${p[@]+"${p[@]}"}
+done
+rm -f "$WORK/link-into-repo"
 rm -rf "$repo/node_modules/.bin"
+# An exported function of that name isn't a binary on PATH either.
+mkdir -p "$WORK/markdownlint-cli2"
+# shellcheck disable=SC2016 # the function's body, expanded only when it runs
+RUN_ENV=('BASH_FUNC_markdownlint-cli2%%=() { echo "function-markdownlint $*" >> "$STUB_LOG"; }')
+RUN_CWD="$WORK" run_hook "$(edit_json "$repo/docs/bad.md")" "$TOOLS"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ $STATUS -eq 0 ]] || p+=("exit $STATUS, want 0 (not installed)")
+! log_has "function-markdownlint " || p+=("the exported function ran")
+[[ "$(system_message "$STDOUT")" == *"markdownlint-cli2 not installed"* ]] || p+=("no not-installed note: $STDOUT")
+check "an exported function named markdownlint-cli2 is treated as not installed" ${p[@]+"${p[@]}"}
+rmdir "$WORK/markdownlint-cli2"
 
 # The output cap (6000 characters): n-1, n and n+1.
 for n in 5999 6000 6001; do
@@ -756,12 +777,14 @@ printf '{ "markdownlint-cli2": { "config": { "default": true, "MD013": { "line_l
 vetted_case "an uncommitted package.json with a markdownlint-cli2 key: not linted" package.json
 commit_vet package.json
 vetted_case "a committed package.json with a harmless markdownlint-cli2 key (and non-ASCII, quotes elsewhere): linted" ""
-printf '{ "markdownlint-cli2": { "config": { "default": true } }, "x": "caf\u00e9 \\"q\\"" }\n' > "$vet/package.json"
+printf '{ "markdownlint-cli2": { "config": { "default": true } }, "x": "caf\\u00e9 \\"q\\"" }\n' > "$vet/package.json"
 commit_vet package.json
 vetted_case "a package.json key is read decoded: an escape outside the key or JSON's own escaping doesn't count" ""
 printf '{ "markdownlint-cli2": { "config": { "MD044": { "names": ["a\\"b", "c\\\\d"] } } } }\n' > "$vet/package.json"
 commit_vet package.json
 vetted_case "a package.json key whose values JSON writes with escapes (a quote, a backslash): linted" ""
+printf '{ "name": "x" }\n' > "$vet/package.json"
+commit_vet package.json
 vetted_case "back to a plain package.json: linted" ""
 # An escape could spell a key that loads code where the text doesn't show it: any backslash in a config read as text is refused.
 for case in 'jsonc|.markdownlint-cli2.jsonc|{ "customR\u0075les": ["./x.js"] }' 'yaml|.markdownlint-cli2.yaml|"custom\x52ules": ["./x.js"]' \
@@ -777,14 +800,22 @@ done
 printf '{ "markdownlint-cli2": { "customR\\u0075les": ["./x.js"] } }\n' > "$vet/package.json"
 commit_vet package.json
 vetted_case "a package.json key spelled with an escape is decoded first: not linted" package.json "$loads"
+printf '{ "markdownlint-cli2": { "customR\\u0075les": ["./x.js"], }, }\n' > "$vet/package.json"
+commit_vet package.json
+vetted_case "a package.json that doesn't parse (a trailing comma) is read as text: its backslash refuses it" package.json "holds a backslash"
 printf '{ "name": "x" }\n' > "$vet/package.json"
 commit_vet package.json
 # Matched byte for byte: a byte that isn't valid UTF-8 before the word can't hide it, whatever the caller's locale.
 printf '{ "x": "\xff", "customRules": ["./x.js"] }\n' > "$vet/docs/.markdownlint-cli2.jsonc"
 commit_vet docs/.markdownlint-cli2.jsonc
-RUN_ENV=(LC_ALL=C.UTF-8)
-vetted_case "a config with an invalid UTF-8 byte before customRules, in a UTF-8 locale: not linted" docs/.markdownlint-cli2.jsonc "$loads"
-RUN_ENV=(RUN_ENV_UNUSED=1)
+utf8_locale="$(locale -a 2> /dev/null | grep -iE '^(C|en_US)\.utf-?8$' | head -n 1 || true)"
+if [[ -n "$utf8_locale" ]]; then
+  RUN_ENV=("LC_ALL=$utf8_locale")
+  vetted_case "a config with an invalid UTF-8 byte before customRules, in a UTF-8 locale: not linted" docs/.markdownlint-cli2.jsonc "$loads"
+  RUN_ENV=(RUN_ENV_UNUSED=1)
+else
+  echo "skip - no C.UTF-8 or en_US.UTF-8 locale here, so the invalid-UTF-8-byte case isn't tried in a UTF-8 locale"
+fi
 drop_vet docs/.markdownlint-cli2.jsonc
 # A tab in a folder on the path is part of the config's name, not a separator.
 mkdir -p "$vet/docs/deep"
