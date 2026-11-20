@@ -189,6 +189,7 @@ describe("the files a re-Apply may write without a review", () => {
       ["no front matter", "# Rule\n\nbody\n", false],
       ["an empty file", "", false],
       ["empty front matter", "---\n---\nbody\n", false],
+      ["empty front matter, then a later block with paths:", "---\n---\npaths: a\n---\nbody\n", false],
       ["front matter without paths:", "---\ndescription: x\n---\nbody\n", false],
       ["an indented paths:, a nested key", "---\nmeta:\n  paths: a\n---\nbody\n", false],
       ["paths: in a later --- block", "# Rule\n\n---\npaths: a\n---\n", false],
@@ -197,7 +198,7 @@ describe("the files a re-Apply may write without a review", () => {
       ["no closing fence", "---\npaths: a\nbody\n", false],
       ["a closing fence with no final newline", "---\npaths: a\n---", false],
       ["a CRLF fence", "---\r\npaths: a\r\n---\r\nbody\r\n", false],
-      ["a byte-order mark before the fence", "﻿---\npaths: a\n---\nbody\n", false],
+      ["a byte-order mark before the fence", "\uFEFF---\npaths: a\n---\nbody\n", false],
     ];
     for (const [name, text, scoped] of cases) assert.equal(scopedRule(text), scoped, name);
   });
