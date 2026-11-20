@@ -131,7 +131,8 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
   (`git diff -z`, or `git ls-files -z` without an `origin/main`; a git that fails stops the gate) and sorted into the lint lists in bash
   under `LC_ALL=C`, so each name is matched whole and byte for byte: a non-ASCII name, one that isn't valid UTF-8, or one with a tab or
   newline reaches its linter as it is on disk. Markdown names go to `markdownlint-cli2` as `:<name>`, its literal-path form, so `a[1].md`
-  isn't read as a glob and `-dash.md` isn't read as an option. `tests/owned-gate-files.test.sh` (the Factory's) runs those lines in a throwaway
+  isn't read as a glob and `-dash.md` isn't read as an option; YAML and shell names go to `yamllint` and `shellcheck` after a `--`, so
+  `-dash.yml` and `-dash.sh` aren't either. `tests/owned-gate-files.test.sh` (the Factory's) runs those lines in a throwaway
   repo, in a UTF-8 locale and in C, and the Markdown step with a stub and, when installed, the real tool. Then build and run each test
   project, where the stack allows it locally. Which steps it runs depends on the repo; what's standard is that
   everything it checks, CI checks too.
@@ -231,9 +232,10 @@ These are the checks the CI lint workflows run; a gate runs `actionlint` and `zi
   still works. Install them outside the project, on an absolute `PATH` entry: `pnpm add -g markdownlint-cli2`, `uv tool install yamllint`, `uv tool install zizmor`,
   and actionlint from its release binaries or a package manager. The pre-commit hook and the gate still use the repo's own `markdownlint-cli2` (only it has one),
   because a person runs those.
-- Exit 1 with a message on stderr when its input is not JSON, `CLAUDE_PROJECT_DIR` is unset, `python3` is missing (or found only where the hook runs nothing from,
+- Exit 1 with a message on stderr when `CLAUDE_PROJECT_DIR` is unset or one of those git files is longer than any that names a folder (`GIT_FILE_MAX`), for any edit,
+  since both are checked before the input is read; when its input is not JSON, `python3` is missing (or found only where the hook runs nothing from,
   which the message says), or, for a Markdown or YAML file, `git` is missing (the same) or older than 2.36
-  (`git worktree list -z`), or one of those git files is longer than any that names a folder (`GIT_FILE_MAX`), so a broken hook is visible and is not read as a clean file.
+  (`git worktree list -z`), so a broken hook is visible and is not read as a clean file.
 - Only the project's own checkout and the linked worktrees it lists are linted: the file's repository root must be one of the paths `git worktree list` prints for `CLAUDE_PROJECT_DIR`,
   which Claude Code
   sets and the hook requires (unset or empty is exit 1). A linter loads the repository's own config, and `markdownlint-cli2` runs JavaScript from its
@@ -244,7 +246,9 @@ These are the checks the CI lint workflows run; a gate runs `actionlint` and `zi
   `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_PREFIX`, `GIT_COMMON_DIR` and `CDPATH`,
   inherited from a git hook, are cleared first.
 - A Markdown file is linted only through markdownlint configs the hook can vouch for: each one on the file's path (its folder and each folder above it, up to the
-  repository root, where `markdownlint-cli2` stops looking) must be a regular file, tracked and unchanged since `HEAD` (so never in a repository with no commit), and unable to
+  repository root, where `markdownlint-cli2` stops looking) must be a regular file whose bytes are the blob `HEAD` holds at its path
+  (`git rev-parse HEAD:<path>` against `git hash-object --no-filters`, which read neither the index nor the working tree's status, so no
+  `core.fsmonitor` command or clean filter from the repository's config runs; never in a repository with no commit), and unable to
   load JavaScript: no `.cjs` or `.mjs` config, and no `customRules`, `markdownItPlugins`, `outputFormatters`, `modulePaths` or `extends` in it, read as text, byte for byte.
   A config read as text must hold no backslash either, since a JSON or YAML escape (`\u0075`, `\x52`, a folded line) could spell one of those keys where the text doesn't show
   it. A file of any of those names that is a symlink, `package.json` included, is refused whatever it holds. A `package.json` counts only when it has a `markdownlint-cli2`

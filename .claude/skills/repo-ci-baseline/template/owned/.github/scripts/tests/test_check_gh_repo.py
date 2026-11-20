@@ -286,7 +286,7 @@ def test_main_exits_2_on_a_decode_error_and_escapes_what_it_prints(tmp_path, cap
     # Assert
     err = capsys.readouterr().err
     assert code == 2
-    assert "can't read a file:" in err
+    assert "check_gh_repo.py: failed: " in err and "can't read" not in err
     assert "\n::error::" not in err
 
 

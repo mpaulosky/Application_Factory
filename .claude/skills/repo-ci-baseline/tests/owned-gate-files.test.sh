@@ -38,7 +38,7 @@ newline=$'\n'
 latin1="$(printf 'caf\xe9')"
 names=("notes/café.md" "a b.md" "docs/blogs/post.md" "tab${tab}name.md" "line${newline}break.md" "conf/settings.yml" "pnpm-lock.yaml"
   ".github/workflows/build.yml" "scripts/tool" "scripts/run.sh" "src/app.cs" "${latin1}.md" "scripts/${latin1}"
-  "x.md${newline}docs/blogs/y.md" "a.yaml${newline}pnpm-lock.yaml" "foo${newline}.github/workflows/a.yml" "a[1].md" "-dash.md")
+  "x.md${newline}docs/blogs/y.md" "a.yaml${newline}pnpm-lock.yaml" "foo${newline}.github/workflows/a.yml" "a[1].md" "-dash.md" "-dash.yml" "-dash.sh")
 for name in "${names[@]}"; do
   mkdir -p "$repo/$(dirname -- "$name")"
   printf 'x\n' > "$repo/$name"
@@ -46,15 +46,22 @@ for name in "${names[@]}"; do
 done
 g "$repo" commit -q -m names
 
-# lists [<git wrapper>]: run the block in the repo, then the gate's Markdown step with a markdownlint-cli2 stub that records its
-# arguments; print each list's entries as "<list><TAB><name>" and each argument as "MD_ARG<TAB><arg>", NUL-separated.
+# lists [<git wrapper>]: run the block in the repo, then the gate's Markdown, YAML and shell steps with stubs of their linters
+# (markdownlint-cli2, yamllint, shellcheck) that record their arguments; print each list's entries as "<list><TAB><name>" and each argument as "MD_ARG<TAB><arg>",
+# "YL_ARG<TAB><arg>" or "SC_ARG<TAB><arg>", NUL-separated.
 stubs="$work/stubs"
 mkdir -p "$stubs"
 # shellcheck disable=SC2016 # the stub's own code, written as it is
-printf '#!/usr/bin/env bash\nprintf "MD_ARG\\t%%s\\0" "$@" >> "$MD_ARGS_FILE"\n' > "$stubs/markdownlint-cli2"
-chmod +x "$stubs/markdownlint-cli2"
+for stub in markdownlint-cli2:MD_ARG yamllint:YL_ARG shellcheck:SC_ARG; do
+  # shellcheck disable=SC2016 # the stub's own code, written as it is
+  printf '#!/usr/bin/env bash\nprintf "%s\\t%%s\\0" "$@" >> "$MD_ARGS_FILE"\n' "${stub#*:}" > "$stubs/${stub%%:*}"
+  chmod +x "$stubs/${stub%%:*}"
+done
 md_step="$work/md-step.sh"
 sed -n '/^step "Markdown lint/,/^fi$/p' "$gate" > "$md_step"
+# The YAML and shell steps, and the run_tool helper the shell step calls.
+other_steps="$work/other-steps.sh"
+sed -n '/^SHELLCHECK_VERSION=/p; /^run_tool() {/,/^}/p; /^step "YAML lint/,/^fi$/p; /^step "Shell lint/,/^fi$/p' "$gate" > "$other_steps"
 lists() {
   (
     cd "$repo" || exit 1
@@ -76,6 +83,8 @@ lists() {
     PATH="$stubs:$PATH"
     # shellcheck disable=SC1090 # the gate's own Markdown step
     source "$md_step"
+    # shellcheck disable=SC1090 # the gate's own YAML and shell steps
+    source "$other_steps"
     cat "$MD_ARGS_FILE"
   )
 }
@@ -83,8 +92,12 @@ lists() {
 run_lists() { local raw="$work/out"; lists "$@" > "$raw" 2> "$work/err"; st=$?; mapfile -d '' -t OUT < "$raw"; }
 has() { local want="$1"$'\t'"$2" entry; for entry in ${OUT[@]+"${OUT[@]}"}; do [[ "$entry" == "$want" ]] && return 0; done; return 1; }
 count() { local n=0 entry; for entry in ${OUT[@]+"${OUT[@]}"}; do [[ "$entry" == "$1"$'\t'* ]] && n=$((n + 1)); done; echo "$n"; }
+# first <prefix>: the first argument recorded under that prefix.
+first() { local entry; for entry in ${OUT[@]+"${OUT[@]}"}; do [[ "$entry" != "$1"$'\t'* ]] || { echo "${entry#*$'\t'}"; return; }; done; }
 
 check "the gate's Markdown step is found" "grep -q 'markdownlint-cli2' '$md_step' && [[ \$(wc -l < '$md_step') -gt 5 ]]"
+check "the gate's YAML and shell steps and run_tool are found" \
+  "grep -q '^run_tool() {' '$other_steps' && grep -q '^step \"YAML lint' '$other_steps' && grep -q '^step \"Shell lint' '$other_steps'"
 
 # The gate runs in whatever locale the caller has: a UTF-8 one and C are both tried.
 utf8="$(locale -a 2> /dev/null | grep -iE '^(C|en_US)\.utf-?8$' | head -n 1 || true)"
@@ -105,12 +118,28 @@ for loc in ${utf8:+"$utf8"} C; do
     "! has WORKFLOW_FILES \"foo\${newline}.github/workflows/a.yml\" && has YAML_FILES \"foo\${newline}.github/workflows/a.yml\""
   check "[$loc] docs/blogs/ stays out of the Markdown list" "! has MD_FILES docs/blogs/post.md"
   check "[$loc] the Markdown list holds exactly the eight others" "[[ \$(count MD_FILES) == 8 ]]"
-  check "[$loc] YAML: not pnpm-lock.yaml" "has YAML_FILES conf/settings.yml && ! has YAML_FILES pnpm-lock.yaml && [[ \$(count YAML_FILES) == 4 ]]"
+  check "[$loc] YAML: not pnpm-lock.yaml" "has YAML_FILES conf/settings.yml && ! has YAML_FILES pnpm-lock.yaml && [[ \$(count YAML_FILES) == 5 ]]"
   check "[$loc] the workflow list holds the workflow alone" "has WORKFLOW_FILES .github/workflows/build.yml && [[ \$(count WORKFLOW_FILES) == 1 ]]"
-  check "[$loc] shell: the extensionless scripts and a .sh" "has SHELL_FILES scripts/tool && has SHELL_FILES scripts/run.sh && [[ \$(count SHELL_FILES) == 3 ]]"
+  check "[$loc] shell: the extensionless scripts and a .sh" "has SHELL_FILES scripts/tool && has SHELL_FILES scripts/run.sh && [[ \$(count SHELL_FILES) == 4 ]]"
   check "[$loc] markdownlint-cli2 gets each name as a literal path (a leading :), never a glob or an option" \
     "has MD_ARG ':a[1].md' && has MD_ARG ':-dash.md' && has MD_ARG \":line\${newline}break.md\" && has MD_ARG \":\${latin1}.md\" && [[ \$(count MD_ARG) == 8 ]] && ! has MD_ARG a[1].md"
+  check "[$loc] yamllint gets '--' before the names, so -dash.yml is a file, not an option" \
+    "[[ \$(first YL_ARG) == -- ]] && has YL_ARG -dash.yml && [[ \$(count YL_ARG) == 6 ]]"
+  check "[$loc] shellcheck gets '--' before the names, so -dash.sh is a file, not an option" \
+    "[[ \$(first SC_ARG) == -- ]] && has SC_ARG -dash.sh && [[ \$(count SC_ARG) == 5 ]]"
 done
+unset LC_ALL
+
+# A branch with no change, and one whose only change no list takes: the block and the steps run, and every list is empty.
+g "$repo" checkout -q -b chore/empty origin/main
+run_lists
+check "a branch with no changed file runs, with four empty lists and no linter run" \
+  "[[ $st == 0 ]] && [[ \${#OUT[@]} == 0 ]]"
+mkdir -p "$repo/src" && printf 'x\n' > "$repo/src/other.cs" && g "$repo" add src/other.cs && g "$repo" commit -q -m cs
+run_lists
+check "a branch whose only change is a .cs file runs, with four empty lists and no linter run" \
+  "[[ $st == 0 ]] && [[ \${#OUT[@]} == 0 ]]"
+g "$repo" checkout -q feature/1-names
 unset LC_ALL
 
 # The real markdownlint-cli2, when installed, reads the gate's ':<name>' as that file: a[1].md is linted, not a1.md beside it, and

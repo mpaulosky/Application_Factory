@@ -107,8 +107,9 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
   their first argument (`list`, `create`, `clone`, `gitignore` and `license` name their own or need none, while
   `rename`, `deploy-key` and `autolink` read `GH_REPO`). `test.sh` checks the Owned scripts with the same
   `check_gh_repo.py`. Its tests ship with it (Owned `.github/scripts/tests/test_check_gh_repo.py`, run by every repo's `python-tests` job,
-  which installs the pinned shfmt for them, and pytest and PyYAML from `.github/scripts/requirements-tests.txt` with `--require-hashes`: Dependabot's `pip` entry in the Factory bumps the
-  Template's copy, and the file's header says how to regenerate it by hand); the few that need the Factory (`OWNED` against the Template's folders, this page) are in `tests/gh_repo/`.
+  which installs the pinned shfmt for them, and pytest and PyYAML from `.github/scripts/requirements-tests.txt` with `--require-hashes`
+  and as wheels only (`--only-binary=:all:`): Dependabot's `pip` entry in the Factory bumps the Template's copy, and the file's header says how
+  to regenerate it by hand); the few that need the Factory (`OWNED` against the Template's folders, this page) are in `tests/gh_repo/`.
 
   More rules of a script, which this page holds in full (the checker's docstring only points here):
 

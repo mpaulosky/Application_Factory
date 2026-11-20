@@ -22,7 +22,7 @@
 # Only files in the project's own checkout, or in a linked worktree that checkout lists in `git worktree list`, are linted
 # (CLAUDE_PROJECT_DIR, which Claude Code sets and which is required). A file in another clone, in a directory that merely
 # names the project's .git, a symlink, or anything under node_modules is left alone, because the linters would load that
-# repository's own config and binaries, and markdownlint-cli2 runs JavaScript from its config. A project that is not a git
+# repository's own config, and markdownlint-cli2 runs JavaScript from its config. A project that is not a git
 # repository has nothing to lint. In the project too, a Markdown file is linted only while every markdownlint config on its path
 # (its folder and each one above it, up to the repository root) is a regular file committed as it is, and none can load JavaScript
 # (a .cjs or .mjs config, or customRules, markdownItPlugins, outputFormatters, modulePaths or extends, or a backslash whose escape
@@ -37,9 +37,10 @@
 # hook won't run (above), or a linter for it is not installed or is found only where the hook runs nothing from (above) (this hook
 # only helps; the commit hook and the gate still check). That config, and a skipped linter, are reported as a systemMessage on stdout, which
 # Claude Code shows to the person. Exit 2: a linter reported a violation; its output goes to stderr, which Claude Code feeds
-# back to the agent. Exit 1: the hook could not run (python3 missing or found only where the hook runs nothing from, CLAUDE_PROJECT_DIR unset, bad JSON, or, for a
-# Markdown or YAML file, git missing, found only where the hook runs nothing from, or older than 2.36, or a git file of the project's
-# checkouts longer than any that names a folder); Claude Code shows that to the
+# back to the agent. Exit 1: the hook could not run (CLAUDE_PROJECT_DIR unset, or a git file of the project's checkouts longer than any
+# that names a folder, both for any edit, since they are checked before the input is read; python3 missing or found only where the
+# hook runs nothing from, bad JSON, or, for a Markdown or YAML file, git missing, found only where the hook runs nothing from, or
+# older than 2.36); Claude Code shows that to the
 # person and carries on. A linter that is installed but crashes counts as a violation, not as clean.
 set -uo pipefail
 
@@ -325,7 +326,7 @@ path_bin() {
 
 # unvetted_config: sets unvetted_path and unvetted_why for the first markdownlint-cli2 config on the file's path (its folder and each one above it, up
 # to the repository root, where markdownlint-cli2 stops looking) that the hook must not run, and returns 1 when there is none. A config
-# is run only when it is a regular file git holds as committed (tracked, unchanged since HEAD, in a repository with a commit) and can't
+# is run only when it is a regular file git holds as committed (its bytes are the blob HEAD holds at its path) and can't
 # load JavaScript: no .cjs or .mjs config, and no customRules, markdownItPlugins, outputFormatters, modulePaths or extends in it (read as
 # text, byte for byte, so even a mention in a comment counts), and no backslash in it, since a JSON or YAML escape (\u0075, \x52, a
 # folded line) could spell one of those keys where the text doesn't show it. A file of any of these names that is a symlink or not a
@@ -333,7 +334,7 @@ path_bin() {
 # key (or doesn't parse), and then only that key, as JSON writes it decoded, is read for those words (all of it when it doesn't parse).
 unvetted_path="" unvetted_why=""
 unvetted_config() {
-  local at="$dir" name path relp text raw LC_ALL=C
+  local at="$dir" name path relp text raw head_blob LC_ALL=C
   while :; do
     for name in .markdownlint-cli2.jsonc .markdownlint-cli2.yaml .markdownlint-cli2.cjs .markdownlint-cli2.mjs \
       .markdownlint.jsonc .markdownlint.json .markdownlint.yaml .markdownlint.yml .markdownlint.cjs .markdownlint.mjs package.json; do
@@ -359,8 +360,10 @@ print("-" if key is None else json.dumps(key))' "$path" 2> /dev/null || true)"
       else
         text="$(cat -- "$path")"
       fi
-      if ! git -C "$root" ls-files --error-unmatch -- ":(literal)$relp" > /dev/null 2>&1 \
-        || ! git -C "$root" diff --quiet HEAD -- ":(literal)$relp" > /dev/null 2>&1; then
+      # Committed as it is: the file's bytes hash to the blob HEAD holds at that path. Neither command reads the index or the
+      # working tree's status, so neither runs a core.fsmonitor command or a clean filter from the repository's own config.
+      if ! head_blob="$(git -C "$root" rev-parse --verify --quiet "HEAD:$relp" 2> /dev/null)" \
+        || [[ "$(git -C "$root" hash-object --no-filters -- "$path" 2> /dev/null)" != "$head_blob" ]]; then
         unvetted_path="$relp" unvetted_why="isn't committed as it is"
         return 0
       fi

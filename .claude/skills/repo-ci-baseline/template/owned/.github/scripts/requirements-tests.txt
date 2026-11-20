@@ -1,4 +1,4 @@
-# The Python tests' packages, pinned with their hashes so CI's python-tests job installs exactly these (pip --require-hashes).
+# The Python tests' packages, pinned with their hashes so CI's python-tests job installs exactly these (pip --require-hashes --only-binary=:all:, so every one needs a wheel).
 # Regenerate from pytest and pyyaml after a bump: uv pip compile --generate-hashes --python-version 3.12 --no-header --no-annotate
 # (with the two names in a file), then copy the result over the pins below. Owned: an Application changes it in the Template.
 

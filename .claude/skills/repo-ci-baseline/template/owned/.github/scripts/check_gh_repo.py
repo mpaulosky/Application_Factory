@@ -1129,8 +1129,10 @@ def main(argv):
         print(f"check_gh_repo.py: {error}", file=sys.stderr)
         return 2
     except (OSError, UnicodeError) as error:
+        # Only an error that names its file says which one it couldn't read; any other (a UnicodeError never names one) says what failed.
         where = getattr(error, "filename", None)
-        print(f"check_gh_repo.py: can't read {for_log(str(where)) if where else 'a file'}: {for_log(str(error))}", file=sys.stderr)
+        said = f"can't read {for_log(str(where))}" if where else "failed"
+        print(f"check_gh_repo.py: {said}: {for_log(str(error))}", file=sys.stderr)
         return 2
 
 

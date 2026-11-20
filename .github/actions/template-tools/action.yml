@@ -38,7 +38,7 @@ runs:
         CMARKGFM_VERSION: "2025.10.22"
       run: |
         # The Template's own pins, so a Dependabot bump of that file is tested here before a Rollout takes it to the Fleet.
-        python -m pip install --require-hashes --no-deps -r .claude/skills/repo-ci-baseline/template/owned/.github/scripts/requirements-tests.txt
+        python -m pip install --require-hashes --no-deps --only-binary=:all: -r .claude/skills/repo-ci-baseline/template/owned/.github/scripts/requirements-tests.txt
         python -m pip install "yamllint==${YAMLLINT_VERSION}" "zizmor==${ZIZMOR_VERSION}" "cmarkgfm==${CMARKGFM_VERSION}"
         # The renderer oracle's kramdown, at the versions the github-pages gem pins.
         sudo gem install --no-document kramdown:2.4.0 kramdown-parser-gfm:1.1.0

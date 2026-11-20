@@ -849,9 +849,9 @@ git -C "$vet" -c user.name=t -c user.email=t@t commit --quiet -m configs
 uncommitted="isn't committed as it is"
 loads="can load JavaScript"
 # vetted_case <label> <expected config, or "" for linted> [<why>, default $uncommitted]: the message names the config and why, and
-# tells the person to commit it only when it isn't committed.
+# tells the person to commit it only when it isn't committed. The file edited is docs/deep/ok.md, or VET_MD when it is set.
 vetted_case() {
-  run_hook "$(edit_json "$vet/docs/deep/ok.md")" "$STUBS:$TOOLS" "$vet"
+  run_hook "$(edit_json "$vet/${VET_MD:-docs/deep/ok.md}")" "$STUBS:$TOOLS" "$vet"
   p=()
   [[ $STATUS -eq 0 ]] || p+=("exit $STATUS, want 0")
   if [[ -z "$2" ]]; then
@@ -861,7 +861,7 @@ vetted_case() {
     [[ "$(ran markdownlint-cli2)" == 0 ]] || p+=("markdownlint-cli2 ran under an unvetted config")
     msg="$(system_message "$STDOUT")"
     local why="${3:-$uncommitted}"
-    [[ "$msg" == *"docs/deep/ok.md was not linted"* && "$msg" == *"config $2 $why"* ]] || p+=("systemMessage: $msg")
+    [[ "$msg" == *"${VET_MD:-docs/deep/ok.md} was not linted"* && "$msg" == *"config $2 $why"* ]] || p+=("systemMessage: $msg")
     if [[ "$why" == "$uncommitted" ]]; then
       [[ "$msg" == *"commit it (or undo the change) and edit the file again; the gate and CI still check it." ]] || p+=("no advice to commit: $msg")
     else
@@ -895,6 +895,40 @@ printf 'module.exports = {};\n' > "$vet/other/.markdownlint-cli2.mjs"
 vetted_case "an untracked config off the file's path changes nothing: linted" ""
 rm -r "$vet/other"
 vetted_case "back as committed: linted again" ""
+# Every config name markdownlint-cli2 reads: one left uncommitted on the file's path stops the hook from running it.
+for name in .markdownlint-cli2.jsonc .markdownlint-cli2.yaml .markdownlint-cli2.cjs .markdownlint-cli2.mjs \
+  .markdownlint.jsonc .markdownlint.json .markdownlint.yaml .markdownlint.yml .markdownlint.cjs .markdownlint.mjs; do
+  printf '{}\n' > "$vet/docs/deep/$name"
+  vetted_case "an untracked $name in the file's folder: not linted, and named" "docs/deep/$name"
+  rm "$vet/docs/deep/$name"
+done
+# A config in a folder whose name holds glob characters is looked up as that path: a committed docs/a1/ config with the same bytes
+# doesn't vouch for an untracked one in docs/a[1]/.
+mkdir -p "$vet/docs/a1" "$vet/docs/a[1]"
+printf '{}\n' > "$vet/docs/a1/.markdownlint.json"
+commit_vet docs/a1/.markdownlint.json
+printf '{}\n' > "$vet/docs/a[1]/.markdownlint.json"
+printf '# Title\n' > "$vet/docs/a[1]/ok.md"
+VET_MD='docs/a[1]/ok.md' vetted_case "an untracked config in docs/a[1]/, beside a committed one in docs/a1/: not linted" 'docs/a[1]/.markdownlint.json'
+commit_vet 'docs/a[1]/.markdownlint.json'
+VET_MD='docs/a[1]/ok.md' vetted_case "a committed config in docs/a[1]/: linted" ""
+drop_vet docs/a1/.markdownlint.json 'docs/a[1]/.markdownlint.json'
+rm -rf -- "$vet/docs/a1" "$vet/docs/a[1]"
+# The committed check runs nothing the repository's own config names: no core.fsmonitor command, and no clean filter.
+ran_marker="$WORK/vet-config-ran"
+printf '#!/bin/sh\necho ran >> "%s"\ncat\n' "$ran_marker" > "$WORK/vet-config-cmd"
+chmod +x "$WORK/vet-config-cmd"
+git -C "$vet" config core.fsmonitor "$WORK/vet-config-cmd"
+git -C "$vet" config filter.vet.clean "$WORK/vet-config-cmd"
+printf '* filter=vet\n' > "$vet/.git/info/attributes"
+touch "$vet/.markdownlint-cli2.jsonc" "$vet/package.json"
+vetted_case "with a core.fsmonitor and a clean filter in the repository's config: linted" ""
+p=()
+[[ ! -e "$ran_marker" ]] || p+=("ran: $(cat "$ran_marker")")
+check "the committed check runs no core.fsmonitor command or clean filter from the repository's config" ${p[@]+"${p[@]}"}
+git -C "$vet" config --unset core.fsmonitor
+git -C "$vet" config --unset filter.vet.clean
+rm "$vet/.git/info/attributes"
 # A committed config that can load code is never run: the code it names isn't vetted.
 for key in customRules markdownItPlugins outputFormatters modulePaths extends; do
   printf '{ "%s": ["./x.js"] }\n' "$key" > "$vet/docs/.markdownlint-cli2.jsonc"
@@ -1095,6 +1129,12 @@ p=()
 ((SECONDS - started < 20)) || p+=("took $((SECONDS - started)) seconds")
 log_empty || p+=("something ran: $(cat "$LOG")")
 check "a .git file padded past any path's length stops the hook at once, and nothing runs" ${p[@]+"${p[@]}"}
+# It is checked before the input is read, so it stops the hook for an edit of any file, not only Markdown or YAML.
+RUN_CWD=/ run_hook "$(edit_json "$WORK/vet-wt/notes.txt")" "$vet/bin:$STUBS:$TOOLS" "$WORK/vet-wt"
+p=()
+[[ $STATUS -eq 1 && "$STDERR" == *"$WORK/vet-wt/.git is longer than any git file that names a folder"* ]] || p+=("exit $STATUS, stderr: $STDERR")
+log_empty || p+=("something ran: $(cat "$LOG")")
+check "a .git file padded past any path's length stops the hook for a .txt edit too, and nothing runs" ${p[@]+"${p[@]}"}
 printf '%s\n' "$wt_git" > "$WORK/vet-wt/.git"
 # read_git_file on its own, taken from the script: each trim set at its edge, as git trims, and the length cap at n and n+1.
 rgf="$WORK/rgf"

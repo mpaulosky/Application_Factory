@@ -116,7 +116,8 @@ if [[ ${#YAML_FILES[@]} -gt 0 ]]; then
   if command -v yamllint &>/dev/null; then
     YAMLLINT_ARGS=()
     [[ -f .yamllint.yml ]] && YAMLLINT_ARGS=(-c .yamllint.yml)
-    yamllint "${YAMLLINT_ARGS[@]}" "${YAML_FILES[@]}"
+    # '--' keeps a name that starts with '-' from being read as an option.
+    yamllint ${YAMLLINT_ARGS[@]+"${YAMLLINT_ARGS[@]}"} -- "${YAML_FILES[@]}"
   else
     echo -e "${YELLOW}⚠️  yamllint not found — skipping. CI's Lint YAML workflow still checks these files.${RESET}"
     echo -e "   To enable: ${CYAN}pipx install yamllint${RESET}"
@@ -143,7 +144,7 @@ step "Shell lint (${#SHELL_FILES[@]} changed file(s))"
 if [[ ${#SHELL_FILES[@]} -gt 0 ]]; then
   run_tool shellcheck "install shellcheck, or Docker" have_docker \
     docker run --rm -v "$ROOT:/mnt" -w /mnt "koalaman/shellcheck:${SHELLCHECK_VERSION}" \
-    -- "${SHELL_FILES[@]}"
+    -- -- "${SHELL_FILES[@]}"
 fi
 
 # A gh command not told its repository reaches gh's default one, a fork in a
