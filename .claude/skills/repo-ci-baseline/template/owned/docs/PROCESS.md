@@ -75,9 +75,9 @@ post, word for word. Keep it current: after every follow-up commit, update it so
 
 - **Review before you push** (in a repo with Sandcastle, where `.sandcastle/lib/review-ledger.mts` exists: the review and its gate
   step are added only there). `/pre-push-review` (`.claude/skills/pre-push-review/`) reviews the branch's whole diff
-  against `origin/main` (or, for a fix made after a review was recorded, only that fix) with parallel read-only reviewers, fixes each Critical and Warning finding behind a regression test and each
-  Advisory one in the review, reviews the fixes again until a round fixes nothing, and records the result under `.git/review/`. GitHub's
-  reviewers are then a backstop that finds little. A Critical or Warning finding left open blocks the push until it is
+  against `origin/main` (or, for a fix made after a review that left nothing open or accepted, only that fix) with parallel read-only reviewers,
+  fixes each Critical and Warning finding behind a regression test and each Advisory one in the review, reviews the fixes again until a round fixes nothing,
+  and records the result under `.git/review/`. GitHub's reviewers are then a backstop that finds little. A Critical or Warning finding left open blocks the push until it is
   fixed or the person accepts it with `scripts/review.sh accept R3 "<reason>"`, never on their behalf (`scripts/review.sh accept-open` lists
   the open ones and decides several at once, accepting or asking for a fix). Advisory findings
   (docs, comments, conventions) never block: one that needs a person goes to one follow-up issue per branch. For a large or
@@ -98,9 +98,9 @@ post, word for word. Keep it current: after every follow-up commit, update it so
   and yamllint. A docs-only PR skips the build and tests, and so does a Dependabot GitHub Actions bump; a skipped check
   counts as passing.
 - **Copilot reviews every push**, drafts included. Fix a thread you agree with in the branch's worktree and review the fix before you push it: `/pre-push-review`
-  reviews only what changed since the branch's last recorded review (`scripts/review.sh prepare <run> recorded`), and the whole diff again only when
-  there's none, the branch was amended or rebased since, or `main` was merged in since. Nothing of the earlier review carries over: what it accepted
-  or left open is raised again. Push the fix, then reply naming the fixing
+  reviews only what changed since the branch's last recorded review (`scripts/review.sh prepare <run> recorded`) when that review left no finding
+  open or accepted. Otherwise it reviews the whole diff again and raises those findings again; so it does when there's no recorded review, the branch
+  was amended or rebased since, or `main` was merged in since. Push the fix, then reply naming the fixing
   commit by its short SHA (7 characters) and saying what changed (`Fixed in 1a2b3c4: <what changed>.`), so the PR documents
   its fixes. Resolve it if Copilot or Claude Review opened it; leave a person's thread for them. A Copilot or Claude Review
   thread resolved without a reply is flagged, in PR Auto-Merge's log and in `status.sh` and `land.sh`, but it doesn't hold the merge. Don't resolve a thread

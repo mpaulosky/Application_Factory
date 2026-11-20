@@ -1010,6 +1010,14 @@ export function recordedAnchor(cwd: string, base: string, head: string, branch: 
     return `the last review of ${branch} was recorded at ${newest.head}, which isn't one of HEAD's commits (an amend or a rebase since): ${RESTART}`;
   }
   if (isAncestor(cwd, newest.head, base)) return `the last review of ${branch} was recorded at ${newest.head}, which main already has: ${RESTART}`;
+  // The reviewers of a recorded run read only the fixes, so a finding this review left open (blocking or not, asked to be fixed
+  // or not, security or not) or a person accepted would never be raised again for this code. Only a review whose findings are
+  // all fixed or dismissed is an anchor; otherwise round 1 reads the whole diff and raises them again. No older review is
+  // taken instead: it would leave this one's findings unread just the same.
+  const undecided = newest.findings.filter((finding) => finding.status === "open" || finding.status === "accepted").length;
+  if (undecided > 0) {
+    return `the last review of ${branch}, recorded at ${newest.head}, has ${undecided} finding(s) open or accepted, which a review of the fixes alone would not raise again: ${RESTART}`;
+  }
   return { commit: newest.head, ledger: newest };
 }
 

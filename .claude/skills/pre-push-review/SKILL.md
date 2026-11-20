@@ -3,8 +3,8 @@ name: pre-push-review
 description: >-
   The heavy local review every branch passes before it's pushed. Reviews the branch's whole diff against origin/main
   with parallel reviewers, grades each finding Critical, Warning or Advisory, fixes all of them behind a regression
-  test or check as they're found, reviews the fixes again, or, for a fix made after a review was recorded, only that fix,
-  and records the result the gate checks. Use
+  test or check as they're found, reviews the fixes again, or, for a fix made after a review that left nothing open or
+  accepted, only that fix, and records the result the gate checks. Use
   before every push (the first and every fix), when asked to review a branch before pushing, or when the gate says no
   review is recorded for this diff.
 ---
@@ -78,8 +78,8 @@ what was left open, is raised again for the person to decide for this code:
 - `scripts/review.sh latest`: the nearest earlier review of this branch's own commits, whatever the branch was called
   then, with every finding and what became of it (`{}` when there's none). It's context for the reviewers: nothing in it
   is carried into this review's record. It reaches reviewers only through `<run>/decisions.md` (step 4), never as its
-  raw output. In a run started with `prepare <run> recorded` (step 4) it is normally the review the fixes follow, and nothing
-  of it carries either: its accepted and open findings are raised again for this code, and the new record holds only this run's findings.
+  raw output. In a run started with `prepare <run> recorded` (step 4) it is normally the review the fixes follow. That review
+  left nothing open or accepted (`prepare` refuses one that did), so there is nothing of it to raise again, and the new record holds only this run's findings.
 - `scripts/review.sh security`: lists the local security record, `.security/` in the main checkout, which every worktree of the
   clone shares: one line per entry with its number, status, lens, finding path and file (`No security entries.` when there's
   none). The entries are what earlier branches decided about a weakness: the policy that resolves it and the test or gate check
@@ -133,7 +133,8 @@ mirror alone still needs a new review. In a later round, run `scripts/review.sh 
 diff of that round's fixes to `<run>/fixes.patch`, filtered the same way. A run for a fix made after the branch's review was recorded (a fix
 for a PR thread, say) starts with `scripts/review.sh prepare <run> recorded` instead: it writes to `<run>/fixes.patch` every change since the commit
 the branch's last recorded review vouched for, which it names on stderr, and the run's first round is a later round. It refuses, and the run
-starts at round 1 with `prepare <run>`, on a detached HEAD, when no review of the branch is recorded in this clone, when that commit isn't one of
+starts at round 1 with `prepare <run>`, on a detached HEAD, when no review of the branch is recorded in this clone, when that review holds a finding
+open or accepted (whatever its severity, `fixAsked` included: the fixes alone wouldn't raise it again), when that commit isn't one of
 HEAD's (an amend or a rebase since), when `main` already has it, or when `main` was merged in since. With no commits since, it refuses too: the
 recorded review already vouches for this code, so there is nothing to review. Then go on with `prepare <run> last` as in any run.
 Write to `<run>/decisions.md`, with the Write tool and not a shell heredoc (the text quotes code such as `$(...)`,
@@ -356,7 +357,8 @@ either accepts it, with `scripts/review.sh accept R3 "<reason>"` or several at o
 (`--reason "<reason>"` for one reason across the ids named; every finding is named, there is no "all"), or asks you to fix it, by saying so or with
 `scripts/review.sh accept-open --fix R3`, which marks it `fixAsked` and leaves it open (and blocking, unless it's an Advisory one that isn't a security
 finding): fix it as in step 6, then start a new run at step 1, in which the record just made is step 3's
-earlier review, with `prepare <run> recorded` (step 4), which reviews only the fix. Never run `accept` or `accept-open` with ids yourself: only the person decides. The
+earlier review. That review holds the open finding, so the run starts at round 1 with `prepare <run>`: `prepare <run> recorded` (step 4) refuses a
+review that left a finding open or accepted. Never run `accept` or `accept-open` with ids yourself: only the person decides. The
 Advisory findings left open never block. For a branch Sandcastle builds, the host runs these rounds itself (`.sandcastle/lib/host-review.mts`), with these
 reviewers, the Bar and lenses, and `prepare` and `record` run by the host in the main checkout, so no session records for it and no agent reaches `.git/review`;
 its sandboxes still skip the gate's review check and see an empty `.git/review`.

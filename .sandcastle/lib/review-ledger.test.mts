@@ -2882,8 +2882,7 @@ describe("main", () => {
     });
 
     it("lets the run go on with prepare <dir> last, and records only the new run's findings, none of the earlier review's", () => {
-      record([finding({ status: "open", test: null })]);
-      assert.equal(checkReview(repo, mergeBase(repo), {}).ok, false);
+      record([finding(), finding({ id: "R2", status: "dismissed", test: null, reason: "The guard trims first." })]);
       commit(repo, "fix.cs", "the fix\n", "fix");
       const dir = fresh("delta");
       assert.equal(cli(["prepare", dir, "recorded"]).code, 0);
@@ -2892,10 +2891,62 @@ describe("main", () => {
       const later = cli(["prepare", dir, "last"]);
       assert.equal(later.code, 0, later.err);
       assert.match(readFileSync(join(dir, "fixes.patch"), "utf8"), /^\+the fix, fixed$/m);
-      const ledger = record([finding({ id: "R2", path: "fix.cs", line: 1 })], 2);
+      const ledger = record([finding({ id: "R3", path: "fix.cs", line: 1 })], 2);
 
-      assert.deepEqual(ledger.findings.map((found) => found.id), ["R2"]);
+      assert.deepEqual(ledger.findings.map((found) => found.id), ["R3"]);
       assert.equal(checkReview(repo, mergeBase(repo), {}).ok, true);
+    });
+
+    // R7: the reviewers of a recorded run read only the fixes, so a finding the earlier review left open or a person accepted would
+    // never be raised again for this code. Only a review that left nothing open or accepted can be the anchor.
+    const refusedFor = (n: number) =>
+      `the last review of feature/1-thing, recorded at ${run(repo, "rev-parse", "HEAD~1")}, has ${n} finding(s) open or accepted, which a review of the fixes alone would not raise again: start again at round 1 with prepare <dir>.\n`;
+    const cases: [string, () => void, number][] = [
+      ["an open Critical finding", () => record([finding(), finding({ id: "R2", status: "open", test: null })]), 1],
+      ["an open Advisory finding", () => record([finding({ severity: "advisory", status: "open", test: null })]), 1],
+      ["an accepted finding", () => record([finding({ status: "accepted", test: null, reason: "Fine here." })]), 1],
+      [
+        "an open finding the person asked to be fixed",
+        () => {
+          record([finding({ status: "open", test: null }), finding({ id: "R2", severity: "advisory", status: "open", test: null })]);
+          decideOpen(repo, mergeBase(repo), { accept: [], fix: ["R1", "R2"] });
+        },
+        2,
+      ],
+    ];
+    for (const [what, recordIt, count] of cases) {
+      it(`refuses an anchor whose review holds ${what}, and writes no fixes patch`, () => {
+        recordIt();
+        commit(repo, "fix.cs", "the fix\n", "fix");
+        const dir = fresh("delta");
+
+        const result = cli(["prepare", dir, "recorded"]);
+
+        assert.equal(result.code, 1);
+        assert.equal(result.err, refusedFor(count));
+        assert.equal(existsSync(join(dir, "fixes.patch")), false);
+      });
+    }
+
+    it("takes an anchor whose review holds only fixed and dismissed findings", () => {
+      record([finding(), finding({ id: "R2", status: "dismissed", test: null, reason: "The guard trims first." })]);
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      assert.equal(cli(["prepare", fresh("delta"), "recorded"]).code, 0);
+    });
+
+    it("refuses a newer review with an open finding though an older clean one is one of HEAD's commits, rather than fall back to it", () => {
+      record([], 1, new Date("2026-01-01T00:00:00Z"));
+      commit(repo, "other.cs", "second\n", "second commit");
+      record([finding({ status: "open", test: null })], 1, new Date("2026-01-02T00:00:00Z"));
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      const dir = fresh("delta");
+
+      const result = cli(["prepare", dir, "recorded"]);
+
+      assert.equal(result.code, 1);
+      assert.equal(result.err, refusedFor(1));
+      assert.equal(existsSync(join(dir, "fixes.patch")), false);
     });
 
     it("refuses when no review of the branch is recorded, and writes no fixes patch", () => {

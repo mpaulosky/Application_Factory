@@ -663,8 +663,9 @@ describe("the pre-push-review skill's fewer-rounds rules", () => {
     const flat = skill.replace(/\s+/g, " ");
     assert.match(flat, /A run for a fix made after the branch's review was recorded \(a fix for a PR thread, say\) starts with `scripts\/review\.sh prepare <run> recorded` instead/);
     assert.match(flat, /the run's first round is a later round/);
-    assert.match(flat, /starts at round 1 with `prepare <run>`, on a detached HEAD, when no review of the branch is recorded in this clone, when that commit isn't one of HEAD's \(an amend or a rebase since\), when `main` already has it, or when `main` was merged in since\. With no commits since, it refuses too: the recorded review already vouches for this code, so there is nothing to review\./);
-    assert.match(flat, /nothing of it carries either: its accepted and open findings are raised again for this code, and the new record holds only this run's findings/);
+    assert.match(flat, /starts at round 1 with `prepare <run>`, on a detached HEAD, when no review of the branch is recorded in this clone, when that review holds a finding open or accepted \(whatever its severity, `fixAsked` included: the fixes alone wouldn't raise it again\), when that commit isn't one of HEAD's \(an amend or a rebase since\), when `main` already has it, or when `main` was merged in since\. With no commits since, it refuses too: the recorded review already vouches for this code, so there is nothing to review\./);
+    assert.match(flat, /That review left nothing open or accepted \(`prepare` refuses one that did\), so there is nothing of it to raise again, and the new record holds only this run's findings/);
+    assert.doesNotMatch(flat, /its accepted and open findings are raised again for this code/);
   });
 
   // Issue 54 (R13, R15): the first round of a recorded run reads the fixes with the whole diff as context, the run goes on as any other, and the
@@ -673,8 +674,8 @@ describe("the pre-push-review skill's fewer-rounds rules", () => {
     const flat = skill.replace(/\s+/g, " ");
     assert.match(flat, /A later round reviews the fixes, not the whole branch again \(so does the first round of a run started with `prepare <run> recorded`\): its reviewers get `<run>\/fixes\.patch` to review and `<run>\/diff\.patch` as context/);
     assert.match(flat, /Then go on with `prepare <run> last` as in any run\./);
-    assert.match(flat, /description: >- The heavy local review[^]*?reviews the fixes again, or, for a fix made after a review was recorded, only that fix, and records/);
-    assert.match(flat, /then start a new run at step 1, in which the record just made is step 3's earlier review, with `prepare <run> recorded` \(step 4\), which reviews only the fix/);
+    assert.match(flat, /description: >- The heavy local review[^]*?reviews the fixes again, or, for a fix made after a review that left nothing open or accepted, only that fix, and records/);
+    assert.match(flat, /then start a new run at step 1, in which the record just made is step 3's earlier review\. That review holds the open finding, so the run starts at round 1 with `prepare <run>`: `prepare <run> recorded` \(step 4\) refuses a review that left a finding open or accepted\./);
     assert.match(flat, /In a run's first round, when it reviews the whole branch and the branch changes more than 30 files/);
   });
 
