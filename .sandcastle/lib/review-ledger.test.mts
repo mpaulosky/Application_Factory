@@ -813,6 +813,27 @@ describe("checkReview", () => {
     assert.equal(checkReview(repo, mergeBase(repo), {}).ok, false);
   });
 
+  // R38: a ledger's head is text anyone can write, so isAncestor ends git's options before it: "--all" is a commit name, not a flag.
+  it("asks git whether a commit is an ancestor with --end-of-options before the names it is given", () => {
+    const bin = mkdtempSync(join(tmpdir(), "logging-git-"));
+    const log = join(bin, "calls");
+    const real = execFileSync("bash", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    writeFileSync(join(bin, "git"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nexec '${real}' "$@"\n`);
+    chmodSync(join(bin, "git"), 0o755);
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path ?? ""}`;
+    try {
+      assert.equal(isAncestor(repo, "--all", "HEAD"), false);
+      assert.equal(isAncestor(repo, mergeBase(repo), "HEAD"), true);
+    } finally {
+      process.env.PATH = path;
+    }
+    const calls = readFileSync(log, "utf8").split("\n").filter((line) => line.includes("--is-ancestor"));
+    rmSync(bin, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    assert.ok(calls.some((line) => line.endsWith("merge-base --is-ancestor --end-of-options --all HEAD")), calls.join("\n"));
+    assert.ok(calls.every((line) => line.includes("merge-base --is-ancestor --end-of-options ")), calls.join("\n"));
+  });
+
   // Run `check` with a git 2.34 on the PATH, which has no merge-tree --write-tree.
   function checkWithOldGit(): ReturnType<typeof checkReview> {
     const bin = mkdtempSync(join(tmpdir(), "old-git-"));
@@ -2864,6 +2885,8 @@ describe("main", () => {
     // As writeLedger writes a ledger: indented JSON with a closing newline, owner-only, through replaceFile's temp file.
     const asWritten = (ledger: unknown) => `${JSON.stringify(ledger, null, 2)}\n`;
     const writeNamed = (name: string, ledger: Record<string, unknown>) => replaceFile(join(ledgerDir(repo), name), asWritten(ledger));
+    // A recordedAt as record writes one, from a Date, as the tests that record pass `now`.
+    const at = (when: string) => new Date(when).toISOString();
 
     it("writes the fixes since the commit the last recorded review vouched for, beside the whole diff, and says which commit", () => {
       record([]);
@@ -3141,8 +3164,8 @@ describe("main", () => {
         commit(repo, "other.cs", "second\n", "second commit");
         const second = ledgerJson([]);
         commit(repo, "fix.cs", "the fix\n", "fix");
-        writeNamed(names[0] as string, { ...first, recordedAt: "2026-01-02T00:00:00.000Z" });
-        writeNamed(names[1] as string, { ...second, recordedAt: "2026-01-01T00:00:00.000Z" });
+        writeNamed(names[0] as string, { ...first, recordedAt: at("2026-01-02T00:00:00Z") });
+        writeNamed(names[1] as string, { ...second, recordedAt: at("2026-01-01T00:00:00Z") });
 
         const result = cli(["prepare", fresh("delta"), "recorded"]);
 
@@ -3155,8 +3178,8 @@ describe("main", () => {
         commit(repo, "other.cs", "second\n", "second commit");
         const detached: Record<string, unknown> = { ...ledgerJson([finding({ status: "open", test: null })]), branch: "" };
         commit(repo, "fix.cs", "the fix\n", "fix");
-        writeNamed(names[0] as string, { ...clean, recordedAt: "2026-01-01T00:00:00.000Z" });
-        writeNamed(names[1] as string, { ...detached, recordedAt: "2026-01-02T00:00:00.000Z" });
+        writeNamed(names[0] as string, { ...clean, recordedAt: at("2026-01-01T00:00:00Z") });
+        writeNamed(names[1] as string, { ...detached, recordedAt: at("2026-01-02T00:00:00Z") });
 
         const result = cli(["prepare", fresh("delta"), "recorded"]);
 
@@ -3167,13 +3190,92 @@ describe("main", () => {
         );
       });
 
+      // R35, R36: an earlier head's open finding is superseded by a review of a descendant head recorded after it, and only then.
+      for (const [order, earlierAt, laterAt, refused] of [
+        ["recorded before the descendant's review", "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z", false],
+        ["recorded at the same time as the descendant's review", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", false],
+        ["recorded after the descendant's review", "2026-01-02T00:00:00Z", "2026-01-01T00:00:00Z", true],
+      ] as [string, string, string, boolean][]) {
+        it(`${refused ? "refuses" : "takes the descendant review"} when a review at an earlier head with an open finding was ${order} (${names.join(", ")})`, () => {
+          const earlier = ledgerJson([finding({ status: "open", test: null })]);
+          commit(repo, "other.cs", "second\n", "second commit");
+          const descendant = ledgerJson([]);
+          commit(repo, "fix.cs", "the fix\n", "fix");
+          writeNamed(names[0] as string, { ...earlier, recordedAt: at(earlierAt) });
+          writeNamed(names[1] as string, { ...descendant, recordedAt: at(laterAt) });
+
+          const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+          if (refused) {
+            assert.equal(result.code, 1);
+            assert.equal(
+              result.err,
+              `a review of feature/1-thing at ${String(earlier.head)}, recorded at ${at(earlierAt)}, after the last review (at ${String(descendant.head)}), has 1 finding(s) open or accepted, which the last review never read and a review of the fixes alone would not raise again: start again at round 1 with prepare <dir>.\n`,
+            );
+          } else {
+            assert.equal(result.code, 0, result.err);
+            assert.equal(result.err, fixesLine(String(descendant.head)));
+          }
+        });
+      }
+
+      // R36: a review under the branch's name off HEAD's history counts as an amend or a rebase only when it is later than every review on it.
+      for (const [order, goneAt, refused] of [
+        ["before", "2026-01-01T00:00:00Z", false],
+        ["at the same time as", "2026-01-02T00:00:00Z", false],
+        ["after", "2026-01-03T00:00:00Z", true],
+      ] as [string, string, boolean][]) {
+        it(`${refused ? "refuses" : "takes the review on HEAD's history"} when a review under the branch's name off it was recorded ${order} it (${names.join(", ")})`, () => {
+          const start = head();
+          commit(repo, "abandoned.cs", "abandoned\n", "abandoned");
+          const gone = ledgerJson([]);
+          run(repo, "reset", "--quiet", "--hard", start);
+          commit(repo, "other.cs", "second\n", "second commit");
+          const kept = ledgerJson([]);
+          commit(repo, "fix.cs", "the fix\n", "fix");
+          writeNamed(names[0] as string, { ...gone, recordedAt: at(goneAt) });
+          writeNamed(names[1] as string, { ...kept, recordedAt: at("2026-01-02T00:00:00Z") });
+
+          const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+          if (refused) {
+            assert.equal(result.code, 1);
+            assert.equal(result.err, `the last review of feature/1-thing was recorded at ${String(gone.head)}, which isn't one of HEAD's commits (an amend or a rebase since): start again at round 1 with prepare <dir>.\n`);
+          } else {
+            assert.equal(result.code, 0, result.err);
+            assert.equal(result.err, fixesLine(String(kept.head)));
+          }
+        });
+      }
+
+      // R42: two reviews off HEAD's history at one recordedAt: the message names the greater head, whatever order the folder gives.
+      it(`names the greater head of two reviews off HEAD's history recorded at the same time (${names.join(", ")})`, () => {
+        const start = head();
+        commit(repo, "abandoned.cs", "abandoned\n", "abandoned");
+        const one = ledgerJson([]);
+        run(repo, "reset", "--quiet", "--hard", start);
+        commit(repo, "abandoned.cs", "abandoned again\n", "abandoned again");
+        const other = ledgerJson([]);
+        run(repo, "reset", "--quiet", "--hard", start);
+        commit(repo, "fix.cs", "the fix\n", "fix");
+        const tie = at("2026-01-01T00:00:00Z");
+        writeNamed(names[0] as string, { ...one, recordedAt: tie });
+        writeNamed(names[1] as string, { ...other, recordedAt: tie });
+        const greater = String(one.head) > String(other.head) ? String(one.head) : String(other.head);
+
+        const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+        assert.equal(result.code, 1);
+        assert.equal(result.err, `the last review of feature/1-thing was recorded at ${greater}, which isn't one of HEAD's commits (an amend or a rebase since): start again at round 1 with prepare <dir>.\n`);
+      });
+
       it(`refuses two reviews at one head when one holds an open finding (${names.join(", ")})`, () => {
         const clean = ledgerJson([]);
         const open = ledgerJson([finding({ status: "open", test: null })]);
         commit(repo, "fix.cs", "the fix\n", "fix");
-        const at = "2026-01-01T00:00:00.000Z";
-        writeNamed(names[0] as string, { ...clean, recordedAt: at });
-        writeNamed(names[1] as string, { ...open, recordedAt: at });
+        const tie = at("2026-01-01T00:00:00Z");
+        writeNamed(names[0] as string, { ...clean, recordedAt: tie });
+        writeNamed(names[1] as string, { ...open, recordedAt: tie });
 
         const result = cli(["prepare", fresh("delta"), "recorded"]);
 
@@ -3242,7 +3344,7 @@ describe("main", () => {
         const clean = ledgerJson([]);
         writeNamed("older.json", clean);
         commit(repo, "other.cs", "second\n", "second commit");
-        const newer = { ...clean, head: run(repo, "rev-parse", "HEAD"), recordedAt: "2099-01-01T00:00:00.000Z" };
+        const newer = { ...clean, head: run(repo, "rev-parse", "HEAD"), recordedAt: at("2099-01-01T00:00:00Z") };
         const text = make(newer);
         const path = join(ledgerDir(repo), "newer.json");
         if (text === undefined) mkdirSync(path);
@@ -3338,6 +3440,45 @@ describe("main", () => {
       assert.equal(result.code, 0, result.err);
     });
 
+    // R38: a head that isn't a full object id names no commit for certain, so a review of this branch's, or of none, with one counts as no review.
+    for (const [badHead, branchOf] of [
+      ["HEAD", "feature/1-thing"],
+      ["feature/1-thing", "feature/1-thing"],
+      ["abc1234", "feature/1-thing"],
+      ["-x", "feature/1-thing"],
+      ["HEAD", ""],
+    ] as [string, string][]) {
+      it(`refuses a review ${branchOf === "" ? "naming no branch" : "of this branch"} whose head is ${JSON.stringify(badHead)}, which isn't a full object id`, () => {
+        writeNamed("older.json", ledgerJson([]));
+        const bad = { ...ledgerJson([finding({ status: "open", test: null })]), head: badHead, branch: branchOf };
+        writeNamed("bad.json", bad);
+        commit(repo, "fix.cs", "the fix\n", "fix");
+        const dir = fresh("delta");
+
+        const result = cli(["prepare", dir, "recorded"]);
+
+        assert.equal(result.code, 1);
+        assert.equal(
+          result.err,
+          `the ledger ${join(ledgerDir(repo), "bad.json")} names its head ${JSON.stringify(badHead)}, which isn't a full object id, and may be the newest review of feature/1-thing, so a recorded run can't anchor while it is there. ` +
+            "It counts as no review, and round 1 and record leave it in place: delete or move it to let recorded runs anchor again, or start again at round 1 with prepare <dir>.\n",
+        );
+        assert.equal(existsSync(join(dir, "fixes.patch")), false);
+      });
+    }
+
+    it("doesn't refuse for another branch's review whose head isn't a full object id", () => {
+      const clean = ledgerJson([]);
+      writeNamed("mine.json", clean);
+      writeNamed("other.json", { ...clean, head: "HEAD", branch: "feature/2-other" });
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.equal(result.err, fixesLine(String(clean.head)));
+    });
+
     it("refuses a review recorded at a commit main already has, and writes no fixes patch", () => {
       record([]);
       const recordedAt = head();
@@ -3388,19 +3529,22 @@ describe("main", () => {
   }
 
   // R33: the second argument is `last`, `recorded` or a commit, checked before the folder is touched.
-  for (const second of ["recordd", "", "-v", "HEAD:app.cs"]) {
+  for (const second of ["recordd", "", "-v", "HEAD:app.cs", "HEAD", "origin/main", "feature/1-thing", "a-tag", "SHORT", "UPPER"]) {
     it(`prepare refuses ${JSON.stringify(second)} as its second argument, and leaves the run folder as it was`, () => {
       const dir = join(root, "run");
-      cli(["prepare", dir]);
+      const printed = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
       record([]);
       commit(repo, "fix.cs", "the fix\n", "fix");
+      run(repo, "tag", "a-tag", printed);
       writeFileSync(join(dir, "fixes.patch"), "an earlier round's fixes\n");
       const before = Object.fromEntries(["diff.patch", "fixes.patch", "head"].map((name) => [name, readFileSync(join(dir, name), "utf8")]));
+      // A tag, a short id and an upper-case id all name the commit the round before printed; only its full lower-case id is taken.
+      const given = second === "SHORT" ? printed.slice(0, 12) : second === "UPPER" ? printed.toUpperCase() : second;
 
-      const result = cli(["prepare", dir, second]);
+      const result = cli(["prepare", dir, given]);
 
       assert.equal(result.code, 1);
-      assert.match(result.err, /^Usage: scripts\/review\.sh <command>/);
+      assert.ok(result.err.startsWith(`prepare: ${JSON.stringify(given)} is none of last, recorded and the full id of a commit this clone has.\nUsage: scripts/review.sh <command>`), result.err);
       for (const [name, text] of Object.entries(before)) assert.equal(readFileSync(join(dir, name), "utf8"), text, name);
     });
   }
