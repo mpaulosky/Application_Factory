@@ -2870,7 +2870,7 @@ describe("main", () => {
       assert.equal(readFileSync(join(dir, "head"), "utf8"), `${run(repo, "rev-parse", "HEAD")}\n`);
     });
 
-    it("gives prepareRound's since the anchor, and leaves the round 1 size warning out", () => {
+    it("gives prepareRound's since the anchor", () => {
       record([]);
       const recordedAt = run(repo, "rev-parse", "HEAD");
       commit(repo, "fix.cs", "the fix\n", "fix");
@@ -2993,7 +2993,54 @@ describe("main", () => {
       assert.equal(result.code, 1);
       assert.match(result.err, /no fixes since/);
     });
+
+    it("refuses a review recorded at a commit main already has, and writes no fixes patch", () => {
+      record([]);
+      run(upstream, "pull", "--quiet", "--ff-only", repo, "feature/1-thing");
+      run(repo, "fetch", "--quiet", "origin");
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      const dir = fresh("delta");
+
+      const result = cli(["prepare", dir, "recorded"]);
+
+      assert.equal(result.code, 1);
+      assert.match(result.err, /which main already has: start again at round 1/);
+      assert.equal(existsSync(join(dir, "fixes.patch")), false);
+    });
+
+    it("gives no round 1 size warning, though the branch is past the size it warns about", () => {
+      for (let index = 0; index <= REVIEW_SIZE_MAX_FILES; index++) writeFileSync(join(repo, `big${index}.cs`), `${index}\n`);
+      run(repo, "add", ".");
+      run(repo, "commit", "--quiet", "-m", "a big branch");
+      const whole = cli(["prepare", fresh("round1")]);
+      assert.match(whole.err, /⚠/, "the branch is past the size round 1 warns about");
+      record([]);
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.doesNotMatch(result.err, /⚠/);
+    });
   });
+
+  // A third argument is refused before prepare removes or writes anything in the folder.
+  for (const third of ["recorded", "last", "sha"]) {
+    it(`prepare refuses an argument after ${third}, and leaves the run folder as it was`, () => {
+      const dir = join(root, "run");
+      const head = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
+      record([]);
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      writeFileSync(join(dir, "fixes.patch"), "an earlier round's fixes\n");
+      const before = Object.fromEntries(["diff.patch", "fixes.patch", "head"].map((name) => [name, readFileSync(join(dir, name), "utf8")]));
+
+      const result = cli(["prepare", dir, third === "sha" ? head : third, "extra"]);
+
+      assert.equal(result.code, 1);
+      assert.match(result.err, /^Usage: scripts\/review\.sh <command>/);
+      for (const [name, text] of Object.entries(before)) assert.equal(readFileSync(join(dir, name), "utf8"), text, name);
+    });
+  }
 
   for (const dir of ["", "relative/run"]) {
     it(`prepare refuses a folder that isn't absolute: ${JSON.stringify(dir)}`, () => {

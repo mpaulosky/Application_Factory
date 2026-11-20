@@ -1768,6 +1768,8 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         // An absolute folder only: an empty shell variable would otherwise
         // write the diff somewhere no reviewer is told to look.
         if (rest[0] === undefined || !isAbsolute(rest[0])) return fail(USAGE);
+        // Refused before anything in the folder is removed or written.
+        if (rest.length > 2) return fail(USAGE);
         // One prepareRound gives both: the key is that of the whole diff, and the files written below hold what the reviewers read (readPatch
         // and readFixes), which leave out the verbatim Template mirrors.
         // A fixes patch is only ever this prepare's: an earlier round's would
@@ -1777,7 +1779,6 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         const preparedHead = existsSync(headFile) ? readFileSync(headFile, "utf8").trim() : undefined;
         // `last` is the HEAD the round before printed, which this folder's `head` file holds: no HEAD to copy from the last round's output.
         if (rest[1] === "last" && preparedHead === undefined) return fail("prepare <dir> last: no round was prepared in this folder yet, so there is no HEAD to read the fixes since. Run prepare <dir> first.");
-        if (rest.length > 2) return fail(USAGE);
         // `recorded`: the fixes since the commit the branch's last recorded review vouched for (recordedAnchor), in a new run.
         const sinceCommit = rest[1] === "last" ? preparedHead : rest[1];
         const since: FixesSince | undefined = rest[1] === "recorded" ? { recorded: true } : sinceCommit === undefined ? undefined : { commit: sinceCommit, preparedHead };
