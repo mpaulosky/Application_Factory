@@ -3153,7 +3153,7 @@ describe("main", () => {
       it(`refuses a review recorded on a detached HEAD with an open finding, after a clean review of the branch (${names.join(", ")})`, () => {
         const clean = ledgerJson([]);
         commit(repo, "other.cs", "second\n", "second commit");
-        const detached = { ...ledgerJson([finding({ status: "open", test: null })]), branch: "" };
+        const detached: Record<string, unknown> = { ...ledgerJson([finding({ status: "open", test: null })]), branch: "" };
         commit(repo, "fix.cs", "the fix\n", "fix");
         writeNamed(names[0] as string, { ...clean, recordedAt: "2026-01-01T00:00:00.000Z" });
         writeNamed(names[1] as string, { ...detached, recordedAt: "2026-01-02T00:00:00.000Z" });
