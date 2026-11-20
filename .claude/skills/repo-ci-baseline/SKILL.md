@@ -92,10 +92,11 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
      it re-Applies the other repos in order, one pre-push gate at a time, reports a repo that fails and goes on.
      Start with `--dry-run`. It ends with the `land.sh` command for the PRs it left open.
    - **Roll out unattended:** `rollout.sh --auto --brings '#<n>,#<n>'` does all of that in one run ([ADR 0015](../../../docs/adr/0015-a-rollout-runs-each-applications-review-headless-in-its-worktree.md)).
-     It checks the tools and each repo's `global.json` SDK first. When the gate asks for a review it runs `/pre-push-review` headless in the repo's re-Apply worktree
-     (`claude -p`, `--permission-mode auto`), then reapplies, and lands TicketManager's PR before the rest. It stops only where a person decides
-     (findings that wait for one, a PR that doesn't land, a failed reapply or review session), printing the command that decides it and `rollout.sh --auto` to resume.
-     A finding in an Owned file stops it too: fix it Template first, then add that PR to `--brings` and resume.
+     It checks the tools and the Template's `global.json` SDK first (`--dry-run` stops there and prints the plan). When the gate asks for a review it runs
+     `/pre-push-review` headless in the repo's re-Apply worktree (`claude -p`, `--permission-mode auto`, with deny rules for pushing, deciding findings, GitHub writes
+     and the Factory), then reapplies. It lands TicketManager's PR before the rest start, and the rest's PRs together. It stops only where a person decides
+     (findings that wait for one, a PR that doesn't land or can't be read, a failed reapply or review session), printing the command that decides it and the one that resumes.
+     A finding in an Owned file stops it too: fix it Template first, then add that PR to `--brings` and resume. `github/auto_rollout.py`'s header has the details.
    - **One repo:** `reapply.sh --brings '#<n>,#<n>' <repo>` (what `rollout.sh` runs, and the way to retry a repo that failed)
      prepares the `chore/reapply-baseline` worktree, merges the remote branch and `main`, commits `apply.sh`'s output alone,
      pushes through the gate (which asks for a review when Apply writes the coverage threshold,

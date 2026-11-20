@@ -30,7 +30,7 @@
 #      label the open PR (an earlier run may have pushed and then failed), then
 #      stop there and say so.
 #   4. git push -u origin HEAD, through the repo's pre-push gate. A failed push
-#      prints its log's path and exits 1. The gate lets a re-Apply through without
+#      prints its log's path. The gate lets a re-Apply through without
 #      a review only when every file is an Owned file that carries no behaviour; when Apply writes the coverage
 #      threshold, the hand-off rules, an issue template, the reviewer agent, a
 #      Sandcastle prompt (intake, critique, plan, review or a role's), the local gate's check.sh or global.json, the gate asks for one
@@ -38,7 +38,11 @@
 #      this again. A push the gate's local review check refused exits 3 when no
 #      review is recorded for the diff, and 4 when one is but findings in it wait
 #      for a person, so rollout.sh --auto can run the review or stop for the
-#      person; any other failed push exits 1.
+#      person. The refusal is read only from the gate's last step, the Local
+#      review one, and only from a line that starts with the ledger's own text,
+#      so output the repository controls (a test's, a finding's summary) can't
+#      pose as it. Any other failed push, and any other failure (a gh exiting 4
+#      on lost sign-in included), exits 1: only those two exits give 3 or 4.
 #   5. Open the re-Apply PR (ready, not a draft), or add a line for this Apply
 #      commit to the open one's description, with the baseline:apply label either
 #      way (owned-files.yml's Owned files check exempts an Apply PR only with it;
@@ -66,6 +70,10 @@
 # branch after the push, never from the API, which lags behind a push: name
 # that head in any thread reply.
 set -euo pipefail
+# A command that fails under set -e exits with its own status, and gh exits 4 when it needs a sign-in: map every such
+# failure to 1, so 3 and 4 mean only the two review refusals below. die, usage and the explicit exits are unaffected.
+set -E
+trap 'exit 1' ERR
 
 branch="chore/reapply-baseline"
 worktree_name="chore-reapply-baseline"
@@ -74,7 +82,9 @@ co_author="Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 pr_title="chore: Re-apply the repo-ci-baseline Template"
 footer="🤖 Generated with [Claude Code](https://claude.com/claude-code)"
 # The texts the gate prints when its local review check refuses the push (review-ledger.mts's checkReview, word for
-# word: test.sh holds them equal), and the exit codes they map to, which rollout.py's REVIEW_NEEDED and FINDINGS_WAIT equal.
+# word), the gate's step header that check runs under (gate.sh's), and the exit codes they map to, which rollout.py's
+# REVIEW_NEEDED and FINDINGS_WAIT equal: github/tests/test_rollout.py holds all of them equal.
+review_step="Local review (scripts/review.sh check)"
 no_review_text="No review is recorded for this diff."
 findings_wait_text="review finding(s) wait for a person."
 review_needed_exit=3
@@ -294,20 +304,34 @@ else
 fi
 
 # ── 4. Push through the pre-push gate ───────────────────────────────────────
+# How the gate's local review check refused a push, from its log: "findings" (a review is recorded, and findings in it
+# wait for a person), "none" (no review is recorded) or nothing. The gate stops at the first step that fails, so only
+# a log whose last step header (gate.sh's step(): "▶ <name>", in colour) is the Local review one can hold its refusal,
+# and the ledger prints each refusal at the start of a line: a finding's summary, which can quote any text, is
+# indented, and an earlier step's output comes before that header. A later step only runs once the check passed, and
+# any line with "▶ " after the header ends the section, so a later step's output would have to print the header
+# line itself to pose as a refusal. Findings win over a missing review, so a refusal that names them is never read as one.
+review_refusal() {
+  awk -v header="$review_step" -v none="$no_review_text" -v wait="$findings_wait_text" '
+    { line = $0; gsub(/\033\[[0-9;]*m/, "", line) }
+    index(line, "\342\226\266 ") { in_review = (line == "\342\226\266 " header); findings = 0; missing = 0; next }
+    substr(line, 1, length(none)) == none { missing = 1 }
+    match(line, /^[0-9]+ /) && substr(line, RLENGTH + 1, length(wait)) == wait { findings = 1 }
+    END { if (in_review && findings) print "findings"; else if (in_review && missing) print "none" }' "$1"
+}
 log="$(mktemp "${TMPDIR:-/tmp}/reapply-$repo_name.XXXXXX.log")"
 echo "── $repo_name: pushing through the pre-push gate (log: $log)"
 if ! w push -u origin HEAD > "$log" 2>&1; then
   echo "reapply.sh: push failed for $repo_name; log: $log" >&2
   tail -n 20 "$log" >&2
-  # The gate's local review check, in the Owned ledger's own words (test.sh holds them equal to review-ledger.mts).
-  if grep -qF "$no_review_text" "$log"; then
-    echo "reapply.sh: $repo_name needs a review: run /pre-push-review in $worktree, then run this again" >&2
-    exit "$review_needed_exit"
-  fi
-  if grep -qF "$findings_wait_text" "$log"; then
-    echo "reapply.sh: review findings on $repo_name wait for a person: cd $worktree && scripts/review.sh accept-open" >&2
-    exit "$findings_wait_exit"
-  fi
+  case "$(review_refusal "$log")" in
+    findings)
+      printf 'reapply.sh: review findings on %s wait for a person: cd %q && scripts/review.sh accept-open\n' "$repo_name" "$worktree" >&2
+      exit "$findings_wait_exit" ;;
+    none)
+      printf 'reapply.sh: %s needs a review: run /pre-push-review in %q, then run this again\n' "$repo_name" "$worktree" >&2
+      exit "$review_needed_exit" ;;
+  esac
   exit 1
 fi
 # The pushed head, from the local branch: the API lags behind the push.

@@ -2,7 +2,9 @@
 # Tests for reapply.sh's local half, against a throwaway repo whose origin is a
 # bare repo, a copy of the skill with a small stand-in Template, and a fake gh
 # on PATH. The stand-in Template's pre-push hook stands in for the gate: it
-# logs each run, and fails while $stub/fail-push exists.
+# logs each run, and fails while $stub/fail-push exists. While $stub/gate-log
+# exists it prints that file, as the gate prints its steps, and fails: the
+# review-refusal tests write the gate's own Local review step into it.
 # check() evals its condition string later, so the single quotes are deliberate
 # and the variables it reads look unused to shellcheck.
 # shellcheck disable=SC2016,SC2034
@@ -35,8 +37,7 @@ cat > "$skill/template/owned/.github/hooks/pre-push" <<EOF
 #!/usr/bin/env bash
 echo gate >> "$stub/push.log"
 if [[ -e "$stub/fail-push" ]]; then echo "gate: the build failed"; exit 1; fi
-if [[ -e "$stub/no-review" ]]; then echo "No review is recorded for this diff. Run /pre-push-review, which reviews, fixes and records it." >&2; exit 1; fi
-if [[ -e "$stub/findings-wait" ]]; then echo "2 review finding(s) wait for a person. Fix them and run /pre-push-review again" >&2; exit 1; fi
+if [[ -e "$stub/gate-log" ]]; then cat "$stub/gate-log" >&2; exit 1; fi
 EOF
 chmod +x "$skill/template/owned/.github/hooks/pre-push"
 reapply="$skill/reapply.sh"
@@ -97,7 +98,8 @@ case "$1 $2" in
     esac ;;
   "pr create") label_made_or_fail --label "$@"; body_from "$@"; echo "https://github.com/acme/Widget/pull/7" ;;
   "label create")
-    if [[ -e "$stub/label-fails" ]]; then echo "HTTP 403: Resource not accessible" >&2; exit 1; fi ;;
+    if [[ -e "$stub/label-fails" ]]; then echo "HTTP 403: Resource not accessible" >&2; exit 1; fi
+    if [[ -e "$stub/signed-out" ]]; then echo "To get started with GitHub CLI, please run:  gh auth login" >&2; exit 4; fi ;;
   "pr view")
     if [[ "$*" == *"--json headRefOid,reviewRequests,reviews,url"* ]]; then
       if [[ -e "$stub/requests" ]]; then requests="$(logins_json < "$stub/requests")"
@@ -283,18 +285,52 @@ check "push fails: names its log" '[[ -n "$log" && -f "$log" ]] && grep -q "the 
 check "push fails: PR untouched" '! grep -q "^pr \(create\|edit\)" "$stub/gh.log"'
 check "push fails: any other failure exits 1" '[[ $rc -eq 1 ]]'
 command rm -f "$stub/fail-push"
-# The gate's review check refused the push: 3 when no review is recorded, 4 when findings wait for a person.
-touch "$stub/no-review"
-out="$("$reapply" --brings '#83' "$repo" 2>&1)" && rc=0 || rc=$?
-check "no review recorded: exits 3" '[[ $rc -eq 3 ]] || { echo "rc $rc: $out" >&2; false; }'
+# The gate's review check refused the push: 3 when no review is recorded, 4 when findings wait for a person, read only
+# from the gate's last step, the Local review one (gate.sh's step header, colour codes and all), at a line's start.
+step_line() { printf '\n\033[0;36m\342\226\266 %s\033[0m\n' "$1"; }
+gate_says() { : > "$stub/gate-log"; for part in "$@"; do printf '%b\n' "$part" >> "$stub/gate-log"; done; }
+review_step="$(step_line "Local review (scripts/review.sh check)")"
+no_review="No review is recorded for this diff. Run /pre-push-review, which reviews, fixes and records it."
+findings="2 review finding(s) wait for a person. Fix them and run /pre-push-review again, or the person you work for accepts each one (never an agent on their behalf):"
+refused() { # <name> <expected exit>: run reapply.sh against the gate log gate_says wrote
+  reset_gh
+  echo 7 > "$stub/open"
+  out="$("$reapply" --brings '#83' "$repo" 2>&1)" && rc=0 || rc=$?
+  check "$1: exits $2" '[[ $rc -eq '"$2"' ]] || { echo "rc $rc: $out" >&2; false; }'
+  check "$1: PR untouched" '! grep -q "^pr \(create\|edit\)" "$stub/gh.log"'
+}
+gate_says "$review_step" "$no_review"
+refused "no review recorded" 3
 check "no review recorded: names the worktree to review in" 'grep -qF "needs a review: run /pre-push-review in $wt" <<< "$out"'
-check "no review recorded: PR untouched" '! grep -q "^pr \(create\|edit\)" "$stub/gh.log"'
-command rm -f "$stub/no-review"
-touch "$stub/findings-wait"
-out="$("$reapply" --brings '#83' "$repo" 2>&1)" && rc=0 || rc=$?
-check "findings wait for a person: exits 4" '[[ $rc -eq 4 ]] || { echo "rc $rc: $out" >&2; false; }'
+gate_says "$review_step" "$findings" "  R1 critical src/a.cs:1 (Tests): an untested branch"
+refused "findings wait for a person" 4
 check "findings wait for a person: names the command that decides them" 'grep -qF "cd $wt && scripts/review.sh accept-open" <<< "$out"'
-command rm -f "$stub/findings-wait"
+# A finding's summary can quote the no-review text; it is indented, and the findings refusal wins.
+gate_says "$review_step" "$findings" "  R1 critical a:1 (Tests): $no_review"
+refused "findings quoting the no-review text" 4
+# Output the repository controls can't pose as a refusal: from an earlier step, from a later one, or indented.
+gate_says "$(step_line "Tests")" "$no_review" "$(step_line "Build")" "error CS1002"
+refused "no-review text in an earlier step" 1
+gate_says "$review_step" "Reviewed clean." "$(step_line "Tests")" "$no_review" "$findings"
+refused "refusal texts in a step after the review check" 1
+gate_says "$review_step" "  $no_review" "x $findings"
+refused "refusal texts not at a line's start" 1
+gate_says "$(step_line "Local review (scripts/review.sh check) again")" "$no_review"
+refused "a step header that only starts like the review step" 1
+# Both refusals at a line's start: the findings one wins, since a review is recorded.
+gate_says "$review_step" "$no_review" "$findings"
+refused "both refusal texts" 4
+# Only the last step counts: a refusal in an earlier run of the same step, followed by a pass, is not one.
+gate_says "$review_step" "$no_review" "$review_step" "Reviewed clean." "error: failed to push some refs"
+refused "a refusal followed by the step passing" 1
+command rm -f "$stub/gate-log"
+# A failure that isn't the push still exits 1 when its command exits 3 or 4: gh exits 4 when signed out.
+reset_gh
+echo 7 > "$stub/open"
+touch "$stub/signed-out"
+out="$("$reapply" --brings '#83' "$repo" 2>&1)" && rc=0 || rc=$?
+check "gh signed out (exit 4): reapply.sh exits 1, not a review code" '[[ $rc -eq 1 ]] || { echo "rc $rc: $out" >&2; false; }'
+command rm -f "$stub/signed-out"
 # The unpushed Apply commit goes out with the next run.
 reset_gh
 echo 7 > "$stub/open"
