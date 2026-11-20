@@ -5,7 +5,8 @@
 # .github/scripts/discover_tests.py and .github/scripts/check_gh_repo.py, with the refs git would
 # pass on stdin. Stub `dotnet`, `pnpm`, `markdownlint-cli2`, `yamllint`,
 # `actionlint`, `zizmor` and `shellcheck` binaries log each call, and fail when the call matches the FAIL glob, so no
-# real build or network access is needed. check_gh_repo.py is the real one, so shfmt (v3.14 or a later v3) must be on PATH.
+# real build or network access is needed. check_gh_repo.py and the Shell format step run the real shfmt (v3.14 or a later v3), which must be on PATH;
+# the repo gets the Template's .editorconfig, so the scripts it is given are written in that style.
 # Usage: .github/hooks/tests/pre-push.test.sh
 set -uo pipefail
 
@@ -56,6 +57,8 @@ mkdir -p "$REPO/tests/Fake.Support"
 echo '<Project />' > "$REPO/tests/Fake.Support/Fake.Support.csproj"
 cp "$SCRIPTS/gate.sh" "$SCRIPTS/check-branch-name.sh" "$REPO/scripts/"
 cp "$DISCOVER" "$CHECK_GH_REPO" "$REPO/.github/scripts/"
+# The Template's .editorconfig, as every repo it is Applied to has: the gate's Shell format step reads its shell style, so the fixture scripts below are written in it.
+cp "$SCRIPTS/../.editorconfig" "$REPO/.editorconfig"
 git -C "$REPO" add .
 git -C "$REPO" commit -q -m init
 git -C "$REPO" update-ref refs/remotes/origin/main main
@@ -341,6 +344,20 @@ commit_on feature/6-script scripts/tool.sh '#!/usr/bin/env bash'
 FAIL='shellcheck*scripts/tool.sh*' run_hook feature/6-script "$(push_stdin feature/6-script)"
 expect "a shellcheck failure in a changed script refuses the push" refused any
 
+# The Shell format step: a changed script shfmt would reformat (a 4-space indent, where .editorconfig gives 2) refuses the push, and a changed extensionless
+# scripts/ file, which no .editorconfig section styles, is not formatted.
+commit_on feature/6-format scripts/indented.sh "if true; then
+    echo indented
+fi"
+run_hook feature/6-format "$(push_stdin feature/6-format)"
+expect "a changed shell file shfmt would reformat refuses the push" refused any "run shfmt -w on each file"
+commit_on feature/6-extensionless scripts/tool "if true; then
+    echo indented
+fi"
+run_hook feature/6-extensionless "$(push_stdin feature/6-extensionless)"
+expect "a changed extensionless script is not formatted, only shellchecked" allowed tests-ran
+expect_log "a changed extensionless script is shellchecked" ran 'shellcheck*scripts/tool*'
+
 commit_on feature/7-hook-readme .github/hooks/README.md '# Hooks'
 run_hook feature/7-hook-readme "$(push_stdin feature/7-hook-readme)"
 expect_log "a non-hook file under .github/hooks skips shellcheck" not-ran 'shellcheck*'
@@ -359,7 +376,8 @@ git -C "$REPO" checkout -q -- tests/Fake.Tests/Fake.Tests.csproj
 
 # The repo's own checks in .github/ci/gate-checks.sh run before the build, get
 # the merge base, and fail the gate when they fail.
-commit_on feature/9-repo-checks .github/ci/gate-checks.sh "echo \"repo-check base=\$1\" >> '$LOG'; [[ -z \"\${FAIL_REPO_CHECK:-}\" ]]"
+commit_on feature/9-repo-checks .github/ci/gate-checks.sh "echo \"repo-check base=\$1\" >> '$LOG'
+[[ -z \"\${FAIL_REPO_CHECK:-}\" ]]"
 run_hook feature/9-repo-checks "$(push_stdin feature/9-repo-checks)"
 expect "the gate runs .github/ci/gate-checks.sh" allowed tests-ran
 expect_log "gate-checks.sh gets the merge base" ran "repo-check base=$(git -C "$REPO" rev-parse origin/main)"
