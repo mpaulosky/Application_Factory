@@ -55,7 +55,9 @@ review-only round raises (step 7), goes to the branch's follow-up issue (step 9)
 ### 1. Get ready
 
 Work in the branch's worktree. Run `git fetch origin main`. If the branch is behind `origin/main`, merge it now
-(`git merge origin/main`), so the review covers what will be pushed. The ledger refuses a dirty worktree: commit your own
+(`git merge origin/main`), so the review covers what will be pushed. A run for a fix made after a review was recorded (step 4's
+`prepare <run> recorded`) is the exception: a merge of `main` since that review makes it start at round 1, so review the fix first and
+merge `main` after, before the push. A clean merge keeps the record the run makes. The ledger refuses a dirty worktree: commit your own
 changes for the branch. When the worktree holds changes you didn't make, stop and ask the person what to do with them;
 never discard or stash their work unasked.
 
@@ -132,11 +134,14 @@ mirror alone still needs a new review. In a later round, run `scripts/review.sh 
 (`last` is the HEAD the round before printed, which `prepare` keeps in `<run>/head`; that HEAD, given as the argument, does the same): it also writes the
 diff of that round's fixes to `<run>/fixes.patch`, filtered the same way. A run for a fix made after the branch's review was recorded (a fix
 for a PR thread, say) starts with `scripts/review.sh prepare <run> recorded` instead: it writes to `<run>/fixes.patch` every change since the commit
-the branch's last recorded review vouched for, which it names on stderr, and the run's first round is a later round. It refuses, and the run
-starts at round 1 with `prepare <run>`, on a detached HEAD, when no review of the branch is recorded in this clone, when a ledger file that may be the branch's newest review
-doesn't read or parse (it counts as no review, and round 1 and record leave it in place: delete or move it to let recorded runs anchor again), when that review holds a finding
-open or accepted (whatever its severity, `fixAsked` included: the fixes alone wouldn't raise it again), when that commit isn't one of
-HEAD's (an amend or a rebase since), when `main` already has it, or when `main` was merged in since. With no commits since, it refuses too: the
+the branch's last recorded review vouched for, which it names on stderr, and the run's first round is a later round. The branch's reviews are those
+of its own commits, whatever branch name they were recorded under (a detached HEAD, a rename), and the last is the one whose head has every other review's head as an
+ancestor, not the latest by the clock. It refuses, and the run starts at round 1 with `prepare <run>`, on a detached HEAD, when no
+review of the branch's own commits is recorded in this clone, when a ledger file that may be one of them doesn't read or parse (it counts as no
+review, and round 1 and record leave it in place: delete or move it to let recorded runs anchor again), when the reviews' heads don't form one line,
+when a review at the last one's head holds a finding open or accepted (whatever its severity, `fixAsked` included: the fixes alone wouldn't raise it
+again), when a later review under the branch's name is at a commit that isn't one of HEAD's (an amend or a rebase since), when `main` already has the
+last review's commit, or when `main` was merged in since. With no changes since (no commits, or commits that change nothing), it refuses too: the
 recorded review already vouches for this code, so there is nothing to review. Then go on with `prepare <run> last` as in any run.
 Write to `<run>/decisions.md`, with the Write tool and not a shell heredoc (the text quotes code such as `$(...)`,
 which a safety check may block), the earlier decisions from step 3 and every finding this run's earlier rounds
