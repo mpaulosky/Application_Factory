@@ -3,7 +3,8 @@ name: pre-push-review
 description: >-
   The heavy local review every branch passes before it's pushed. Reviews the branch's whole diff against origin/main
   with parallel reviewers, grades each finding Critical, Warning or Advisory, fixes all of them behind a regression
-  test or check as they're found, reviews the fixes again, and records the result the gate checks. Use
+  test or check as they're found, reviews the fixes again, or, for a fix made after a review was recorded, only that fix,
+  and records the result the gate checks. Use
   before every push (the first and every fix), when asked to review a branch before pushing, or when the gate says no
   review is recorded for this diff.
 ---
@@ -149,7 +150,7 @@ source at the pinned commit into `<run>/actions/<owner>/<repo>/<path>`, as the r
 (`repo="$(scripts/review.sh repo)" && GH_REPO="$repo" gh api -H 'Accept: application/vnd.github.raw' 'repos/<action owner>/<action repo>/contents/<path>?ref=<sha>'`), since reviewers
 can't.
 
-In round 1, when the branch changes more than 30 files
+In a run's first round, when it reviews the whole branch and the branch changes more than 30 files
 or more than 3,000 lines, a file and its Template mirror counting once, `prepare` also writes a warning to stderr, so stdout stays the two lines
 (the host review logs the same one). Tell the person and suggest splitting the branch; it only
 advises, and the review goes on.
@@ -355,7 +356,7 @@ either accepts it, with `scripts/review.sh accept R3 "<reason>"` or several at o
 (`--reason "<reason>"` for one reason across the ids named; every finding is named, there is no "all"), or asks you to fix it, by saying so or with
 `scripts/review.sh accept-open --fix R3`, which marks it `fixAsked` and leaves it open (and blocking, unless it's an Advisory one that isn't a security
 finding): fix it as in step 6, then start a new run at step 1, in which the record just made is step 3's
-earlier review. Never run `accept` or `accept-open` with ids yourself: only the person decides. The
+earlier review, with `prepare <run> recorded` (step 4), which reviews only the fix. Never run `accept` or `accept-open` with ids yourself: only the person decides. The
 Advisory findings left open never block. For a branch Sandcastle builds, the host runs these rounds itself (`.sandcastle/lib/host-review.mts`), with these
 reviewers, the Bar and lenses, and `prepare` and `record` run by the host in the main checkout, so no session records for it and no agent reaches `.git/review`;
 its sandboxes still skip the gate's review check and see an empty `.git/review`.

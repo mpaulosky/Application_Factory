@@ -667,6 +667,17 @@ describe("the pre-push-review skill's fewer-rounds rules", () => {
     assert.match(flat, /nothing of it carries either: its accepted and open findings are raised again for this code, and the new record holds only this run's findings/);
   });
 
+  // Issue 54 (R13, R15): the first round of a recorded run reads the fixes with the whole diff as context, the run goes on as any other, and the
+  // description, step 9 and the size warning say so.
+  it("gives a recorded run's first round fixes.patch with diff.patch as context, goes on with last, and says so in the description, step 9 and the size warning", () => {
+    const flat = skill.replace(/\s+/g, " ");
+    assert.match(flat, /A later round reviews the fixes, not the whole branch again \(so does the first round of a run started with `prepare <run> recorded`\): its reviewers get `<run>\/fixes\.patch` to review and `<run>\/diff\.patch` as context/);
+    assert.match(flat, /Then go on with `prepare <run> last` as in any run\./);
+    assert.match(flat, /description: >- The heavy local review[^]*?reviews the fixes again, or, for a fix made after a review was recorded, only that fix, and records/);
+    assert.match(flat, /then start a new run at step 1, in which the record just made is step 3's earlier review, with `prepare <run> recorded` \(step 4\), which reviews only the fix/);
+    assert.match(flat, /In a run's first round, when it reviews the whole branch and the branch changes more than 30 files/);
+  });
+
   it("has the fixer check its fix before committing, and replace a function that two rounds in a row fixed", () => {
     assert.match(skill, /Check the fix before committing it/);
     assert.match(skill, /Write n-1, n and n\+1 boundary tests for each/);
