@@ -318,15 +318,63 @@
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "        if len(line) - match.end() > BEFORE_CHARS:\n            return False\n",
+      "old": "    if len(after) <= AFTER_CHARS:\n        return after\n",
       "new": "",
-      "why": "the rest of a gh's line is read whole"
+      "why": "the rest of a gh's line is cut even when it is at most AFTER_CHARS long"
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
-      "old": "        if len(line) - match.end() > BEFORE_CHARS:\n",
-      "new": "        if len(line) - match.end() >= BEFORE_CHARS:\n",
-      "why": "BEFORE_CHARS characters after a gh on its line are no longer read"
+      "old": "    if len(after) <= AFTER_CHARS:\n",
+      "new": "    if len(after) < AFTER_CHARS:\n",
+      "why": "AFTER_CHARS characters after a gh on its line are no longer read whole"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "after = line[end:end + AFTER_CHARS + 1]",
+      "new": "after = line[end:end + AFTER_CHARS]",
+      "why": "a rest of exactly AFTER_CHARS characters can't be told from a longer one"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "return after[:max(after.rfind(\" \"), after.rfind(\"\\t\")) + 1] + \"(\"",
+      "new": "return after + \"(\"",
+      "why": "a cut rest is not cut back to whole words"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "after.rfind(\"\\t\")",
+      "new": "-1",
+      "why": "a cut rest is cut back to a space only, never to a tab"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "after.rfind(\"\\t\")) + 1] + \"(\"",
+      "new": "after.rfind(\"\\t\"))] + \"(\"",
+      "why": "a cut rest with no blank keeps all but its last character, so gh; and a long word reads as a told bare gh (test_untold_refuses_a_gh_whose_rest_has_no_blank_in_its_first_after_chars)"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "after.rfind(\" \"), after.rfind",
+      "new": "-1, after.rfind",
+      "why": "a cut rest is cut back to a tab only, never to a space (test_untold_accepts_a_told_gh_whose_own_command_goes_on_past_after_chars)"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "max(after.rfind",
+      "new": "min(after.rfind",
+      "why": "a cut rest is cut back to the earlier of its last space and last tab, often to nothing (test_untold_accepts_a_told_gh_whose_own_command_goes_on_past_after_chars)"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "+ 1] + \"(\"",
+      "new": "+ 1]",
+      "why": "a cut rest ends at the cut, which reads as the end of the gh's command"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "+ 1] + \"(\"",
+      "new": "+ 1] + \"a\"",
+      "why": "a cut rest ends in a word a subcommand can start with"
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
@@ -357,6 +405,12 @@
       "old": "if position - start > 2 * BEFORE_CHARS:",
       "new": "if position - start > 4 * BEFORE_CHARS:",
       "why": "a command more than twice BEFORE_CHARS long with its continuations is joined"
+    },
+    {
+      "path": ".claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_gh_repo.py",
+      "old": "        if place in (\"comment\", \"data\"):\n            exported_lines.append(exported)",
+      "new": "        if place in (\"data\",):\n            exported_lines.append(exported)",
+      "why": "an unset of GH_REPO in a comment ends an export"
     }
   ]
 }

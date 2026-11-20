@@ -140,9 +140,13 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
     A script that isn't valid bash is read up to its syntax error, since bash runs the statements before it and stops there: those statements are judged on the tree
     and their export counts. The lines from the error on are judged one at a time as code, with the export the statements before left, and no export of their own;
     a wrapper on an earlier line that a backslash joins to the `gh`'s (`sudo \`) drops that export. A `gh` with more than 4096 characters before it in its own
-    command (`BEFORE_CHARS`; joined lines included, without the backslash and newline that join them) or after it on its line, or more than 100 continued lines
+    command (`BEFORE_CHARS`; joined lines included, without the backslash and newline that join them), or more than 100 continued lines
     before it after a syntax error (`JOINED_LINES`), or whose command is more than 8192 characters (twice `BEFORE_CHARS`) long before it,
-    continuations included, is refused whatever tells it, so the text read for one `gh` stays bounded: split such a command or line.
+    continuations included, is refused whatever tells it: split such a command. After a `gh`, at most 4096 characters of the rest of its line are read
+    (`AFTER_CHARS`), cut back to the last blank: what tells a `gh` is in the first words of its own command, so a long one (`gh api ... --jq '<5000 characters>'`)
+    passes. A `gh` that those characters, cut back to the last blank, don't tell is refused: one whose subcommand or repository word isn't wholly in them (after a
+    run of blanks or redirections that long, say), and one followed by a single blank-less word that long, even a bare `gh` the export would tell (`gh;` then a
+    5000-character word, a false refusal: put a blank in it). So the text read for one `gh` stays bounded.
     Within those bounds a crafted command (hundreds of `env` or `NAME=value` words before many `gh` words) still takes the old
     checker's rules seconds. The checker parses at most five times looking for those
     statements (`PREFIX_TRIES`), the whole script first.
