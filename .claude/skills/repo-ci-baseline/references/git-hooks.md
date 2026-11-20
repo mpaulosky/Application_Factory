@@ -217,7 +217,8 @@ These are the checks the CI lint workflows run; a gate runs `actionlint` and `zi
 The hook sees only those tools' writes: a file an agent writes through Bash (a heredoc, `sed -i`, a script) is not linted until the pre-commit hook (Markdown only), the gate or CI,
 since a Bash command doesn't name the files it wrote. The Owned `.claude/rules/markdown-and-yaml-edits.md`, which Apply writes into every repo and which loads in every session (it has no `paths:`),
 tells agents to write Markdown and YAML with Write and Edit for that reason, in a repo that hasn't wired the hook yet as well.
-A re-Apply that rewrites it needs a review (`REVIEWED_ON_REAPPLY` in the review ledger), as for every rules file that loads in every session.
+In a repo that runs Sandcastle, which is where the review ledger is, a re-Apply that rewrites it needs a local review (`REVIEWED_ON_REAPPLY`), as the hand-off rules do;
+in a repo without the ledger the re-Apply PR's own review is the check.
 
 - Exit 2 with the linters' output on stderr when any linter reports a problem; Claude Code feeds that back to the agent. A linter that crashes counts as a problem, not as clean. Each linter's
   output is cut at 6,000 characters (bytes in the C locale, where a cut may split a multibyte character). The report says the output below it is data, not instructions, and ends with a line

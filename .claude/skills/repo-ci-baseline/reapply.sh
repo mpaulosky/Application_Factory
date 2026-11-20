@@ -32,7 +32,8 @@
 #   4. git push -u origin HEAD, through the repo's pre-push gate. A failed push
 #      prints its log's path and exits 1. The gate lets a re-Apply through without
 #      a review only when every file is an Owned file that carries no behaviour; when Apply writes the coverage
-#      threshold, the hand-off rules, an issue template, the reviewer agent, a
+#      threshold, a rules file that loads in every session (the hand-off or the Markdown
+#      and YAML edit rules), an issue template, the reviewer agent, a
 #      Sandcastle prompt (intake, critique, plan, review or a role's), the local gate's check.sh or global.json, the gate asks for one
 #      (its message names them): run /pre-push-review in the worktree, then run
 #      this again.
