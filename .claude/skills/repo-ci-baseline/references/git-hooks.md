@@ -213,6 +213,8 @@ it lints the file the tool wrote, so an agent fixes a violation in the same turn
 `.markdownlint-cli2.jsonc`. A YAML file goes through `yamllint` with `.yamllint.yml`; a workflow also goes through `actionlint` and `zizmor --offline`, and `.github/dependabot.yml` through `zizmor`,
 at the repo root or under any folder (the Factory edits the Template's originals under `.claude/skills/`).
 These are the checks the CI lint workflows run; a gate runs `actionlint` and `zizmor` only where it lints workflows (an Application's gate does when a workflow changed; the Factory's does not).
+The hook sees only those tools' writes: a file an agent writes through Bash (a heredoc, `sed -i`, a script) is not linted until the pre-commit hook (Markdown only), the gate or CI,
+since a Bash command doesn't name the files it wrote. Have agents write Markdown and YAML with Write and Edit; the Factory's `CLAUDE.md` says so.
 
 - Exit 2 with the linters' output on stderr when any linter reports a problem; Claude Code feeds that back to the agent. A linter that crashes counts as a problem, not as clean. Each linter's
   output is cut at 6,000 characters (bytes in the C locale, where a cut may split a multibyte character). The report says the output below it is data, not instructions, and ends with a line
