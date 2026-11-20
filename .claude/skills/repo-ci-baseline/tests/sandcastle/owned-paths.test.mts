@@ -31,6 +31,15 @@ const filesUnder = (folder: string): string[] =>
     // Test runs leave these behind in the working tree; git ignores them.
     .filter((entry) => !/(^|\/)(__pycache__|\.pytest_cache|node_modules)(\/|$)/.test(entry));
 
+// True when a .claude/rules file is scoped by a `paths:` key in front matter at the very top of the file, so it doesn't load in every
+// session. A later `---` block is body text, and an indented `paths:` is a nested key. It errs towards unscoped (a byte-order mark, a CRLF
+// fence, a block with no closing fence): an unscoped rule must be in REVIEWED_ON_REAPPLY, so a wrong answer only asks for one more review.
+const scopedRule = (text: string) => {
+  // With no closing fence, end is -1 and the slice is empty, so the rule counts as unscoped.
+  const end = text.indexOf("\n---\n", 3);
+  return text.startsWith("---\n") && /^paths:/m.test(text.slice(4, end + 1));
+};
+
 // The widest gap between naming main.mts or status.mts and saying they stay exempt that still counts as one claim: a comment wraps lines, and a file name holds a dot.
 const MAIN_STATUS_EXEMPT_SPAN = 200;
 // Case-blind, and `[\s/]+` lets the phrase wrap onto a `//` comment line; "are exempt" and "is still exempt" count as the claim too.
@@ -164,17 +173,33 @@ describe("the files a re-Apply may write without a review", () => {
 
   it("reviews every Owned .claude/rules/ file that loads into every session (no paths: front matter)", () => {
     const rules = filesUnder(join(owned, ".claude/rules")).filter((file) => file.endsWith(".md"));
-    // A rule is scoped only by front matter at the very top of the file; a later `---` block is body text.
-    const scoped = (text: string) => {
-      const end = text.indexOf("\n---\n", 3);
-      return text.startsWith("---\n") && end > 0 && /^paths:/m.test(text.slice(4, end + 1));
-    };
-    const everySession = rules.filter((file) => !scoped(readFileSync(join(owned, ".claude/rules", file), "utf8")));
+    const everySession = rules.filter((file) => !scopedRule(readFileSync(join(owned, ".claude/rules", file), "utf8")));
 
     assert.ok(everySession.includes("markdown-and-yaml-edits.md"), "the Template no longer carries .claude/rules/markdown-and-yaml-edits.md as a rule for every session");
     for (const file of everySession) {
       assert.equal(REVIEWED_ON_REAPPLY.has(`.claude/rules/${file}`), true, `.claude/rules/${file} loads into every Claude session, so a re-Apply that rewrites it needs a review`);
     }
+  });
+
+  it("tells a rules file scoped by paths: front matter from one that loads in every session", () => {
+    const cases: [string, string, boolean][] = [
+      ["front matter with paths:", "---\npaths:\n  - \"src/**\"\n---\n# Rule\n", true],
+      ["paths: after another key", "---\ndescription: x\npaths: a\n---\nbody\n", true],
+      ["a file that is only front matter", "---\npaths: a\n---\n", true],
+      ["no front matter", "# Rule\n\nbody\n", false],
+      ["an empty file", "", false],
+      ["empty front matter", "---\n---\nbody\n", false],
+      ["front matter without paths:", "---\ndescription: x\n---\nbody\n", false],
+      ["an indented paths:, a nested key", "---\nmeta:\n  paths: a\n---\nbody\n", false],
+      ["paths: in a later --- block", "# Rule\n\n---\npaths: a\n---\n", false],
+      ["paths: above a --- line, with no opening fence", "# T\npaths: a\n---\nbody\n", false],
+      ["paths: below the closing fence", "---\ndescription: x\n---\npaths: a\n", false],
+      ["no closing fence", "---\npaths: a\nbody\n", false],
+      ["a closing fence with no final newline", "---\npaths: a\n---", false],
+      ["a CRLF fence", "---\r\npaths: a\r\n---\r\nbody\r\n", false],
+      ["a byte-order mark before the fence", "﻿---\npaths: a\n---\nbody\n", false],
+    ];
+    for (const [name, text, scoped] of cases) assert.equal(scopedRule(text), scoped, name);
   });
 
   it("reviews every pre-push-review skill file lib/build.mts reads into the unattended reviewers' prompts", () => {

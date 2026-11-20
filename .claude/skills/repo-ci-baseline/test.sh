@@ -102,17 +102,29 @@ edit_rule="$owned/.claude/rules/markdown-and-yaml-edits.md"
 if [[ ! -f "$edit_rule" ]]; then
   fail "the Template must carry .claude/rules/markdown-and-yaml-edits.md as an Owned file: the edit-time lint sees only Write, Edit and MultiEdit"
 else
-  [[ "$(head -n 1 "$edit_rule")" != "---" ]] \
+  # A byte-order mark, a CR (a CRLF save) or trailing blanks after the opening `---` still open front matter.
+  edit_rule_first="$(head -n 1 "$edit_rule")"
+  edit_rule_first="${edit_rule_first#$'\xEF\xBB\xBF'}"
+  [[ ! "$edit_rule_first" =~ ^---[[:space:]]*$ ]] \
     || fail "the Owned .claude/rules/markdown-and-yaml-edits.md must load in every session: it takes no front matter"
-  for needle in 'with the Write and Edit tools, never with a shell command' 'scripts/lint-edited-file.sh' 'PostToolUse' 'Write, Edit and MultiEdit' '.claude/settings.json'; do
+  for needle in 'with the Write and Edit tools, never with a shell command' 'scripts/lint-edited-file.sh' 'PostToolUse' '.claude/settings.json'; do
     grep -qF -- "$needle" "$edit_rule" || fail "the Owned .claude/rules/markdown-and-yaml-edits.md must say '$needle'"
   done
-  if grep -nE 'dotfiles|repo-ci-baseline|Factory|references/|docs/adr/' "$edit_rule"; then
+  if grep -niE 'dotfiles|repo-ci-baseline|factory|references/|docs/adr/' "$edit_rule"; then
     fail "the Owned .claude/rules/markdown-and-yaml-edits.md is written into every repo; it must not name the Factory, its skill or its docs"
   fi
+  # The rule names the tools the hook runs after: each one in the matcher of the settings entry the script's header gives.
+  edit_rule_matcher="$(sed -nE 's/^#[[:space:]]*"matcher": "([^"]*)".*/\1/p' "$owned/scripts/lint-edited-file.sh" | head -n 1)"
+  if [[ -z "$edit_rule_matcher" ]]; then
+    fail "scripts/lint-edited-file.sh's header no longer gives the settings entry's \"matcher\", which .claude/rules/markdown-and-yaml-edits.md is checked against"
+  else
+    IFS='|' read -r -a edit_rule_tools <<< "$edit_rule_matcher"
+    for tool in "${edit_rule_tools[@]}"; do
+      grep -qw -- "$tool" "$edit_rule" \
+        || fail "the Owned .claude/rules/markdown-and-yaml-edits.md must name $tool: scripts/lint-edited-file.sh runs after it (\"matcher\": \"$edit_rule_matcher\")"
+    done
+  fi
 fi
-grep -qF -- 'PostToolUse hook for Edit, Write and MultiEdit' "$owned/scripts/lint-edited-file.sh" \
-  || fail "scripts/lint-edited-file.sh's header no longer names the tools it runs after; check .claude/rules/markdown-and-yaml-edits.md still names the same ones"
 bash "$skill_dir/tests/owned-gate-files.test.sh" || fail "owned-gate-files.test.sh"
 # CI's Branch name job passes the PR's author, from the event payload (which a pusher can't set), so only dependabot[bot]'s own PR
 # gets any dependabot/* name (R42 of TicketManager's re-Apply review).
