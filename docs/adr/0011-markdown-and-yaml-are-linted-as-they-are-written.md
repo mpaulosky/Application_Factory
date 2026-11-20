@@ -54,3 +54,7 @@ no backslash in one read as text), and the hook cleans `PATH` before it runs any
 repository's `node_modules/.bin`, or another worktree's), so no linter or helper a linter looks up comes from there. Otherwise the file is left unlinted with a `systemMessage` saying why;
 the pre-commit hook, the gate and CI still lint it. The
 Template's `references/git-hooks.md` (Edit-time lint) has the detail.
+
+The hook sees only what Edit, Write and MultiEdit write. A Markdown or YAML file an agent wrote through Bash (a heredoc, `sed -i`, a script) reached the commit hook, the gate or
+CI unlinted. The Factory's `CLAUDE.md` therefore says to write and edit Markdown and YAML with Write and Edit only. Extending the hook to Bash was not chosen: a Bash command
+doesn't name the files it wrote, so the hook would have to diff the tree after every command.
