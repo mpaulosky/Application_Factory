@@ -97,6 +97,14 @@ bash "$owned/scripts/tests/lint-edited-file.test.sh" || fail "lint-edited-file.t
 grep -qxF '        run: bash scripts/tests/lint-edited-file.test.sh' "$owned/.github/workflows/ci.yml" \
   || fail "the Owned ci.yml's hook-tests job must run scripts/tests/lint-edited-file.test.sh, so every repo tests its copy"
 bash "$skill_dir/tests/owned-gate-files.test.sh" || fail "owned-gate-files.test.sh"
+# CI's Branch name job passes the PR's author, from the event payload (which a pusher can't set), so only dependabot[bot]'s own PR
+# gets any dependabot/* name (R42 of TicketManager's re-Apply review).
+# shellcheck disable=SC2016 # the workflow's own text, which must not expand here
+grep -qxF '          PR_AUTHOR: ${{ github.event.pull_request.user.login }}' "$owned/.github/workflows/ci.yml" \
+  || fail "the Owned ci.yml's Branch name job must set PR_AUTHOR from github.event.pull_request.user.login"
+# shellcheck disable=SC2016 # the workflow's own text
+grep -qxF '        run: bash scripts/check-branch-name.sh --pr --author "$PR_AUTHOR" "$HEAD_REF"' "$owned/.github/workflows/ci.yml" \
+  || fail "the Owned ci.yml's Branch name job must run: bash scripts/check-branch-name.sh --pr --author \"\$PR_AUTHOR\" \"\$HEAD_REF\""
 # Every pip install in an Owned workflow takes only hashed pins (R43 of TicketManager's re-Apply review): the python-tests job installs
 # requirements-tests.txt with --require-hashes, and every pin there is exact and carries a hash.
 grep -qxF '        run: python -m pip install --require-hashes --no-deps -r .github/scripts/requirements-tests.txt' "$owned/.github/workflows/ci.yml" \
@@ -104,6 +112,13 @@ grep -qxF '        run: python -m pip install --require-hashes --no-deps -r .git
 if grep -nE 'pip install' "$owned"/.github/workflows/*.yml | grep -v -- '--require-hashes'; then
   fail "every pip install in an Owned workflow must use --require-hashes (the lines above don't)"
 fi
+# Dependabot keeps the hashed pins current: the Factory's own entry bumps the Template's copy, the Seed's an Application's.
+for pair in "$skill_dir/../../../.github/dependabot.yml|/.claude/skills/repo-ci-baseline/template/owned/.github/scripts" \
+  "$skill_dir/template/seed/.github/dependabot.yml|/.github/scripts"; do
+  file="${pair%%|*}" dir="${pair#*|}"
+  awk -v dir="$dir" '/package-ecosystem: "pip"/ { pip = 1; next } /package-ecosystem:/ { pip = 0 } pip && $0 ~ "directory: \"" dir "\"" { found = 1 } END { exit !found }' "$file" \
+    || fail "$file must have a pip entry for $dir, so Dependabot bumps requirements-tests.txt"
+done
 python3 - "$owned/.github/scripts/requirements-tests.txt" <<'PY_REQ' || fail "requirements-tests.txt must pin each package exactly, with at least one sha256 hash, pytest and pyyaml among them"
 import re, sys
 text = open(sys.argv[1]).read()
@@ -177,6 +192,7 @@ shell_files=(
   "$skill_dir/tests/apply.test.sh" "$skill_dir/tests/reapply.test.sh"
   "$skill_dir/tests/seed-check.test.sh" "$skill_dir/tests/seed-dependabot.test.sh"
   "$skill_dir/tests/seed-dockerfile.test.sh" "$skill_dir/tests/doc-single-source.test.sh" "$skill_dir/tests/no-dotfiles-dependency.test.sh"
+  "$skill_dir/tests/owned-gate-files.test.sh"
   "$skill_dir/tests/sandcastle-check.test.sh" "$skill_dir/tests/repos-scope.test.sh"
   "$skill_dir/tests/check-git-status.sh" "$skill_dir/tests/check-git-status.test.sh" "$skill_dir/tests/mutations/check-spec.test.sh"
   "$owned/scripts/gate.sh" "$owned/scripts/check-branch-name.sh" "$owned/scripts/tests/check-branch-name.test.sh"

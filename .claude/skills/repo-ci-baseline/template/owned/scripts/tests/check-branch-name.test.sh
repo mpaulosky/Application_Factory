@@ -59,6 +59,28 @@ expect refused --pr --author 'dependabot' 'dependabot/$(x)'
 # shellcheck disable=SC2016 # the same literal name
 expect refused --pr --author 'dependabot[bot] ' 'dependabot/$(x)'
 expect allowed --pr --author someone dependabot/nuget/all-nuget-1a2b3c
+# refused_as <shown name> <args...>: refused (exit 1), naming the branch it read; for calls whose last argument isn't the branch.
+refused_as() {
+  local shown="$1" output status
+  shift
+  output="$(bash "$SCRIPT" "$@" 2>&1)"
+  status=$?
+  if [[ $status -eq 1 && "$output" == "Branch name '${shown}' does not match"* ]]; then
+    PASSED=$((PASSED + 1))
+    echo "ok   - $* is refused, read as branch '$shown'"
+  else
+    FAILED=$((FAILED + 1))
+    echo "FAIL - $* should be refused as branch '$shown': exit $status"
+    while IFS= read -r line; do echo "       | $line"; done <<< "$output"
+  fi
+}
+# A missing or empty --author, or a missing branch, is a refusal with the usual message, never a shift error or an author read as the branch.
+refused_as "" --pr --author
+refused_as "" --pr --author ''
+refused_as "" --pr --author 'dependabot[bot]'
+expect refused --pr --author '' 'dependabot/a|b'
+# --author means something only after --pr: before it, it's the branch.
+refused_as "--author" --author 'dependabot[bot]' 'dependabot/a|b'
 # --author names only who opened the PR: it never lets another name through.
 expect refused --pr --author 'dependabot[bot]' claude/x
 expect refused --pr --author 'dependabot[bot]' patch-1

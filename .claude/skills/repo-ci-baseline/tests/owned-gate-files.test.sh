@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tests for the Owned scripts/gate.sh's lists of changed files (the lines from "# Files added" to the SHELL_FILES mapfile), run in a
-# throwaway repo: every name reaches its list as it is on disk, a non-ASCII one, one with a tab or a newline among them, and a git that
-# fails stops the gate. The gate's other steps need a .NET repo, so only these lines are run.
+# throwaway repo, and the Markdown step with a stub linter: every name reaches its list and the linter as it is on disk (non-ASCII, not
+# valid UTF-8, a tab or a newline among them), in a UTF-8 locale and in C, and a git that fails stops the gate. The gate's other steps
+# need a .NET repo, so only these lines are run.
 # Usage: bash tests/owned-gate-files.test.sh
 set -uo pipefail
 
@@ -34,16 +35,26 @@ g "$repo" checkout -q -b feature/1-names
 
 tab=$'\t'
 newline=$'\n'
+latin1="$(printf 'caf\xe9')"
 names=("notes/café.md" "a b.md" "docs/blogs/post.md" "tab${tab}name.md" "line${newline}break.md" "conf/settings.yml" "pnpm-lock.yaml"
-  ".github/workflows/build.yml" "scripts/tool" "scripts/run.sh" "src/app.cs")
+  ".github/workflows/build.yml" "scripts/tool" "scripts/run.sh" "src/app.cs" "${latin1}.md" "scripts/${latin1}"
+  "x.md${newline}docs/blogs/y.md" "a.yaml${newline}pnpm-lock.yaml" "foo${newline}.github/workflows/a.yml" "a[1].md" "-dash.md")
 for name in "${names[@]}"; do
-  mkdir -p "$repo/$(dirname "$name")"
+  mkdir -p "$repo/$(dirname -- "$name")"
   printf 'x\n' > "$repo/$name"
   g "$repo" add -- "$name"
 done
 g "$repo" commit -q -m names
 
-# lists [<git wrapper>]: run the block in the repo and print each list's entries, one per line, shell-quoted.
+# lists [<git wrapper>]: run the block in the repo, then the gate's Markdown step with a markdownlint-cli2 stub that records its
+# arguments; print each list's entries as "<list><TAB><name>" and each argument as "MD_ARG<TAB><arg>", NUL-separated.
+stubs="$work/stubs"
+mkdir -p "$stubs"
+# shellcheck disable=SC2016 # the stub's own code, written as it is
+printf '#!/usr/bin/env bash\nprintf "MD_ARG\\t%%s\\0" "$@" >> "$MD_ARGS_FILE"\n' > "$stubs/markdownlint-cli2"
+chmod +x "$stubs/markdownlint-cli2"
+md_step="$work/md-step.sh"
+sed -n '/^step "Markdown lint/,/^fi$/p' "$gate" > "$md_step"
 lists() {
   (
     cd "$repo" || exit 1
@@ -53,36 +64,69 @@ lists() {
     source "$block"
     for list in MD_FILES YAML_FILES WORKFLOW_FILES SHELL_FILES; do
       declare -n entries="$list"
-      for entry in "${entries[@]}"; do printf '%s %q\n' "$list" "$entry"; done
+      for entry in ${entries[@]+"${entries[@]}"}; do printf '%s\t%s\0' "$list" "$entry"; done
     done
+    # The step's own helper and root, which the sourced lines use.
+    # shellcheck disable=SC2329,SC2034
+    step() { :; }
+    # shellcheck disable=SC2034
+    ROOT="$repo" MD_ARGS_FILE="$work/md-args"
+    export MD_ARGS_FILE
+    : > "$MD_ARGS_FILE"
+    PATH="$stubs:$PATH"
+    # shellcheck disable=SC1090 # the gate's own Markdown step
+    source "$md_step"
+    cat "$MD_ARGS_FILE"
   )
 }
-out="$(lists)"; st=$?
-check "the block runs" "[[ $st == 0 ]]"
-has() { grep -qxF -- "$1 $(printf '%q' "$2")" <<< "$out"; }
-check "a non-ASCII Markdown name is listed as it is on disk" "has MD_FILES 'notes/café.md'"
-check "a name with a space is listed" "has MD_FILES 'a b.md'"
-check "a name with a tab is listed" "has MD_FILES \"tab\${tab}name.md\""
-check "a name with a newline is listed whole" "has MD_FILES \"line\${newline}break.md\""
-check "docs/blogs/ stays out of the Markdown list" "! grep -q 'docs/blogs' <<< \"\$out\""
-check "no name is quoted by git (no backslash-escaped octal, no surrounding quotes)" "! grep -qE '\\\\[0-9]{3}|\"' <<< \"\$out\""
-check "the Markdown list holds exactly those four" "[[ \$(grep -c '^MD_FILES ' <<< \"\$out\") == 4 ]]"
-check "YAML: the config and the workflow, not pnpm-lock.yaml" \
-  "has YAML_FILES conf/settings.yml && has YAML_FILES .github/workflows/build.yml && ! grep -q pnpm-lock <<< \"\$out\""
-check "the workflow list holds the workflow alone" "has WORKFLOW_FILES .github/workflows/build.yml && [[ \$(grep -c '^WORKFLOW_FILES ' <<< \"\$out\") == 1 ]]"
-check "shell: an extensionless script and a .sh" "has SHELL_FILES scripts/tool && has SHELL_FILES scripts/run.sh && [[ \$(grep -c '^SHELL_FILES ' <<< \"\$out\") == 2 ]]"
+# run_lists [<git wrapper>]: lists, into the array OUT and its status into st.
+run_lists() { local raw="$work/out"; lists "$@" > "$raw" 2> "$work/err"; st=$?; mapfile -d '' -t OUT < "$raw"; }
+has() { local want="$1"$'\t'"$2" entry; for entry in ${OUT[@]+"${OUT[@]}"}; do [[ "$entry" == "$want" ]] && return 0; done; return 1; }
+count() { local n=0 entry; for entry in ${OUT[@]+"${OUT[@]}"}; do [[ "$entry" == "$1"$'\t'* ]] && n=$((n + 1)); done; echo "$n"; }
+
+check "the gate's Markdown step is found" "grep -q 'markdownlint-cli2' '$md_step' && [[ \$(wc -l < '$md_step') -gt 5 ]]"
+
+# The gate runs in whatever locale the caller has: a UTF-8 one and C are both tried.
+utf8="$(locale -a 2> /dev/null | grep -iE '^(C|en_US)\.utf-?8$' | head -n 1 || true)"
+for loc in ${utf8:+"$utf8"} C; do
+  export LC_ALL="$loc"
+  run_lists
+  check "[$loc] the block runs" "[[ $st == 0 ]]"
+  check "[$loc] a non-ASCII Markdown name is listed as it is on disk" "has MD_FILES 'notes/café.md'"
+  check "[$loc] a name that isn't valid UTF-8 is listed, byte for byte" "has MD_FILES \"\${latin1}.md\" && has SHELL_FILES \"scripts/\${latin1}\""
+  check "[$loc] a name with a space is listed" "has MD_FILES 'a b.md'"
+  check "[$loc] a name with a tab is listed" "has MD_FILES \"tab\${tab}name.md\""
+  check "[$loc] a name with a newline is listed whole" "has MD_FILES \"line\${newline}break.md\""
+  check "[$loc] an exclusion matches a whole name, not a line of one" \
+    "has MD_FILES \"x.md\${newline}docs/blogs/y.md\" && has YAML_FILES \"a.yaml\${newline}pnpm-lock.yaml\""
+  check "[$loc] an inclusion matches a whole name, not a line of one" \
+    "! has WORKFLOW_FILES \"foo\${newline}.github/workflows/a.yml\" && has YAML_FILES \"foo\${newline}.github/workflows/a.yml\""
+  check "[$loc] docs/blogs/ stays out of the Markdown list" "! has MD_FILES docs/blogs/post.md"
+  check "[$loc] the Markdown list holds exactly the eight others" "[[ \$(count MD_FILES) == 8 ]]"
+  check "[$loc] YAML: not pnpm-lock.yaml" "has YAML_FILES conf/settings.yml && ! has YAML_FILES pnpm-lock.yaml && [[ \$(count YAML_FILES) == 4 ]]"
+  check "[$loc] the workflow list holds the workflow alone" "has WORKFLOW_FILES .github/workflows/build.yml && [[ \$(count WORKFLOW_FILES) == 1 ]]"
+  check "[$loc] shell: the extensionless scripts and a .sh" "has SHELL_FILES scripts/tool && has SHELL_FILES scripts/run.sh && [[ \$(count SHELL_FILES) == 3 ]]"
+  check "[$loc] markdownlint-cli2 gets each name as a literal path (a leading :), never a glob or an option" \
+    "has MD_ARG ':a[1].md' && has MD_ARG ':-dash.md' && has MD_ARG \":line\${newline}break.md\" && [[ \$(count MD_ARG) == 8 ]] && ! has MD_ARG a[1].md"
+done
+unset LC_ALL
+
+# A git diff that fails stops the block, instead of leaving the lists empty.
+# shellcheck disable=SC2016 # the wrapper is code for lists to eval, so it must not expand here
+run_lists 'git() { if [[ "$1" == diff ]]; then return 1; fi; command git "$@"; }'
+check "a git diff that fails stops the block (set -e), and lists nothing" "[[ $st != 0 ]] && [[ \$(count MD_FILES) == 0 ]] && [[ \$(count MD_ARG) == 0 ]]"
 
 # Without origin/main every tracked file is listed, by the same rules.
 g "$repo" remote remove origin
 g "$repo" update-ref -d refs/remotes/origin/main
-out="$(lists)"; st=$?
+run_lists
 check "with no origin/main the block runs on every tracked file" "[[ $st == 0 ]] && has MD_FILES README.md && has MD_FILES 'notes/café.md'"
 check "with no origin/main a newline name is still listed whole" "has MD_FILES \"line\${newline}break.md\""
 
-# A git that fails stops the block, instead of leaving the lists empty.
+# A git ls-files that fails stops the block too.
 # shellcheck disable=SC2016 # the wrapper is code for lists to eval, so it must not expand here
-out="$(lists 'git() { if [[ "$1" == ls-files ]]; then return 1; fi; command git "$@"; }' 2>&1)"; st=$?
-check "a git ls-files that fails stops the block (set -e), and lists nothing" "[[ $st != 0 ]] && ! grep -q '^MD_FILES' <<< \"\$out\""
+run_lists 'git() { if [[ "$1" == ls-files ]]; then return 1; fi; command git "$@"; }'
+check "a git ls-files that fails stops the block (set -e), and lists nothing" "[[ $st != 0 ]] && [[ \$(count MD_FILES) == 0 ]]"
 
 echo
 echo "$PASSED passed, $FAILED failed"

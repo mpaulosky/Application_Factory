@@ -40,9 +40,11 @@ standard in the first place.
 The check guards the process, not against a hostile PR. Under `pull_request` the job runs the PR's own copy of the
 script and of `ci.yml`, so a PR can change either, as it can for `Build Solution`; such an edit shows in its review.
 
-The CI job also accepts the branches that only Actions and Dependabot create, which no hook sees:
-`docs/release-notes` (`release.yml`), `docs/backfill-blog-posts` (`backfill-blog-posts.yml`) and any `dependabot/*`, whatever its characters, since CI quotes the name.
-The hook accepts a `dependabot/*` branch too, in shell-safe ASCII characters only (`A-Za-z0-9._@+-` per segment), so a person can push a fix to a Dependabot PR.
+The CI job also accepts the branches that only Actions and Dependabot create, which no hook sees: `docs/release-notes` (`release.yml`),
+`docs/backfill-blog-posts` (`backfill-blog-posts.yml`) and, from a PR `dependabot[bot]` opened, any `dependabot/*` whatever its characters (its branch can't be renamed).
+The job runs `check-branch-name.sh --pr --author "$PR_AUTHOR" "$HEAD_REF"`, with the author from `github.event.pull_request.user.login`, which a pusher can't set; `test.sh` pins both lines.
+The hook, and the CI job for anyone else's PR, accept a `dependabot/*` branch in shell-safe ASCII characters only (`A-Za-z0-9._@+-` per segment), so a person can push a fix to a Dependabot PR.
+A refused name is printed with its control characters escaped (`printf %q`), so a newline in it can't start a line of its own in the log.
 Fork PRs skip the job, which a required check counts as passing.
 
 ## Worktree standard
@@ -165,8 +167,11 @@ checkout and from a subfolder of it (refused, before the lint), the opt-out, a l
 and `git commit` end to end, which runs the hook with `GIT_DIR` set.
 
 `scripts/tests/check-branch-name.test.sh` covers the script's push form and its `--pr` form, which the CI job uses: the Actions
-branches (`docs/release-notes`, `docs/backfill-blog-posts`, refused for a push) and any `dependabot/*` allowed with `--pr`, only a shell-safe `dependabot/*` allowed for a push
-(a backtick, quote, `|` or `&` refused), non-ASCII names (`fix/1-café`, `dependabot/aé`) refused under `LC_ALL=C`, under `C.UTF-8` and `en_US.UTF-8` when installed, and under every
+branches (`docs/release-notes`, `docs/backfill-blog-posts`, refused for a push), any `dependabot/*` allowed with `--pr --author 'dependabot[bot]'` and only a
+shell-safe one for any other author, none or an empty one (and `--author` before `--pr` read as the branch), a missing `--author` value or branch refused with the usual message,
+a refused name's control characters printed escaped on one line,
+only a shell-safe `dependabot/*` allowed for a push (a backtick, quote, `|` or `&` refused),
+non-ASCII names (`fix/1-café`, `dependabot/aé`) refused under `LC_ALL=C`, under `C.UTF-8` and `en_US.UTF-8` when installed, and under every
 other UTF-8 locale of the machine where `[a-z]` matches an accented letter (a skip line says when there is none), with `fix/1-cafe` still allowed,
 and a check that the script exports `LC_ALL=C` before its first regex match, which holds on any machine (so the hook, CI, `cleanup.sh` and
 `work-issue.sh` agree on a name whatever the caller's locale),
@@ -220,6 +225,12 @@ These are the checks the CI lint workflows run; a gate runs `actionlint` and `zi
   and the file's name, folder, repository root and each listed worktree's resolved path keep a trailing newline (`$(...)` would drop it and lint the sibling folder).
   `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_PREFIX`, `GIT_COMMON_DIR` and `CDPATH`,
   inherited from a git hook, are cleared first.
+- A Markdown file is linted only through markdownlint configs the hook can vouch for: each one on the file's path (its folder and each folder above it, up to the
+  repository root, where `markdownlint-cli2` stops looking) must be a regular file, tracked and unchanged since `HEAD` (so never in a repository with no commit), and unable to
+  load JavaScript: no `.cjs` or `.mjs` config, and no `customRules`, `markdownItPlugins`, `outputFormatters`, `modulePaths` or `extends` in it, read as text. A `package.json`
+  counts only when it has a `markdownlint-cli2` key, and then only that key is read (all of it when it doesn't parse). Otherwise an agent could write a config, or the code a
+  committed one names, and the hook would run it with no Bash prompt. The file is then left unlinted: exit 0, with a `systemMessage` naming the config and why; the
+  pre-commit hook, the gate and CI still lint it. The real-linter test block commits its config for this reason.
 - The path reaches the linter whole: from the repo root of the file's own repository, as `./<path>`, and for Markdown with `--no-globs`, so a name with `[`, `*` or a leading `-` is not read as a glob
   or an option (checked against the real tool: `a[1].md` and `x*y.md` are linted as those files). The config's `ignores` still apply.
 - A `file_path` holding a lone surrogate (valid JSON, but no UTF-8) is still read, not an exit 1: `\udc80` to `\udcff` stand for the raw bytes `0x80` to `0xff`

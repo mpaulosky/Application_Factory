@@ -24,12 +24,14 @@
 # names the project's .git, a symlink, or anything under node_modules is left alone, because the linters would load that
 # repository's own config and binaries, and markdownlint-cli2 runs JavaScript from its config. A project that is not a git
 # repository has nothing to lint. In the project too, a Markdown file is linted only while every markdownlint config on its path
-# (its folder and each one above it, up to the repository root) is committed as it is: an agent could write a .cjs config, or a
-# customRules entry in any, and have this hook run it with no Bash prompt. The person is told which config, and the gate and CI
-# still lint the file.
+# (its folder and each one above it, up to the repository root) is a regular file committed as it is, and none can load JavaScript
+# (a .cjs or .mjs config, or customRules, markdownItPlugins, outputFormatters, modulePaths or extends): an agent could write such a
+# config, or the code one names, and have this hook run it with no Bash prompt. The person is told which config and why, and the
+# gate and CI still lint the file (see unvetted_config).
 #
-# Exit 0: the file is clean, is missing, is not Markdown or YAML, is not in the project, or no linter for it is installed (this hook
-# only helps; the commit hook and the gate still check). A skipped linter is reported as a systemMessage on stdout, which
+# Exit 0: the file is clean, is missing, is not Markdown or YAML, is not in the project, is Markdown under a markdownlint config the
+# hook won't run (above), or no linter for it is installed (this hook only helps; the commit hook and the gate still check). That
+# config, and a skipped linter, are reported as a systemMessage on stdout, which
 # Claude Code shows to the person. Exit 2: a linter reported a violation; its output goes to stderr, which Claude Code feeds
 # back to the agent. Exit 1: the hook could not run (python3 missing, CLAUDE_PROJECT_DIR unset, bad JSON, or, for a Markdown or YAML file, git missing or older than 2.36); Claude Code shows that to the
 # person and carries on. A linter that is installed but crashes counts as a violation, not as clean.
@@ -182,19 +184,46 @@ local_bin() {
   fi
 }
 
-# unvetted_config: prints the first markdownlint-cli2 config (or package.json, which can hold one) on the file's path that git doesn't
-# hold as committed: untracked, ignored, staged or changed since HEAD, or in a repository with no commit. Returns 1 when there is none.
+# unvetted_config: prints "<config>\t<why>" for the first markdownlint-cli2 config on the file's path (its folder and each one above it, up
+# to the repository root, where markdownlint-cli2 stops looking) that the hook must not run, and returns 1 when there is none. A config
+# is run only when it is a regular file git holds as committed (tracked, unchanged since HEAD, in a repository with a commit) and can't
+# load JavaScript: no .cjs or .mjs config, and no customRules, markdownItPlugins, outputFormatters, modulePaths or extends in it (read as
+# text, so even a mention in a comment counts). A package.json counts only when it has a "markdownlint-cli2" key (or doesn't parse),
+# and then only that key is read for those words.
 unvetted_config() {
-  local at="$dir" name path relp
+  local at="$dir" name path relp text
   while :; do
     for name in .markdownlint-cli2.jsonc .markdownlint-cli2.yaml .markdownlint-cli2.cjs .markdownlint-cli2.mjs \
       .markdownlint.jsonc .markdownlint.json .markdownlint.yaml .markdownlint.yml .markdownlint.cjs .markdownlint.mjs package.json; do
       path="$at/$name"
       [[ -e "$path" || -L "$path" ]] || continue
       relp="${path#"$root"/}"
+      if [[ -L "$path" || ! -f "$path" ]]; then
+        printf '%s\t%s' "$relp" "is a symlink or not a regular file"
+        return 0
+      fi
+      if [[ "$name" == package.json ]]; then
+        # The "markdownlint-cli2" key as JSON, "-" when there is none, or nothing when the file doesn't parse (then all of it counts).
+        text="$(python3 -I -c 'import json, sys
+try:
+    data = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+key = data.get("markdownlint-cli2") if isinstance(data, dict) else None
+print("-" if key is None else json.dumps(key))' "$path" 2> /dev/null || true)"
+        [[ "$text" != "-" ]] || continue
+        [[ -n "$text" ]] || text="$(cat -- "$path")"
+      else
+        text="$(cat -- "$path")"
+      fi
       if ! git -C "$root" ls-files --error-unmatch -- ":(literal)$relp" > /dev/null 2>&1 \
         || ! git -C "$root" diff --quiet HEAD -- ":(literal)$relp" > /dev/null 2>&1; then
-        printf '%s' "$relp"
+        printf '%s\t%s' "$relp" "isn't committed as it is"
+        return 0
+      fi
+      if [[ "$name" == *.cjs || "$name" == *.mjs ]] \
+        || [[ "$text" =~ customRules|markdownItPlugins|outputFormatters|modulePaths|extends ]]; then
+        printf '%s\t%s' "$relp" "can load JavaScript (a .cjs or .mjs config, or customRules, markdownItPlugins, outputFormatters, modulePaths or extends)"
         return 0
       fi
     done
@@ -258,8 +287,11 @@ if ((${#failures[@]} > 0)); then
 fi
 
 if [[ -n "$unvetted" ]]; then
+  why="${unvetted#*$'\t'}"
+  advice="the gate and CI still check it."
+  [[ "$why" != "isn't committed as it is" ]] || advice="commit it (or undo the change) and edit the file again; the gate and CI still check it."
   python3 -I -c 'import json, sys; print(json.dumps({"systemMessage": sys.argv[1]}))' \
-    "lint-edited-file.sh: $rel was not linted: its markdownlint config $unvetted isn't committed as it is, and a config can load JavaScript. Commit it (or undo the change) and edit the file again; the gate and CI still check it."
+    "lint-edited-file.sh: $rel was not linted: its markdownlint config ${unvetted%%$'\t'*} $why, and this hook runs no code it can't vouch for: $advice"
   exit 0
 fi
 

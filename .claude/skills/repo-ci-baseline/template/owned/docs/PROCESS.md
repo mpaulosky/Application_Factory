@@ -49,8 +49,8 @@ deleted by hand has git's entry for it forgotten (a locked one is kept; a parent
 `{slug}` is lowercase letters and digits in words joined by `-` (`upgrade-net10`, `oauth2-login`). A `chore/` slug
 starts with a letter, so `chore/7-cleanup` is refused. The pre-push hook refuses any other name, except a shell-safe `dependabot/*` name, which it
 allows so a person can push a fix to a Dependabot PR. The required **Branch name** check allows the same names, plus any
-`dependabot/*` whatever its characters and the `docs/release-notes` and `docs/backfill-blog-posts` branches the release
-workflows create. It refuses everything else, so it catches a push that skipped the hook (a Claude cloud session's
+`dependabot/*` whatever its characters on a PR `dependabot[bot]` opened, and the `docs/release-notes` and `docs/backfill-blog-posts`
+branches the release workflows create. It refuses everything else, so it catches a push that skipped the hook (a Claude cloud session's
 `claude/...` branch, GitHub's web editor). To fix a refused name, rename the branch on GitHub, then close and reopen the PR.
 
 ## Commits and PR titles

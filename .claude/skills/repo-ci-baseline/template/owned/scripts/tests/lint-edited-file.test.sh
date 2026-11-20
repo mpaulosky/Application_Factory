@@ -671,6 +671,8 @@ printf '# Title\n' > "$vet/top.md"
 git -C "$vet" add .markdownlint-cli2.jsonc package.json
 git -C "$vet" -c user.name=t -c user.email=t@t commit --quiet -m configs
 # vetted_case <label> <expected config, or "" for linted>
+uncommitted="isn't committed as it is"
+# vetted_case <label> <expected config, or "" for linted> [<why>, default $uncommitted]
 vetted_case() {
   run_hook "$(edit_json "$vet/docs/deep/ok.md")" "$STUBS:$TOOLS" "$vet"
   p=()
@@ -681,10 +683,16 @@ vetted_case() {
   else
     [[ "$(ran markdownlint-cli2)" == 0 ]] || p+=("markdownlint-cli2 ran under an unvetted config")
     msg="$(system_message "$STDOUT")"
-    [[ "$msg" == *"docs/deep/ok.md was not linted"* && "$msg" == *"config $2 isn't committed"* ]] || p+=("systemMessage: $msg")
+    local why="${3:-$uncommitted}"
+    [[ "$msg" == *"docs/deep/ok.md was not linted"* && "$msg" == *"config $2 $why"* ]] || p+=("systemMessage: $msg")
   fi
   check "$1" ${p[@]+"${p[@]}"}
 }
+# commit_vet <path>...: commit those files in the vetted repo.
+commit_vet() { git -C "$vet" add -- "$@" && git -C "$vet" -c user.name=t -c user.email=t@t commit --quiet -m more; }
+# drop_vet <path>...: remove committed files from the vetted repo, in a commit.
+drop_vet() { git -C "$vet" rm --quiet -- "$@" && git -C "$vet" -c user.name=t -c user.email=t@t commit --quiet -m less; }
+loads="can load JavaScript"
 vetted_case "committed configs on the path: the file is linted" ""
 printf 'module.exports = {};\n' > "$vet/docs/.markdownlint-cli2.cjs"
 vetted_case "an untracked .cjs config in a folder above the file: not linted, and named" docs/.markdownlint-cli2.cjs
@@ -706,6 +714,49 @@ printf 'module.exports = {};\n' > "$vet/other/.markdownlint-cli2.mjs"
 vetted_case "an untracked config off the file's path changes nothing: linted" ""
 rm -r "$vet/other"
 vetted_case "back as committed: linted again" ""
+# A committed config that can load code is never run: the code it names isn't vetted.
+for key in customRules markdownItPlugins outputFormatters modulePaths extends; do
+  printf '{ "%s": ["./x.js"] }\n' "$key" > "$vet/docs/.markdownlint-cli2.jsonc"
+  commit_vet docs/.markdownlint-cli2.jsonc
+  vetted_case "a committed config with $key: not linted" docs/.markdownlint-cli2.jsonc "$loads"
+  drop_vet docs/.markdownlint-cli2.jsonc
+done
+printf 'module.exports = {};\n' > "$vet/docs/.markdownlint-cli2.cjs"
+commit_vet docs/.markdownlint-cli2.cjs
+vetted_case "a committed .cjs config: not linted" docs/.markdownlint-cli2.cjs "$loads"
+drop_vet docs/.markdownlint-cli2.cjs
+printf 'export default {};\n' > "$vet/docs/.markdownlint.mjs"
+commit_vet docs/.markdownlint.mjs
+vetted_case "a committed .mjs config: not linted" docs/.markdownlint.mjs "$loads"
+drop_vet docs/.markdownlint.mjs
+# A package.json is a config only with a "markdownlint-cli2" key, and only that key is read.
+printf '{ "name": "x", "scripts": { "build": "tsc" } }\n' > "$vet/package.json"
+vetted_case "an uncommitted package.json without a markdownlint-cli2 key changes nothing: linted" ""
+printf '{ "eslintConfig": { "extends": "x" } }\n' > "$vet/package.json"
+commit_vet package.json
+vetted_case "a committed package.json whose extends is another tool's: linted" ""
+printf '{ "markdownlint-cli2": { "customRules": ["./x.js"] } }\n' > "$vet/package.json"
+commit_vet package.json
+vetted_case "a committed package.json whose markdownlint-cli2 key has customRules: not linted" package.json "$loads"
+printf '{ "markdownlint-cli2": { "config": {} }\n' > "$vet/package.json"
+commit_vet package.json
+vetted_case "a committed package.json that doesn't parse is read whole: linted when nothing in it loads code" ""
+printf '{ "markdownlint-cli2": { "customRules": ["./x.js"] }\n' > "$vet/package.json"
+commit_vet package.json
+vetted_case "a committed package.json that doesn't parse and names customRules: not linted" package.json "$loads"
+printf '{ "name": "x" }\n' > "$vet/package.json"
+commit_vet package.json
+vetted_case "back to a plain package.json: linted" ""
+# A config that is a symlink can point anywhere, an untracked file among them: never run.
+printf '{}\n' > "$vet/elsewhere.json"
+ln -s ../../elsewhere.json "$vet/docs/deep/.markdownlint.json"
+commit_vet docs/deep/.markdownlint.json
+vetted_case "a committed config that is a symlink to an untracked file: not linted" docs/deep/.markdownlint.json "is a symlink or not a regular file"
+drop_vet docs/deep/.markdownlint.json
+ln -s missing.json "$vet/docs/deep/.markdownlint.json"
+vetted_case "a dangling symlink config: not linted" docs/deep/.markdownlint.json "is a symlink or not a regular file"
+rm "$vet/docs/deep/.markdownlint.json" "$vet/elsewhere.json"
+vetted_case "with the symlinks gone: linted" ""
 # A file at the repository root: its own folder is the root, checked once.
 printf 'module.exports = {};\n' > "$vet/.markdownlint.cjs"
 run_hook "$(edit_json "$vet/top.md")" "$STUBS:$TOOLS" "$vet"
@@ -730,6 +781,12 @@ run_hook "$(edit_json "$bare/a.md")" "$STUBS:$TOOLS" "$bare"
 p=()
 [[ $STATUS -eq 0 && "$(ran markdownlint-cli2)" == 0 ]] || p+=("exit $STATUS, ran $(ran markdownlint-cli2)")
 check "a config in a repository with no commit: not linted" ${p[@]+"${p[@]}"}
+git -C "$bare" add .markdownlint-cli2.jsonc
+run_hook "$(edit_json "$bare/a.md")" "$STUBS:$TOOLS" "$bare"
+p=()
+[[ $STATUS -eq 0 && "$(ran markdownlint-cli2)" == 0 ]] || p+=("exit $STATUS, ran $(ran markdownlint-cli2)")
+[[ "$(system_message "$STDOUT")" == *"config .markdownlint-cli2.jsonc isn't committed as it is"* ]] || p+=("systemMessage: $STDOUT")
+check "a config staged in a repository with no commit: not linted (no HEAD to compare with)" ${p[@]+"${p[@]}"}
 
 # --- Input that is not a file edit ----------------------------------------
 for json in '{}' '{"tool_input": {}}' '{"tool_input": {"file_path": 5}}' '{"tool_input": {"file_path": ""}}' '{"tool_input": {"file_path": null}}' '[]' '{"tool_input": "x"}'; do

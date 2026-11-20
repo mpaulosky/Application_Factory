@@ -36,13 +36,17 @@ else
   BASE=""
   git ls-files -z > "$CHANGED_FILE"
 fi
-# The changed files matching the extended regex $1, and not $2 when it's given, one array entry each.
+mapfile -d '' -t CHANGED < "$CHANGED_FILE"
+# pick <regex> [<regex>]: the changed files matching the extended regex $1, and not $2 when it's given, NUL-separated. Matched in bash,
+# not grep: grep in a UTF-8 locale drops a name that isn't valid UTF-8, and its ^ and $ also match at a newline inside a name. With
+# LC_ALL=C a name is matched byte for byte, and ^ and $ anchor at its two ends only. Nothing here can fail.
 pick() {
-  if [[ $# -gt 1 ]]; then
-    { grep -zE "$1" "$CHANGED_FILE" || true; } | { grep -zvE "$2" || true; }
-  else
-    grep -zE "$1" "$CHANGED_FILE" || true
-  fi
+  local LC_ALL=C name
+  for name in ${CHANGED[@]+"${CHANGED[@]}"}; do
+    [[ "$name" =~ $1 ]] || continue
+    [[ $# -lt 2 || ! "$name" =~ $2 ]] || continue
+    printf '%s\0' "$name"
+  done
 }
 
 mapfile -d '' -t MD_FILES < <(pick '\.md$' '^docs/blogs/')
@@ -91,12 +95,15 @@ run_tool() {
 
 step "Markdown lint (${#MD_FILES[@]} changed file(s))"
 if [[ ${#MD_FILES[@]} -gt 0 ]]; then
+  # markdownlint-cli2 reads each argument as a glob, so a[1].md would match a1.md: a leading ':' makes it a literal path (and keeps
+  # a name that starts with '-' from being read as an option).
+  MD_PATHS=("${MD_FILES[@]/#/:}")
   if [[ -x "$ROOT/node_modules/.bin/markdownlint-cli2" ]]; then
-    "$ROOT/node_modules/.bin/markdownlint-cli2" "${MD_FILES[@]}"
+    "$ROOT/node_modules/.bin/markdownlint-cli2" "${MD_PATHS[@]}"
   elif command -v markdownlint-cli2 &>/dev/null; then
-    markdownlint-cli2 "${MD_FILES[@]}"
+    markdownlint-cli2 "${MD_PATHS[@]}"
   elif command -v pnpm &>/dev/null; then
-    pnpm dlx "markdownlint-cli2@${MARKDOWNLINT_CLI2_VERSION}" "${MD_FILES[@]}"
+    pnpm dlx "markdownlint-cli2@${MARKDOWNLINT_CLI2_VERSION}" "${MD_PATHS[@]}"
   else
     # Every repo uses pnpm, never npm or npx, so without pnpm there is no way to lint.
     echo "Markdown lint needs pnpm: corepack enable pnpm, or pnpm add -g markdownlint-cli2." >&2
