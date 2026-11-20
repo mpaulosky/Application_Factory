@@ -61,7 +61,7 @@ jobs:
         run: bash "scripts/gate.sh"
 
   static:
-    name: Gate - copies, lint, shellcheck
+    name: Gate - copies, lint, shellcheck, shfmt
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -73,7 +73,8 @@ jobs:
       - name: Install the tools
         uses: ./.github/actions/template-tools
 
-      # The Factory's copies of Template files, the issue-reference and git status checks, the Markdown and YAML lint, shellcheck of the shell files.
+      # The Factory's copies of Template files, the issue-reference and git status checks, the Markdown and YAML lint, shellcheck of the shell files,
+      # shfmt of every shell file (ADR 0015).
       - name: Run the gate part
         env:
           GATE_PART: static

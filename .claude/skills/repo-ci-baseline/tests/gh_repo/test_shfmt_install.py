@@ -142,10 +142,11 @@ def test_an_install_step_retries_a_failed_download(where):
 
 
 def sh_version_check():
-    """test.sh's shfmt version check, the two lines that start with [[ "$(shfmt --version)"."""
+    """test.sh's shfmt version check: from the line that starts with [[ "$(shfmt --version)" to the } that ends its || { ... } block (shfmt puts the block on lines of its own)."""
     lines = (SKILL / "test.sh").read_text().splitlines()
     first = next(index for index, line in enumerate(lines) if line.startswith('[[ "$(shfmt --version)" =~'))
-    return "\n".join(lines[first:first + 2]) + "\n"
+    last = next(index for index in range(first + 1, len(lines)) if lines[index].strip() == "}")
+    return "\n".join(lines[first:last + 1]) + "\n"
 
 
 @pytest.mark.parametrize("version", [

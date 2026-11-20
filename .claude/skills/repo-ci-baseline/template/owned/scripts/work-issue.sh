@@ -19,10 +19,16 @@
 # Everything but the path goes to stderr.
 set -euo pipefail
 
-die() { echo "❌ $*" >&2; exit 1; }
-[[ $# == 1 && "$1" =~ ^[0-9]{1,9}$ ]] || { echo "usage: scripts/work-issue.sh <issue-number>" >&2; exit 1; }
+die() {
+  echo "❌ $*" >&2
+  exit 1
+}
+[[ $# == 1 && "$1" =~ ^[0-9]{1,9}$ ]] || {
+  echo "usage: scripts/work-issue.sh <issue-number>" >&2
+  exit 1
+}
 n=$((10#$1))
-command -v gh >/dev/null || die "gh is needed to read the issue" # gh-repo: ok
+command -v gh > /dev/null || die "gh is needed to read the issue" # gh-repo: ok
 
 primary="$(git worktree list --porcelain | awk '/^worktree / && !seen {print substr($0,10); seen=1}')"
 [[ -n "$primary" ]] || die "can't find the primary checkout"
@@ -35,10 +41,13 @@ repo="$(basename "$primary")"
 # It runs in the C locale (LC_ALL=C is local for the regex, and set on tr, a separate process), so [A-Za-z] means ASCII only. So a lookalike (https://evil.com#@github.com/o/r, evil.com:x@github.com:o/r, github.com:/o/r, a deeper path, file://, an IPv6 host) gives nothing.
 slug_of() {
   local LC_ALL=C u="${1%/}" l out="" ui_url="[A-Za-z0-9._~%!\$&'()*+,;=:-]+@" ui_scp="[A-Za-z0-9._~%!\$&'()*+,;=-]+@" nm="[A-Za-z0-9._-]+" host="(ssh\.|www\.)?github\.com"
-  u="${u%.git}"; u="${u%/}"
+  u="${u%.git}"
+  u="${u%/}"
   l="$(printf '%s' "$u" | LC_ALL=C tr '[:upper:]' '[:lower:]')" # the match is on an ASCII-lowercase copy (LC_ALL=C on tr, which is another process and doesn't see the local one: no non-ASCII letter folds into an ASCII one), so it needs neither nocasematch nor bash 4
-  if [[ "$l" =~ ^(ssh|https?|git)://(${ui_url})?${host}(:[0-9]+)?/(${nm}/${nm})$ ]]; then out="${BASH_REMATCH[5]}"
-  elif [[ "$l" =~ ^(${ui_scp})?${host}:(${nm}/${nm})$ ]]; then out="${BASH_REMATCH[3]}"
+  if [[ "$l" =~ ^(ssh|https?|git)://(${ui_url})?${host}(:[0-9]+)?/(${nm}/${nm})$ ]]; then
+    out="${BASH_REMATCH[5]}"
+  elif [[ "$l" =~ ^(${ui_scp})?${host}:(${nm}/${nm})$ ]]; then
+    out="${BASH_REMATCH[3]}"
   fi
   if [[ -n "$out" ]]; then printf '%s' "${u: -${#out}}"; fi # the owner/name ends the URL: take it from the original, case kept
 }
@@ -48,12 +57,13 @@ resolve_path() {
   [[ "$p" == /* ]] || p="$1/$p"
   rest="$p/"
   while [[ -n "$rest" ]]; do
-    seg="${rest%%/*}"; rest="${rest#*/}"
-    case "$seg" in ''|.) ;; ..) out="${out%/*}" ;; *) out="$out/$seg" ;; esac
+    seg="${rest%%/*}"
+    rest="${rest#*/}"
+    case "$seg" in '' | .) ;; ..) out="${out%/*}" ;; *) out="$out/$seg" ;; esac
   done
   printf '%s' "${out:-/}"
 }
-url="$(git remote get-url upstream 2>/dev/null || git remote get-url origin 2>/dev/null || true)"
+url="$(git remote get-url upstream 2> /dev/null || git remote get-url origin 2> /dev/null || true)"
 repo_slug="${GITHUB_REPOSITORY:-}"
 if [[ -z "$repo_slug" ]]; then repo_slug="$(slug_of "$url")"; fi
 [[ "$repo_slug" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] || die "can't tell which repository: set GITHUB_REPOSITORY or add a github.com upstream or origin remote"
@@ -63,19 +73,24 @@ title="$(gh issue view "$n" --json title --jq .title)"
 labels="$(gh issue view "$n" --json labels --jq '.labels[].name')"
 [[ -n "$title" ]] || die "issue #$n has no title"
 type=feature
-grep -qix bug <<<"$labels" && type=fix
+grep -qix bug <<< "$labels" && type=fix
 
-slug="$(sed -E 's/^\[[^]]*\][[:space:]]*//' <<<"$title" | tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -c 'a-z0-9\n' ' ' | tr -s ' ' | sed -E 's/^ //; s/ $//' | cut -d' ' -f1-6 | tr ' ' '-' | cut -c1-50 | sed -E 's/-+$//')"
+slug="$(sed -E 's/^\[[^]]*\][[:space:]]*//' <<< "$title" | tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -c 'a-z0-9\n' ' ' | tr -s ' ' | sed -E 's/^ //; s/ $//' | cut -d' ' -f1-6 | tr ' ' '-' | cut -c1-50 | sed -E 's/-+$//')"
 slug="${slug:-issue}"
 branch="$type/$n-$slug"
-fetched=true; git -C "$primary" fetch --prune --quiet origin || fetched=false
+fetched=true
+git -C "$primary" fetch --prune --quiet origin || fetched=false
 # An issue renamed since the branch was made keeps its branch: when the branch this title would get doesn't exist, a local or origin branch already named for this number wins
 # (local first, then in name order; one outside the branch standard or under another prefix, or with leading zeros in its number, is not the issue's).
 if ! git -C "$primary" show-ref --verify --quiet "refs/heads/$branch" && ! git -C "$primary" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
   while read -r ref; do
-    name="${ref#refs/heads/}"; name="${name#refs/remotes/origin/}"
-    case "$name" in feature/"$n"-*|fix/"$n"-*|hotfix/"$n"-*) ;; *) continue ;; esac
-    if bash "$primary/scripts/check-branch-name.sh" "$name" >/dev/null 2>&1; then branch="$name"; break; fi
+    name="${ref#refs/heads/}"
+    name="${name#refs/remotes/origin/}"
+    case "$name" in feature/"$n"-* | fix/"$n"-* | hotfix/"$n"-*) ;; *) continue ;; esac
+    if bash "$primary/scripts/check-branch-name.sh" "$name" > /dev/null 2>&1; then
+      branch="$name"
+      break
+    fi
   done < <(git -C "$primary" for-each-ref --format='%(refname)' "refs/heads/*/$n-*" "refs/remotes/origin/*/$n-*")
 fi
 bash "$primary/scripts/check-branch-name.sh" "$branch" >&2 || die "$branch is not an allowed branch name"
@@ -88,7 +103,7 @@ worktree_ok() {
   local c1 c2
   c1="$(cd "$1" && cd "$(git rev-parse --git-common-dir)" && pwd -P)" || return 1
   c2="$(cd "$primary" && cd "$(git rev-parse --git-common-dir)" && pwd -P)" || return 1
-  [[ "$c1" == "$c2" && "$(git -C "$1" symbolic-ref -q HEAD 2>/dev/null)" == "refs/heads/$branch" ]]
+  [[ "$c1" == "$c2" && "$(git -C "$1" symbolic-ref -q HEAD 2> /dev/null)" == "refs/heads/$branch" ]]
 }
 if [[ -n "$existing" && -d "$existing" ]]; then
   worktree_ok "$existing" || die "$existing is registered as the worktree of $branch, but is not one now (the folder was recreated or replaced, or git can't read it, e.g. a safe.directory refusal): fix that, or move it away and run git worktree prune, then try again"
@@ -101,13 +116,16 @@ fi
 # A worktree whose folder was deleted by hand is stale: forget git's entry for it (this one only), then make the worktree again.
 if [[ -n "$existing" ]]; then
   p="$(dirname "$existing")"
-  [[ -d "$p" && -x "$p" && -n "$(ls -A "$p" 2>/dev/null)" ]] \
+  [[ -d "$p" && -x "$p" && -n "$(ls -A "$p" 2> /dev/null)" ]] \
     || die "$existing is a worktree of $branch whose folder can't be reached: its parent folder is missing, empty, unreadable or unsearchable, so it may be on an unmounted drive. If you deleted it, run git worktree prune, then try again"
   common="$(cd "$primary" && cd "$(git rev-parse --git-common-dir)" && pwd -P)"
   entry=""
   for d in "$common"/worktrees/*/; do
     [[ -d "$d" && ! -L "${d%/}" && -f "${d}gitdir" ]] || continue # a real directory only: never follow a symlink out of .git/worktrees
-    if [[ "$(resolve_path "${d%/}" "$(<"${d}gitdir")")" == "$(resolve_path / "$existing")/.git" ]]; then entry="$d"; break; fi
+    if [[ "$(resolve_path "${d%/}" "$(< "${d}gitdir")")" == "$(resolve_path / "$existing")/.git" ]]; then
+      entry="$d"
+      break
+    fi
   done
   [[ -n "$entry" ]] || die "$existing is a worktree of $branch whose folder is missing, and git's entry for it was not found: run git worktree prune, then try again"
   [[ ! -e "${entry}locked" ]] || die "$existing is a missing but locked worktree of $branch: run git worktree unlock '$existing', then try again"

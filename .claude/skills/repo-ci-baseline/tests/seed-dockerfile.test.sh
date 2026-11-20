@@ -7,7 +7,7 @@ set -uo pipefail
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-python3 -I - "$SKILL_DIR/template/seed/.sandcastle/Dockerfile" "$SKILL_DIR/references/sandcastle.md" <<'PY'
+python3 -I - "$SKILL_DIR/template/seed/.sandcastle/Dockerfile" "$SKILL_DIR/references/sandcastle.md" << 'PY'
 import re
 import sys
 

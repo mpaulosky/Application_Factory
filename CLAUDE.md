@@ -26,13 +26,14 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   `.github/scripts/post_claude_review.py`, and the issue and PR process (ADR 0009): `.github/ISSUE_TEMPLATE/*`, `.github/pull_request_template.md`, `.github/workflows/pr-title.yml` and
   `scripts/check-pr-title.sh`, and `.github/workflows/lint-{markdown,yaml,actions}.yml`, and the local review (ADR 0010): `scripts/review.sh`, five `.sandcastle/lib/` modules with three tests,
   `.claude/skills/pre-push-review/`, `.claude/agents/pre-push-reviewer.md` and `.security/README.md`: copies of the Template's Owned files. `.github/dependabot.yml`, `.yamllint.yml` and
-  `.markdownlint-cli2.jsonc` are the Factory's own (ADR 0009). Edit the Template's file and run `scripts/gate.sh --sync` to copy it over; `scripts/gate.sh` fails when a copy drifts.
+  `.markdownlint-cli2.jsonc` are the Factory's own (ADR 0009). `.editorconfig`, which holds the shell style shfmt reads (ADR 0015), is a copy too.
+  Edit the Template's file and run `scripts/gate.sh --sync` to copy it over; `scripts/gate.sh` fails when a copy drifts.
   The review's own, non-copy files are `.sandcastle/lib/repo-config.mts` (`REPO_SLUG`, `NOT_OWNED_BASELINE_PATHS`), `package.json`, `pnpm-workspace.yaml`,
   `pnpm-lock.yaml` and the `.gitignore` lines for `node_modules/` and `.security/`.
 - `.claude/settings.json` and `scripts/lint-edited-file.sh` (a copy of the Template's Owned file): the edit-time lint (ADR 0011). The settings file holds one `PostToolUse` hook
   that lints each Markdown or YAML file Claude writes; the Template carries the script but not the settings file.
 - `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too; its header lists the steps (its test and the review's three tests, the copies' drift check, the bare-`#N` check,
-  the Git-status check, lint, shellcheck of the changed shell files, the local review check, then `test.sh`, which it skips for a tree that already passed it,
+  the Git-status check, lint, shellcheck of the changed shell files, shfmt of every shell file, the local review check, then `test.sh`, which it skips for a tree that already passed it,
   then the Sandcastle check when the branch changed a file it reads).
   `GATE_PART=<part>` runs one part (CI's jobs; the pre-push hook drops it), and `TEST_SH_SHARD` one shard of `test.sh` in the `template` part only.
   [ADR 0006](docs/adr/0006-the-factory-carries-the-git-hooks-and-a-gate.md), [ADR
@@ -40,14 +41,15 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
 - `~/.claude/skills/repo-ci-baseline` is a symlink to the skill here, so editing it changes what `apply.sh` copies everywhere.
 
 The Factory carries the git hooks and a gate of its own (ADR 0006), Claude Review with PR Auto-Merge (ADR 0008), the issue and PR process (ADR 0009), the local review
-(ADR 0010) and the edit-time lint (ADR 0011), not the rest of the Baseline: no other `.sandcastle/` code, .NET workflows or release workflows; its `package.json` holds only `tsx` and `zod`.
+(ADR 0010), the edit-time lint (ADR 0011) and the shell style (ADR 0015), not the rest of the Baseline: no other `.sandcastle/` code, .NET workflows or
+release workflows; its `package.json` holds only `tsx` and `zod`.
 Don't add more without an ADR.
 
 ## Commands
 
 ```bash
 scripts/gate.sh --sync                                        # copy the Template's files over the Factory's copies of them (after editing the Template)
-scripts/gate.sh --quick                                       # while iterating: the gate up to and including shellcheck of the shell files the branch changed, without the local review check, test.sh and the Sandcastle check (about a minute); never for a push
+scripts/gate.sh --quick                                       # while iterating: the gate up to and including shellcheck of the shell files the branch changed and shfmt of every shell file, without the local review check, test.sh and the Sandcastle check (about a minute); never for a push
 scripts/gate.sh                                               # the pre-push gate (needs pnpm on the first run, and test.sh's tools, shfmt among them); GATE_NO_CACHE=1 runs test.sh and the Sandcastle check again on a tree that already passed them
 GATE_PART=sandcastle scripts/gate.sh                          # one part alone (self, review, static, template, sandcastle), as a CI job runs it; the Sandcastle check needs pnpm and the network
 .claude/skills/repo-ci-baseline/test.sh                       # all the Template's tests (TEST_SH_SHARD=hooks|scripts|checks runs one shard); needs actionlint, zizmor, yamllint, shellcheck, shfmt (v3.14 or a later v3), markdownlint-cli2, node, git, jq
@@ -79,7 +81,8 @@ Commit in a linked worktree under `../Application_Factory-worktrees/`: `pre-comm
 to `main`, a bad branch name, a dirty tree or a branch behind `origin/main`. In each clone, turn the hooks on once with `git config core.hooksPath .github/hooks`.
 Start a branch with `git worktree add --no-track -b <branch> ../Application_Factory-worktrees/<folder> origin/main`, where `<folder>` is the branch with `/` as `-`.
 
-Markdown is linted with `.markdownlint-cli2.jsonc` (lines up to 200 characters).
+Markdown is linted with `.markdownlint-cli2.jsonc` (lines up to 200 characters). Shell files are formatted by shfmt in the style `.editorconfig` gives (ADR 0015): run `shfmt -w <file>`
+after editing one, with no style flags, so it reads that file.
 
 Write and edit Markdown and YAML files with the Write and Edit tools, never with a shell command (`cat <<EOF >`, `sed -i`, `tee`, `echo >>`, a `python`
 or `node` one-liner, a script). The edit-time lint (ADR 0011) is a `PostToolUse` hook on Write, Edit and MultiEdit: it lints the file the moment the tool

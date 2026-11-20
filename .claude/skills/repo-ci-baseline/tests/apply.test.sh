@@ -14,7 +14,10 @@ trap 'command rm -rf "$work"' EXIT
 pass=0
 failed=0
 ok() { pass=$((pass + 1)); }
-bad() { echo "FAIL: $1" >&2; failed=$((failed + 1)); }
+bad() {
+  echo "FAIL: $1" >&2
+  failed=$((failed + 1))
+}
 check() { if eval "$2"; then ok; else bad "$1"; fi; }
 
 # A skill copy whose Template has one Owned and two Seed files, plus a cache
@@ -169,10 +172,10 @@ check "no remote: unfilled reported" \
   'grep -A2 "unfilled placeholders (2)" <<< "$out" | grep -q "docs/SECURITY.md" && grep -A2 "unfilled placeholders (2)" <<< "$out" | grep -q ".sandcastle/roles/architect.md"'
 
 # ── Sandcastle's files go only into a repo that runs Sandcastle (ADR 0006) ──
-sandcastle_files=(.sandcastle/tsconfig.json .sandcastle/roles/architect.md package.json scripts/review.sh .claude/agents/pre-push-reviewer.md \
-  .claude/skills/pre-push-review/SKILL.md .claude/skills/pre-push-review/lenses.md \
-  .claude/skills/hardening-review/SKILL.md .claude/skills/hardening-review/scripts/mutate.py \
-  .sandcastle/lib/review-ledger.mts .sandcastle/lib/review-ledger.test.mts .sandcastle/lib/pre-push-review-skill.test.mts \
+sandcastle_files=(.sandcastle/tsconfig.json .sandcastle/roles/architect.md package.json scripts/review.sh .claude/agents/pre-push-reviewer.md
+  .claude/skills/pre-push-review/SKILL.md .claude/skills/pre-push-review/lenses.md
+  .claude/skills/hardening-review/SKILL.md .claude/skills/hardening-review/scripts/mutate.py
+  .sandcastle/lib/review-ledger.mts .sandcastle/lib/review-ledger.test.mts .sandcastle/lib/pre-push-review-skill.test.mts
   .github/workflows/sandcastle.yml .github/ci/sandcastle-skills.txt .claude/rules/sandcastle-hand-off.md)
 
 # An empty repo gets them. Sandcastle's own {{TASK_ID}} stays and isn't reported as unfilled.
@@ -268,7 +271,7 @@ mkdir -p "$repo/.sandcastle"
 printf 'x\n' > "$repo/.sandcastle/.gitkeep"
 commit_all "$repo" "init"
 git_q -C "$repo" switch -q -c chore/standardize-baseline
-"$apply" "$repo" >/dev/null
+"$apply" "$repo" > /dev/null
 check "role prompts: a repo without roles/skills.md gets the Seed's, empty" '[[ -f "$repo/.sandcastle/roles/skills.md" && ! -s "$repo/.sandcastle/roles/skills.md" ]]'
 check "role prompts: a repo without roles/backend.md gets the Owned one" '[[ -f "$repo/.sandcastle/roles/backend.md" ]]'
 command rm -rf "$skill/template/owned/.sandcastle/roles" "$skill/template/seed/.sandcastle/roles/skills.md"
@@ -309,7 +312,7 @@ for config in 'export const REPO_SLUG = "o/r";' \
   commit_all "$repo" "init"
   git_q -C "$repo" switch -q -c chore/standardize-baseline
   rc=0
-  "$apply" "$repo" >/dev/null 2>&1 || rc=$?
+  "$apply" "$repo" > /dev/null 2>&1 || rc=$?
   check "ledger prerequisite ($n): Apply refuses and the ledger is not written" '[[ $rc -eq 1 && ! -e "$repo/.sandcastle/lib/review-ledger.mts" ]]'
 done
 
@@ -348,7 +351,7 @@ touch "$repo/Widget.slnx"
 printf '.security/*\n!.security/README.md\n' > "$repo/.gitignore"
 commit_all "$repo" "init"
 git_q -C "$repo" switch -q -c chore/standardize-baseline
-"$apply" "$repo" >/dev/null
+"$apply" "$repo" > /dev/null
 check "security record: the README is written from the Template" 'grep -qx "# The security record" "$repo/.security/README.md"'
 printf 'Our own note.\n' >> "$repo/.security/README.md"
 printf '# 0001: An entry\n\n- Status: fixed\n' > "$repo/.security/0001-an-entry.md"
@@ -359,14 +362,17 @@ check "security record: dry run lists no .security entry as overwritten or added
 check "security record: dry run lists the edited README as an Owned file it would overwrite" \
   'awk "/^Owned files that would be overwritten/ {on = 1; next} /^\$/ {on = 0} on" <<< "$dry" | grep -q "\.security/README.md"'
 check "security record: dry run lists the entry nowhere" '! grep -q "0001-an-entry" <<< "$dry"'
-"$apply" "$repo" >/dev/null
+"$apply" "$repo" > /dev/null
 check "security record: a re-Apply restores the README" 'grep -qx "# The security record" "$repo/.security/README.md" && ! grep -q "Our own note" "$repo/.security/README.md"'
 check "security record: a re-Apply leaves the entry alone" '[[ "$(cat "$repo/.security/0001-an-entry.md")" == "$(printf "# 0001: An entry\n\n- Status: fixed")" ]]'
 
 # Runs of newlines for the window cases (a command substitution would strip them).
-printf -v NL10 '%*s' 10 ''; NL10="${NL10// /$'\n'}"
-printf -v NL11 '%*s' 11 ''; NL11="${NL11// /$'\n'}"
-printf -v NL12 '%*s' 12 ''; NL12="${NL12// /$'\n'}"
+printf -v NL10 '%*s' 10 ''
+NL10="${NL10// /$'\n'}"
+printf -v NL11 '%*s' 11 ''
+NL11="${NL11// /$'\n'}"
+printf -v NL12 '%*s' 12 ''
+NL12="${NL12// /$'\n'}"
 # .sandcastle/check.sh is Owned, but a repo whose GATE_COMMAND or GATE_SCRIPT names it uses it as its sandbox gate (the three older
 # repos did): Apply keeps that copy and says to rename it, since the Owned script would pass the gate without its lints and tests.
 printf '#!/usr/bin/env bash\necho owned\n' > "$skill/template/owned/.sandcastle/check.sh"

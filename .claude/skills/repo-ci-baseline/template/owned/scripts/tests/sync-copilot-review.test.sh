@@ -29,17 +29,26 @@ new_repo() {
     printf '%s' "$1" > "$repo/.claude/skills/code-review/SKILL.md"
   fi
 }
-run() { out="$(cd "$repo" && bash "$SCRIPT" "$@" 2>&1)"; status=$?; }
+run() {
+  out="$(cd "$repo" && bash "$SCRIPT" "$@" 2>&1)"
+  status=$?
+}
 # The same, from a folder inside the repository.
-run_in_subfolder() { mkdir -p "$repo/src/deep"; out="$(cd "$repo/src/deep" && bash "$SCRIPT" "$@" 2>&1)"; status=$?; }
+run_in_subfolder() {
+  mkdir -p "$repo/src/deep"
+  out="$(cd "$repo/src/deep" && bash "$SCRIPT" "$@" 2>&1)"
+  status=$?
+}
 # check <description> <command...>: passes when the command succeeds.
 check() {
   local description="$1"
   shift
   if "$@"; then
-    PASSED=$((PASSED + 1)); echo "ok   - $description"
+    PASSED=$((PASSED + 1))
+    echo "ok   - $description"
   else
-    FAILED=$((FAILED + 1)); echo "FAIL - $description (exit $status)"
+    FAILED=$((FAILED + 1))
+    echo "FAIL - $description (exit $status)"
     while IFS= read -r line; do echo "       | $line"; done <<< "$out"
   fi
 }
@@ -49,7 +58,7 @@ out_has() { [[ $out == *"$1"* ]]; }
 target_exists() { [[ -e "$(target)" ]]; }
 target_has_line() { grep -qxF -- "$1" "$(target)"; }
 target_lacks() { ! grep -q -- "$1" "$(target)"; }
-target_is() { [[ "$(<"$(target)")" == "$1" ]]; }
+target_is() { [[ "$(< "$(target)")" == "$1" ]]; }
 first_line_is() { [[ "$(head -1 "$(target)")" == "$1" ]]; }
 not() { ! "$@"; }
 

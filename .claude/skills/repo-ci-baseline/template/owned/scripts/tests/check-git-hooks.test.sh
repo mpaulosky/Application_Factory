@@ -11,7 +11,10 @@ BASH_BIN="$(command -v bash)"
 
 # python3 is what the gate already requires (discover_tests.py), so the JSON
 # checks use it rather than adding jq to the gate's prerequisites.
-command -v python3 > /dev/null 2>&1 || { echo "check-git-hooks.test.sh needs python3" >&2; exit 1; }
+command -v python3 > /dev/null 2>&1 || {
+  echo "check-git-hooks.test.sh needs python3" >&2
+  exit 1
+}
 
 PASSED=0
 FAILED=0

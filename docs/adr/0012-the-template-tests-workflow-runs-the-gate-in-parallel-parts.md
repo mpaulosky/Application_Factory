@@ -12,9 +12,9 @@ only asked people to run by hand. This ADR builds on ADR 0006, which gave the Fa
 ## Decision
 
 - **CI runs the gate one part per job, in parallel.** `scripts/gate.sh` takes `GATE_PART` (`self`, `static`, `template` or `sandcastle`): `self` is the gate's own test and the review's tests,
-  `static` the copies, the issue-reference and `git status` checks, the Markdown and YAML lint and shellcheck, `template` the local review check and `test.sh`, and `sandcastle` the Template's
-  Sandcastle check. With no `GATE_PART` every part runs, in that order (the `sandcastle` part only when its files changed, below),
-  so the pre-push hook and a gate started by hand run what they ran, plus that check. The workflow has a job per part, each installing the same
+  `static` the copies, the issue-reference and `git status` checks, the Markdown and YAML lint, shellcheck and (since ADR 0015) shfmt,
+  `template` the local review check and `test.sh`, and `sandcastle` the Template's Sandcastle check. With no `GATE_PART` every part runs, in that order
+  (the `sandcastle` part only when its files changed, below), so the pre-push hook and a gate started by hand run what they ran, plus that check. The workflow has a job per part, each installing the same
   tools through one local action (`.github/actions/template-tools`), and the run takes as long as its slowest part instead of the sum.
 - **One job still gates the pull request.** `Template tests` keeps its name, because the ruleset requires it by name and PR Auto-Merge, the landing scripts and the Sandcastle host read it by
   name. It now `needs` every part job, runs with `always()`, and fails unless every part passed: a skipped required check counts as passing, so a part that failed or was skipped must not leave it

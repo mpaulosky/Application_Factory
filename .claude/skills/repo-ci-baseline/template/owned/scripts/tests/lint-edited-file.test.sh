@@ -17,15 +17,25 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT="$ROOT/scripts/lint-edited-file.sh"
 BASH_BIN="$(command -v bash)"
 
-command -v python3 > /dev/null 2>&1 || { echo "lint-edited-file.test.sh needs python3" >&2; exit 1; }
+command -v python3 > /dev/null 2>&1 || {
+  echo "lint-edited-file.test.sh needs python3" >&2
+  exit 1
+}
 
 PASSED=0
 FAILED=0
 
 # Canonical: the script logs pwd -P paths, and on macOS mktemp returns /var/..., a symlink to /private/var/....
 # Two steps, each checked: with `cd -P -- "$(mktemp -d)"` a failed mktemp would leave WORK as the current directory.
-tmp="$(mktemp -d)" || { echo "lint-edited-file.test.sh: mktemp -d failed" >&2; exit 1; }
-WORK="$(cd -P -- "$tmp" && pwd -P)" || { echo "lint-edited-file.test.sh: cannot enter $tmp" >&2; rm -rf "$tmp"; exit 1; }
+tmp="$(mktemp -d)" || {
+  echo "lint-edited-file.test.sh: mktemp -d failed" >&2
+  exit 1
+}
+WORK="$(cd -P -- "$tmp" && pwd -P)" || {
+  echo "lint-edited-file.test.sh: cannot enter $tmp" >&2
+  rm -rf "$tmp"
+  exit 1
+}
 trap 'rm -rf "$WORK"' EXIT
 
 # Keep the developer's git config out of every git call here.
@@ -307,7 +317,10 @@ rm -r "$WORK/shim" "$WORK/multi"
 # A linter's helpers, and the hook's own python3, git and tr, come from the cleaned PATH too: an agent's copy in the repo, ahead on
 # PATH as an absolute, relative, empty or '.' entry, never runs. The empty and '.' entries name the working directory, so those
 # copies sit in it.
-for helper in python3 bash node env git tr; do attacker_stub "$repo/bin/$helper"; attacker_stub "$repo/$helper"; done
+for helper in python3 bash node env git tr; do
+  attacker_stub "$repo/bin/$helper"
+  attacker_stub "$repo/$helper"
+done
 for first in "$repo/bin" bin "" .; do
   RUN_CWD="$repo" run_hook "$(edit_json "$repo/docs/bad.md")" "$first:$STUBS:$TOOLS"
   p=()
@@ -1077,8 +1090,8 @@ mv "$WORK/vet-wt/bin" "$vet/bin"
 wt_git="$(cat "$WORK/vet-wt/.git")"
 printf 'gitdir: ../vetted/.git/worktrees/vet-wt\n' > "$WORK/vet-wt/.git"
 p=()
-[[ "$vet" == "$WORK/vetted" && "$(git -C "$WORK/vet-wt" rev-parse --show-toplevel 2> /dev/null)" == "$WORK/vet-wt" ]] ||
-  p+=("git doesn't read the relative gitdir, so this case proves nothing")
+[[ "$vet" == "$WORK/vetted" && "$(git -C "$WORK/vet-wt" rev-parse --show-toplevel 2> /dev/null)" == "$WORK/vet-wt" ]] \
+  || p+=("git doesn't read the relative gitdir, so this case proves nothing")
 # Run from / so a relative gitdir left unresolved can't happen to name the right folder from the working directory.
 RUN_CWD=/ run_hook "$(edit_json "$WORK/vet-wt/docs/deep/ok.md")" "$vet/bin:$STUBS:$TOOLS" "$WORK/vet-wt"
 [[ $STATUS -eq 0 && "$(ran markdownlint-cli2)" == 1 ]] || p+=("exit $STATUS, ran $(ran markdownlint-cli2)")

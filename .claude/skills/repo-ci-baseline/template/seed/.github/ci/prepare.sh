@@ -21,5 +21,8 @@ test_name="${2:-}"
 case "$job" in
   build) ;;
   test) : "$test_name" ;;
-  *) echo "prepare.sh: unknown job '$job'" >&2; exit 2 ;;
+  *)
+    echo "prepare.sh: unknown job '$job'" >&2
+    exit 2
+    ;;
 esac

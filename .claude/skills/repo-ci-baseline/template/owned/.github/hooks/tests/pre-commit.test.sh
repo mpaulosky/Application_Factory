@@ -23,7 +23,7 @@ STUBS="$WORK/bin"
 LOG="$WORK/lint.log"
 
 mkdir -p "$STUBS"
-cat > "$STUBS/markdownlint-cli2" <<EOF
+cat > "$STUBS/markdownlint-cli2" << EOF
 #!/usr/bin/env bash
 echo "markdownlint-cli2 \$*" >> "$LOG"
 [[ -f .markdownlint-cli2.jsonc ]] || { echo "no config in \$PWD"; exit 2; }
@@ -279,7 +279,7 @@ RECOVERY="$(sed -e 's/\x1b\[[0-9;]*m//g' -n -e 's/^      \(git .*\|cd .*\)$/\1/p
 MOVED="$(cd "$WORK" && pwd -P)/repo-worktrees/fix-2-moved"
 if [[ "$RECOVERY" != *"git switch main"* ]]; then
   fail "the refusal's commands move the branch into a worktree" "no git switch main in the message"
-elif ! (cd "$PRIMARY" && set -e && eval "$RECOVERY") &>/dev/null; then
+elif ! (cd "$PRIMARY" && set -e && eval "$RECOVERY") &> /dev/null; then
   fail "the refusal's commands move the branch into a worktree" "the commands failed"
 elif [[ "$(git -C "$MOVED" branch --show-current)" != fix/2-moved ]] \
   || ! grep -q Staged "$MOVED/README.md" || [[ ! -f "$MOVED/new.md" ]] \
@@ -303,7 +303,7 @@ git -C "$PRIMARY" checkout -q -f main
 # GIT_INDEX_FILE set, and in a worktree points GIT_DIR at .git/worktrees/<name>.
 HOOKS_DIR="$(dirname "$HOOK")"
 echo 'Some text.' >> "$PRIMARY/README.md"
-if PATH="$STUBS:$PATH" git -C "$PRIMARY" -c core.hooksPath="$HOOKS_DIR" commit -q -am primary &>/dev/null; then
+if PATH="$STUBS:$PATH" git -C "$PRIMARY" -c core.hooksPath="$HOOKS_DIR" commit -q -am primary &> /dev/null; then
   fail "git commit in the primary checkout is refused" "the commit was made"
   git -C "$PRIMARY" reset -q --hard HEAD~1
 else

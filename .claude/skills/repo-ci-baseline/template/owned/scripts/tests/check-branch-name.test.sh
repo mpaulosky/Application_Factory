@@ -109,13 +109,13 @@ utf8_locales=()
 widening=0
 while IFS= read -r loc; do
   case "$loc" in *[Uu][Tt][Ff]8 | *[Uu][Tt][Ff]-8) ;; *) continue ;; esac
-  if LC_ALL="$loc" bash -c '[[ é =~ ^[a-z]$ ]]' 2>/dev/null; then
+  if LC_ALL="$loc" bash -c '[[ é =~ ^[a-z]$ ]]' 2> /dev/null; then
     utf8_locales+=("$loc")
     widening=$((widening + 1))
   elif [[ "$loc" == C.* || "$loc" == en_US.* ]]; then
     utf8_locales+=("$loc")
   fi
-done < <(locale -a 2>/dev/null)
+done < <(locale -a 2> /dev/null)
 # ${a[@]+"${a[@]}"}: an empty array is no unbound variable under set -u in bash before 4.4.
 for loc in ${utf8_locales[@]+"${utf8_locales[@]}"}; do
   for name in fix/1-café feature/2-naïve chore/résumé 'dependabot/aé' 'dependabot/npm/é'; do

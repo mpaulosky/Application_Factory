@@ -2,16 +2,16 @@
 # The Application Factory's pre-push gate, run by .github/hooks/pre-push (a copy of the Template's) and safe to run by hand.
 # The Factory isn't a .NET repo, so its gate is what its CI runs: first this script's own test and the review's three stand-alone tests (they install
 # the packages with pnpm), then that its copies of Template files haven't drifted from the Template (ADR 0006), then that no Owned file has a bare #N,
-# then that no Owned script reads git status --porcelain without --untracked-files (tests/check-git-status.sh), then the Markdown and YAML lint, then shellcheck of the shell files the branch changes, then that the branch passed the local review (scripts/review.sh check, ADR 0010; GATE_SKIP_REVIEW=1 skips it),
+# then that no Owned script reads git status --porcelain without --untracked-files (tests/check-git-status.sh), then the Markdown and YAML lint, then shellcheck of the shell files the branch changes, then that every shell file is formatted as shfmt formats it, then that the branch passed the local review (scripts/review.sh check, ADR 0010; GATE_SKIP_REVIEW=1 skips it),
 # then the repo-ci-baseline skill's test.sh (skipped when it already passed on the same clean tree; GATE_NO_CACHE=1 runs it). This script is the Factory's own, not a copy of the Template's scripts/gate.sh.
 
 # GATE_PART=self|review|static|template|sandcastle runs one part of this gate, which is how CI runs a part per job (ADR 0012, ADR 0013): self is this script's own test, review the
-# review's stand-alone tests, static the copies, the issue references, the git status guards, the lint and shellcheck, template the review check and test.sh, sandcastle the Template's Sandcastle check.
+# review's stand-alone tests, static the copies, the issue references, the git status guards, the lint, shellcheck and shfmt, template the review check and test.sh, sandcastle the Template's Sandcastle check.
 # With no GATE_PART every part runs, in that order, except that sandcastle runs only when the branch changed a file it reads (a part run by name always runs). The pre-push hook drops GATE_PART.
 # TEST_SH_SHARD=hooks|scripts|checks, with GATE_PART=template, runs one shard of test.sh (ADR 0013); any other run of the gate ignores it and runs the whole of test.sh.
 set -euo pipefail
 
-# scripts/gate.sh --quick: the checks that finish in about a minute (its test, the review tests, the copies' drift, the bare-#N check, the git status guard check, lint, shellcheck of the shell files the branch changes), then stop before the local
+# scripts/gate.sh --quick: the checks that finish in about a minute (its test, the review tests, the copies' drift, the bare-#N check, the git status guard check, lint, shellcheck of the shell files the branch changes, shfmt of every shell file), then stop before the local
 # review check, test.sh and the Sandcastle check. It is for iterating, never for pushing: the pre-push hook and CI call this script with no argument.
 # scripts/gate.sh --sync: copies every Template file the Factory carries over its copy (cp -p keeps the execute bit), prints the ones that changed,
 # and stops. A copy edited by hand is overwritten, so edit the Template's file. Run it after editing the Template's file; the drift check below is what finds a copy you forgot.
@@ -21,18 +21,30 @@ case "${1:-}" in
   "") ;;
   --quick) quick=1 ;;
   --sync) sync=1 ;;
-  *) echo "Usage: scripts/gate.sh [--quick|--sync]" >&2; exit 2 ;;
+  *)
+    echo "Usage: scripts/gate.sh [--quick|--sync]" >&2
+    exit 2
+    ;;
 esac
-if (($# > 1)); then echo "Usage: scripts/gate.sh [--quick|--sync]" >&2; exit 2; fi
+if (($# > 1)); then
+  echo "Usage: scripts/gate.sh [--quick|--sync]" >&2
+  exit 2
+fi
 
 part="${GATE_PART:-}"
 case "$part" in
   "" | self | review | static | template | sandcastle) ;;
-  *) echo "GATE_PART must be self, review, static, template or sandcastle, not '$part'." >&2; exit 2 ;;
+  *)
+    echo "GATE_PART must be self, review, static, template or sandcastle, not '$part'." >&2
+    exit 2
+    ;;
 esac
 # A push, a full gate and every other part run all of test.sh: only the template part, run by name, runs a shard.
 if [[ "$part" != template ]]; then unset TEST_SH_SHARD; fi
-if ((quick || sync)) && [[ -n "$part" ]]; then echo "scripts/gate.sh --quick and --sync run no single part: unset GATE_PART." >&2; exit 2; fi
+if ((quick || sync)) && [[ -n "$part" ]]; then
+  echo "scripts/gate.sh --quick and --sync run no single part: unset GATE_PART." >&2
+  exit 2
+fi
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
@@ -41,12 +53,14 @@ cd "$ROOT"
 # shellcheck disable=SC2046 # one variable name per word, on purpose
 unset $(git rev-parse --local-env-vars)
 
-CYAN='\033[0;36m'; RED='\033[0;31m'; RESET='\033[0m'
+CYAN='\033[0;36m'
+RED='\033[0;31m'
+RESET='\033[0m'
 skill=".claude/skills/repo-ci-baseline"
 owned="$skill/template/owned"
 
-# The Factory carries these Owned files as copies, for its git hooks, review layer and issue and PR process. Edit the Template's file, then run scripts/gate.sh --sync to copy it over.
-# Keep this list in step with ADR 0006, ADR 0008, ADR 0009, ADR 0010, ADR 0011 and CLAUDE.md.
+# The Factory carries these Owned files as copies, for its git hooks, review layer, issue and PR process and shell style (.editorconfig). Edit the Template's file, then run scripts/gate.sh --sync to copy it over.
+# Keep this list in step with ADR 0006, ADR 0008, ADR 0009, ADR 0010, ADR 0011, ADR 0015 and CLAUDE.md.
 copies=(
   .github/hooks/pre-commit
   .github/hooks/pre-push
@@ -80,6 +94,7 @@ copies=(
   .claude/skills/pre-push-review/review-bar.md
   .claude/agents/pre-push-reviewer.md
   .security/README.md
+  .editorconfig
 )
 
 if ((sync)); then
@@ -109,12 +124,15 @@ run_review() {
     # The three copied tests that stand alone (ADR 0010); the Template's Sandcastle check runs the rest.
     echo -e "\n${CYAN}▶ Local review tests${RESET}"
     if [[ ! -x node_modules/.bin/tsx ]]; then
-      if ! command -v pnpm >/dev/null 2>&1; then
+      if ! command -v pnpm > /dev/null 2>&1; then
         echo "❌ node_modules/.bin/tsx not found, and pnpm isn't installed: run corepack enable pnpm, then pnpm install." >&2
         exit 1
       fi
       pnpm install --frozen-lockfile >&2
-      if [[ ! -x node_modules/.bin/tsx ]]; then echo "❌ pnpm install did not install node_modules/.bin/tsx." >&2; exit 1; fi
+      if [[ ! -x node_modules/.bin/tsx ]]; then
+        echo "❌ pnpm install did not install node_modules/.bin/tsx." >&2
+        exit 1
+      fi
     fi
     node_modules/.bin/tsx --test .sandcastle/lib/review-ledger.test.mts .sandcastle/lib/security-record.test.mts .sandcastle/lib/plain-text.test.mts
   fi
@@ -140,7 +158,7 @@ run_static() {
   # test.sh's issue-reference rule (a bare #N in an Owned file), run here too so --quick catches it and not only the template part (test.sh).
   echo -e "\n${CYAN}▶ Issue references in Owned files${RESET}"
   # Exit 1 is a bare #N (the checker printed it); anything else (2: a folder, file or directory it could not check) is the check itself failing, and fails the gate too. An uncaught Python error also exits 1, with its traceback above.
-  if ! command -v python3 >/dev/null 2>&1; then
+  if ! command -v python3 > /dev/null 2>&1; then
     echo -e "${RED}❌ python3 not found: the issue-reference check needs it.${RESET}" >&2
     exit 1
   fi
@@ -169,34 +187,92 @@ run_static() {
   # What the Lint Markdown and Lint YAML workflows run over the whole repo, so a failure shows here and not first on GitHub (ADR 0009).
   # The pre-commit hook lints staged Markdown only; test.sh lints the Template's files only.
   echo -e "\n${CYAN}▶ markdownlint (whole repo, as Lint Markdown)${RESET}"
-  markdownlint-cli2 '**/*.md' || { echo -e "${RED}❌ markdownlint${RESET}" >&2; exit 1; }
+  markdownlint-cli2 '**/*.md' || {
+    echo -e "${RED}❌ markdownlint${RESET}" >&2
+    exit 1
+  }
   echo -e "\n${CYAN}▶ yamllint (whole repo, as Lint YAML)${RESET}"
-  yamllint -c .yamllint.yml . || { echo -e "${RED}❌ yamllint${RESET}" >&2; exit 1; }
+  yamllint -c .yamllint.yml . || {
+    echo -e "${RED}❌ yamllint${RESET}" >&2
+    exit 1
+  }
+  # A shell file, for the shellcheck and shfmt steps: a *.sh, or one of the three git hooks, which have no extension, in the repo's .github/hooks or the Template's copy of it
+  # ($owned/.github/hooks). Those two are the hooks folders an .editorconfig gives the shell style to, so a file named pre-commit anywhere else is not taken for a hook.
+  is_shell_file() {
+    case "$1" in
+      *.sh) return 0 ;;
+      .github/hooks/pre-commit | .github/hooks/pre-push | .github/hooks/post-checkout) return 0 ;;
+      "$owned"/.github/hooks/pre-commit | "$owned"/.github/hooks/pre-push | "$owned"/.github/hooks/post-checkout) return 0 ;;
+    esac
+    return 1
+  }
+  # The two steps' file lists, removed however the gate ends. Both names are set before the trap, so it never reads an unset one under set -u.
+  changed_list=""
+  all_list=""
+  trap 'command rm -f -- ${changed_list:+"$changed_list"} ${all_list:+"$all_list"}' EXIT
   # Lint with ShellCheck the shell files this branch changes (added, copied, modified, renamed or type-changed, committed or not, against its merge base with origin/main; every tracked and untracked
-  # shell file when there is no origin/main or no merge base), so --quick finds what test.sh's shellcheck step would fail in the template part. A shell file is a *.sh or one of the three git hooks.
+  # shell file when there is no origin/main or no merge base), so --quick finds what test.sh's shellcheck step would fail in the template part.
   echo -e "\n${CYAN}▶ shellcheck (changed shell files)${RESET}"
-  if ! command -v shellcheck >/dev/null 2>&1; then
+  if ! command -v shellcheck > /dev/null 2>&1; then
     echo -e "${RED}❌ shellcheck not found: the gate needs it (test.sh runs it too).${RESET}" >&2
     exit 1
   fi
   # NUL-separated names (-z): git quotes a name with a non-ASCII byte, a tab or a quote otherwise, and the file would never be found.
   # The list is written to a file first: a git failure inside a process substitution would not stop the gate, and the step would pass having checked nothing.
   changed_list="$(mktemp)"
-  trap 'command rm -f -- "$changed_list"' EXIT
-  if git rev-parse -q --verify refs/remotes/origin/main >/dev/null && merge_base="$(git merge-base origin/main HEAD 2>/dev/null)"; then
-    { git diff -z --name-only --diff-filter=ACMRT "$merge_base" && git ls-files -z --others --exclude-standard; } >"$changed_list"
+  if git rev-parse -q --verify refs/remotes/origin/main > /dev/null && merge_base="$(git merge-base origin/main HEAD 2> /dev/null)"; then
+    { git diff -z --name-only --diff-filter=ACMRT "$merge_base" && git ls-files -z --others --exclude-standard; } > "$changed_list"
   else
-    git ls-files -z --cached --others --exclude-standard >"$changed_list"
-  fi || { echo -e "${RED}❌ could not list the changed files (git failed): the shell files were not checked.${RESET}" >&2; exit 1; }
+    git ls-files -z --cached --others --exclude-standard > "$changed_list"
+  fi || {
+    echo -e "${RED}❌ could not list the changed files (git failed): the shell files were not checked.${RESET}" >&2
+    exit 1
+  }
   shell_changed=()
   while IFS= read -r -d '' f; do
     [[ -f "$f" ]] || continue
-    case "${f##*/}" in *.sh | pre-commit | pre-push | post-checkout) shell_changed+=("$f") ;; esac
-  done <"$changed_list"
+    if is_shell_file "$f"; then shell_changed+=("$f"); fi
+  done < "$changed_list"
+  # -- ends the options: git lists names relative to the root, so a file named -x.sh would be read as one.
   if ((${#shell_changed[@]})); then
-    shellcheck "${shell_changed[@]}" || { echo -e "${RED}❌ shellcheck${RESET}" >&2; exit 1; }
+    shellcheck -- "${shell_changed[@]}" || {
+      echo -e "${RED}❌ shellcheck${RESET}" >&2
+      exit 1
+    }
   fi
   echo "${#shell_changed[@]} changed shell file(s) checked."
+
+  # Every tracked and untracked shell file is formatted as shfmt formats it, in the style .editorconfig gives (a copy of the Template's, ADR 0015). shfmt -d is given no
+  # style flags, so it reads that file and the style is written down once. All of them, not only the changed ones: the step takes well under a second.
+  # shfmt must be v3.14 or a later v3, the releases test.sh accepts (the same regex): this refuses v2, v4 and a v3 before v3.14. It doesn't make every accepted release format
+  # alike: a later v3 that formats differently fails files CI's pinned one passes, and then the files are reformatted or the pin moves.
+  echo -e "\n${CYAN}▶ shfmt (every shell file)${RESET}"
+  if ! command -v shfmt > /dev/null 2>&1; then
+    echo -e "${RED}❌ shfmt not found: the gate needs v3.14 or a later v3 (test.sh needs it too).${RESET}" >&2
+    exit 1
+  fi
+  if ! [[ "$(shfmt --version)" =~ ^v3\.(1[4-9]|[2-9][0-9]|[1-9][0-9]{2,})\.[0-9]+$ ]]; then
+    echo -e "${RED}❌ shfmt v3.14 or a later v3 release is required, not '$(shfmt --version)'.${RESET}" >&2
+    exit 1
+  fi
+  all_list="$(mktemp)"
+  git ls-files -z --cached --others --exclude-standard > "$all_list" || {
+    echo -e "${RED}❌ could not list the files (git failed): the shell files were not checked.${RESET}" >&2
+    exit 1
+  }
+  shell_all=()
+  while IFS= read -r -d '' f; do
+    [[ -f "$f" ]] || continue
+    if is_shell_file "$f"; then shell_all+=("$f"); fi
+  done < "$all_list"
+  # shfmt exits 1 both for a file it would change (it prints the diff) and for one it can't parse (it prints the error), so the message names both.
+  if ((${#shell_all[@]})); then
+    shfmt -d -- "${shell_all[@]}" || {
+      echo -e "${RED}❌ shfmt: run shfmt -w on each file whose diff is shown above (it reads .editorconfig; for the Template's style edit the Template's, then scripts/gate.sh --sync), and fix the syntax of any file shfmt could not parse.${RESET}" >&2
+      exit 1
+    }
+  fi
+  echo "${#shell_all[@]} shell file(s) formatted as shfmt formats them."
 
 }
 
@@ -217,7 +293,7 @@ cache_pending=""
 cache_lock() {
   local i sig
   for ((i = 0; i < 20; i++)); do
-    if mkdir -- "$1" 2>/dev/null; then
+    if mkdir -- "$1" 2> /dev/null; then
       cache_locked="$1"
       for sig in INT TERM HUP; do
         # shellcheck disable=SC2064 # $sig is meant to expand now, once per signal
@@ -248,7 +324,7 @@ cache_unlock() {
     (
       trap '' INT TERM HUP
       exec rmdir -- "$cache_locked"
-    ) 2>/dev/null || true
+    ) 2> /dev/null || true
     # The signals before the lock is forgotten: a signal before this is noted by the handler, and one after it ends the gate as by default, the lock already gone.
     trap - INT TERM HUP
     cache_locked=""
@@ -264,8 +340,8 @@ cache_unlock() {
 # stamp_write <label> <stamp> <token>: writes the token to the start stamp; 1 when it couldn't, having removed the stamp so it vouches for nothing. A stamp that can be neither
 # written nor removed fails the gate, since it would keep vouching for an old pass.
 stamp_write() {
-  if { printf '%s\n' "$3" >"$2"; } 2>/dev/null; then return 0; fi
-  command rm -f -- "$2" 2>/dev/null || true
+  if { printf '%s\n' "$3" > "$2"; } 2> /dev/null; then return 0; fi
+  command rm -f -- "$2" 2> /dev/null || true
   if [[ -e "$2" ]]; then
     echo -e "${RED}❌ could not write or remove the $1 start stamp ($2): it would keep vouching for a pass this run may disprove. Remove it by hand.${RESET}" >&2
     cache_unlock
@@ -289,7 +365,7 @@ run_cached() {
   local name="$1" label="$2" cache="" dirty tree common after dir whole token="" mark held s
   shift 2
   if dirty="$(git status --porcelain --untracked-files=all)" && [[ -z "$dirty" ]] \
-    && tree="$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" && common="$(git rev-parse --git-common-dir)"; then
+    && tree="$(git rev-parse -q --verify 'HEAD^{tree}' 2> /dev/null)" && common="$(git rev-parse --git-common-dir)"; then
     cache="$common/gate-cache/$name-$tree"
     dir="${cache%/*}"
     whole="${name%%.*}"
@@ -297,7 +373,7 @@ run_cached() {
   if [[ -n "$cache" ]]; then
     mark="$$.$RANDOM$RANDOM.$(date +%s)"
     token="$mark"
-    mkdir -p "$dir" 2>/dev/null || true
+    mkdir -p "$dir" 2> /dev/null || true
     if ! cache_lock "$dir/lock-$tree"; then
       token=""
       # Only a writable cache folder waited for the lock; a read-only one gave up at once and is reported by the stamps or "could not record".
@@ -305,8 +381,8 @@ run_cached() {
         echo "the cache lock $dir/lock-$tree has been held for over 2 seconds: $label runs and its pass is not remembered. If no gate is running, remove it." >&2
       fi
     fi
-    if [[ -n "$cache_locked" && -f "$cache" && "${GATE_NO_CACHE:-}" != "1" ]] && held="$(cat -- "$cache" 2>/dev/null)" \
-      && [[ -n "$held" && "$held" == "$(cat -- "$dir/started.$name-$tree" 2>/dev/null)" ]]; then
+    if [[ -n "$cache_locked" && -f "$cache" && "${GATE_NO_CACHE:-}" != "1" ]] && held="$(cat -- "$cache" 2> /dev/null)" \
+      && [[ -n "$held" && "$held" == "$(cat -- "$dir/started.$name-$tree" 2> /dev/null)" ]]; then
       cache_unlock
       echo "$label already passed on this tree (${cache##*-}): skipped. GATE_NO_CACHE=1 runs it again."
       return 0
@@ -322,16 +398,16 @@ run_cached() {
     fi
     cache_unlock
     # Without its own stamp, or without the lock, this run's pass is not stored (token is empty). Removing old pass files is only tidying.
-    command rm -f -- "$cache" "$dir/$whole-$tree" 2>/dev/null || true
-    if [[ "$name" == "$whole" ]]; then command rm -f -- "$dir/$whole."*"-$tree" 2>/dev/null || true; fi
+    command rm -f -- "$cache" "$dir/$whole-$tree" 2> /dev/null || true
+    if [[ "$name" == "$whole" ]]; then command rm -f -- "$dir/$whole."*"-$tree" 2> /dev/null || true; fi
   fi
   "$@"
   # Remembering the pass is best effort: a folder that can't be written to must not turn a passing command into a failing gate.
   if [[ -n "$cache" ]]; then
-    if after="$(git status --porcelain --untracked-files=all)" && [[ -z "$after" && "$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" == "$tree" ]]; then
-      if [[ -z "$token" ]] || ! { printf '%s\n' "$token" >"$cache"; } 2>/dev/null; then
+    if after="$(git status --porcelain --untracked-files=all)" && [[ -z "$after" && "$(git rev-parse -q --verify 'HEAD^{tree}' 2> /dev/null)" == "$tree" ]]; then
+      if [[ -z "$token" ]] || ! { printf '%s\n' "$token" > "$cache"; } 2> /dev/null; then
         echo "could not record the $label pass in $dir: it will run again next time." >&2
-      elif [[ "$(cat -- "$dir/started.$name-$tree" 2>/dev/null)" != "$token" ]]; then
+      elif [[ "$(cat -- "$dir/started.$name-$tree" 2> /dev/null)" != "$token" ]]; then
         echo "another run of $label, or of a part it overlaps, started on this tree while it ran: this pass will not be trusted." >&2
       fi
     else
@@ -346,9 +422,9 @@ run_cached() {
 # non-ASCII byte, and show only the new name of a rename, hiding a file moved out of a watched folder.
 sandcastle_changed() {
   local base list rc=0
-  git rev-parse -q --verify refs/remotes/origin/main >/dev/null && base="$(git merge-base origin/main HEAD 2>/dev/null)" || return 0
+  git rev-parse -q --verify refs/remotes/origin/main > /dev/null && base="$(git merge-base origin/main HEAD 2> /dev/null)" || return 0
   list="$(mktemp)" || return 0
-  if ! { git diff -z --name-only --no-renames "$base" && git ls-files -z --others --exclude-standard; } >"$list" 2>/dev/null; then
+  if ! { git diff -z --name-only --no-renames "$base" && git ls-files -z --others --exclude-standard; } > "$list" 2> /dev/null; then
     command rm -f -- "$list"
     return 0
   fi
@@ -369,16 +445,15 @@ run_template() {
   echo -e "\n${CYAN}▶ Local review (scripts/review.sh check)${RESET}"
   if [[ "${GATE_SKIP_REVIEW:-}" == "1" ]]; then
     echo "Local review check skipped (GATE_SKIP_REVIEW=1)."
-  elif ! git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null; then
+  elif ! git rev-parse --verify --quiet refs/remotes/origin/main > /dev/null; then
     echo "❌ No origin/main to diff against, so the review can't be checked: run git fetch origin main." >&2
     exit 1
-  elif ! BASE="$(git merge-base HEAD refs/remotes/origin/main 2>/dev/null)"; then
+  elif ! BASE="$(git merge-base HEAD refs/remotes/origin/main 2> /dev/null)"; then
     echo "❌ HEAD and origin/main share no history to diff from (a shallow clone, or unrelated histories): run git fetch --unshallow origin main, or rebase the branch onto origin/main." >&2
     exit 1
   else
     scripts/review.sh check "$BASE"
   fi
-
 
   local shard="${TEST_SH_SHARD:-}"
   echo -e "\n${CYAN}▶ test.sh${shard:+ ($shard shard)}${RESET}"

@@ -48,8 +48,8 @@ fi
 
 # Made by release.yml, backfill-blog-posts.yml and Dependabot.
 if [[ "$pr" == true ]] \
-  && [[ "$branch" == docs/release-notes || "$branch" == docs/backfill-blog-posts \
-    || ("$author" == "dependabot[bot]" && "$branch" == dependabot/*) ]]; then
+  && [[ "$branch" == docs/release-notes || "$branch" == docs/backfill-blog-posts ||
+    ("$author" == "dependabot[bot]" && "$branch" == dependabot/*) ]]; then
   exit 0
 fi
 

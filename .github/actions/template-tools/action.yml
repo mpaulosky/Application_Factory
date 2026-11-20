@@ -1,7 +1,7 @@
 ---
 name: Template tools
 description: >
-  The tools the Factory's gate needs (Python, pnpm, Node, the linters, and shfmt for the Template's gh check), at the versions
+  The tools the Factory's gate needs (Python, pnpm, Node, the linters, and shfmt for the gate's format check and the Template's gh check), at the versions
   scripts/gate.sh in the Template pins, shfmt at the version the Template's ci.yml pins, and pytest and PyYAML from the Template's
   hashed .github/scripts/requirements-tests.txt, as an Application's python-tests job installs them.
   Used by every job of the repo-ci-baseline Template workflow (ADR 0012). It belongs to the Application Factory; it isn't part of the Template.
@@ -52,7 +52,8 @@ runs:
         sudo tar -xzf "$archive" -C /usr/local/bin actionlint
 
     # The Template's check_gh_repo.py parses shell with shfmt (repo-ci-baseline's ADR 0011), so test.sh and the Template's tests
-    # need it: the version and SHA-256 the Template's ci.yml pins (test.sh checks they match). The Factory's own gate runs no gh check.
+    # need it: the version and SHA-256 the Template's ci.yml pins (test.sh checks they match). The Factory's own gate runs no gh check,
+    # but its static part runs shfmt -d on every shell file (ADR 0015), which needs v3.14 or a later v3: this pin is one.
     - name: Install shfmt
       shell: bash
       env:
