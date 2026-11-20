@@ -446,7 +446,7 @@ const git = (cwd: string, ...args: string[]) => gitBytes(cwd, args).toString("ut
 const OBJECT_ID = /^([0-9a-f]{40}|[0-9a-f]{64})$/;
 
 // Whether `id` is a full object id (OBJECT_ID) of a commit this clone has. Not a tag, a branch name or a short id, which can name
-// another commit tomorrow; the id can't start with a dash, so rev-parse needs no --end-of-options, which older gits lack.
+// another commit tomorrow. The pattern lets no option through: an id can't start with a dash.
 function isCommitId(cwd: string, id: string): boolean {
   if (!OBJECT_ID.test(id)) return false;
   try {
@@ -459,11 +459,14 @@ function isCommitId(cwd: string, id: string): boolean {
 }
 
 // Whether `ancestor` is an ancestor of (or is) `commit`. A commit git doesn't
-// have counts as not.
+// have counts as not, and so does a name that starts with a dash: a ledger's
+// head is text anyone can write, and git would read it as an option. That is
+// checked here rather than with --end-of-options, which not every git the
+// Template runs on may take for merge-base.
 export function isAncestor(cwd: string, ancestor: string, commit: string): boolean {
+  if (ancestor.startsWith("-") || commit.startsWith("-")) return false;
   try {
-    // --end-of-options (git 2.24 and later, older than any git the review runs on): a ledger's text can't be read as an option.
-    gitBytes(cwd, ["merge-base", "--is-ancestor", "--end-of-options", ancestor, commit]);
+    gitBytes(cwd, ["merge-base", "--is-ancestor", ancestor, commit]);
     return true;
   } catch (error) {
     if (endedByLimit(error)) throw error;
@@ -1107,8 +1110,10 @@ export function recordedAnchor(cwd: string, base: string, head: string, branch: 
   const anchorRecorded = (latestOf(atLast) as Ledger).recordedAt;
   const unread = latestOf(reviews.filter((ledger) => ledger.head !== last && undecided(ledger) > 0 && ledger.recordedAt > anchorRecorded));
   if (unread !== undefined) {
+    // Every review at that head recorded after the anchor's counts, so the number doesn't depend on the folder's order.
+    const count = reviews.filter((ledger) => ledger.head === unread.head && ledger.recordedAt > anchorRecorded).reduce((sum, ledger) => sum + undecided(ledger), 0);
     return (
-      `a review of ${branch} at ${unread.head}, recorded at ${unread.recordedAt}, after the last review (at ${last}), has ${undecided(unread)} finding(s) open or accepted, ` +
+      `a review of ${branch} at ${unread.head}, recorded at ${unread.recordedAt}, after the last review (at ${last}), has ${count} finding(s) open or accepted, ` +
       `which the last review never read and a review of the fixes alone would not raise again: ${RESTART}`
     );
   }

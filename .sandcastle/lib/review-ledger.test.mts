@@ -813,25 +813,52 @@ describe("checkReview", () => {
     assert.equal(checkReview(repo, mergeBase(repo), {}).ok, false);
   });
 
-  // R38: a ledger's head is text anyone can write, so isAncestor ends git's options before it: "--all" is a commit name, not a flag.
-  it("asks git whether a commit is an ancestor with --end-of-options before the names it is given", () => {
-    const bin = mkdtempSync(join(tmpdir(), "logging-git-"));
-    const log = join(bin, "calls");
-    const real = execFileSync("bash", ["-c", "command -v git"], { encoding: "utf8" }).trim();
-    writeFileSync(join(bin, "git"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nexec '${real}' "$@"\n`);
-    chmodSync(join(bin, "git"), 0o755);
-    const path = process.env.PATH;
-    process.env.PATH = `${bin}:${path ?? ""}`;
-    try {
-      assert.equal(isAncestor(repo, "--all", "HEAD"), false);
-      assert.equal(isAncestor(repo, mergeBase(repo), "HEAD"), true);
-    } finally {
-      process.env.PATH = path;
+  // R44: a ledger's head is text anyone can write, so isAncestor refuses a name that starts with a dash before git sees it, rather
+  // than pass --end-of-options, which an older git may not take. Under a git that rejects --end-of-options (exit 129, as for an unknown
+  // option), "--all" is still no ancestor, a real ancestor still is, and a recorded run still anchors.
+  describe("under a git that rejects --end-of-options", () => {
+    // Every call's arguments go to `calls`, one line each, so a test can see what reached git.
+    let calls: string[] = [];
+    function withStrictGit<T>(body: () => T): T {
+      const bin = mkdtempSync(join(tmpdir(), "strict-git-"));
+      const log = join(bin, "calls");
+      const real = execFileSync("bash", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+      writeFileSync(
+        join(bin, "git"),
+        `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nfor a in "$@"; do [ "$a" = --end-of-options ] && { echo "error: unknown option" >&2; exit 129; }; done\nexec '${real}' "$@"\n`,
+      );
+      chmodSync(join(bin, "git"), 0o755);
+      const path = process.env.PATH;
+      process.env.PATH = `${bin}:${path ?? ""}`;
+      try {
+        return body();
+      } finally {
+        process.env.PATH = path;
+        calls = existsSync(log) ? readFileSync(log, "utf8").split("\n").filter((line) => line !== "") : [];
+        rmSync(bin, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
     }
-    const calls = readFileSync(log, "utf8").split("\n").filter((line) => line.includes("--is-ancestor"));
-    rmSync(bin, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    assert.ok(calls.some((line) => line.endsWith("merge-base --is-ancestor --end-of-options --all HEAD")), calls.join("\n"));
-    assert.ok(calls.every((line) => line.includes("merge-base --is-ancestor --end-of-options ")), calls.join("\n"));
+
+    it("isAncestor takes a name that starts with a dash as no ancestor, and a real ancestor as one", () => {
+      withStrictGit(() => {
+        assert.equal(isAncestor(repo, "--all", "HEAD"), false);
+        assert.equal(isAncestor(repo, "HEAD", "--all"), false);
+        assert.equal(isAncestor(repo, mergeBase(repo), "HEAD"), true);
+      });
+      // The dash names never reach git: every git exits 129 on them too, so only the calls can tell.
+      assert.deepEqual(calls.filter((line) => line.includes("--all")), []);
+    });
+
+    it("prepare <dir> recorded still anchors at the recorded review", () => {
+      record([]);
+      const recordedAt = run(repo, "rev-parse", "HEAD");
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      const result = withStrictGit(() => cli(["prepare", join(root, "delta"), "recorded"]));
+
+      assert.equal(result.code, 0, result.err);
+      assert.equal(result.err, `Fixes since ${recordedAt}, the commit the last recorded review of this branch vouched for.\n`);
+    });
   });
 
   // Run `check` with a git 2.34 on the PATH, which has no merge-tree --write-tree.
@@ -3219,6 +3246,27 @@ describe("main", () => {
         });
       }
 
+      // R47: two reviews at the earlier head, both recorded after the descendant's, count together, whatever order the folder gives.
+      it(`counts every finding open in the reviews at an earlier head recorded after the descendant's (${names.join(", ")})`, () => {
+        const one = ledgerJson([finding({ status: "open", test: null })]);
+        const two = ledgerJson([finding({ id: "R2", status: "open", test: null }), finding({ id: "R3", status: "accepted", test: null, reason: "Fine." })]);
+        commit(repo, "other.cs", "second\n", "second commit");
+        const descendant = ledgerJson([]);
+        commit(repo, "fix.cs", "the fix\n", "fix");
+        const after = at("2026-01-02T00:00:00Z");
+        writeNamed(names[0] as string, { ...one, recordedAt: after });
+        writeNamed(names[1] as string, { ...two, recordedAt: after });
+        writeNamed("descendant.json", { ...descendant, recordedAt: at("2026-01-01T00:00:00Z") });
+
+        const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+        assert.equal(result.code, 1);
+        assert.equal(
+          result.err,
+          `a review of feature/1-thing at ${String(one.head)}, recorded at ${after}, after the last review (at ${String(descendant.head)}), has 3 finding(s) open or accepted, which the last review never read and a review of the fixes alone would not raise again: start again at round 1 with prepare <dir>.\n`,
+        );
+      });
+
       // R36: a review under the branch's name off HEAD's history counts as an amend or a rebase only when it is later than every review on it.
       for (const [order, goneAt, refused] of [
         ["before", "2026-01-01T00:00:00Z", false],
@@ -3249,7 +3297,8 @@ describe("main", () => {
       }
 
       // R42: two reviews off HEAD's history at one recordedAt: the message names the greater head, whatever order the folder gives.
-      it(`names the greater head of two reviews off HEAD's history recorded at the same time (${names.join(", ")})`, () => {
+      // R46: the lesser head is always in a.json, the name listed first, so a tie-break that kept the first would name the wrong commit every run.
+      if (!swap) it("names the greater head of two reviews off HEAD's history recorded at the same time, the lesser in the file listed first", () => {
         const start = head();
         commit(repo, "abandoned.cs", "abandoned\n", "abandoned");
         const one = ledgerJson([]);
@@ -3259,9 +3308,10 @@ describe("main", () => {
         run(repo, "reset", "--quiet", "--hard", start);
         commit(repo, "fix.cs", "the fix\n", "fix");
         const tie = at("2026-01-01T00:00:00Z");
-        writeNamed(names[0] as string, { ...one, recordedAt: tie });
-        writeNamed(names[1] as string, { ...other, recordedAt: tie });
-        const greater = String(one.head) > String(other.head) ? String(one.head) : String(other.head);
+        const [lesser, greaterLedger] = [one, other].sort((a, b) => (String(a.head) < String(b.head) ? -1 : 1)) as [Record<string, unknown>, Record<string, unknown>];
+        writeNamed("a.json", { ...lesser, recordedAt: tie });
+        writeNamed("b.json", { ...greaterLedger, recordedAt: tie });
+        const greater = String(greaterLedger.head);
 
         const result = cli(["prepare", fresh("delta"), "recorded"]);
 
@@ -3529,7 +3579,7 @@ describe("main", () => {
   }
 
   // R33: the second argument is `last`, `recorded` or a commit, checked before the folder is touched.
-  for (const second of ["recordd", "", "-v", "HEAD:app.cs", "HEAD", "origin/main", "feature/1-thing", "a-tag", "SHORT", "UPPER"]) {
+  for (const second of ["recordd", "", "-v", "HEAD:app.cs", "HEAD", "origin/main", "feature/1-thing", "a-tag", "SHORT", "UPPER", "ZERO", "TREE", "BLOB", "SHA256"]) {
     it(`prepare refuses ${JSON.stringify(second)} as its second argument, and leaves the run folder as it was`, () => {
       const dir = join(root, "run");
       const printed = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
@@ -3539,7 +3589,16 @@ describe("main", () => {
       writeFileSync(join(dir, "fixes.patch"), "an earlier round's fixes\n");
       const before = Object.fromEntries(["diff.patch", "fixes.patch", "head"].map((name) => [name, readFileSync(join(dir, name), "utf8")]));
       // A tag, a short id and an upper-case id all name the commit the round before printed; only its full lower-case id is taken.
-      const given = second === "SHORT" ? printed.slice(0, 12) : second === "UPPER" ? printed.toUpperCase() : second;
+      // R45: full ids that pass the pattern but name no commit this clone has: all zeros, a tree, a blob, and a SHA-256-long id in a SHA-1 repo.
+      const ids: Record<string, string> = {
+        SHORT: printed.slice(0, 12),
+        UPPER: printed.toUpperCase(),
+        ZERO: "0".repeat(40),
+        TREE: run(repo, "rev-parse", "HEAD^{tree}"),
+        BLOB: run(repo, "rev-parse", "HEAD:app.cs"),
+        SHA256: "a".repeat(64),
+      };
+      const given = ids[second] ?? second;
 
       const result = cli(["prepare", dir, given]);
 

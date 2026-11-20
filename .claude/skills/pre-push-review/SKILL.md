@@ -137,10 +137,12 @@ for a PR thread, say) starts with `scripts/review.sh prepare <run> recorded` ins
 the branch's last recorded review vouched for, which it names on stderr, and the run's first round is a later round. The branch's reviews are those
 of its own commits, whatever branch name they were recorded under (a detached HEAD, a rename), and the last is the one whose head has every other review's head as an
 ancestor, not the latest by the clock. A finding an earlier head's review left open or accepted is superseded by a review of a descendant head recorded after it, which
-read that code too; a review at an earlier head recorded after the last one's was never read by it, so it refuses. It refuses, and the run starts at round 1 with
+read that code too; a review at an earlier head recorded after the last one's was never read by it, so it refuses when it holds a finding open or accepted. It refuses,
+and the run starts at round 1 with
 `prepare <run>`, on a detached HEAD, when no
-review of the branch's own commits is recorded in this clone, when a ledger file that may be one of them doesn't read or parse or names a head that isn't a full object
-id (it counts as no review, and round 1 and record leave it in place: delete or move it to let recorded runs anchor again), when the reviews' heads don't form one line,
+review of the branch's own commits is recorded in this clone, when a ledger file that may be one of them doesn't read or parse, or names this branch or none and a head
+that isn't a full lower-case object id (it counts as no review, and round 1 and record leave it in place: delete or move it to let recorded runs anchor again), when the
+reviews' heads don't form one line,
 when a review at the last one's head, or one at an earlier head recorded after it, holds a finding open or accepted (whatever its severity, `fixAsked` included: the
 fixes alone wouldn't raise it again), when a later review under the branch's name is at a commit that isn't one of HEAD's (an amend or a rebase since), when `main` already has the
 last review's commit, or when `main` was merged in since. With no changes since (no commits, or commits that change nothing), it refuses too: the
