@@ -23,7 +23,8 @@ there too, until the PR merges (a branch it makes from `origin/main` has no upst
 wt="$(scripts/work-issue.sh 42)" && cd "$wt"   # e.g. fix/42-null-children in ../<Repo>-worktrees/fix-42-null-children
 ```
 
-Start a Work Issue task, by hand or as an agent, with `scripts/work-issue.sh <n>` before reading or changing any code, and work only in the folder it prints.
+Start a task for an issue, by hand or as an agent, with `scripts/work-issue.sh <n>` before reading or changing any code, and work only in the folder it
+prints: the pre-commit hook refuses a commit in the primary checkout.
 
 For work without an issue, make it by hand: `git worktree add --no-track -b chore/upgrade-net10 ../<Repo>-worktrees/chore-upgrade-net10 origin/main`.
 The folder is the branch name with `/` turned into `-`.
@@ -100,7 +101,8 @@ post, word for word. Keep it current: after every follow-up commit, update it so
 - **Copilot reviews every push**, drafts included. Fix a thread you agree with in the branch's worktree and review the fix before you push it: `/pre-push-review`
   reviews only what changed since the branch's last recorded review (`scripts/review.sh prepare <run> recorded`) when that review left no finding
   open or accepted. Otherwise it reviews the whole diff again and raises those findings again; so it does when there's no recorded review, the branch
-  was amended or rebased since, or `main` was merged in since. Push the fix, then reply naming the fixing
+  was amended or rebased since, or `main` was merged in since. So review the fix before you merge `main` into the branch, and merge it after, before
+  the push: a clean merge keeps the record. Push the fix, then reply naming the fixing
   commit by its short SHA (7 characters) and saying what changed (`Fixed in 1a2b3c4: <what changed>.`), so the PR documents
   its fixes. Resolve it if Copilot or Claude Review opened it; leave a person's thread for them. A Copilot or Claude Review
   thread resolved without a reply is flagged, in PR Auto-Merge's log and in `status.sh` and `land.sh`, but it doesn't hold the merge. Don't resolve a thread

@@ -614,6 +614,13 @@ grep -qF -- 'short SHA' "$owned/docs/PROCESS.md" \
   || fail "docs/PROCESS.md must tell a session that the reply to a fixed review thread names the fixing commit by its short SHA"
 grep -qF -- 'resolved without a reply' "$owned/docs/PROCESS.md" \
   || fail "docs/PROCESS.md must say a bot thread resolved without a reply is flagged ('resolved without a reply')"
+# Issue 54: the flow PROCESS.md documents for starting an issue, reviewing a fix after a recorded review, and pushing a rebased branch.
+grep -qF -- 'scripts/work-issue.sh <n>' "$owned/docs/PROCESS.md" \
+  || fail "docs/PROCESS.md must tell a task for an issue to start with scripts/work-issue.sh <n>"
+grep -qF -- 'prepare <run> recorded' "$owned/docs/PROCESS.md" \
+  || fail "docs/PROCESS.md must say a fix after a recorded review is reviewed with scripts/review.sh prepare <run> recorded"
+grep -qF -- 'git push --force-with-lease' "$owned/docs/PROCESS.md" \
+  || fail "docs/PROCESS.md must say a pushed branch rebased onto main needs git push --force-with-lease"
 # PR Auto-Merge asks Copilot once per PR and falls back to Claude 30 seconds after a request that didn't register (mpaulosky/dotfiles#360),
 # which replaces #318's grace: the docs that describe the rule say so, and the two that describe today's behaviour name no grace.
 for ask_doc in "$skill_dir/references/automerge.md" "$skill_dir/docs/adr/0004-claude-review-as-copilots-backup.md" "$owned/docs/PROCESS.md"; do
