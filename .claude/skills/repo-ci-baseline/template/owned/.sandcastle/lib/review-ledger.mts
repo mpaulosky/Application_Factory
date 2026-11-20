@@ -138,6 +138,7 @@ export const OWNED_PATHS = [
   ".github/ISSUE_TEMPLATE/feature_request.md",
   ".github/ci/coverage-threshold",
   ".claude/rules/sandcastle-hand-off.md",
+  ".claude/rules/markdown-and-yaml-edits.md",
   ".claude/skills/README.md",
   ".security/README.md",
   ".editorconfig",
@@ -151,7 +152,7 @@ export const OWNED_PATHS = [
 
 // The Owned files whose content is behaviour, not text: the coverage gate
 // ci.yml enforces (any whole percentage passes it, 0 included), the rules
-// file that loads into every Claude session in the repository, and the issue
+// files that load into every Claude session in the repository, and the issue
 // templates, whose front matter sets the labels and assignee of every issue
 // opened from them (a `Sandcastle` label would feed the unattended pipeline),
 // the reviewer agent, whose `tools:` front matter is what keeps reviewers
@@ -171,6 +172,7 @@ export const REVIEWED_ON_REAPPLY: ReadonlySet<string> = new Set([
   "scripts/work-issue.sh",
   ".github/ci/coverage-threshold",
   ".claude/rules/sandcastle-hand-off.md",
+  ".claude/rules/markdown-and-yaml-edits.md",
   ".github/ISSUE_TEMPLATE/bug_report.md",
   ".github/ISSUE_TEMPLATE/config.yml",
   ".github/ISSUE_TEMPLATE/feature_request.md",

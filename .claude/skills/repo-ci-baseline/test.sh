@@ -96,6 +96,23 @@ bash "$owned/scripts/tests/check-git-hooks.test.sh" || fail "check-git-hooks.tes
 bash "$owned/scripts/tests/lint-edited-file.test.sh" || fail "lint-edited-file.test.sh"
 grep -qxF '        run: bash scripts/tests/lint-edited-file.test.sh' "$owned/.github/workflows/ci.yml" \
   || fail "the Owned ci.yml's hook-tests job must run scripts/tests/lint-edited-file.test.sh, so every repo tests its copy"
+# The edit-time lint sees only Write, Edit and MultiEdit, so an Owned rules file tells every session to edit Markdown and YAML with them.
+# It loads in every session (no front matter, so no paths:), and it is written into every repo, so it names nothing of the Factory's.
+edit_rule="$owned/.claude/rules/markdown-and-yaml-edits.md"
+if [[ ! -f "$edit_rule" ]]; then
+  fail "the Template must carry .claude/rules/markdown-and-yaml-edits.md as an Owned file: the edit-time lint sees only Write, Edit and MultiEdit"
+else
+  [[ "$(head -n 1 "$edit_rule")" != "---" ]] \
+    || fail "the Owned .claude/rules/markdown-and-yaml-edits.md must load in every session: it takes no front matter"
+  for needle in 'with the Write and Edit tools, never with a shell command' 'scripts/lint-edited-file.sh' 'PostToolUse' 'Write, Edit and MultiEdit' '.claude/settings.json'; do
+    grep -qF -- "$needle" "$edit_rule" || fail "the Owned .claude/rules/markdown-and-yaml-edits.md must say '$needle'"
+  done
+  if grep -nE 'dotfiles|repo-ci-baseline|Factory|references/|docs/adr/' "$edit_rule"; then
+    fail "the Owned .claude/rules/markdown-and-yaml-edits.md is written into every repo; it must not name the Factory, its skill or its docs"
+  fi
+fi
+grep -qF -- 'PostToolUse hook for Edit, Write and MultiEdit' "$owned/scripts/lint-edited-file.sh" \
+  || fail "scripts/lint-edited-file.sh's header no longer names the tools it runs after; check .claude/rules/markdown-and-yaml-edits.md still names the same ones"
 bash "$skill_dir/tests/owned-gate-files.test.sh" || fail "owned-gate-files.test.sh"
 # CI's Branch name job passes the PR's author, from the event payload (which a pusher can't set), so only dependabot[bot]'s own PR
 # gets any dependabot/* name (R42 of TicketManager's re-Apply review).

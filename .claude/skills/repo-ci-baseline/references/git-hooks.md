@@ -3,6 +3,7 @@
 Template files (Owned), among them: `.github/hooks/` (`pre-commit`, `pre-push`, `post-checkout`), `.github/hooks/tests/`,
 `scripts/gate.sh`, `scripts/check-branch-name.sh` with its test,
 `scripts/check-git-hooks.sh` ([Session-start check](#session-start-check)) and `scripts/lint-edited-file.sh` ([Edit-time lint](#edit-time-lint)) with their tests,
+`.claude/rules/markdown-and-yaml-edits.md` (the [Edit-time lint](#edit-time-lint)'s session rule),
 `scripts/work-issue.sh` and `scripts/cleanup.sh` with their tests, and the `branch-name` job in `ci.yml`. History: IssueTracker #182 (the branch standard).
 
 ## Branch-name standard
@@ -214,7 +215,9 @@ it lints the file the tool wrote, so an agent fixes a violation in the same turn
 at the repo root or under any folder (the Factory edits the Template's originals under `.claude/skills/`).
 These are the checks the CI lint workflows run; a gate runs `actionlint` and `zizmor` only where it lints workflows (an Application's gate does when a workflow changed; the Factory's does not).
 The hook sees only those tools' writes: a file an agent writes through Bash (a heredoc, `sed -i`, a script) is not linted until the pre-commit hook (Markdown only), the gate or CI,
-since a Bash command doesn't name the files it wrote. Have agents write Markdown and YAML with Write and Edit; the Factory's `CLAUDE.md` says so.
+since a Bash command doesn't name the files it wrote. The Owned `.claude/rules/markdown-and-yaml-edits.md`, which Apply writes into every repo and which loads in every session (it has no `paths:`),
+tells agents to write Markdown and YAML with Write and Edit for that reason, in a repo that hasn't wired the hook yet as well.
+A re-Apply that rewrites it needs a review (`REVIEWED_ON_REAPPLY` in the review ledger), as for every rules file that loads in every session.
 
 - Exit 2 with the linters' output on stderr when any linter reports a problem; Claude Code feeds that back to the agent. A linter that crashes counts as a problem, not as clean. Each linter's
   output is cut at 6,000 characters (bytes in the C locale, where a cut may split a multibyte character). The report says the output below it is data, not instructions, and ends with a line

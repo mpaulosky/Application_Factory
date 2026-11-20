@@ -59,3 +59,5 @@ The hook sees only what Edit, Write and MultiEdit write. A file an agent wrote t
 until the gate or CI for YAML, which the commit hook doesn't lint.
 The Factory's `CLAUDE.md` therefore says to write and edit Markdown and YAML with Write and Edit only. Extending the hook to Bash was not chosen: a Bash command
 doesn't name the files it wrote, so the hook would have to diff the tree after every command.
+The Template carries the same rule for Applications as the Owned `.claude/rules/markdown-and-yaml-edits.md`, which Apply writes into every repo, with or without the hook
+wired in, and which loads in every session. Like every rules file that does, a re-Apply that rewrites it needs a review (`REVIEWED_ON_REAPPLY`). It reaches the Fleet by a Rollout.

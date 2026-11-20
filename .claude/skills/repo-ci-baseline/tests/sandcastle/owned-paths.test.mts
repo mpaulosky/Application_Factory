@@ -162,6 +162,21 @@ describe("the files a re-Apply may write without a review", () => {
     }
   });
 
+  it("reviews every Owned .claude/rules/ file that loads into every session (no paths: front matter)", () => {
+    const rules = filesUnder(join(owned, ".claude/rules")).filter((file) => file.endsWith(".md"));
+    // A rule is scoped only by front matter at the very top of the file; a later `---` block is body text.
+    const scoped = (text: string) => {
+      const end = text.indexOf("\n---\n", 3);
+      return text.startsWith("---\n") && end > 0 && /^paths:/m.test(text.slice(4, end + 1));
+    };
+    const everySession = rules.filter((file) => !scoped(readFileSync(join(owned, ".claude/rules", file), "utf8")));
+
+    assert.ok(everySession.includes("markdown-and-yaml-edits.md"), "the Template no longer carries .claude/rules/markdown-and-yaml-edits.md as a rule for every session");
+    for (const file of everySession) {
+      assert.equal(REVIEWED_ON_REAPPLY.has(`.claude/rules/${file}`), true, `.claude/rules/${file} loads into every Claude session, so a re-Apply that rewrites it needs a review`);
+    }
+  });
+
   it("reviews every pre-push-review skill file lib/build.mts reads into the unattended reviewers' prompts", () => {
     const source = readFileSync(join(root, ".sandcastle/lib/build.mts"), "utf8");
     const read = [...source.matchAll(/read\(`\$\{skill\}\/([^`]+)`\)/g)].map((match) => `.claude/skills/pre-push-review/${match[1]}`);
