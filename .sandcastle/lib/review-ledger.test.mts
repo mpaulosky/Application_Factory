@@ -53,7 +53,7 @@ import {
   type ReviewInput,
 } from "./review-ledger.mts";
 import { NOT_OWNED_BASELINE_PATHS } from "./repo-config.mts";
-import { fingerprint } from "./security-record.mts";
+import { fingerprint, replaceFile } from "./security-record.mts";
 
 // Only the config each test sets: a machine's global or system git config
 // (commit signing, a hooks path, merge.ff=only, colour) mustn't decide these
@@ -3087,7 +3087,9 @@ describe("main", () => {
       rmSync(path);
       return text;
     };
-    const writeNamed = (name: string, ledger: Record<string, unknown>) => writeFileSync(join(ledgerDir(repo), name), JSON.stringify(ledger));
+    // As writeLedger writes a ledger: indented JSON with a closing newline, owner-only, through replaceFile's temp file.
+    const asWritten = (ledger: unknown) => `${JSON.stringify(ledger, null, 2)}\n`;
+    const writeNamed = (name: string, ledger: Record<string, unknown>) => replaceFile(join(ledgerDir(repo), name), asWritten(ledger));
 
     for (const smallerFirst of [true, false]) {
       it(`breaks a tie in recordedAt by the head, the greater one winning, with the smaller head in the file that sorts ${smallerFirst ? "first" : "second"}`, () => {
@@ -3130,14 +3132,18 @@ describe("main", () => {
     // R16: a ledger that doesn't read or parse could be the branch's newest, holding findings left open or accepted; skipping it would
     // take an older clean review as the anchor and leave them unread. So prepare refuses, naming the file.
     const malformed: [string, (ledger: Record<string, unknown>) => string | undefined][] = [
-      ["has no findings", (ledger) => JSON.stringify({ ...ledger, findings: undefined })],
-      ["has a finding whose status isn't one of the four", (ledger) => JSON.stringify({ ...ledger, findings: [{ ...(finding() as object), status: "weird" }] })],
-      ["has a field the schema doesn't know", (ledger) => JSON.stringify({ ...ledger, extra: 1 })],
+      ["has no findings", (ledger) => asWritten({ ...ledger, findings: undefined })],
+      ["has a finding whose status isn't one of the four", (ledger) => asWritten({ ...ledger, findings: [{ ...(finding() as object), status: "weird" }] })],
+      ["has a field the schema doesn't know", (ledger) => asWritten({ ...ledger, extra: 1 })],
       ["is damaged JSON", () => '{"version": 1, "branch": "feature/1-thing", "findings": ['],
-      ["is JSON that names no branch", (ledger) => JSON.stringify({ ...ledger, branch: undefined })],
-      ["is JSON that isn't an object", () => "[]"],
+      ["is empty, as a truncated write leaves it", () => ""],
+      ["is JSON that names no branch", (ledger) => asWritten({ ...ledger, branch: undefined })],
+      ["is JSON that isn't an object", () => "[]\n"],
       ["can't be read", () => undefined],
     ];
+    const refusedBy = (path: string) =>
+      `the ledger ${path} doesn't read or parse as a review, and may be the newest review of feature/1-thing, so a recorded run can't anchor while it is there. ` +
+      "It counts as no review, and round 1 and record leave it in place: delete or move it to let recorded runs anchor again, or start again at round 1 with prepare <dir>.\n";
     for (const [what, make] of malformed) {
       it(`refuses when a ledger in the folder ${what}, beside an older clean review of the branch, and writes no fixes patch`, () => {
         const clean = ledgerJson([]);
@@ -3147,22 +3153,74 @@ describe("main", () => {
         const text = make(newer);
         const path = join(ledgerDir(repo), "newer.json");
         if (text === undefined) mkdirSync(path);
-        else writeFileSync(path, text);
+        else replaceFile(path, text);
         commit(repo, "fix.cs", "the fix\n", "fix");
         const dir = fresh("delta");
 
         const result = cli(["prepare", dir, "recorded"]);
 
         assert.equal(result.code, 1);
-        assert.equal(result.err, `the ledger ${path} doesn't read or parse as a review, and may be the newest review of feature/1-thing: start again at round 1 with prepare <dir>.\n`);
+        assert.equal(result.err, refusedBy(path));
         assert.equal(existsSync(join(dir, "fixes.patch")), false);
       });
     }
 
+    // R20: what else the ledger folder holds beside the ledgers doesn't block: a crashed write's temp file (replaceFile's name), a
+    // security entry map, the lock, and files whose name doesn't end in exactly ".json", each holding text that isn't JSON.
+    it("doesn't refuse for the other files a ledger folder holds, or a name that only ends in .JSON or .txt", () => {
+      const clean = ledgerJson([]);
+      writeNamed("mine.json", clean);
+      const folder = ledgerDir(repo);
+      const key = String(clean.key);
+      for (const name of [`${key}.json.${process.pid}.0a1b2c3d.tmp`, `${key}.entries`, ".lock", "x.JSON", "x.txt"]) writeFileSync(join(folder, name), "{");
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+      assert.equal(result.code, 0, result.err);
+    });
+
+    it("doesn't refuse for a lock held as a folder", () => {
+      writeNamed("mine.json", ledgerJson([]));
+      mkdirSync(join(ledgerDir(repo), ".lock"));
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      assert.equal(cli(["prepare", fresh("delta"), "recorded"]).code, 0);
+    });
+
+    // A symlink is read through, as readLedgers reads it: one to a valid ledger is that ledger, and a dangling one can't be read, so it
+    // may be the newest review and refuses.
+    it("reads a *.json symlink to a valid ledger as that ledger", () => {
+      const clean = ledgerJson([]);
+      const target = join(root, "kept-ledger.json");
+      replaceFile(target, asWritten(clean));
+      symlinkSync(target, join(ledgerDir(repo), "linked.json"));
+      commit(repo, "fix.cs", "the fix\n", "fix");
+
+      const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.match(result.err, new RegExp(`Fixes since ${String(clean.head)}`));
+    });
+
+    it("refuses beside a dangling *.json symlink, which can't be read", () => {
+      writeNamed("older.json", ledgerJson([]));
+      const path = join(ledgerDir(repo), "dangling.json");
+      symlinkSync(join(root, "gone.json"), path);
+      commit(repo, "fix.cs", "the fix\n", "fix");
+      const dir = fresh("delta");
+
+      const result = cli(["prepare", dir, "recorded"]);
+
+      assert.equal(result.code, 1);
+      assert.equal(result.err, refusedBy(path));
+      assert.equal(existsSync(join(dir, "fixes.patch")), false);
+    });
+
     it("doesn't refuse for another branch's ledger that doesn't parse but names its branch", () => {
       const clean = ledgerJson([]);
       writeNamed("mine.json", clean);
-      writeFileSync(join(ledgerDir(repo), "other.json"), JSON.stringify({ ...clean, branch: "feature/2-other", findings: undefined }));
+      replaceFile(join(ledgerDir(repo), "other.json"), asWritten({ ...clean, branch: "feature/2-other", findings: undefined }));
       commit(repo, "fix.cs", "the fix\n", "fix");
 
       const result = cli(["prepare", fresh("delta"), "recorded"]);

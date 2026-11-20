@@ -134,7 +134,7 @@ diff of that round's fixes to `<run>/fixes.patch`, filtered the same way. A run 
 for a PR thread, say) starts with `scripts/review.sh prepare <run> recorded` instead: it writes to `<run>/fixes.patch` every change since the commit
 the branch's last recorded review vouched for, which it names on stderr, and the run's first round is a later round. It refuses, and the run
 starts at round 1 with `prepare <run>`, on a detached HEAD, when no review of the branch is recorded in this clone, when a ledger file that may be the branch's newest review
-doesn't read or parse, when that review holds a finding
+doesn't read or parse (it counts as no review, and round 1 and record leave it in place: delete or move it to let recorded runs anchor again), when that review holds a finding
 open or accepted (whatever its severity, `fixAsked` included: the fixes alone wouldn't raise it again), when that commit isn't one of
 HEAD's (an amend or a rebase since), when `main` already has it, or when `main` was merged in since. With no commits since, it refuses too: the
 recorded review already vouches for this code, so there is nothing to review. Then go on with `prepare <run> last` as in any run.

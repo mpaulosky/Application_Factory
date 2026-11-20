@@ -1017,12 +1017,18 @@ const RESTART = "start again at round 1 with prepare <dir>.";
 // there's none, as a message, when no review of the branch is recorded or HEAD has none. A tie in recordedAt goes to the greater
 // head, then the greater file name, so the folder's order never decides. A ledger that doesn't read or parse refuses the anchor
 // when it is this branch's or says no branch (unreadableLedger): it may be the newest review, holding findings left open or
-// accepted, and skipping it would take an older clean review instead and leave them unread. readLedgers, which the gate's check
-// and `latest` share, still skips it.
+// accepted, and skipping it would take an older clean review instead and leave them unread. readLedgers still skips it for its
+// other caller, branchLedgers, which latestLedger and takenIds use; the gate's check reads only the diff's own ledger, with
+// readLedger, and refuses a damaged one.
 export function recordedAnchor(cwd: string, base: string, head: string, branch: string): { commit: string; ledger: Ledger } | string {
   if (branch === "") return `HEAD isn't on a branch, so no review recorded for one can be its anchor: ${RESTART}`;
   const unreadable = unreadableLedger(cwd, branch);
-  if (unreadable !== undefined) return `the ledger ${unreadable} doesn't read or parse as a review, and may be the newest review of ${branch}: ${RESTART}`;
+  if (unreadable !== undefined) {
+    return (
+      `the ledger ${unreadable} doesn't read or parse as a review, and may be the newest review of ${branch}, so a recorded run can't anchor while it is there. ` +
+      `It counts as no review, and round 1 and record leave it in place: delete or move it to let recorded runs anchor again, or ${RESTART}`
+    );
+  }
   const newer = (a: { ledger: Ledger; name: string }, b: { ledger: Ledger; name: string }) =>
     a.ledger.recordedAt !== b.ledger.recordedAt ? a.ledger.recordedAt > b.ledger.recordedAt : a.ledger.head !== b.ledger.head ? a.ledger.head > b.ledger.head : a.name > b.name;
   let found: { ledger: Ledger; name: string } | undefined;
