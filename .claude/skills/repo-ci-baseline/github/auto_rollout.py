@@ -372,14 +372,16 @@ def own_log_dir(log_dir):
 def session_env(base, tmp):
     """The review session's environment: base without GATE_SKIP_REVIEW (the gate's review check must run in it) or the
     names SECRET_NAME matches (a cloud sign-in's own kept when Claude Code uses it); gh pointed at an empty config;
-    SESSION_GIT_CONFIG; and every cache and temporary folder a build or install writes (NuGet, pnpm, XDG, dotnet's
-    home, TMPDIR) moved into tmp, the one folder outside the worktree the sandbox lets it write."""
+    SESSION_GIT_CONFIG; and every cache and temporary folder a build or install writes (NuGet, pnpm under both its
+    old npm_config_ and its pnpm 12 pnpm_config_ name, XDG, dotnet's home, TMPDIR) moved into tmp, the one folder
+    outside the worktree the sandbox lets it write."""
     kept_cloud = tuple(prefix for flag, prefix in CLOUD_SIGN_IN.items() if base.get(flag))
     env = {name: value for name, value in base.items()
            if name != "GATE_SKIP_REVIEW"
            and (CLAUDE_SIGN_IN.match(name) or name.startswith(kept_cloud or ("\0",)) or not SECRET_NAME.search(name))}
     folders = {"GH_CONFIG_DIR": "gh", "TMPDIR": "tmp", "NUGET_PACKAGES": "nuget-packages",
-               "NUGET_HTTP_CACHE_PATH": "nuget-http", "npm_config_store_dir": "pnpm-store", "XDG_CACHE_HOME": "cache",
+               "NUGET_HTTP_CACHE_PATH": "nuget-http", "npm_config_store_dir": "pnpm-store",
+               "pnpm_config_store_dir": "pnpm-store", "XDG_CACHE_HOME": "cache",
                "DOTNET_CLI_HOME": "dotnet-home"}
     for name, folder in folders.items():
         env[name] = os.path.join(tmp, folder)

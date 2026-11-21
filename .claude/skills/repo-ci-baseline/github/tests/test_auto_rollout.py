@@ -794,7 +794,7 @@ def test_the_sessions_caches_and_temporary_folders_are_its_own(tmp_path):
     env = auto.session_env({"PATH": "/bin"}, str(tmp_path))
     for name, folder in (("GH_CONFIG_DIR", "gh"), ("TMPDIR", "tmp"), ("NUGET_PACKAGES", "nuget-packages"),
                          ("NUGET_HTTP_CACHE_PATH", "nuget-http"), ("npm_config_store_dir", "pnpm-store"),
-                         ("XDG_CACHE_HOME", "cache"), ("DOTNET_CLI_HOME", "dotnet-home")):
+                         ("pnpm_config_store_dir", "pnpm-store"), ("XDG_CACHE_HOME", "cache"), ("DOTNET_CLI_HOME", "dotnet-home")):
         assert env[name] == str(tmp_path / folder) and (tmp_path / folder).is_dir(), name
     assert env["DOTNET_NOLOGO"] == env["DOTNET_CLI_TELEMETRY_OPTOUT"] == "1"
 
