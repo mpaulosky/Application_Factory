@@ -144,6 +144,10 @@ updates:
       default-days: 7
     labels:
       - "dependencies"
+    # ruff comes with the Template, never from here: the gate and the edit-time lint take only the
+    # release line it pins, so a bump here would lint CI with another one. A Rollout moves it.
+    ignore:
+      - dependency-name: "ruff"
     groups:
       all-pip:
         patterns:

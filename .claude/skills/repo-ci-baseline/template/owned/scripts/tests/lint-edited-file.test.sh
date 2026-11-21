@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Tests for scripts/lint-edited-file.sh, the Claude Code PostToolUse hook that lints the Markdown, YAML or shell file a tool just wrote.
+# Tests for scripts/lint-edited-file.sh, the Claude Code PostToolUse hook that lints the Markdown, YAML, shell or Python file a tool just wrote.
 # Wiring it in (.claude/settings.json) is each repo's own.
 #
 # The linters are stubs on PATH, so the suite needs none of them: each stub fails when the file it is given holds the word BAD
 # (CRASH: exit 3), and logs its arguments and working directory, which is how the cases tell which linter ran, on which path,
 # with which config. The shfmt stub answers --version with $SHFMT_STUB_VERSION (v3.14.1 when unset), and a stub named in
-# $STUB_PASS passes whatever the file holds; $SHFMT_STUB_VERSION_EXIT is the exit status of shfmt --version (0 when unset). Last blocks run the real markdownlint-cli2 when it is installed, and the real shellcheck
-# and shfmt together, when shellcheck, shfmt v3.14 or a later v3 and the Template's .editorconfig are all there; an Application's
+# $STUB_PASS passes whatever the file holds; $SHFMT_STUB_VERSION_EXIT is the exit status of shfmt --version (0 when unset). The ruff
+# stub answers --version the same way, from $STUB_RUFF_VERSION (ruff 0.17.6) and $STUB_RUFF_VERSION_EXIT. Last blocks run the real markdownlint-cli2 when it is installed, and the real shellcheck
+# and shfmt together, when shellcheck, shfmt v3.14 or a later v3 and the Template's .editorconfig are all there, and the real ruff when
+# it is a 0.17 release; an Application's
 # hook-tests job may have none, so there those blocks are skipped. A self-test runs the suite once more with a TMPDIR that does not exist (LINT_TEST_NESTED=1 keeps
 # that run from starting another).
 # Usage: scripts/tests/lint-edited-file.test.sh
@@ -68,7 +70,8 @@ STUBS="$WORK/stubs"
 mkdir -p "$STUBS"
 # make_stub <dir> <name>: a linter that logs "<name> <cwd> <args>"; exit 4 when its last argument is not a file, 3 when the file
 # holds CRASH, 1 when it holds BAD (BIG<n>: after printing n characters), else 0. Named in $STUB_PASS, it logs and passes.
-# shfmt --version prints $SHFMT_STUB_VERSION and logs nothing. A stub run with SHELLCHECK_OPTS set logs it on a line of its own, and one
+# shfmt --version prints $SHFMT_STUB_VERSION and logs nothing, and ruff --version $STUB_RUFF_VERSION. A stub run with SHELLCHECK_OPTS set
+# logs it on a line of its own, as it does each RUFF_ variable it was given, and one
 # given --rcfile (as its own argument or --rcfile=<file>) logs "RCFILE <its arguments>": the hook gives it none, and a test checks that.
 # A shellcheck stub logs "ARGV" and each argument in < >, so a test can tell one argument from two; shellcheck --help prints a usage that
 # lists --extended-analysis under a Usage: line (one without it when SHELLCHECK_STUB_OLD is set, nothing when SHELLCHECK_STUB_HELP_QUIET is), exits
@@ -80,6 +83,10 @@ name="$(basename "$0")"
 if [[ "$name" == shfmt && "${1:-}" == --version ]]; then
   echo "${SHFMT_STUB_VERSION-v3.14.1}"
   exit "${SHFMT_STUB_VERSION_EXIT:-0}"
+fi
+if [[ "$name" == ruff && "${1:-}" == --version ]]; then
+  echo "${STUB_RUFF_VERSION-ruff 0.17.6}"
+  exit "${STUB_RUFF_VERSION_EXIT:-0}"
 fi
 if [[ "$name" == shellcheck && "${1:-}" == --help ]]; then
   if [[ -z "${SHELLCHECK_STUB_HELP_QUIET:-}" ]]; then
@@ -94,6 +101,7 @@ if [[ "$name" == shellcheck ]]; then
   { printf 'ARGV'; printf ' <%s>' "$@"; echo; } >> "$STUB_LOG"
 fi
 [[ -z "${SHELLCHECK_OPTS+x}" ]] || echo "SHELLCHECK_OPTS=$SHELLCHECK_OPTS" >> "$STUB_LOG"
+for var in $(compgen -v RUFF_); do echo "ENV $var" >> "$STUB_LOG"; done
 for arg in "$@"; do
   if [[ "$arg" == --rcfile || "$arg" == --rcfile=* ]]; then echo "RCFILE $*" >> "$STUB_LOG"; fi
 done
@@ -111,7 +119,7 @@ exit 0
 EOF
   chmod +x "$1/$2"
 }
-for tool in markdownlint-cli2 yamllint actionlint zizmor shellcheck shfmt; do make_stub "$STUBS" "$tool"; done
+for tool in markdownlint-cli2 yamllint actionlint zizmor shellcheck shfmt ruff; do make_stub "$STUBS" "$tool"; done
 # The stub's --rcfile detector itself, in both forms, so a test that finds no RCFILE line in the log can fail. STDOUT and STDERR are
 # set first: check prints them on a failure, and no run_hook has set them yet.
 STDOUT="" STDERR=""
@@ -664,7 +672,7 @@ printf 'BAD\n' > "$repo/.github/hooks/my-pre-push"
 printf 'BAD\n' > "$repo/.github/hooks/commit-msgs"
 printf 'BAD\n' > "$repo/notes/pre-push"
 printf 'BAD\n' > "$repo/UPPER.SH"
-printf 'BAD\n' > "$repo/scripts/tool.py"
+printf 'BAD\n' > "$repo/scripts/tool.rb"
 printf 'BAD\n' > "$repo/script.bash"
 # Extensionless names in a scripts folder that isn't the root's, or nested in it: the folder passes the first filter, the path doesn't.
 mkdir -p "$repo/scripts/scripts" "$repo/tools/scripts" "$repo/scripts/.github/hooks"
@@ -675,7 +683,7 @@ printf 'BAD\n' > "$repo/.github/hooks/x"$'\n'"pre-push"
 for edited in tools/.github/hooks/pre-push scripts/sub/tool .github/hooks/README .github/hooks/Pre-push .github/hooks/pre- .github/hooks/pré-push \
   .github/hooks/my-pre-push .github/hooks/commit-msgs scripts/scripts/tool scripts/scripts/pre-push tools/scripts/tool tools/scripts/pre-push \
   scripts/.github/hooks/pre-push ".github/hooks/pre-push"$'\n'"x" ".github/hooks/x"$'\n'"pre-push" \
-  notes/pre-push UPPER.SH scripts/tool.py script.bash; do
+  notes/pre-push UPPER.SH scripts/tool.rb script.bash; do
   run_hook "$(edit_json "$repo/$edited")"
   p=()
   [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
@@ -1278,13 +1286,13 @@ check "a shellcheck config that only tunes the checks is used, and SHELLCHECK_OP
 rm "$repo/.shellcheckrc"
 
 # --- Not linted -----------------------------------------------------------
-printf 'BAD\n' > "$repo/script.py"
-run_hook "$(edit_json "$repo/script.py")"
+printf 'BAD\n' > "$repo/script.rb"
+run_hook "$(edit_json "$repo/script.rb")"
 p=()
 [[ $STATUS -eq 0 ]] || p+=("exit $STATUS, want 0")
-log_empty || p+=("a .py file was linted: $(cat "$LOG")")
+log_empty || p+=("a .rb file was linted: $(cat "$LOG")")
 [[ -z "$OUTPUT" ]] || p+=("output: $OUTPUT")
-check "a file that is not Markdown, YAML or shell is left alone" ${p[@]+"${p[@]}"}
+check "a file that is not Markdown, YAML, shell or Python is left alone" ${p[@]+"${p[@]}"}
 
 run_hook "$(edit_json "$repo/docs/missing.md")"
 p=()
@@ -2153,10 +2161,10 @@ for entry in "$repo/bin" bin; do
 done
 rm -r "${repo:?}/bin"
 
-run_hook "$(edit_json "$repo/script.py")" "$STUBS:$NOGIT"
+run_hook "$(edit_json "$repo/script.rb")" "$STUBS:$NOGIT"
 p=()
-[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT: a file that is not Markdown, YAML or shell needs no git")
-check "without git, a file that is not Markdown, YAML or shell still exits 0 silently" ${p[@]+"${p[@]}"}
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT: a file that is not Markdown, YAML, shell or Python needs no git")
+check "without git, a file that is not Markdown, YAML, shell or Python still exits 0 silently" ${p[@]+"${p[@]}"}
 run_hook "$(edit_json "$repo/scripts/bad.sh")" "$STUBS:$NOGIT"
 p=()
 [[ $STATUS -eq 1 && "$STDERR" == *"git not found"* && -z "$STDOUT" ]] || p+=("exit $STATUS, stderr: $STDERR")
@@ -2237,6 +2245,105 @@ EOF
 else
   echo "skip - markdownlint-cli2 is not installed (or does not run), so its own run is not tested"
 fi
+
+# --- Python: ruff ------------------------------------------------------------
+# A *.py is linted by ruff with the gate's flags, --isolated so it reads no config, and only when ruff is a 0.17 release.
+mkdir -p "$repo/py" "$repo/py/-x"
+printf 'x = 1\n' > "$repo/py/ok.py"
+printf 'BAD\n' > "$repo/py/bad.py"
+printf 'CRASH\n' > "$repo/py/crash.py"
+printf 'BAD\n' > "$repo/py/UPPER.PY"
+printf 'BAD\n' > "$repo/py/stub.pyi"
+printf 'BAD\n' > "$repo/py/ok.pyc"
+printf 'BAD\n' > "$repo/py/-x/-dash.py"
+py_args="check --isolated --no-cache --select F,B --target-version py312 --"
+run_hook "$(edit_json "$repo/py/ok.py")"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+log_line "ruff $repo $py_args ./py/ok.py" && [[ "$(ran ruff)" == 1 ]] || p+=("ruff was not run once with the gate's flags from the root: $(cat "$LOG")")
+[[ "$(wc -l < "$LOG")" -eq 1 ]] || p+=("another linter ran: $(cat "$LOG")")
+check "a clean Python file is linted by ruff alone, with the gate's flags, from the repository root, and exits 0" ${p[@]+"${p[@]}"}
+run_hook "$(edit_json "$repo/py/bad.py")"
+p=()
+[[ $STATUS -eq 2 && -z "$STDOUT" && "$STDERR" == *"Lint found problems in py/bad.py."*"ruff (exit 1):"*"a violation"* ]] || p+=("exit $STATUS, stderr: $STDERR")
+[[ "$STDERR" != *"run shfmt -w"* ]] || p+=("the shfmt hint was given for a Python file")
+check "a ruff finding exits 2 with ruff's report for the agent" ${p[@]+"${p[@]}"}
+run_hook "$(edit_json "$repo/py/crash.py")"
+p=()
+[[ $STATUS -eq 2 && "$STDERR" == *"ruff (exit 3):"*"ruff crashed"* ]] || p+=("exit $STATUS, stderr: $STDERR")
+check "a ruff that crashes counts as a violation, not as clean" ${p[@]+"${p[@]}"}
+run_hook "$(edit_json "$repo/py/-x/-dash.py")"
+p=()
+[[ $STATUS -eq 2 ]] && log_line "ruff $repo $py_args ./py/-x/-dash.py" || p+=("exit $STATUS, log: $(cat "$LOG")")
+check "a Python file whose folder and name start with a dash reaches ruff after --, as ./<path>" ${p[@]+"${p[@]}"}
+for other in UPPER.PY stub.pyi ok.pyc; do
+  run_hook "$(edit_json "$repo/py/$other")"
+  p=()
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_empty || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+  check "$other is not linted: the gate takes *.py alone, case and all" ${p[@]+"${p[@]}"}
+done
+# Every RUFF_ variable is cleared: RUFF_OUTPUT_FILE would send the report to a file, and the agent would see a clean edit.
+RUN_ENV=(RUFF_OUTPUT_FILE="$WORK/ruff-out" RUFF_OUTPUT_FORMAT=json RUFF_CACHE_DIR="$repo/.cache" RUFF_NO_CACHE=false RUFF_ANYTHING=1)
+run_hook "$(edit_json "$repo/py/bad.py")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ $STATUS -eq 2 ]] || p+=("exit $STATUS, want 2")
+! log_has "ENV RUFF_" || p+=("a RUFF_ variable reached ruff: $(grep '^ENV' "$LOG")")
+check "no RUFF_ variable the session has reaches ruff" ${p[@]+"${p[@]}"}
+# The stub's own RUFF_ logging, so the case above can fail.
+: > "$WORK/ruff-probe.log"
+STUB_LOG="$WORK/ruff-probe.log" STUB_PASS=ruff RUFF_OUTPUT_FILE=x "$STUBS/ruff" check ok.py
+p=()
+grep -qx 'ENV RUFF_OUTPUT_FILE' "$WORK/ruff-probe.log" || p+=("the stub logged no RUFF_ variable: $(cat "$WORK/ruff-probe.log")")
+rm "$WORK/ruff-probe.log"
+check "the ruff stub logs each RUFF_ variable it is given" ${p[@]+"${p[@]}"}
+for version in "ruff 0.17.0" "ruff 0.17.6" "ruff 0.17.10"; do
+  RUN_ENV=(STUB_RUFF_VERSION="$version")
+  run_hook "$(edit_json "$repo/py/ok.py")"
+  RUN_ENV=(RUN_ENV_UNUSED=1)
+  p=()
+  [[ $STATUS -eq 0 && -z "$OUTPUT" && "$(ran ruff)" == 1 ]] || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+  check "$version is run" ${p[@]+"${p[@]}"}
+done
+for version in "ruff 0.16.9" "ruff 0.18.0" "ruff 1.17.0" "ruff 0.17" "0.17.6" "ruff 0.17.6 extra" "xruff 0.17.6" "ruff 0.170.1" "ruff 0.17.6
+ruff 0.17.6"; do
+  RUN_ENV=(STUB_RUFF_VERSION="$version")
+  run_hook "$(edit_json "$repo/py/bad.py")"
+  RUN_ENV=(RUN_ENV_UNUSED=1)
+  p=()
+  [[ $STATUS -eq 0 && -z "$STDERR" && "$(ran ruff)" == 0 ]] || p+=("exit $STATUS, stderr: $STDERR, log: $(cat "$LOG")")
+  [[ "$(system_message "$STDOUT")" == "lint-edited-file.sh: py/bad.py was not fully linted: ruff '${version//$'\n'/?}' is not a 0.17 release, the one the gate checks with (the gate still checks it before the push)." ]] \
+    || p+=("note: $STDOUT")
+  check "ruff '${version//$'\n'/\\n}' is noted and not run" ${p[@]+"${p[@]}"}
+done
+for case in "|0" "ruff 0.17.6|1" "|1"; do
+  RUN_ENV=(STUB_RUFF_VERSION="${case%|*}" STUB_RUFF_VERSION_EXIT="${case#*|}")
+  run_hook "$(edit_json "$repo/py/bad.py")"
+  RUN_ENV=(RUN_ENV_UNUSED=1)
+  p=()
+  [[ $STATUS -eq 0 && -z "$STDERR" && "$(ran ruff)" == 0 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
+  [[ "$(system_message "$STDOUT")" == "lint-edited-file.sh: py/bad.py was not fully linted: ruff --version failed or printed nothing, so its release is unknown and ruff was not run (the gate still checks it before the push)." ]] \
+    || p+=("note: $STDOUT")
+  check "a ruff --version printing '${case%|*}' with exit ${case#*|} is noted as unknown, and ruff is not run" ${p[@]+"${p[@]}"}
+done
+RUN_ENV=(STUB_RUFF_VERSION=$'ruff 0.1\033]0;x\007\303\251'"$(printf '%040d' 0)")
+run_hook "$(edit_json "$repo/py/ok.py")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ "$(system_message "$STDOUT")" == *"ruff 'ruff 0.1??0?x???$(printf '%024d' 0)' is not"* ]] || p+=("note: $STDOUT")
+[[ "$STDOUT" != *$'\033'* ]] || p+=("an escape byte reached the note")
+check "a ruff release is noted with only plain bytes, cut at 40" ${p[@]+"${p[@]}"}
+run_hook "$(edit_json "$repo/py/bad.py")" "$TOOLS"
+p=()
+[[ $STATUS -eq 0 && "$(system_message "$STDOUT")" == "lint-edited-file.sh: py/bad.py was not fully linted: ruff not installed (the gate still checks it before the push)." ]] || p+=("exit $STATUS, note: $STDOUT")
+check "a missing ruff is noted, and the file isn't linted" ${p[@]+"${p[@]}"}
+attacker_stub "$repo/bin/ruff"
+run_hook "$(edit_json "$repo/py/bad.py")" "$repo/bin:$TOOLS"
+p=()
+[[ $STATUS -eq 0 ]] && ! log_has "attacker " || p+=("exit $STATUS, or an in-repo ruff ran: $(cat "$LOG")")
+[[ "$(system_message "$STDOUT")" == *"was not fully linted: ruff $found_inside"* ]] || p+=("note: $STDOUT")
+check "a ruff inside the repo is refused" ${p[@]+"${p[@]}"}
+rm -r "${repo:?}/bin"
 
 # --- The real shellcheck and shfmt, when installed ---------------------------
 # The repo's own .editorconfig gives the style, as in every repo the Template is Applied to.
@@ -2377,6 +2484,35 @@ done
 # shellcheck disable=SC2016 # code text, written as it is
 ! grep -qE -- "$heredoc_re" <<< 'echo $((a<<2))' || p+=("the pattern matches a shift")
 check "the hook reads no data through a here-string or heredoc" ${p[@]+"${p[@]}"}
+
+# --- The real ruff, when it is a 0.17 release ----------------------------------
+# --isolated is what keeps a repository's config out: a pyproject.toml and a ruff.toml that turn F401 off, and one that turns on E501,
+# change nothing, and a B rule is reported.
+if [[ "$(PATH="$REAL_PATH" ruff --version 2> /dev/null)" =~ ^ruff\ 0\.17\.[0-9]+$ ]]; then
+  realpy="$(new_repo realpy)"
+  printf '[tool.ruff.lint]\nignore = ["F401"]\nextend-select = ["E501"]\n' > "$realpy/pyproject.toml"
+  printf '[lint]\nignore = ["F401"]\n' > "$realpy/ruff.toml"
+  printf 'x = 1\nprint("%s")\n' "$(printf '%0100d' 0)" > "$realpy/long.py"
+  printf 'import os\n' > "$realpy/unused.py"
+  printf 'def f(a=[]):\n    return a\n' > "$realpy/default.py"
+  run_hook "$(edit_json "$realpy/long.py")" "$REAL_PATH" "$realpy"
+  p=()
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+  check "ruff itself: a clean file passes, though the repo's config turns on E501" ${p[@]+"${p[@]}"}
+  run_hook "$(edit_json "$realpy/unused.py")" "$REAL_PATH" "$realpy"
+  p=()
+  [[ $STATUS -eq 2 && "$STDERR" == *"ruff (exit 1):"*F401* ]] || p+=("exit $STATUS, stderr: $STDERR")
+  check "ruff itself: F401 is reported, though the repo's configs ignore it" ${p[@]+"${p[@]}"}
+  run_hook "$(edit_json "$realpy/default.py")" "$REAL_PATH" "$realpy"
+  p=()
+  [[ $STATUS -eq 2 && "$STDERR" == *B006* ]] || p+=("exit $STATUS, stderr: $STDERR")
+  check "ruff itself: a B rule is reported" ${p[@]+"${p[@]}"}
+  p=()
+  [[ ! -e "$realpy/.ruff_cache" ]] || p+=("ruff wrote $realpy/.ruff_cache")
+  check "ruff itself: no .ruff_cache is written" ${p[@]+"${p[@]}"}
+else
+  echo "skip - no ruff 0.17 here, so the real ruff isn't tried"
+fi
 
 if [[ -x "$SCRIPT" ]]; then
   pass "scripts/lint-edited-file.sh is executable"

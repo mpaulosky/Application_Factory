@@ -172,6 +172,75 @@ for problem in problems:
     print(problem)
 sys.exit(1 if problems else 0)
 PY
+  # The edit-time lint and the Owned gate check Python with the same ruff release rule and flags, CI's python-tests job passes the same
+  # flags, and requirements-tests.txt pins the release the gate runs through uvx, one the rule takes: a bump of the pin to another
+  # release line fails here, so the rule is moved with it on purpose (Dependabot leaves ruff alone; see the dependabot.yml check).
+  python3 -I - "$owned" << 'PY' || fail "scripts/lint-edited-file.sh, scripts/gate.sh, ci.yml and requirements-tests.txt must agree on ruff (see above)"
+import re, shlex, sys
+owned = sys.argv[1]
+read = lambda path: open(path, encoding="utf-8").read()
+texts = {"lint-edited-file.sh": read(f"{owned}/scripts/lint-edited-file.sh"), "gate.sh": read(f"{owned}/scripts/gate.sh"),
+         "ci.yml": read(f"{owned}/.github/workflows/ci.yml"), "requirements-tests.txt": read(f"{owned}/.github/scripts/requirements-tests.txt")}
+problems = []
+def one(where, pattern):
+    found = re.findall(pattern, texts[where], re.M)
+    if len(found) != 1:
+        problems.append(f"{where}: {pattern} is not found once ({len(found)} found)")
+        return None
+    return found[0]
+rules = {where: one(where, r"^RUFF_RELEASE='([^']+)'$") for where in ("lint-edited-file.sh", "gate.sh")}
+flags = {where: one(where, r"^RUFF_ARGS=\((.+)\)$") for where in ("lint-edited-file.sh", "gate.sh")}
+flags = {where: shlex.split(found) for where, found in flags.items() if found is not None}
+ci = one("ci.yml", r"^ *run: python -m ruff (.+) -- \S.*$")
+if ci is not None:
+    flags["ci.yml"] = shlex.split(ci)
+# CI's paths are folders of the Template, and between them they hold every Owned Python file, so a moved folder or a new one is found here.
+ci_paths = one("ci.yml", r"^ *run: python -m ruff .+ -- (\S.*)$")
+if ci_paths is not None:
+    import os
+    folders = shlex.split(ci_paths)
+    for folder in folders:
+        if not os.path.isdir(os.path.join(owned, folder)):
+            problems.append(f"ci.yml's ruff step lints {folder}, which is not a folder of the Template")
+    # Folders ruff skips when it walks a folder it is given (its default exclude, which --isolated keeps): a file under one is not linted.
+    skipped = {".bzr", ".direnv", ".eggs", ".git", ".git-rewrite", ".hg", ".ipynb_checkpoints", ".mypy_cache", ".nox", ".pants.d", ".pyenv",
+               ".pytest_cache", ".pytype", ".ruff_cache", ".svn", ".tox", ".venv", ".vscode", "__pypackages__", "_build", "buck-out", "build",
+               "dist", "node_modules", "site-packages", "venv"}
+    for top, dirs, files in os.walk(owned):
+        dirs[:] = [d for d in dirs if d != "__pycache__"]
+        for name in files:
+            if name.endswith(".py"):
+                path = os.path.relpath(os.path.join(top, name), owned)
+                given = next((folder.rstrip("/") for folder in folders if path.startswith(folder.rstrip("/") + "/")), None)
+                # Only the folders below the one ci.yml names: ruff's default exclude doesn't drop a path it is given.
+                parts = path[len(given) + 1 :].split(os.sep)[:-1] if given else []
+                if given is None:
+                    problems.append(f"ci.yml's ruff step doesn't lint the Owned {path}")
+                elif skipped.intersection(parts):
+                    problems.append(f"the Owned {path} is under a folder ruff skips by default ({sorted(skipped.intersection(parts))[0]}), so CI's ruff step doesn't lint it")
+version = one("gate.sh", r'^RUFF_VERSION="([^"]+)"$')
+pin = one("requirements-tests.txt", r"^ruff==(\S+) \\$")
+if len(set(rules.values())) != 1:
+    problems.append(f"the ruff release rules differ: {rules}")
+if len({tuple(found) for found in flags.values()}) != 1:
+    problems.append(f"the ruff flags differ: {flags}")
+if "--isolated" not in flags.get("gate.sh", []):
+    problems.append("gate.sh's RUFF_ARGS must hold --isolated, so no config an agent could write is read")
+if version is not None and pin is not None and version != pin:
+    problems.append(f"gate.sh's RUFF_VERSION {version} is not requirements-tests.txt's ruff=={pin}")
+rule = rules.get("gate.sh")
+if rule and version and not re.fullmatch(rule, f"ruff {version}"):
+    problems.append(f"RUFF_VERSION {version} is not a release the rule {rule} takes")
+# The messages name the release line, so they move with the rule too.
+if version:
+    line = ".".join(version.split(".")[:2])
+    for where, words in (("lint-edited-file.sh", f"is not a {line} release"), ("gate.sh", f"needs ruff {line}")):
+        if words not in texts[where]:
+            problems.append(f"{where} doesn't say '{words}', the release line RUFF_VERSION {version} is in")
+for problem in problems:
+    print(problem)
+sys.exit(1 if problems else 0)
+PY
   # The script edit rule: the checks reviewers keep raising on script changes, loaded when a session works on a script (its paths: front matter
   # names the shell and Python files and the folders the hook lints), and written into every repo, so it names nothing of the Factory's.
   script_rule="$owned/.claude/rules/script-edits.md"
@@ -250,6 +319,10 @@ PY
     file="${pair%%|*}" dir="${pair#*|}"
     awk -v dir="$dir" '/package-ecosystem: "pip"/ { pip = 1; next } /package-ecosystem:/ { pip = 0 } pip && $0 ~ "directory: \"" dir "\"" { found = 1 } END { exit !found }' "$file" \
       || fail "$file must have a pip entry for $dir, so Dependabot bumps requirements-tests.txt"
+    # But never ruff: its pin moves by hand with gate.sh's RUFF_VERSION and release rule (ADR 0011, Update: Python).
+    awk '/package-ecosystem: "pip"/ { pip = 1; next } /package-ecosystem:/ { pip = 0 } pip && /^ *ignore:/ { ign = 1; next } pip && /^    [a-z]/ { ign = 0 }
+      pip && ign && /^ *- dependency-name: "ruff" *$/ { found = 1 } END { exit !found }' "$file" \
+      || fail "$file's pip entry must ignore ruff, whose pin moves only with gate.sh's RUFF_VERSION and release rule"
   done
   python3 - "$owned/.github/scripts/requirements-tests.txt" << 'PY_REQ' || fail "requirements-tests.txt must pin each package exactly, with at least one sha256 hash, pytest and pyyaml among them"
 import re, sys
@@ -763,12 +836,21 @@ STUB
     fail "the Seed Sandcastle files describe dotfiles; describe any Baseline repo instead"
   fi
   # The sandbox runs the gate, so its linters are the versions the Owned gate.sh pins.
-  for name in ACTIONLINT_VERSION ZIZMOR_VERSION SHELLCHECK_VERSION MARKDOWNLINT_CLI2_VERSION; do
+  for name in ACTIONLINT_VERSION ZIZMOR_VERSION SHELLCHECK_VERSION MARKDOWNLINT_CLI2_VERSION RUFF_VERSION; do
     pinned="$(sed -nE "s/^$name=\"([^\"]+)\".*/\1/p" "$owned/scripts/gate.sh")"
     image="$(sed -nE "s/^ARG $name=([^ ]+).*/\1/p" "$seed/.sandcastle/Dockerfile")"
     [[ -n "$pinned" && "$image" == "$pinned" ]] \
       || fail "the Seed .sandcastle/Dockerfile's $name is '$image', gate.sh's '$pinned'; set it, and its SHA-256s, to gate.sh's"
   done
+  # The ARG alone installs nothing: the image's pip install takes ruff at that release, or the sandbox's gate fails on a changed *.py.
+  # shellcheck disable=SC2016 # the Dockerfile's own ${RUFF_VERSION}, matched as written
+  # Comment lines dropped (Docker drops them inside a continued instruction too), then continued lines joined, CRLF or LF; RUN is any case,
+  # and the spec is an argument of that pip install, not of a later command on the line.
+  python3 -I -c 'import re, sys
+text = re.sub(r"(?m)^[ \t]*#[^\n]*\n", "", open(sys.argv[1], encoding="utf-8").read().replace("\r\n", "\n"))
+text = re.sub(r"\\[ \t]*\n", " ", text)
+sys.exit(0 if re.search(r"^[ \t]*(?i:RUN)[ \t]+[^\n]*\bpip3?[ \t]+install\b[^\n&|;]*[ \t]\"ruff==\$\{RUFF_VERSION\}\"", text, re.M) else 1)' "$seed/.sandcastle/Dockerfile" \
+    || fail "the Seed .sandcastle/Dockerfile must have \"ruff==\${RUFF_VERSION}\" on a RUN pip install line, the release the gate's Python lint step takes"
   # And the .NET SDK channel global.json pins.
   sdk="$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["sdk"]["version"])' "$owned/global.json")"
   channel="$(sed -nE 's/^ARG DOTNET_CHANNEL=([^ ]+).*/\1/p' "$seed/.sandcastle/Dockerfile")"

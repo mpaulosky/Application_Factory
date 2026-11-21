@@ -65,7 +65,7 @@ def plain(value, what):
     try:
         value.encode("utf-8")
     except UnicodeEncodeError:
-        raise Refused(f"{what} is not valid text (a lone surrogate)")
+        raise Refused(f"{what} is not valid text (a lone surrogate)") from None
     return value
 
 
@@ -73,7 +73,7 @@ def load_spec(path):
     try:
         spec = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
-        raise Refused(f"cannot read the spec: {error}")
+        raise Refused(f"cannot read the spec: {error}") from error
     if not isinstance(spec, dict):
         raise Refused("the spec must be a JSON object")
     test = spec.get("test")
@@ -115,7 +115,7 @@ def target_files(root, mutations):
         try:
             relative = resolved.relative_to(root)
         except ValueError:
-            raise Refused(f'{item["path"]} is outside {root}')
+            raise Refused(f'{item["path"]} is outside {root}') from None
         if resolved in originals:
             continue
         if not resolved.is_file():
@@ -201,7 +201,7 @@ def claim_journal(journal, top):
     try:
         os.link(staged, journal)
     except FileExistsError:
-        raise Refused(describe_journal(journal, top))
+        raise Refused(describe_journal(journal, top)) from None
     finally:
         staged.unlink(missing_ok=True)
 
@@ -236,7 +236,7 @@ def run_tests(argv, root, timeout, pycache):
             process = subprocess.Popen(argv, cwd=root, stdin=subprocess.DEVNULL, stdout=out, stderr=err,
                                        env=clean_env(pycache), start_new_session=True)
         except (OSError, ValueError) as error:
-            raise Refused(f"cannot run the test command: {error}")
+            raise Refused(f"cannot run the test command: {error}") from error
         try:
             try:
                 process.wait(timeout=timeout)
@@ -305,7 +305,7 @@ def main(argv):
             try:
                 text = originals[path].decode("utf-8")
             except UnicodeDecodeError:
-                raise Refused(f'{item["path"]} is not UTF-8')
+                raise Refused(f'{item["path"]} is not UTF-8') from None
             if item["old"] == item["new"]:
                 print(f"INVALID {label(item)} (old and new are the same)")
                 failed = True

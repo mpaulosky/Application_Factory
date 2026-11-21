@@ -95,6 +95,7 @@ post, word for word. Keep it current: after every follow-up commit, update it so
   gate runs while iterating, never for a push. Sandcastle's sandboxes set it: the host runs the review's rounds on a built branch itself (`lib/host-review.mts`).
   The gate needs shfmt v3.14 or a later v3 on `PATH`: its check that each `gh` command is told its repository parses every script with shfmt, its Shell format
   step checks the changed shell files with `shfmt -d`, and it fails, naming shfmt, when shfmt is missing or another release (`pacman -S shfmt`, `brew install shfmt`, or the release binaries at <https://github.com/mvdan/sh/releases>).
+  A push that changes a Python file needs ruff 0.17 (`uv tool install ruff@0.17.6`) or uv, which runs that release: the gate's Python lint step checks the changed `*.py` files.
 - **Required checks:** Build Solution, Test Suite, Branch name, PR title, actionlint, zizmor, shellcheck, markdownlint
   and yamllint. A docs-only PR skips the build and tests, and so does a Dependabot GitHub Actions bump; a skipped check
   counts as passing.

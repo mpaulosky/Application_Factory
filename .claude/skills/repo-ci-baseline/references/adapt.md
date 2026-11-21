@@ -12,7 +12,8 @@ Done when every item below is resolved for this repo and `scripts/gate.sh` passe
   or Dependabot's npm updater reports `dependency_file_not_found` every week. The `npm` label comes from `labels.json`,
   so run `github-settings.sh --fix`. Its pip block bumps `.github/scripts/requirements-tests.txt`, the Python tests' hashed pins, and needs only the `dependencies`
   label. A Seed is written only where it's missing, so an Application Applied before the block existed copies it in by hand; without it, the pins move only when
-  a Rollout brings the Template's copy, which the Factory's own pip entry bumps.
+  a Rollout brings the Template's copy, which the Factory's own pip entry bumps. The block ignores ruff, whose pin moves only with the gate's release rule
+  (the Factory's ADR 0011, Update: Python): an Application Applied before the `ignore` existed adds `ignore: [{dependency-name: "ruff"}]` to its pip entry by hand.
 - **Seed files skipped.** Diff each against `template/seed/` and bring over what the repo lacks.
   The repo's version wins on content.
 - **Seed files written.** Check each against what the repo had before.

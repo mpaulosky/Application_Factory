@@ -46,11 +46,12 @@ STEPS_OF_ACTION = load_yaml(ACTION)["runs"]["steps"]
 
 
 def install_steps():
-    """Every step that installs shfmt, by where it is: the Owned ci.yml's jobs and the template-tools action."""
-    found = {f"ci.yml {name}": step for name, job in WORKFLOW["jobs"].items() for step in job.get("steps", [])
-             if INSTALLS in str(step.get("run", ""))}
-    found.update({"template-tools": step for step in STEPS_OF_ACTION if INSTALLS in str(step.get("run", ""))})
-    return found
+    """Every step that installs shfmt, by where it is: the Owned ci.yml's jobs and the template-tools action, each step by its place
+    in its job, so two install steps in one job or in the action are two entries, not one keeping the last."""
+    places = [(f"ci.yml {name}", job.get("steps", [])) for name, job in WORKFLOW["jobs"].items()]
+    places.append(("template-tools", STEPS_OF_ACTION))
+    return {f"{place} step {number}": step for place, steps in places for number, step in enumerate(steps, 1)
+            if INSTALLS in str(step.get("run", ""))}
 
 
 def dockerfile_pins():

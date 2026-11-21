@@ -52,7 +52,7 @@ def load(listing):
     try:
         entries = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
-        raise Refused(f"cannot read {listing}: {error}")
+        raise Refused(f"cannot read {listing}: {error}") from error
     if not isinstance(entries, list):
         raise Refused(f"{listing} is not a known-open list")
     for index, entry in enumerate(entries, 1):
@@ -73,11 +73,11 @@ def inside(root, relative):
         resolved = (base / relative).resolve()
     except (OSError, RuntimeError) as error:
         # RuntimeError: a symlink loop, on a Python before 3.13.
-        raise Refused(f"cannot resolve {relative} in {root}: {error}")
+        raise Refused(f"cannot resolve {relative} in {root}: {error}") from error
     try:
         resolved.relative_to(base)
     except ValueError:
-        raise Refused(f"{relative} is outside {root}")
+        raise Refused(f"{relative} is outside {root}") from None
     return base, resolved
 
 
@@ -108,12 +108,12 @@ def locked(listing):
         private_folder(listing.parent)
         descriptor = os.open(f"{listing}.lock", os.O_RDWR | os.O_CREAT, 0o600)
     except OSError as error:
-        raise Refused(f"cannot write the list: {error}")
+        raise Refused(f"cannot write the list: {error}") from error
     try:
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX)
         except OSError as error:
-            raise Refused(f"cannot lock the list: {error}")
+            raise Refused(f"cannot lock the list: {error}") from error
         yield
     finally:
         os.close(descriptor)
@@ -129,7 +129,7 @@ def replace(listing, entries):
             json.dump(entries, stream, indent=2)
         os.replace(temporary, listing)
     except OSError as error:
-        raise Refused(f"cannot write the list: {error}")
+        raise Refused(f"cannot write the list: {error}") from error
     finally:
         if temporary:
             with contextlib.suppress(OSError):

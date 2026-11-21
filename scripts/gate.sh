@@ -2,16 +2,16 @@
 # The Application Factory's pre-push gate, run by .github/hooks/pre-push (a copy of the Template's) and safe to run by hand.
 # The Factory isn't a .NET repo, so its gate is what its CI runs: first this script's own test and the review's three stand-alone tests (they install
 # the packages with pnpm), then that its copies of Template files haven't drifted from the Template (ADR 0006), then that no Owned file has a bare #N,
-# then that no Owned script reads git status --porcelain without --untracked-files (tests/check-git-status.sh), then the Markdown and YAML lint, then shellcheck of the shell files the branch changes, then that every shell file is formatted as shfmt formats it, then that the branch passed the local review (scripts/review.sh check, ADR 0010; GATE_SKIP_REVIEW=1 skips it),
+# then that no Owned script reads git status --porcelain without --untracked-files (tests/check-git-status.sh), then the Markdown and YAML lint, then shellcheck of the shell files the branch changes, then that every shell file is formatted as shfmt formats it, then ruff over every Python file, then that the branch passed the local review (scripts/review.sh check, ADR 0010; GATE_SKIP_REVIEW=1 skips it),
 # then the repo-ci-baseline skill's test.sh (skipped when it already passed on the same clean tree; GATE_NO_CACHE=1 runs it). This script is the Factory's own, not a copy of the Template's scripts/gate.sh.
 
 # GATE_PART=self|review|static|template|sandcastle runs one part of this gate, which is how CI runs a part per job (ADR 0012, ADR 0013): self is this script's own test, review the
-# review's stand-alone tests, static the copies, the issue references, the git status guards, the lint, shellcheck and shfmt, template the review check and test.sh, sandcastle the Template's Sandcastle check.
+# review's stand-alone tests, static the copies, the issue references, the git status guards, the lint, shellcheck, shfmt and ruff, template the review check and test.sh, sandcastle the Template's Sandcastle check.
 # With no GATE_PART every part runs, in that order, except that sandcastle runs only when the branch changed a file it reads (a part run by name always runs). The pre-push hook drops GATE_PART.
 # TEST_SH_SHARD=hooks|scripts|checks, with GATE_PART=template, runs one shard of test.sh (ADR 0013); any other run of the gate ignores it and runs the whole of test.sh.
 set -euo pipefail
 
-# scripts/gate.sh --quick: the checks that finish in about a minute (its test, the review tests, the copies' drift, the bare-#N check, the git status guard check, lint, shellcheck of the shell files the branch changes, shfmt of every shell file), then stop before the local
+# scripts/gate.sh --quick: the checks that finish in about a minute (its test, the review tests, the copies' drift, the bare-#N check, the git status guard check, lint, shellcheck of the shell files the branch changes, shfmt of every shell file, ruff of every Python file), then stop before the local
 # review check, test.sh and the Sandcastle check. It is for iterating, never for pushing: the pre-push hook and CI call this script with no argument.
 # scripts/gate.sh --sync: copies every Template file the Factory carries over its copy (cp -p keeps the execute bit), prints the ones that changed,
 # and stops. A copy edited by hand is overwritten, so edit the Template's file. Run it after editing the Template's file; the drift check below is what finds a copy you forgot.
@@ -280,6 +280,48 @@ run_static() {
     fi
   fi
   echo "${#shell_all[@]} shell file(s) formatted as shfmt formats them."
+
+  # Every tracked and untracked Python file passes ruff's bug-finding rules (F and B), with the Template gate's release rule and flags
+  # (scripts/tests/gate.test.sh checks the three lines are the same), so the Factory's Python and the Template's are held to what an
+  # Application's gate and the edit-time lint check (ADR 0011). All of them, as for shfmt: ruff takes well under a second.
+  RUFF_VERSION="0.17.6"
+  RUFF_RELEASE='^ruff 0\.17\.[0-9]+$'
+  RUFF_ARGS=(check --isolated --no-cache --select "F,B" --target-version py312)
+  echo -e "\n${CYAN}▶ ruff (every Python file)${RESET}"
+  if ! command -v ruff > /dev/null 2>&1; then
+    echo -e "${RED}❌ ruff not found: the gate needs ruff 0.17 (uv tool install ruff@${RUFF_VERSION}).${RESET}" >&2
+    exit 1
+  fi
+  ruff_found="$(ruff --version 2>&1)" || ruff_found=""
+  if ! [[ "$ruff_found" =~ $RUFF_RELEASE ]]; then
+    # Its first 80 bytes, every byte but printable ASCII as ?, in C so the cut and the match go byte by byte.
+    ruff_shown="$(
+      export LC_ALL=C
+      cut="${ruff_found:0:80}"
+      printf '%s' "${cut//[!\ -~]/?}"
+    )"
+    # printf %s, not echo -e: a backslash in the answer must not become an escape.
+    printf '%b❌ the gate needs ruff 0.17, not '\''%s'\'': uv tool install ruff@%s.%b\n' "$RED" "$ruff_shown" "$RUFF_VERSION" "$RESET" >&2
+    exit 1
+  fi
+  py_all=()
+  while IFS= read -r -d '' f; do
+    [[ -f "$f" && "$f" == *.py ]] || continue
+    py_all+=("$f")
+  done < "$all_list"
+  # ruff exits 1 for a problem it found and 2 for its own failure.
+  if ((${#py_all[@]})); then
+    ruff_rc=0
+    ruff "${RUFF_ARGS[@]}" -- "${py_all[@]}" || ruff_rc=$?
+    if ((ruff_rc == 1)); then
+      echo -e "${RED}❌ ruff: fix each problem shown above (in the Template's file for a copy, then scripts/gate.sh --sync), or, for a false alarm, add # noqa: <code> to the line with the reason.${RESET}" >&2
+      exit 1
+    elif ((ruff_rc != 0)); then
+      echo -e "${RED}❌ ruff failed (exit $ruff_rc) without checking the files: check the ruff install.${RESET}" >&2
+      exit 1
+    fi
+  fi
+  echo "${#py_all[@]} Python file(s) checked."
 
 }
 

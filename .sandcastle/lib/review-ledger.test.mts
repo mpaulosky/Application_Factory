@@ -4017,7 +4017,7 @@ describe("OWNED_PATHS", () => {
   // The Factory's owned-paths test pins these too, but an Application doesn't carry it. An entry dropped from OWNED_PATHS makes a
   // re-Apply that rewrites the script need a review of its own; one dropped from REVIEWED_ON_REAPPLY lets a re-Apply that rewrites
   // cleanup.sh (which deletes branches, worktrees and origin branches), work-issue.sh (which names a branch from issue text) or
-  // lint-edited-file.sh (which lints each Markdown, YAML or shell file an agent writes, with no prompt, and vets the configs its linters read) pass unread.
+  // lint-edited-file.sh (which lints each Markdown, YAML, shell or Python file an agent writes, with no prompt, and vets the configs its linters read) pass unread.
   it("names the edit-time lint, cleanup and work-issue scripts as Owned, and reviews all three on a re-Apply", () => {
     for (const path of ["scripts/lint-edited-file.sh", "scripts/cleanup.sh", "scripts/work-issue.sh"]) {
       assert.equal((OWNED_PATHS as readonly string[]).includes(path), true, `${path} is an OWNED_PATHS entry`);

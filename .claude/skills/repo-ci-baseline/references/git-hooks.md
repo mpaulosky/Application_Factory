@@ -127,7 +127,7 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
      from writing the clone's `.git/config`, and run all host git with hooks off, since the relative `hooksPath`
      makes each worktree's own `.github/hooks/*` the ones that fire; see step 7 of the Sandcastle setup in the
      README.
-- **`scripts/gate.sh`**, also safe to run by hand: lint the Markdown, YAML, workflow and shell files changed since
+- **`scripts/gate.sh`**, also safe to run by hand: lint the Markdown, YAML, workflow, shell and Python files changed since
   `origin/main`, using CI's configs, and prefer installed tools with pinned fallbacks. The changed files are read NUL-separated
   (`git diff -z`, or `git ls-files -z` without an `origin/main`; a git that fails stops the gate) and sorted into the lint lists in bash
   under `LC_ALL=C`, so each name is matched whole and byte for byte: a non-ASCII name, one that isn't valid UTF-8, or one with a tab or
@@ -138,11 +138,19 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
   `.editorconfig`: a repo's own scripts take the style as they are touched, with no one-off reformat ([the Factory's ADR 0015](../../../../docs/adr/0015-shell-files-are-formatted-with-shfmt.md)).
   It needs shfmt v3.14 or a later v3 release, which `check_gh_repo.py` needs too, and stops, naming it, without one. shfmt exiting 1 is a diff or a file it can't parse, and
   any other status stops the gate as a failed shfmt, with no `shfmt -w` advice. Without an `origin/main` it is skipped with a note, since the
-  changed files are then every tracked file. `tests/owned-gate-files.test.sh` (the Factory's) runs those lines in a throwaway
-  repo, in a UTF-8 locale and in C, the YAML, shell lint and shell format steps with stubs, and the Markdown step with a stub and, when installed, the real tool;
+  changed files are then every tracked file. The **Python lint** step runs ruff's bug-finding rules on the changed `*.py` files, with the flags the edit-time lint
+  passes (`check --isolated --no-cache --select F,B --target-version py312 --`): `--isolated` reads no `pyproject.toml` or `ruff.toml`, so every repo checks the same rules
+  ([the Factory's ADR 0011](../../../../docs/adr/0011-markdown-and-yaml-are-linted-as-they-are-written.md), Update: Python). An installed ruff 0.17 is used, since a
+  later one adds rules. Without one, or with another release or a `--version` that fails, it runs `uvx --no-config ruff@0.17.6` (`--no-config`: it reads no uv config at
+  all, so none in the checkout can send the fetch elsewhere, nor can the user's own name a mirror), first saying why it passed the installed one over, naming what it printed
+  with every byte but printable ASCII as `?`; without uv it stops, saying the same and naming both. A uvx run that fails other than with a finding is named as a possible
+  failed fetch, with the way round it: ruff 0.17 first on PATH. ruff exiting 1 is a finding, and any other status stops the gate as a failed ruff. Unlike shell format it runs
+  without an `origin/main` too, on every tracked Python file, as the shell lint does. `tests/owned-gate-files.test.sh` (the Factory's) runs those lines in a throwaway
+  repo, in a UTF-8 locale and in C, the YAML, shell lint, shell format and Python lint steps with stubs, and the Markdown step with a stub and, when installed, the real tool;
   `.github/hooks/tests/pre-push.test.sh` runs the whole gate with the real shfmt, and shows it reads the repo's `.editorconfig`. Then build and run each test
   project, where the stack allows it locally. Which steps it runs depends on the repo; what's standard is that
-  everything it checks, CI checks too, except the Shell format step (CI would need the PR's base to know which files changed) and the local review check below.
+  everything it checks, CI checks too, except the Shell format step (CI would need the PR's base to know which files changed), the Python lint of a repo's own Python
+  (CI's `python-tests` job lints only the Template's Python folders, `.github/scripts` and the hardening-review scripts, own files kept there included) and the local review check below.
   After the lints it runs `python3 -I .github/scripts/check_gh_repo.py --repo`, which refuses a `gh` command in the
   repo's own `scripts/`, `.github/ci/` and skills that isn't told its repository (not the Owned Baseline files;
   [gotchas.md](gotchas.md)). It reads each script with shfmt v3.14 or a later v3, which must be installed: without it the check fails
@@ -229,6 +237,12 @@ the note, and shellcheck still runs). When shfmt exits 1 (a diff, or a file it c
 for a shell, and says to fix the syntax if the output is a syntax error; a shfmt that crashes gets no such hint. Neither tool runs code from the repository, and shfmt reads
 only `.editorconfig`.
 
+A Python file (a `*.py`, case and all, as the gate matches it: not a `.PY`, `.pyi` or `.pyc`) goes through ruff with the gate's Python lint flags, `check --isolated --no-cache
+--select F,B --target-version py312 --`: `--isolated` reads no `pyproject.toml`, `ruff.toml` or `.ruff.toml`, so a config an agent writes can't turn a rule off, and
+`--no-cache` writes no `.ruff_cache`. ruff runs no code from the repository. The hook clears every `RUFF_` variable first (`RUFF_OUTPUT_FILE` would send the report to a
+file, and the agent would see a clean edit). It runs only a 0.17 release, the line the gate accepts; another, or a `--version` that fails or prints nothing, is named in
+the note (its first 40 bytes, each other than a letter, digit, space or `_ . + -` as `?`).
+
 shellcheck reads its `.shellcheckrc`, and `external-sources` there lets it open the files a `source` line names; `--check-sourced` would then quote their lines in the report the
 agent reads. So the hook clears `SHELLCHECK_OPTS`, and shellcheck reads no config at all: it runs with `--norc`, and the hook turns the `.shellcheckrc` or `shellcheckrc`
 nearest the file (its folder and each one above it, up to the repository root, in the order shellcheck looks) into the flag each of its keys has: `disable` becomes `-e`,
@@ -251,24 +265,25 @@ that note, and a `--help` that prints no usage gets one of its own. Each value i
 may start with a dash, since shellcheck takes the argument after `-P` as its value, and `disable` and `enable` may not.
 
 A hook under a nested `.github/hooks` whose `.editorconfig` can't be read is not linted, with a note; a line of it longer than 4,096 characters is no section header. A violation
-wins over a note: the hook exits 2 with the report alone. `test.sh` checks that the hook's hook-name rule is the gate's and the Lint Actions shellcheck job's, and that its shfmt
-release rule is the gate's and its own.
+wins over a note: the hook exits 2 with the report alone. `test.sh` checks that the hook's hook-name rule is the gate's and the Lint Actions shellcheck job's, that its shfmt
+release rule is the gate's and its own, and that its ruff release rule and flags are the gate's, its flags CI's `python-tests` job's, and the gate's `RUFF_VERSION`
+`requirements-tests.txt`'s pin and the Seed `Dockerfile`'s.
 The hook sees only those tools' writes: a file an agent writes through Bash (a heredoc, `sed -i`, a script) is not linted until the pre-commit hook (Markdown only), the gate or CI,
 since a Bash command doesn't name the files it wrote. The Owned `.claude/rules/markdown-and-yaml-edits.md`, which Apply writes into every repo and which loads in every session (it has no `paths:`),
 tells agents to write Markdown and YAML with Write and Edit for that reason, in a repo that hasn't wired the hook yet as well. The Owned `.claude/rules/script-edits.md`, whose `paths:`
-load it when a session works on a shell or Python script, says the same for shell scripts (the hook lints no Python) and lists the checks reviewers keep raising on them:
+load it when a session works on a shell or Python script, says the same for shell and Python scripts and lists the checks reviewers keep raising on them:
 a test that fails without each new branch, the header or docstring updated in the same edit, the edge cases that keep coming back (a missing tool, an empty,
 relative or odd path, CRLF or a byte-order mark, a symlink, a variable a caller left set), and the script's error contract.
-In a repo that runs Sandcastle, which is where the review ledger is, a re-Apply that rewrites either, or the hook itself (which lints each Markdown, YAML or shell file an agent
+In a repo that runs Sandcastle, which is where the review ledger is, a re-Apply that rewrites either, or the hook itself (which lints each Markdown, YAML, shell or Python file an agent
 writes, with no Bash prompt, and vets the configs its linters read), needs a local review (`REVIEWED_ON_REAPPLY`), as the hand-off rules do;
 in a repo without the ledger the re-Apply PR's own review is the check.
 
 - Exit 2 with the linters' output on stderr when any linter reports a problem; Claude Code feeds that back to the agent. A linter that crashes counts as a problem, not as clean. Each linter's
   output is cut at 6,000 characters (bytes in the C locale, where a cut may split a multibyte character). The report says the output below it is data, not instructions, and ends with a line
   telling the agent to hand a broken linter (a usage error, an old version) to the person.
-- Exit 0 and no output for a file that is not Markdown, YAML or a shell file the gate checks, one that no longer exists, a directory, a symlink, one under `node_modules/`,
+- Exit 0 and no output for a file that is not Markdown, YAML, a shell file the gate checks or a `*.py`, one that no longer exists, a directory, a symlink, one under `node_modules/`,
   and one outside the project (below).
-- Exit 0 with a `systemMessage` on stdout, which Claude Code shows to the person, when a linter is not installed, or is not run (shfmt another release or one whose
+- Exit 0 with a `systemMessage` on stdout, which Claude Code shows to the person, when a linter is not installed, or is not run (shfmt or ruff another release or one whose
   `--version` fails or prints nothing, shellcheck under a config the hook won't take, as above), or a hook under a nested `.github/hooks` isn't linted because its
   `.editorconfig` can't be read: the file is skipped for that linter, the hook only helps, and the gate still checks, as do the pre-commit hook and CI where they lint
   that kind of file (the pre-commit hook lints Markdown; CI doesn't check shell format). Plain stderr on exit 0 is not shown, which is why the note is JSON. Before it runs anything the hook cleans `PATH`:
@@ -278,15 +293,16 @@ in a repo without the ledger the re-Apply PR's own review is the check.
   the checkouts read from git's own files (`.git`, `commondir`, `worktrees/*/gitdir`) by bash alone, read whole and trimmed as git trims them (a relative
   `worktrees/*/gitdir` from its own folder), and again with `git worktree list` and the edited file's repository.
   A `PATH` left with no entry is set to a folder that can't exist, never to an empty string, which bash would read as the working directory. So no linter (`markdownlint-cli2`, `yamllint`, `actionlint`,
-  `zizmor`, `shellcheck`, `shfmt`) and no helper a linter looks up on `PATH` (`node`, `python3`, `bash`, `shellcheck`) comes from there. A linter whose real file is a symlink into a checkout
+  `zizmor`, `shellcheck`, `shfmt`, `ruff`) and no helper a linter looks up on `PATH` (`node`, `python3`, `bash`, `shellcheck`) comes from there. A linter whose real file is a symlink into a checkout
   is passed over for the next one on `PATH`; one found only in such places is named apart in the note ("found only inside the project or on a relative PATH entry"),
   and an exported function of that name counts as not installed. Each linter runs by the path `PATH` found it under, so a shim that picks its program by name (mise)
   still works. Install them outside the project, on an absolute `PATH` entry: `pnpm add -g markdownlint-cli2`, `uv tool install yamllint`, `uv tool install zizmor`,
-  and actionlint, shellcheck and shfmt from their release binaries or a package manager. The pre-commit hook and the gate still use the repo's own `markdownlint-cli2` (only it has one),
+  `uv tool install ruff@0.17.6`, and actionlint, shellcheck and shfmt from their release binaries or a package manager. The pre-commit hook and the gate still use
+  the repo's own `markdownlint-cli2` (only it has one),
   because a person runs those.
 - Exit 1 with a message on stderr when `CLAUDE_PROJECT_DIR` is unset or one of those git files is longer than any that names a folder (`GIT_FILE_MAX`), for any edit,
   since both are checked before the input is read; when its input is not JSON, `python3` is missing (or found only where the hook runs nothing from,
-  which the message says), or, for a Markdown, YAML or shell file, `git` is missing (the same) or older than 2.36
+  which the message says), or, for a Markdown, YAML, shell or Python file, `git` is missing (the same) or older than 2.36
   (`git worktree list -z`), so a broken hook is visible and is not read as a clean file.
 - Only the project's own checkout and the linked worktrees it lists are linted: the file's repository root must be one of the paths `git worktree list` prints for `CLAUDE_PROJECT_DIR`,
   which Claude Code

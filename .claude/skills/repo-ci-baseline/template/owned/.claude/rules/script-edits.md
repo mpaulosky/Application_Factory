@@ -8,10 +8,11 @@ paths:
 
 # Editing scripts
 
-Write and edit shell scripts with the Write and Edit tools. `scripts/lint-edited-file.sh` is a Claude Code `PostToolUse` hook on Write, Edit and MultiEdit,
-run from `.claude/settings.json` where the repository turns it on: it runs shellcheck and `shfmt -d` on a shell file the moment the tool writes it, so a finding is
-fixed in the same turn. A Bash command doesn't name the files it wrote, so the hook never sees them. It lints no Python: for a Python script the checks below are
-all there is before the gate. To write the format shfmt asks for, run `shfmt -w <file>` with no style flags, so it reads `.editorconfig`, on a `*.sh` or a git hook;
+Write and edit shell and Python scripts with the Write and Edit tools. `scripts/lint-edited-file.sh` is a Claude Code `PostToolUse` hook on Write, Edit and MultiEdit,
+run from `.claude/settings.json` where the repository turns it on: it runs shellcheck and `shfmt -d` on a shell file, and ruff's bug-finding rules (F and B) on a `*.py`,
+the moment the tool writes it, so a finding is fixed in the same turn. A Bash command doesn't name the files it wrote, so the hook never sees them. ruff reads no
+`pyproject.toml` or `ruff.toml` there or in the gate (`--isolated`), so mark a false alarm on its line with `# noqa: <code>` and the reason, not in a config.
+To write the format shfmt asks for, run `shfmt -w <file>` with no style flags, so it reads `.editorconfig`, on a `*.sh` or a git hook;
 an extensionless file in `scripts/` is in no `.editorconfig` section, so shfmt would format it in its own style, not the repository's.
 
 Reviewers keep finding the same gaps in script changes. Close them in the edit that opens them:

@@ -54,7 +54,7 @@ Under `template/seed/`. Each one describes the repo, so it's the repo's once wri
 | `.sandcastle/roles/shared-rules.md` | The repo's paragraph, its pointers (`docs/CODING_STANDARDS.md`, `CONTEXT.md`, `.claude/rules/`), its stacks and test commands, any "UI developer" section naming its UI files; the one file every role reads about the repo |
 | `.sandcastle/roles/skills.md` | The repo's `# SKILLS` block, empty in the Seed; injected into the `tester`, `backend` and `ui` prompts as `{{REPO_SKILLS}}` |
 | `.sandcastle/CODING_STANDARDS.md` | The repo's code and test standards, which every role and the review follow |
-| `.sandcastle/Dockerfile` | The sandbox image: the gate's linters and the shfmt its gh check parses scripts with and its Shell format step runs, as `ARG`s with their SHA-256s, an optional .NET SDK (`INSTALL_DOTNET`, `DOTNET_CHANNEL`), optional Chromium libraries for Playwright (`INSTALL_PLAYWRIGHT_DEPS`, `PLAYWRIGHT_VERSION`), and `tini` as PID 1 (`ENTRYPOINT ["tini", "--", "sleep", "infinity"]`) |
+| `.sandcastle/Dockerfile` | The sandbox image: the gate's linters and the shfmt its gh check parses scripts with and its Shell format step runs, as `ARG`s with their SHA-256s, the ruff its Python lint step runs (`RUFF_VERSION`), an optional .NET SDK (`INSTALL_DOTNET`, `DOTNET_CHANNEL`), optional Chromium libraries for Playwright (`INSTALL_PLAYWRIGHT_DEPS`, `PLAYWRIGHT_VERSION`), and `tini` as PID 1 (`ENTRYPOINT ["tini", "--", "sleep", "infinity"]`) |
 | `.sandcastle/check-paths.txt` | The files, besides the Template's own list, whose change makes the Owned `check.sh` run Sandcastle's check: those the repo's `.sandcastle/` tests read (`CLAUDE.md`, `.github/workflows`, the solution file and so on); one pathspec per line, and a line that matches no file is named on stderr on every run |
 | `package.json`, `pnpm-workspace.yaml` | Sandcastle's packages and scripts; a repo with its own Node tooling merges them |
 | `.github/ci/sandcastle-skills.txt` | The skills the Sandcastle workflow installs on the runner for the run (a pinned Application Factory commit and skill names, read as data); empty until filled ([The workflow](#the-workflow)) |
@@ -70,6 +70,9 @@ A Seed file is written once, so an existing repo keeps its own Dockerfile and ad
 The same goes for shfmt, which the gate's gh check (repo-ci-baseline's ADR 0011) and its Shell format step need: a Dockerfile written before it adds the Seed's
 `SHFMT_VERSION` `ARG`, its two `shfmt_sha` values and its download, check and install lines by hand, or the sandbox's gate fails naming shfmt (exit 1 from the Shell format step when
 a `*.sh` file or hook changed, otherwise exit 2 from the gh check).
+So does ruff, which the gate's Python lint step runs on the changed `*.py` files: a Dockerfile written before it adds the Seed's `RUFF_VERSION` `ARG` (the release
+`scripts/gate.sh` pins) and `"ruff==${RUFF_VERSION}"` to its `pip3 install` line, or the sandbox's gate fails on a branch that changes a Python file, naming ruff (the image
+has no uv for the gate to fall back on).
 A repo that already has a Dockerfile adds `tini` to its `apt-get install` list and replaces its `ENTRYPOINT ["sleep", "infinity"]`
 with `ENTRYPOINT ["tini", "--", "sleep", "infinity"]`: with `sleep` as PID 1,
 nothing reaps the processes the gate orphans, they stay zombies holding their PIDs, and a long build ends unable to fork (the gate fails with `Resource temporarily unavailable`,
