@@ -1,7 +1,9 @@
 """Tests for github/auto_rollout.py (rollout.sh --auto), with reapply, the review session, land.sh, gh and git faked.
 No GitHub, no Claude."""
 
+import dataclasses
 import hashlib
+import inspect
 import io
 import json
 import os
@@ -489,7 +491,7 @@ def fake_guard(tmp_path):
     common.mkdir(parents=True, exist_ok=True)
     return auto.Guard(worktree="w", remote_branch="", template={}, ledgers=str(common / "review"), ledgers_before={},
                       common=str(common), gitdir=str(common / "worktrees" / "chore-reapply-baseline"), link=b"gitdir: x\n",
-                      security=str(tmp_path / "clone" / ".security"), security_before={}, worktree_state=("h", "h", ""))
+                      security=str(tmp_path / "clone" / ".security"), security_before={}, worktree_state=("headsha", "branchname", ""))
 
 
 SKILL_TEXT = "# Pre-push review\n\nThe skill's own steps.\n"
@@ -500,9 +502,9 @@ def review_once(tmp_path, monkeypatch, popen=None, changes=None, worktree=None, 
                 clock=None, guard=None, record=None, check=None):
     seen = {}
 
-    def fake_record(worktree, run, out, head, keep):
+    def fake_record(worktree, run, out, head, keep, got, unseen):
         seen["recorded"] = (worktree, run, os.path.isdir(run))
-        seen["record_head"], seen["keep"] = head, keep
+        seen["record_head"], seen["keep"], seen["got"], seen["unseen"] = head, keep, got, unseen()
         return 0, []
 
     session = session or FakeSession()
@@ -575,7 +577,8 @@ def test_the_review_session_runs_sandboxed_in_the_worktree_with_the_templates_sk
     for rule in ("never ask one", "Review only: this session changes nothing in the repository",
                  "Don't edit, fix or commit anything, and don't run the gate", "the skill's last, review-only round",
                  "stage open every finding the skill's triage doesn't dismiss, with its suggested fix", "Never dismiss a security finding",
-                 "a repeat of a fixed .security entry too, with that entry's number in the summary; leave repeats out, since rollout.sh drops it",
+                 "a repeat of a fixed .security entry too, with that entry's number in the summary. Leave out every finding's"
+                 " repeats field, whatever entry it would name (fixed, open or accepted): rollout.sh drops it",
                  f"Your run folder is {run}, made for you", "write nothing anywhere else",
                  "its review ledgers and the .security record are read-only to you",
                  f"scripts/review.sh stage {run} <file>", "as an empty array [] when it keeps none",
@@ -601,15 +604,16 @@ def test_a_session_whose_group_survived_is_never_recorded(tmp_path, monkeypatch)
 @pytest.mark.parametrize("outcome, code", [((auto.RECORD_FAILED, []), auto.RECORD_FAILED), ((0, []), 0),
                                            ((auto.SESSION_BROKE_A_RULE, ["R2 was staged fixed"]), auto.SESSION_BROKE_A_RULE)])
 def test_the_records_outcome_is_the_reviews(tmp_path, monkeypatch, outcome, code):
-    got, log, seen, _ = review_once(tmp_path, monkeypatch, record=lambda w, r, out, head, keep: outcome)
+    got, log, seen, _ = review_once(tmp_path, monkeypatch, record=lambda *args: outcome)
     assert got == code and seen["broke"] == outcome[1]
     for rule in outcome[1]:
         assert f"rollout.sh: the session broke a rule: {rule}" in Path(log).read_text()
 
 
-@pytest.mark.parametrize("error", [OSError("no space"), subprocess.TimeoutExpired("review.sh", 600)])
+@pytest.mark.parametrize("error", [OSError("no space"), PermissionError(13, "Permission denied"),
+                                   subprocess.SubprocessError("Exception occurred in preexec_fn.")])
 def test_a_record_that_cant_run_is_record_failed_with_its_reason_in_the_log(tmp_path, monkeypatch, error):
-    def record(worktree, run, out, head, keep):
+    def record(*args):
         raise error
 
     code, log, seen, _ = review_once(tmp_path, monkeypatch, record=record)
@@ -619,27 +623,57 @@ def test_a_record_that_cant_run_is_record_failed_with_its_reason_in_the_log(tmp_
 
 def test_the_record_is_given_the_head_the_guard_read_and_a_folder_beside_the_log(tmp_path, monkeypatch):
     _, log, seen, _ = review_once(tmp_path, monkeypatch)
-    assert seen["record_head"] == "h", "the guard's HEAD, read before the session"
+    assert seen["record_head"] == "headsha", "the guard's HEAD (not its branch), read before the session"
     assert seen["keep"] == f"{log}.staged" == auto.staged_copy(log)
+    assert seen["got"] == [], "the round's deferred signals, so a signal can stop prepare"
+    assert seen["unseen"] == [], "the guard's own unseen_changes, asked again just before record runs"
 
 
-def test_a_group_the_record_left_is_a_broken_rule(tmp_path, monkeypatch):
-    def record(worktree, run, out, head, keep):
+def test_the_record_asks_the_guards_own_snapshot_again(tmp_path, monkeypatch):
+    def guard(worktree):
+        return dataclasses.replace(fake_guard(tmp_path), files={".": ("dir", 0o40755)})
+
+    _, _, seen, worktree = review_once(tmp_path, monkeypatch, guard=guard)
+    assert len(seen["unseen"]) == 1 and seen["unseen"][0].startswith("1 path(s) in w changed during the session")
+
+
+def test_the_record_start_is_said_on_the_terminal(tmp_path, monkeypatch, capsys):
+    review_once(tmp_path, monkeypatch)
+    assert capsys.readouterr().err == ("rollout.sh: recording the review (scripts/review.sh prepare, then record, up to"
+                                       " 10 minutes each: an interrupt stops prepare, and waits for record to end)\n")
+
+
+def test_a_group_the_record_left_is_its_own_stop_since_it_may_have_recorded(tmp_path, monkeypatch, capsys):
+    def record(*args):
         raise auto.GroupLeft("what review.sh record left ...")
 
-    code, _, seen, _ = review_once(tmp_path, monkeypatch, record=record)
-    assert code == auto.SESSION_BROKE_A_RULE and seen["broke"] == ["what review.sh record left ..."]
+    code, log, seen, _ = review_once(tmp_path, monkeypatch, record=record)
+    assert code == auto.RECORD_LEFT and seen["broke"] == ["what review.sh record left ..."]
+    text = Path(log).read_text()
+    assert "rollout.sh: what review.sh record left ...\n" in text and "broke a rule" not in text
+    assert "what review.sh record left" not in capsys.readouterr().err, "no signal: the stop says it"
+
+    def interrupted(*args):
+        os.kill(os.getpid(), signal.SIGINT)
+        time.sleep(0.2)
+        raise auto.GroupLeft("what review.sh record left ...")
+
+    (tmp_path / "again").mkdir()
+    with pytest.raises(KeyboardInterrupt):
+        review_once(tmp_path / "again", monkeypatch, record=interrupted)
+    assert "rollout.sh: what review.sh record left ...\n" in capsys.readouterr().err, \
+        "the signal wins, and the person still hears of the group"
 
 
 def test_a_bug_while_recording_is_record_failed_with_its_traceback_and_the_signal_still_passed_on(tmp_path, monkeypatch):
-    def record(worktree, run, out, head, keep):
+    def record(*args):
         raise ValueError("a bug")
 
     code, log, seen, _ = review_once(tmp_path, monkeypatch, record=record)
     assert code == auto.RECORD_FAILED and seen["broke"] == []
     assert "rollout.sh: recording the review failed:\nTraceback" in Path(log).read_text()
 
-    def interrupted(worktree, run, out, head, keep):
+    def interrupted(*args):
         os.kill(os.getpid(), signal.SIGINT)
         time.sleep(0.2)
         raise ValueError("a bug")
@@ -661,7 +695,7 @@ def test_a_check_that_fails_is_a_broken_rule_not_a_crash(tmp_path, monkeypatch):
 
 
 def test_the_record_runs_with_the_signals_held_and_passes_one_on_after(tmp_path, monkeypatch):
-    def record(worktree, run, out, head, keep):
+    def record(worktree, run, out, *rest):
         os.kill(os.getpid(), signal.SIGINT)
         time.sleep(0.2)
         out.write("recorded whole\n")
@@ -835,8 +869,11 @@ def test_the_sandbox_and_session_lists_word_for_word():
     assert auto.NO_BUILD_SERVERS == {"MSBUILDDISABLENODEREUSE": "1", "DOTNET_CLI_USE_MSBUILD_SERVER": "0",
                                      "UseSharedCompilation": "false"}
     assert (auto.RECORD_BYTES, auto.STAGED_STATUSES) == (16 * 1024 * 1024, ("open", "dismissed"))
-    assert (auto.RECORD_FAILED, auto.NOTHING_STAGED, auto.RECORD_TIMEOUT_SECONDS, auto.SHOWN_CHARS) == (256, 257, 600, 120)
-    assert min(auto.RECORD_FAILED, auto.NOTHING_STAGED) > 255, "above every exit code, so a session's can't read as one"
+    assert (auto.RECORD_FAILED, auto.NOTHING_STAGED, auto.RECORD_LEFT, auto.RECORD_TIMEOUT_SECONDS, auto.SHOWN_CHARS,
+            auto.UNSEEN_SHOWN, auto.KEPT_HEAD_FILE) == (256, 257, 258, 600, 120, 3, "HEAD")
+    assert min(auto.RECORD_FAILED, auto.NOTHING_STAGED, auto.RECORD_LEFT) > 255, \
+        "above every exit code, so a session's can't read as one"
+    assert inspect.signature(auto.run_bounded).parameters["timeout"].default == auto.RECORD_TIMEOUT_SECONDS
     assert auto.SANDBOX_TOOLS == (("bwrap", "socat") if sys.platform.startswith("linux") else ())
     assert auto.TOOLS == ("git", "gh", "python3", "node", "pnpm", "shfmt", "claude")
     assert (auto.GROUP_WAIT_SECONDS, auto.SESSION_BROKE_A_RULE) == (10, 126)
@@ -1213,7 +1250,7 @@ def test_run_in_group_holds_a_second_signal_and_passes_the_first_on():
     assert stop.value.code == 128 + signal.SIGTERM and len(ended) == 1
 
 
-def test_run_in_group_that_cant_start_passes_a_signal_on_before_its_error():
+def test_run_in_group_that_cant_start_passes_a_signal_on_before_its_error(capsys):
     def popen(command, **kwargs):
         os.kill(os.getpid(), signal.SIGHUP)
         time.sleep(0.05)
@@ -1222,6 +1259,7 @@ def test_run_in_group_that_cant_start_passes_a_signal_on_before_its_error():
     with pytest.raises(SystemExit) as stop:
         auto.run_in_group(["x"], popen=popen)
     assert stop.value.code == 128 + signal.SIGHUP
+    assert capsys.readouterr().err == "", "only a group left behind is written as the signal wins"
     with pytest.raises(FileNotFoundError):
         auto.run_in_group(["/nonexistent/x"])
 
@@ -1455,8 +1493,9 @@ def test_a_session_that_kept_the_rules_broke_none(tmp_path):
 
 
 CHANGED = "{} changed during the session (its HEAD, its branch or its files): the session reviews only, so it commits and edits nothing"
-UNSEEN = ("{!a} changed during the session, though git status shows nothing (an ignored file, such as node_modules): the"
-          " round would run the worktree's scripts/review.sh after it, so nothing is run or recorded")
+UNSEEN = ("{} path(s) in {} changed during the session, which git status may not show (an ignored file, such as"
+          " node_modules): {}. The round's record and the gate on the push run the worktree's files as you, so nothing"
+          " is run or recorded")
 
 
 @pytest.mark.parametrize("how", ["commit", "edit", "new file", "branch moved", "checkout"])
@@ -1477,7 +1516,9 @@ def test_a_session_that_commits_or_edits_in_the_worktree_is_caught(tmp_path, how
     else:
         g.git(*wt, "checkout", "-q", "--detach")
         g.git(*wt, "commit", "-q", "--allow-empty", "-m", "elsewhere")
-    assert g.check(changes=lambda w: []) == [CHANGED.format(g.worktree)]
+    named = {"edit": "'README.md'", "new file": "'src.cs'"}.get(how)
+    assert g.check(changes=lambda w: []) == [CHANGED.format(g.worktree)] + (
+        [UNSEEN.format(1, g.worktree, named)] if named else []), "the snapshot names a file the status counts too"
 
 
 @pytest.mark.parametrize("failing, hint", [
@@ -1596,10 +1637,10 @@ def test_an_owned_file_edited_or_deleted_by_the_session_is_caught(tmp_path):
     g.guard()
     owned = "scripts/gate.sh is an Owned file and no longer the Template's: edit the Template, not the copy"
     (g.worktree / "scripts" / "gate.sh").write_text("gate, edited\n")
-    assert g.check() == [UNSEEN.format(str(g.worktree / "scripts" / "gate.sh")), owned], (
-        "an ignored file edited: the status reads the same, the ctime and the Owned check catch it")
+    assert g.check() == [owned, UNSEEN.format(1, g.worktree, "'scripts/gate.sh'")], (
+        "an ignored file edited: the status reads the same, the snapshot and the Owned check catch it")
     (g.worktree / "scripts" / "gate.sh").unlink()
-    assert g.check() == [CHANGED.format(g.worktree), owned]
+    assert g.check() == [CHANGED.format(g.worktree), owned, UNSEEN.format(1, g.worktree, "'scripts/gate.sh'")]
 
 
 def test_an_ignored_file_the_session_changed_is_caught(tmp_path):
@@ -1608,23 +1649,57 @@ def test_an_ignored_file_the_session_changed_is_caught(tmp_path):
     g = Guarded(tmp_path)
     (g.worktree / ".gitignore").write_text("node_modules/\n")
     (g.worktree / "node_modules" / ".bin").mkdir(parents=True)
-    (g.worktree / "node_modules" / ".bin" / "tsx").write_text("tsx\n")
+    for name in ("tsx", "a", "b", "c", "d"):
+        (g.worktree / "node_modules" / ".bin" / name).write_text(f"{name}\n")
     g.guard()
     assert g.check() == []
     (g.worktree / "node_modules" / ".bin" / "tsx").write_text("planted\n")
-    assert g.check() == [UNSEEN.format(str(g.worktree / "node_modules" / ".bin" / "tsx"))]
+    assert g.check() == [UNSEEN.format(1, g.worktree, "'node_modules/.bin/tsx'")]
+    for name in ("d", "c"):
+        (g.worktree / "node_modules" / ".bin" / name).write_text("planted\n")
+    assert g.check() == [UNSEEN.format(3, g.worktree, "'node_modules/.bin/c', 'node_modules/.bin/d',"
+                                       " 'node_modules/.bin/tsx'")], "three are named whole"
+    (g.worktree / "node_modules" / ".bin" / "b").write_text("planted\n")
+    assert g.check() == [UNSEEN.format(4, g.worktree, "'node_modules/.bin/b', 'node_modules/.bin/c',"
+                                       " 'node_modules/.bin/d' and 1 more")], "the first three, sorted, and how many more"
+    (g.worktree / "node_modules" / ".bin" / "a").write_text("planted\n")
+    assert g.check() == [UNSEEN.format(5, g.worktree, "'node_modules/.bin/a', 'node_modules/.bin/b',"
+                                       " 'node_modules/.bin/c' and 2 more")]
 
 
-@pytest.mark.parametrize("how", ["write", "chmod", "new file", "new folder", "remove", "rename", "symlink"])
-def test_changed_since_catches_every_kind_of_change_under_the_root(tmp_path, how):
+def test_a_hard_link_made_elsewhere_changes_nothing(tmp_path):
+    # pnpm hard-links node_modules files from its store: another project's install changes their link count and
+    # ctime, never their bytes.
+    root = tmp_path / "w"
+    (root / "node_modules").mkdir(parents=True)
+    (root / "node_modules" / "f").write_text("x")
+    before = auto.tree_state(str(root))
+    os.link(root / "node_modules" / "f", tmp_path / "elsewhere")
+    assert auto.tree_changes(before, auto.tree_state(str(root))) == []
+    (tmp_path / "elsewhere").unlink()
+    assert auto.tree_changes(before, auto.tree_state(str(root))) == []
+
+
+@pytest.mark.parametrize("how", ["write", "same size", "chmod", "new file", "new folder", "remove", "rename", "symlink",
+                                 "relink", "fifo", "fifo mode", "nested git", "root mode"])
+def test_tree_state_catches_every_kind_of_change_under_the_root(tmp_path, how):
     root = tmp_path / "w"
     (root / "a" / "b").mkdir(parents=True)
-    (root / "a" / "b" / "f").write_text("x")
-    (root / ".git").write_text("gitdir: x\n")
-    since = auto.change_mark()
-    assert auto.changed_since(str(root), since) == []
     f = root / "a" / "b" / "f"
+    f.write_text("x")
+    (root / "a" / "l").symlink_to("b")
+    (root / ".git").write_text("gitdir: x\n")
+    (root / "a" / ".git").write_text("a package's own\n")
+    os.mkfifo(root / "a" / "p", 0o600)
+    before = auto.tree_state(str(root))
+    assert auto.tree_changes(before, auto.tree_state(str(root))) == []
+    expected = {"write": ["a/b/f"], "same size": ["a/b/f"], "chmod": ["a/b/f"], "new file": ["a/b/g"],
+                "new folder": ["a/c"], "remove": ["a/b/f"], "rename": ["a/b/f", "a/b/h"], "symlink": ["a/b/l"],
+                "relink": ["a/l"], "fifo": ["a/b/f"], "fifo mode": ["a/p"], "nested git": ["a/.git"],
+                "root mode": ["."]}[how]
     if how == "write":
+        f.write_text("yy")
+    elif how == "same size":
         f.write_text("y")
     elif how == "chmod":
         f.chmod(0o700)
@@ -1636,19 +1711,88 @@ def test_changed_since_catches_every_kind_of_change_under_the_root(tmp_path, how
         f.unlink()
     elif how == "rename":
         f.rename(root / "a" / "b" / "h")
-    else:
+    elif how == "symlink":
         (root / "a" / "b" / "l").symlink_to("/etc/passwd")
-    assert auto.changed_since(str(root), since), how
+    elif how == "relink":
+        (root / "a" / "l").unlink()
+        (root / "a" / "l").symlink_to("/etc")
+    elif how == "fifo":
+        f.unlink()
+        os.mkfifo(f)
+    elif how == "fifo mode":
+        (root / "a" / "p").chmod(0o640)
+    elif how == "nested git":
+        (root / "a" / ".git").write_text("planted\n")
+    else:
+        root.chmod(0o755 if stat.S_IMODE(root.stat().st_mode) != 0o755 else 0o750)
+    assert auto.tree_changes(before, auto.tree_state(str(root))) == expected, how
 
 
-def test_changed_since_leaves_the_git_link_to_its_own_check_and_counts_what_cant_be_walked(tmp_path):
+def test_tree_state_leaves_the_git_link_to_its_own_check_and_never_follows_a_symlink(tmp_path):
+    root, outside = tmp_path / "w", tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    (outside / "f").write_text("x")
+    (root / "out").symlink_to(outside)
+    (root / ".git").write_text("gitdir: x\n")
+    before = auto.tree_state(str(root))
+    assert ".git" not in before and "out/f" not in before
+    (root / ".git").write_text("gitdir: y\n")
+    (outside / "f").write_text("y")
+    assert auto.tree_changes(before, auto.tree_state(str(root))) == [], "the .git link is broken_rules' own check"
+    assert auto.tree_state(str(tmp_path / "none")) == {".": None}
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a folder whatever its mode")
+def test_a_folder_that_cant_be_read_is_read_the_same_each_time_and_its_mode_still_counts(tmp_path):
     root = tmp_path / "w"
     (root / "locked").mkdir(parents=True)
-    (root / ".git").write_text("gitdir: x\n")
-    since = auto.change_mark()
-    (root / ".git").write_text("gitdir: y\n")
-    assert auto.changed_since(str(root), since) == [], "the .git link is broken_rules' own check"
-    assert auto.changed_since(str(tmp_path / "none"), since) == [str(tmp_path / "none")]
+    (root / "locked" / "f").write_text("x")
+    (root / "secret").write_text("x")
+    (root / "locked").chmod(0)
+    (root / "secret").chmod(0)
+    try:
+        before = auto.tree_state(str(root))
+        assert before["locked"] == ("dir", stat.S_IFDIR) and before["secret"][0] == "unread"
+        assert auto.tree_changes(before, auto.tree_state(str(root))) == [], "unreadable, but no change: no stop"
+        (root / "locked").chmod(0o700)
+        assert auto.tree_changes(before, auto.tree_state(str(root))) == ["locked", "locked/f"]
+    finally:
+        (root / "locked").chmod(0o700)
+        (root / "secret").chmod(0o600)
+
+
+@pytest.mark.parametrize("what", ["config", "config.worktree", "hooks", "info", "worktree config.worktree"])
+def test_a_change_to_the_clones_git_config_or_hooks_is_caught_and_no_git_runs(tmp_path, what):
+    g = Guarded(tmp_path)
+    (g.primary / ".git" / "hooks").mkdir(exist_ok=True)
+    g.guard()
+    assert g.check() == []
+    common, gitdir = g.primary / ".git", g.primary / ".git" / "worktrees" / "w"
+    if what == "config":
+        with open(common / "config", "a") as handle:
+            handle.write("[core]\n\tfsmonitor = /tmp/planted\n")
+    elif what == "config.worktree":
+        (common / "config.worktree").write_text("[core]\n\thooksPath = /tmp\n")
+    elif what == "hooks":
+        (common / "hooks" / "post-index-change").write_text("#!/bin/sh\n")
+    elif what == "info":
+        (common / "info").mkdir(exist_ok=True)
+        (common / "info" / "attributes").write_text("* diff=planted\n")
+    else:
+        (gitdir / "config.worktree").write_text("[core]\n\tfsmonitor = /tmp/planted\n")
+    g.reads.clear()
+    listed = []
+    broke = g.check(changes=lambda w: listed.append(w) or [])
+    assert broke[0].startswith(f"the clone's git {what} changed during the session (in {common}): git can run a"
+                               " command they name, so it wasn't run there after the session"), broke
+    assert g.reads == [] and listed == [], "neither the remote read nor the Owned list runs git there"
+
+
+def test_entry_state_reads_a_file_whole_in_chunks(tmp_path):
+    big = tmp_path / "big"
+    big.write_bytes(b"a" * (3 << 20) + b"b")
+    assert auto.entry_state(str(big))[2] == hashlib.sha256(b"a" * (3 << 20) + b"b").hexdigest()
 
 
 def test_an_owned_list_that_fails_after_the_session_is_a_stop(tmp_path):
@@ -1862,6 +2006,10 @@ def test_staged_findings_that_arent_a_small_regular_file_are_never_read(tmp_path
                                                      " writes"])
 
 
+def test_shown_cuts_a_text_just_past_its_length():
+    assert auto.shown("x" * 119) == "'" + "x" * 119 + "... (121 characters)"
+
+
 def test_shown_cuts_a_long_text_so_it_cant_flood_the_terminal():
     assert auto.shown("R1") == "'R1'"
     assert auto.shown("x" * 118) == "'" + "x" * 118 + "'", "120 characters, quotes included, are shown whole"
@@ -1875,7 +2023,7 @@ def test_a_staged_id_and_status_are_printed_escaped(tmp_path):
                      " open or dismissed, since it fixes nothing and only the person accepts"]
 
 
-HEAD = "h" * 40
+HEAD = "c" * 40
 KEY_AND_HEAD = "k" * 64 + "\n" + HEAD + "\n"
 
 
@@ -1910,7 +2058,7 @@ def recorded(tmp_path, findings, recorder, head=HEAD, out=None):
 def kept(tmp_path):
     folder = tmp_path / "log.staged"
     return (json.loads((folder / auto.STAGED_FILE).read_text()), stat.S_IMODE(folder.stat().st_mode),
-            stat.S_IMODE((folder / auto.STAGED_FILE).stat().st_mode))
+            stat.S_IMODE((folder / auto.STAGED_FILE).stat().st_mode), auto.kept_head(str(folder)))
 
 
 def test_the_round_records_what_the_session_staged_with_the_worktrees_own_review_script(tmp_path):
@@ -1929,6 +2077,7 @@ def test_the_round_records_what_the_session_staged_with_the_worktrees_own_review
     assert recorder.input == {"reviewedKey": "k" * 64, "reviewedHead": HEAD, "rounds": 1,
                               "reviewerAgent": "pre-push-reviewer"}
     assert recorder.staged == ([OPEN], 0o700, 0o600), "the copy is the person's own, as record wants it"
+    assert prepare_kwargs["got"] == () and "got" not in record_kwargs, "a signal can stop prepare, never record"
     assert not os.path.exists(record[4]), "the copy is gone after the record"
     assert "rollout.sh: recording the 1 finding(s) the session staged\nReview recorded.\n" in out.getvalue()
     assert not (tmp_path / "log.staged").exists(), "nothing is kept once it is recorded"
@@ -1961,12 +2110,14 @@ def test_a_findings_repeats_is_dropped_and_said(tmp_path):
     assert result == (0, [])
     assert recorder.staged[0] == [OPEN, {**OPEN, "id": "R2"}]
     assert "rollout.sh: 'R1''s repeats '0007' was dropped: the record matches the finding to a .security entry by its" \
-           " text alone\n" in out.getvalue()
+           " path and summary (case and spacing aside)\n" in out.getvalue()
 
 
-def test_findings_that_cant_be_written_again_break_a_rule(tmp_path, monkeypatch):
+@pytest.mark.parametrize("error", [RecursionError("maximum recursion depth exceeded while encoding a JSON object"),
+                                   ValueError("Exceeds the limit (4300 digits) for integer string conversion")])
+def test_findings_that_cant_be_written_again_break_a_rule(tmp_path, monkeypatch, error):
     def too_deep(value):
-        raise RecursionError("maximum recursion depth exceeded while encoding a JSON object")
+        raise error
 
     run = stage(tmp_path, [OPEN])
     monkeypatch.setattr(auto.json, "dumps", too_deep)
@@ -1980,8 +2131,8 @@ def failed_and_kept(tmp_path, out, why):
     assert out.getvalue().endswith(
         f"rollout.sh: {why}, so the review wasn't recorded\n"
         f"rollout.sh: what the session staged is kept in {tmp_path / 'log.staged'}; once what refused it is put right,"
-        f" record it with:\n  {auto.record_command('/w', str(tmp_path / 'log.staged'))}\n")
-    assert kept(tmp_path) == ([OPEN], 0o700, 0o600)
+        f" record it with:\n  {auto.record_command('/w', str(tmp_path / 'log.staged'), HEAD)}\n")
+    assert kept(tmp_path) == ([OPEN], 0o700, 0o600, HEAD)
 
 
 @pytest.mark.parametrize("prepare, lines", [((1, ""), 0), ((0, "only-one-line\n"), 1), ((0, "a\nb\nc\n"), 3),
@@ -2009,11 +2160,60 @@ def test_a_record_that_refuses_or_runs_past_its_time_is_record_failed_and_keeps_
     failed_and_kept(tmp_path, out, why)
 
 
-def test_findings_that_cant_be_kept_are_said_to_be_gone(tmp_path):
+def test_findings_that_cant_be_kept_are_said_to_be_gone_and_no_command_is_given(tmp_path):
     (tmp_path / "log.staged").mkdir()
     result, out = recorded(tmp_path, [OPEN], Recorder(record=1))
     assert result == (auto.RECORD_FAILED, [])
-    assert "rollout.sh: and what the session staged couldn't be kept ([Errno 17] File exists" in out.getvalue()
+    assert f"rollout.sh: what the session staged couldn't be kept in {tmp_path / 'log.staged'} ([Errno 17] File exists" \
+           in out.getvalue()
+    assert out.getvalue().endswith("rollout.sh: scripts/review.sh record exited 1, so the review wasn't recorded\n")
+
+
+def test_a_keep_holding_another_reviews_findings_gives_no_command(tmp_path):
+    auto.write_staged(str(tmp_path / "log.staged"), "[]", "a" * 40)
+    result, out = recorded(tmp_path, [OPEN], Recorder(record=1))
+    assert result == (auto.RECORD_FAILED, [])
+    assert out.getvalue().endswith("rollout.sh: scripts/review.sh record exited 1, so the review wasn't recorded\n")
+
+
+@pytest.mark.parametrize("error", [OSError(8, "Exec format error"), auto.GroupLeft("left"), ValueError("a bug")])
+def test_findings_are_kept_whatever_stops_the_record(tmp_path, error):
+    def bounded(command, **kwargs):
+        raise error
+
+    with pytest.raises(type(error)):
+        recorded(tmp_path, [OPEN], bounded)
+    assert kept(tmp_path) == ([OPEN], 0o700, 0o600, HEAD)
+
+
+def test_a_signal_during_prepare_stops_it_and_keeps_the_findings(tmp_path):
+    def bounded(command, **kwargs):
+        kwargs["got"].append(signal.SIGINT)
+        return None
+
+    got = []
+    out = io.StringIO()
+    result = auto.record_review("/w", stage(tmp_path, [OPEN]), out, HEAD, str(tmp_path / "log.staged"), got=got,
+                                bounded=bounded)
+    assert result == (auto.RECORD_FAILED, [])
+    failed_and_kept(tmp_path, out, "scripts/review.sh prepare was stopped by a signal")
+
+
+def test_a_change_the_unseen_check_finds_before_record_records_nothing(tmp_path):
+    recorder = Recorder()
+    out = io.StringIO()
+    result = auto.record_review("/w", stage(tmp_path, [OPEN]), out, HEAD, str(tmp_path / "log.staged"),
+                                unseen=lambda: ["node_modules changed"], bounded=recorder)
+    assert result == (auto.SESSION_BROKE_A_RULE, ["node_modules changed"])
+    assert [command[1] for command, _ in recorder.calls] == ["prepare"], "record never ran"
+
+
+def test_kept_head_reads_only_an_object_id(tmp_path):
+    assert auto.kept_head(str(tmp_path / "none")) is None
+    auto.write_staged(str(tmp_path / "k"), "[]", "a" * 40 + "\n")
+    assert auto.kept_head(str(tmp_path / "k")) == "a" * 40
+    auto.write_staged(str(tmp_path / "j"), "[]", "a; rm -rf ~")
+    assert auto.kept_head(str(tmp_path / "j")) is None
 
 
 def test_a_head_that_moved_since_the_guard_read_it_is_a_broken_rule_and_records_nothing(tmp_path):
@@ -2026,7 +2226,7 @@ def test_a_head_that_moved_since_the_guard_read_it_is_a_broken_rule_and_records_
 
 STUB = r"""#!/bin/sh
 case "$1" in
-prepare) echo "prepare's note" >&2; printf '%s\n%s\n' "$KEY" "$HEAD" ;;
+prepare) echo "prepare's note" >&2; pwd > "$CALLS/prepare.pwd"; printf '%s\n%s\n' "$KEY" "$HEAD" ;;
 record)
   cat > "$CALLS/input.json"
   printf '%s\n' "$@" > "$CALLS/argv"
@@ -2063,10 +2263,10 @@ def test_the_record_runs_a_real_review_script_in_a_group_of_its_own_and_logs_bot
     assert json.loads((calls / "input.json").read_text())["reviewedHead"] == HEAD
     assert json.loads((calls / "staged.json").read_text()) == [OPEN]
     assert wait_gone(read_pid(calls / "left.pid")), "what record left in its group is killed with it"
+    assert (calls / "prepare.pwd").read_text().strip() == str(worktree), "prepare runs in the worktree"
 
 
-@needs_proc
-def test_the_command_kept_findings_are_recorded_with_works(tmp_path, monkeypatch):
+def test_the_kept_findings_record_with_the_command_given_only_at_the_head_reviewed(tmp_path, monkeypatch):
     worktree, calls = tmp_path / "w t", tmp_path / "calls"
     (worktree / "scripts").mkdir(parents=True)
     calls.mkdir()
@@ -2076,12 +2276,17 @@ def test_the_command_kept_findings_are_recorded_with_works(tmp_path, monkeypatch
     monkeypatch.setenv("KEY", "k" * 64)
     monkeypatch.setenv("HEAD", HEAD)
     monkeypatch.setenv("CALLS", str(calls))
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
     keep = tmp_path / "kept it"
     auto.write_staged(str(keep), json.dumps([OPEN]))
-    subprocess.run(["sh", "-c", auto.record_command(str(worktree), str(keep))], check=True, capture_output=True)
+    moved = subprocess.run(["sh", "-c", auto.record_command(str(worktree), str(keep), "a" * 40)], capture_output=True)
+    assert moved.returncode != 0 and not (calls / "input.json").exists(), "a HEAD other than the reviewed one records nothing"
+    subprocess.run(["sh", "-c", auto.record_command(str(worktree), str(keep), HEAD) + "; pwd > \"$CALLS/pwd\""],
+                   check=True, capture_output=True)
     assert json.loads((calls / "input.json").read_text()) == {"reviewedKey": "k" * 64, "reviewedHead": HEAD, "rounds": 1,
                                                              "reviewerAgent": "pre-push-reviewer"}
     assert (calls / "argv").read_text().split("\n")[:4] == ["record", "-", "--staged", str(keep)]
+    assert (calls / "pwd").read_text().strip() == str(worktree), "it runs in the worktree"
 
 
 @needs_proc
@@ -2102,9 +2307,10 @@ def test_a_bounded_command_runs_in_its_own_group_holding_the_lock_and_a_group_it
 
     monkeypatch.setattr(auto, "LOCK_FDS", [42])
     with pytest.raises(auto.GroupLeft) as left:
-        auto.run_bounded(["/w/scripts/review.sh", "record"], cwd="/w", stdin=None, stdout=None, stderr=None,
+        auto.run_bounded(["/w/scripts/review.sh", "record"], cwd="/w", stdin="in", stdout="out", stderr="err",
                          popen=popen, end=lambda child: False)
-    assert seen["start_new_session"] is True and seen["pass_fds"] == (42,)
+    assert seen == {"cwd": "/w", "stdin": "in", "stdout": "out", "stderr": "err", "start_new_session": True,
+                    "pass_fds": (42,)}
     assert str(left.value) == ("what review.sh record left in its process group was still there 10 s after it was"
                                " killed, and may still write the review ledgers and .security: see it with pgrep -l -g"
                                f" {FakeSession().pid}, and end it with pkill -KILL -g {FakeSession().pid}, before you"
@@ -2608,9 +2814,8 @@ def test_auto_reviews_a_second_time_when_the_first_session_left_no_record():
     (124, "ran past 180 minutes and was stopped"),
     (127, "couldn't be started (the log's rollout.sh: line says why)"),
     (1, "exited 1"),
-    (auto.RECORD_FAILED, "staged findings the round couldn't record (scripts/review.sh prepare or record failed; the log"
-                         " says why, and how to record them from /tmp/review-TicketManager.log.staged once it is put"
-                         " right)"),
+    (auto.RECORD_FAILED, "staged findings the round couldn't record (scripts/review.sh prepare or record failed, or the"
+                         " round did; the log says why)"),
     (auto.NOTHING_STAGED, "exited 0 having staged no findings, not even [], so no review was recorded"),
     (125, "exited 125"),
     (3, "exited 3"),
@@ -2621,7 +2826,38 @@ def test_auto_stops_when_a_review_session_fails_and_says_what_to_do(exit_code, w
     assert code == 1
     assert len(reapplied(fleet)) == 1
     assert (f"TicketManager: the review session {why} (see /tmp/review-TicketManager.log); run /pre-push-review in"
-            " /r/TicketManager-worktrees/chore-reapply-baseline, then resume") in out
+            " /r/TicketManager-worktrees/chore-reapply-baseline, then resume.") in out
+    assert "What the session staged is kept" not in out, "nothing is kept: no command"
+
+
+def drive_once(tmp_path, code, broke=(), head=HEAD):
+    log = tmp_path / "review.log"
+    if head is not None:
+        auto.write_staged(auto.staged_copy(str(log)), "[]", head)
+    said = []
+    outcome = auto.drive(TM, "/r/TicketManager", "#82", lambda brings, path: auto.REVIEW_NEEDED,
+                         lambda repo, worktree: (code, str(log), list(broke)), said.append)
+    return outcome, auto.staged_copy(str(log))
+
+
+def test_a_stop_with_findings_kept_prints_the_command_that_records_them(tmp_path):
+    outcome, keep = drive_once(tmp_path, auto.RECORD_FAILED)
+    command = auto.record_command("/r/TicketManager-worktrees/chore-reapply-baseline", keep, HEAD)
+    assert outcome.status == "failed" and outcome.detail.endswith(
+        f"then resume. What the session staged is kept in {keep}; record it, once that is put right, with: {command}")
+    (tmp_path / "none").mkdir()
+    outcome, _ = drive_once(tmp_path / "none", auto.RECORD_FAILED, head=None)
+    assert outcome.detail.endswith("then resume."), "nothing kept, so no command"
+
+
+def test_a_group_the_record_left_stops_for_the_person_saying_it_may_have_recorded(tmp_path):
+    outcome, keep = drive_once(tmp_path, auto.RECORD_LEFT, broke=["what review.sh record left in its process group"])
+    here = "/r/TicketManager-worktrees/chore-reapply-baseline"
+    assert outcome.status == "person"
+    assert outcome.detail.startswith("the round's record of the review didn't end cleanly: what review.sh record left in"
+                                     " its process group. Whether the review was recorded can't be told: cd"
+                                     f" {here} && scripts/review.sh report shows it")
+    assert f"record it, once that is put right, with: {auto.record_command(here, keep, HEAD)}" in outcome.detail
 
 
 def test_auto_holds_the_rest_when_ticketmanagers_pr_does_not_land():
