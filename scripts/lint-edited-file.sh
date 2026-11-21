@@ -26,10 +26,13 @@
 # differently). Neither tool runs code from the repository, and shfmt reads only .editorconfig. A shellcheck config could let it open
 # the files a source line names (external-sources) and, with check-sourced, quote their lines back to the agent. So SHELLCHECK_OPTS is
 # cleared (it could pass --check-sourced), and shellcheck never looks for a config itself: the hook reads the one shellcheck would use
-# from the repository and hands it a private copy (--rcfile), or --norc when the repository has none, so no config above the
-# repository root, or one swapped in after the check, is read. shellcheck is not run while a config on the file's path is a symlink,
-# not a regular file, unreadable, or names external-sources or check-sourced (see sc_config_refused); the person is told, and the gate
-# still checks the file.
+# from the repository and hands it a private copy (--rcfile, written with mktemp under an absolute TMPDIR and removed with rm), or
+# --norc when the repository has none, so no config above the repository root, or one swapped in after the check, is read.
+# ShellCheck is not run while a config on the file's path is a symlink, not a regular file, unreadable, names external-sources or
+# check-sourced, or holds a line other than a blank, a comment or one of the keys disable, enable, source-path, shell and
+# extended-analysis (see sc_config_refused), or while the private copy can't be made (mktemp missing or failing, a relative TMPDIR, a
+# failed write): the person is told, and the gate still checks the file. A hook under a nested .github/hooks whose .editorconfig can't
+# be read is not linted either, and the person is told.
 #
 # Only files in the project's own checkout, or in a linked worktree that checkout lists in `git worktree list`, are linted
 # (CLAUDE_PROJECT_DIR, which Claude Code sets and which is required). A file in another clone, in a directory that merely
@@ -47,10 +50,12 @@
 #
 # Exit 0: the file is clean, is missing, is not Markdown, YAML or shell, is not in the project, is Markdown under a markdownlint config the
 # hook won't run (above), a linter for it is not installed or is found only where the hook runs nothing from (above), shfmt is
-# another release or its --version fails, or shellcheck is not run under a shellcheck config (above) (this hook only helps; the gate
-# still checks, and the commit hook and CI where they lint that kind of file). A violation wins: when a linter reports one, the hook
-# exits 2 with the report alone, and a note about a linter that was not run comes with the next edit of the file that finds none. That config, and a skipped linter, are reported as a systemMessage on stdout, which
-# Claude Code shows to the person. Exit 2: a linter reported a violation; its output goes to stderr, which Claude Code feeds
+# another release or its --version fails, shellcheck is not run under a shellcheck config or without a private copy of it, or a
+# nested hook's .editorconfig can't be read (above) (this hook only helps; the gate still checks, and the commit hook and CI where
+# they lint that kind of file). Each of these, and a skipped linter, is reported as a systemMessage on stdout, which Claude Code shows
+# to the person; a missing mktemp or rm costs only the shellcheck run, unlike a missing python3 or git (exit 1, below). A violation
+# wins: when a linter reports one, the hook exits 2 with the report alone, and a note about a linter that was not run comes with the
+# next edit of the file that finds none. Exit 2: a linter reported a violation; its output goes to stderr, which Claude Code feeds
 # back to the agent. Exit 1: the hook could not run (CLAUDE_PROJECT_DIR unset, or a git file of the project's checkouts longer than any
 # that names a folder, both for any edit, since they are checked before the input is read; python3 missing or found only where the
 # hook runs nothing from, bad JSON, or, for a Markdown, YAML or shell file, git missing, found only where the hook runs nothing from, or
@@ -320,18 +325,24 @@ hook_name() {
 }
 # styles_hooks <.editorconfig>: 0 when the file is a regular file, not a symlink, with a [.github/hooks/*] section header, read as an
 # editorconfig parser reads one: a byte-order mark before the first line, and blanks around it (a CRLF line's CR among them), don't count.
+# A line longer than STYLES_LINE_MAX characters is no section header and is passed over untrimmed, since trimming one is slow. 2 when
+# the file is a regular file that can't be read; 1 otherwise.
+STYLES_LINE_MAX=4096
 styles_hooks() {
   local LC_ALL=C line first=1
   [[ -f "$1" && ! -L "$1" ]] || return 1
+  [[ -r "$1" ]] || return 2
   while IFS= read -r line || [[ -n "$line" ]]; do
     if ((first)); then
       line="${line#$'\xEF\xBB\xBF'}"
       first=0
     fi
+    ((${#line} <= STYLES_LINE_MAX)) || continue
     line="${line#"${line%%[![:space:]]*}"}"
     line="${line%"${line##*[![:space:]]}"}"
     [[ "$line" != '[.github/hooks/*]' ]] || return 0
-  done < "$1"
+    # Defensive: -r is checked above, so only a file made unreadable after that check fails here, and quietly.
+  done 2> /dev/null < "$1"
   return 1
 }
 # A shell file is linted only where the gate checks it (the header has the rule), and formatted only where .editorconfig styles it.
@@ -345,7 +356,18 @@ if [[ "$kind" == shell ]]; then
       # A hook name the gate knows, in the root's .github/hooks or in one under a folder whose .editorconfig styles it.
       hook_name "$name" || exit 0
       if [[ "$hooks" != .github/hooks ]]; then
-        [[ "$hooks" == */.github/hooks ]] && styles_hooks "$root/${hooks%/.github/hooks}/.editorconfig" || exit 0
+        [[ "$hooks" == */.github/hooks ]] || exit 0
+        styled="${hooks%/.github/hooks}/.editorconfig"
+        styles_hooks "$root/$styled"
+        case $? in
+          0) ;;
+          2)
+            python3 -I -c 'import json, sys; print(json.dumps({"systemMessage": sys.argv[1]}))' \
+              "lint-edited-file.sh: $rel was not linted: $styled, which says whether its hooks are shell files the gate formats, could not be read (the gate still checks the repository's own hooks before the push)."
+            exit 0
+            ;;
+          *) exit 0 ;;
+        esac
       fi
       shell_format=1
       ;;
@@ -467,9 +489,20 @@ print("-" if key is None else json.dumps(key))' "$path" 2> /dev/null || true)"
 # looks for one itself. 0, with sc_rc_path and sc_rc_why set, for the first the hook won't hand over: a symlink or not a regular file (it
 # could be any file, read as a config), one that can't be read (what it turns on is unknown), or one that names external-sources (which
 # lets shellcheck open the files a source line names) or check-sourced (which quotes their lines in the report the agent reads), in any
-# case, a comment included. 1 otherwise, with sc_rc_found 1 and sc_rc_text the nearest one's text, or sc_rc_found 0 when there is none. A
-# config above the repository root, or the person's own in their home, is not read: shellcheck gets --norc then, and the gate reads it.
-sc_rc_path="" sc_rc_why="" sc_rc_text="" sc_rc_found=0
+# case, a comment included), or one with a line other than a blank, a comment or one of the keys sc_keys_known names: a key this hook
+# doesn't know could be a later shellcheck's way to turn either on. 1 otherwise, with sc_rc_found 1 and sc_rc_text and sc_rc_near the
+# nearest one's text and path, or sc_rc_found 0 when there is none. A config above the repository root, or the person's own in their
+# home, is not read: shellcheck gets --norc then, and the gate reads it.
+sc_rc_path="" sc_rc_why="" sc_rc_text="" sc_rc_near="" sc_rc_found=0
+# sc_keys_known <text>: 0 when every line of a shellcheck config is blank, a comment, or sets one of the keys that open no other file
+# and quote nothing (disable, enable, source-path, shell, extended-analysis). A key's spelling is matched as shellcheck reads it, at the
+# start of the line, before its =; a CRLF line's CR is a blank, so a blank or comment line with one still counts.
+sc_keys_known() {
+  local LC_ALL=C line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^[[:space:]]*(#|$) || "$line" =~ ^[[:space:]]*(disable|enable|source-path|shell|extended-analysis)[[:space:]]*= ]] || return 1
+  done <<< "$1"
+}
 sc_config_refused() {
   local at="$dir" rc path text
   while :; do
@@ -489,9 +522,14 @@ sc_config_refused() {
         sc_rc_why="names external-sources or check-sourced, which could show this hook's output the lines of other files"
         return 0
       fi
+      if ! sc_keys_known "$text"; then
+        sc_rc_why="sets a key other than disable, enable, source-path, shell and extended-analysis, which this hook doesn't hand to shellcheck"
+        return 0
+      fi
       if ((! sc_rc_found)); then
         sc_rc_found=1
         sc_rc_text="$text"
+        sc_rc_near="$sc_rc_path"
       fi
     done
     [[ "$at" != "$root" ]] || return 1
@@ -500,7 +538,7 @@ sc_config_refused() {
 }
 # The private copy of the config shellcheck is handed, removed however the hook ends.
 rc_copy=""
-trap '[[ -z "$rc_copy" ]] || rm -f -- "$rc_copy"' EXIT
+trap '[[ -z "$rc_copy" ]] || rm -f -- "$rc_copy" 2> /dev/null' EXIT
 
 if [[ "$kind" == markdown ]]; then
   path_bin markdownlint-cli2 bin
@@ -521,10 +559,16 @@ elif [[ "$kind" == shell ]]; then
     notes+=("shellcheck was not run: its config $sc_rc_path $sc_rc_why")
   elif ((! sc_rc_found)); then
     run_linter shellcheck "$bin" --norc -- "$target"
-  elif rc_copy="$(mktemp 2> /dev/null)" && [[ -n "$rc_copy" ]] && printf '%s\n' "$sc_rc_text" > "$rc_copy"; then
-    run_linter shellcheck "$bin" --rcfile "$rc_copy" -- "$target"
+  elif ! rc_copy="$(mktemp 2> /dev/null)" || [[ -z "$rc_copy" ]]; then
+    rc_copy=""
+    notes+=("shellcheck was not run: the hook could not create a private copy of its config $sc_rc_near (mktemp failed)")
+  elif [[ "$rc_copy" != /* ]]; then
+    # ShellCheck runs from the repository root, where a relative path names another file, and a copy beside the project could be swapped.
+    notes+=("shellcheck was not run: TMPDIR is not an absolute path, so the hook made no private copy of its config $sc_rc_near")
+  elif ! printf '%s\n' "$sc_rc_text" 2> /dev/null > "$rc_copy"; then
+    notes+=("shellcheck was not run: the hook could not write a private copy of its config $sc_rc_near")
   else
-    notes+=("shellcheck was not run: the hook could not write a private copy of its config $sc_rc_path (mktemp failed)")
+    run_linter shellcheck "$bin" --rcfile "$rc_copy" -- "$target"
   fi
   if ((shell_format)); then
     path_bin shfmt bin

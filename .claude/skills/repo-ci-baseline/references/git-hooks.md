@@ -225,9 +225,12 @@ shellcheck still runs). On a shfmt failure the report adds the `shfmt -w` comman
 syntax error. Neither tool runs code from the repository, and shfmt reads only `.editorconfig`. shellcheck reads its `.shellcheckrc`, and `external-sources` there lets it open the files a
 `source` line names; `--check-sourced` would then quote their lines in the report the agent reads. So the hook clears `SHELLCHECK_OPTS`, and shellcheck never looks for a config itself:
 the hook reads the `.shellcheckrc` or `shellcheckrc` on the file's path (its folder and each one above it, up to the repository root, in the order shellcheck looks) and hands shellcheck a
-private copy of the nearest one (`--rcfile`, written with `mktemp` and removed after), or `--norc` when there is none. A config above the repository root, or the person's own in their home,
-is not read at edit time; the gate reads it. shellcheck is not run while a config on the path is a symlink, not a regular file, unreadable, or names `external-sources` or `check-sourced`
-in any case, or when no private copy can be written: the note names the config and why, and the gate still checks the file. A violation wins over a note: the hook exits 2 with the
+private copy of the nearest one (`--rcfile`, written with `mktemp` under an absolute `TMPDIR` and removed with `rm` however the hook ends), or `--norc` when there is none. A config above
+the repository root, or the person's own in their home, is not read at edit time; the gate reads it. shellcheck is not run while a config on the path is a symlink, not a regular file,
+unreadable, names `external-sources` or `check-sourced` in any case, or holds a line other than a blank, a comment or one of the keys `disable`, `enable`, `source-path`, `shell` and
+`extended-analysis` (an allow-list, so a key a later shellcheck adds can't slip past), or when the private copy can't be made (`mktemp` missing or failing, a relative `TMPDIR`, a failed
+write): the note names the config and why, and the gate still checks the file. A missing `mktemp` or `rm` costs only that shellcheck run. A hook under a nested `.github/hooks` whose
+`.editorconfig` can't be read is not linted, with a note; a line of it longer than 4,096 characters is no section header. A violation wins over a note: the hook exits 2 with the
 report alone. `test.sh` checks that the hook's hook-name rule is the gate's and the Lint Actions shellcheck job's, and that its shfmt
 release rule is the gate's and its own.
 The hook sees only those tools' writes: a file an agent writes through Bash (a heredoc, `sed -i`, a script) is not linted until the pre-commit hook (Markdown only), the gate or CI,

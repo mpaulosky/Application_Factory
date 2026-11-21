@@ -73,7 +73,8 @@ is named in the `systemMessage`. Neither tool runs code from the repository, and
 opens the files a `source` line names, and `--check-sourced` quotes their lines in the report the agent reads, a way round what the person's settings deny Claude. So the hook clears
 `SHELLCHECK_OPTS`, reads the configs between the file and the repository root itself, and hands shellcheck a private copy of the nearest (`--rcfile`), or `--norc` when there is none:
 shellcheck never looks for one, so a config above the root, or one swapped in after the check, is never read. It doesn't run shellcheck under a config that is a symlink, not a
-regular file, unreadable, or names `external-sources` or `check-sourced`; the note says so. Plain `--norc` alone was not chosen: a repo's own `disable=` lines would then fail files
+regular file, unreadable, names `external-sources` or `check-sourced`, or sets a key outside an allow-list (`disable`, `enable`, `source-path`, `shell`, `extended-analysis`), nor
+when the private copy can't be made (a relative `TMPDIR` among the causes); the note says so. Plain `--norc` alone was not chosen: a repo's own `disable=` lines would then fail files
 its gate passes, and the copy keeps them. `test.sh` keeps the hook's hook-name and shfmt release rules equal to
 the gate's. The report's first line now says only that the gate checks the same file before the push, which is true of every kind; the pre-commit hook lints only Markdown, and an
 Application's CI doesn't check shell format.

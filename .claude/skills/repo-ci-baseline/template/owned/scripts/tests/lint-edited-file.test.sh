@@ -697,6 +697,37 @@ p=()
 [[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_empty || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
 check "a symlinked .editorconfig is not read, so the hooks under it are left alone" ${p[@]+"${p[@]}"}
 rm "$repo/pkg/.editorconfig"
+# One that can't be read: nothing on stderr, and the note names it (root reads it anyway, so there the case can't be made).
+printf '[.github/hooks/*]\n' > "$repo/pkg/.editorconfig"
+chmod 000 "$repo/pkg/.editorconfig"
+if [[ -r "$repo/pkg/.editorconfig" ]]; then
+  echo "skip - a mode-000 file is still readable here (root), so an unreadable .editorconfig can't be made"
+else
+  run_hook "$(edit_json "$repo/pkg/.github/hooks/pre-push")"
+  p=()
+  [[ $STATUS -eq 0 && -z "$STDERR" ]] && log_empty || p+=("exit $STATUS, stderr: $STDERR, log: $(cat "$LOG")")
+  [[ "$(system_message "$STDOUT")" == "lint-edited-file.sh: pkg/.github/hooks/pre-push was not linted: pkg/.editorconfig, which says whether its hooks are shell files the gate formats, could not be read (the gate still checks the repository's own hooks before the push)." ]] \
+    || p+=("note: $STDOUT")
+  check "a hook under a folder whose .editorconfig can't be read is not linted, and the note says why" ${p[@]+"${p[@]}"}
+fi
+chmod 644 "$repo/pkg/.editorconfig"
+# A line longer than 4096 characters is no section header: one of 4096 (blanks, then the header) still names it, one of 4097 doesn't,
+# and a line of a million blanks is passed over at once.
+for case in "4096|styled" "4097|unstyled" "1000000|unstyled"; do
+  n="${case%|*}"
+  printf '%*s[.github/hooks/*]\n' $((n - 17)) '' > "$repo/pkg/.editorconfig"
+  start=$SECONDS
+  run_hook "$(edit_json "$repo/pkg/.github/hooks/pre-push")"
+  p=()
+  if [[ "${case#*|}" == styled ]]; then
+    [[ $STATUS -eq 2 ]] && sh_both pkg/.github/hooks/pre-push || p+=("exit $STATUS, log: $(cat "$LOG")")
+  else
+    [[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_empty || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+  fi
+  ((SECONDS - start < 10)) || p+=("took $((SECONDS - start)) s")
+  check "a header line of $n characters is ${case#*|} for the hooks under it, read in under 10 s" ${p[@]+"${p[@]}"}
+done
+rm "$repo/pkg/.editorconfig"
 
 printf 'BAD\n' > "$repo/-dash.sh"
 run_hook "$(edit_json "$repo/-dash.sh")"
@@ -876,14 +907,65 @@ p=()
 log_line "RCFILE disable=SC3000|" || p+=("shellcheckrc in scripts/ did not win over the root's: $(cat "$LOG")")
 check "a shellcheckrc in the file's folder wins over the root's .shellcheckrc" ${p[@]+"${p[@]}"}
 rm "$repo/scripts/shellcheckrc"
-# Where no private copy can be written (mktemp fails), shellcheck is not run under the config, and the note says so.
-RUN_ENV=(TMPDIR="$WORK/no-such-tmp")
-run_hook "$(edit_json "$repo/scripts/ok.sh")"
+# Where no private copy can be made, shellcheck is not run under the config, and the note names the config it would have copied: the
+# nearest (scripts/.shellcheckrc here, with the root's above it). mktemp failing, a relative TMPDIR (shellcheck runs from the repository
+# root, where that path names another file) and a failed write each say so.
+printf 'disable=SC1000\n' > "$repo/scripts/.shellcheckrc"
+mkdir -p "$WORK/cwd/reltmp" "$WORK/dirtmp/copy-is-a-folder"
+FAKE_MKTEMP="$WORK/fake-mktemp"
+mkdir -p "$FAKE_MKTEMP"
+printf '#!/bin/sh\necho "%s"\n' "$WORK/dirtmp/copy-is-a-folder" > "$FAKE_MKTEMP/mktemp"
+chmod +x "$FAKE_MKTEMP/mktemp"
+for case in "TMPDIR=$WORK/no-such-tmp|$STUBS:$TOOLS|the hook could not create a private copy of its config scripts/.shellcheckrc (mktemp failed)" \
+  "TMPDIR=reltmp|$STUBS:$TOOLS|TMPDIR is not an absolute path, so the hook made no private copy of its config scripts/.shellcheckrc" \
+  "RUN_ENV_UNUSED=1|$FAKE_MKTEMP:$STUBS:$TOOLS|the hook could not write a private copy of its config scripts/.shellcheckrc"; do
+  IFS='|' read -r setting path_for want <<< "$case"
+  RUN_ENV=("$setting")
+  run_hook "$(edit_json "$repo/scripts/ok.sh")" "$path_for"
+  RUN_ENV=(RUN_ENV_UNUSED=1)
+  p=()
+  [[ $STATUS -eq 0 && -z "$STDERR" && "$(ran shellcheck)" == 0 && "$(ran shfmt)" == 1 ]] || p+=("exit $STATUS, stderr: $STDERR, log: $(cat "$LOG")")
+  [[ "$(system_message "$STDOUT")" == *"shellcheck was not run: $want (the gate"* ]] || p+=("note: $STDOUT")
+  check "with $setting${path_for%%:*}, shellcheck is not run and the note names the nearest config" ${p[@]+"${p[@]}"}
+done
+p=()
+[[ -z "$(ls -A "$WORK/cwd/reltmp")" ]] || p+=("left: $(ls -A "$WORK/cwd/reltmp")")
+check "the copy made under a relative TMPDIR is removed" ${p[@]+"${p[@]}"}
+p=()
+[[ -d "$WORK/dirtmp/copy-is-a-folder" ]] || p+=("the folder is gone")
+check "a copy path that can't be written to is left as it was" ${p[@]+"${p[@]}"}
+# The copy is removed however the hook ends: on a violation (exit 2) too.
+RUN_ENV=(TMPDIR="$WORK/rctmp")
+run_hook "$(edit_json "$repo/scripts/bad.sh")"
 RUN_ENV=(RUN_ENV_UNUSED=1)
 p=()
-[[ $STATUS -eq 0 && "$(ran shellcheck)" == 0 && "$(ran shfmt)" == 1 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
-[[ "$(system_message "$STDOUT")" == *"shellcheck was not run: the hook could not write a private copy of its config .shellcheckrc (mktemp failed)"* ]] || p+=("note: $STDOUT")
-check "when no private copy of the config can be written, shellcheck is not run and the note says why" ${p[@]+"${p[@]}"}
+[[ $STATUS -eq 2 ]] && log_line "RCFILE disable=SC1000|" || p+=("exit $STATUS, log: $(cat "$LOG")")
+[[ -z "$(ls -A "$WORK/rctmp")" ]] || p+=("the copy was left behind: $(ls -A "$WORK/rctmp")")
+check "the private copy is removed when the hook exits 2" ${p[@]+"${p[@]}"}
+# A config farther up that the hook won't hand over keeps shellcheck from running, though a nearer one is fine.
+printf 'external-sources=true\n' > "$repo/.shellcheckrc"
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+p=()
+[[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"shellcheck was not run: its config .shellcheckrc names external-sources"* ]] || p+=("log: $(cat "$LOG"), note: $STDOUT")
+check "a refused config farther up the path keeps shellcheck from running, though a nearer one is fine" ${p[@]+"${p[@]}"}
+rm "$repo/scripts/.shellcheckrc" "$repo/.shellcheckrc"
+# The keys handed over: blanks, comments and disable, enable, source-path, shell and extended-analysis, a CRLF line among them. Any other
+# key, however spelled (a later shellcheck's, a typo, a BOM before it), keeps shellcheck from running.
+printf '# tuned\n\ndisable=SC2086\r\n  enable = require-variable-braces\nsource-path=SCRIPTDIR\nshell=bash\nextended-analysis=false\n' > "$repo/.shellcheckrc"
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" && "$(ran shellcheck)" == 1 ]] || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+check "a config of blanks, comments and the five known keys is handed to shellcheck" ${p[@]+"${p[@]}"}
+for text in 'severity=error' 'external=true' 'disable=SC2086\nexternal_sources=true' '\xef\xbb\xbfdisable=SC2086' 'disable'; do
+  # shellcheck disable=SC2059 # the case is the escaped file content, written as printf reads it
+  printf "$text\n" > "$repo/.shellcheckrc"
+  run_hook "$(edit_json "$repo/scripts/ok.sh")"
+  p=()
+  [[ $STATUS -eq 0 && "$(ran shellcheck)" == 0 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
+  [[ "$(system_message "$STDOUT")" == *"shellcheck was not run: its config .shellcheckrc sets a key other than disable, enable, source-path, shell and extended-analysis, which this hook doesn't hand to shellcheck"* ]] \
+    || p+=("note: $STDOUT")
+  check "a config holding '$text' keeps shellcheck from running" ${p[@]+"${p[@]}"}
+done
 rm "$repo/.shellcheckrc"
 # A config above the repository root is never read: the walk stops at the root, and shellcheck gets --norc, so it doesn't find that one itself.
 printf 'external-sources=true\n' > "$WORK/.shellcheckrc"
@@ -892,7 +974,7 @@ p=()
 [[ $STATUS -eq 0 && -z "$OUTPUT" ]] && sh_both scripts/ok.sh || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
 check "a config above the repository root is not read, and shellcheck is run with --norc" ${p[@]+"${p[@]}"}
 rm "$WORK/.shellcheckrc"
-# Two notes, and a missing linter, are joined with "; ".
+# Two notes (a refused shellcheck config and an old shfmt) are joined with "; ".
 printf 'external-sources=true\n' > "$repo/.shellcheckrc"
 RUN_ENV=(SHFMT_STUB_VERSION=v3.13.0)
 run_hook "$(edit_json "$repo/scripts/ok.sh")"
@@ -1914,15 +1996,22 @@ if PATH="$REAL_PATH" shellcheck --version > /dev/null 2>&1 \
   [[ "$(system_message "$STDOUT")" == *"shellcheck was not run: its config .shellcheckrc names external-sources or check-sourced"* ]] || p+=("note: $STDOUT")
   check "shellcheck itself: a config naming external-sources keeps it from running" ${p[@]+"${p[@]}"}
   rm "$realsh/.shellcheckrc"
-  # One above the repository root is never read: shellcheck gets --norc, so it neither follows the source line nor stays quiet about $1.
-  printf 'external-sources=true\n' > "$WORK/.shellcheckrc"
-  RUN_ENV=(SHELLCHECK_OPTS="-x -a")
-  run_hook "$(edit_json "$realsh/scripts/sources-bad.sh")" "$REAL_PATH" "$realsh"
-  RUN_ENV=(RUN_ENV_UNUSED=1)
+  # One above the repository root is never read: shellcheck gets --norc, so its disable=SC2086 doesn't quiet the unquoted $1 (and HOME is
+  # $WORK here, so the same file stands for the person's own config too).
+  printf 'disable=SC2086\n' > "$WORK/.shellcheckrc"
+  run_hook "$(edit_json "$realsh/scripts/unquoted.sh")" "$REAL_PATH" "$realsh"
   p=()
-  [[ $STATUS -eq 2 && "$STDERR" == *SC2086* && "$OUTPUT" != *SENTINEL_LINE* ]] || p+=("exit $STATUS, output: $OUTPUT")
+  [[ $STATUS -eq 2 && "$STDERR" == *SC2086* ]] || p+=("exit $STATUS, output: $OUTPUT")
   check "shellcheck itself: a config above the repository root is not read" ${p[@]+"${p[@]}"}
-  rm "$WORK/.shellcheckrc"
+  # And with a config in the repository, the private copy is the only one read: the one above (enable=all, which would add findings on
+  # the unquoted $1) is not.
+  printf 'enable=all\n' > "$WORK/.shellcheckrc"
+  printf 'disable=SC2086\n' > "$realsh/.shellcheckrc"
+  run_hook "$(edit_json "$realsh/scripts/unquoted.sh")" "$REAL_PATH" "$realsh"
+  p=()
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+  check "shellcheck itself: with --rcfile, only the private copy is read" ${p[@]+"${p[@]}"}
+  rm "$WORK/.shellcheckrc" "$realsh/.shellcheckrc"
   # A config in the repository that only tunes the checks still applies, through the copy: disable=SC2086 quiets the unquoted $1.
   printf 'disable=SC2086\n' > "$realsh/.shellcheckrc"
   run_hook "$(edit_json "$realsh/scripts/unquoted.sh")" "$REAL_PATH" "$realsh"
