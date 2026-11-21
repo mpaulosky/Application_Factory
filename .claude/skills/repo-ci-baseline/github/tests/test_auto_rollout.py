@@ -1603,7 +1603,7 @@ def test_the_round_without_auto_is_unchanged():
 
 def test_the_header_says_what_holds_and_what_only_backs_it_up():
     doc = " ".join(auto.__doc__.split())
-    assert "it runs in Claude Code's sandbox (session_settings; ADR 0015)" in doc
+    assert "it runs in Claude Code's sandbox (session_settings; ADR 0016)" in doc
     assert "can't leave the sandbox; the session refuses to start without bubblewrap" in doc
     assert "the repository's hooks and permission rules never apply" in doc
     assert "git's push is sent nowhere: layers behind the sandbox" in doc
@@ -1844,7 +1844,7 @@ def test_the_guard_of_a_linked_worktree_reads_the_primary_checkouts_ledgers(tmp_
 
 
 def test_the_adr_says_what_the_sandbox_doesnt_cover():
-    adr = next((SKILL.parents[2] / "docs" / "adr").glob("0015-*.md")).read_text()
+    adr = next((SKILL.parents[2] / "docs" / "adr").glob("0016-*.md")).read_text()
     text = " ".join(adr.split())
     assert "The sandbox holds only as far as Claude Code enforces it" in text
     assert "a host on the allowed list (GitHub, the registries) is reachable for anything" in text

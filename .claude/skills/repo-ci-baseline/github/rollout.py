@@ -26,7 +26,7 @@ now, and makes none: the rest's calls only follow when TicketManager's reapply
 opens no new PR.
 
 --auto runs the whole round in one run, with no person between the steps:
-github/auto_rollout.py, whose docstring says how (ADR 0015). With --dry-run it
+github/auto_rollout.py, whose docstring says how (ADR 0016). With --dry-run it
 checks the tools and prints its plan, and runs nothing.
 """
 
@@ -120,7 +120,7 @@ def main(argv=None, listed=None, reapply=run_reapply, latest_pr=gh_latest_pr, ex
     parser.add_argument("--dry-run", action="store_true",
                         help="print the reapply.sh calls instead of making them (with --auto: check the tools, print the plan)")
     parser.add_argument("--auto", action="store_true",
-                        help="check the tools, then reapply, review and land each repo with no person between the steps (ADR 0015)")
+                        help="check the tools, then reapply, review and land each repo with no person between the steps (ADR 0016)")
     args = parser.parse_args(argv)
     try:
         order = rollout_order(read_repo_list() if listed is None else listed)

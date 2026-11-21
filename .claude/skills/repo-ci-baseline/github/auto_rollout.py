@@ -1,4 +1,4 @@
-"""rollout.sh --auto: a re-Apply round driven to the end with no person between the steps (ADR 0015).
+"""rollout.sh --auto: a re-Apply round driven to the end with no person between the steps (ADR 0016).
 
     rollout.sh --auto --brings <prs> [--root dir] [--dry-run]
 
@@ -20,7 +20,7 @@
    and the rest's PRs together once each has been reapplied.
 
 The session runs unattended, reading text people without write access may have
-written, so it runs in Claude Code's sandbox (session_settings; ADR 0015). Its
+written, so it runs in Claude Code's sandbox (session_settings; ADR 0016). Its
 Bash can't read the person's credentials (CREDENTIAL_PATHS), writes only the
 worktree, the clone's git folder (not its config or hooks), the main checkout's
 .security and a temporary folder of its own, reaches only SANDBOX_DOMAINS, and
@@ -115,7 +115,7 @@ SKILL_FILE = os.path.join(OWNED, ".claude", "skills", "pre-push-review", "SKILL.
 AGENT_FILE = os.path.join(OWNED, ".claude", "agents", "pre-push-reviewer.md")
 # What the session may never do, whatever text it reads: the skill's Rules, and the Template-first rule (the Factory's
 # CLAUDE.md). Deny rules hold in every permission mode; they match command prefixes, and Edit rules bind the file
-# tools only. The sandbox is what holds against the rest (ADR 0015).
+# tools only. The sandbox is what holds against the rest (ADR 0016).
 DENIED_TOOLS = (
     "Bash(git push:*)",
     "Bash(scripts/review.sh accept:*)",

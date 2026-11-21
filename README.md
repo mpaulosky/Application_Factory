@@ -35,7 +35,7 @@ BASELINE="$HOME/github/Application_Factory/.claude/skills/repo-ci-baseline"
 [`docs/Instructions.md`](docs/Instructions.md) walks through the whole sequence, and the skill's [`SKILL.md`](.claude/skills/repo-ci-baseline/SKILL.md)
 is the reference. `reapply.sh --brings <prs> <repo>` re-Applies the Baseline to one Application in its re-Apply PR,
 `rollout.sh` runs that across the Fleet (TicketManager first), and `land.sh` watches a round's PRs until they land;
-`rollout.sh --auto` does both in one run, reviewing each re-Apply headless where its gate asks for a review (ADR 0015).
+`rollout.sh --auto` does both in one run, reviewing each re-Apply headless where its gate asks for a review (ADR 0016).
 
 ## Working on the Factory
 

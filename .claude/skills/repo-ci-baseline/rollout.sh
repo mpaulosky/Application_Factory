@@ -4,7 +4,7 @@
 # time so one pre-push gate runs at a time. Run it again after TicketManager
 # lands. --auto checks the tools, runs /pre-push-review headless in a re-Apply
 # worktree whose gate asks for it, and lands each PR, stopping only for a
-# person (ADR 0015). The logic is github/rollout.py (--auto: github/auto_rollout.py); see
+# person (ADR 0016). The logic is github/rollout.py (--auto: github/auto_rollout.py); see
 # SKILL.md's Change the Baseline.
 #
 #   rollout.sh --brings <owner/repo#n,#n,...> [--root dir] [--dry-run] [--auto]
