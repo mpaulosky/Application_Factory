@@ -35,7 +35,8 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 ARG ACTIONLINT_VERSION=1.7.12
 ARG SHELLCHECK_VERSION=v0.11.0
 ARG ZIZMOR_VERSION=1.30.1
-# shfmt parses the scripts for the gate's gh check (.github/scripts/check_gh_repo.py), which fails without it.
+# shfmt parses the scripts for the gate's gh check (.github/scripts/check_gh_repo.py) and checks the changed shell files' format (its Shell
+# format step); both fail without it.
 ARG SHFMT_VERSION=3.14.1
 RUN set -eu; \
   case "$(dpkg --print-architecture)" in \

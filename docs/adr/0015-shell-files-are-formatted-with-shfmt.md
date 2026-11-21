@@ -43,12 +43,13 @@ below makes it).
   editors already look.
 - **A Factory-only `.editorconfig`.** The Template's `.editorconfig` is `root = true`, so its section is the one that reaches the Template's files under the Factory, and the one an Application gets.
   The style lives there, and the Factory copies it.
-- **Check only the changed shell files, as shellcheck does.** Rejected: the whole repo is formatted now, and checking every file costs well under a second and keeps it that way.
+- **Check only the changed shell files, as shellcheck does.** Rejected for the Factory: the whole repo is formatted now, and checking every file costs well under a second and keeps it
+  that way. The Update below takes this option for an Application's gate, whose own scripts were never formatted.
 
 ## Consequences
 
 - The Owned `.editorconfig` and the Owned scripts and hooks reach an Application at the next Rollout, together, with no change in what the scripts do. An Application's own shell files are
-  not checked, but an editor that reads `.editorconfig`, and `shfmt -w` run with no flags, now format them in this style.
+  not checked (until the Update below, which checks the ones a branch changes), but an editor that reads `.editorconfig`, and `shfmt -w` run with no flags, now format them in this style.
 - Test fixtures that write shell files into a throwaway repo the gate checks must be written in the same style (`scripts/tests/gate.test.sh`'s stub `test.sh`).
 - A test that reads a script's text must not depend on its old layout: the gate test's shard check counts a `step` whatever its indent, and the mutation spec for `cleanup.sh` and
   `work-issue.sh` matches the formatted text.

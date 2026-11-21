@@ -139,7 +139,7 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
   It needs shfmt v3.14 or a later v3 release, which `check_gh_repo.py` needs too, and stops, naming it, without one. `tests/owned-gate-files.test.sh` (the Factory's) runs those lines in a throwaway
   repo, in a UTF-8 locale and in C, the YAML and shell steps with stubs, and the Markdown step with a stub and, when installed, the real tool. Then build and run each test
   project, where the stack allows it locally. Which steps it runs depends on the repo; what's standard is that
-  everything it checks, CI checks too.
+  everything it checks, CI checks too, except the Shell format step, which only the gate runs (CI would need the PR's base to know which files changed).
   After the lints it runs `python3 -I .github/scripts/check_gh_repo.py --repo`, which refuses a `gh` command in the
   repo's own `scripts/`, `.github/ci/` and skills that isn't told its repository (not the Owned Baseline files;
   [gotchas.md](gotchas.md)). It reads each script with shfmt v3.14 or a later v3, which must be installed: without it the check fails
@@ -218,18 +218,21 @@ it lints the file the tool wrote, so an agent fixes a violation in the same turn
 at the repo root or under any folder (the Factory edits the Template's originals under `.claude/skills/`).
 These are the checks the CI lint workflows run; a gate runs `actionlint` and `zizmor` only where it lints workflows (an Application's gate does when a workflow changed; the Factory's does not).
 A shell file goes through `shellcheck` and `shfmt -d`, the gate's Shell lint and Shell format steps, on the files the gate takes for shell files: a `*.sh`, an extensionless file in the
-root's `scripts/`, or a git hook (`pre-*`, `post-*`, `commit-msg`, `prepare-commit-msg`) in the root's `.github/hooks`, or in a `.github/hooks` under a folder that holds an
-`.editorconfig` (the Template's copy in the Factory). shfmt gets no style flags, so it reads `.editorconfig`; it skips the extensionless `scripts/` files, which no section styles, and runs
-only when it is v3.14 or a later v3 release, as the gate needs (another is named in the note, and shellcheck still runs). On a shfmt finding the report adds the `shfmt -w` command that writes
-the format. Neither tool runs code from the repository: `shellcheck` reports only on the file it is given (a file it follows a `source` line into is read, never quoted), and shfmt reads only
-`.editorconfig`, so neither config is vetted as a markdownlint one is (below). `test.sh` checks that the hook's hook-name rule is the gate's and the Lint Actions shellcheck job's, and that
-its shfmt release rule is the gate's and its own.
+root's `scripts/`, or a git hook (`pre-*`, `post-*`, `commit-msg`, `prepare-commit-msg`, matched in the C locale) in the root's `.github/hooks`, or in a `.github/hooks` under a folder
+whose `.editorconfig` has a `[.github/hooks/*]` section (the Template's copy in the Factory). shfmt gets no style flags, so it reads `.editorconfig`; it skips the extensionless `scripts/`
+files, which no section styles, and runs only when it is v3.14 or a later v3 release, as the gate needs (another, or a `--version` that fails or prints nothing, is named in the note, and
+shellcheck still runs). On a shfmt failure the report adds the `shfmt -w` command that writes the format, with the path quoted for a shell, and says to fix the syntax if the output is a
+syntax error. Neither tool runs code from the repository, and shfmt reads only `.editorconfig`. shellcheck reads its `.shellcheckrc`, and `external-sources` there lets it open the files a
+`source` line names; `--check-sourced` would then quote their lines in the report the agent reads. So the hook clears `SHELLCHECK_OPTS`, and doesn't run shellcheck while a `.shellcheckrc`
+or `shellcheckrc` on the file's path (its folder and each one above it, up to the repository root) is a symlink, not a regular file, or names `external-sources` or `check-sourced` in any
+case: the note names the config, and the gate still checks the file. `test.sh` checks that the hook's hook-name rule is the gate's and the Lint Actions shellcheck job's, and that its shfmt
+release rule is the gate's and its own.
 The hook sees only those tools' writes: a file an agent writes through Bash (a heredoc, `sed -i`, a script) is not linted until the pre-commit hook (Markdown only), the gate or CI,
 since a Bash command doesn't name the files it wrote. The Owned `.claude/rules/markdown-and-yaml-edits.md`, which Apply writes into every repo and which loads in every session (it has no `paths:`),
 tells agents to write Markdown and YAML with Write and Edit for that reason, in a repo that hasn't wired the hook yet as well. The Owned `.claude/rules/script-edits.md`, whose `paths:`
-load it when a session works on a shell or Python script, says the same for scripts and lists the checks reviewers keep raising on them: a test that fails without each new branch,
-the header or docstring updated in the same edit, the edge cases that keep coming back (a missing tool, an empty, relative or odd path, CRLF or a byte-order mark, a symlink, a variable
-a caller left set), and the script's error contract.
+load it when a session works on a shell or Python script, says the same for shell scripts (the hook lints no Python) and lists the checks reviewers keep raising on them:
+a test that fails without each new branch, the header or docstring updated in the same edit, the edge cases that keep coming back (a missing tool, an empty,
+relative or odd path, CRLF or a byte-order mark, a symlink, a variable a caller left set), and the script's error contract.
 In a repo that runs Sandcastle, which is where the review ledger is, a re-Apply that rewrites either needs a local review (`REVIEWED_ON_REAPPLY`), as the hand-off rules do;
 in a repo without the ledger the re-Apply PR's own review is the check.
 
@@ -238,9 +241,9 @@ in a repo without the ledger the re-Apply PR's own review is the check.
   telling the agent to hand a broken linter (a usage error, an old version) to the person.
 - Exit 0 and no output for a file that is not Markdown, YAML or a shell file the gate checks, one that no longer exists, a directory, a symlink, one under `node_modules/`,
   and one outside the project (below).
-- Exit 0 with a `systemMessage` on stdout, which Claude Code shows to the person, when a linter is not installed (or, for shfmt, is another release): the file is skipped for that linter,
-  the hook only helps, and the pre-commit hook,
-  the gate and CI still check. Plain stderr on exit 0 is not shown, which is why the note is JSON. Before it runs anything the hook cleans `PATH`:
+- Exit 0 with a `systemMessage` on stdout, which Claude Code shows to the person, when a linter is not installed, or is not run (shfmt another release, shellcheck under a config above): the
+  file is skipped for that linter, the hook only helps, and the gate still checks, as do the pre-commit hook and CI where they lint that kind of file (the pre-commit hook lints Markdown; CI
+  doesn't check shell format). Plain stderr on exit 0 is not shown, which is why the note is JSON. Before it runs anything the hook cleans `PATH`:
   every relative or empty entry goes (it would name a folder of whatever directory a command runs in, the repository once the hook has changed into it), and so does
   every entry inside the project's checkouts (the file's repository, and the project and every worktree `git worktree list` shows, a `node_modules/.bin` among them),
   since an agent can write any of them with no Bash prompt and this hook runs right after a write. It cleans twice: first, before it looks up `python3` or `git`, with

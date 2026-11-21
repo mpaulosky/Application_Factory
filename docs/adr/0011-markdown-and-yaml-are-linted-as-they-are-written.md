@@ -1,7 +1,9 @@
 ---
 status: accepted
 ---
-# Markdown and YAML are linted as they are written
+# Markdown, YAML and shell are linted as they are written
+
+The file keeps its first name, so links to it still work; the Update at the end added shell files.
 
 A lint failure in a Markdown or YAML file used to surface late: at the commit (the `pre-commit` hook lints staged Markdown only), at the push (the Factory's gate runs `markdownlint-cli2` and
 `yamllint` over the whole repo), in CI (`lint-markdown`, `lint-yaml`, `lint-actions`), or in a review, where it costs a re-review cycle. This ADR builds on ADR 0006 and ADR 0010.
@@ -65,13 +67,18 @@ as the hand-off rules do; elsewhere the re-Apply PR's own review is the check. I
 
 The hook lints shell files too, with the gate's two shell checks: `shellcheck`, and `shfmt -d` with no style flags, so it reads `.editorconfig` ([ADR 0015](0015-shell-files-are-formatted-with-shfmt.md),
 whose Update makes an Application's gate check the changed shell files' format). A shell file is one the gate takes for one: a `*.sh`, an extensionless file in the root's
-`scripts/`, or a git hook in the root's `.github/hooks`, or in a `.github/hooks` under a folder that holds an `.editorconfig` (the Template's copy in the Factory). shfmt skips the
-extensionless `scripts/` files, which no `.editorconfig` section styles, and runs only when it is v3.14 or a later v3 release, as the gate needs; another is named in the
-`systemMessage`. Neither tool runs code from the repository (shellcheck reports only on the file it is given, and shfmt reads only `.editorconfig`), so neither config is vetted
-as a markdownlint one is. `test.sh` keeps the hook's hook-name and shfmt release rules equal to the gate's. The report's first line now says only that the gate checks the same
-file before the push, which is true of every kind; the pre-commit hook lints only Markdown, and an Application's CI doesn't check shell format.
+`scripts/`, or a git hook in the root's `.github/hooks`, or in a `.github/hooks` under a folder whose `.editorconfig` has a `[.github/hooks/*]` section (the Template's copy in the
+Factory). shfmt skips the extensionless `scripts/` files, which no `.editorconfig` section styles, and runs only when it is v3.14 or a later v3 release, as the gate needs; another
+is named in the `systemMessage`. Neither tool runs code from the repository, and shfmt reads only `.editorconfig`. shellcheck's `.shellcheckrc` can turn on `external-sources`, which
+opens the files a `source` line names, and `--check-sourced` quotes their lines in the report the agent reads, a way round what the person's settings deny Claude. So the hook clears
+`SHELLCHECK_OPTS` and doesn't run shellcheck under a config on the file's path that is not a regular file or names `external-sources` or `check-sourced`; the note says so. Running it
+with `--norc` instead was not chosen: a repo's own `disable=` lines would then fail files its gate passes. `test.sh` keeps the hook's hook-name and shfmt release rules equal to
+the gate's. The report's first line now says only that the gate checks the same file before the push, which is true of every kind; the pre-commit hook lints only Markdown, and an
+Application's CI doesn't check shell format.
 
-The Owned `.claude/rules/script-edits.md` says the same for scripts as the Markdown and YAML rule does, and lists the checks reviewers keep raising on script changes: a test
-that fails without each new branch, the header or docstring updated in the same edit, the edge cases that keep coming back (a missing tool or another release, an empty, relative
-or odd path, CRLF or a byte-order mark, a symlink, a variable a caller left set), and the script's error contract. Its `paths:` front matter loads it when a session works on a shell
-or Python script, not in every session. It is in `REVIEWED_ON_REAPPLY` too, since it steers how an agent writes code, and the Factory carries a copy of it (`scripts/gate.sh` lists it).
+The Owned `.claude/rules/script-edits.md` says the same for shell scripts as the Markdown and YAML rule does (the hook lints no Python), and lists the checks reviewers keep
+raising on script changes: a test that fails without each new branch, the header or docstring updated in the same edit, the edge cases that keep coming back (a missing tool
+or another release, an empty, relative or odd path, CRLF or a byte-order mark, a symlink, a variable a caller left set), and the script's error contract. Its `paths:` front
+matter loads it when a session works on a shell or Python script, not in every session. It is in `REVIEWED_ON_REAPPLY` too, since it steers how an agent writes code, and the
+Factory carries a copy of it (`scripts/gate.sh` lists it): the Factory's sessions edit scripts more than anything else, and its `CLAUDE.md` holds no such checklist.
+The Markdown and YAML rule has no copy, since the Factory's `CLAUDE.md` says the same.

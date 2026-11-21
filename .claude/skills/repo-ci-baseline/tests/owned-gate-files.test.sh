@@ -57,7 +57,7 @@ g "$repo" commit -q -m names
 # lists [<git wrapper>]: run the block in the repo, then the gate's Markdown, YAML and shell steps with stubs of their linters
 # (markdownlint-cli2, yamllint, shellcheck, shfmt) that record their arguments; print each list's entries as "<list><TAB><name>" and each argument as
 # "MD_ARG<TAB><arg>", "YL_ARG<TAB><arg>", "SC_ARG<TAB><arg>" or "SF_ARG<TAB><arg>", NUL-separated. The shfmt stub answers --version with
-# $SHFMT_STUB_VERSION (v3.14.1 when unset) and exits $SHFMT_STUB_EXIT (0 when unset).
+# $SHFMT_STUB_VERSION (v3.14.1 when unset) and exit $SHFMT_STUB_VERSION_EXIT (0 when unset), and otherwise exits $SHFMT_STUB_EXIT (0 when unset).
 stubs="$work/stubs"
 mkdir -p "$stubs"
 # shellcheck disable=SC2016 # the stub's own code, written as it is
@@ -70,7 +70,7 @@ cat > "$stubs/shfmt" << 'STUB'
 #!/usr/bin/env bash
 if [[ "${1:-}" == --version ]]; then
   echo "${SHFMT_STUB_VERSION-v3.14.1}"
-  exit 0
+  exit "${SHFMT_STUB_VERSION_EXIT:-0}"
 fi
 printf 'SF_ARG\t%s\0' "$@" >> "$MD_ARGS_FILE"
 exit "${SHFMT_STUB_EXIT:-0}"
@@ -220,18 +220,30 @@ format_run() {
   ) 2>&1 > /dev/null)"
   fst=$?
 }
-for version in v3.14.0 v3.14.1 v3.15.2 v3.20.0 v3.100.0; do
+for version in v3.14.0 v3.14.1 v3.15.2 v3.19.0 v3.19.9 v3.20.0 v3.99.9 v3.100.0; do
   SHFMT_STUB_VERSION="$version" format_run
   check "shell format: shfmt $version runs" "[[ $fst == 0 ]] && grep -qF -- '-dash.sh' '$work/md-args'"
 done
-for version in v3.13.9 v3.1.0 v2.6.4 v4.0.0 3.14.1 "" "v3.14.1 extra"; do
+for version in v3.13.9 v3.1.0 v3.9.0 v3.10.0 v3.14 v3.14. v2.6.4 v4.0.0 3.14.1 xv3.14.1 "" "v3.14.1 extra" "v3.14.1
+v3.14.1"; do
   SHFMT_STUB_VERSION="$version" format_run
-  check "shell format: shfmt '$version' is refused, by name, before it runs" \
+  check "shell format: shfmt '${version//$'\n'/\\n}' is refused, by name, before it runs" \
     "[[ $fst != 0 ]] && [[ \"\$ferr\" == *'v3.14 or a later v3 release, not'* ]] && ! grep -qF -- '-dash.sh' '$work/md-args'"
+done
+# A --version that fails after printing a release the gate takes is refused too: its answer can't be trusted.
+SHFMT_STUB_VERSION=v3.14.1 SHFMT_STUB_VERSION_EXIT=1 format_run
+check "shell format: a shfmt whose --version fails is refused, before it runs" \
+  "[[ $fst != 0 ]] && [[ \"\$ferr\" == *\"v3.14 or a later v3 release, not ''.\"* ]] && ! grep -qF -- '-dash.sh' '$work/md-args'"
+# The answer is cut at 80 characters in the message: 79, 80 and 81 characters of it.
+for n in 79 80 81; do
+  long="v3.$(printf '%0*d' $((n - 3)) 0)"
+  SHFMT_STUB_VERSION="$long" format_run
+  check "shell format: an answer of $n characters is shown cut at 80" "[[ $fst != 0 ]] && [[ \"\$ferr\" == *\"not '\${long:0:80}'.\"* ]]"
 done
 export SHFMT_STUB_EXIT=1
 format_run
-check "shell format: a file shfmt would change stops the gate, and says to run shfmt -w" "[[ $fst != 0 ]] && [[ \"\$ferr\" == *'run shfmt -w on each file'* ]]"
+check "shell format: a file shfmt would change, or can't parse, stops the gate, and says to run shfmt -w or fix the syntax" \
+  "[[ $fst != 0 ]] && [[ \"\$ferr\" == *'run shfmt -w on each file'*'fix the syntax of any file it could not parse'* ]]"
 unset SHFMT_STUB_EXIT
 noshfmt="$work/noshfmt"
 mkdir -p "$noshfmt"

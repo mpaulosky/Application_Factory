@@ -26,7 +26,8 @@ Done when every item below is resolved for this repo and `scripts/gate.sh` passe
   IssueManager's root file turned off xUnit1030 and xUnit1051 for `tests/**` and IDE0044 for Razor code-behind; Apply dropped them and
   the build failed, so they moved to `tests/.editorconfig` (`[*.cs]`) and `src/.editorconfig` (`[*.razor.cs]`).
 - **The shell style** is in the Owned `.editorconfig` too: its `[*.sh]` and `[.github/hooks/*]` sections are `shfmt -i 2 -ci -bn -sr`, which shfmt reads when it is given no style flags.
-  The Owned scripts and hooks are formatted that way (the Factory's gate checks them, its ADR 0015). Run `shfmt -w` on the repo's own scripts to match; nothing in the repo checks them.
+  The Owned scripts and hooks are formatted that way (the Factory's gate checks them, its ADR 0015). The repo's own gate checks the `*.sh` files and hooks a branch changes (its Shell
+  format step; not an extensionless `scripts/` file, and not in CI), so each of the repo's own scripts takes the style when it is next touched: `shfmt -w` it then, or all of them at once.
 - **Unfilled placeholders.** Fill each `{{...}}` by hand.
 - **Sandcastle.** A repo that runs Sandcastle follows [sandcastle.md](sandcastle.md#migrating-a-repo) for its `.sandcastle/` drift and Seed files.
 - **Leftovers.** Delete `sync-readme.yml` (`release_post.py` already maintains `docs/README.md`) and `label-enforce.yml` (squad's triage labels).

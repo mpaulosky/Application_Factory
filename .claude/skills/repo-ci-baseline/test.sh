@@ -188,6 +188,12 @@ PY
       'A test for every new branch' 'The header or docstring in the same edit' 'CRLF' 'byte-order mark' 'symlink' 'The error contract'; do
       grep -qF -- "$needle" "$script_rule" || fail "the Owned .claude/rules/script-edits.md must say '$needle'"
     done
+    # It names the tools the hook runs after, as the Markdown and YAML rule does: the plain names of the matcher read above.
+    for tool in ${edit_rule_tools[@]+"${edit_rule_tools[@]}"}; do
+      [[ "$tool" =~ ^[A-Za-z0-9_]+$ ]] || continue
+      grep -qwF -- "$tool" "$script_rule" \
+        || fail "the Owned .claude/rules/script-edits.md must name $tool: scripts/lint-edited-file.sh runs after it (\"matcher\": \"$edit_rule_matcher\")"
+    done
     if grep -niE 'dotfiles|repo-ci-baseline|factory|references/|docs/adr/' "$script_rule"; then
       fail "the Owned .claude/rules/script-edits.md is written into every repo; it must not name the Factory, its skill or its docs"
     fi

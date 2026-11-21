@@ -33,7 +33,8 @@ Use the commands for each stack the issue touches:
   Never write the whole shape in a source line, a fixture or a comment. The host scans every commit's added lines, and a match stops the issue from being published.
   A later commit does not clear it, because the scan reads each commit.
 - Lint YAML with `yamllint -c .yamllint.yml <file>`: the Template ships that config at the repo root, and it allows the long lines yamllint's default rejects.
-- Shell scripts pass `shellcheck`. The code standards are in `.sandcastle/CODING_STANDARDS.md`.
+- Shell scripts pass `shellcheck`, and a `*.sh` file or git hook is formatted as `shfmt -w <file>` writes it, with no style flags (it reads `.editorconfig`): the gate
+  checks the ones the branch changed. The code standards are in `.sandcastle/CODING_STANDARDS.md`.
 
 ## The gate
 
