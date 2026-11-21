@@ -429,12 +429,17 @@ printf 'def f(a=[]):\n    return a\n' > "$repoP/loose.py"
 GATE_ARGS=--quick run "$repoP"
 check "a B finding fails it too" "$([[ $status == 1 ]] && grep -q 'B006' "$repoP/out" && echo 0 || echo 1)"
 printf 'import os\n\nprint(os.sep)\n' > "$repoP/loose.py"
+GATE_ARGS=--quick run "$repoP"
+py_before="$(sed -n 's/^\([0-9][0-9]*\) Python file(s) checked\.$/\1/p' "$repoP/out")"
+check "the same file passes once fixed, counting the Python files" "$([[ $status == 0 && "$py_before" -gt 0 ]] && echo 0 || echo 1)"
+# One more *.py, a -dash.py, and an upper.PY with a finding: the step takes *.py alone, case and all, so the count goes up by one and
+# the finding in upper.PY is never seen.
 mkdir -p "$repoP/-x"
 printf 'x = 1\n' > "$repoP/-x/-dash.py"
-printf 'BAD = 1\n' > "$repoP/upper.PY"
+printf 'import os\n' > "$repoP/upper.PY"
 GATE_ARGS=--quick run "$repoP"
-check "the same file passes once fixed, and the step counts every *.py, a -dash.py among them" \
-  "$([[ $status == 0 ]] && grep -qE '^[1-9][0-9]* Python file\(s\) checked' "$repoP/out" && echo 0 || echo 1)"
+check "the step counts every *.py, a -dash.py among them, and only *.py: upper.PY's finding is not linted" \
+  "$([[ $status == 0 ]] && grep -qx "$((py_before + 1)) Python file(s) checked." "$repoP/out" && ! grep -q 'upper.PY' "$repoP/out" && echo 0 || echo 1)"
 git -C "$repoP" add -A
 printf 'import sys\n' > "$repoP/-x/-dash.py"
 GATE_ARGS=--quick run "$repoP"
@@ -450,10 +455,10 @@ done
 status=0
 (cd "$repoP" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/noruff" bash scripts/gate.sh --quick > "$repoP/out" 2>&1) || status=$?
 check "a missing ruff fails the gate and says how to install it" "$([[ $status == 1 ]] && grep -q 'ruff not found: the gate needs ruff 0.17 (uv tool install ruff@0.17.6)' "$repoP/out" && echo 0 || echo 1)"
-# stub_ruff <version answer> <exit for a check>: a ruff that prints the answer for --version and logs its arguments otherwise.
+# stub_ruff <version answer> <exit for a check> [<exit for --version>]: a ruff that prints the answer for --version and logs its arguments otherwise.
 stub_ruff() {
   # shellcheck disable=SC2016 # the stub's own code, written as it is
-  printf '#!/usr/bin/env bash\nif [[ "${1:-}" == --version ]]; then printf "%%s\\n" %q; exit 0; fi\nprintf "%%s\\n" "$@" > %q\nexit %d\n' "$1" "$work/ruff-args" "$2" > "$work/stubruff/ruff"
+  printf '#!/usr/bin/env bash\nif [[ "${1:-}" == --version ]]; then printf "%%s\\n" %q; exit %d; fi\nprintf "%%s\\n" "$@" > %q\nexit %d\n' "$1" "${3:-0}" "$work/ruff-args" "$2" > "$work/stubruff/ruff"
   chmod +x "$work/stubruff/ruff"
 }
 run_stub_ruff() {
@@ -473,6 +478,19 @@ stub_ruff $'ruff 0.1\033]0;x\a\\e\303\251' 0
 run_stub_ruff
 check "a release's control bytes and bytes outside ASCII are shown as ?, and a backslash stays a backslash" \
   "$([[ $status == 1 ]] && grep -qF "not 'ruff 0.1?]0;x?\\e??'" "$repoP/out" && ! grep -q $'\033]0' "$repoP/out" && echo 0 || echo 1)"
+# A ruff whose --version fails, even printing a 0.17 release, is refused before it runs.
+stub_ruff "ruff 0.17.6" 0 1
+run_stub_ruff
+check "a ruff whose --version fails is refused before it runs" "$([[ $status == 1 && ! -e $work/ruff-args ]] && grep -q 'needs ruff 0.17, not' "$repoP/out" && echo 0 || echo 1)"
+# The answer is shown cut to its first 80 bytes: 79 and 80 whole, 81 cut to 80.
+for n in 79 80 81; do
+  answer="ruff 0.18.0 $(printf 'x%.0s' $(seq 1 $((n - 12))))"
+  shown="${answer:0:80}"
+  stub_ruff "$answer" 0
+  run_stub_ruff
+  check "a $n-byte answer is shown as its first $(((n < 80) ? n : 80)) bytes" \
+    "$([[ $status == 1 ]] && grep -qF "not '$shown': uv tool install" "$repoP/out" && echo 0 || echo 1)"
+done
 stub_ruff "ruff 0.17.6" 0
 run_stub_ruff
 check "ruff gets exactly the flags, then --, then the names" \
@@ -486,7 +504,7 @@ done
 # The release rule and the flags are the Template gate's, so the Factory checks its Python as an Application's gate checks its own.
 ruff_lines() { grep -E '^ *(RUFF_VERSION|RUFF_RELEASE|RUFF_ARGS)=' "$1" | sed 's/^ *//'; }
 check "the gate's ruff release, rule and flags are the Template gate's" \
-  "$([[ "$(ruff_lines "$here/scripts/gate.sh" | wc -l)" == 3 && "$(ruff_lines "$here/scripts/gate.sh")" == "$(ruff_lines "$here/$skill/template/owned/scripts/gate.sh")" ]] && echo 0 || echo 1)"
+  "$([[ "$(ruff_lines "$here/scripts/gate.sh" | wc -l)" -eq 3 && "$(ruff_lines "$here/scripts/gate.sh")" == "$(ruff_lines "$here/$skill/template/owned/scripts/gate.sh")" ]] && echo 0 || echo 1)"
 
 # test.sh's pass is remembered for a clean tree: the same tree is not tested twice; a new commit, an uncommitted or untracked file, GATE_NO_CACHE=1 and a failure all run it.
 repo9="$(new_repo cache)"
@@ -811,7 +829,7 @@ done
 
 # --- GATE_PART (ADR 0012): CI runs one part of the gate per job; a full gate runs them all -------------------------------------------------------------------
 # The step headers of each part. A part prints its own and no other part's, so a step that moves to another part, or is dropped, is found here.
-headers_static="Copies of Template files|Issue references in Owned files|git status guards in Owned scripts|markdownlint (whole repo|yamllint (whole repo|shellcheck (changed shell files)|shfmt (every shell file)"
+headers_static="Copies of Template files|Issue references in Owned files|git status guards in Owned scripts|markdownlint (whole repo|yamllint (whole repo|shellcheck (changed shell files)|shfmt (every shell file)|ruff (every Python file)"
 headers_template="Local review (scripts/review.sh check)|▶ test.sh"
 headers_sandcastle="▶ Sandcastle check"
 repoP="$(new_repo parts)"
@@ -892,7 +910,7 @@ rm -rf "$repoP/.git/gate-cache" "$repoP/.git/test-sh-shards"
 RUN_PART=template RUN_SHARD=hooks run "$repoP"
 check "GATE_PART=template with TEST_SH_SHARD runs that shard of test.sh" "$([[ $status == 0 && $ran == yes && "$(shards_seen)" == hooks ]] && grep -qF "test.sh (hooks shard)" "$repoP/out" && echo 0 || echo 1)"
 RUN_PART=template RUN_SHARD=hooks run "$repoP"
-check "a shard's pass is remembered for the clean tree" "$(grep -q "test.sh (hooks shard) already passed on this tree" "$repoP/out" && [[ "$(wc -l < "$repoP/.git/test-sh-shards")" == 1 ]] && echo 0 || echo 1)"
+check "a shard's pass is remembered for the clean tree" "$(grep -q "test.sh (hooks shard) already passed on this tree" "$repoP/out" && [[ "$(wc -l < "$repoP/.git/test-sh-shards")" -eq 1 ]] && echo 0 || echo 1)"
 RUN_PART=template RUN_SHARD=scripts run "$repoP"
 check "another shard is not skipped by the first shard's pass" "$([[ $status == 0 && "$(shards_seen)" == scripts ]] && echo 0 || echo 1)"
 RUN_SHARD=hooks run "$repoP"

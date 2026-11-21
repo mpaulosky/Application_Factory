@@ -1,9 +1,9 @@
 ---
 status: accepted
 ---
-# Markdown, YAML and shell are linted as they are written
+# Markdown, YAML, shell and Python are linted as they are written
 
-The file keeps its first name, so links to it still work; the Update at the end added shell files.
+The file keeps its first name, so links to it still work; the Updates at the end added shell files, then Python files.
 
 A lint failure in a Markdown or YAML file used to surface late: at the commit (the `pre-commit` hook lints staged Markdown only), at the push (the Factory's gate runs `markdownlint-cli2` and
 `yamllint` over the whole repo), in CI (`lint-markdown`, `lint-yaml`, `lint-actions`), or in a review, where it costs a re-review cycle. This ADR builds on ADR 0006 and ADR 0010.
@@ -86,8 +86,8 @@ Plain `--norc` alone was not chosen: a repo's own `disable=` lines would then fa
 before the push, which is true of every kind; the pre-commit hook lints only Markdown, and an Application's CI doesn't check shell format. A note about a hook under a nested
 `.github/hooks` says instead that the gate checks it only where it takes that folder, since an Application's gate takes the root's hooks alone.
 
-The Owned `.claude/rules/script-edits.md` says the same for shell scripts as the Markdown and YAML rule does (the hook lints no Python), and lists the checks reviewers keep
-raising on script changes: a test that fails without each new branch, the header or docstring updated in the same edit, the edge cases that keep coming back (a missing tool
+The Owned `.claude/rules/script-edits.md` says the same for shell scripts as the Markdown and YAML rule does (the hook linted no Python until the Update: Python below), and lists the
+checks reviewers keep raising on script changes: a test that fails without each new branch, the header or docstring updated in the same edit, the edge cases that keep coming back (a missing tool
 or another release, an empty, relative or odd path, CRLF or a byte-order mark, a symlink, a variable a caller left set), and the script's error contract. Its `paths:` front
 matter loads it when a session works on a shell or Python script, not in every session. It is in `REVIEWED_ON_REAPPLY` too, since it steers how an agent writes code, and the
 Factory carries a copy of it (`scripts/gate.sh` lists it): the Factory's sessions edit scripts more than anything else, and its `CLAUDE.md` holds no such checklist.
@@ -114,12 +114,14 @@ linted at all three places, with the same command: `ruff check --isolated --no-c
   the pin isn't the gate's release, or when the messages name another line, so a Dependabot bump to 0.18 fails until the rule moves with it on purpose.
 - **Where each runs.** The hook lints each `*.py` Edit, Write or MultiEdit writes; another ruff release, or none, is a `systemMessage`, as for shfmt. The Template gate's
   Python lint step lints the Python files a branch changes, so an Application's own Python takes the rules as it is touched. CI's `python-tests` job lints the Template's
-  Python (`.github/scripts` and the hardening-review scripts) before pytest; it doesn't lint an Application's own Python, which only the gate checks, as with shell format.
+  Python folders (`.github/scripts` and the hardening-review scripts) before pytest, and so any Python of an Application's own it keeps there; it doesn't lint the rest of an
+  Application's own Python, which only the gate checks, as with shell format.
   The Factory's gate lints every Python file in its `static` part, with the Template gate's three lines, which `scripts/tests/gate.test.sh` keeps equal.
 - **The existing problems were fixed**, not ignored: the dict (now keyed by each step's place), a mutable default shared by every call, a `zip` that is now
   `itertools.pairwise`, a variable first set in a loop, and twelve re-raises that now say `from error` or `from None`. A false alarm takes a `# noqa: <code>` with its reason.
 
-This reaches the Fleet by a Rollout: the hook, `scripts/gate.sh`, `ci.yml`, `requirements-tests.txt` and `.claude/rules/script-edits.md` are Owned, and all five are in
-`REVIEWED_ON_REAPPLY` already, so the re-Apply needs a local review where the ledger is. A developer's first push that changes a Python file needs ruff 0.17 or uv on the machine. The Seed
+This reaches the Fleet by a Rollout: the hook, `scripts/gate.sh`, `ci.yml`, `requirements-tests.txt` and `.claude/rules/script-edits.md` are Owned. The hook, `scripts/gate.sh`
+and `script-edits.md` are in `REVIEWED_ON_REAPPLY` already, so the re-Apply needs a local review where the ledger is; `ci.yml` and `requirements-tests.txt` are not, and a
+re-Apply rewrites them with no such review (the re-Apply PR's own CI runs them). A developer's first push that changes a Python file needs ruff 0.17 or uv on the machine. The Seed
 `Dockerfile`'s ruff never reaches an Application that has one; it adds the `RUFF_VERSION` `ARG` and the pip package by hand, or its sandbox's gate fails on a branch that
 changes a Python file.

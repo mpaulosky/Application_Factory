@@ -194,6 +194,21 @@ flags = {where: shlex.split(found) for where, found in flags.items() if found is
 ci = one("ci.yml", r"^ *run: python -m ruff (.+) -- \S.*$")
 if ci is not None:
     flags["ci.yml"] = shlex.split(ci)
+# CI's paths are folders of the Template, and between them they hold every Owned Python file, so a moved folder or a new one is found here.
+ci_paths = one("ci.yml", r"^ *run: python -m ruff .+ -- (\S.*)$")
+if ci_paths is not None:
+    import os
+    folders = shlex.split(ci_paths)
+    for folder in folders:
+        if not os.path.isdir(os.path.join(owned, folder)):
+            problems.append(f"ci.yml's ruff step lints {folder}, which is not a folder of the Template")
+    for top, dirs, files in os.walk(owned):
+        dirs[:] = [d for d in dirs if d not in ("node_modules", "__pycache__")]
+        for name in files:
+            if name.endswith(".py"):
+                path = os.path.relpath(os.path.join(top, name), owned)
+                if not any(path.startswith(folder.rstrip("/") + "/") for folder in folders):
+                    problems.append(f"ci.yml's ruff step doesn't lint the Owned {path}")
 version = one("gate.sh", r'^RUFF_VERSION="([^"]+)"$')
 pin = one("requirements-tests.txt", r"^ruff==(\S+) \\$")
 if len(set(rules.values())) != 1:
@@ -814,6 +829,11 @@ STUB
     [[ -n "$pinned" && "$image" == "$pinned" ]] \
       || fail "the Seed .sandcastle/Dockerfile's $name is '$image', gate.sh's '$pinned'; set it, and its SHA-256s, to gate.sh's"
   done
+  # The ARG alone installs nothing: the image's pip install takes ruff at that release, or the sandbox's gate fails on a changed *.py.
+  # shellcheck disable=SC2016 # the Dockerfile's own ${RUFF_VERSION}, matched as written
+  python3 -I -c 'import re, sys; text = open(sys.argv[1], encoding="utf-8").read().replace("\\\n", " ")
+sys.exit(0 if re.search(r"^RUN pip3 install [^\n]*\"ruff==\$\{RUFF_VERSION\}\"", text, re.M) else 1)' "$seed/.sandcastle/Dockerfile" \
+    || fail "the Seed .sandcastle/Dockerfile must pip3 install \"ruff==\${RUFF_VERSION}\", the release the gate's Python lint step takes"
   # And the .NET SDK channel global.json pins.
   sdk="$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["sdk"]["version"])' "$owned/global.json")"
   channel="$(sed -nE 's/^ARG DOTNET_CHANNEL=([^ ]+).*/\1/p' "$seed/.sandcastle/Dockerfile")"

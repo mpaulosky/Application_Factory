@@ -4,8 +4,9 @@
 # scripts/gate.sh, scripts/check-branch-name.sh,
 # .github/scripts/discover_tests.py and .github/scripts/check_gh_repo.py, with the refs git would
 # pass on stdin. Stub `dotnet`, `pnpm`, `markdownlint-cli2`, `yamllint`,
-# `actionlint`, `zizmor` and `shellcheck` binaries log each call, and fail when the call matches the FAIL glob, so no
-# real build or network access is needed. check_gh_repo.py and the Shell format step run the real shfmt (v3.14 or a later v3), which must be on PATH;
+# `actionlint`, `zizmor`, `shellcheck` and `ruff` binaries log each call, and fail when the call matches the FAIL glob, so no
+# real build or network access is needed (the ruff stub answers --version with a 0.17 release, the one the gate's Python lint step accepts:
+# the repo tracks two Python files, which the gate lints when there is no origin/main to diff against, and CI's hook-tests job has no ruff or uv). check_gh_repo.py and the Shell format step run the real shfmt (v3.14 or a later v3), which must be on PATH;
 # the repo gets the Template's .editorconfig, so the scripts it is given are written in that style.
 # Usage: .github/hooks/tests/pre-push.test.sh
 set -uo pipefail
@@ -38,9 +39,13 @@ EOF
 }
 
 mkdir -p "$STUBS"
-for tool in dotnet pnpm markdownlint-cli2 yamllint actionlint zizmor shellcheck; do
+for tool in dotnet pnpm markdownlint-cli2 yamllint actionlint zizmor shellcheck ruff; do
   make_stub "$STUBS" "$tool"
 done
+# The gate reads ruff's release before it lints, and refuses one that is not 0.17.
+ruff_stub="$(cat "$STUBS/ruff")"
+# shellcheck disable=SC2016 # the line is the stub's code, expanded when it runs
+printf '%s\n%s\n%s\n' "${ruff_stub%%$'\n'*}" '[[ "$*" != --version ]] || { echo "ruff 0.17.6"; exit 0; }' "${ruff_stub#*$'\n'}" > "$STUBS/ruff"
 
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
 # The caller may be iterating with the review check skipped; the cases set what they need.
@@ -551,6 +556,12 @@ git -C "$REPO" switch -q feature/1-x
 git -C "$REPO" update-ref -d refs/remotes/origin/main
 run_hook feature/1-x "$(push_stdin feature/1-x)"
 expect "without an origin/main the check is skipped and the gate runs" allowed tests-ran "No origin/main"
+# There every tracked file counts as changed, the two Python files among them, so the gate's Python lint step runs on them.
+if grep -q '^ruff check .* -- .*discover_tests\.py' "$LOG"; then
+  pass "without an origin/main the gate lints the tracked Python files"
+else
+  fail "without an origin/main the gate lints the tracked Python files" "no ruff check of discover_tests.py in: $(tr '\n' ' ' < "$LOG")"
+fi
 git -C "$REPO" update-ref refs/remotes/origin/main "$MAIN_BEFORE"
 
 # The hook fetches main first, so it sees what merged since the last fetch.

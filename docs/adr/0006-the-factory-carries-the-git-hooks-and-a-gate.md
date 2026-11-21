@@ -12,7 +12,8 @@ The gate runs two things: a test of the gate itself (`scripts/tests/gate.test.sh
 Template's file, then run `scripts/gate.sh --sync` to copy it over; the gate fails on a
 copy that has drifted. Later records added to the gate the Markdown and YAML lint,
 the bare-`#N` issue-reference check and the `git status --porcelain` guard check (`tests/check-git-status.sh`), both also in `--quick`, and the local review check. ADR 0012 splits the gate into
-parts that CI runs in parallel, and adds the Sandcastle check, which a full gate runs when the branch changed a file it reads. ADR 0015 adds shfmt of every shell file, in `--quick` too.
+parts that CI runs in parallel, and adds the Sandcastle check, which a full gate runs when the branch changed a file it reads. ADR 0015 adds shfmt of every shell file, in `--quick` too,
+and ADR 0011's Update: Python adds ruff of every Python file, in `--quick` too.
 
 ## Considered Options
 

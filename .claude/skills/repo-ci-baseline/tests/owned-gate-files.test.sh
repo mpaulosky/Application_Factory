@@ -229,11 +229,11 @@ rm "$repo/.yamllint.yml"
 # A branch with no change, and one whose only change no list takes: the block and the steps run, and every list is empty.
 g "$repo" checkout -q -b chore/empty origin/main
 run_lists
-check "a branch with no changed file runs, with five empty lists and no linter run" \
+check "a branch with no changed file runs, with every list empty and no linter run" \
   "[[ $st == 0 ]] && [[ \${#OUT[@]} == 0 ]]"
 mkdir -p "$repo/src" && printf 'x\n' > "$repo/src/other.cs" && g "$repo" add src/other.cs && g "$repo" commit -q -m cs
 run_lists
-check "a branch whose only change is a .cs file runs, with five empty lists and no linter run" \
+check "a branch whose only change is a .cs file runs, with every list empty and no linter run" \
   "[[ $st == 0 ]] && [[ \${#OUT[@]} == 0 ]]"
 g "$repo" checkout -q feature/1-names
 unset LC_ALL
@@ -345,8 +345,8 @@ check "shell format: without shfmt the gate stops and names it" "[[ $fst != 0 ]]
 
 # The Python lint step alone, on one name, with the ruff and uvx stubs: an installed ruff must be a 0.17 release, whose answer is shown
 # as printable() shows it; without one the pinned release runs through uvx; without either the gate stops, naming ruff.
-# py_run [<PATH>]: the step on -dash.py with that PATH (the stubs first when unset); status in pst, stderr in perr, and each argument the
-# stubs got in PARGS ("RF <arg>" or "UV <arg>").
+# py_run [<PATH>]: the step on -dash.py (on no file when PY_NONE is set) with that PATH (the stubs first when unset); status in pst, stderr in
+# perr, and each argument the stubs got in PARGS ("RF <arg>" or "UV <arg>").
 py_run() {
   : > "$work/steps"
   # shellcheck disable=SC2034 # read inside the checks' eval strings
@@ -356,6 +356,7 @@ py_run() {
     step() { printf '%s\n' "$1" >> "$work/steps"; }
     # shellcheck disable=SC2034 # read by the sourced step
     PY_FILES=(-dash.py) MD_ARGS_FILE="$work/md-args"
+    [[ -z "${PY_NONE:-}" ]] || PY_FILES=()
     export MD_ARGS_FILE
     : > "$MD_ARGS_FILE"
     # shellcheck disable=SC2030,SC2031 # the step's own PATH, in this subshell only
@@ -418,6 +419,13 @@ check "python lint: an installed ruff is used, not uvx" "[[ $pst == 0 && \"\${PA
 py_run "$noruff"
 check "python lint: without ruff or uv the gate stops and names both" \
   "[[ $pst != 0 && \${#PARGS[@]} == 0 ]] && [[ \"\$perr\" == *'needs ruff 0.17: uv tool install ruff@0.17.6, or install uv'* ]]"
+# A branch that changes no Python file needs neither ruff nor uv, and an installed ruff is not run: ruff given no file would lint the
+# whole folder it runs in.
+PY_NONE=1 py_run "$noruff"
+check "python lint: with no changed Python file, no ruff or uv is needed" \
+  "[[ $pst == 0 && \${#PARGS[@]} == 0 && -z \"\$perr\" ]] && [[ \"\$(cat '$work/steps')\" == 'Python lint (0 changed file(s))' ]]"
+PY_NONE=1 py_run
+check "python lint: with no changed Python file, an installed ruff is not run" "[[ $pst == 0 && \${#PARGS[@]} == 0 ]]"
 
 # The real markdownlint-cli2, when installed, reads the gate's ':<name>' as that file: a[1].md is linted, not a1.md beside it, and
 # -dash.md is a file, not an option. Each failing check asks for the planted MD012, so a usage error or a missing file can't pass

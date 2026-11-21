@@ -148,7 +148,7 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
   `.github/hooks/tests/pre-push.test.sh` runs the whole gate with the real shfmt, and shows it reads the repo's `.editorconfig`. Then build and run each test
   project, where the stack allows it locally. Which steps it runs depends on the repo; what's standard is that
   everything it checks, CI checks too, except the Shell format step (CI would need the PR's base to know which files changed), the Python lint of a repo's own Python
-  (CI's `python-tests` job lints only the Template's: `.github/scripts` and the hardening-review scripts) and the local review check below.
+  (CI's `python-tests` job lints only the Template's Python folders, `.github/scripts` and the hardening-review scripts, own files kept there included) and the local review check below.
   After the lints it runs `python3 -I .github/scripts/check_gh_repo.py --repo`, which refuses a `gh` command in the
   repo's own `scripts/`, `.github/ci/` and skills that isn't told its repository (not the Owned Baseline files;
   [gotchas.md](gotchas.md)). It reads each script with shfmt v3.14 or a later v3, which must be installed: without it the check fails
@@ -300,7 +300,7 @@ in a repo without the ledger the re-Apply PR's own review is the check.
   because a person runs those.
 - Exit 1 with a message on stderr when `CLAUDE_PROJECT_DIR` is unset or one of those git files is longer than any that names a folder (`GIT_FILE_MAX`), for any edit,
   since both are checked before the input is read; when its input is not JSON, `python3` is missing (or found only where the hook runs nothing from,
-  which the message says), or, for a Markdown, YAML or shell file, `git` is missing (the same) or older than 2.36
+  which the message says), or, for a Markdown, YAML, shell or Python file, `git` is missing (the same) or older than 2.36
   (`git worktree list -z`), so a broken hook is visible and is not read as a clean file.
 - Only the project's own checkout and the linked worktrees it lists are linted: the file's repository root must be one of the paths `git worktree list` prints for `CLAUDE_PROJECT_DIR`,
   which Claude Code

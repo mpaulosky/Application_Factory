@@ -20,7 +20,7 @@ Why it works this way is in [ADR 0001](docs/adr/0001-standardize-by-copying-a-te
   The Owned `.editorconfig` also carries the shell style shfmt reads (`-i 2 -ci -bn -sr`), which the Owned scripts follow; an Application's gate checks the format of the `*.sh` files
   and git hooks a branch changes (its Shell format step), so its own scripts take the style as they are touched ([references/adapt.md](references/adapt.md)).
   Its Python lint step runs ruff 0.17's bug-finding rules (F and B, no config read) on the Python files a branch changes: an Application needs ruff 0.17 or uv
-  installed for a push that changes one (the Factory's ADR 0011, Update: Python).
+  installed for a push that changes one ([the Factory's ADR 0011](../../../docs/adr/0011-markdown-and-yaml-are-linted-as-they-are-written.md), Update: Python).
 
 **Template first.**
 A fix to an Owned file is made in `template/`, then Applied to the repo that needed it.
