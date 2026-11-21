@@ -202,13 +202,20 @@ if ci_paths is not None:
     for folder in folders:
         if not os.path.isdir(os.path.join(owned, folder)):
             problems.append(f"ci.yml's ruff step lints {folder}, which is not a folder of the Template")
+    # Folders ruff skips when it walks a folder it is given (its default exclude, which --isolated keeps): a file under one is not linted.
+    skipped = {".bzr", ".direnv", ".eggs", ".git", ".git-rewrite", ".hg", ".ipynb_checkpoints", ".mypy_cache", ".nox", ".pants.d", ".pyenv",
+               ".pytest_cache", ".pytype", ".ruff_cache", ".svn", ".tox", ".venv", ".vscode", "__pypackages__", "_build", "buck-out", "build",
+               "dist", "node_modules", "site-packages", "venv"}
     for top, dirs, files in os.walk(owned):
-        dirs[:] = [d for d in dirs if d not in ("node_modules", "__pycache__")]
+        dirs[:] = [d for d in dirs if d != "__pycache__"]
         for name in files:
             if name.endswith(".py"):
                 path = os.path.relpath(os.path.join(top, name), owned)
+                parts = path.split(os.sep)[:-1]
                 if not any(path.startswith(folder.rstrip("/") + "/") for folder in folders):
                     problems.append(f"ci.yml's ruff step doesn't lint the Owned {path}")
+                elif skipped.intersection(parts):
+                    problems.append(f"the Owned {path} is under a folder ruff skips by default ({sorted(skipped.intersection(parts))[0]}), so CI's ruff step doesn't lint it")
 version = one("gate.sh", r'^RUFF_VERSION="([^"]+)"$')
 pin = one("requirements-tests.txt", r"^ruff==(\S+) \\$")
 if len(set(rules.values())) != 1:
@@ -831,9 +838,12 @@ STUB
   done
   # The ARG alone installs nothing: the image's pip install takes ruff at that release, or the sandbox's gate fails on a changed *.py.
   # shellcheck disable=SC2016 # the Dockerfile's own ${RUFF_VERSION}, matched as written
-  python3 -I -c 'import re, sys; text = open(sys.argv[1], encoding="utf-8").read().replace("\\\n", " ")
-sys.exit(0 if re.search(r"^RUN pip3 install [^\n]*\"ruff==\$\{RUFF_VERSION\}\"", text, re.M) else 1)' "$seed/.sandcastle/Dockerfile" \
-    || fail "the Seed .sandcastle/Dockerfile must pip3 install \"ruff==\${RUFF_VERSION}\", the release the gate's Python lint step takes"
+  # Comment lines dropped (Docker drops them inside a continued instruction too), then continued lines joined, CRLF or LF; RUN is any case.
+  python3 -I -c 'import re, sys
+text = re.sub(r"(?m)^[ \t]*#[^\n]*\n", "", open(sys.argv[1], encoding="utf-8").read().replace("\r\n", "\n"))
+text = re.sub(r"\\[ \t]*\n", " ", text)
+sys.exit(0 if re.search(r"^[ \t]*RUN[ \t]+[^\n]*\bpip3?[ \t]+install\b[^\n]*\"ruff==\$\{RUFF_VERSION\}\"", text, re.M | re.I) else 1)' "$seed/.sandcastle/Dockerfile" \
+    || fail "the Seed .sandcastle/Dockerfile must have \"ruff==\${RUFF_VERSION}\" on a RUN pip install line, the release the gate's Python lint step takes"
   # And the .NET SDK channel global.json pins.
   sdk="$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["sdk"]["version"])' "$owned/global.json")"
   channel="$(sed -nE 's/^ARG DOTNET_CHANNEL=([^ ]+).*/\1/p' "$seed/.sandcastle/Dockerfile")"
