@@ -229,7 +229,8 @@ private copy of the nearest one (`--rcfile`, written with `mktemp` under an abso
 the repository root, or the person's own in their home, is not read at edit time; the gate reads it. shellcheck is not run while a config on the path is a symlink, not a regular file,
 unreadable, names `external-sources` or `check-sourced` in any case, or holds a line other than a blank, a comment or one of the keys `disable`, `enable`, `source-path`, `shell` and
 `extended-analysis` (an allow-list, so a key a later shellcheck adds can't slip past), or when the private copy can't be made (`mktemp` missing or failing, a relative `TMPDIR`, a failed
-write): the note names the config and why, and the gate still checks the file. A missing `mktemp` or `rm` costs only that shellcheck run. A hook under a nested `.github/hooks` whose
+write): the note names the config and why, and the gate still checks the file. A missing `mktemp` costs only that shellcheck run, and a missing `rm` leaves the private copy in
+`TMPDIR`. The config is read without a here-string, which bash may write to a temp file of its own. A hook under a nested `.github/hooks` whose
 `.editorconfig` can't be read is not linted, with a note; a line of it longer than 4,096 characters is no section header. A violation wins over a note: the hook exits 2 with the
 report alone. `test.sh` checks that the hook's hook-name rule is the gate's and the Lint Actions shellcheck job's, and that its shfmt
 release rule is the gate's and its own.

@@ -53,7 +53,8 @@
 # another release or its --version fails, shellcheck is not run under a shellcheck config or without a private copy of it, or a
 # nested hook's .editorconfig can't be read (above) (this hook only helps; the gate still checks, and the commit hook and CI where
 # they lint that kind of file). Each of these, and a skipped linter, is reported as a systemMessage on stdout, which Claude Code shows
-# to the person; a missing mktemp or rm costs only the shellcheck run, unlike a missing python3 or git (exit 1, below). A violation
+# to the person; a missing mktemp costs only the shellcheck run, and a missing rm leaves its private copy in TMPDIR, unlike a missing
+# python3 or git (exit 1, below). A violation
 # wins: when a linter reports one, the hook exits 2 with the report alone, and a note about a linter that was not run comes with the
 # next edit of the file that finds none. Exit 2: a linter reported a violation; its output goes to stderr, which Claude Code feeds
 # back to the agent. Exit 1: the hook could not run (CLAUDE_PROJECT_DIR unset, or a git file of the project's checkouts longer than any
@@ -501,7 +502,9 @@ sc_keys_known() {
   local LC_ALL=C line
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ "$line" =~ ^[[:space:]]*(#|$) || "$line" =~ ^[[:space:]]*(disable|enable|source-path|shell|extended-analysis)[[:space:]]*= ]] || return 1
-  done <<< "$1"
+    # Fed from printf, not a here-string: bash writes a here-string to a temp file (always before 5.1, and for a large one after), which
+    # fails where no temporary folder can be written, and the config would then read as one with an unknown key.
+  done < <(printf '%s\n' "$1")
 }
 sc_config_refused() {
   local at="$dir" rc path text

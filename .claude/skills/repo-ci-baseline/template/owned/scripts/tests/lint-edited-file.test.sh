@@ -2023,6 +2023,12 @@ else
   echo "skip - shellcheck, or shfmt v3.14 or a later v3, is not installed (or there is no .editorconfig), so their own runs are not tested"
 fi
 
+# The hook feeds no data through a here-string or a heredoc: bash writes those to a temp file (always before 5.1), which fails where no
+# temporary folder can be written, so a shellcheck config would read as one with an unknown key.
+p=()
+! grep -nF -- '<<' "$SCRIPT" || p+=("the hook uses a here-string or heredoc")
+check "the hook reads no data through a here-string or heredoc" ${p[@]+"${p[@]}"}
+
 if [[ -x "$SCRIPT" ]]; then
   pass "scripts/lint-edited-file.sh is executable"
 else
