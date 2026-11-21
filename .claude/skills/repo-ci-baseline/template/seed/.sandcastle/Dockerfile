@@ -14,11 +14,14 @@ RUN apt-get update && apt-get install -y \
   && rm -rf /var/lib/apt/lists/*
 
 # The Python tools: yamllint, which the gate runs on the YAML a branch changes,
+# ruff, which it runs on the Python a branch changes (the release scripts/gate.sh
+# pins as RUFF_VERSION; without it the gate tries uvx, which isn't here, and fails),
 # and pytest for the tests of the scripts under .github/scripts. The gate skips
 # yamllint when it's missing, so the sandbox would pass a branch CI fails.
 ARG YAMLLINT_VERSION=1.38.0
+ARG RUFF_VERSION=0.17.6
 RUN pip3 install --no-cache-dir --break-system-packages \
-    pytest pyyaml "yamllint==${YAMLLINT_VERSION}"
+    pytest pyyaml "yamllint==${YAMLLINT_VERSION}" "ruff==${RUFF_VERSION}"
 
 # Install GitHub CLI
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \

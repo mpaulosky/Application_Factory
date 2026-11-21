@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# A Claude Code PostToolUse hook for Edit, Write and MultiEdit: lints the Markdown, YAML or shell file the tool just wrote, so a
+# A Claude Code PostToolUse hook for Edit, Write and MultiEdit: lints the Markdown, YAML, shell or Python file the tool just wrote, so a
 # violation is fixed in the same turn and not found by the commit hook, the gate, CI or a reviewer.
 #
 #   scripts/lint-edited-file.sh            (Claude Code passes the tool call as JSON on stdin)
@@ -37,6 +37,10 @@
 # and every character in a note that isn't plain text (a control character but a tab, a bidi or zero-width one, a byte that isn't
 # UTF-8; a path's included) is shown as ? (emit_message), as is every byte but printable ASCII in the path an exit-1 message names
 # (plain_path). A hook under a nested .github/hooks whose .editorconfig can't be read is not linted either, and the person is told.
+# Python: a *.py, through ruff check with the gate's flags (RUFF_ARGS: --isolated, so it reads no pyproject.toml or ruff.toml, the
+# rules F and B, Python 3.12, no cache), and only when ruff is a 0.17 release (RUFF_RELEASE), the line the gate accepts: a later one
+# adds rules to F and B. ruff runs no code from the repository, and with --isolated it reads only the file it lints; every RUFF_
+# variable is cleared, since RUFF_OUTPUT_FILE would send the report elsewhere.
 #
 # Only files in the project's own checkout, or in a linked worktree that checkout lists in `git worktree list`, are linted
 # (CLAUDE_PROJECT_DIR, which Claude Code sets and which is required). A file in another clone, in a directory that merely
@@ -52,16 +56,16 @@
 # linter and no helper a linter looks up (node, python3, bash) comes from there, and a linter whose real file is a symlink into
 # one is passed over for the next on PATH (path_bin). Install the linters outside the project, on an absolute PATH entry.
 #
-# Exit 0: the file is clean, is missing, is not Markdown, YAML or shell, is not in the project, is Markdown under a markdownlint config the
-# hook won't run (above), a linter for it is not installed or is found only where the hook runs nothing from (above), shfmt is
-# another release or its --version fails, shellcheck is not run under a shellcheck config, or a nested hook's .editorconfig can't be
+# Exit 0: the file is clean, is missing, is not Markdown, YAML, shell or Python, is not in the project, is Markdown under a markdownlint config the
+# hook won't run (above), a linter for it is not installed or is found only where the hook runs nothing from (above), shfmt or ruff
+# is another release or its --version fails, shellcheck is not run under a shellcheck config, or a nested hook's .editorconfig can't be
 # read (above) (this hook only helps; the gate still checks, and the commit hook and CI where
 # they lint that kind of file). Each of these, and a skipped linter, is reported as a systemMessage on stdout, which Claude Code shows
 # to the person. A violation wins: when a linter reports one, the hook exits 2 with the report alone, and a note about a linter that was not run comes with the
 # next edit of the file that finds none. Exit 2: a linter reported a violation; its output goes to stderr, which Claude Code feeds
 # back to the agent. Exit 1: the hook could not run (CLAUDE_PROJECT_DIR unset, or a git file of the project's checkouts longer than any
 # that names a folder, both for any edit, since they are checked before the input is read; python3 missing or found only where the
-# hook runs nothing from, bad JSON, or, for a Markdown, YAML or shell file, git missing, found only where the hook runs nothing from, or
+# hook runs nothing from, bad JSON, or, for a Markdown, YAML, shell or Python file, git missing, found only where the hook runs nothing from, or
 # older than 2.36); Claude Code shows that to the
 # person and carries on. A linter that is installed but crashes counts as a violation, not as clean.
 set -uo pipefail
@@ -70,6 +74,13 @@ set -uo pipefail
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR CDPATH
 # ShellCheck reads its options from this too, and --check-sourced there would quote the lines of a file a source line names.
 unset SHELLCHECK_OPTS
+# Ruff reads RUFF_OUTPUT_FILE, RUFF_OUTPUT_FORMAT, RUFF_CACHE_DIR and RUFF_NO_CACHE: the report would go to a file and not to the agent,
+# or a cache would be written. Every RUFF_ variable goes, so ruff runs with the flags below alone.
+# shellcheck disable=SC2046 # one variable name per word, on purpose
+unset $(compgen -v RUFF_)
+# The one ruff release line the gate accepts, and the rules it checks: the same in scripts/gate.sh, which test.sh keeps equal.
+RUFF_RELEASE='^ruff 0\.17\.[0-9]+$'
+RUFF_ARGS=(check --isolated --no-cache --select "F,B" --target-version py312)
 
 # emit_message <text>: the systemMessage Claude Code shows the person, as JSON on stdout. The text quotes paths and config text an agent
 # chose, so every character that isn't plain text becomes ?: a control character but a tab (C0, DEL, C1: an escape sequence), a format
@@ -273,6 +284,7 @@ esac
 if [[ -z "$kind" ]]; then
   case "$name" in
     *.sh) kind=shell ;;
+    *.py) kind=python ;;
     *.*) ;;
     *) [[ "$dir" != */scripts && "$dir" != */.github/hooks ]] || kind=shell ;;
   esac
@@ -713,6 +725,18 @@ elif [[ "$kind" == shell ]]; then
         notes+=("shfmt '$(plain_text "$shfmt_version" 40)' is not v3.14 or a later v3 release, whose format the gate checks")
       fi
     fi
+  fi
+elif [[ "$kind" == python ]]; then
+  path_bin ruff bin
+  if [[ -z "$bin" ]]; then
+    skipped+=("ruff")
+  elif ! ruff_version="$(cd "$root" && "$bin" --version 2> /dev/null)" || [[ -z "$ruff_version" ]]; then
+    notes+=("ruff --version failed or printed nothing, so its release is unknown and ruff was not run")
+  elif [[ "$ruff_version" =~ $RUFF_RELEASE ]]; then
+    # --isolated: ruff reads no pyproject.toml, ruff.toml or .ruff.toml, so a config an agent wrote can't turn a rule off or another on.
+    run_linter ruff "$bin" "${RUFF_ARGS[@]}" -- "$target"
+  else
+    notes+=("ruff '$(plain_text "$ruff_version" 40)' is not a 0.17 release, the one the gate checks with")
   fi
 else
   path_bin yamllint bin

@@ -290,8 +290,8 @@ jobs:
   # Unit tests for the scripts in .github/scripts (the release blog generator,
   # Claude Review's script and the rest), among them the gh check
   # (check_gh_repo.py), the Owned files check (check_owned_files.py) and the
-  # gh-repo job that runs them. Deliberately not a required status check on
-  # main's ruleset.
+  # gh-repo job that runs them, and ruff over the Template's Python. Deliberately
+  # not a required status check on main's ruleset.
   python-tests:
     name: Python tests
     runs-on: ubuntu-latest
@@ -327,6 +327,11 @@ jobs:
       - name: Install the Python tests' packages
         run: |
           python -m pip install --require-hashes --no-deps --only-binary=:all: -r .github/scripts/requirements-tests.txt
+
+      # ruff's bug-finding rules (F and B) over the Template's Python, with the flags scripts/gate.sh and the edit-time lint pass (test.sh
+      # keeps them equal); --isolated, so no config is read. The gate lints a repo's own Python files as a branch changes them.
+      - name: Run ruff
+        run: python -m ruff check --isolated --no-cache --select F,B --target-version py312 -- .github/scripts .claude/skills/hardening-review/scripts
 
       - name: Run pytest
         run: python -m pytest .github/scripts/tests

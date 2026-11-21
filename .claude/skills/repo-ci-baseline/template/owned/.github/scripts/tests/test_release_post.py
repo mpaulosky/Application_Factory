@@ -1,4 +1,5 @@
 import io
+import itertools
 import json
 import re
 import subprocess
@@ -166,7 +167,7 @@ def assert_one_h1_and_no_skipped_levels(post):
     levels = heading_levels(post)
     assert levels[0] == 1
     assert levels.count(1) == 1
-    assert all(b - a <= 1 for a, b in zip(levels, levels[1:]))
+    assert all(b - a <= 1 for a, b in itertools.pairwise(levels))
 
 
 def test_post_starts_with_one_h1_and_never_skips_a_level():

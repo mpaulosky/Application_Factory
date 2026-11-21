@@ -172,6 +172,51 @@ for problem in problems:
     print(problem)
 sys.exit(1 if problems else 0)
 PY
+  # The edit-time lint and the Owned gate check Python with the same ruff release rule and flags, CI's python-tests job passes the same
+  # flags, and requirements-tests.txt pins the release the gate runs through uvx, one the rule takes: a Dependabot bump to another
+  # release line fails here, so the rule is moved with it on purpose.
+  python3 -I - "$owned" << 'PY' || fail "scripts/lint-edited-file.sh, scripts/gate.sh, ci.yml and requirements-tests.txt must agree on ruff (see above)"
+import re, shlex, sys
+owned = sys.argv[1]
+read = lambda path: open(path, encoding="utf-8").read()
+texts = {"lint-edited-file.sh": read(f"{owned}/scripts/lint-edited-file.sh"), "gate.sh": read(f"{owned}/scripts/gate.sh"),
+         "ci.yml": read(f"{owned}/.github/workflows/ci.yml"), "requirements-tests.txt": read(f"{owned}/.github/scripts/requirements-tests.txt")}
+problems = []
+def one(where, pattern):
+    found = re.findall(pattern, texts[where], re.M)
+    if len(found) != 1:
+        problems.append(f"{where}: {pattern} is not found once ({len(found)} found)")
+        return None
+    return found[0]
+rules = {where: one(where, r"^RUFF_RELEASE='([^']+)'$") for where in ("lint-edited-file.sh", "gate.sh")}
+flags = {where: one(where, r"^RUFF_ARGS=\((.+)\)$") for where in ("lint-edited-file.sh", "gate.sh")}
+flags = {where: shlex.split(found) for where, found in flags.items() if found is not None}
+ci = one("ci.yml", r"^ *run: python -m ruff (.+) -- \S.*$")
+if ci is not None:
+    flags["ci.yml"] = shlex.split(ci)
+version = one("gate.sh", r'^RUFF_VERSION="([^"]+)"$')
+pin = one("requirements-tests.txt", r"^ruff==(\S+) \\$")
+if len(set(rules.values())) != 1:
+    problems.append(f"the ruff release rules differ: {rules}")
+if len({tuple(found) for found in flags.values()}) != 1:
+    problems.append(f"the ruff flags differ: {flags}")
+if "--isolated" not in flags.get("gate.sh", []):
+    problems.append("gate.sh's RUFF_ARGS must hold --isolated, so no config an agent could write is read")
+if version is not None and pin is not None and version != pin:
+    problems.append(f"gate.sh's RUFF_VERSION {version} is not requirements-tests.txt's ruff=={pin}")
+rule = rules.get("gate.sh")
+if rule and version and not re.fullmatch(rule, f"ruff {version}"):
+    problems.append(f"RUFF_VERSION {version} is not a release the rule {rule} takes")
+# The messages name the release line, so they move with the rule too.
+if version:
+    line = ".".join(version.split(".")[:2])
+    for where, words in (("lint-edited-file.sh", f"is not a {line} release"), ("gate.sh", f"needs ruff {line}")):
+        if words not in texts[where]:
+            problems.append(f"{where} doesn't say '{words}', the release line RUFF_VERSION {version} is in")
+for problem in problems:
+    print(problem)
+sys.exit(1 if problems else 0)
+PY
   # The script edit rule: the checks reviewers keep raising on script changes, loaded when a session works on a script (its paths: front matter
   # names the shell and Python files and the folders the hook lints), and written into every repo, so it names nothing of the Factory's.
   script_rule="$owned/.claude/rules/script-edits.md"
@@ -763,7 +808,7 @@ STUB
     fail "the Seed Sandcastle files describe dotfiles; describe any Baseline repo instead"
   fi
   # The sandbox runs the gate, so its linters are the versions the Owned gate.sh pins.
-  for name in ACTIONLINT_VERSION ZIZMOR_VERSION SHELLCHECK_VERSION MARKDOWNLINT_CLI2_VERSION; do
+  for name in ACTIONLINT_VERSION ZIZMOR_VERSION SHELLCHECK_VERSION MARKDOWNLINT_CLI2_VERSION RUFF_VERSION; do
     pinned="$(sed -nE "s/^$name=\"([^\"]+)\".*/\1/p" "$owned/scripts/gate.sh")"
     image="$(sed -nE "s/^ARG $name=([^ ]+).*/\1/p" "$seed/.sandcastle/Dockerfile")"
     [[ -n "$pinned" && "$image" == "$pinned" ]] \

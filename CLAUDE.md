@@ -32,10 +32,10 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   The review's own, non-copy files are `.sandcastle/lib/repo-config.mts` (`REPO_SLUG`, `NOT_OWNED_BASELINE_PATHS`), `package.json`, `pnpm-workspace.yaml`,
   `pnpm-lock.yaml` and the `.gitignore` lines for `node_modules/` and `.security/`.
 - `.claude/settings.json` and `scripts/lint-edited-file.sh` (a copy of the Template's Owned file): the edit-time lint (ADR 0011). The settings file holds one `PostToolUse` hook
-  that lints each Markdown, YAML or shell file Claude writes; the Template carries the script but not the settings file.
+  that lints each Markdown, YAML, shell or Python file Claude writes; the Template carries the script but not the settings file.
 - `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too; its header lists the steps (its test and the review's three tests, the copies' drift check, the bare-`#N` check,
-  the Git-status check, lint, shellcheck of the changed shell files, shfmt of every shell file, the local review check, then `test.sh`, which it skips for a tree that already passed it,
-  then the Sandcastle check when the branch changed a file it reads).
+  the Git-status check, lint, shellcheck of the changed shell files, shfmt of every shell file, ruff of every Python file, the local review check, then `test.sh`,
+  which it skips for a tree that already passed it, then the Sandcastle check when the branch changed a file it reads).
   `GATE_PART=<part>` runs one part (CI's jobs; the pre-push hook drops it), and `TEST_SH_SHARD` one shard of `test.sh` in the `template` part only.
   [ADR 0006](docs/adr/0006-the-factory-carries-the-git-hooks-and-a-gate.md), [ADR
   0012](docs/adr/0012-the-template-tests-workflow-runs-the-gate-in-parallel-parts.md), [ADR 0013](docs/adr/0013-ci-runs-test-sh-in-shards-and-the-review-tests-as-their-own-part.md).
@@ -50,8 +50,8 @@ Don't add more without an ADR.
 
 ```bash
 scripts/gate.sh --sync                                        # copy the Template's files over the Factory's copies of them (after editing the Template)
-scripts/gate.sh --quick                                       # while iterating: the gate up to and including shellcheck of the shell files the branch changed and shfmt of every shell file, without the local review check, test.sh and the Sandcastle check (about a minute); never for a push
-scripts/gate.sh                                               # the pre-push gate (needs pnpm on the first run, and test.sh's tools, shfmt among them); GATE_NO_CACHE=1 runs test.sh and the Sandcastle check again on a tree that already passed them
+scripts/gate.sh --quick                                       # while iterating: the gate up to and including shellcheck of the shell files the branch changed, shfmt of every shell file and ruff of every Python file, without the local review check, test.sh and the Sandcastle check (about a minute); never for a push
+scripts/gate.sh                                               # the pre-push gate (needs pnpm on the first run, test.sh's tools, shfmt among them, and ruff 0.17: uv tool install ruff@0.17.6); GATE_NO_CACHE=1 runs test.sh and the Sandcastle check again on a tree that already passed them
 GATE_PART=sandcastle scripts/gate.sh                          # one part alone (self, review, static, template, sandcastle), as a CI job runs it; the Sandcastle check needs pnpm and the network
 .claude/skills/repo-ci-baseline/test.sh                       # all the Template's tests (TEST_SH_SHARD=hooks|scripts|checks runs one shard); needs actionlint, zizmor, yamllint, shellcheck, shfmt (v3.14 or a later v3), markdownlint-cli2, node, git, jq
 .claude/skills/repo-ci-baseline/tests/sandcastle-check.test.sh # Sandcastle's type-check and tests on a throwaway Application; needs pnpm and the network
@@ -84,6 +84,8 @@ Start a branch with `git worktree add --no-track -b <branch> ../Application_Fact
 
 Markdown is linted with `.markdownlint-cli2.jsonc` (lines up to 200 characters). Shell files are formatted by shfmt in the style `.editorconfig` gives (ADR 0015): run `shfmt -w <file>`
 after editing one, with no style flags, so it reads that file. The edit-time lint runs shellcheck and `shfmt -d` on a shell file Write or Edit writes.
+Python files pass ruff's bug-finding rules (F and B) with no config read (ADR 0011, Update: Python), at edit time and in the gate; mark a false alarm with
+`# noqa: <code>` and the reason on its line.
 
 Write and edit Markdown and YAML files with the Write and Edit tools, never with a shell command (`cat <<EOF >`, `sed -i`, `tee`, `echo >>`, a `python`
 or `node` one-liner, a script). The edit-time lint (ADR 0011) is a `PostToolUse` hook on Write, Edit and MultiEdit: it lints the file the moment the tool

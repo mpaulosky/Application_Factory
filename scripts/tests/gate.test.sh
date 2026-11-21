@@ -264,7 +264,7 @@ check "with an origin/main that shares no history every shell file is checked" "
 # A missing shellcheck fails the gate and says so.
 repo8="$(new_repo quick-no-shellcheck)"
 mkdir -p "$work/noshellcheck"
-for tool in bash git python3 markdownlint-cli2 yamllint shfmt node pnpm env sh cat grep sed awk sort dirname basename mktemp rm cp mv ls tr head tail wc cmp mkdir touch uname date find; do
+for tool in bash git python3 markdownlint-cli2 yamllint shfmt ruff node pnpm env sh cat grep sed awk sort dirname basename mktemp rm cp mv ls tr head tail wc cmp mkdir touch uname date find; do
   tool_path="$(command -v "$tool" 2> /dev/null || true)"
   [[ -z $tool_path ]] || ln -sf "$tool_path" "$work/noshellcheck/$tool"
 done
@@ -385,7 +385,7 @@ check "shfmt takes the style from .editorconfig" "$([[ $status == 1 ]] && grep -
 # A missing shfmt fails the gate and says so; the version rule is test.sh's (v3.14 or a later v3), tried with a stub shfmt on the versions tests/gh_repo/test_shfmt_install.py tries.
 repoH="$(new_repo shfmt-missing)"
 mkdir -p "$work/noshfmt" "$work/stubshfmt"
-for tool in bash git python3 markdownlint-cli2 yamllint shellcheck node pnpm env sh cat grep sed awk sort dirname basename mktemp rm cp mv ls tr head tail wc cmp mkdir touch uname date find; do
+for tool in bash git python3 markdownlint-cli2 yamllint shellcheck ruff node pnpm env sh cat grep sed awk sort dirname basename mktemp rm cp mv ls tr head tail wc cmp mkdir touch uname date find; do
   tool_path="$(command -v "$tool" 2> /dev/null || true)"
   [[ -z $tool_path ]] || ln -sf "$tool_path" "$work/noshfmt/$tool"
   [[ -z $tool_path ]] || ln -sf "$tool_path" "$work/stubshfmt/$tool"
@@ -413,6 +413,80 @@ status=0
 check "a shfmt that fails (exit 3) stops the gate as a failed shfmt, not a diff" "$([[ $status == 1 ]] && grep -q 'shfmt failed (exit 3) without checking the format' "$repoH/out" && ! grep -q 'run shfmt -w' "$repoH/out" && echo 0 || echo 1)"
 version_rule() { grep -oE '"\$\(shfmt --version\)" =~ [^ ]+' "$1"; }
 check "the gate's shfmt version rule is test.sh's" "$([[ -n "$(version_rule "$here/scripts/gate.sh")" && "$(version_rule "$here/scripts/gate.sh")" == "$(version_rule "$here/$skill/test.sh")" ]] && echo 0 || echo 1)"
+
+# The ruff step (ADR 0011): every Python file, changed or not, passes ruff's F and B rules with --isolated, so a config in the repo changes nothing.
+repoP="$(new_repo ruff)"
+stub_review "$repoP"
+with_origin "$repoP"
+printf 'import os\n' > "$repoP/loose.py"
+printf '[tool.ruff.lint]\nignore = ["F401"]\n' > "$repoP/pyproject.toml"
+GATE_ARGS=--quick run "$repoP"
+check "--quick fails on an untracked Python file with an F finding, naming it, though pyproject.toml ignores the rule" \
+  "$([[ $status == 1 && $ran == no ]] && grep -q 'loose.py:1:8' "$repoP/out" && grep -q 'F401' "$repoP/out" && grep -q '❌ ruff: fix each problem' "$repoP/out" && echo 0 || echo 1)"
+run "$repoP"
+check "the full gate fails in the ruff step too, before test.sh" "$([[ $status == 1 && $ran == no ]] && grep -q '❌ ruff' "$repoP/out" && echo 0 || echo 1)"
+printf 'def f(a=[]):\n    return a\n' > "$repoP/loose.py"
+GATE_ARGS=--quick run "$repoP"
+check "a B finding fails it too" "$([[ $status == 1 ]] && grep -q 'B006' "$repoP/out" && echo 0 || echo 1)"
+printf 'import os\n\nprint(os.sep)\n' > "$repoP/loose.py"
+mkdir -p "$repoP/-x"
+printf 'x = 1\n' > "$repoP/-x/-dash.py"
+printf 'BAD = 1\n' > "$repoP/upper.PY"
+GATE_ARGS=--quick run "$repoP"
+check "the same file passes once fixed, and the step counts every *.py, a -dash.py among them" \
+  "$([[ $status == 0 ]] && grep -qE '^[1-9][0-9]* Python file\(s\) checked' "$repoP/out" && echo 0 || echo 1)"
+git -C "$repoP" add -A
+printf 'import sys\n' > "$repoP/-x/-dash.py"
+GATE_ARGS=--quick run "$repoP"
+check "a file whose name starts with - is a file to ruff, not an option" "$([[ $status == 1 ]] && grep -qF -- '-x/-dash.py:1:8' "$repoP/out" && echo 0 || echo 1)"
+rm -r "${repoP:?}/-x" "$repoP/upper.PY"
+# A missing ruff fails the gate and says so; an installed one must be a 0.17 release (the Template gate's rule, checked below), tried with a stub.
+mkdir -p "$work/noruff" "$work/stubruff"
+for tool in bash git python3 markdownlint-cli2 yamllint shellcheck shfmt node pnpm env sh cat grep sed awk sort dirname basename mktemp rm cp mv ls tr head tail wc cmp mkdir touch uname date find; do
+  tool_path="$(command -v "$tool" 2> /dev/null || true)"
+  [[ -z $tool_path ]] || ln -sf "$tool_path" "$work/noruff/$tool"
+  [[ -z $tool_path ]] || ln -sf "$tool_path" "$work/stubruff/$tool"
+done
+status=0
+(cd "$repoP" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/noruff" bash scripts/gate.sh --quick > "$repoP/out" 2>&1) || status=$?
+check "a missing ruff fails the gate and says how to install it" "$([[ $status == 1 ]] && grep -q 'ruff not found: the gate needs ruff 0.17 (uv tool install ruff@0.17.6)' "$repoP/out" && echo 0 || echo 1)"
+# stub_ruff <version answer> <exit for a check>: a ruff that prints the answer for --version and logs its arguments otherwise.
+stub_ruff() {
+  # shellcheck disable=SC2016 # the stub's own code, written as it is
+  printf '#!/usr/bin/env bash\nif [[ "${1:-}" == --version ]]; then printf "%%s\\n" %q; exit 0; fi\nprintf "%%s\\n" "$@" > %q\nexit %d\n' "$1" "$work/ruff-args" "$2" > "$work/stubruff/ruff"
+  chmod +x "$work/stubruff/ruff"
+}
+run_stub_ruff() {
+  rm -f "$work/ruff-args"
+  status=0
+  (cd "$repoP" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/stubruff" bash scripts/gate.sh --quick > "$repoP/out" 2>&1) || status=$?
+}
+for version in "ruff 0.17.0" "ruff 0.17.6" "ruff 0.17.10" "ruff 0.16.9" "ruff 0.18.0" "ruff 1.17.0" "ruff 0.17" "0.17.6" "ruff 0.17.6 extra"; do
+  stub_ruff "$version" 0
+  run_stub_ruff
+  case "$version" in
+    "ruff 0.17.0" | "ruff 0.17.6" | "ruff 0.17.10") check "$version is accepted" "$([[ $status == 0 && -e $work/ruff-args ]] && echo 0 || echo 1)" ;;
+    *) check "'$version' is refused, naming it, before ruff runs" "$([[ $status == 1 && ! -e $work/ruff-args ]] && grep -qF "needs ruff 0.17, not '$version'" "$repoP/out" && echo 0 || echo 1)" ;;
+  esac
+done
+stub_ruff $'ruff 0.1\033]0;x\a\\e\303\251' 0
+run_stub_ruff
+check "a release's control bytes and bytes outside ASCII are shown as ?, and a backslash stays a backslash" \
+  "$([[ $status == 1 ]] && grep -qF "not 'ruff 0.1?]0;x?\\e??'" "$repoP/out" && ! grep -q $'\033]0' "$repoP/out" && echo 0 || echo 1)"
+stub_ruff "ruff 0.17.6" 0
+run_stub_ruff
+check "ruff gets exactly the flags, then --, then the names" \
+  "$([[ $status == 0 ]] && [[ "$(head -n 8 "$work/ruff-args" | tr '\n' ' ')" == 'check --isolated --no-cache --select F,B --target-version py312 -- ' ]] && echo 0 || echo 1)"
+for code in 2 3; do
+  stub_ruff "ruff 0.17.6" "$code"
+  run_stub_ruff
+  check "a ruff that exits $code stops the gate as a failed ruff, not a finding" \
+    "$([[ $status == 1 ]] && grep -q "ruff failed (exit $code) without checking the files" "$repoP/out" && ! grep -q 'fix each problem' "$repoP/out" && echo 0 || echo 1)"
+done
+# The release rule and the flags are the Template gate's, so the Factory checks its Python as an Application's gate checks its own.
+ruff_lines() { grep -E '^ *(RUFF_VERSION|RUFF_RELEASE|RUFF_ARGS)=' "$1" | sed 's/^ *//'; }
+check "the gate's ruff release, rule and flags are the Template gate's" \
+  "$([[ "$(ruff_lines "$here/scripts/gate.sh" | wc -l)" == 3 && "$(ruff_lines "$here/scripts/gate.sh")" == "$(ruff_lines "$here/$skill/template/owned/scripts/gate.sh")" ]] && echo 0 || echo 1)"
 
 # test.sh's pass is remembered for a clean tree: the same tree is not tested twice; a new commit, an uncommitted or untracked file, GATE_NO_CACHE=1 and a failure all run it.
 repo9="$(new_repo cache)"

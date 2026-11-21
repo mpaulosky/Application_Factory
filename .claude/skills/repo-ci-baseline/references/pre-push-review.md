@@ -105,7 +105,7 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   pipeline's roles, `.sandcastle/check.sh`, whose watched paths decide whether the Sandcastle check runs,
   `global.json`, which sets the SDK and msbuild-sdks a build runs, `docs/PROCESS.md`, which `review-prompt.md` tells a role to follow, `scripts/cleanup.sh`, which deletes branches,
   worktrees and origin branches, `scripts/work-issue.sh`, which makes a branch and worktree named from issue text, `scripts/lint-edited-file.sh`, which lints each
-  Markdown, YAML or shell file an agent writes, with no Bash prompt, and vets the configs its linters read, and the chain that runs the review and the gate:
+  Markdown, YAML, shell or Python file an agent writes, with no Bash prompt, and vets the configs its linters read, and the chain that runs the review and the gate:
   `scripts/gate.sh`, `scripts/review.sh`, `.github/hooks/pre-push` and the `lib/` modules `review-ledger.mts`, `host-safety.mts`, `sandbox-env.mts`, `host-review.mts`,
   `host-review-prompts.mts` and `build.mts`, and the host's entrypoint and status command `.sandcastle/main.mts` and `.sandcastle/status.mts`, which wire those modules together,
   since the Template's checks run in the Template and in a repo judge whatever bytes the re-Apply wrote)
