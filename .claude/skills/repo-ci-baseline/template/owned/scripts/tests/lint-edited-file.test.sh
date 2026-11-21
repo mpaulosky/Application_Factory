@@ -71,7 +71,7 @@ mkdir -p "$STUBS"
 # shfmt --version prints $SHFMT_STUB_VERSION and logs nothing. A stub run with SHELLCHECK_OPTS set logs it on a line of its own, and one
 # given --rcfile (as its own argument or --rcfile=<file>) logs "RCFILE <its arguments>": the hook gives it none, and a test checks that.
 # A shellcheck stub logs "ARGV" and each argument in < >, so a test can tell one argument from two; shellcheck --help prints a usage that
-# lists --extended-analysis (one without it when SHELLCHECK_STUB_OLD is set, nothing when SHELLCHECK_STUB_HELP_QUIET is), exits
+# lists --extended-analysis under a Usage: line (one without it when SHELLCHECK_STUB_OLD is set, nothing when SHELLCHECK_STUB_HELP_QUIET is), exits
 # $SHELLCHECK_STUB_HELP_EXIT (0 by default) and logs nothing.
 make_stub() {
   cat > "$1/$2" << 'EOF'
@@ -83,6 +83,7 @@ if [[ "$name" == shfmt && "${1:-}" == --version ]]; then
 fi
 if [[ "$name" == shellcheck && "${1:-}" == --help ]]; then
   if [[ -z "${SHELLCHECK_STUB_HELP_QUIET:-}" ]]; then
+    echo "Usage: shellcheck [OPTIONS...] FILES..."
     echo "  -e CODE1,CODE2..    --exclude=CODE1,CODE2..    Exclude types of warnings"
     [[ -n "${SHELLCHECK_STUB_OLD:-}" ]] || echo "                      --extended-analysis=bool   Perform dataflow analysis (default true)"
   fi
@@ -111,7 +112,9 @@ EOF
   chmod +x "$1/$2"
 }
 for tool in markdownlint-cli2 yamllint actionlint zizmor shellcheck shfmt; do make_stub "$STUBS" "$tool"; done
-# The stub's --rcfile detector itself, in both forms, so a test that finds no RCFILE line in the log can fail.
+# The stub's --rcfile detector itself, in both forms, so a test that finds no RCFILE line in the log can fail. STDOUT and STDERR are
+# set first: check prints them on a failure, and no run_hook has set them yet.
+STDOUT="" STDERR=""
 p=()
 for form in "--rcfile=$WORK/x" "--rcfile $WORK/x"; do
   : > "$WORK/rcfile-probe.log"
@@ -1012,8 +1015,8 @@ p=()
 [[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_line "ARGV <--norc> <-P> <--extended-analysis=false> <--> <./scripts/ok.sh>" \
   || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
 check "a source-path value spelling --extended-analysis doesn't count as the key" ${p[@]+"${p[@]}"}
-# The help is judged by what it lists, not by its exit status: one that lists the flag and exits 1 still runs shellcheck, and one that
-# fails and prints nothing gets a note saying --help failed, not that the flag is missing.
+# The help is judged by what it prints, not by its exit status: one that lists the flag and exits 1 still runs shellcheck, a usage
+# without the flag that exits 1 gets the "has no --extended-analysis" note, and one that prints nothing gets a note saying so.
 printf 'extended-analysis=false\n' > "$repo/scripts/.shellcheckrc"
 RUN_ENV=(SHELLCHECK_STUB_HELP_EXIT=1)
 run_hook "$(edit_json "$repo/scripts/ok.sh")"
@@ -1021,14 +1024,20 @@ p=()
 [[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_line "ARGV <--norc> <--extended-analysis=false> <--> <./scripts/ok.sh>" \
   || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
 check "a shellcheck --help that lists --extended-analysis and exits 1 still runs shellcheck" ${p[@]+"${p[@]}"}
+RUN_ENV=(SHELLCHECK_STUB_HELP_EXIT=1 SHELLCHECK_STUB_OLD=1)
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+p=()
+[[ $STATUS -eq 0 && "$(ran shellcheck)" == 0 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
+[[ "$(system_message "$STDOUT")" == *"this shellcheck has no --extended-analysis, which its config scripts/.shellcheckrc sets"* ]] || p+=("note: $STDOUT")
+check "a shellcheck --help that prints a usage without --extended-analysis and exits 1 gets the 'has no' note" ${p[@]+"${p[@]}"}
 RUN_ENV=(SHELLCHECK_STUB_HELP_EXIT=2 SHELLCHECK_STUB_HELP_QUIET=1)
 run_hook "$(edit_json "$repo/scripts/ok.sh")"
 RUN_ENV=(RUN_ENV_UNUSED=1)
 p=()
 [[ $STATUS -eq 0 && "$(ran shellcheck)" == 0 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
-[[ "$(system_message "$STDOUT")" == *"shellcheck was not run: its --help failed (exit 2), so the hook can't tell whether it has --extended-analysis, which its config scripts/.shellcheckrc sets"* ]] \
+[[ "$(system_message "$STDOUT")" == *"shellcheck was not run: its --help (exit 2) printed no usage, so the hook can't tell whether it has --extended-analysis, which its config scripts/.shellcheckrc sets"* ]] \
   || p+=("note: $STDOUT")
-check "a shellcheck --help that fails gets its own note, not 'has no --extended-analysis'" ${p[@]+"${p[@]}"}
+check "a shellcheck --help that prints no usage gets its own note, not 'has no --extended-analysis'" ${p[@]+"${p[@]}"}
 # Each accepted value, as its flag; a value with an = in it, or one starting with a dash after -P, stays one argument;
 # a repeated key gives its flag twice, in order; tabs around the = count for nothing.
 for case in 'shell=sh|<-s> <sh>' 'shell=dash|<-s> <dash>' 'shell=ksh|<-s> <ksh>' 'shell=busybox|<-s> <busybox>' \
@@ -1120,6 +1129,20 @@ p=()
 [[ "$(wc -c < "$repo/scripts/.shellcheckrc" | tr -d ' ')" == 65537 ]] || p+=("the fixture is not 65537 bytes")
 [[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"is longer than 65536 bytes"* ]] || p+=("note: $STDOUT")
 check "a config whose 65537th byte is a newline is refused" ${p[@]+"${p[@]}"}
+# A NUL byte is refused before the read, which would drop it: a config of 65537 bytes with ten NULs would otherwise measure 65527, and a
+# short one would be vetted without them.
+for size in long short; do
+  if [[ "$size" == long ]]; then
+    python3 -I -c 'import sys; sys.stdout.buffer.write(b"#" * 65000 + b"\0" * 10 + b"\n" + b"disable=SC1000\n" * 100)' > "$repo/scripts/.shellcheckrc"
+  else
+    printf 'disable=SC1000\n\000\n' > "$repo/scripts/.shellcheckrc"
+  fi
+  run_hook "$(edit_json "$repo/scripts/ok.sh")"
+  p=()
+  [[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"its config scripts/.shellcheckrc holds a NUL byte"* ]] || p+=("note: ${STDOUT:0:300}")
+  [[ "$STDERR" != *"null byte"* ]] || p+=("bash warned of the NUL: $STDERR")
+  check "a $size config holding a NUL byte is refused" ${p[@]+"${p[@]}"}
+done
 # A config of 20 MB is refused at once: the hook reads its first 65537 bytes, not all of it.
 python3 -I -c 'import sys; sys.stdout.write(("#" * 99 + "\n") * 200000)' > "$repo/scripts/.shellcheckrc"
 start=$SECONDS

@@ -237,11 +237,13 @@ process to change, and the hook needs a shellcheck with `--norc`, not `--rcfile`
 time; the gate reads it. The config is read without a here-string, which bash may write to a temp file of its own. shellcheck is not run while a config on the path is a
 symlink, not a regular file, unreadable, names `external-sources` or `check-sourced` in any case, holds a line other than a blank, a comment or one of those five keys (an
 allow-list, so a key a later shellcheck adds can't slip past), gives one no value or a value of a form the hook doesn't pass on (`disable` and `enable` take codes or check
-names with commas, starting with a letter or digit, `shell` one of `sh`, `bash`, `dash`, `ksh` and `busybox`, `extended-analysis` `true` or `false`), has a line over 4,096
+names with commas, starting with a letter or digit, `shell` one of `sh`, `bash`, `dash`, `ksh` and `busybox`, `extended-analysis` `true` or `false`), holds a NUL byte (which
+bash would drop as it reads, so the length would come out short), has a line over 4,096
 bytes or is over 65,536 in all (bounds chosen well inside what a command line carries, which no real config comes near; only 65,537 bytes of a config are read), or sets
 `extended-analysis` for a shellcheck whose `--help` lists no `--extended-analysis` (before 0.9), which would stop on it with a usage error: the note names the config and
 why (an unknown key by its first 40 bytes, each one other than a letter, digit, space or `_ . + -` shown as `?`, so no control byte an agent wrote reaches the person's
-terminal), and the gate still checks the file. A `--help` that fails without listing the flag gets a note of its own. Each value is one argument of its flag: `source-path`
+terminal), and the gate still checks the file. The help is judged by what it prints, not its exit status: a usage without the flag gets
+that note, and a `--help` that prints no usage gets one of its own. Each value is one argument of its flag: `source-path`
 may start with a dash, since shellcheck takes the argument after `-P` as its value, and `disable` and `enable` may not.
 
 A hook under a nested `.github/hooks` whose `.editorconfig` can't be read is not linted, with a note; a line of it longer than 4,096 characters is no section header. A violation

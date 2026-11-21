@@ -77,7 +77,7 @@ above the root, or one changed after the check, is never read. Two hand-overs we
 before shellcheck reads it. A pipe (`--rcfile <(...)`) can be reached by another process running as the person through `/proc/<pid>/fd`, and is a named FIFO in `TMPDIR` on a
 bash without `/dev/fd`. Flags leave nothing to reach. It doesn't run shellcheck under a config that is a symlink, not a regular file, unreadable, names `external-sources` or
 `check-sourced`, sets a key outside an allow-list (`disable`, `enable`, `source-path`, `shell`, `extended-analysis`), gives one no value or a value of a form the hook
-doesn't pass on, has a line over 4,096 bytes or is over 65,536 in all (of which the hook reads no more than one byte past the cap), or sets `extended-analysis` for a
+doesn't pass on, holds a NUL byte, has a line over 4,096 bytes or is over 65,536 in all (of which the hook reads no more than one byte past the cap), or sets `extended-analysis` for a
 shellcheck whose `--help` doesn't list that flag (before 0.9); the note says so, and quotes an agent-written key with every byte but a letter, digit, space or `_ . + -` as `?`.
 Plain `--norc` alone was not chosen: a repo's own `disable=` lines would then fail files its gate passes, and the flags keep them.
 `test.sh` keeps the hook's hook-name and shfmt release rules equal to the gate's. The report's first line now says only that the gate checks the same file

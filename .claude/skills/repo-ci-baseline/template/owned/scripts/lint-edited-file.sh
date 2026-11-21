@@ -31,10 +31,11 @@
 # --extended-analysis), so nothing a process could change between the check and shellcheck's run is read, and no config above the
 # repository root is. ShellCheck is not run while a config on the file's path is a symlink, not a regular file, unreadable, names
 # external-sources or check-sourced, holds a line other than a blank, a comment or one of those keys, gives one of them no value or a
-# value of a form the hook doesn't pass on, or is over the size the hook reads (see sc_config_refused and sc_config_flags), or while it
-# sets extended-analysis for a shellcheck whose --help doesn't list that flag: the person is told, and the gate still checks the file. A
-# key or shfmt release the note names is shown with only letters, digits, spaces and _ . + -, so it carries no control byte. A hook under a
-# nested .github/hooks whose .editorconfig can't be read is not linted either, and the person is told.
+# value of a form the hook doesn't pass on, holds a NUL byte, or is over the size the hook reads (see sc_config_refused and
+# sc_config_flags), or while it sets extended-analysis for a shellcheck whose --help doesn't list that flag: the person is told,
+# and the gate still checks the file. A key or shfmt release the note names is shown with only letters, digits, spaces and _ . + -,
+# so it carries no control byte. A hook under a nested .github/hooks whose .editorconfig can't be read is not linted either, and the
+# person is told.
 #
 # Only files in the project's own checkout, or in a linked worktree that checkout lists in `git worktree list`, are linted
 # (CLAUDE_PROJECT_DIR, which Claude Code sets and which is required). A file in another clone, in a directory that merely
@@ -501,21 +502,25 @@ plain_text() {
   printf '%s' "${text//[!A-Za-z0-9 _.+-]/?}"
 }
 
-# sc_help_lists_ea <shellcheck>: 0 when its --help lists --extended-analysis, whatever --help exits with; sc_help_rc is that exit
-# status. The help is taken whole and matched in bash, in the folder the linter runs in (a version manager's shim picks its release
-# by folder): a pipe into grep would fail under pipefail when grep stopped reading early, or wasn't on PATH.
-sc_help_rc=0
+# sc_help_lists_ea <shellcheck>: 0 when its --help lists --extended-analysis, whatever --help exits with. Otherwise 1, with
+# sc_help_usage 1 when the help is a usage (it has a Usage: line, as every shellcheck's does) and 0 when it printed none, and
+# sc_help_rc --help's exit status. The help is taken whole and matched in bash, in the folder the linter runs in (a version manager's
+# shim picks its release by folder): a pipe into grep would fail under pipefail when grep stopped reading early, or wasn't on PATH.
+sc_help_rc=0 sc_help_usage=0
 sc_help_lists_ea() {
   local help
   help="$(cd "$root" && "$1" --help 2>&1)"
   sc_help_rc=$?
+  sc_help_usage=0
+  [[ "$help" != *Usage:* ]] || sc_help_usage=1
   [[ "$help" == *--extended-analysis=* ]]
 }
 
 # sc_config_refused: reads the shellcheck configs on the file's path (its folder and each one above it, up to the repository root,
 # .shellcheckrc before shellcheckrc in each, the order shellcheck looks in), so shellcheck is given the nearest one's settings as flags
 # and never looks for one itself. 0, with sc_rc_path and sc_rc_why set, for the first the hook won't hand over: a symlink or not a
-# regular file (it could be any file, read as a config), one that can't be read (what it turns on is unknown), one longer than
+# regular file (it could be any file, read as a config), one that can't be read (what it turns on is unknown), one holding a NUL
+# byte in what is read (bash would drop it, so the length would be short), one longer than
 # SC_TEXT_MAX bytes (only that much and one more is read), one that names external-sources (which lets shellcheck open the files a source line names) or check-sourced
 # (which quotes their lines in the report the agent reads), in any case, a comment included, or one sc_config_flags can't turn into
 # flags: a key this hook doesn't know could be a later shellcheck's way to turn either on. 1 otherwise, with sc_flags and sc_rc_near the
@@ -604,6 +609,11 @@ sc_config_refused() {
         sc_rc_why="is a symlink or not a regular file, so the hook can't vouch for what shellcheck would read"
         return 0
       fi
+      # A NUL first: bash drops it from $(...) below, so a config cut at the cap would measure under it. tr keeps only the NULs, as x.
+      if [[ -n "$(head -c $((SC_TEXT_MAX + 1)) -- "$path" 2> /dev/null | LC_ALL=C tr -cd '\000' | LC_ALL=C tr '\000' x)" ]]; then
+        sc_rc_why="holds a NUL byte, which no shellcheck config holds"
+        return 0
+      fi
       # One byte over the cap at most, so a huge config is never read whole. The x keeps the trailing newlines $(...) drops, so the
       # length is the file's own, and a file cut at the cap is refused, never vetted as the part read.
       text="$(head -c $((SC_TEXT_MAX + 1)) -- "$path" 2> /dev/null && printf x)" || {
@@ -657,8 +667,9 @@ elif [[ "$kind" == shell ]]; then
   elif ((sc_ea)) && ! sc_help_lists_ea "$bin"; then
     # The one flag a still-common shellcheck lacks (it came in 0.9): without it the call would fail with a usage error, which run_linter
     # would report to the agent as a violation in the file.
-    if ((sc_help_rc)); then
-      notes+=("shellcheck was not run: its --help failed (exit $sc_help_rc), so the hook can't tell whether it has --extended-analysis, which its config $sc_rc_near sets")
+    # Judged by what --help printed, not its exit status, which a release may set to non-zero for a usage.
+    if ((! sc_help_usage)); then
+      notes+=("shellcheck was not run: its --help (exit $sc_help_rc) printed no usage, so the hook can't tell whether it has --extended-analysis, which its config $sc_rc_near sets")
     else
       notes+=("shellcheck was not run: this shellcheck has no --extended-analysis, which its config $sc_rc_near sets")
     fi
