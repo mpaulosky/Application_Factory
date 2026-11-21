@@ -4003,14 +4003,15 @@ describe("OWNED_PATHS", () => {
 
   // The Factory's owned-paths test pins these too, but an Application doesn't carry it. An entry dropped from OWNED_PATHS makes a
   // re-Apply that rewrites the script need a review of its own; one dropped from REVIEWED_ON_REAPPLY lets a re-Apply that rewrites
-  // cleanup.sh (which deletes branches, worktrees and origin branches) or work-issue.sh (which names a branch from issue text) pass unread.
-  it("names the edit-time lint, cleanup and work-issue scripts as Owned, and reviews the last two on a re-Apply", () => {
+  // cleanup.sh (which deletes branches, worktrees and origin branches), work-issue.sh (which names a branch from issue text) or
+  // lint-edited-file.sh (which runs linters on every agent write with no prompt, and vets the configs they read) pass unread.
+  it("names the edit-time lint, cleanup and work-issue scripts as Owned, and reviews all three on a re-Apply", () => {
     for (const path of ["scripts/lint-edited-file.sh", "scripts/cleanup.sh", "scripts/work-issue.sh"]) {
       assert.equal((OWNED_PATHS as readonly string[]).includes(path), true, `${path} is an OWNED_PATHS entry`);
       // A repository may list one as its own; it is Owned everywhere else.
       if (!NOT_OWNED_BASELINE_PATHS.includes(path)) assert.equal(isOwnedPath(path), true, path);
     }
-    for (const path of ["scripts/cleanup.sh", "scripts/work-issue.sh"]) {
+    for (const path of ["scripts/lint-edited-file.sh", "scripts/cleanup.sh", "scripts/work-issue.sh"]) {
       assert.equal(REVIEWED_ON_REAPPLY.has(path), true, `${path} is reviewed on a re-Apply`);
     }
   });

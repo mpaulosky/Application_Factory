@@ -251,7 +251,8 @@ tells agents to write Markdown and YAML with Write and Edit for that reason, in 
 load it when a session works on a shell or Python script, says the same for shell scripts (the hook lints no Python) and lists the checks reviewers keep raising on them:
 a test that fails without each new branch, the header or docstring updated in the same edit, the edge cases that keep coming back (a missing tool, an empty,
 relative or odd path, CRLF or a byte-order mark, a symlink, a variable a caller left set), and the script's error contract.
-In a repo that runs Sandcastle, which is where the review ledger is, a re-Apply that rewrites either needs a local review (`REVIEWED_ON_REAPPLY`), as the hand-off rules do;
+In a repo that runs Sandcastle, which is where the review ledger is, a re-Apply that rewrites either, or the hook itself (which runs linters on every agent write with no
+Bash prompt and vets the configs they read), needs a local review (`REVIEWED_ON_REAPPLY`), as the hand-off rules do;
 in a repo without the ledger the re-Apply PR's own review is the check.
 
 - Exit 2 with the linters' output on stderr when any linter reports a problem; Claude Code feeds that back to the agent. A linter that crashes counts as a problem, not as clean. Each linter's

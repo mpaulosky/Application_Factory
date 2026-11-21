@@ -162,7 +162,9 @@ export const OWNED_PATHS = [
 // local gate's .sandcastle/check.sh, whose watched paths and early exit decide
 // whether the Sandcastle check runs at all, global.json, which sets the SDK and the msbuild-sdks a build runs,
 // docs/PROCESS.md, which review-prompt.md tells a role to follow, scripts/cleanup.sh, which deletes branches, worktrees and origin
-// branches, and scripts/work-issue.sh, which makes a branch and worktree named from issue text, and the gate chain (see OWNED_PATHS above).
+// branches, scripts/work-issue.sh, which makes a branch and worktree named from issue text, scripts/lint-edited-file.sh, which runs
+// shellcheck and shfmt on every file an agent writes, with no Bash prompt, and vets the repository's linter configs as it does, and the
+// gate chain (see OWNED_PATHS above).
 // The other files that moved from Seed to Owned (CODE_OF_CONDUCT.md,
 // the READMEs under .security/ and .claude/skills/) are audited text that no
 // role reads, and a wrong one only misleads a person, so they stay exempt.
@@ -171,6 +173,7 @@ export const OWNED_PATHS = [
 export const REVIEWED_ON_REAPPLY: ReadonlySet<string> = new Set([
   "scripts/cleanup.sh",
   "scripts/work-issue.sh",
+  "scripts/lint-edited-file.sh",
   ".github/ci/coverage-threshold",
   ".claude/rules/sandcastle-hand-off.md",
   ".claude/rules/markdown-and-yaml-edits.md",
