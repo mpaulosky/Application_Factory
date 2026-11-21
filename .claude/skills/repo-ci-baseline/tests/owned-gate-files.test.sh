@@ -237,10 +237,15 @@ done
 # answer can't be trusted, and it names no release.
 SHFMT_STUB_VERSION=v3.14.1 SHFMT_STUB_VERSION_EXIT=1 format_run
 check "shell format: a shfmt whose --version fails is refused, before it runs, as failed" \
-  "[[ $fst != 0 ]] && [[ \"\$ferr\" == *'shfmt --version failed or printed nothing, so its release is unknown'* && \"\$ferr\" != *\"not ''\"* ]] && ! grep -qF -- '-dash.sh' '$work/md-args'"
+  "[[ $fst != 0 ]] && [[ \"\$ferr\" == *\"shfmt --version exited 1 and printed 'v3.14.1', so its release is unknown\"* && \"\$ferr\" != *\"not '\"* ]] && ! grep -qF -- '-dash.sh' '$work/md-args'"
 SHFMT_STUB_VERSION="" format_run
 check "shell format: a shfmt whose --version prints nothing is refused, before it runs, as failed" \
-  "[[ $fst != 0 ]] && [[ \"\$ferr\" == *'shfmt --version failed or printed nothing, so its release is unknown'* ]] && ! grep -qF -- '-dash.sh' '$work/md-args'"
+  "[[ $fst != 0 ]] && [[ \"\$ferr\" == *\"shfmt --version exited 0 and printed '', so its release is unknown\"* ]] && ! grep -qF -- '-dash.sh' '$work/md-args'"
+# What a release that isn't v3.14 or later prints is shown with every byte but printable ASCII as ?: an escape sequence in it doesn't
+# reach the terminal.
+SHFMT_STUB_VERSION=$'v3.1\033]0;x\007' format_run
+check "shell format: a release holding an escape sequence is shown with ? for its control bytes" \
+  "[[ $fst != 0 ]] && [[ \"\$ferr\" == *\"not 'v3.1?]0;x?'.\"* && \"\$ferr\" != *\$'\\033'* ]]"
 # The answer is cut at 80 characters in the message: 79, 80 and 81 characters of it.
 for n in 79 80 81; do
   long="v3.$(printf '%0*d' $((n - 3)) 0)"

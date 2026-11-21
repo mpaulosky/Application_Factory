@@ -79,6 +79,8 @@ bash without `/dev/fd`. Flags leave nothing to reach. It doesn't run shellcheck 
 `check-sourced`, sets a key outside an allow-list (`disable`, `enable`, `source-path`, `shell`, `extended-analysis`), gives one no value or a value of a form the hook
 doesn't pass on, holds a NUL byte, has a line over 4,096 bytes or is over 65,536 in all (of which the hook reads no more than one byte past the cap), or sets `extended-analysis` for a
 shellcheck whose `--help` doesn't list that flag (before 0.9); the note says so, and quotes an agent-written key with every byte but a letter, digit, space or `_ . + -` as `?`.
+Every note of the hook, of every kind, goes through one filter that shows a control character other than a tab, a format character (a bidi
+override, a zero-width one), a line or paragraph separator, or a byte that isn't UTF-8 as `?`, since a note quotes paths an agent named.
 Plain `--norc` alone was not chosen: a repo's own `disable=` lines would then fail files its gate passes, and the flags keep them.
 `test.sh` keeps the hook's hook-name and shfmt release rules equal to the gate's. The report's first line now says only that the gate checks the same file
 before the push, which is true of every kind; the pre-commit hook lints only Markdown, and an Application's CI doesn't check shell format. A note about a hook under a nested

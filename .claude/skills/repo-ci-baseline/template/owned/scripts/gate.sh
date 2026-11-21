@@ -173,13 +173,21 @@ elif [[ ${#SHFMT_FILES[@]} -gt 0 ]]; then
     echo "❌ Shell format needs shfmt v3.14 or a later v3 release (check_gh_repo.py needs it too): install it on PATH." >&2
     exit 1
   fi
-  # A --version that fails or prints nothing says nothing of the release: it gets its own message, not an empty release.
-  if ! SHFMT_FOUND="$(shfmt --version 2>&1)" || [[ -z "$SHFMT_FOUND" ]]; then
-    echo "❌ Shell format needs shfmt v3.14 or a later v3 release, and shfmt --version failed or printed nothing, so its release is unknown: check the shfmt install." >&2
+  SHFMT_VERSION_RC=0
+  SHFMT_FOUND="$(shfmt --version 2>&1)" || SHFMT_VERSION_RC=$?
+  # Its first 80 characters as the message shows them, every byte but printable ASCII as ?, so what shfmt printed can't move the terminal.
+  SHFMT_SHOWN="$(
+    export LC_ALL=C
+    shown="${SHFMT_FOUND:0:80}"
+    printf '%s' "${shown//[!\ -~]/?}"
+  )"
+  # A --version that fails or prints nothing says nothing of the release: it gets its own message, with its exit status and output.
+  if ((SHFMT_VERSION_RC != 0)) || [[ -z "$SHFMT_FOUND" ]]; then
+    echo "❌ Shell format needs shfmt v3.14 or a later v3 release, and shfmt --version exited $SHFMT_VERSION_RC and printed '$SHFMT_SHOWN', so its release is unknown: check the shfmt install." >&2
     exit 1
   fi
   if ! [[ "$SHFMT_FOUND" =~ ^v3\.(1[4-9]|[2-9][0-9]|[1-9][0-9]{2,})\.[0-9]+$ ]]; then
-    echo "❌ Shell format needs shfmt v3.14 or a later v3 release, not '${SHFMT_FOUND:0:80}'." >&2
+    echo "❌ Shell format needs shfmt v3.14 or a later v3 release, not '$SHFMT_SHOWN'." >&2
     exit 1
   fi
   # shfmt exits 1 both for a file it would change (it prints the diff) and for one it can't parse (it prints the error); any other status

@@ -34,8 +34,9 @@
 # value of a form the hook doesn't pass on, holds a NUL byte, or is over the size the hook reads (see sc_config_refused and
 # sc_config_flags), or while it sets extended-analysis for a shellcheck whose --help doesn't list that flag: the person is told,
 # and the gate still checks the file. A key or shfmt release the note names is shown with only letters, digits, spaces and _ . + -,
-# and every control byte in a note (a path's included) is shown as ? (emit_message). A hook under a nested .github/hooks whose
-# .editorconfig can't be read is not linted either, and the person is told.
+# and every character in a note that isn't plain text (a control character but a tab, a bidi or zero-width one, a byte that isn't
+# UTF-8; a path's included) is shown as ? (emit_message), as is every byte but printable ASCII in the path an exit-1 message names
+# (plain_path). A hook under a nested .github/hooks whose .editorconfig can't be read is not linted either, and the person is told.
 #
 # Only files in the project's own checkout, or in a linked worktree that checkout lists in `git worktree list`, are linted
 # (CLAUDE_PROJECT_DIR, which Claude Code sets and which is required). A file in another clone, in a directory that merely
@@ -70,12 +71,23 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR CDPATH
 # ShellCheck reads its options from this too, and --check-sourced there would quote the lines of a file a source line names.
 unset SHELLCHECK_OPTS
 
-# emit_message <text>: the systemMessage Claude Code shows the person, as JSON on stdout. Every control character but a tab (C0, DEL, C1) and
-# every byte that isn't valid UTF-8 becomes ?: the text quotes paths and config text an agent chose, which must not reach the person's
-# terminal as escape sequences.
+# emit_message <text>: the systemMessage Claude Code shows the person, as JSON on stdout. The text quotes paths and config text an agent
+# chose, so every character that isn't plain text becomes ?: a control character but a tab (C0, DEL, C1: an escape sequence), a format
+# character (a bidi override or isolate, a zero-width one, a BOM: text that reads as another name), a line or paragraph separator, and a
+# byte that isn't valid UTF-8 (-X utf8 reads the arguments as UTF-8 whatever the locale, each such byte as a lone surrogate).
 emit_message() {
-  python3 -I -c 'import json, re, sys
-print(json.dumps({"systemMessage": re.sub("[\x00-\x08\x0a-\x1f\x7f-\x9f\ud800-\udfff]", "?", sys.argv[1])}))' "$1"
+  python3 -I -X utf8 -c 'import json, sys, unicodedata
+hidden = ("Cc", "Cf", "Cs", "Zl", "Zp")
+text = "".join("?" if c != "\t" and unicodedata.category(c) in hidden else c for c in sys.argv[1])
+print(json.dumps({"systemMessage": text}))' "$1"
+}
+
+# plain_path <path>: the path with every byte but printable ASCII as ?, for a message on stderr that goes to the person before python3
+# is known to run: a folder an agent named carries no escape sequence there either.
+plain_path() {
+  local LC_ALL=C path
+  path="$1"
+  printf '%s' "${path//[!\ -~]/?}"
 }
 
 # The most a linter's output may add to the message the agent reads; a generated file can have thousands of violations.
@@ -136,7 +148,7 @@ read_git_file() {
   [[ "${3:-}" != all ]] || strip=$' \t\r\n'
   IFS= read -r -d '' -n $((GIT_FILE_MAX + 1)) text < "$1" || [[ -n "$text" ]] || return 1
   if ((${#text} > GIT_FILE_MAX)); then
-    echo "lint-edited-file.sh: $1 is longer than any git file that names a folder (over $GIT_FILE_MAX characters), so the edited file was not linted." >&2
+    echo "lint-edited-file.sh: $(plain_path "$1") is longer than any git file that names a folder (over $GIT_FILE_MAX characters), so the edited file was not linted." >&2
     exit 1
   fi
   while [[ -n "$text" && "$strip" == *"${text: -1}"* ]]; do text="${text%?}"; done

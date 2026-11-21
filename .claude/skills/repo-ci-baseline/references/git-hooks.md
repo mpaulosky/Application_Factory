@@ -242,8 +242,10 @@ bash would drop as it reads, so the length would come out short), has a line ove
 bytes or is over 65,536 in all (bounds chosen well inside what a command line carries, which no real config comes near; only 65,537 bytes of a config are read), or sets
 `extended-analysis` for a shellcheck whose `--help` lists no `--extended-analysis` (before 0.9), which would stop on it with a usage error: the note names the config and
 why (an unknown key by its first 40 bytes, each one other than a letter, digit, space or `_ . + -` shown as `?`, so no control byte an agent wrote reaches the person's
-terminal; every note, of every kind, shows a control character other than a tab, or a byte that isn't UTF-8, as `?`, so a folder an agent named
-can't carry one either), and the gate still checks the file. The help is judged by what it prints, not its exit status: a usage without the flag gets
+terminal; every note, of every kind, shows a control character other than a tab, a format character (a bidi override or isolate, a zero-width
+one, a BOM), a line or paragraph separator, or a byte that isn't UTF-8, as `?`, whatever the locale, so a folder an agent named can't carry an
+escape sequence or read as another name, and the one exit-1 message that names a path shows every byte of it but printable ASCII as `?`), and
+the gate still checks the file. The help is judged by what it prints, not its exit status: a usage without the flag gets
 that note, and a `--help` that prints no usage gets one of its own. Each value is one argument of its flag: `source-path`
 may start with a dash, since shellcheck takes the argument after `-P` as its value, and `disable` and `enable` may not.
 

@@ -1104,6 +1104,39 @@ note="$(system_message "$STDOUT")"
 [[ "$note" != *$'\033'* && "$note" != *$'\007'* && "$note" != *$'\302\233'* ]] || p+=("a control byte reached the note")
 check "a path's control bytes reach the note as ?" ${p[@]+"${p[@]}"}
 rm -r "$esc_dir"
+# emit_message itself, each edge of what it hides: a C0 control but a tab, DEL and C1 (\x08, \x0a, \x1f, \x7f, U+0080, U+009F), a
+# format character (a bidi override, isolate and mark, a zero-width space and joiner, a BOM), a line and paragraph separator, and a
+# byte that isn't UTF-8, in a C locale too. A tab, a space, ~, a no-break space and a letter outside ASCII stay as they are.
+# shellcheck disable=SC2016 # expanded by the inner bash
+em() { LC_ALL="${2:-C.UTF-8}" GIT_FILE_SCRIPT="$SCRIPT" bash -c 'eval "$(sed -n "/^emit_message() {/,/^}/p" "$GIT_FILE_SCRIPT")"; emit_message "$1"' _ "$1"; }
+p=()
+for case in $'\x08|?' $'\t|\t' $'\n|?' $'\x1f|?' ' | ' '~|~' $'\x7f|?' $'\xc2\x80|?' $'\xc2\x9f|?' $'\xc2\xa0|\xc2\xa0' \
+  $'\xc3\xa9|\xc3\xa9' $'\xe2\x80\xae|?' $'\xe2\x81\xa6|?' $'\xe2\x80\x8f|?' $'\xe2\x80\x8b|?' $'\xe2\x80\x8d|?' \
+  $'\xef\xbb\xbf|?' $'\xe2\x80\xa8|?' $'\xe2\x80\xa9|?' $'\xff|?' $'\xed\xa0\x80|???'; do
+  out="$(em "[${case%%|*}]")"
+  [[ "$(system_message "$out")" == "[${case#*|}]" ]] || p+=("$(printf '%q' "${case%%|*}") gave $out, want [$(printf '%q' "${case#*|}")]")
+  [[ "$out" != *'\udc'* ]] || p+=("$(printf '%q' "${case%%|*}") left a surrogate escape: $out")
+done
+out="$(em $'a\xffb' C)"
+[[ "$(system_message "$out")" == "a?b" ]] || p+=("in a C locale, a byte that isn't UTF-8 gave $out")
+check "emit_message shows each character that isn't plain text as ?, and keeps a tab and the rest" ${p[@]+"${p[@]}"}
+# In a single-byte locale python3 would read \xff as the letter ÿ: -X utf8 reads the arguments as UTF-8 there too. Tried where one is
+# installed.
+latin1="$(locale -a 2> /dev/null | grep -iE '\.(iso88591|iso-8859-1)$' | head -n 1 || true)"
+if [[ -n "$latin1" ]]; then
+  p=()
+  out="$(em $'a\xffb' "$latin1")"
+  [[ "$(system_message "$out")" == "a?b" ]] || p+=("in $latin1, a byte that isn't UTF-8 gave $out")
+  check "emit_message shows a byte that isn't UTF-8 as ? in a single-byte locale ($latin1)" ${p[@]+"${p[@]}"}
+else
+  echo "skip - no ISO-8859-1 locale is installed, so emit_message isn't tried in a single-byte locale"
+fi
+# Every systemMessage goes through emit_message: outside comments, the key appears in the hook only in emit_message's own python.
+p=()
+sm_all="$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'systemMessage')"
+sm_em="$(sed -n '/^emit_message() {/,/^}/p' "$SCRIPT" | grep -v '^[[:space:]]*#' | grep -c 'systemMessage')"
+[[ "$sm_all" == 1 && "$sm_em" == 1 ]] || p+=("systemMessage outside emit_message: $(grep -n 'systemMessage' "$SCRIPT" | grep -v '^[0-9]*:[[:space:]]*#')")
+check "the hook writes a systemMessage only through emit_message" ${p[@]+"${p[@]}"}
 # Lines up to 4096 bytes are read, one over is refused; a config over 65536 bytes is refused, and only that much and one more is read.
 for case in "4096|ok" "4097|refused"; do
   n="${case%|*}"
@@ -1889,7 +1922,7 @@ rgf_case() {
   local got
   printf '%b' "$3" > "$rgf/f"
   # shellcheck disable=SC2016 # expanded by the inner bash
-  got="$(GIT_FILE_SCRIPT="$SCRIPT" bash -c 'eval "$(sed -n "/^GIT_FILE_MAX=/p; /^read_git_file() {/,/^}/p" "$GIT_FILE_SCRIPT")"
+  got="$(GIT_FILE_SCRIPT="$SCRIPT" bash -c 'eval "$(sed -n "/^GIT_FILE_MAX=/p; /^plain_path() {/,/^}/p; /^read_git_file() {/,/^}/p" "$GIT_FILE_SCRIPT")"
     if read_git_file "$1" out "${2:-}"; then printf "%s" "$out" | od -An -c | tr -s " "; else echo "<1>"; fi' _ "$rgf/f" "${4:-}")"
   p=()
   [[ "$got" == "$2" ]] || p+=("got '$got', want '$2'")
@@ -1904,14 +1937,25 @@ rgf_case "an empty file holds nothing" "<1>" ''
 max="$(sed -n 's/^GIT_FILE_MAX=//p' "$SCRIPT")"
 head -c "$max" /dev/zero | tr '\0' x > "$rgf/f"
 # shellcheck disable=SC2016 # expanded by the inner bash
-got="$(GIT_FILE_SCRIPT="$SCRIPT" bash -c 'eval "$(sed -n "/^GIT_FILE_MAX=/p; /^read_git_file() {/,/^}/p" "$GIT_FILE_SCRIPT")"; read_git_file "$1" out && echo "${#out}"' _ "$rgf/f" 2>&1)"
+got="$(GIT_FILE_SCRIPT="$SCRIPT" bash -c 'eval "$(sed -n "/^GIT_FILE_MAX=/p; /^plain_path() {/,/^}/p; /^read_git_file() {/,/^}/p" "$GIT_FILE_SCRIPT")"; read_git_file "$1" out && echo "${#out}"' _ "$rgf/f" 2>&1)"
 p=()
 [[ "$got" == "$max" ]] || p+=("a file of $max characters: '$got'")
 printf x >> "$rgf/f"
 # shellcheck disable=SC2016 # expanded by the inner bash
-got="$(GIT_FILE_SCRIPT="$SCRIPT" bash -c 'eval "$(sed -n "/^GIT_FILE_MAX=/p; /^read_git_file() {/,/^}/p" "$GIT_FILE_SCRIPT")"; read_git_file "$1" out; echo "reached"' _ "$rgf/f" 2>&1)"
+got="$(GIT_FILE_SCRIPT="$SCRIPT" bash -c 'eval "$(sed -n "/^GIT_FILE_MAX=/p; /^plain_path() {/,/^}/p; /^read_git_file() {/,/^}/p" "$GIT_FILE_SCRIPT")"; read_git_file "$1" out; echo "reached"' _ "$rgf/f" 2>&1)"
 [[ "$got" == *"is longer than any git file that names a folder (over $max characters)"* && "$got" != *reached* ]] || p+=("a file of $((max + 1)) characters: '$got'")
 check "read_git_file reads a file of GIT_FILE_MAX characters ($max) and stops the hook at one more" ${p[@]+"${p[@]}"}
+# The exit-1 message names the file with every byte but printable ASCII as ?: a folder an agent named with an escape sequence, a
+# C1 byte or a bidi override reaches the person's terminal as plain text.
+esc_rgf="$rgf/"$'a\033]0;x\007\302\233\342\200\256b'
+mkdir -p "$esc_rgf"
+head -c $((max + 1)) /dev/zero | tr '\0' x > "$esc_rgf/f"
+# shellcheck disable=SC2016 # expanded by the inner bash
+got="$(GIT_FILE_SCRIPT="$SCRIPT" bash -c 'eval "$(sed -n "/^GIT_FILE_MAX=/p; /^plain_path() {/,/^}/p; /^read_git_file() {/,/^}/p" "$GIT_FILE_SCRIPT")"; read_git_file "$1" out' _ "$esc_rgf/f" 2>&1)"
+p=()
+[[ "$got" == *"$rgf/a?]0;x??????b/f is longer than any git file"* ]] || p+=("got: $got")
+[[ "$got" != *$'\033'* && "$got" != *$'\007'* ]] || p+=("a control byte reached the message")
+check "read_git_file's exit-1 message shows a path's bytes outside printable ASCII as ?" ${p[@]+"${p[@]}"}
 rm -r "$rgf"
 rm -r "${vet:?}/bin"
 # A project inside a checkout whose .git file names a gitdir that doesn't exist: the checkout itself is still dropped, though
