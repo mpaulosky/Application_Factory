@@ -27,17 +27,22 @@ stops only where a person must decide, and prints the command that decides it an
 The session runs unattended and reads text people without write access may have written, so it reviews only, and runs in Claude Code's sandbox, which the operating system
 enforces (bubblewrap on Linux) on every Bash command and everything it starts:
 
-- **Review only.** It runs one round over the whole branch, as the skill's last, review-only round, and records every finding it keeps open with its suggested fix. It edits,
-  fixes and commits nothing and runs no gate, so nothing it wrote runs later as the person: the gate on the push and the Application's build and tests run only the code the
-  re-Apply wrote. A Critical or Warning finding stops the round for the person, who fixes it with `/pre-push-review` in the worktree or accepts it.
+- **Review only.** It runs one round over the whole branch, as the skill's last, review-only round, and keeps every finding open with its suggested fix; a security
+  finding is never dismissed, a repeat of a fixed `.security` entry included. It edits, fixes and commits nothing and runs no gate, so nothing it wrote runs later as the
+  person: the gate on the push and the Application's build and tests run only the code the re-Apply wrote. A Critical or Warning finding stops the round for the person,
+  who fixes it with `/pre-push-review` in the worktree or accepts it.
+- **The round records, not the session.** The session stages its findings (`scripts/review.sh stage`) in a run folder the round made for it, and doesn't record them. Once it
+  ends, exited 0 and broke no rule, the round reads the staged file without following a link, copies it into a folder of its own and runs the worktree's
+  `scripts/review.sh prepare` for the key and HEAD and `scripts/review.sh record` with them, outside the sandbox, as the gate on the push runs those scripts. So the ledgers,
+  their entry maps and `.security` are written only by the record's own code, which checks each finding, its id and its `repeats` as it does for a person.
 - **The sandbox.** Its Bash reads none of the person's credentials (`~/.ssh`, `~/.config/gh`, `~/.git-credentials`, `~/.netrc`, `~/.gitconfig`, the shells' start-up
   files, .NET's user secrets, the keyrings, cloud and package-registry sign-ins, shell histories, all of `~/.claude` and Claude Code's `CLAUDE_CONFIG_DIR`, the other sessions'
-  logs, and wherever a variable such as `KUBECONFIG` or `XDG_CONFIG_HOME` moves one). It writes only the clone's review ledgers, the main checkout's `.security`
-  (`scripts/review.sh record` writes both; the round makes both folders first) and a temporary folder of its own: not the worktree, which a sandbox otherwise lets its working
-  folder be written, nor the rest of the clone's git folder. It reaches no host (it builds and installs nothing, and a `git fetch` has nowhere to write: `reapply.sh` has just
-  fetched), can't leave the sandbox (`allowUnsandboxedCommands: false`), and the session refuses to start without it (`failIfUnavailable`).
+  logs, and wherever a variable such as `KUBECONFIG` or `XDG_CONFIG_HOME` moves one). It writes only a temporary folder of its own, its run folder among it: not the
+  worktree, which a sandbox otherwise lets its working folder be written, the clone's git folder, its review ledgers or the main checkout's `.security`. It reaches no host (it builds and
+  installs nothing, and a `git fetch` has nowhere to write: `reapply.sh` has just fetched), can't leave the sandbox (`allowUnsandboxedCommands: false`), and the session refuses to start without it (`failIfUnavailable`).
 - **The file tools**, which run outside the sandbox, follow `dontAsk` permissions: anything not allowed is refused. They may read only the worktree, `.security` and the temporary
-  folder, edit only the temporary folder, start the reviewer agent, and run Bash, which is sandboxed. Only the built-in tools the review needs exist in the session (`--tools`).
+  folder, edit only the temporary folder (so never a ledger or a `.security` entry), start the reviewer agent, and run Bash, which is sandboxed.
+  Only the built-in tools the review needs exist in the session (`--tools`).
 - **Nothing of the repository's own or the person's applies to it.** It loads no settings file at all (`--setting-sources ""`; its settings are passed on the command line, so the
   session can't rewrite them) and no MCP server, and takes the skill's text and its reviewer agent from the Template, not the worktree: neither the repository's nor the person's
   hooks, permission rules, plugins or settings run or widen it.
@@ -48,18 +53,18 @@ enforces (bubblewrap on Linux) on every Bash command and everything it starts:
 - **Layers behind the sandbox.** git's push to GitHub is sent nowhere, and deny rules name the commands that must never run. The prompt names the Owned files the branch changes,
   says it runs unattended and review-only, and says a finding in an Owned file is fixed in the Template first.
 - **Checks after it.** A session after which the worktree's `.git` link changed (then no git runs there), the remote branch moved (or can't be read), the worktree's HEAD, branch or
-  status changed, the Template changed, an Owned file the branch changes is no longer the Template's, or the ledgers or `.security` changed other than as a review-only record
-  changes them, stops the round for the person. That record writes one new ledger with its entry map, holding no finding fixed or accepted, and new open entries: so a ledger or
-  entry map that was there before and changed or went, whatever branch or head it names (the session can write those too; a record replacing an earlier one of the same diff
-  counts too), a new ledger with a finding fixed or accepted or a security one dismissed, a new entry map without a new ledger beside it or sending a finding to an entry that
-  doesn't hold its weakness by the record's fingerprint (`accept` goes by it, so the person's accept would change that entry), an entry removed or changed, a new one that isn't
-  open or has another's number, or the ledgers' lock left behind, stops it. A review the person records on another branch meanwhile stops the round as well. These files are
-  read without following a symlink, waiting on a FIFO or reading past a size, since the session made them, and as the record's JavaScript reads them; one that can't be read is
-  compared by what `lstat` says of it.
+  status changed, the Template changed, an Owned file the branch changes is no longer the Template's, any file of the ledgers or `.security` was added, removed or changed
+  (the session writes neither, so a review the person records on another branch meanwhile stops it as well), or it staged a finding other than open or dismissed, or a
+  security one dismissed, stops the round for the person, and nothing is recorded. A dismissed finding counts as a security one when the ledger could read it as one, read
+  wider: graded Warning, not marked `security: false`, or a lens that names security once all but its letters are dropped. Files are read without following a symlink,
+  waiting on a FIFO or reading past a size; one that can't be read is compared by what `lstat` says of it. What the session wrote is printed escaped. A check that fails
+  is a stop too, not a crash.
 - **Its processes.** It runs in a process group of its own, killed whole however it ends (it exits, or runs past three hours), while its exited leader is still unreaped, so
-  the group's id can't be another's; a group still there after the kill stops the round, since it could still write. An interrupt, a SIGTERM or a SIGHUP while it runs is
-  held until the group is gone, then passed on, and one the caller ignores (`nohup`) stays ignored. `reapply.sh` and `land.sh` run in groups of their own too, which a SIGTERM or SIGHUP
-  of the round kills. Its log is kept, `0600`, in a `0700` folder of the person's own, `~/.cache/repo-ci-baseline/logs`, since it can hold the session's report of security findings.
+  the group's id can't be another's (where Python has no `waitid`, macOS, the leader is reaped first: the best that platform allows); a group still there after the kill stops
+  the round, since it could still write. An interrupt, a SIGTERM or a SIGHUP while it runs is held until the group is gone, then passed on, and one the caller ignores
+  (`nohup`) stays ignored. `reapply.sh` and `land.sh` run in groups of their own too, which a SIGTERM or SIGHUP of the round kills; one still there after the kill stops
+  that repo too, since it holds the lock and may still work in the worktree, and the stop names `pgrep -l -g` and `pkill -KILL -g` to see and end it. Its log is kept, `0600`,
+  in a `0700` folder of the person's own, `~/.cache/repo-ci-baseline/logs`, since it can hold the session's report of security findings.
 
 The gate, the ledger and the review's rules are unchanged: the push still needs a recorded review with no open Critical or Warning finding, and only the person accepts one.
 
@@ -94,6 +99,7 @@ The gate, the ledger and the review's rules are unchanged: the push still needs 
   permission mode back to `default`, and the refused sign-in
   secrets make it unneeded. The session reads no PR threads or issue, which a re-Apply reviewed before its first push hasn't got, and a session that ends without recording a review
   is run once more, then the round stops. A SIGKILL of `rollout.sh` can't be caught, and leaves a running session to finish on its own, holding the lock.
-- The ledgers and `.security` are what the session writes that outlives it, and the checks after it allow only what a review-only `record` writes: a new ledger with no
-  finding fixed or accepted, and new open entries. They can't tell that ledger's judgment from a steered one that raised less: that is the review's own trust, as when a
-  person runs it.
+- What the session hands on is its staged findings, which the round records with the record's own code, never its own copy of the record's rules: an earlier version let
+  the session record and checked the ledgers and `.security` after it by reading them as the record does, and every round of review found another way that reading and the
+  record's differed. The round's checks can't tell a review's judgment from a steered one that raised less, or chose another `repeats`: that is the review's own trust, as
+  when a person runs it. A security finding the skill would dismiss as a repeat of a fixed entry is recorded open instead, so the person decides it.

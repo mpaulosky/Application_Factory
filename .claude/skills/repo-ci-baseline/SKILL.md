@@ -101,12 +101,13 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
    - **Roll out unattended:** `rollout.sh --auto --brings '#<n>,#<n>'` does all of that in one run (the Factory's [ADR 0016](../../../docs/adr/0016-a-rollout-runs-each-applications-review-headless-and-sandboxed-in-its-worktree.md)).
      It checks the tools (on Linux, bubblewrap and socat for the sandbox among them, and that bubblewrap can make one), ruff 0.17 or uv,
      and the Template's `global.json` SDK first (`--dry-run` stops there and prints the plan). It refuses to start with `claude` signed out (as it is with no settings file
-     read), or with a Claude Code or cloud sign-in secret in the environment (`ANTHROPIC_API_KEY`, say): sign Claude Code in with `claude /login` instead.
-     When the gate asks for a review it runs the pre-push review headless in the repo's re-Apply worktree, review-only: one round that records every finding open and
-     edits, fixes and commits nothing. It runs in Claude Code's sandbox: its shell reads none of your credentials, writes only the review ledgers, `.security` and a
-     folder of its own, and reaches no host; it has no GitHub sign-in, loads no settings file, and takes the skill and its agent from
-     the Template. The round stops when a session broke a rule it checks after, such as a changed worktree, or a ledger or `.security` entry changed other than by a
-     review-only record.
+     read; a cloud's sign-in, which `claude auth status` doesn't report, isn't asked), or with a Claude Code or cloud sign-in secret in the environment
+     (`ANTHROPIC_API_KEY`, say): sign Claude Code in with `claude /login` instead.
+     When the gate asks for a review it runs the pre-push review headless in the repo's re-Apply worktree, review-only: one round that stages every finding open (a
+     security one is never dismissed) and edits, fixes and commits nothing. It runs in Claude Code's sandbox: its shell reads none of your credentials, writes only a
+     folder of its own, and reaches no host; it has no GitHub sign-in, loads no settings file, and takes the skill and its agent from the Template. Once it ends, the round
+     records what it staged with the worktree's `scripts/review.sh record`, so the ledgers and `.security` are written only by the record's own code. The round stops,
+     recording nothing, when a session broke a rule it checks after, such as a changed worktree, a ledger or `.security` file changed, or a finding staged fixed or accepted.
      Then it reapplies: a Critical or Warning finding stops the round for you to fix or accept. It lands TicketManager's PR before the rest start, and the rest's PRs together.
      Its lock keeps a second `--auto` run out, not a person: don't run `reapply.sh` or the review by hand in a re-Apply worktree while it runs. It stops only where a person decides
      (findings that wait for one, a PR that doesn't land or can't be read, a failed reapply or review session), printing the command that decides it and the one that resumes.

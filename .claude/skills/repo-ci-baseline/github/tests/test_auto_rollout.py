@@ -497,8 +497,13 @@ AGENTS = {"pre-push-reviewer": {"description": "d", "prompt": "p", "tools": ["Re
 
 
 def review_once(tmp_path, monkeypatch, popen=None, changes=None, worktree=None, session=None, end=None, broke=(),
-                clock=None, guard=None):
+                clock=None, guard=None, record=None, check=None):
     seen = {}
+
+    def fake_record(worktree, run, out):
+        seen["recorded"] = (worktree, run, os.path.isdir(run))
+        return 0, []
+
     session = session or FakeSession()
     ended = seen.setdefault("ended", [])
 
@@ -507,8 +512,9 @@ def review_once(tmp_path, monkeypatch, popen=None, changes=None, worktree=None, 
         seen["settings"] = json.loads(command[command.index("--settings") + 1])
         seen["tmp"] = os.path.dirname(kwargs["env"]["TMPDIR"])
         seen["gh_config"] = sorted(os.listdir(kwargs["env"]["GH_CONFIG_DIR"]))
-        seen["folders"] = {name: os.path.isdir(tmp_path / "clone" / name) and not os.path.islink(tmp_path / "clone" / name)
-                           for name in (".git/review", ".security")}
+        seen["folders"] = {name: os.path.lexists(tmp_path / "clone" / name) for name in (".git/review", ".security")}
+        run = os.path.join(seen["tmp"], "run")
+        seen["run"] = (run, os.path.isdir(run) and stat.S_IMODE(os.stat(run).st_mode))
         kwargs["stdout"].write("the session's own output\n")
         return session
 
@@ -520,7 +526,8 @@ def review_once(tmp_path, monkeypatch, popen=None, changes=None, worktree=None, 
                                    changes=changes or (lambda path: [".github/hooks/pre-push", "scripts/gate.sh"]),
                                    log_dir=str(tmp_path / "logs"), end=end or (lambda s: ended.append(s) or True),
                                    guard=guard or (lambda w: seen.setdefault("guarded", w) and fake_guard(tmp_path)),
-                                   check=lambda g: list(broke), skill=lambda: SKILL_TEXT, agents=lambda: AGENTS,
+                                   check=check or (lambda g: list(broke)), skill=lambda: SKILL_TEXT, agents=lambda: AGENTS,
+                                   record=record or fake_record,
                                    **({"clock": clock} if clock else {}))
     return code, log, seen, str(worktree)
 
@@ -545,9 +552,12 @@ def test_the_review_session_runs_sandboxed_in_the_worktree_with_the_templates_sk
     assert seen["settings"] == auto.session_settings(worktree, str(clone), str(clone / "worktrees" / "chore-reapply-baseline"),
                                                      seen["tmp"]), "the settings are built from the guard's folders"
     assert seen["tmp"].startswith(tempfile.gettempdir()) and os.path.basename(seen["tmp"]).startswith("rollout-session.")
-    assert seen["folders"] == {".git/review": True, ".security": True}, \
-        "the ledger folder and the .security record are made before the session, so the sandbox can let them be written"
-    assert stat.S_IMODE((clone / "review").stat().st_mode) == stat.S_IMODE((clone.parent / ".security").stat().st_mode) == 0o700
+    assert seen["folders"] == {".git/review": False, ".security": False}, \
+        "the session writes neither the ledgers nor .security, so neither is made for it"
+    run = os.path.join(seen["tmp"], "run")
+    assert seen["run"] == (run, 0o700), "its run folder is made for it, the person's own, in its temporary folder"
+    assert seen["settings"]["sandbox"]["filesystem"]["allowWrite"] == [seen["tmp"]]
+    assert seen["recorded"] == (worktree, run, True), "once it exits 0 having broken no rule, the round records its run"
     assert seen["pass_fds"] == (), "no lock held here, so none is passed on"
     assert seen["cwd"] == worktree and seen["start_new_session"] is True
     assert seen["stdin"] is subprocess.DEVNULL and seen["stderr"] is subprocess.STDOUT
@@ -563,37 +573,71 @@ def test_the_review_session_runs_sandboxed_in_the_worktree_with_the_templates_sk
     assert os.path.join(worktree, ".claude", "skills", "pre-push-review") in prompt
     for rule in ("never ask one", "Review only: this session changes nothing in the repository",
                  "Don't edit, fix or commit anything, and don't run the gate", "the skill's last, review-only round",
-                 "record every finding it keeps open, with its suggested fix", "The worktree is read-only to you",
+                 "keep every finding open, with its suggested fix", "Never dismiss a security finding",
+                 "a repeat of a fixed .security entry too, with that entry's number as repeats",
+                 f"Your run folder is {run}, made for you", "write nothing anywhere else",
+                 "its review ledgers and the .security record are read-only to you",
+                 f"scripts/review.sh stage {run} <file>", "as an empty array [] when it keeps none",
+                 "don't run scripts/review.sh record", "rollout.sh records what you staged once the session ends",
                  "what to change in the Factory's template/owned/", "Don't push",
                  "don't file the follow-up issue", "don't edit a PR", "skip the skill's GitHub reads",
-                 "and its git fetch", "go on with origin/main as it is", "no network", "End with the output of scripts/review.sh report"):
+                 "and its git fetch", "go on with origin/main as it is", "no network",
+                 "End with a list of the findings you staged"):
         assert rule in prompt, rule
 
 
-def test_a_ledger_folder_and_record_already_there_are_kept_as_they_are(tmp_path, monkeypatch):
-    (tmp_path / "clone" / ".git" / "review").mkdir(parents=True)
-    (tmp_path / "clone" / ".git" / "review" / "l.json").write_text("{}")
-    (tmp_path / "clone" / ".security").mkdir()
-    code, _, seen, _ = review_once(tmp_path, monkeypatch)
-    assert code == 0 and seen["folders"] == {".git/review": True, ".security": True}
-    assert (tmp_path / "clone" / ".git" / "review" / "l.json").read_text() == "{}"
+@pytest.mark.parametrize("session, broke", [(FakeSession(code=1), ()), (FakeSession(code=0), ("a rule",))])
+def test_a_session_that_failed_or_broke_a_rule_is_never_recorded(tmp_path, monkeypatch, session, broke):
+    _, _, seen, _ = review_once(tmp_path, monkeypatch, session=session, broke=broke)
+    assert "recorded" not in seen
 
 
-@pytest.mark.parametrize("name", [".git/review", ".security"])
-@pytest.mark.parametrize("what", ["symlink", "file"])
-def test_a_ledger_folder_or_record_that_isnt_a_real_folder_starts_no_session(tmp_path, monkeypatch, name, what):
-    (tmp_path / "clone" / ".git").mkdir(parents=True)
-    place = tmp_path / "clone" / name
-    if what == "symlink":
-        (tmp_path / "elsewhere").mkdir()
-        place.symlink_to(tmp_path / "elsewhere")
-    else:
-        place.write_text("x")
-    started = []
-    code, log, _, _ = review_once(tmp_path, monkeypatch, popen=lambda *a, **k: started.append(a))
-    assert code == 127 and started == []
-    assert f"rollout.sh: can't set the session up: {place} isn't a real folder: inspect it and remove it" in Path(log).read_text()
-    assert not os.listdir(tmp_path / "elsewhere") if what == "symlink" else place.read_text() == "x"
+def test_a_session_whose_group_survived_is_never_recorded(tmp_path, monkeypatch):
+    _, _, seen, _ = review_once(tmp_path, monkeypatch, end=lambda s: False)
+    assert "recorded" not in seen
+
+
+@pytest.mark.parametrize("outcome, code", [((auto.RECORD_FAILED, []), auto.RECORD_FAILED), ((0, []), 0),
+                                           ((auto.SESSION_BROKE_A_RULE, ["R2 was staged fixed"]), auto.SESSION_BROKE_A_RULE)])
+def test_the_records_outcome_is_the_reviews(tmp_path, monkeypatch, outcome, code):
+    got, log, seen, _ = review_once(tmp_path, monkeypatch, record=lambda w, r, out: outcome)
+    assert got == code and seen["broke"] == outcome[1]
+    for rule in outcome[1]:
+        assert f"rollout.sh: the session broke a rule: {rule}" in Path(log).read_text()
+
+
+@pytest.mark.parametrize("error", [OSError("no space"), subprocess.TimeoutExpired("review.sh", 600)])
+def test_a_record_that_cant_run_is_record_failed_with_its_reason_in_the_log(tmp_path, monkeypatch, error):
+    def record(worktree, run, out):
+        raise error
+
+    code, log, seen, _ = review_once(tmp_path, monkeypatch, record=record)
+    assert code == auto.RECORD_FAILED and seen["broke"] == []
+    assert f"rollout.sh: can't record the review: {type(error).__name__}: {error}" in Path(log).read_text()
+
+
+def test_a_check_that_fails_is_a_broken_rule_not_a_crash(tmp_path, monkeypatch):
+    def check(guard):
+        raise ValueError("a bug")
+
+    code, log, seen, _ = review_once(tmp_path, monkeypatch, check=check)
+    assert code == auto.SESSION_BROKE_A_RULE and "recorded" not in seen
+    assert seen["broke"] == ["the checks after the session failed (ValueError: a bug; the traceback is in the log), so"
+                             " what it did can't be told"]
+    assert "Traceback" in Path(log).read_text()
+
+
+def test_the_record_runs_with_the_signals_held_and_passes_one_on_after(tmp_path, monkeypatch):
+    def record(worktree, run, out):
+        os.kill(os.getpid(), signal.SIGINT)
+        time.sleep(0.2)
+        out.write("recorded whole\n")
+        return 0, []
+
+    with pytest.raises(KeyboardInterrupt):
+        review_once(tmp_path, monkeypatch, record=record)
+    log = next((tmp_path / "logs").iterdir())
+    assert "recorded whole" in log.read_text()
 
 
 def test_the_sessions_folders_and_settings_are_gone_after_it(tmp_path, monkeypatch):
@@ -612,10 +656,10 @@ def test_the_session_settings_sandbox_its_bash_and_fence_its_file_tools(tmp_path
     security = str(tmp_path / "clone" / ".security")
     credentials = [home + path[1:] for path in auto.CREDENTIAL_PATHS]
     assert sandbox["filesystem"] == {
-        "allowWrite": [os.path.join(common, "review"), security, "/t/session"],
+        "allowWrite": ["/t/session"],
         "denyWrite": ["/w/wt", gitdir],
         "denyRead": credentials,
-    }, "it writes the ledgers, .security and its own folder: not the worktree, its working folder, nor its git folder"
+    }, "it writes only its own folder: not the worktree, its working folder, its git folder, the ledgers or .security"
     assert sandbox["network"] == {"allowedDomains": list(auto.SANDBOX_DOMAINS)}
     permissions = settings["permissions"]
     assert permissions["allow"] == [*auto.SESSION_TOOLS, "Read(//w/wt/**)", f"Read(/{security}/**)", "Read(//t/session/**)",
@@ -725,7 +769,7 @@ def test_the_session_settings_expand_the_real_home_and_take_the_main_checkout_fr
     settings = auto.session_settings("/w/wt", "/x/Repo.git", "/x/Repo.git/worktrees/wt", "/t", environ={})
     assert settings["sandbox"]["filesystem"]["denyRead"][0] == str(tmp_path / "me" / ".ssh")
     assert not any("~" in path for path in settings["sandbox"]["filesystem"]["denyRead"])
-    assert "/x/.security" in settings["sandbox"]["filesystem"]["allowWrite"], \
+    assert "Read(//x/.security/**)" in settings["permissions"]["allow"], \
         "the .security record is beside the git folder whatever it is called, as reapply.sh finds the main checkout"
 
 
@@ -757,7 +801,7 @@ def test_the_sandbox_and_session_lists_word_for_word():
     assert auto.SANDBOX_DOMAINS == (), "it builds, installs and fetches nothing, so it reaches no host"
     assert auto.NO_BUILD_SERVERS == {"MSBUILDDISABLENODEREUSE": "1", "DOTNET_CLI_USE_MSBUILD_SERVER": "0",
                                      "UseSharedCompilation": "false"}
-    assert (auto.RECORD_BYTES, auto.LEDGER_FILE.pattern) == (16 * 1024 * 1024, r"\.(json|entries)$")
+    assert (auto.RECORD_BYTES, auto.STAGED_STATUSES, auto.RECORD_FAILED) == (16 * 1024 * 1024, ("open", "dismissed"), 125)
     assert auto.SANDBOX_TOOLS == (("bwrap", "socat") if sys.platform.startswith("linux") else ())
     assert auto.TOOLS == ("git", "gh", "python3", "node", "pnpm", "shfmt", "claude")
     assert (auto.GROUP_WAIT_SECONDS, auto.SESSION_BROKE_A_RULE) == (10, 126)
@@ -891,7 +935,7 @@ def test_an_existing_log_folder_is_set_to_0700_and_a_symlink_is_refused(tmp_path
 
 
 def test_the_prompt_says_none_when_no_owned_file_changes():
-    prompt = auto.review_command(TM, "/w", [], {}, AGENTS, SKILL_TEXT)[2]
+    prompt = auto.review_command(TM, "/w", [], {}, AGENTS, SKILL_TEXT, "/t/run")[2]
     assert "These files the branch changes are Owned Baseline files, which the next Apply overwrites: none." in prompt
 
 
@@ -933,7 +977,7 @@ def test_a_group_that_does_not_go_away_is_a_broken_rule(tmp_path, monkeypatch):
     code, log, seen, _ = review_once(tmp_path, monkeypatch, end=lambda s: False)
     assert code == auto.SESSION_BROKE_A_RULE
     rule = (f"the session's process group was still there {auto.GROUP_WAIT_SECONDS} s after it was killed, and can still"
-            " write: see it with pgrep -a -g 999999, and end it before you resume")
+            " write: see it with pgrep -l -g 999999, and end it with pkill -KILL -g 999999, before you resume")
     assert seen["broke"] == [rule]
     assert f"rollout.sh: the session broke a rule: {rule}" in Path(log).read_text()
 
@@ -1109,12 +1153,12 @@ def test_run_in_group_starts_its_own_group_and_ends_it_on_an_interrupt():
         seen.update(command=command, **kwargs)
         return FakeSession(code=3)
 
-    assert auto.run_in_group(["x"], popen=popen, end=ended.append) == 3
+    assert auto.run_in_group(["x"], popen=popen, end=lambda child: ended.append(child) or True) == 3
     assert seen == {"command": ["x"], "start_new_session": True, "pass_fds": (),
                     "env": {**os.environ, **auto.NO_BUILD_SERVERS}}, "no build server is left to outlive it"
     assert len(ended) == 1, "its group is ended when it exits, too"
     with pytest.raises(SystemExit):
-        auto.run_in_group(["x"], popen=lambda c, **k: _Raising(), end=ended.append)
+        auto.run_in_group(["x"], popen=lambda c, **k: _Raising(), end=lambda child: ended.append(child) or True)
     assert len(ended) == 2
 
 
@@ -1129,7 +1173,7 @@ def test_run_in_group_holds_a_second_signal_and_passes_the_first_on():
             raise subprocess.TimeoutExpired("x", timeout)
 
     with pytest.raises(SystemExit) as stop:
-        auto.run_in_group(["x"], popen=lambda c, **k: Signalled(), end=ended.append)
+        auto.run_in_group(["x"], popen=lambda c, **k: Signalled(), end=lambda child: ended.append(child) or True)
     assert stop.value.code == 128 + signal.SIGTERM and len(ended) == 1
 
 
@@ -1530,239 +1574,69 @@ def test_an_owned_list_that_fails_after_the_session_is_a_stop(tmp_path):
     assert g.check(changes=broken) == ["can't list the Owned files the branch changes: git diff failed"]
 
 
-LEDGER_CHANGED = ("{} was {} during the session (by the session, by its record replacing an earlier record of the same"
-                  " diff, or by your own review on another branch meanwhile): a review-only session writes only a new ledger")
-NEW_DECIDED = "{} appeared during the session with {}: a review-only session fixes nothing, and only the person accepts"
+FOLDER_CHANGED = ("{} was {} during the session, which can't write {}: your own review or record on another branch"
+                  " meanwhile, or a sandbox that didn't hold")
 
 
-WEAK = {"id": "R1", "status": "open", "severity": "warning", "security": True, "lens": "Security", "path": "a.py",
-        "summary": "The weakness"}
-NOT_SECURITY = {"severity": "critical", "security": False, "lens": "Tests"}
-
-
-def test_a_new_ledger_and_its_entry_map_with_open_and_dismissed_findings_break_nothing(tmp_path):
+@pytest.mark.parametrize("where, what", [("ledgers", "the review ledgers"), ("security", "the .security record")])
+@pytest.mark.parametrize("how", ["added", "removed", "changed"])
+@pytest.mark.parametrize("name", ["l.json", "l.entries", ".lock", "0001-a.md", "README.md", "x.tmp"])
+def test_any_file_added_removed_or_changed_in_the_ledgers_or_the_security_record_is_caught(tmp_path, where, what, how,
+                                                                                            name):
+    # The round records, not the session, so the session writes neither folder: whatever a file is called, a lock or a
+    # temporary file included, a change is a stop.
     g = Guarded(tmp_path)
-    g.ledger("old.json", [{"id": "R1", "status": "accepted"}])
-    (g.ledgers / "old.entries").write_text("{}\n")
-    g.entry("0001-old.md", "open", fingerprint=auto.record_fingerprint("b.py", "An older weakness"))
+    folder = getattr(g, where)
+    if how != "added":
+        (folder / name).write_text("before")
     g.guard()
-    g.ledger("new.json", [WEAK, {**WEAK, "id": "R2", "path": "b.py", "summary": "an  OLDER weakness"},
-                          {"id": "R3", "status": "dismissed", "reason": "x", **NOT_SECURITY}])
-    g.entry("0002-new.md", "open", fingerprint=auto.record_fingerprint("a.py", "The weakness"))
-    (g.ledgers / "new.entries").write_text('{"R1": "0002", "R2": "0001"}\n')  # R2 repeats the older entry
-    (g.ledgers / "new.json.123.ab12.tmp").write_text("{")
-    assert g.check() == [], "a write in progress isn't a ledger, and a repeat goes to the entry of its weakness"
+    if how == "removed":
+        (folder / name).unlink()
+    else:
+        (folder / name).write_text("after")
+    assert g.check() == [FOLDER_CHANGED.format(folder / name, how, what)]
 
 
-MAP_TO_ELSEWHERE = "{} sends R1 to entry {}, which doesn't hold its weakness: an accept of R1 would change that entry"
-
-
-@pytest.mark.parametrize("how", ["another weakness", "no fingerprint", "no such entry", "an entry that doesn't read",
-                                 "the first of a number"])
-def test_a_new_entry_map_that_sends_a_finding_to_an_entry_of_another_weakness_is_caught(tmp_path, how):
-    # accept goes by the entry map: a forged one would have the person's accept of a harmless-looking finding accept
-    # a real weakness's entry.
-    g = Guarded(tmp_path)
-    mine = auto.record_fingerprint("a.py", "The weakness")
-    if how == "another weakness":
-        g.entry("0001-real.md", "open", fingerprint=auto.record_fingerprint("src/real.cs", "A real weakness"))
-    elif how == "no fingerprint":
-        g.entry("0001-real.md", "open")
-    elif how == "an entry that doesn't read":
-        g.entry("0001-real.md", "maybe", fingerprint=mine)
-    elif how == "the first of a number":
-        # accept takes the first entry of the number, as the record sorts them: 0001-a before 0001-b.
-        g.entry("0001-a.md", "open", fingerprint=auto.record_fingerprint("src/real.cs", "A real weakness"))
-        g.entry("0001-b.md", "open", fingerprint=mine)
-    g.guard()
-    g.ledger("new.json", [WEAK])
-    path = g.ledgers / "new.entries"
-    path.write_text('{"R1": "0001"}')
-    assert g.check() == [MAP_TO_ELSEWHERE.format(path, "0001")]
-
-
-def test_a_new_entry_map_naming_a_finding_its_ledger_doesnt_hold_is_caught(tmp_path):
-    g = Guarded(tmp_path)
-    g.guard()
-    g.ledger("new.json", [WEAK])
-    g.entry("0001-a.md", "open", fingerprint=auto.record_fingerprint("a.py", "The weakness"))
-    path = g.ledgers / "new.entries"
-    path.write_text('{"R1": "0001", "R7": "0001"}')
-    assert g.check() == [f"{path} names R7, a finding its ledger doesn't hold"]
-
-
-@pytest.mark.parametrize("ledger", ["none", "there before", "doesn't read"])
-def test_a_new_entry_map_without_a_new_ledger_of_its_own_is_caught(tmp_path, ledger):
-    g = Guarded(tmp_path)
-    if ledger == "there before":
-        g.ledger("k.json", [WEAK])
-    g.guard()
-    if ledger == "doesn't read":
-        g.ledger("k.json", [], raw="{")
-    path = g.ledgers / "k.entries"
-    path.write_text('{"R1": "0001"}')
-    expected = [f"{path} appeared during the session without a new ledger of its own beside it"]
-    if ledger == "doesn't read":
-        expected.append(f"{g.ledgers / 'k.json'} appeared during the session and doesn't read as a ledger")
-    assert g.check() == expected
-
-
-@pytest.mark.parametrize("raw", ["{", "[]", '{"R1": 1}', '{"R1": "001"}', '{"R1": "0001x"}', '{"R1": "\u0661\u0662\u0663\u0664"}',
-                                 "[" * 100000])
-def test_a_new_entry_map_that_doesnt_read_as_one_is_caught(tmp_path, raw):
-    g = Guarded(tmp_path)
-    g.guard()
-    path = g.ledgers / "k.entries"
-    path.write_text(raw)
-    assert g.check() == [f"{path} appeared during the session and doesn't read as an entry map"]
-
-
-def test_an_entry_map_and_ledger_that_read_are_read_as_the_ledger_reads_them():
-    assert auto.ledger_body("k.entries", b'{"R1": "0001", "R2": "12345"}') == {"R1": "0001", "R2": "12345"}
-    assert auto.ledger_body("k.entries", b"{}") == {}
-    assert auto.ledger_body("k.json", b'{"findings": [{"id": "R1"}]}') == [{"id": "R1"}]
-    assert auto.ledger_body("k.json", b'{"findings": ["R1"]}') is None, "a finding is an object"
-    assert auto.ledger_body("k.json", None) is None
-
-
-def test_a_new_ledger_nested_past_the_parser_doesnt_read_and_crashes_nothing(tmp_path):
-    g = Guarded(tmp_path)
-    g.guard()
-    path = g.ledgers / "deep.json"
-    path.write_text("[" * 200000)
-    assert g.check() == [f"{path} appeared during the session and doesn't read as a ledger"]
-
-
-@pytest.mark.parametrize("finding, dismissed", [
-    ({"severity": "warning", "security": False, "lens": "Tests"}, True),
-    ({"severity": "critical", "lens": "Tests"}, True),
-    ({"severity": "critical", "security": True, "lens": "Tests"}, True),
-    ({"severity": "advisory", "security": False, "lens": "Bar/Security"}, True),
-    ({"severity": "critical", "security": False, "lens": "Tests"}, False),
-    ({"severity": "advisory", "security": False, "lens": "Docs match the code"}, False),
-])
-def test_a_new_ledger_with_a_security_finding_dismissed_is_caught(tmp_path, finding, dismissed):
-    # Only the person decides a security finding, as the ledger's isSecurity tells one.
-    g = Guarded(tmp_path)
-    g.guard()
-    path = g.ledger("new.json", [{"id": "R5", "status": "dismissed", "reason": "x", **finding}])
-    assert g.check() == ([f"{path} appeared during the session with R5 dismissed, a security finding: only the person"
-                          " decides one"] if dismissed else [])
-
-
-LOCK_LEFT = ("{} is there after the session (its record was ended while it held it, or your own review is running): once"
-             " no review is running there, remove it with: rm {}")
-
-
-def test_a_ledger_lock_the_session_left_is_a_stop_that_says_how_to_clear_it(tmp_path):
-    g = Guarded(tmp_path)
-    g.guard()
-    lock = g.ledgers / ".lock"
-    lock.write_text("12 abc")
-    assert g.check() == [LOCK_LEFT.format(lock, lock)]
-
-
-def test_a_ledger_lock_there_before_and_kept_or_gone_is_no_stop(tmp_path):
-    g = Guarded(tmp_path)
-    lock = g.ledgers / ".lock"
-    lock.write_text("12 abc")
-    g.guard()
-    assert g.check() == []
-    lock.unlink()
-    assert g.check() == []
-    lock.write_text("13 def")
-    assert g.check() == [LOCK_LEFT.format(lock, lock)], "another lock, made during the session"
-
-
-@pytest.mark.parametrize("where", ["ledger", "entry"])
-def test_a_file_that_didnt_read_before_and_was_swapped_for_another_is_caught(tmp_path, where):
-    g = Guarded(tmp_path)
-    folder, name = (g.ledgers, "l.json") if where == "ledger" else (g.security, "0001-a.md")
-    (tmp_path / "one").write_text("x")
-    (tmp_path / "two").write_text("x")
-    (folder / name).symlink_to(tmp_path / "one")
-    g.guard()
-    assert g.check() == []
-    (folder / name).unlink()
-    (folder / name).symlink_to(tmp_path / "two")
-    broke = g.check()
-    assert len(broke) == 1 and broke[0].startswith(f"{folder / name} {'was changed' if where == 'ledger' else 'changed'} during the session")
-
-
-def test_an_unread_files_identity_is_what_lstat_says_and_where_it_leads(tmp_path):
-    (tmp_path / "l").symlink_to("/somewhere")
-    info = os.lstat(tmp_path / "l")
-    assert auto.identity(str(tmp_path / "l"), None) == (f"unread {info.st_mode:o} {info.st_ino} {info.st_size}"
-                                                        f" {info.st_mtime_ns} /somewhere")
-    assert auto.identity(str(tmp_path / "missing"), None) == "gone"
-    assert auto.identity("x", b"abc") == hashlib.sha256(b"abc").hexdigest()
-
-
-@pytest.mark.parametrize("findings, decided", [
-    ([{"id": "R2", "status": "fixed"}, {"id": "R3", "status": "accepted"}, {"id": "R4", "status": "open"}],
-     "R2 fixed, R3 accepted"),
-    ([{"id": "R9", "status": "accepted"}], "R9 accepted"),
-    ([{"id": "R9", "status": "fixed"}], "R9 fixed"),
-])
-def test_a_new_ledger_with_a_finding_fixed_or_accepted_is_caught_whatever_its_mtime(tmp_path, findings, decided):
-    g = Guarded(tmp_path)
-    g.guard()
-    path = g.ledger("new.json", findings)
-    os.utime(path, (0, 0))  # backdated: still caught, by content
-    assert g.check() == [NEW_DECIDED.format(path, decided)]
-
-
-@pytest.mark.parametrize("branch, head", [("feature/7-x", "1" * 40), ("something-else", None), ("chore/reapply-baseline", None)])
-@pytest.mark.parametrize("name", ["l.json", "l.entries"])
-def test_a_ledger_or_entry_map_already_there_that_changes_is_caught_whatever_it_names(tmp_path, branch, head, name):
-    # The session can write those fields too, so a ledger can't vouch for itself; flipping a finding to fixed or
-    # dismissed, or rewriting the entry map an accept goes by, is as much a decision as accepting it.
-    g = Guarded(tmp_path)
-    g.ledger(name, [{"id": "R1", "status": "open"}], branch=branch, head=head)
-    g.guard()
-    path = g.ledger(name, [{"id": "R1", "status": "dismissed", "reason": "x"}], branch=branch, head=head)
-    assert g.check() == [LEDGER_CHANGED.format(path, "changed")]
-
-
-@pytest.mark.parametrize("name", ["l.json", "l.entries", "bad.json"])
-def test_a_ledger_or_entry_map_removed_during_the_session_is_caught(tmp_path, name):
-    g = Guarded(tmp_path)
-    g.ledger(name, [{"id": "R1", "status": "open"}], raw="{" if name == "bad.json" else None)
-    g.guard()
-    (g.ledgers / name).unlink()
-    assert g.check() == [LEDGER_CHANGED.format(g.ledgers / name, "removed")]
-
-
-@pytest.mark.parametrize("raw", ['{"findings": 5}', '{"findings": "x"}', "[]", "{", '{"findings": null}', "\xff"])
-def test_a_new_ledger_that_doesnt_read_is_caught(tmp_path, raw):
-    g = Guarded(tmp_path)
-    g.guard()
-    path = g.ledgers / "bad.json"
-    path.write_bytes(raw.encode("latin-1"))
-    assert g.check() == [f"{path} appeared during the session and doesn't read as a ledger"]
-
-
-@pytest.mark.parametrize("raw", ["{", "[]", '{"findings": 5}'])
-def test_a_ledger_that_didnt_read_before_and_reads_with_an_accept_after_is_caught(tmp_path, raw):
-    g = Guarded(tmp_path)
-    g.ledger("l.json", [], raw=raw)
-    g.guard()
-    path = g.ledger("l.json", [{"id": "R1", "status": "accepted"}])
-    assert g.check() == [LEDGER_CHANGED.format(path, "changed")]
-
-
-def test_a_ledger_that_didnt_read_before_and_is_unchanged_is_not_the_sessions(tmp_path):
+def test_files_there_before_and_unchanged_are_no_stop_whatever_they_hold(tmp_path):
     g = Guarded(tmp_path)
     g.ledger("old-bad.json", [], raw="{")
+    g.ledger("l.json", [{"id": "R1", "status": "accepted"}])
+    g.entry("0001-a.md", "fixed")
+    (g.ledgers / ".lock").write_text("1 abc\n")
     g.guard()
     assert g.check() == []
+
+
+def test_a_folder_that_isnt_there_reads_as_empty_and_one_made_with_files_is_caught(tmp_path):
+    assert auto.folder_state(str(tmp_path / "none")) == {}
+    g = Guarded(tmp_path)
+    g.ledgers.rmdir()
+    g.security.rmdir()
+    g.guard()
+    assert g.check() == []
+    g.security.mkdir()
+    g.entry("0001-a.md", "open")
+    assert g.check() == [FOLDER_CHANGED.format(g.security / "0001-a.md", "added", "the .security record")]
+
+
+@pytest.mark.parametrize("where", ["ledgers", "security"])
+def test_a_file_that_didnt_read_before_and_was_swapped_for_another_is_caught(tmp_path, where):
+    g = Guarded(tmp_path)
+    folder = getattr(g, where)
+    (tmp_path / "one").write_text("x")
+    (tmp_path / "two").write_text("x")
+    (folder / "f").symlink_to(tmp_path / "one")
+    g.guard()
+    assert g.check() == []
+    (folder / "f").unlink()
+    (folder / "f").symlink_to(tmp_path / "two")
+    assert len(g.check()) == 1 and g.check()[0].startswith(f"{folder / 'f'} was changed during the session")
 
 
 @needs_proc
-@pytest.mark.parametrize("what", ["fifo", "zero", "dangling", "link to a ledger", "oversized"])
-def test_a_ledger_that_isnt_a_small_regular_file_is_never_read_and_is_caught(tmp_path, what, monkeypatch):
-    # The session can make anything in the ledger folder: the round reads none of it in a way that hangs or fills
-    # memory (record_bytes), and it doesn't read as a ledger.
+@pytest.mark.parametrize("what", ["fifo", "zero", "dangling", "oversized"])
+def test_a_file_that_isnt_a_small_regular_one_is_never_read_and_is_caught(tmp_path, what, monkeypatch):
+    # Nothing in either folder is read in a way that hangs or fills memory (record_bytes).
     g = Guarded(tmp_path)
     g.guard()
     path = g.ledgers / "x.json"
@@ -1772,13 +1646,34 @@ def test_a_ledger_that_isnt_a_small_regular_file_is_never_read_and_is_caught(tmp
         path.symlink_to("/dev/zero")
     elif what == "dangling":
         path.symlink_to(tmp_path / "nowhere.json")
-    elif what == "link to a ledger":
-        (tmp_path / "real.json").write_text(json.dumps({"findings": []}))
-        path.symlink_to(tmp_path / "real.json")
     else:
         monkeypatch.setattr(auto, "RECORD_BYTES", 10)
         path.write_text(json.dumps({"findings": []}))
-    assert g.check() == [f"{path} appeared during the session and doesn't read as a ledger"]
+    assert g.check() == [FOLDER_CHANGED.format(path, "added", "the review ledgers")]
+
+
+def test_a_file_name_is_printed_with_its_control_characters_escaped(tmp_path):
+    g = Guarded(tmp_path)
+    g.guard()
+    (g.ledgers / "a\x1b[2J\nrollout.sh: all is well‮.json").write_text("x")
+    [rule] = g.check()
+    assert "\x1b" not in rule and "\n" not in rule and "‮" not in rule
+    assert rule.startswith(f"{g.ledgers}/a\\x1b[2J\\nrollout.sh: all is well\\u202e.json was added during the session")
+
+
+def test_shown_quotes_and_escapes_what_the_session_wrote():
+    assert auto.shown("R1") == "'R1'"
+    assert auto.shown("R1\x1b]0;x\x07\n") == "'R1\\x1b]0;x\\x07\\n'"
+    assert auto.shown(None) == "None" and auto.shown(["x"]) == "['x']"
+
+
+def test_an_unread_files_identity_is_what_lstat_says_and_where_it_leads(tmp_path):
+    (tmp_path / "l").symlink_to("/somewhere")
+    info = os.lstat(tmp_path / "l")
+    assert auto.identity(str(tmp_path / "l"), None) == (f"unread {info.st_mode:o} {info.st_ino} {info.st_size}"
+                                                        f" {info.st_mtime_ns} /somewhere")
+    assert auto.identity(str(tmp_path / "missing"), None) == "gone"
+    assert auto.identity("x", b"abc") == hashlib.sha256(b"abc").hexdigest()
 
 
 def test_record_bytes_reads_a_regular_file_up_to_its_limit_only(tmp_path):
@@ -1791,167 +1686,179 @@ def test_record_bytes_reads_a_regular_file_up_to_its_limit_only(tmp_path):
     assert auto.record_bytes(str(tmp_path)) is None, "a folder isn't read"
 
 
-def test_the_security_record_may_gain_open_entries(tmp_path):
-    g = Guarded(tmp_path)
-    g.entry("0001-a.md", "open")
-    g.entry("0002-b.md", "fixed")
-    (g.security / "README.md").write_text("# The record\n")
-    g.guard()
-    g.entry("0003-c.md", "open")
-    (g.security / "README.md").write_text("# The record, as the person edited it\n")
-    (g.security / "0004-d.md.123.ab.tmp").write_text("- Status: accepted\n")
-    assert g.check() == [], "the README and a write in progress aren't entries"
+OPEN = {"id": "R1", "lens": "Bar", "path": "a.py", "line": 1, "summary": "s", "severity": "critical", "security": False,
+        "status": "open", "test": None, "reason": None, "fix": "f"}
+NOT_SECURITY = {"severity": "critical", "security": False, "lens": "Tests"}
 
 
-def test_a_temporary_file_there_before_and_gone_after_is_no_removed_entry(tmp_path):
-    g = Guarded(tmp_path)
-    (g.security / "0001-a.md.99.ff.tmp").write_text("- Status: open\n")
-    g.guard()
-    (g.security / "0001-a.md.99.ff.tmp").unlink()
-    assert g.check() == []
+def stage(tmp_path, findings=None, raw=None):
+    run = tmp_path / "run"
+    run.mkdir(exist_ok=True)
+    (run / auto.STAGED_FILE).write_text(raw if raw is not None else json.dumps(findings))
+    return str(run)
 
 
-@pytest.mark.parametrize("before, after", [
-    ("accepted", None),
-    ("open", "accepted"),
-    ("open", "fixed"),
-    ("fixed", "open"),
-    ("fixed", "fixed"),
-    ("accepted", "fixed"),
-    ("open", "open"),
+def test_staged_findings_kept_open_or_dismissed_break_nothing(tmp_path):
+    findings = [OPEN, {**OPEN, "id": "R2", "severity": "warning", "security": True, "lens": "Security"},
+                {**OPEN, "id": "R3", **NOT_SECURITY, "status": "dismissed", "reason": "r"}]
+    assert auto.staged_findings(stage(tmp_path, findings)) == (findings, [])
+    assert auto.staged_findings(stage(tmp_path, [])) == ([], []), "a round that keeps nothing stages []"
+
+
+def test_nothing_staged_is_no_findings_and_no_broken_rule(tmp_path):
+    assert auto.staged_findings(str(tmp_path)) == (None, [])
+
+
+@pytest.mark.parametrize("status", ["fixed", "accepted", None, 5, "Open"])
+def test_a_finding_staged_fixed_accepted_or_otherwise_breaks_a_rule(tmp_path, status):
+    findings, broke = auto.staged_findings(stage(tmp_path, [OPEN, {**OPEN, "id": "R2", "status": status}]))
+    assert findings is None
+    assert broke == [f"'R2' was staged {status!r}: a review-only session stages a finding open or dismissed, since it"
+                     " fixes nothing and only the person accepts"]
+
+
+@pytest.mark.parametrize("finding, security", [
+    ({"severity": "warning", "security": False, "lens": "Tests"}, True),
+    ({"severity": "critical", "security": True, "lens": "Tests"}, True),
+    ({"severity": "critical", "lens": "Tests"}, True),
+    ({"severity": "critical", "security": False, "lens": "Bar/Security"}, True),
+    ({"severity": "critical", "security": False, "lens": "SECURITY"}, True),
+    ({"severity": "critical", "security": False, "lens": "Sec​urity"}, True),
+    ({"severity": "critical", "security": False, "lens": "Sec­urity"}, True),
+    ({"severity": "critical", "security": False, "lens": "Sec urity"}, True),
+    ({"severity": "critical", "security": False}, True),
+    ({"severity": "critical", "security": False, "lens": None}, True),
+    ({"severity": "critical", "security": False, "lens": 5}, True),
+    (NOT_SECURITY, False),
+    ({"severity": "advisory", "security": False, "lens": "Docs match the code"}, False),
 ])
-def test_the_security_record_losing_or_changing_an_entry_is_caught(tmp_path, before, after):
-    # A review-only session records no finding fixed, so its record marks no open entry fixed either.
-    g = Guarded(tmp_path)
-    path = g.entry("0001-a.md", before)
-    g.guard()
-    if after is None:
-        path.unlink()
-        assert g.check() == [f"{path} was removed during the session"]
-    else:
-        g.entry("0001-a.md", after, text="another weakness")
-        assert g.check() == [f"{path} changed during the session ({before} to {after}): a review-only session's"
-                             " record changes no entry"]
+def test_a_security_finding_staged_dismissed_breaks_a_rule_read_wider_than_the_ledger(tmp_path, finding, security):
+    # The ledger reads the lens with its control and invisible characters stripped: read here with all but its
+    # letters dropped, a lens can't hide security from the check and show it to the ledger.
+    dismissed = {**{key: value for key, value in OPEN.items() if key not in ("security", "lens")}, **finding,
+                 "status": "dismissed", "reason": "r"}
+    findings, broke = auto.staged_findings(stage(tmp_path, [dismissed]))
+    assert auto.is_security(dismissed) is security
+    assert broke == (["'R1' was staged dismissed, and may be a security finding: only the person decides one, so the"
+                      " session records it open"] if security else [])
+    assert findings == (None if security else [dismissed])
 
 
-@pytest.mark.parametrize("status, shown", [("accepted", "accepted"), ("fixed", "fixed"), ("maybe", "unreadable")])
-def test_a_new_security_entry_that_isnt_open_is_caught(tmp_path, status, shown):
-    g = Guarded(tmp_path)
-    g.guard()
-    path = g.entry("0009-z.md", status)
-    assert g.check() == [f"{path} appeared during the session as {shown}: a review-only session's record writes only"
-                         " open entries"]
+@pytest.mark.parametrize("raw", ["{", "{}", '{"findings": []}', "5", '["x"]', "[[]]", "\xff", "[" * 100000])
+def test_staged_findings_that_arent_a_json_array_of_objects_break_a_rule(tmp_path, raw):
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / auto.STAGED_FILE).write_bytes(raw.encode("latin-1"))
+    assert auto.staged_findings(str(run)) == (None, [f"{run / auto.STAGED_FILE} isn't the JSON array of findings"
+                                                     " scripts/review.sh stage writes"])
 
 
-@pytest.mark.parametrize("what", ["fifo", "symlink"])
-def test_a_security_entry_that_isnt_a_regular_file_is_never_read(tmp_path, what):
-    g = Guarded(tmp_path)
-    g.guard()
-    path = g.security / "0009-z.md"
+@needs_proc
+@pytest.mark.parametrize("what", ["fifo", "symlink", "dangling", "folder", "oversized"])
+def test_staged_findings_that_arent_a_small_regular_file_are_never_read(tmp_path, what, monkeypatch):
+    run = tmp_path / "run"
+    run.mkdir()
+    path = run / auto.STAGED_FILE
     if what == "fifo":
         os.mkfifo(path)
+    elif what == "symlink":
+        (tmp_path / "secret").write_text(json.dumps([OPEN]))
+        path.symlink_to(tmp_path / "secret")
+    elif what == "dangling":
+        path.symlink_to(tmp_path / "nowhere")  # not "nothing staged": a link is there
+    elif what == "folder":
+        path.mkdir()
     else:
-        (tmp_path / "e.md").write_text("- Status: open\n")
-        path.symlink_to(tmp_path / "e.md")
-    assert g.check() == [f"{path} appeared during the session as unreadable: a review-only session's record writes only"
-                         " open entries"]
+        monkeypatch.setattr(auto, "RECORD_BYTES", 10)
+        path.write_text(json.dumps([OPEN]))
+    assert auto.staged_findings(str(run)) == (None, [f"{path} isn't the JSON array of findings scripts/review.sh stage"
+                                                     " writes"])
 
 
-def test_a_missing_security_record_reads_as_no_entries(tmp_path):
-    assert auto.security_state(str(tmp_path / "none")) == {}
-    (tmp_path / "rec").mkdir()
-    (tmp_path / "rec" / "0001-sub.md").mkdir()  # a folder named as an entry isn't read
-    (tmp_path / "rec" / "0002-x.md").write_text("- Status: maybe\n")
-    (tmp_path / "rec" / "x.md").write_text("- Status: open\n")
-    state = auto.security_state(str(tmp_path / "rec"))
-    assert list(state) == ["0001-sub.md", "0002-x.md"] and state["0001-sub.md"][1:] == (None, None)
-    assert state["0001-sub.md"][0].startswith("unread ") and state["0002-x.md"][1:] == (None, None)
+def test_a_staged_id_and_status_are_printed_escaped(tmp_path):
+    _, broke = auto.staged_findings(stage(tmp_path, [{**OPEN, "id": "R1\x1b[2J\nrollout.sh: ok", "status": "fixed\x07"}]))
+    assert broke == ["'R1\\x1b[2J\\nrollout.sh: ok' was staged 'fixed\\x07': a review-only session stages a finding"
+                     " open or dismissed, since it fixes nothing and only the person accepts"]
 
 
-@pytest.mark.parametrize("text, status", [
-    ("- Status: open\n", "open"),
-    ("- Status: fixed  \n", "fixed"),
-    ("- Status: accepted", "accepted"),
-    ("intro\n- Status: open\n", "open"),
-    ("- Status: open\n\n- Status: accepted\n", "open"),
-    ("- Status: openx\n", None),
-    ("- Status: Open\n", None),
-    ("  - Status: open\n", None),
-    ("Status: open\n", None),
-    ("x- Status: open\n", None),
-    ("- Status: open x\n", None),
-    # JavaScript's ^ and $ also stop at \r, U+2028 and U+2029, and its \s takes the other spaces: read as it reads them.
-    ("- Status: accepted\u2028\n- Status: open\n", "accepted"),
-    ("- Status: accepted\r- Status: open\n", "accepted"),
-    ("- Status: fixed\u2029", "fixed"),
-    ("- Status: open\u00a0\n", "open"),
-    ("- Status: accepted\u3000\n- Status: open\n", "accepted"),
-    ("- Status: accepted\ufeff\n", "accepted"),
-    ("- Status: open\x85\n", None),
-    ("- Status: open\x1c\n", None),
-])
-def test_an_entrys_status_line_reads_as_the_record_reads_it(tmp_path, text, status):
-    (tmp_path / "0001-a.md").write_bytes(text.encode("utf-8"))
-    assert auto.security_state(str(tmp_path))["0001-a.md"][1] == status
+class Recorder:
+    """scripts/review.sh as record_review runs it: prepare prints the key and HEAD, record reads its input."""
+
+    def __init__(self, prepare=(0, "k" * 64 + "\n" + "h" * 40 + "\n"), record=0):
+        self.prepare, self.record, self.calls = prepare, record, []
+
+    def __call__(self, command, **kwargs):
+        self.calls.append((command, kwargs))
+        if command[1] == "prepare":
+            assert os.path.isabs(command[2]), "prepare takes an absolute folder"
+            return subprocess.CompletedProcess(command, self.prepare[0], self.prepare[1], "prepare's stderr\n")
+        staged = command[4]
+        self.staged = (json.loads(Path(staged, auto.STAGED_FILE).read_text()),
+                       stat.S_IMODE(os.stat(staged).st_mode), stat.S_IMODE(os.stat(Path(staged, auto.STAGED_FILE)).st_mode))
+        kwargs["stdout"].write("Review recorded.\n")
+        return subprocess.CompletedProcess(command, self.record)
 
 
-@pytest.mark.parametrize("path, summary, digest", [
-    # Each digest is what security-record.mts's fingerprint gives (node, Claude Code 2.1.326's era).
-    ("a.py", "The  Weakness\n", "fdb62a7484e90320a1e980eca6ec6bd2efcd9391f9deb7d49c46b1f0ab7327b1"),
-    ("a.py", "x\u00a0Y\u2028z\u3000", "7a1de819938ef981be70a1afe50c5e5aa0576c42f17a150bf2a053563640ead5"),
-    ("src/\u00c9.cs", "  \u00c9COLE\t\u0130 ", "e134800818919562a2c23ab939c33e98785899c0e645c94f196262c2839a0291"),
-    ("p", "\x85A\x1c", "935ad8e21d833df8b971ef2159048fc0df1eec9653679914db1e029e46d1ca50"),
-])
-def test_a_findings_fingerprint_is_the_records(path, summary, digest):
-    assert auto.record_fingerprint(path, summary) == digest
+def test_the_round_records_what_the_session_staged_with_the_worktrees_own_review_script(tmp_path):
+    run = stage(tmp_path, [OPEN])
+    recorder, out = Recorder(), io.StringIO()
+    assert auto.record_review("/w", run, out, run_command=recorder) == (0, [])
+    (prepare, prepare_kwargs), (record, record_kwargs) = recorder.calls
+    assert prepare[:2] == ["/w/scripts/review.sh", "prepare"] and prepare_kwargs["cwd"] == "/w"
+    assert prepare_kwargs["stdin"] is subprocess.DEVNULL
+    assert record[:4] == ["/w/scripts/review.sh", "record", "-", "--staged"] and record_kwargs["cwd"] == "/w"
+    assert not record[4].startswith(run), "record reads a copy of the round's own, not the session's folder"
+    assert json.loads(record_kwargs["input"]) == {"reviewedKey": "k" * 64, "reviewedHead": "h" * 40, "rounds": 1,
+                                                  "reviewerAgent": "pre-push-reviewer"}
+    assert recorder.staged == ([OPEN], 0o700, 0o600), "the copy is the person's own, as record wants it"
+    assert not os.path.exists(record[4]), "the copy is gone after the record"
+    assert "rollout.sh: recording the 1 finding(s) the session staged\nReview recorded.\n" in out.getvalue()
 
 
-def test_a_fingerprint_of_what_isnt_text_is_none():
-    assert auto.record_fingerprint(None, "x") is None and auto.record_fingerprint("p", 5) is None
-    assert auto.record_fingerprint("p", "\ud800") is None
+def test_the_round_records_an_empty_review(tmp_path):
+    recorder = Recorder()
+    assert auto.record_review("/w", stage(tmp_path, []), io.StringIO(), run_command=recorder) == (0, [])
+    assert recorder.staged[0] == []
 
 
-def test_the_fingerprint_is_computed_as_the_record_computes_it():
-    record = (SKILL / "template/owned/.sandcastle/lib/security-record.mts").read_text()
-    assert 'update(`${path}\\0${summary.toLowerCase().replace(/\\s+/g, " ").trim()}`).digest("hex")' in record
-    assert f"/{auto.SECURITY_FINGERPRINT.pattern}/m.exec(text)" in record
+def test_nothing_staged_records_nothing_and_says_so(tmp_path):
+    recorder, out = Recorder(), io.StringIO()
+    assert auto.record_review("/w", str(tmp_path), out, run_command=recorder) == (0, [])
+    assert recorder.calls == []
+    assert out.getvalue() == f"rollout.sh: the session staged no findings in {tmp_path}, so no review was recorded\n"
 
 
-def test_a_new_entry_with_another_entrys_number_is_caught(tmp_path):
-    g = Guarded(tmp_path)
-    g.entry("0001-a.md", "open")
-    g.guard()
-    path = g.entry("1-b.md", "open")
-    assert g.check() == [f"{path} appeared during the session with the number of 0001-a.md: the record gives each entry a"
-                         " number of its own"]
+def test_staged_findings_that_break_a_rule_are_never_recorded(tmp_path):
+    recorder = Recorder()
+    code, broke = auto.record_review("/w", stage(tmp_path, [{**OPEN, "status": "accepted"}]), io.StringIO(),
+                                     run_command=recorder)
+    assert code == auto.SESSION_BROKE_A_RULE and len(broke) == 1 and recorder.calls == []
 
 
-@pytest.mark.parametrize("name, entry", [("0001-a.md", True), ("12-b.md", True), ("0001-.md", True), ("0001a.md", False),
-                                         ("a-0001.md", False), ("0001-a.md.1.ff.tmp", False), ("README.md", False),
-                                         ("0001-a.mdx", False), ("\u0661-a.md", False)])
-def test_an_entry_is_named_as_the_record_names_it(name, entry):
-    assert bool(auto.SECURITY_ENTRY.search(name)) is entry
+@pytest.mark.parametrize("prepare", [(1, ""), (0, "only-one-line\n"), (0, "a\nb\nc\n")])
+def test_a_prepare_that_fails_or_doesnt_print_two_lines_records_nothing(tmp_path, prepare):
+    recorder, out = Recorder(prepare=prepare), io.StringIO()
+    assert auto.record_review("/w", stage(tmp_path, [OPEN]), out, run_command=recorder) == (auto.RECORD_FAILED, [])
+    assert len(recorder.calls) == 1
+    assert out.getvalue() == (f"rollout.sh: scripts/review.sh prepare exited {prepare[0]}, so the review wasn't"
+                              " recorded:\nprepare's stderr\n")
 
 
-def test_the_entry_name_and_status_patterns_are_the_records_own():
-    record = (SKILL / "template/owned/.sandcastle/lib/security-record.mts").read_text()
-    assert f"/{auto.SECURITY_ENTRY.pattern}/.exec(file)" in record
-    assert f"/{auto.SECURITY_STATUS.pattern}/m.exec(text)" in record
-    for pattern in (auto.SECURITY_STATUS, auto.SECURITY_FINGERPRINT):
-        assert pattern.flags & re.M and pattern.flags & re.A, "\\s read as ASCII once as_the_record_reads maps the rest"
-    assert auto.SECURITY_ENTRY.flags & re.A
+def test_a_record_that_refuses_is_record_failed(tmp_path):
+    out = io.StringIO()
+    assert auto.record_review("/w", stage(tmp_path, [OPEN]), out, run_command=Recorder(record=1)) == (auto.RECORD_FAILED, [])
+    assert out.getvalue().endswith("rollout.sh: scripts/review.sh record exited 1, so the review wasn't recorded\n")
 
 
-def test_the_ledger_folders_names_are_the_records_own():
-    ledger = (SKILL.parents[2] / ".sandcastle/lib/review-ledger.mts").read_text()
-    record = (SKILL / "template/owned/.sandcastle/lib/security-record.mts").read_text()
-    assert "join(ledgerDir(cwd), `${key}.json`)" in ledger and "join(ledgerDir(cwd), `${key}.entries`)" in ledger
-    assert f'join(ledgerDir(cwd), "{auto.LEDGER_LOCK}")' in ledger
-    assert 'const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;' in record
-    assert "replaceFile(ledgerPath(cwd, ledger.key)" in ledger and "replaceFile(path, `${JSON.stringify(entries)}" in ledger
-    for name, matched in [("k.json", True), ("k.entries", True), (".lock", False), ("k.json.12.ab12cd34.tmp", False),
-                          ("k.entries.12.ab12cd34.tmp", False), ("k.jsonx", False)]:
-        assert bool(auto.LEDGER_FILE.search(name)) is matched, name
+def test_the_staged_file_and_record_form_are_the_ledgers_own():
+    source = (SKILL / "template" / "owned" / ".sandcastle" / "lib" / "review-ledger.mts").read_text()
+    assert f'const STAGED_FILE = "{auto.STAGED_FILE}";' in source
+    assert 'const flag = rest.indexOf("--staged");' in source and "flag !== 1" in source, \
+        "record takes its input, then --staged and the folder, as record_review passes them"
+    for field in ("reviewedKey", "reviewedHead", "rounds", "reviewerAgent"):
+        assert f"{field}:" in source, field
+    agents = auto.agent_definition()
+    assert list(agents) == [auto.REVIEWER_AGENT], "the review is recorded under the agent the session ran"
 
 
 def test_link_text_reads_only_a_plain_file(tmp_path):
@@ -1967,11 +1874,12 @@ def test_run_text_strips_trailing_newlines_only_and_gives_none_for_a_failure(tmp
     assert auto.run_text(["pwd"], cwd=str(tmp_path)) == str(tmp_path)
 
 
-def test_a_missing_ledger_folder_reads_as_no_ledgers(tmp_path):
-    assert auto.ledger_state(str(tmp_path / "none")) == {}
+needs_waitid = pytest.mark.skipif(not hasattr(os, "waitid") or not hasattr(os, "WNOWAIT"),
+                                  reason="no waitid or WNOWAIT here (macOS)")
 
 
 @needs_proc
+@needs_waitid
 def test_a_leader_that_exited_stays_unreaped_until_its_group_is_ended():
     # Its pid is the group's id: reaped before the group is signalled, it could be another process's by then.
     session = subprocess.Popen(["sh", "-c", "exit 3"], start_new_session=True)
@@ -1983,6 +1891,7 @@ def test_a_leader_that_exited_stays_unreaped_until_its_group_is_ended():
         os.waitid(os.P_PID, session.pid, os.WEXITED | os.WNOHANG)
 
 
+@needs_waitid
 def test_exit_unreaped_gives_a_signal_as_popen_does_and_times_out_as_it_does():
     killed = subprocess.Popen(["sh", "-c", "kill -9 $$"], start_new_session=True)
     assert auto.exit_unreaped(killed, 10) == -signal.SIGKILL
@@ -1997,11 +1906,33 @@ def test_exit_unreaped_gives_a_signal_as_popen_does_and_times_out_as_it_does():
     assert auto.exit_unreaped(FakeSession(code=5), 1) == 5, "not this process's child: waited as Popen waits"
 
 
-def test_a_group_a_command_left_that_wont_go_is_said(capsys):
-    code = auto.run_in_group(["/bin/true"], end=lambda child: False)
-    assert code == 0
-    assert re.fullmatch(r"rollout\.sh: what true left in its process group was still there 10 s after it was killed, and"
-                        r" holds the round's lock: see it with: pgrep -a -g \d+\n", capsys.readouterr().err)
+@pytest.mark.parametrize("missing", ["waitid", "WNOWAIT"])
+def test_without_waitid_a_session_is_waited_as_popen_waits(monkeypatch, missing):
+    monkeypatch.delattr(os, missing)
+    session = FakeSession(code=5)
+    assert auto.exit_unreaped(session, 1) == 5 and session.waits == [1]
+    assert auto.wait_for(FakeSession(code=6), 10, []) == 6
+    timing_out = FakeSession(raises=subprocess.TimeoutExpired("x", 1))
+    with pytest.raises(subprocess.TimeoutExpired):
+        auto.exit_unreaped(timing_out, 1)
+
+
+def test_a_group_a_command_left_that_wont_go_is_a_stop_after_its_code(capsys):
+    with pytest.raises(auto.GroupLeft) as left:
+        auto.run_in_group(["/bin/true"], end=lambda child: False)
+    assert re.fullmatch(r"what true left in its process group was still there 10 s after it was killed, and holds the"
+                        r" round's lock and may still work in its worktree: see it with pgrep -l -g (\d+), and end it"
+                        r" with pkill -KILL -g \1, before you resume", str(left.value))
+    assert capsys.readouterr().err == ""
+
+
+def test_a_group_that_went_away_says_nothing(capsys):
+    assert auto.run_in_group(["/bin/true"], end=lambda child: True) == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_the_group_hint_uses_commands_procps_and_the_bsds_share():
+    assert auto.group_hint(42) == "see it with pgrep -l -g 42, and end it with pkill -KILL -g 42"
 
 
 def test_end_group_of_a_group_already_gone_returns_at_once():
@@ -2404,7 +2335,8 @@ def test_auto_reviews_a_second_time_when_the_first_session_left_no_record():
     (124, "ran past 180 minutes and was stopped"),
     (127, "couldn't be started (the log's rollout.sh: line says why)"),
     (1, "exited 1"),
-    (125, "exited 125"),
+    (125, "staged findings scripts/review.sh record refused (the log says why)"),
+    (3, "exited 3"),
 ])
 def test_auto_stops_when_a_review_session_fails_and_says_what_to_do(exit_code, why):
     fleet = Fleet(codes={TM: [auto.REVIEW_NEEDED]}, reviews={TM: exit_code})
@@ -2655,6 +2587,40 @@ def test_a_bug_while_landing_ticketmanager_is_a_crash_with_its_traceback():
     code, out, err = run_auto(["--brings", "#82"], fleet)
     assert code == 1
     assert "land.sh failed" not in out and "TypeError: a bug" in err and "Traceback" in err
+    assert ("rollout: TicketManager: TypeError: a bug (traceback on stderr); run it by hand with: land.sh"
+            " mpaulosky/TicketManager#130; held:") in out and "reapply.sh" not in out.split("held:")[0]
+
+
+LEFT = auto.GroupLeft("what reapply.sh left in its process group was still there 10 s after it was killed")
+
+
+def test_a_group_ticketmanagers_reapply_left_holds_the_round():
+    fleet = Fleet(raises={TM: LEFT})
+    code, out, err = run_auto(["--brings", "#82"], fleet)
+    assert code == 1 and reapplied(fleet) == ["TicketManager"] and err == ""
+    assert f"rollout: TicketManager: {LEFT}; held: IssueTracker," in out
+
+
+def test_a_group_one_of_the_rests_reapply_left_is_a_stop_and_the_round_goes_on():
+    fleet = Fleet(raises={ARTICLES: LEFT})
+    code, out, err = run_auto(["--brings", "#82"], fleet)
+    assert code == 1 and reapplied(fleet) == ["TicketManager", *map(short, REST)] and "crashed" not in err
+    assert f"  Articles: {LEFT}\n" in out
+
+
+def test_a_group_ticketmanagers_land_left_holds_the_round_and_names_land_sh():
+    fleet = Fleet(opens={TM: 130}, land_raises=LEFT)
+    code, out, err = run_auto(["--brings", "#82"], fleet)
+    assert code == 1 and "crashed" not in err
+    assert f"rollout: TicketManager#130: {LEFT}; then land it with land.sh mpaulosky/TicketManager#130; held:" in out
+
+
+def test_a_group_the_rests_land_left_is_a_stop_and_each_pr_is_still_read():
+    fleet = Fleet(opens={REST[0]: 200}, land_raises=LEFT)
+    code, out, _ = run_auto(["--brings", "#82"], fleet)
+    assert code == 1
+    assert f"  land.sh: {LEFT}\n" in out
+    assert "  IssueTracker#200 didn't land (#200 still reads as OPEN): land.sh mpaulosky/IssueTracker#200" in out
 
 
 def test_a_crash_on_one_of_the_rest_is_reported_and_the_round_goes_on():
@@ -2708,10 +2674,11 @@ def test_the_round_without_auto_is_unchanged():
 def test_the_header_says_what_holds_and_what_only_backs_it_up():
     doc = " ".join(auto.__doc__.split())
     assert "so it reviews only, and runs in Claude Code's sandbox (session_settings; ADR 0016)" in doc
-    assert "it edits, fixes and commits nothing, and runs no gate, so nothing it wrote runs later as the person" in doc
+    assert "It edits, fixes and commits nothing, and runs no gate, so nothing it wrote runs later as the person" in doc
     assert "the worktree's HEAD, branch or status changed" in doc
     assert "can't leave the sandbox; the session refuses to start without the sandbox (bubblewrap and socat on Linux" in doc
-    assert "never the worktree or the rest of its git folder" in doc
+    assert "writes only a temporary folder of its own (session_writes: never the worktree, its git folder, the ledgers or .security)" in doc
+    assert "the round records that with the worktree's scripts/review.sh record (record_review)" in doc
     assert "the worktree's .git link changed" in doc
     assert "git's push is sent nowhere: layers behind the sandbox" in doc
     assert "a SIGKILL of rollout.sh can't be caught, and leaves the session running (holding the lock until it ends)" in doc
@@ -2876,8 +2843,7 @@ def test_a_session_that_broke_a_rule_stops_for_the_person_without_reapplying():
     assert ("TicketManager: the review session broke a rule: the remote chore/reapply-baseline moved: the session isn't to"
             " push (and 1 more); see /tmp/review-TicketManager.log. Put it right before you resume, since a resume starts"
             " from what it finds: git -C /r/TicketManager-worktrees/chore-reapply-baseline status shows the worktree, and"
-            " cd /r/TicketManager-worktrees/chore-reapply-baseline && scripts/review.sh report (the ledgers) and"
-            " scripts/review.sh security (the .security record) show the review's") in out
+            " cd /r/TicketManager-worktrees/chore-reapply-baseline && scripts/review.sh security the .security record") in out
 
 
 def test_rollouts_reapply_path_has_its_symlinks_resolved(tmp_path):
@@ -2951,7 +2917,7 @@ def test_the_guard_of_a_linked_worktree_reads_the_primary_checkouts_ledgers(tmp_
     (primary / ".git" / "review" / "l.json").write_text(json.dumps({"branch": "x", "findings": [{"id": "R1", "status": "accepted"}]}))
     broke = auto.broken_rules(guard, owned=str(owned), read=lambda c, cwd=None: "" if "ls-remote" in c else auto.run_text(c, cwd),
                               changes=lambda w: [])
-    assert broke == [LEDGER_CHANGED.format(primary / ".git" / "review" / "l.json", "changed")]
+    assert broke == [FOLDER_CHANGED.format(primary / ".git" / "review" / "l.json", "changed", "the review ledgers")]
 
 
 def test_the_adr_says_what_the_sandbox_doesnt_cover():
