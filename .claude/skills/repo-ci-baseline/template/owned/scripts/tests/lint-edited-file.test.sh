@@ -1950,12 +1950,17 @@ check "read_git_file reads a file of GIT_FILE_MAX characters ($max) and stops th
 esc_rgf="$rgf/"$'a\033]0;x\007\302\233\342\200\256b'
 mkdir -p "$esc_rgf"
 head -c $((max + 1)) /dev/zero | tr '\0' x > "$esc_rgf/f"
-# shellcheck disable=SC2016 # expanded by the inner bash
-got="$(GIT_FILE_SCRIPT="$SCRIPT" bash -c 'eval "$(sed -n "/^GIT_FILE_MAX=/p; /^plain_path() {/,/^}/p; /^read_git_file() {/,/^}/p" "$GIT_FILE_SCRIPT")"; read_git_file "$1" out' _ "$esc_rgf/f" 2>&1)"
-p=()
-[[ "$got" == *"$rgf/a?]0;x??????b/f is longer than any git file"* ]] || p+=("got: $got")
-[[ "$got" != *$'\033'* && "$got" != *$'\007'* ]] || p+=("a control byte reached the message")
-check "read_git_file's exit-1 message shows a path's bytes outside printable ASCII as ?" ${p[@]+"${p[@]}"}
+# One ? per byte in a UTF-8 locale too, where U+009B and the bidi override would otherwise be one ? each.
+rgf_utf8="$(locale -a 2> /dev/null | grep -ixE '(en_US|C)\.utf-?8' | head -n 1 || true)"
+[[ -n "$rgf_utf8" ]] || echo "skip - no C.UTF-8 or en_US.UTF-8 locale here, so plain_path is tried in C only"
+for loc in ${rgf_utf8:+"$rgf_utf8"} C; do
+  # shellcheck disable=SC2016 # expanded by the inner bash
+  got="$(LC_ALL="$loc" GIT_FILE_SCRIPT="$SCRIPT" bash -c 'eval "$(sed -n "/^GIT_FILE_MAX=/p; /^plain_path() {/,/^}/p; /^read_git_file() {/,/^}/p" "$GIT_FILE_SCRIPT")"; read_git_file "$1" out' _ "$esc_rgf/f" 2>&1)"
+  p=()
+  [[ "$got" == *"$rgf/a?]0;x??????b/f is longer than any git file"* ]] || p+=("got: $got")
+  [[ "$got" != *$'\033'* && "$got" != *$'\007'* ]] || p+=("a control byte reached the message")
+  check "[$loc] read_git_file's exit-1 message shows a path's bytes outside printable ASCII as ?" ${p[@]+"${p[@]}"}
+done
 rm -r "$rgf"
 rm -r "${vet:?}/bin"
 # A project inside a checkout whose .git file names a gitdir that doesn't exist: the checkout itself is still dropped, though

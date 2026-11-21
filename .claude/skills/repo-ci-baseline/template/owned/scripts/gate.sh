@@ -175,7 +175,7 @@ elif [[ ${#SHFMT_FILES[@]} -gt 0 ]]; then
   fi
   SHFMT_VERSION_RC=0
   SHFMT_FOUND="$(shfmt --version 2>&1)" || SHFMT_VERSION_RC=$?
-  # Its first 80 characters as the message shows them, every byte but printable ASCII as ?, so what shfmt printed can't move the terminal.
+  # Its first 80 bytes as the message shows them, every byte but printable ASCII as ?, so what shfmt printed can't move the terminal.
   SHFMT_SHOWN="$(
     export LC_ALL=C
     shown="${SHFMT_FOUND:0:80}"

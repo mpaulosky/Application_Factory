@@ -73,7 +73,7 @@ unset SHELLCHECK_OPTS
 
 # emit_message <text>: the systemMessage Claude Code shows the person, as JSON on stdout. The text quotes paths and config text an agent
 # chose, so every character that isn't plain text becomes ?: a control character but a tab (C0, DEL, C1: an escape sequence), a format
-# character (a bidi override or isolate, a zero-width one, a BOM: text that reads as another name), a line or paragraph separator, and a
+# character (a bidi override or isolate, a zero-width one, a BOM: text that changes how a name reads), a line or paragraph separator, and a
 # byte that isn't valid UTF-8 (-X utf8 reads the arguments as UTF-8 whatever the locale, each such byte as a lone surrogate).
 emit_message() {
   python3 -I -X utf8 -c 'import json, sys, unicodedata

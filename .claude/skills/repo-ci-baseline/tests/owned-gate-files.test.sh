@@ -246,11 +246,24 @@ check "shell format: a shfmt whose --version prints nothing is refused, before i
 SHFMT_STUB_VERSION=$'v3.1\033]0;x\007' format_run
 check "shell format: a release holding an escape sequence is shown with ? for its control bytes" \
   "[[ $fst != 0 ]] && [[ \"\$ferr\" == *\"not 'v3.1?]0;x?'.\"* && \"\$ferr\" != *\$'\\033'* ]]"
-# The answer is cut at 80 characters in the message: 79, 80 and 81 characters of it.
+# Bytes outside ASCII too, one ? each, and the cut is at 80 bytes, whatever the caller's locale: in a UTF-8 one, é and a bidi override
+# would otherwise be one ? each, and 40 é's would all be shown.
+eacute=$'\303\251'
+many="v3.$(for _ in {1..40}; do printf '%s' "$eacute"; done)"
+want_many="v3.$(printf '?%.0s' {1..77})"
+for loc in ${utf8:+"$utf8"} C; do
+  LC_ALL="$loc" SHFMT_STUB_VERSION=$'v3.\303\251\342\200\256x' format_run
+  check "[$loc] shell format: a release's bytes outside ASCII are shown as one ? each" "[[ $fst != 0 ]] && [[ \"\$ferr\" == *\"not 'v3.?????x'.\"* ]]"
+  LC_ALL="$loc" SHFMT_STUB_VERSION=$'v3.\377' format_run
+  check "[$loc] shell format: a byte that isn't UTF-8 is shown as ?" "[[ $fst != 0 ]] && [[ \"\$ferr\" == *\"not 'v3.?'.\"* ]]"
+  LC_ALL="$loc" SHFMT_STUB_VERSION="$many" format_run
+  check "[$loc] shell format: an answer of 83 bytes in 43 characters is cut at 80 bytes" "[[ $fst != 0 ]] && [[ \"\$ferr\" == *\"not '$want_many'.\"* ]]"
+done
+# The answer is cut at 80 bytes in the message: 79, 80 and 81 of it, in ASCII.
 for n in 79 80 81; do
   long="v3.$(printf '%0*d' $((n - 3)) 0)"
   SHFMT_STUB_VERSION="$long" format_run
-  check "shell format: an answer of $n characters is shown cut at 80" "[[ $fst != 0 ]] && [[ \"\$ferr\" == *\"not '\${long:0:80}'.\"* ]]"
+  check "shell format: an answer of $n bytes is shown cut at 80" "[[ $fst != 0 ]] && [[ \"\$ferr\" == *\"not '\${long:0:80}'.\"* ]]"
 done
 export SHFMT_STUB_EXIT=1
 format_run

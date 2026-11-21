@@ -244,7 +244,8 @@ bytes or is over 65,536 in all (bounds chosen well inside what a command line ca
 why (an unknown key by its first 40 bytes, each one other than a letter, digit, space or `_ . + -` shown as `?`, so no control byte an agent wrote reaches the person's
 terminal; every note, of every kind, shows a control character other than a tab, a format character (a bidi override or isolate, a zero-width
 one, a BOM), a line or paragraph separator, or a byte that isn't UTF-8, as `?`, whatever the locale, so a folder an agent named can't carry an
-escape sequence or read as another name, and the one exit-1 message that names a path shows every byte of it but printable ASCII as `?`), and
+escape sequence, or a bidi or zero-width character that changes how it reads (a letter that looks like another
+still shows as it is), and the one exit-1 message that names a path shows every byte of it but printable ASCII as `?`), and
 the gate still checks the file. The help is judged by what it prints, not its exit status: a usage without the flag gets
 that note, and a `--help` that prints no usage gets one of its own. Each value is one argument of its flag: `source-path`
 may start with a dash, since shellcheck takes the argument after `-P` as its value, and `disable` and `enable` may not.
