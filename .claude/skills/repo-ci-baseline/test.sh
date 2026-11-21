@@ -173,8 +173,8 @@ for problem in problems:
 sys.exit(1 if problems else 0)
 PY
   # The edit-time lint and the Owned gate check Python with the same ruff release rule and flags, CI's python-tests job passes the same
-  # flags, and requirements-tests.txt pins the release the gate runs through uvx, one the rule takes: a Dependabot bump to another
-  # release line fails here, so the rule is moved with it on purpose.
+  # flags, and requirements-tests.txt pins the release the gate runs through uvx, one the rule takes: a bump of the pin to another
+  # release line fails here, so the rule is moved with it on purpose (Dependabot leaves ruff alone; see the dependabot.yml check).
   python3 -I - "$owned" << 'PY' || fail "scripts/lint-edited-file.sh, scripts/gate.sh, ci.yml and requirements-tests.txt must agree on ruff (see above)"
 import re, shlex, sys
 owned = sys.argv[1]

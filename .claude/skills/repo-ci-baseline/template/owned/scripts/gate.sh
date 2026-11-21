@@ -81,8 +81,8 @@ MARKDOWNLINT_CLI2_VERSION="0.24.0"
 ACTIONLINT_VERSION="1.7.12"
 ZIZMOR_VERSION="1.30.1"
 SHELLCHECK_VERSION="v0.11.0"
-# ruff: an installed one must be a 0.17 release (a later one adds rules to F and B, so the same file could pass here and fail there);
-# without one, this release through uvx. The edit-time lint (scripts/lint-edited-file.sh) has the same release rule and flags, and
+# ruff: an installed one is used only when it is a 0.17 release (a later one adds rules to F and B, so the same file could pass here and
+# fail there); without one, or with another release or a failing --version, this release through uvx --no-config. The edit-time lint (scripts/lint-edited-file.sh) has the same release rule and flags, and
 # requirements-tests.txt the same pin, for CI's python-tests job: test.sh keeps them equal.
 RUFF_VERSION="0.17.6"
 RUFF_RELEASE='^ruff 0\.17\.[0-9]+$'
@@ -219,8 +219,8 @@ fi
 step "Python lint (${#PY_FILES[@]} changed file(s))"
 if [[ ${#PY_FILES[@]} -gt 0 ]]; then
   # An installed ruff 0.17 is used; another release, or one whose release is unknown, is passed over for the pinned one through uvx, so
-  # a newer ruff from the system's packages doesn't stop the push. uvx runs with --no-config: it reads no uv.toml or pyproject.toml from
-  # the checkout, which could send the fetch to another index.
+  # a newer ruff from the system's packages doesn't stop the push. uvx runs with --no-config: it reads no uv config at all, so no uv.toml or
+  # pyproject.toml in the checkout can send the fetch to another index (nor can the user's own uv.toml name a mirror for it).
   RUFF=() RUFF_SKIPPED=""
   if command -v ruff &> /dev/null; then
     RUFF_VERSION_RC=0
@@ -251,6 +251,9 @@ if [[ ${#PY_FILES[@]} -gt 0 ]]; then
   "${RUFF[@]}" "${RUFF_ARGS[@]}" -- "${PY_FILES[@]}" || RUFF_RC=$?
   if ((RUFF_RC == 1)); then
     echo "❌ ruff: fix each problem shown above (the ones marked [*] ruff can fix: add --fix to the command), or, for a false alarm, add # noqa: <code> to the line with the reason." >&2
+    exit 1
+  elif ((RUFF_RC != 0)) && [[ "${RUFF[0]}" == uvx ]]; then
+    echo "❌ uvx ruff@${RUFF_VERSION} failed (exit $RUFF_RC) without checking the files: if uvx could not fetch it (offline, or an index only a uv config names, which --no-config skips), install ruff 0.17 first on PATH (uv tool install ruff@${RUFF_VERSION}); otherwise check the file it names." >&2
     exit 1
   elif ((RUFF_RC != 0)); then
     echo "❌ ruff failed (exit $RUFF_RC) without checking the files: check the ruff install, or the file it names." >&2

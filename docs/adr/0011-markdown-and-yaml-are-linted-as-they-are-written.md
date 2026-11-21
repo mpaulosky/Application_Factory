@@ -110,7 +110,8 @@ linted at all three places, with the same command: `ruff check --isolated --no-c
   Style rules and `ruff format` are not chosen: like shfmt before ADR 0015, they would be a new standard, not a check on bugs.
 - **One release line.** A later ruff adds rules to F and B, so the same file could pass on one machine and fail on another. The hook and both gates take only a 0.17 release
   (`RUFF_RELEASE`). The Template gate runs `uvx --no-config ruff@0.17.6` (`RUFF_VERSION`) when none is installed, or when the installed one is another release, saying so,
-  so a newer ruff from a distro's packages doesn't stop the push; `--no-config` keeps the checkout's uv config from changing where it is fetched from. The Template's hashed
+  so a newer ruff from a distro's packages doesn't stop the push; `--no-config` keeps the checkout's uv config from changing where it is fetched from (it skips the user's own uv config too, so a
+  machine that reaches PyPI only through a mirror a uv config names installs ruff 0.17 instead, which the gate's message says). The Template's hashed
   `requirements-tests.txt` pins the same release for CI, and the Seed Sandcastle `Dockerfile` installs it. `test.sh` fails when the hook's and the gate's rule or flags differ,
   when CI's flags differ, when the pin isn't the gate's release, or when the messages name another line. So Dependabot's pip entries, the Factory's and the Seed's, ignore
   ruff (`test.sh` checks it): a bump of the pin alone would fail, and hold the group's other bumps with it. ruff moves by hand, with the rule.
@@ -126,4 +127,5 @@ This reaches the Fleet by a Rollout: the hook, `scripts/gate.sh`, `ci.yml`, `req
 and `script-edits.md` are in `REVIEWED_ON_REAPPLY` already, so the re-Apply needs a local review where the ledger is; `ci.yml` and `requirements-tests.txt` are not, and a
 re-Apply rewrites them with no such review (the re-Apply PR's own CI runs them). A developer's first push that changes a Python file needs ruff 0.17 or uv on the machine. The Seed
 `Dockerfile`'s ruff never reaches an Application that has one; it adds the `RUFF_VERSION` `ARG` and the pip package by hand, or its sandbox's gate fails on a branch that
-changes a Python file.
+changes a Python file. The Seed `dependabot.yml`'s ruff `ignore` doesn't reach one either: an Application adds it to its pip entry by hand, or Dependabot there can bump
+ruff in `requirements-tests.txt` and CI lints with another release line than the gate's, until the next Rollout puts the Template's pin back.

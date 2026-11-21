@@ -417,10 +417,13 @@ for code in 2 3 126; do
 done
 # Without ruff, the pinned release through uvx; without either, the gate stops.
 py_run "$noruff:$uvx_stubs"
-check "python lint: without ruff, uvx runs ruff@0.17.6 with the gate's flags" \
-  "[[ $pst == 0 && \"\${PARGS[*]}\" == 'UV --no-config UV ruff@0.17.6 UV check UV --isolated UV --no-cache UV --select UV F,B UV --target-version UV py312 UV -- UV -dash.py' ]]"
+check "python lint: without ruff, uvx runs ruff@0.17.6 with the gate's flags, with no note of a ruff passed over" \
+  "[[ $pst == 0 && \"\${PARGS[*]}\" == 'UV --no-config UV ruff@0.17.6 UV check UV --isolated UV --no-cache UV --select UV F,B UV --target-version UV py312 UV -- UV -dash.py' ]] && ! grep -q 'instead' '$work/py-out'"
 STUB_RUFF_EXIT=1 py_run "$noruff:$uvx_stubs"
 check "python lint: a problem ruff finds through uvx stops the gate too" "[[ $pst != 0 ]] && [[ \"\$perr\" == *'ruff: fix each problem shown above'* ]]"
+STUB_RUFF_EXIT=2 py_run "$noruff:$uvx_stubs"
+check "python lint: a uvx run that fails names a failed fetch and the installed-ruff way round it" \
+  "[[ $pst != 0 ]] && [[ \"\$perr\" == *'uvx ruff@0.17.6 failed (exit 2) without checking the files: if uvx could not fetch it'*'install ruff 0.17 first on PATH (uv tool install ruff@0.17.6)'* && \"\$perr\" != *'check the ruff install'* ]]"
 # shellcheck disable=SC2031 # this shell's own PATH, which only py_run's subshell changes
 py_run "$stubs:$uvx_stubs:$PATH"
 check "python lint: an installed ruff is used, not uvx" "[[ $pst == 0 && \"\${PARGS[0]:-}\" == 'RF check' ]]"
