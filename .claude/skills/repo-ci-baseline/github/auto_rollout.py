@@ -4,14 +4,16 @@
 
 1. It checks what would stop the round partway through: a tool missing from
    PATH, an shfmt the gate's gh check refuses, neither ruff 0.17 nor uv for the
-   gate's Python lint, a claude that doesn't run, a sandbox bubblewrap can't
+   gate's Python lint, a claude that doesn't run or isn't signed in, a sandbox bubblewrap can't
    make (on Linux), gh signed out, and the .NET SDK the Template's global.json
    names (an Owned file, so Apply writes it into every re-Apply worktree and the
    gate builds with it), and a sign-in secret in the environment the review
    session would inherit. One problem stops the round before anything runs. A
    second --auto run while the lock is held stops too, since both would work
    the same worktrees and review ledgers; every child the round starts holds
-   the lock as well, so one a SIGKILL of rollout.sh leaves running keeps it.
+   the lock as well, so one a SIGKILL of rollout.sh leaves running keeps it,
+   and its process group is killed when it exits, with no build server left
+   (NO_BUILD_SERVERS), so nothing it leaves keeps the lock after the round.
    The lock keeps --auto runs apart only: while a round runs, don't run
    reapply.sh or /pre-push-review by hand in a re-Apply worktree.
 2. reapply.sh on each repo, TicketManager first. When the gate asks for a
@@ -28,10 +30,11 @@ written, so it reviews only, and runs in Claude Code's sandbox (session_settings
 ADR 0016). It runs one review-only round and records what it finds, open: it
 edits, fixes and commits nothing, and runs no gate, so nothing it wrote runs
 later as the person. Its Bash can't read the person's credentials
-(CREDENTIAL_PATHS, ~/.claude among them), writes only the clone's review
-ledgers, the main checkout's .security and a temporary folder of its own
-(session_writes: never the worktree or the rest of its git folder), reaches
-only SANDBOX_DOMAINS, and can't leave the sandbox; the session refuses to start
+(CREDENTIAL_PATHS, ~/.claude among them, and where CREDENTIAL_VARS move them),
+writes only the clone's review ledgers, the main checkout's .security and a
+temporary folder of its own (session_writes: never the worktree or the rest of
+its git folder), reaches no host (SANDBOX_DOMAINS is empty), and can't leave
+the sandbox; the session refuses to start
 without the sandbox (bubblewrap and socat on Linux, which the preflight checks
 for). Its file tools, which run outside the sandbox, may read only the
 worktree, the .security record and that folder, and edit only that folder
@@ -46,10 +49,11 @@ cloud sign-in secret set, since the session would inherit it) and git's push is
 sent nowhere: layers behind the sandbox. After the session the round checks what
 it still could do: a session after which the worktree's .git link changed, the
 remote branch moved (or can't be read), the worktree's HEAD, branch or status
-changed, the Template changed, an Owned file is no longer the Template's, any of
-the clone's ledgers gained an accepted finding, or the .security record lost or
-changed an entry (record marking an open one fixed aside), stops the round for
-the person.
+changed, the Template changed, an Owned file is no longer the Template's, a
+ledger or entry map of the clone that was there before changed or went, a new
+ledger holds a finding accepted or fixed, or the .security record lost or
+changed an entry or gained one that isn't open, stops the round for the person:
+a review-only record writes only a new ledger and new open entries.
 It runs in a process group of its own, killed whole however it ends (it exits,
 or runs past its time); an interrupt, a SIGTERM or a SIGHUP while it runs is
 held until the group is gone, then passed on, and a SIGKILL of rollout.sh can't
@@ -128,6 +132,10 @@ SHFMT_OLDEST_MINOR = 14
 # only when it is a 0.17 release, and otherwise runs the pinned one through uvx.
 RUFF_RELEASE = re.compile(r"^ruff 0\.17\.[0-9]+$")
 RUFF_VERSION = "0.17.6"
+RUFF_INSTALL = (f"install uv (https://docs.astral.sh/uv/), or put a ruff 0.17 first on PATH (uv tool install"
+                f" ruff@{RUFF_VERSION} once uv is there)")
+# The preflight's try of the review session's sandbox, as the person can run it again.
+BWRAP_PROBE = ("bwrap", "--unshare-all", "--ro-bind", "/", "/", "--dev", "/dev", "true")
 # The Template's own copies of the skill the session runs and of its reviewer agent. The session gets both from here,
 # never from the repository it reviews: it loads no settings file at all (--setting-sources ""), so the repository's
 # hooks and permission rules, and the person's own, don't apply to it either.
@@ -166,11 +174,22 @@ CREDENTIAL_PATHS = (
     "~/.m2/settings.xml", "~/.local/share/keyrings", "~/.password-store", "~/.vault-token", "~/.config/op",
     "~/.pgpass", "~/.bash_history", "~/.zsh_history", "~/.local/share/fish/fish_history", "~/.claude.json",
     "~/.claude", "~/.cache/repo-ci-baseline",
+    # Files a secret is often exported or kept in: the shells' start-up files, git's own config (the session reads an
+    # empty one: GIT_CONFIG_GLOBAL), .NET's user secrets, and other tools' sign-ins.
+    "~/.bashrc", "~/.bash_profile", "~/.bash_login", "~/.profile", "~/.zshrc", "~/.zshenv", "~/.zprofile",
+    "~/.zlogin", "~/.config/fish", "~/.gitconfig", "~/.config/git", "~/.microsoft/usersecrets", "~/.aspnet",
+    "~/.config/rclone", "~/.s3cfg", "~/.boto", "~/.oci", "~/.config/doctl", "~/.gradle/gradle.properties",
 )
-# The hosts the session's Bash may reach: GitHub alone, for the skill's git fetch. It builds and installs nothing (it
-# runs no gate), so no package registry; and there is nothing to push with: no credential is readable and none is in
-# its environment.
-SANDBOX_DOMAINS = ("github.com",)
+# The variables that move one of those credentials elsewhere: what each names is kept from the session too. A colon
+# separated list (KUBECONFIG) names each of its files; XDG_CONFIG_HOME, where set, holds XDG_CONFIG_SUBFOLDERS.
+CREDENTIAL_VARS = ("GH_CONFIG_DIR", "DOCKER_CONFIG", "KUBECONFIG", "AWS_SHARED_CREDENTIALS_FILE", "AWS_CONFIG_FILE",
+                   "NPM_CONFIG_USERCONFIG", "npm_config_userconfig", "GNUPGHOME", "CLOUDSDK_CONFIG", "AZURE_CONFIG_DIR",
+                   "PASSWORD_STORE_DIR", "GIT_CONFIG_GLOBAL")
+XDG_CONFIG_SUBFOLDERS = ("gh", "glab-cli", "hub", "git", "pnpm", "pip", "uv", "NuGet", "op", "gcloud", "rclone",
+                         "doctl", "fish")
+# The hosts the session's Bash may reach: none. It builds and installs nothing (it runs no gate), and git can't fetch
+# in it (the clone's git folder is read-only to it, so a fetch has nowhere to write); reapply.sh has just fetched.
+SANDBOX_DOMAINS = ()
 # What the sandbox runs on Linux (bubblewrap and socat); failIfUnavailable makes the session refuse to start without.
 SANDBOX_TOOLS = ("bwrap", "socat") if sys.platform.startswith("linux") else ()
 # The headless review's instructions, then the skill's own text from the Template. Nobody answers, the Owned files'
@@ -180,7 +199,7 @@ Nobody will answer a question: never ask one or wait for a reply; where the skil
 Review only: this session changes nothing in the repository. Don't edit, fix or commit anything, and don't run the gate (reapply.sh runs it on the push). Run one round over the whole branch, as the skill's last, review-only round: record every finding it keeps open, with its suggested fix, and the person fixes or accepts them. The worktree is read-only to you; write only to the run folder.
 These files the branch changes are Owned Baseline files, which the next Apply overwrites: {owned}. A finding in one says, in its fix, what to change in the Factory's template/owned/.
 Don't push, don't file the follow-up issue, and don't edit a PR: write the advisory body to the run folder and name its path.
-Your shell runs in a sandbox with no GitHub sign-in, and git can't push: skip the skill's GitHub reads (the PR's threads, the issue) and say you did. reapply.sh has just fetched origin, so if git fetch fails, go on with origin/main as it is.
+Your shell runs in a sandbox with no network and no GitHub sign-in: skip the skill's GitHub reads (the PR's threads, the issue) and its git fetch, and say you did. reapply.sh has just fetched origin, so go on with origin/main as it is.
 End with the output of scripts/review.sh report.
 
 {skill}"""
@@ -208,8 +227,10 @@ CLAUDE_KEPT = (
 # a cloud's profile files, which the sandbox keeps from the shell.
 CLAUDE_SECRETS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_FOUNDRY_API_KEY",
                   "ANTHROPIC_CUSTOM_HEADERS")
-# A cloud variable that is a secret, or names a file of one: refused by the preflight, left out by session_env.
-SIGN_IN_SECRET = re.compile(r"TOKEN|SECRET|PASSW|API_?KEY|ACCESS_KEY|AUTH(?!OR)|CREDENTIAL|_KEY$|COOKIE|BEARER", re.I)
+# A cloud variable that is a secret, or names a file of one (a certificate's or private key's path, a key file):
+# refused by the preflight, left out by session_env.
+SIGN_IN_SECRET = re.compile(
+    r"TOKEN|SECRET|PASSW|API_?KEY|ACCESS_KEY|AUTH(?!OR)|CREDENTIAL|_KEY$|COOKIE|BEARER|CERT|PRIVATE|KEY_?FILE", re.I)
 CLOUD_SIGN_IN = {"CLAUDE_CODE_USE_BEDROCK": "AWS_", "CLAUDE_CODE_USE_VERTEX": "GOOGLE_", "CLAUDE_CODE_USE_FOUNDRY": "AZURE_"}
 # The values of a CLAUDE_CODE_USE_* flag that turn its cloud on; any other (0, false, empty) leaves it off.
 FLAG_ON = ("1", "true", "yes", "on")
@@ -227,8 +248,19 @@ SESSION_GIT_CONFIG = (
 )
 # run_review's code for a session that broke one of the Rules the round checks after it.
 SESSION_BROKE_A_RULE = 126
-# A .security entry's status line, as security-record.mts reads it.
-SECURITY_STATUS = re.compile(r"^- Status: (fixed|accepted|open)\s*$", re.M)
+# A .security entry's file name and its status line, as security-record.mts reads them (a test holds them equal).
+# The README and a temporary file of a write in progress aren't entries.
+SECURITY_ENTRY = re.compile(r"^(\d+)-.*\.md$", re.A)
+SECURITY_STATUS = re.compile(r"^- Status: (fixed|accepted|open)\s*$", re.M | re.A)
+# The review ledger folder's own files, which record writes: the ledgers and the entry maps beside them. Its lock and
+# a temporary file of a write in progress are left out.
+LEDGER_FILE = re.compile(r"\.(json|entries)$")
+# The most a ledger or .security entry read after the session may hold, a hundred times a large ledger: the session
+# writes them, so a bigger file isn't read.
+RECORD_BYTES = 16 * 1024 * 1024
+# What the children the round starts are told, so the gate's build leaves no server running after it: one would keep
+# the round's lock (its descriptor is passed on) after the round ends.
+NO_BUILD_SERVERS = {"MSBUILDDISABLENODEREUSE": "1", "DOTNET_CLI_USE_MSBUILD_SERVER": "0", "UseSharedCompilation": "false"}
 
 
 def short_name(repo):
@@ -283,14 +315,19 @@ def preflight(which=shutil.which, run=run_quiet, template_global_json=TEMPLATE_G
     if SANDBOX_TOOLS and which("bwrap") is not None:
         # The sandbox needs unprivileged user namespaces, which a host can refuse (AppArmor's restriction on Ubuntu
         # 24.04, some containers): then the binaries are there and the first review session still can't start.
-        code, _, error = run(["bwrap", "--unshare-all", "--ro-bind", "/", "/", "--dev", "/dev", "true"])
+        code, _, error = run(list(BWRAP_PROBE))
         if code != 0:
             problems.append(f"bubblewrap can't make the review session's sandbox here (exit {code}): {error.strip() or 'no answer'};"
-                            " the host may refuse unprivileged user namespaces")
+                            f" try it with: {shlex.join(BWRAP_PROBE)}. The host may refuse unprivileged user namespaces"
+                            " (Ubuntu's sysctl kernel.apparmor_restrict_unprivileged_userns, kernel.unprivileged_userns_clone,"
+                            " a container without them); where it can't allow them, run rollout.sh without --auto and the"
+                            " review by hand")
     if which("claude") is not None:
         code, _, error = run(["claude", "--version"])
         if code != 0:
             problems.append(f"claude --version failed (exit {code}): {error.strip() or 'no answer'}")
+        else:
+            problems += claude_sign_in_problems(run)
     if which("shfmt") is not None:
         # As check_gh_repo.py runs it: PATH alone, stdout alone.
         code, out, error = run(["shfmt", "--version"], env={"PATH": os.environ.get("PATH", "")})
@@ -325,19 +362,35 @@ def sign_in_problems(environ):
             " the shell" for name in found]
 
 
+def claude_sign_in_problems(run):
+    """Whether claude is signed in, as claude auth status --json says (its loggedIn; the rest of what it prints, the
+    account, is never shown). The session loads no settings file, so a sign-in only a settings file's apiKeyHelper
+    gives isn't one it has."""
+    code, out, error = run(["claude", "auth", "status", "--json"])
+    try:
+        signed_in = code == 0 and json.loads(out).get("loggedIn") is True
+    except (ValueError, AttributeError):
+        signed_in = False
+    if signed_in:
+        return []
+    why = f" (exit {code})" if code != 0 else ""
+    return [f"claude isn't signed in{why}, as claude auth status says: sign it in with claude /login (the review session"
+            " reads no settings file, so an apiKeyHelper in one isn't used)"]
+
+
 def ruff_problems(which, run):
     """Whether the gate's Python lint can run, as the Template's gate decides: an installed ruff 0.17 release, or uvx
     to run the pinned one. A re-Apply that writes an Owned Python file needs it."""
     if which("uvx") is not None:
         return []
     if which("ruff") is None:
-        return [f"neither ruff 0.17 nor uv is installed, and the gate's Python lint needs one: uv tool install ruff@{RUFF_VERSION}"]
+        return [f"neither ruff 0.17 nor uv is installed, and the gate's Python lint needs one: {RUFF_INSTALL}"]
     code, out, error = run(["ruff", "--version"])
     found = (out + error).strip()
     if code == 0 and RUFF_RELEASE.fullmatch(found):
         return []
     return [f"ruff is '{found or 'silent'}' (exit {code}), not a 0.17 release, and uv isn't installed for the gate to run"
-            f" the pinned one: uv tool install ruff@{RUFF_VERSION}"]
+            f" the pinned one: {RUFF_INSTALL}"]
 
 
 def sdk_problems(global_json, which, run):
@@ -380,7 +433,8 @@ def take_lock(path=LOCK):
 
 # The descriptor of the lock the running round holds (run sets it), which every child it starts is given: the lock is
 # on the open file, so it is held until the last of them is gone, and a SIGKILL of rollout.sh, which leaves a session
-# or a gate running, doesn't let a second --auto run in beside it.
+# or a gate running, doesn't let a second --auto run in beside it. Each child's group is killed when it exits
+# (run_in_group, run_review), so what it leaves behind doesn't keep the lock after the round.
 LOCK_FDS = []
 
 
@@ -455,19 +509,53 @@ def session_writes(common, security, tmp):
     return [os.path.join(common, "review"), security, tmp]
 
 
-def session_settings(worktree, common, gitdir, tmp, home=None, config_dir=None):
+def absolute(path, home):
+    """path as an absolute path with no trailing slash: a leading ~ is home, a relative one is from the current
+    folder, as the program reading the variable would take it. None for an empty or blank one."""
+    path = (path or "").strip()
+    if not path:
+        return None
+    return os.path.normpath(os.path.abspath(expand_home(path, home)))
+
+
+def both_forms(path):
+    """path and, when a symlink is on the way, where it leads: a rule naming one form only may miss the other."""
+    return sorted({path, os.path.realpath(path)})
+
+
+def claude_config_dir(environ, home):
+    """Claude Code's config folder when CLAUDE_CONFIG_DIR moves it, as an absolute path, or None."""
+    return absolute(environ.get("CLAUDE_CONFIG_DIR"), home)
+
+
+def relocated_credentials(environ, home):
+    """Where CREDENTIAL_VARS move a credential to, and XDG_CONFIG_HOME's credential folders, each as an absolute path."""
+    found = []
+    for name in CREDENTIAL_VARS:
+        found += [absolute(part, home) for part in environ.get(name, "").split(os.pathsep)]
+    config = absolute(environ.get("XDG_CONFIG_HOME"), home)
+    if config:
+        found += [os.path.join(config, folder) for folder in XDG_CONFIG_SUBFOLDERS]
+    return [path for path in found if path]
+
+
+def session_settings(worktree, common, gitdir, tmp, home=None, config_dir=None, environ=None):
     """The session's settings (--settings, passed as JSON so no file of them exists for it to change): dontAsk
     permissions that allow only SESSION_TOOLS, reads of the worktree, the main checkout's .security and tmp, and edits
     in tmp alone, and deny the credentials, the Factory, ~/.claude and every edit in the worktree; and a sandbox for its
     Bash that can't be turned off, refuses to start without its sandbox (bubblewrap on Linux), reads none of
-    CREDENTIAL_PATHS (nor Claude Code's CLAUDE_CONFIG_DIR, when one is set), writes only session_writes (never the
-    worktree, which a sandbox otherwise lets its working folder be written, nor its git folder), and reaches only
-    SANDBOX_DOMAINS. The main checkout is the git common folder's parent, as reapply.sh has it."""
+    CREDENTIAL_PATHS (nor Claude Code's CLAUDE_CONFIG_DIR, nor where environ's CREDENTIAL_VARS move a credential, each
+    as an absolute path and where its symlinks lead), writes only session_writes (never the worktree, which a sandbox
+    otherwise lets its working folder be written, nor its git folder), and reaches only SANDBOX_DOMAINS (none). The
+    main checkout is the git common folder's parent, as reapply.sh has it."""
     home = home or os.path.expanduser("~")
-    config_dir = os.environ.get("CLAUDE_CONFIG_DIR") if config_dir is None else config_dir
+    environ = os.environ if environ is None else environ
+    config_dir = claude_config_dir(environ, home) if config_dir is None else absolute(config_dir, home)
     security = os.path.join(os.path.dirname(common), ".security")
     read_only = [worktree, gitdir]
-    credentials = [expand_home(path, home) for path in CREDENTIAL_PATHS] + ([config_dir] if config_dir else [])
+    moved = ([config_dir] if config_dir else []) + relocated_credentials(environ, home)
+    credentials = list(dict.fromkeys([expand_home(path, home) for path in CREDENTIAL_PATHS]
+                                     + [form for path in moved for form in both_forms(path)]))
     return {
         "permissions": {
             "allow": [*SESSION_TOOLS, f"Read(/{worktree}/**)", f"Read(/{security}/**)", f"Read(/{tmp}/**)", f"Edit(/{tmp}/**)"],
@@ -511,13 +599,24 @@ def own_log_dir(log_dir):
     os.chmod(log_dir, 0o700)
 
 
+def real_folder(path):
+    """Make path a 0700 folder when nothing is there, as record makes it. Raises OSError when something other than a
+    real folder is there (a symlink, a file), which is never followed."""
+    if not os.path.lexists(path):
+        os.makedirs(path, mode=0o700, exist_ok=True)
+    if not stat.S_ISDIR(os.lstat(path).st_mode):
+        raise OSError(f"{path} isn't a real folder: inspect it and remove it")
+
+
 def session_env(base, tmp):
     """The review session's environment: base without GATE_SKIP_REVIEW (the gate's review check must run in it) or the
-    names SECRET_NAME matches, Claude Code's own but CLAUDE_KEPT, and the cloud in use's secrets; gh pointed at an
-    empty config; GIT_OPTIONAL_LOCKS off;
-    SESSION_GIT_CONFIG; and every cache and temporary folder a build or install writes (NuGet, pnpm under both its
-    old npm_config_ and its pnpm 12 pnpm_config_ name, XDG, dotnet's home, TMPDIR) moved into tmp, the one folder
-    outside the worktree the sandbox lets it write."""
+    names SECRET_NAME matches, Claude Code's own but CLAUDE_KEPT (CLAUDE_CONFIG_DIR made absolute, as the settings
+    deny it), and the cloud in use's secrets; gh pointed at an empty config and git at an empty global one; and
+    SESSION_GIT_CONFIG. The worktree and the clone's git folder are read-only to it, so GIT_OPTIONAL_LOCKS is off (git
+    status writes no index back) and gc.auto is 0. The session builds and installs nothing, but the caches and
+    temporary folders the tools it runs may write (git, gh, node, Python; NuGet, pnpm under both its old npm_config_
+    and its pnpm 12 pnpm_config_ name, XDG, dotnet's home, TMPDIR) are moved into tmp, its own folder, so none of them
+    writes the person's home."""
     clouds = kept_clouds(base)
 
     def kept(name):
@@ -537,6 +636,12 @@ def session_env(base, tmp):
     for name, folder in folders.items():
         env[name] = os.path.join(tmp, folder)
         os.makedirs(env[name], exist_ok=True)
+    config_dir = claude_config_dir(base, os.path.expanduser("~"))
+    if config_dir:
+        env["CLAUDE_CONFIG_DIR"] = config_dir
+    env["GIT_CONFIG_GLOBAL"] = os.path.join(tmp, "gitconfig")  # the person's ~/.gitconfig is kept from the session
+    with open(env["GIT_CONFIG_GLOBAL"], "w", encoding="utf-8"):
+        pass
     env["DOTNET_NOLOGO"] = env["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1"
     env["GIT_OPTIONAL_LOCKS"] = "0"  # git status reads the index without writing it back: the worktree is read-only
     env["GIT_CONFIG_COUNT"] = str(len(SESSION_GIT_CONFIG))
@@ -570,51 +675,71 @@ def tree_hashes(folder):
     return hashes
 
 
-def ledger_state(folder):
-    """{ledger file name: (sha256, its accepted findings)} for each *.json in the review ledger folder, each accepted
-    finding as (its id, the whole finding as canonical JSON), so one put in place under an id already accepted counts
-    as new; a file that doesn't read as a ledger has (sha256, None)."""
-    state = {}
+def record_bytes(path, limit=None):
+    """The bytes of a file the session may have written, or None unless it is a regular file of at most limit bytes
+    (RECORD_BYTES by default): it is opened without following a symlink and without waiting (a FIFO), and nothing
+    else (a device, a folder) is read."""
+    limit = RECORD_BYTES if limit is None else limit
     try:
-        names = sorted(os.listdir(folder))
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
-        return state
-    for name in names:
-        if not name.endswith(".json"):
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        chunks, size = [], 0
+        while size <= limit:
+            chunk = os.read(fd, limit + 1 - size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    return b"".join(chunks) if size <= limit else None
+
+
+def names_in(folder, pattern):
+    """The names in folder that pattern matches, sorted; none when it can't be listed."""
+    try:
+        return sorted(name for name in os.listdir(folder) if pattern.search(name))
+    except OSError:
+        return []
+
+
+def ledger_state(folder):
+    """{file name: (sha256 or None, its decided findings or None)} for each ledger (*.json) and entry map (*.entries)
+    in the review ledger folder (record_bytes reads them). A ledger's decided findings are those accepted or fixed, as
+    "<id> <status>"; an entry map has none; a ledger that doesn't read as one has None."""
+    state = {}
+    for name in names_in(folder, LEDGER_FILE):
+        data = record_bytes(os.path.join(folder, name))
+        digest = hashlib.sha256(data).hexdigest() if data is not None else None
+        if name.endswith(".entries"):
+            state[name] = (digest, frozenset())
             continue
-        path = os.path.join(folder, name)
-        digest = file_hash(path)
         try:
-            with open(path, encoding="utf-8") as handle:
-                ledger = json.load(handle)
+            ledger = json.loads(data.decode("utf-8"))
             findings = ledger.get("findings") if isinstance(ledger, dict) else None
             if not isinstance(findings, list):
                 raise ValueError("no list of findings")
-            accepted = frozenset((str(finding.get("id")), json.dumps(finding, sort_keys=True)) for finding in findings
-                                 if isinstance(finding, dict) and finding.get("status") == "accepted")
-            state[name] = (digest, accepted)
-        except (OSError, ValueError, AttributeError, TypeError):
+            state[name] = (digest, frozenset(f"{finding.get('id')} {finding.get('status')}" for finding in findings
+                                             if isinstance(finding, dict) and finding.get("status") in ("accepted", "fixed")))
+        except (AttributeError, ValueError, TypeError):
             state[name] = (digest, None)
     return state
 
 
 def security_state(folder):
-    """{file name: (sha256, its status or None)} for each file in the .security record."""
+    """{entry file name: (sha256 or None, its status or None)} for each entry (SECURITY_ENTRY) of the .security
+    record, read by record_bytes."""
     state = {}
-    try:
-        names = sorted(os.listdir(folder))
-    except OSError:
-        return state
-    for name in names:
-        path = os.path.join(folder, name)
-        if not os.path.isfile(path):
-            continue
-        try:
-            with open(path, encoding="utf-8", errors="replace") as handle:
-                found = SECURITY_STATUS.search(handle.read())
-        except OSError:
-            found = None
-        state[name] = (file_hash(path), found.group(1) if found else None)
+    for name in names_in(folder, SECURITY_ENTRY):
+        data = record_bytes(os.path.join(folder, name))
+        found = SECURITY_STATUS.search(data.decode("utf-8", errors="replace")) if data is not None else None
+        state[name] = (hashlib.sha256(data).hexdigest() if data is not None else None, found.group(1) if found else None)
     return state
 
 
@@ -677,17 +802,24 @@ def session_guard(worktree, owned=OWNED, read=run_text):
     the remote or the clone's git folders can't be read, since a check against nothing would pass whatever happened."""
     link = link_text(worktree)
     if link is None:
-        raise GuardUnreadable(f"{worktree}/.git isn't the plain file a linked worktree has")
+        raise GuardUnreadable(f"{worktree}/.git isn't the plain file a linked worktree has (see: ls -la"
+                              f" {shlex.quote(os.path.join(worktree, '.git'))})")
     remote = read(remote_branch_command(worktree))
     if remote is None:
-        raise GuardUnreadable(f"can't read the remote {BRANCH} before the session (the network, or git)")
-    common = read(["git", "-C", worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"])
+        raise GuardUnreadable(f"can't read the remote {BRANCH} before the session (the network, or git); see why with:"
+                              f" {shlex.join(remote_branch_command(worktree))}")
+    folders = ["git", "-C", worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"]
+    common = read(folders)
     gitdir = read(["git", "-C", worktree, "rev-parse", "--path-format=absolute", "--git-dir"])
     if not common or not gitdir:
-        raise GuardUnreadable(f"can't find the git folders of {worktree} (git 2.31 or later reads them)")
+        raise GuardUnreadable(f"can't find the git folders of {worktree} (git 2.31 or later reads them); see why with:"
+                              f" {shlex.join(folders)}")
     state = worktree_state(worktree, read)
     if None in state:
-        raise GuardUnreadable(f"can't read the HEAD, the branch {BRANCH} or the status of {worktree}")
+        failed = next(command for command, value in zip(worktree_state_commands(worktree), state, strict=True)
+                      if value is None)
+        raise GuardUnreadable(f"can't read the HEAD, the branch {BRANCH} or the status of {worktree}; see why with:"
+                              f" {shlex.join(failed)}")
     ledgers = os.path.join(common, "review")
     security = os.path.join(os.path.dirname(common), ".security")
     return Guard(worktree_state=state, worktree=worktree, remote_branch=remote, template=tree_hashes(owned), ledgers=ledgers,
@@ -699,10 +831,10 @@ def broken_rules(guard, owned=OWNED, read=run_text, changes=owned_changes):
     """The Rules a finished session broke, as a list of what happened (empty when it broke none): the worktree's .git
     link changed (then no git command runs in the worktree, since git would obey whatever folder it now names), the
     remote branch moved or can't be read, the worktree's HEAD, branch or status changed, the Template changed, an Owned file the branch changes is no longer the
-    Template's as it was when the session started, any ledger of the clone gained an accepted finding or stopped
-    reading as one, or the .security record lost an entry, or one changed other than from open to fixed (which
-    record writes), or gained one that is accepted. Every ledger counts, whatever branch or head it names, since the
-    session writes those too: a person accepting something on another branch meanwhile stops the round as well."""
+    Template's as it was when the session started, or the ledgers or the .security record changed other than as a
+    review-only record changes them (ledger_changes, security_changes). Every ledger counts, whatever branch or head
+    it names, since the session writes those too: a person's own review on another branch meanwhile stops the round
+    as well."""
     broke = []
     link_kept = link_text(guard.worktree) == guard.link
     if not link_kept:
@@ -731,35 +863,51 @@ def broken_rules(guard, owned=OWNED, read=run_text, changes=owned_changes):
         for path in changed:
             if file_hash(os.path.join(guard.worktree, path)) != guard.template.get(path):
                 broke.append(f"{path} is an Owned file and no longer the Template's: edit the Template, not the copy")
-    for name, (digest, accepted) in ledger_state(guard.ledgers).items():
-        before = guard.ledgers_before.get(name)
-        if before is not None and before[0] == digest:
-            continue  # unchanged since the session started
-        path = os.path.join(guard.ledgers, name)
-        if accepted is None:
-            broke.append(f"{path} changed during the session and doesn't read as a ledger")
-            continue
-        gained = sorted({finding_id for finding_id, _ in accepted - ((before[1] or frozenset()) if before else frozenset())})
-        if gained:
-            broke.append(f"{path} gained {', '.join(gained)} accepted during the session: only the person accepts")
+    broke += ledger_changes(guard.ledgers, guard.ledgers_before)
     broke += security_changes(guard.security, guard.security_before)
     return broke
 
 
+def ledger_changes(folder, before):
+    """What happened to the clone's review ledgers that a review-only session's record doesn't do. Its record writes
+    one new ledger with its entry map, so any ledger or entry map that was there before and was removed or changed
+    counts, whatever branch or head it names (the session can write those fields too), and so does a new ledger that
+    doesn't read as one or holds a finding accepted (only the person accepts) or fixed (the session fixes nothing)."""
+    after, broke = ledger_state(folder), []
+    for name, (digest, _) in before.items():
+        now = after.get(name)
+        if now is None or now[0] != digest:
+            broke.append(f"{os.path.join(folder, name)} was {'removed' if now is None else 'changed'} during the session"
+                         " (the session, or your own review on another branch meanwhile): a review-only session writes"
+                         " only a new ledger")
+    for name, (_, decided) in after.items():
+        if name in before:
+            continue
+        path = os.path.join(folder, name)
+        if decided is None:
+            broke.append(f"{path} appeared during the session and doesn't read as a ledger")
+        elif decided:
+            broke.append(f"{path} appeared during the session with {', '.join(sorted(decided))}: a review-only session"
+                         " fixes nothing, and only the person accepts")
+    return broke
+
+
 def security_changes(folder, before):
-    """What happened to the .security record that only a person may do: an entry removed, one changed other than from
-    open to fixed, or a new one that is accepted."""
+    """What happened to the .security record that a review-only session's record doesn't do. It marks no entry fixed
+    (it records no finding fixed) and writes only open ones, so an entry removed or changed counts, and so does a new
+    one that isn't open."""
     after, broke = security_state(folder), []
     for name, (digest, status) in before.items():
         now = after.get(name)
         if now is None:
             broke.append(f"{os.path.join(folder, name)} was removed during the session")
-        elif now[0] != digest and not (status == "open" and now[1] == "fixed"):
-            broke.append(f"{os.path.join(folder, name)} changed during the session ({status} to {now[1]}): only a"
-                         " review's record marks an open entry fixed")
+        elif now[0] != digest:
+            broke.append(f"{os.path.join(folder, name)} changed during the session ({status} to {now[1]}): a review-only"
+                         " session's record changes no entry")
     for name, (_, status) in after.items():
-        if name not in before and status == "accepted":
-            broke.append(f"{os.path.join(folder, name)} appeared during the session as accepted: only the person accepts")
+        if name not in before and status != "open":
+            broke.append(f"{os.path.join(folder, name)} appeared during the session as {status or 'unreadable'}: a"
+                         " review-only session's record writes only open entries")
     return broke
 
 
@@ -878,7 +1026,8 @@ def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, ti
         try:
             owned = changes(worktree)
             before = guard(worktree)
-            os.makedirs(os.path.join(before.common, "review"), exist_ok=True)  # the sandbox lets it write only what exists
+            for folder in (before.ledgers, before.security):  # the sandbox lets it write only what exists
+                real_folder(folder)
             settings = session_settings(worktree, before.common, before.gitdir, tmp)
             command = review_command(repo, worktree, owned, settings, agents(), skill())
             env = session_env(os.environ, tmp)
@@ -928,28 +1077,34 @@ def wait_for(session, timeout, got, clock=time.monotonic):
 
 
 def run_in_group(command, popen=subprocess.Popen, end=None, clock=time.monotonic):
-    """A command, its output straight through, in a process group of its own: its exit code. A SIGTERM or SIGHUP that
-    ends the round (round_signals) or an interrupt kills the whole group, so neither it nor anything it started (the
-    gate a push runs) goes on working in a worktree after rollout.sh is gone. The signals are held from before it
+    """A command, its output straight through, in a process group of its own, with child_env: its exit code. Its group
+    is killed whole however it ends: after it exits, so nothing it left there (a build server) keeps the round's
+    lock, which it is passed; and on a SIGTERM or SIGHUP that ends the round (round_signals) or an interrupt, so
+    neither it nor anything it started (the gate a push runs) goes on working in a worktree after rollout.sh is gone. The signals are held from before it
     starts until its group is gone (a second one meanwhile is dropped), then the first is passed on, as for a review
     session; a command that can't start raises its OSError, after a signal that came meanwhile."""
     code, failed = None, None
     with deferred_signals() as got:
         try:
-            child = popen(command, start_new_session=True, pass_fds=held_lock_fds())
+            child = popen(command, start_new_session=True, pass_fds=held_lock_fds(), env=child_env(os.environ))
         except OSError as error:
             failed = error
         else:
             try:
                 code = wait_for(child, math.inf, got, clock)
             finally:
-                if code is None:
-                    (end or end_group)(child)
+                # However it ends: what it left running in its group (a build server) holds the round's lock.
+                (end or end_group)(child)
     if got:
         raise passed_on(got[0])
     if failed is not None:
         raise failed
     return code
+
+
+def child_env(base):
+    """The environment of what the round runs: base with NO_BUILD_SERVERS."""
+    return {**base, **NO_BUILD_SERVERS}
 
 
 def run_land(refs):
@@ -1042,11 +1197,16 @@ def drive(repo, path, brings, reapply, review, say):
         code, log, broke = review(repo, worktree)
         say(f"── rollout: {short_name(repo)}: review session exited {code}; log: {log}")
         if broke:
+            here = shlex.quote(worktree)
             return Outcome("person", f"the review session broke a rule: {broke[0]}"
-                           + (f" (and {len(broke) - 1} more)" if len(broke) > 1 else "") + f"; see {log}, put it right in"
-                           f" {shlex.quote(worktree)}, then resume")
+                           + (f" (and {len(broke) - 1} more)" if len(broke) > 1 else "") + f"; see {log}. Put it right"
+                           f" before you resume, since a resume starts from what it finds: git -C {here} status shows the"
+                           f" worktree, and cd {here} && scripts/review.sh report (the ledgers) and scripts/review.sh"
+                           " security (the .security record) show the review's")
         if code != 0:
-            return Outcome("failed", f"the review session exited {code} (see {log}); run /pre-push-review in"
+            why = {124: f"ran past {REVIEW_TIMEOUT_MINUTES} minutes and was stopped",
+                   127: "couldn't be started (the log's rollout.sh: line says why)"}.get(code, f"exited {code}")
+            return Outcome("failed", f"the review session {why} (see {log}); run /pre-push-review in"
                            f" {shlex.quote(worktree)}, then resume")
 
 
@@ -1138,7 +1298,12 @@ def auto_round(order, brings, resume, checkout, reapply, review, land, pr_of, pr
         number, state = found
         if state == "OPEN":
             say(f"── rollout: landing {short_name(first)}#{number}")
-            if land([f"{first}#{number}"]) != 0:
+            try:
+                landed = land([f"{first}#{number}"])
+            except Exception as error:  # noqa: BLE001 - the stop names land.sh, not the reapply.sh a crash would
+                return held(f"{short_name(first)}#{number}: land.sh failed: {type(error).__name__}: {error}; land it with"
+                            f" land.sh {first}#{number}")
+            if landed != 0:
                 return held(f"{short_name(first)}#{number} didn't land (see land.sh's output above): land.sh {first}#{number}")
             state = settle(first, number)
         if state != "MERGED":
@@ -1222,7 +1387,8 @@ def run(order, brings, root, checkout, dry_run, reapply, say, err, default_root,
         return 1
     if handle is None:
         err.write(f"rollout.sh: another rollout.sh --auto holds {LOCK}, or a review session or gate an earlier one"
-                  " started is still running; nothing run\n")
+                  f" started is still running; nothing run. See what holds it with: fuser -v {shlex.quote(LOCK)} (or lsof"
+                  f" {shlex.quote(LOCK)}), and end it only when no round is running\n")
         return 1
     try:
         LOCK_FDS[:] = [handle.fileno()]
