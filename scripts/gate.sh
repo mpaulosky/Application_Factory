@@ -59,7 +59,7 @@ RESET='\033[0m'
 skill=".claude/skills/repo-ci-baseline"
 owned="$skill/template/owned"
 
-# The Factory carries these Owned files as copies, for its git hooks, review layer, issue and PR process and shell style (.editorconfig). Edit the Template's file, then run scripts/gate.sh --sync to copy it over.
+# The Factory carries these Owned files as copies, for its git hooks, review layer, issue and PR process, edit-time lint and its script rule, and shell style (.editorconfig). Edit the Template's file, then run scripts/gate.sh --sync to copy it over.
 # Keep this list in step with ADR 0006, ADR 0008, ADR 0009, ADR 0010, ADR 0011, ADR 0015 and CLAUDE.md.
 copies=(
   .github/hooks/pre-commit
@@ -95,6 +95,7 @@ copies=(
   .claude/agents/pre-push-reviewer.md
   .security/README.md
   .editorconfig
+  .claude/rules/script-edits.md
 )
 
 if ((sync)); then
@@ -265,12 +266,18 @@ run_static() {
     [[ -f "$f" ]] || continue
     if is_shell_file "$f"; then shell_all+=("$f"); fi
   done < "$all_list"
-  # shfmt exits 1 both for a file it would change (it prints the diff) and for one it can't parse (it prints the error), so the message names both.
+  # shfmt exits 1 both for a file it would change (it prints the diff) and for one it can't parse (it prints the error), so the message names both; any
+  # other status is shfmt itself failing (a crash, a usage error), with no diff to follow.
   if ((${#shell_all[@]})); then
-    shfmt -d -- "${shell_all[@]}" || {
+    shfmt_rc=0
+    shfmt -d -- "${shell_all[@]}" || shfmt_rc=$?
+    if ((shfmt_rc == 1)); then
       echo -e "${RED}❌ shfmt: run shfmt -w on each file whose diff is shown above (it reads .editorconfig; for the Template's style edit the Template's, then scripts/gate.sh --sync), and fix the syntax of any file shfmt could not parse.${RESET}" >&2
       exit 1
-    }
+    elif ((shfmt_rc != 0)); then
+      echo -e "${RED}❌ shfmt failed (exit $shfmt_rc) without checking the format: this is no format problem in the files. Check the shfmt install.${RESET}" >&2
+      exit 1
+    fi
   fi
   echo "${#shell_all[@]} shell file(s) formatted as shfmt formats them."
 

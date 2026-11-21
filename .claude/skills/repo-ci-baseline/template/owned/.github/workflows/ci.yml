@@ -346,8 +346,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # pre-push.test.sh runs the gate, whose gh check reads each script's syntax tree from shfmt and so needs shfmt v3.14
-      # or a later v3: the gh-repo job's pinned and checked release.
+      # pre-push.test.sh runs the gate, whose gh check reads each script's syntax tree from shfmt and whose Shell format step
+      # runs shfmt -d, so it needs shfmt v3.14 or a later v3: the gh-repo job's pinned and checked release.
       - name: Install shfmt
         env:
           SHFMT_VERSION: "3.14.1"
@@ -383,6 +383,9 @@ jobs:
       - name: Run work-issue script tests
         run: bash scripts/tests/work-issue.test.sh
 
+      # The hook's own cases use stub linters. Its real-shellcheck block runs when the job has shellcheck (ubuntu-latest does), shfmt v3.14
+      # or a later v3 and a root .editorconfig, and skips with a note when it doesn't; every flag the hook passes is also checked against
+      # the stubs.
       - name: Run edit-time lint hook tests
         run: bash scripts/tests/lint-edited-file.test.sh
 

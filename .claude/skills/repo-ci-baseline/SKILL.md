@@ -17,8 +17,8 @@ Why it works this way is in [ADR 0001](docs/adr/0001-standardize-by-copying-a-te
   Per-repo CI setup goes in the Seed `.github/ci/prepare.sh`, which `ci.yml` calls; per-repo gate checks go in the Seed `.github/ci/gate-checks.sh`, which `scripts/gate.sh` calls.
   The gate itself refuses a `gh` command in a repo's own scripts and skills that isn't told its repository (`check_gh_repo.py --repo`),
   which parses the scripts with shfmt: every Application needs shfmt v3.14 or a later v3 installed ([ADR 0011](docs/adr/0011-the-gh-repo-check-parses-shell-with-shfmt.md)).
-  The Owned `.editorconfig` also carries the shell style shfmt reads (`-i 2 -ci -bn -sr`), which the Owned scripts follow; an Application's gate doesn't check its own scripts' format
-  ([references/adapt.md](references/adapt.md)).
+  The Owned `.editorconfig` also carries the shell style shfmt reads (`-i 2 -ci -bn -sr`), which the Owned scripts follow; an Application's gate checks the format of the `*.sh` files
+  and git hooks a branch changes (its Shell format step), so its own scripts take the style as they are touched ([references/adapt.md](references/adapt.md)).
 
 **Template first.**
 A fix to an Owned file is made in `template/`, then Applied to the repo that needed it.
@@ -48,8 +48,10 @@ Which token each workflow call uses, and the allowance they share, is in [tokens
 Claude Code settings (`.claude/settings.json`) are not part of the Template: permissions are set per user, so don't add the file back.
 The one rule worth adding to it, denying Claude Code the local review's ledgers and credential files, is in [pre-push-review.md](references/pre-push-review.md#adapting).
 The hooks worth adding by hand are `scripts/check-git-hooks.sh` ([git-hooks.md](references/git-hooks.md#session-start-check))
-and `scripts/lint-edited-file.sh`, which lints a Markdown or YAML file as Claude writes it ([git-hooks.md](references/git-hooks.md#edit-time-lint)).
+and `scripts/lint-edited-file.sh`, which lints a Markdown, YAML or shell file as Claude writes it ([git-hooks.md](references/git-hooks.md#edit-time-lint)).
 The Owned `.claude/rules/markdown-and-yaml-edits.md` goes into every repo, with or without the hook: it tells every session to write those files with Write and Edit, which the hook sees.
+So does `.claude/rules/script-edits.md`, which loads when a session works on a script: the same for shell scripts (the hook lints no Python), and the checks reviewers keep raising on
+shell and Python scripts.
 A repo that got a `.claude/settings.json` from an earlier Apply deletes it by hand, since `apply.sh` never deletes.
 The Factory has a `.claude/settings.json` of its own for the edit-time lint hook
 ([the Factory's ADR 0011](../../../docs/adr/0011-markdown-and-yaml-are-linted-as-they-are-written.md)); an Application does not receive it.
@@ -97,8 +99,9 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
    - **One repo:** `reapply.sh --brings '#<n>,#<n>' <repo>` (what `rollout.sh` runs, and the way to retry a repo that failed)
      prepares the `chore/reapply-baseline` worktree, merges the remote branch and `main`, commits `apply.sh`'s output alone,
      pushes through the gate (which asks for a review when Apply writes the coverage threshold,
-     a rules file that loads in every session (the hand-off or the Markdown and YAML edit rules), an issue template, the reviewer agent,
-     a Sandcastle prompt (intake, critique, plan, review or a role's), the local gate's check.sh or global.json),
+     a rules file that loads in every session (the hand-off or the Markdown and YAML edit rules) or the script edit rules, an issue template, the reviewer agent,
+     a Sandcastle prompt (intake, critique, plan, review or a role's), the local gate's check.sh, global.json, the edit-time lint hook,
+     or another file the ledger reviews on a re-Apply; [pre-push-review.md](references/pre-push-review.md) has the full list),
      opens the re-Apply PR ready (or adds the commit to the open one) with the `baseline:apply` label, which `owned-files.yml`'s Owned files check needs to exempt it, and requests Copilot;
      it records Copilot's ask on the PR when the request doesn't register, so Claude Review runs (a first re-Apply PR has the old PR Auto-Merge).
      Its header comment has the details; name the head it prints in thread replies.

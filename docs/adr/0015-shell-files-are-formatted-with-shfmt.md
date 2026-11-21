@@ -7,7 +7,8 @@ The Factory and the Template installed shfmt only so the Template's gh check cou
 [ADR 0011](../../.claude/skills/repo-ci-baseline/docs/adr/0011-the-gh-repo-check-parses-shell-with-shfmt.md)); nothing checked how a shell file was formatted. Before this ADR, 44 of
 the 56 shell files would have changed under shfmt, each in its own mix of one-line `if ...; then ...; fi` blocks, `case` arms with two commands, and both `>/dev/null` and `> /dev/null`.
 Formatting is a choice a reviewer should not have to read or argue about. This ADR builds on ADR 0006 (the gate) and ADR 0012 (its parts). The Factory's edit-time lint
-([ADR 0011](0011-markdown-and-yaml-are-linted-as-they-are-written.md)) lints Markdown and YAML only; running shfmt from it too is a later decision, not made here.
+([ADR 0011](0011-markdown-and-yaml-are-linted-as-they-are-written.md)) lints Markdown and YAML only; running shfmt from it too is a later decision, not made here (the Update
+below makes it).
 
 ## Decision: one shfmt style, written in the Template's .editorconfig, checked by the gate
 
@@ -42,14 +43,32 @@ Formatting is a choice a reviewer should not have to read or argue about. This A
   editors already look.
 - **A Factory-only `.editorconfig`.** The Template's `.editorconfig` is `root = true`, so its section is the one that reaches the Template's files under the Factory, and the one an Application gets.
   The style lives there, and the Factory copies it.
-- **Check only the changed shell files, as shellcheck does.** Rejected: the whole repo is formatted now, and checking every file costs well under a second and keeps it that way.
+- **Check only the changed shell files, as shellcheck does.** Rejected for the Factory: the whole repo is formatted now, and checking every file costs well under a second and keeps it
+  that way. The Update below takes this option for an Application's gate, whose own scripts were never formatted.
 
 ## Consequences
 
 - The Owned `.editorconfig` and the Owned scripts and hooks reach an Application at the next Rollout, together, with no change in what the scripts do. An Application's own shell files are
-  not checked, but an editor that reads `.editorconfig`, and `shfmt -w` run with no flags, now format them in this style.
+  not checked (until the Update below, which checks the ones a branch changes), but an editor that reads `.editorconfig`, and `shfmt -w` run with no flags, now format them in this style.
 - Test fixtures that write shell files into a throwaway repo the gate checks must be written in the same style (`scripts/tests/gate.test.sh`'s stub `test.sh`).
 - A test that reads a script's text must not depend on its old layout: the gate test's shard check counts a `step` whatever its indent, and the mutation spec for `cleanup.sh` and
   `work-issue.sh` matches the formatted text.
 - shfmt lines up the trailing comments of consecutive lines, so a long line next to a commented one pushes that comment far right; and where it splits a commented one-liner, the comment
   stays on the last line. Put such a comment on its own line above the code, or a blank line between the two lines.
+
+## Update
+
+An Application's gate now checks format too, but only on the shell files a branch changes: the Owned `scripts/gate.sh` has a **Shell format** step, after Shell lint, that runs
+`shfmt -d --` with no style flags on the changed `*.sh` files and git hooks (its `SHFMT_FILES` list). An Application's own scripts were never formatted, and reformatting all of them
+in a Rollout would bury the Rollout's real changes, so each one takes the style when someone next touches it. An extensionless `scripts/` file, which the gate's shellcheck step
+also checks, is in no `.editorconfig` section, so shfmt would want its own defaults there; it is left out. The step needs shfmt v3.14 or a later v3 release, which the gh check already
+needs, and stops, naming it, without one. An Application's CI doesn't check format: its Lint Actions workflow runs shellcheck on every file, and checking only changed files there
+would need the PR's base, so the gate, which the pre-push hook runs, is the check. Without an `origin/main` the gate's changed files are every tracked file, so the step is
+skipped with a note rather than ask for every script at once.
+
+The edit-time lint ([ADR 0011](0011-markdown-and-yaml-are-linted-as-they-are-written.md), its Update) runs `shfmt -d` on the same files as each is written, in the Factory and in
+Applications, so the format is fixed in the turn that broke it. The Factory's gate still checks every shell file.
+
+The Owned `scripts/gate.sh` reaches each Application at its next Rollout (it is in `REVIEWED_ON_REAPPLY`, so in an Application that runs Sandcastle that re-Apply needs a
+local review). From then on, a push that changes a `*.sh` file or a git hook needs shfmt v3.14 or a later v3 on
+`PATH`, as the gh check already did, and fails the gate on a changed shell file not in the `.editorconfig` style. The Seed Sandcastle `Dockerfile` already installs shfmt.

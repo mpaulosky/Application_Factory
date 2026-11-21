@@ -144,6 +144,61 @@ if in_shard hooks; then
       done
     fi
   fi
+  # The edit-time lint lints and formats the shell files the gate does, with the shfmt releases it accepts: the hook's hook-name rule
+  # is the Owned gate's (its SHELL_FILES and SHFMT_FILES lists, and the Lint Actions shellcheck job's), and its shfmt release rule is the
+  # Owned gate's and this script's.
+  python3 -I - "$owned" "$skill_dir/test.sh" << 'PY' || fail "scripts/lint-edited-file.sh must take the gate's shell files and shfmt releases (see above)"
+import re, sys
+owned, test_sh = sys.argv[1], sys.argv[2]
+read = lambda path: open(path, encoding="utf-8").read()
+hook, gate, actions = read(f"{owned}/scripts/lint-edited-file.sh"), read(f"{owned}/scripts/gate.sh"), read(f"{owned}/.github/workflows/lint-actions.yml")
+problems = []
+# The rule is the one in hook_name's own body: other functions match their argument with a line of the same shape.
+names = re.findall(r'^hook_name\(\) \{\n(?:  [^\n]*\n)*?  \[\[ "\$1" =~ \^(.+)\$ \]\]\n\}$', hook, re.M)
+if len(names) != 1:
+    problems.append(f"lint-edited-file.sh's hook_name rule is not found once ({len(names)} found)")
+else:
+    hooks = "^\\.github/hooks/" + names[0] + "$"
+    for where, text, pattern in (("gate.sh's SHELL_FILES", gate, r"^mapfile .* SHELL_FILES .*$"), ("gate.sh's SHFMT_FILES", gate, r"^mapfile .* SHFMT_FILES .*$"),
+                                 ("lint-actions.yml's shellcheck job", actions, r"^ *mapfile -t files .*$")):
+        lines = re.findall(pattern, text, re.M)
+        if len(lines) != 1 or hooks not in lines[0]:
+            problems.append(f"{where} doesn't take the hooks lint-edited-file.sh does ({hooks})")
+release = lambda text: set(re.findall(r"=~ (\^v3\S+\$) \]\]", text))
+rules = {"lint-edited-file.sh": release(hook), "gate.sh": release(gate), "test.sh": release(read(test_sh))}
+if any(len(found) != 1 for found in rules.values()) or len(set.union(*rules.values())) != 1:
+    problems.append(f"the shfmt release rules differ, or one is missing: {rules}")
+for problem in problems:
+    print(problem)
+sys.exit(1 if problems else 0)
+PY
+  # The script edit rule: the checks reviewers keep raising on script changes, loaded when a session works on a script (its paths: front matter
+  # names the shell and Python files and the folders the hook lints), and written into every repo, so it names nothing of the Factory's.
+  script_rule="$owned/.claude/rules/script-edits.md"
+  if [[ ! -f "$script_rule" ]]; then
+    fail "the Template must carry .claude/rules/script-edits.md as an Owned file: the checks reviewers keep raising on script changes"
+  else
+    # The front matter: a first line of exactly ---, then the paths: list up to the next ---.
+    script_rule_paths="$(awk 'NR == 1 { if ($0 != "---") exit; next } $0 == "---" { exit } { print }' "$script_rule")"
+    for glob in '**/*.sh' '**/*.py' 'scripts/**' '.github/hooks/**'; do
+      grep -qxF -- "  - \"$glob\"" <<< "$script_rule_paths" \
+        || fail "the Owned .claude/rules/script-edits.md's paths: front matter must name \"$glob\", so it loads where the hook lints"
+    done
+    grep -qx 'paths:' <<< "$script_rule_paths" || fail "the Owned .claude/rules/script-edits.md must open with paths: front matter"
+    for needle in 'with the Write and Edit tools' 'scripts/lint-edited-file.sh' 'PostToolUse' 'shfmt -w <file>' '.editorconfig' \
+      'A test for every new branch' 'The header or docstring in the same edit' 'CRLF' 'byte-order mark' 'symlink' 'The error contract'; do
+      grep -qF -- "$needle" "$script_rule" || fail "the Owned .claude/rules/script-edits.md must say '$needle'"
+    done
+    # It names the tools the hook runs after, as the Markdown and YAML rule does: the plain names of the matcher read above.
+    for tool in ${edit_rule_tools[@]+"${edit_rule_tools[@]}"}; do
+      [[ "$tool" =~ ^[A-Za-z0-9_]+$ ]] || continue
+      grep -qwF -- "$tool" "$script_rule" \
+        || fail "the Owned .claude/rules/script-edits.md must name $tool: scripts/lint-edited-file.sh runs after it (\"matcher\": \"$edit_rule_matcher\")"
+    done
+    if grep -niE 'dotfiles|repo-ci-baseline|factory|references/|docs/adr/' "$script_rule"; then
+      fail "the Owned .claude/rules/script-edits.md is written into every repo; it must not name the Factory, its skill or its docs"
+    fi
+  fi
   bash "$skill_dir/tests/owned-gate-files.test.sh" || fail "owned-gate-files.test.sh"
   # CI's Branch name job passes the PR's author, from the event payload (which a pusher can't set), so only dependabot[bot]'s own PR
   # gets any dependabot/* name (R42 of TicketManager's re-Apply review).

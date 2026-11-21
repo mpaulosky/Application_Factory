@@ -1,7 +1,9 @@
 ---
 status: accepted
 ---
-# Markdown and YAML are linted as they are written
+# Markdown, YAML and shell are linted as they are written
+
+The file keeps its first name, so links to it still work; the Update at the end added shell files.
 
 A lint failure in a Markdown or YAML file used to surface late: at the commit (the `pre-commit` hook lints staged Markdown only), at the push (the Factory's gate runs `markdownlint-cli2` and
 `yamllint` over the whole repo), in CI (`lint-markdown`, `lint-yaml`, `lint-actions`), or in a review, where it costs a re-review cycle. This ADR builds on ADR 0006 and ADR 0010.
@@ -62,3 +64,36 @@ doesn't name the files it wrote, so the hook would have to diff the tree after e
 The Template carries the same rule for Applications as the Owned `.claude/rules/markdown-and-yaml-edits.md`, which Apply writes into every repo, with or without the hook
 wired in, and which loads in every session. In a repo that runs Sandcastle, where the review ledger is, a re-Apply that rewrites it needs a local review (`REVIEWED_ON_REAPPLY`),
 as the hand-off rules do; elsewhere the re-Apply PR's own review is the check. It reaches the Fleet by a Rollout.
+
+The hook lints shell files too, with the gate's two shell checks: `shellcheck`, and `shfmt -d` with no style flags, so it reads `.editorconfig` ([ADR 0015](0015-shell-files-are-formatted-with-shfmt.md),
+whose Update makes an Application's gate check the changed shell files' format). A shell file is one the gate takes for one: a `*.sh`, an extensionless file in the root's
+`scripts/`, or a git hook in the root's `.github/hooks`, or in a `.github/hooks` under a folder whose `.editorconfig` has a `[.github/hooks/*]` section (the Template's copy in the
+Factory). shfmt skips the extensionless `scripts/` files, which no `.editorconfig` section styles, and runs only when it is v3.14 or a later v3 release, as the gate needs; another
+is named in the `systemMessage`. Neither tool runs code from the repository, and shfmt reads only `.editorconfig`. shellcheck's `.shellcheckrc` can turn on `external-sources`, which
+opens the files a `source` line names, and `--check-sourced` quotes their lines in the report the agent reads, a way round what the person's settings deny Claude. So the hook clears
+`SHELLCHECK_OPTS`, reads the configs between the file and the repository root itself, and runs shellcheck with `--norc` and the nearest config's settings as the flags each
+key has (`disable` as `-e`, `enable` as `-o`, `shell` as `-s`, `source-path` as `-P`, `extended-analysis` as `--extended-analysis`): shellcheck reads no config at all, so one
+above the root, or one changed after the check, is never read. Two hand-overs were tried first and dropped. A temporary copy, a named file in a shared folder, can be swapped
+before shellcheck reads it. A pipe (`--rcfile <(...)`) can be reached by another process running as the person through `/proc/<pid>/fd`, and is a named FIFO in `TMPDIR` on a
+bash without `/dev/fd`. Flags leave nothing to reach. It doesn't run shellcheck under a config that is a symlink, not a regular file, unreadable, names `external-sources` or
+`check-sourced`, sets a key outside an allow-list (`disable`, `enable`, `source-path`, `shell`, `extended-analysis`), gives one no value or a value of a form the hook
+doesn't pass on, holds a NUL byte, has a line over 4,096 bytes or is over 65,536 in all (of which the hook reads no more than one byte past the cap), or sets `extended-analysis` for a
+shellcheck whose `--help` doesn't list that flag (before 0.9); the note says so, and quotes an agent-written key with every byte but a letter, digit, space or `_ . + -` as `?`.
+Every note of the hook, of every kind, goes through one filter that shows a control character other than a tab, a format character (a bidi
+override, a zero-width one), a line or paragraph separator, or a byte that isn't UTF-8 as `?`, since a note quotes paths an agent named.
+Plain `--norc` alone was not chosen: a repo's own `disable=` lines would then fail files its gate passes, and the flags keep them.
+`test.sh` keeps the hook's hook-name and shfmt release rules equal to the gate's. The report's first line now says only that the gate checks the same file
+before the push, which is true of every kind; the pre-commit hook lints only Markdown, and an Application's CI doesn't check shell format. A note about a hook under a nested
+`.github/hooks` says instead that the gate checks it only where it takes that folder, since an Application's gate takes the root's hooks alone.
+
+The Owned `.claude/rules/script-edits.md` says the same for shell scripts as the Markdown and YAML rule does (the hook lints no Python), and lists the checks reviewers keep
+raising on script changes: a test that fails without each new branch, the header or docstring updated in the same edit, the edge cases that keep coming back (a missing tool
+or another release, an empty, relative or odd path, CRLF or a byte-order mark, a symlink, a variable a caller left set), and the script's error contract. Its `paths:` front
+matter loads it when a session works on a shell or Python script, not in every session. It is in `REVIEWED_ON_REAPPLY` too, since it steers how an agent writes code, and the
+Factory carries a copy of it (`scripts/gate.sh` lists it): the Factory's sessions edit scripts more than anything else, and its `CLAUDE.md` holds no such checklist.
+The Markdown and YAML rule has no copy, since the Factory's `CLAUDE.md` says the same.
+
+These reach the Fleet by a Rollout: the Owned `scripts/lint-edited-file.sh`, `scripts/gate.sh` and `.claude/rules/script-edits.md` arrive at each Application's next
+Rollout. All three are in `REVIEWED_ON_REAPPLY`, so that re-Apply needs a local review where the ledger is: the hook joined the set with this Update, since it now lints
+each Markdown, YAML or shell file an agent writes, with no Bash prompt, and vets the configs its linters read. The Seed `.sandcastle/roles/shared-rules.md` and
+`Dockerfile` changes never reach an Application that has them; it brings them over by hand (the skill's `references/sandcastle.md`, Migrating a repo).

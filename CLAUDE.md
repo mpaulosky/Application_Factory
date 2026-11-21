@@ -26,12 +26,13 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   `.github/scripts/post_claude_review.py`, and the issue and PR process (ADR 0009): `.github/ISSUE_TEMPLATE/*`, `.github/pull_request_template.md`, `.github/workflows/pr-title.yml` and
   `scripts/check-pr-title.sh`, and `.github/workflows/lint-{markdown,yaml,actions}.yml`, and the local review (ADR 0010): `scripts/review.sh`, five `.sandcastle/lib/` modules with three tests,
   `.claude/skills/pre-push-review/`, `.claude/agents/pre-push-reviewer.md` and `.security/README.md`: copies of the Template's Owned files. `.github/dependabot.yml`, `.yamllint.yml` and
-  `.markdownlint-cli2.jsonc` are the Factory's own (ADR 0009). `.editorconfig`, which holds the shell style shfmt reads (ADR 0015), is a copy too.
+  `.markdownlint-cli2.jsonc` are the Factory's own (ADR 0009). `.editorconfig`, which holds the shell style shfmt reads (ADR 0015), is a copy too, and so is
+  `.claude/rules/script-edits.md`, the checks to make when editing a shell or Python script (ADR 0011).
   Edit the Template's file and run `scripts/gate.sh --sync` to copy it over; `scripts/gate.sh` fails when a copy drifts.
   The review's own, non-copy files are `.sandcastle/lib/repo-config.mts` (`REPO_SLUG`, `NOT_OWNED_BASELINE_PATHS`), `package.json`, `pnpm-workspace.yaml`,
   `pnpm-lock.yaml` and the `.gitignore` lines for `node_modules/` and `.security/`.
 - `.claude/settings.json` and `scripts/lint-edited-file.sh` (a copy of the Template's Owned file): the edit-time lint (ADR 0011). The settings file holds one `PostToolUse` hook
-  that lints each Markdown or YAML file Claude writes; the Template carries the script but not the settings file.
+  that lints each Markdown, YAML or shell file Claude writes; the Template carries the script but not the settings file.
 - `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too; its header lists the steps (its test and the review's three tests, the copies' drift check, the bare-`#N` check,
   the Git-status check, lint, shellcheck of the changed shell files, shfmt of every shell file, the local review check, then `test.sh`, which it skips for a tree that already passed it,
   then the Sandcastle check when the branch changed a file it reads).
@@ -82,7 +83,7 @@ to `main`, a bad branch name, a dirty tree or a branch behind `origin/main`. In 
 Start a branch with `git worktree add --no-track -b <branch> ../Application_Factory-worktrees/<folder> origin/main`, where `<folder>` is the branch with `/` as `-`.
 
 Markdown is linted with `.markdownlint-cli2.jsonc` (lines up to 200 characters). Shell files are formatted by shfmt in the style `.editorconfig` gives (ADR 0015): run `shfmt -w <file>`
-after editing one, with no style flags, so it reads that file.
+after editing one, with no style flags, so it reads that file. The edit-time lint runs shellcheck and `shfmt -d` on a shell file Write or Edit writes.
 
 Write and edit Markdown and YAML files with the Write and Edit tools, never with a shell command (`cat <<EOF >`, `sed -i`, `tee`, `echo >>`, a `python`
 or `node` one-liner, a script). The edit-time lint (ADR 0011) is a `PostToolUse` hook on Write, Edit and MultiEdit: it lints the file the moment the tool

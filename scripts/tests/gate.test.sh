@@ -9,7 +9,7 @@
 # a command without the quotes around CLAUDE_PROJECT_DIR or naming another script, a non-executable script and a file that is not JSON.
 # It also checks the shfmt step (ADR 0015): every shell file, changed or not, the three hooks among them, is formatted in the style .editorconfig gives; a file that is not a shell file,
 # a hook name outside the root's and the Template's .github/hooks, a tracked file deleted from the working tree and an ignored file are left alone; a name with a space, a non-ASCII byte or a leading - is checked as a
-# file; a file shfmt can't parse fails with its error; git failing fails the step; no temp file is left; and shfmt is refused when missing or outside test.sh's version rule, which is the same.
+# file; a file shfmt can't parse fails with its error; a shfmt that exits with a status other than 0 or 1 fails the step as a failed shfmt, with no shfmt -w advice; git failing fails the step; no temp file is left; and shfmt is refused when missing or outside test.sh's version rule, which is the same.
 # It also checks GATE_PART (ADR 0012) and TEST_SH_SHARD (ADR 0013, only the template part runs a shard; test.sh's steps each sit in one shard; the workflow's matrix lists them all): each part runs alone, a bad value, or --quick or --sync with a part, is refused, the Sandcastle check runs in a full gate only when the branch changed
 # a file it reads (and is remembered per clean tree), and the CI workflow has one job per part and a Template tests job that needs them all.
 #
@@ -36,7 +36,7 @@ check() { # check <description> <condition: 0 for ok>
 }
 
 skill=".claude/skills/repo-ci-baseline"
-copies=(.github/hooks/pre-commit .github/hooks/pre-push .github/hooks/post-checkout scripts/check-branch-name.sh .github/workflows/claude-review.yml .github/workflows/pr-automerge.yml .github/workflows/pr-review-submitted.yml .github/scripts/post_claude_review.py .github/ISSUE_TEMPLATE/bug_report.md .github/ISSUE_TEMPLATE/feature_request.md .github/ISSUE_TEMPLATE/config.yml .github/pull_request_template.md .github/workflows/pr-title.yml scripts/check-pr-title.sh .github/workflows/lint-markdown.yml .github/workflows/lint-yaml.yml .github/workflows/lint-actions.yml scripts/review.sh scripts/lint-edited-file.sh .sandcastle/lib/review-ledger.mts .sandcastle/lib/security-record.mts .sandcastle/lib/errors.mts .sandcastle/lib/host-limit.mts .sandcastle/lib/plain-text.mts .sandcastle/lib/review-ledger.test.mts .sandcastle/lib/security-record.test.mts .sandcastle/lib/plain-text.test.mts .claude/skills/pre-push-review/SKILL.md .claude/skills/pre-push-review/lenses.md .claude/skills/pre-push-review/review-bar.md .claude/agents/pre-push-reviewer.md .security/README.md .editorconfig)
+copies=(.github/hooks/pre-commit .github/hooks/pre-push .github/hooks/post-checkout scripts/check-branch-name.sh .github/workflows/claude-review.yml .github/workflows/pr-automerge.yml .github/workflows/pr-review-submitted.yml .github/scripts/post_claude_review.py .github/ISSUE_TEMPLATE/bug_report.md .github/ISSUE_TEMPLATE/feature_request.md .github/ISSUE_TEMPLATE/config.yml .github/pull_request_template.md .github/workflows/pr-title.yml scripts/check-pr-title.sh .github/workflows/lint-markdown.yml .github/workflows/lint-yaml.yml .github/workflows/lint-actions.yml scripts/review.sh scripts/lint-edited-file.sh .sandcastle/lib/review-ledger.mts .sandcastle/lib/security-record.mts .sandcastle/lib/errors.mts .sandcastle/lib/host-limit.mts .sandcastle/lib/plain-text.mts .sandcastle/lib/review-ledger.test.mts .sandcastle/lib/security-record.test.mts .sandcastle/lib/plain-text.test.mts .claude/skills/pre-push-review/SKILL.md .claude/skills/pre-push-review/lenses.md .claude/skills/pre-push-review/review-bar.md .claude/agents/pre-push-reviewer.md .security/README.md .editorconfig .claude/rules/script-edits.md)
 
 # A repo shaped like the Factory: gate.sh, the Template's Owned originals, matching copies, and a stub test.sh that records
 # that it ran and exits with $STUB_EXIT.
@@ -404,6 +404,13 @@ for version in v3.13.9 v3.14.0 v3.14.1 v3.20.0 v3.99.0 v3.100.0 v2.6.4 v4.0.0 v3
     *) check "shfmt $version is refused, naming it" "$([[ $status == 1 ]] && grep -qF "not '$version'" "$repoH/out" && echo 0 || echo 1)" ;;
   esac
 done
+# A shfmt that answers --version but fails the check itself (exit 3, a crash) stops the gate as a failed shfmt, not as a diff to fix.
+# shellcheck disable=SC2016 # the stub's own code, written as it is
+printf '#!/usr/bin/env bash\n[[ "${1:-}" == --version ]] && { echo v3.14.1; exit 0; }\nexit 3\n' > "$work/stubshfmt/shfmt"
+chmod +x "$work/stubshfmt/shfmt"
+status=0
+(cd "$repoH" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/stubshfmt" bash scripts/gate.sh --quick > "$repoH/out" 2>&1) || status=$?
+check "a shfmt that fails (exit 3) stops the gate as a failed shfmt, not a diff" "$([[ $status == 1 ]] && grep -q 'shfmt failed (exit 3) without checking the format' "$repoH/out" && ! grep -q 'run shfmt -w' "$repoH/out" && echo 0 || echo 1)"
 version_rule() { grep -oE '"\$\(shfmt --version\)" =~ [^ ]+' "$1"; }
 check "the gate's shfmt version rule is test.sh's" "$([[ -n "$(version_rule "$here/scripts/gate.sh")" && "$(version_rule "$here/scripts/gate.sh")" == "$(version_rule "$here/$skill/test.sh")" ]] && echo 0 || echo 1)"
 

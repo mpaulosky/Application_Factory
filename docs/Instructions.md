@@ -52,8 +52,8 @@ git commit -m "chore: Apply the repo-ci-baseline Template"
 ```
 
 It also runs `git config core.hooksPath .github/hooks`. The gate the pre-push hook runs needs shfmt v3.14 or a later v3 on `PATH` for its
-gh check (`pacman -S shfmt`, `brew install shfmt`, or the release binaries at <https://github.com/mvdan/sh/releases>); without it the first push fails
-with exit 2. From here on, `pre-commit` refuses commits in the primary checkout: every
+gh check and for its Shell format step on the changed shell files (`pacman -S shfmt`, `brew install shfmt`, or the release binaries at <https://github.com/mvdan/sh/releases>);
+without it the first push fails, naming shfmt. From here on, `pre-commit` refuses commits in the primary checkout: every
 change, including filling the placeholders the report lists, is made in a worktree under `../[ProjectName]-worktrees/` (see the
 skill's `references/git-hooks.md`).
 

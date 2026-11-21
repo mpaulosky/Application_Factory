@@ -96,14 +96,16 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   change is a regular Owned file added or modified, as Apply writes them (`OWNED_PATHS` in the ledger lists them, and a dotfiles test keeps it equal to
   `template/owned/`). A deleted Owned file, a symlink, a submodule, a file of the repo's own, a Seed file the re-Apply writes because the repo lacked it, or one of
   the Owned files that carry behaviour (`REVIEWED_ON_REAPPLY`: `.github/ci/coverage-threshold`, which ci.yml enforces at any value,
-  `.claude/rules/sandcastle-hand-off.md` and `.claude/rules/markdown-and-yaml-edits.md`, which load into every session, the three `.github/ISSUE_TEMPLATE/` files, whose front matter sets labels and assignees,
+  `.claude/rules/sandcastle-hand-off.md` and `.claude/rules/markdown-and-yaml-edits.md`, which load into every session, `.claude/rules/script-edits.md`, which loads into every session
+  that works on a script, the three `.github/ISSUE_TEMPLATE/` files, whose front matter sets labels and assignees,
   `.claude/agents/pre-push-reviewer.md`, whose `tools:` front matter keeps reviewers read-only, the `pre-push-review` skill's `SKILL.md`, `lenses.md` and `review-bar.md`,
   which the host reads into the unattended reviewers' prompts (the bar, the lenses and the severities), `.sandcastle/critique-prompt.md` and `intake-prompt.md`,
   and `plan-prompt.md`, `review-prompt.md` and the role prompts under `.sandcastle/roles/`
   (`architect.md`, `backend.md`, `tester.md`, `follow-up.md`, `gate-fixer.md`, `scribe.md` and `ui.md`), which instruct the
   pipeline's roles, `.sandcastle/check.sh`, whose watched paths decide whether the Sandcastle check runs,
   `global.json`, which sets the SDK and msbuild-sdks a build runs, `docs/PROCESS.md`, which `review-prompt.md` tells a role to follow, `scripts/cleanup.sh`, which deletes branches,
-  worktrees and origin branches, `scripts/work-issue.sh`, which makes a branch and worktree named from issue text, and the chain that runs the review and the gate:
+  worktrees and origin branches, `scripts/work-issue.sh`, which makes a branch and worktree named from issue text, `scripts/lint-edited-file.sh`, which lints each
+  Markdown, YAML or shell file an agent writes, with no Bash prompt, and vets the configs its linters read, and the chain that runs the review and the gate:
   `scripts/gate.sh`, `scripts/review.sh`, `.github/hooks/pre-push` and the `lib/` modules `review-ledger.mts`, `host-safety.mts`, `sandbox-env.mts`, `host-review.mts`,
   `host-review-prompts.mts` and `build.mts`, and the host's entrypoint and status command `.sandcastle/main.mts` and `.sandcastle/status.mts`, which wire those modules together,
   since the Template's checks run in the Template and in a repo judge whatever bytes the re-Apply wrote)

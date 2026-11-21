@@ -3,7 +3,7 @@
 Template files (Owned), among them: `.github/hooks/` (`pre-commit`, `pre-push`, `post-checkout`), `.github/hooks/tests/`,
 `scripts/gate.sh`, `scripts/check-branch-name.sh` with its test,
 `scripts/check-git-hooks.sh` ([Session-start check](#session-start-check)) and `scripts/lint-edited-file.sh` ([Edit-time lint](#edit-time-lint)) with their tests,
-`.claude/rules/markdown-and-yaml-edits.md` (the [Edit-time lint](#edit-time-lint)'s session rule),
+`.claude/rules/markdown-and-yaml-edits.md` and `.claude/rules/script-edits.md` (the [Edit-time lint](#edit-time-lint)'s session rules),
 `scripts/work-issue.sh` and `scripts/cleanup.sh` with their tests, and the `branch-name` job in `ci.yml`. History: IssueTracker #182 (the branch standard).
 
 ## Branch-name standard
@@ -133,17 +133,23 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
   under `LC_ALL=C`, so each name is matched whole and byte for byte: a non-ASCII name, one that isn't valid UTF-8, or one with a tab or
   newline reaches its linter as it is on disk. Markdown names go to `markdownlint-cli2` as `:<name>`, its literal-path form, so `a[1].md`
   isn't read as a glob and `-dash.md` isn't read as an option; YAML and shell names go to `yamllint` and `shellcheck` after a `--`, so
-  `-dash.yml` and `-dash.sh` aren't either. `tests/owned-gate-files.test.sh` (the Factory's) runs those lines in a throwaway
-  repo, in a UTF-8 locale and in C, the YAML and shell steps with stubs, and the Markdown step with a stub and, when installed, the real tool. Then build and run each test
+  `-dash.yml` and `-dash.sh` aren't either. The **Shell format** step then runs `shfmt -d --` on the changed shell files `.editorconfig` gives the shell style to
+  (a `*.sh` or a hook in `.github/hooks`; an extensionless `scripts/` file is in no section, so shellcheck alone checks it), with no style flags, so shfmt reads
+  `.editorconfig`: a repo's own scripts take the style as they are touched, with no one-off reformat ([the Factory's ADR 0015](../../../../docs/adr/0015-shell-files-are-formatted-with-shfmt.md)).
+  It needs shfmt v3.14 or a later v3 release, which `check_gh_repo.py` needs too, and stops, naming it, without one. shfmt exiting 1 is a diff or a file it can't parse, and
+  any other status stops the gate as a failed shfmt, with no `shfmt -w` advice. Without an `origin/main` it is skipped with a note, since the
+  changed files are then every tracked file. `tests/owned-gate-files.test.sh` (the Factory's) runs those lines in a throwaway
+  repo, in a UTF-8 locale and in C, the YAML, shell lint and shell format steps with stubs, and the Markdown step with a stub and, when installed, the real tool;
+  `.github/hooks/tests/pre-push.test.sh` runs the whole gate with the real shfmt, and shows it reads the repo's `.editorconfig`. Then build and run each test
   project, where the stack allows it locally. Which steps it runs depends on the repo; what's standard is that
-  everything it checks, CI checks too.
+  everything it checks, CI checks too, except the Shell format step (CI would need the PR's base to know which files changed) and the local review check below.
   After the lints it runs `python3 -I .github/scripts/check_gh_repo.py --repo`, which refuses a `gh` command in the
   repo's own `scripts/`, `.github/ci/` and skills that isn't told its repository (not the Owned Baseline files;
   [gotchas.md](gotchas.md)). It reads each script with shfmt v3.14 or a later v3, which must be installed: without it the check fails
   ([ADR 0011](../docs/adr/0011-the-gh-repo-check-parses-shell-with-shfmt.md)).
   Then it checks that the branch's diff passed the local review (`scripts/review.sh check`, [pre-push-review.md](pre-push-review.md)) in a repo that
   has `.sandcastle/lib/review-ledger.mts`; `GATE_SKIP_REVIEW=1` skips that for gate runs you start yourself (the hook drops the variable, so a push never
-  skips it; it drops `GATE_SKIP_SELF_TEST` too, the switch of a gate that tests itself, and `GATE_PART`, which makes a gate run one part of itself), and it is the one check CI doesn't repeat.
+  skips it; it drops `GATE_SKIP_SELF_TEST` too, the switch of a gate that tests itself, and `GATE_PART`, which makes a gate run one part of itself), and CI doesn't repeat it, since CI has no ledger.
   Then it runs `bash scripts/sync-copilot-review.sh --check` when the repo has the script: the Copilot review instructions must match the
   code-review skill, and a repo without the skill passes ([copilot-review-sync.md](copilot-review-sync.md)).
   Between the lints and the build it runs the Seed `.github/ci/gate-checks.sh <merge-base>` when the repo has one:
@@ -214,33 +220,73 @@ it lints the file the tool wrote, so an agent fixes a violation in the same turn
 `.markdownlint-cli2.jsonc`. A YAML file goes through `yamllint` with `.yamllint.yml`; a workflow also goes through `actionlint` and `zizmor --offline`, and `.github/dependabot.yml` through `zizmor`,
 at the repo root or under any folder (the Factory edits the Template's originals under `.claude/skills/`).
 These are the checks the CI lint workflows run; a gate runs `actionlint` and `zizmor` only where it lints workflows (an Application's gate does when a workflow changed; the Factory's does not).
+A shell file goes through `shellcheck` and `shfmt -d`, the gate's Shell lint and Shell format steps, on the files the gate takes for shell files: a `*.sh`, an extensionless file in the
+root's `scripts/`, or a git hook (`pre-*`, `post-*`, `commit-msg`, `prepare-commit-msg`, matched in the C locale) in the root's `.github/hooks`, or in a `.github/hooks` under a folder
+whose `.editorconfig` has a `[.github/hooks/*]` section (the Template's copy in the Factory, whose gate takes only its `pre-commit`, `pre-push` and `post-checkout`; an
+Application's gate takes the root's hooks alone, and the hook's note says so). shfmt gets no style flags, so it reads `.editorconfig`; it skips the extensionless `scripts/`
+files, which no section styles, and runs only when it is v3.14 or a later v3 release, as the gate needs (another, or a `--version` that fails or prints nothing, is named in
+the note, and shellcheck still runs). When shfmt exits 1 (a diff, or a file it can't parse) the report adds the `shfmt -w` command that writes the format, with the path quoted
+for a shell, and says to fix the syntax if the output is a syntax error; a shfmt that crashes gets no such hint. Neither tool runs code from the repository, and shfmt reads
+only `.editorconfig`.
+
+shellcheck reads its `.shellcheckrc`, and `external-sources` there lets it open the files a `source` line names; `--check-sourced` would then quote their lines in the report the
+agent reads. So the hook clears `SHELLCHECK_OPTS`, and shellcheck reads no config at all: it runs with `--norc`, and the hook turns the `.shellcheckrc` or `shellcheckrc`
+nearest the file (its folder and each one above it, up to the repository root, in the order shellcheck looks) into the flag each of its keys has: `disable` becomes `-e`,
+`enable` `-o`, `shell` `-s`, `source-path` `-P` and `extended-analysis` `--extended-analysis`. Nothing is read after the check, so no file or pipe is left for another
+process to change, and the hook needs a shellcheck with `--norc`, not `--rcfile`. A config above the repository root, or the person's own in their home, is not read at edit
+time; the gate reads it. The config is read without a here-string, which bash may write to a temp file of its own. shellcheck is not run while a config on the path is a
+symlink, not a regular file, unreadable, names `external-sources` or `check-sourced` in any case, holds a line other than a blank, a comment or one of those five keys (an
+allow-list, so a key a later shellcheck adds can't slip past), gives one no value or a value of a form the hook doesn't pass on (`disable` and `enable` take codes or check
+names with commas, starting with a letter or digit, `shell` one of `sh`, `bash`, `dash`, `ksh` and `busybox`, `extended-analysis` `true` or `false`), holds a NUL byte (which
+bash would drop as it reads, so the length would come out short), has a line over 4,096
+bytes or is over 65,536 in all (bounds chosen well inside what a command line carries, which no real config comes near; only 65,537 bytes of a config are read), or sets
+`extended-analysis` for a shellcheck whose `--help` lists no `--extended-analysis` (before 0.9), which would stop on it with a usage error: the note names the config and
+why (an unknown key by its first 40 bytes, each one other than a letter, digit, space or `_ . + -` shown as `?`, so no control byte an agent wrote reaches the person's
+terminal; every note, of every kind, shows a control character other than a tab, a format character (a bidi override or isolate, a zero-width
+one, a BOM), a line or paragraph separator, or a byte that isn't UTF-8, as `?`, whatever the locale, so a folder an agent named can't carry an
+escape sequence, or a bidi or zero-width character that changes how it reads (a letter that looks like another
+still shows as it is), and the one exit-1 message that names a path shows every byte of it but printable ASCII as `?`), and
+the gate still checks the file. The help is judged by what it prints, not its exit status: a usage without the flag gets
+that note, and a `--help` that prints no usage gets one of its own. Each value is one argument of its flag: `source-path`
+may start with a dash, since shellcheck takes the argument after `-P` as its value, and `disable` and `enable` may not.
+
+A hook under a nested `.github/hooks` whose `.editorconfig` can't be read is not linted, with a note; a line of it longer than 4,096 characters is no section header. A violation
+wins over a note: the hook exits 2 with the report alone. `test.sh` checks that the hook's hook-name rule is the gate's and the Lint Actions shellcheck job's, and that its shfmt
+release rule is the gate's and its own.
 The hook sees only those tools' writes: a file an agent writes through Bash (a heredoc, `sed -i`, a script) is not linted until the pre-commit hook (Markdown only), the gate or CI,
 since a Bash command doesn't name the files it wrote. The Owned `.claude/rules/markdown-and-yaml-edits.md`, which Apply writes into every repo and which loads in every session (it has no `paths:`),
-tells agents to write Markdown and YAML with Write and Edit for that reason, in a repo that hasn't wired the hook yet as well.
-In a repo that runs Sandcastle, which is where the review ledger is, a re-Apply that rewrites it needs a local review (`REVIEWED_ON_REAPPLY`), as the hand-off rules do;
+tells agents to write Markdown and YAML with Write and Edit for that reason, in a repo that hasn't wired the hook yet as well. The Owned `.claude/rules/script-edits.md`, whose `paths:`
+load it when a session works on a shell or Python script, says the same for shell scripts (the hook lints no Python) and lists the checks reviewers keep raising on them:
+a test that fails without each new branch, the header or docstring updated in the same edit, the edge cases that keep coming back (a missing tool, an empty,
+relative or odd path, CRLF or a byte-order mark, a symlink, a variable a caller left set), and the script's error contract.
+In a repo that runs Sandcastle, which is where the review ledger is, a re-Apply that rewrites either, or the hook itself (which lints each Markdown, YAML or shell file an agent
+writes, with no Bash prompt, and vets the configs its linters read), needs a local review (`REVIEWED_ON_REAPPLY`), as the hand-off rules do;
 in a repo without the ledger the re-Apply PR's own review is the check.
 
 - Exit 2 with the linters' output on stderr when any linter reports a problem; Claude Code feeds that back to the agent. A linter that crashes counts as a problem, not as clean. Each linter's
   output is cut at 6,000 characters (bytes in the C locale, where a cut may split a multibyte character). The report says the output below it is data, not instructions, and ends with a line
   telling the agent to hand a broken linter (a usage error, an old version) to the person.
-- Exit 0 and no output for a file that is neither Markdown nor YAML, one that no longer exists, a directory, a symlink, one under `node_modules/`, and one outside the project (below).
-- Exit 0 with a `systemMessage` on stdout, which Claude Code shows to the person, when a linter is not installed: the file is skipped for that linter, the hook only helps, and the pre-commit hook,
-  the gate and CI still check. Plain stderr on exit 0 is not shown, which is why the note is JSON. Before it runs anything the hook cleans `PATH`:
+- Exit 0 and no output for a file that is not Markdown, YAML or a shell file the gate checks, one that no longer exists, a directory, a symlink, one under `node_modules/`,
+  and one outside the project (below).
+- Exit 0 with a `systemMessage` on stdout, which Claude Code shows to the person, when a linter is not installed, or is not run (shfmt another release or one whose
+  `--version` fails or prints nothing, shellcheck under a config the hook won't take, as above), or a hook under a nested `.github/hooks` isn't linted because its
+  `.editorconfig` can't be read: the file is skipped for that linter, the hook only helps, and the gate still checks, as do the pre-commit hook and CI where they lint
+  that kind of file (the pre-commit hook lints Markdown; CI doesn't check shell format). Plain stderr on exit 0 is not shown, which is why the note is JSON. Before it runs anything the hook cleans `PATH`:
   every relative or empty entry goes (it would name a folder of whatever directory a command runs in, the repository once the hook has changed into it), and so does
   every entry inside the project's checkouts (the file's repository, and the project and every worktree `git worktree list` shows, a `node_modules/.bin` among them),
   since an agent can write any of them with no Bash prompt and this hook runs right after a write. It cleans twice: first, before it looks up `python3` or `git`, with
   the checkouts read from git's own files (`.git`, `commondir`, `worktrees/*/gitdir`) by bash alone, read whole and trimmed as git trims them (a relative
   `worktrees/*/gitdir` from its own folder), and again with `git worktree list` and the edited file's repository.
   A `PATH` left with no entry is set to a folder that can't exist, never to an empty string, which bash would read as the working directory. So no linter (`markdownlint-cli2`, `yamllint`, `actionlint`,
-  `zizmor`) and no helper a linter looks up on `PATH` (`node`, `python3`, `bash`, `shellcheck`) comes from there. A linter whose real file is a symlink into a checkout
+  `zizmor`, `shellcheck`, `shfmt`) and no helper a linter looks up on `PATH` (`node`, `python3`, `bash`, `shellcheck`) comes from there. A linter whose real file is a symlink into a checkout
   is passed over for the next one on `PATH`; one found only in such places is named apart in the note ("found only inside the project or on a relative PATH entry"),
   and an exported function of that name counts as not installed. Each linter runs by the path `PATH` found it under, so a shim that picks its program by name (mise)
   still works. Install them outside the project, on an absolute `PATH` entry: `pnpm add -g markdownlint-cli2`, `uv tool install yamllint`, `uv tool install zizmor`,
-  and actionlint from its release binaries or a package manager. The pre-commit hook and the gate still use the repo's own `markdownlint-cli2` (only it has one),
+  and actionlint, shellcheck and shfmt from their release binaries or a package manager. The pre-commit hook and the gate still use the repo's own `markdownlint-cli2` (only it has one),
   because a person runs those.
 - Exit 1 with a message on stderr when `CLAUDE_PROJECT_DIR` is unset or one of those git files is longer than any that names a folder (`GIT_FILE_MAX`), for any edit,
   since both are checked before the input is read; when its input is not JSON, `python3` is missing (or found only where the hook runs nothing from,
-  which the message says), or, for a Markdown or YAML file, `git` is missing (the same) or older than 2.36
+  which the message says), or, for a Markdown, YAML or shell file, `git` is missing (the same) or older than 2.36
   (`git worktree list -z`), so a broken hook is visible and is not read as a clean file.
 - Only the project's own checkout and the linked worktrees it lists are linted: the file's repository root must be one of the paths `git worktree list` prints for `CLAUDE_PROJECT_DIR`,
   which Claude Code

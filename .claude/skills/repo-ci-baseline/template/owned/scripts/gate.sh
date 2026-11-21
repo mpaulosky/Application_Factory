@@ -2,6 +2,7 @@
 # Local quality gate, run by .github/hooks/pre-push and safe to run by hand.
 # Lints the Markdown, YAML, workflow and shell files changed since origin/main
 # (every unpushed commit, with the same configs as CI), checks that the
+# changed shell files are formatted as shfmt formats them, checks that the
 # branch's diff passed the local review (/pre-push-review), that its own
 # scripts and skills tell every gh command its repository, that
 # .github/copilot-instructions.md matches the repo's code-review skill (when
@@ -28,7 +29,7 @@ RESET='\033[0m'
 step() { echo -e "\n${CYAN}▶ $1${RESET}"; }
 
 # Files added, copied, modified or renamed since this branch left origin/main.
-# Without an origin/main (a fresh clone of a fork, say) lint every tracked file.
+# Without an origin/main (a fresh clone of a fork, say) lint every tracked file; the Shell format step skips then (below).
 # NUL-separated, so a name git would quote (non-ASCII, a tab, a newline, a quote) reaches the linters as it is on disk. Written to a
 # file first, so a git that fails stops the gate here (set -e) instead of leaving every list empty.
 CHANGED_FILE="$(mktemp)"
@@ -58,6 +59,9 @@ mapfile -d '' -t YAML_FILES < <(pick '\.ya?ml$' '(^|/)pnpm-lock\.yaml$')
 mapfile -d '' -t WORKFLOW_FILES < <(pick '^\.github/(workflows/[^/]+\.ya?ml|dependabot\.ya?ml|actionlint\.ya?ml|zizmor\.ya?ml)$')
 # Shell scripts, plus extensionless scripts and git hooks.
 mapfile -d '' -t SHELL_FILES < <(pick '\.sh$|^scripts/[^/.]+$|^\.github/hooks/((pre|post)-[a-z-]+|(prepare-)?commit-msg)$')
+# The shell files shfmt formats: those .editorconfig gives the shell style to (its [*.sh] and [.github/hooks/*] sections). An
+# extensionless scripts/ file is in no section, so shfmt would format it in its own defaults: shellcheck alone checks it.
+mapfile -d '' -t SHFMT_FILES < <(pick '\.sh$|^\.github/hooks/((pre|post)-[a-z-]+|(prepare-)?commit-msg)$')
 
 # An installed markdownlint-cli2 (as the pre-commit hook uses) when there is
 # one; otherwise this pinned version, never whatever the registry serves at push time.
@@ -152,6 +156,51 @@ if [[ ${#SHELL_FILES[@]} -gt 0 ]]; then
   run_tool shellcheck "install shellcheck, or Docker" have_docker \
     docker run --rm -v "$ROOT:/mnt" -w /mnt "koalaman/shellcheck:${SHELLCHECK_VERSION}" \
     -- -- "${SHELL_FILES[@]}"
+fi
+
+# Each changed shell file is formatted as shfmt formats it, in the style .editorconfig gives, so a repo's own scripts take the
+# style as they are touched, with no one-off reformat. shfmt gets no style flags, so it reads that file. It must be v3.14 or a later
+# v3 release, the one check_gh_repo.py below needs too: another release can format the same file differently.
+# Without an origin/main the changed files are every tracked file, and a repo's own scripts would all have to be reformatted at once:
+# the step is skipped, as there is no branch to tell its changes by, and its heading gives no count.
+SHFMT_COUNT=""
+[[ -z "$BASE" ]] || SHFMT_COUNT=" (${#SHFMT_FILES[@]} changed file(s))"
+step "Shell format${SHFMT_COUNT}"
+if [[ -z "$BASE" ]]; then
+  echo -e "${YELLOW}⚠️  No origin/main, so no changed files to tell apart: skipping the shell format check (git fetch origin main to run it).${RESET}"
+elif [[ ${#SHFMT_FILES[@]} -gt 0 ]]; then
+  if ! command -v shfmt &> /dev/null; then
+    echo "❌ Shell format needs shfmt v3.14 or a later v3 release (check_gh_repo.py needs it too): install it on PATH." >&2
+    exit 1
+  fi
+  SHFMT_VERSION_RC=0
+  SHFMT_FOUND="$(shfmt --version 2>&1)" || SHFMT_VERSION_RC=$?
+  # Its first 80 bytes as the message shows them, every byte but printable ASCII as ?, so what shfmt printed can't move the terminal.
+  SHFMT_SHOWN="$(
+    export LC_ALL=C
+    shown="${SHFMT_FOUND:0:80}"
+    printf '%s' "${shown//[!\ -~]/?}"
+  )"
+  # A --version that fails or prints nothing says nothing of the release: it gets its own message, with its exit status and output.
+  if ((SHFMT_VERSION_RC != 0)) || [[ -z "$SHFMT_FOUND" ]]; then
+    echo "❌ Shell format needs shfmt v3.14 or a later v3 release, and shfmt --version exited $SHFMT_VERSION_RC and printed '$SHFMT_SHOWN', so its release is unknown: check the shfmt install." >&2
+    exit 1
+  fi
+  if ! [[ "$SHFMT_FOUND" =~ ^v3\.(1[4-9]|[2-9][0-9]|[1-9][0-9]{2,})\.[0-9]+$ ]]; then
+    echo "❌ Shell format needs shfmt v3.14 or a later v3 release, not '$SHFMT_SHOWN'." >&2
+    exit 1
+  fi
+  # shfmt exits 1 both for a file it would change (it prints the diff) and for one it can't parse (it prints the error); any other status
+  # is shfmt itself failing (a crash, a usage error), with no diff to follow.
+  SHFMT_RC=0
+  shfmt -d -- "${SHFMT_FILES[@]}" || SHFMT_RC=$?
+  if ((SHFMT_RC == 1)); then
+    echo "❌ shfmt: run shfmt -w on each file whose diff is shown above (with no style flags, so it reads .editorconfig), and fix the syntax of any file it could not parse." >&2
+    exit 1
+  elif ((SHFMT_RC != 0)); then
+    echo "❌ shfmt failed (exit $SHFMT_RC) without checking the format: this is no format problem in the files. Check the shfmt install." >&2
+    exit 1
+  fi
 fi
 
 # A gh command not told its repository reaches gh's default one, a fork in a
