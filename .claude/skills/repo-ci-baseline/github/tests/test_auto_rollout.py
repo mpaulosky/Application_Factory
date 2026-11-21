@@ -1506,6 +1506,15 @@ def test_a_new_ledger_that_doesnt_read_is_caught(tmp_path, raw):
     assert g.check() == [f"{path} appeared during the session and doesn't read as a ledger"]
 
 
+@pytest.mark.parametrize("raw", ["{", "[]", '{"findings": 5}'])
+def test_a_ledger_that_didnt_read_before_and_reads_with_an_accept_after_is_caught(tmp_path, raw):
+    g = Guarded(tmp_path)
+    g.ledger("l.json", [], raw=raw)
+    g.guard()
+    path = g.ledger("l.json", [{"id": "R1", "status": "accepted"}])
+    assert g.check() == [LEDGER_CHANGED.format(path, "changed")]
+
+
 def test_a_ledger_that_didnt_read_before_and_is_unchanged_is_not_the_sessions(tmp_path):
     g = Guarded(tmp_path)
     g.ledger("old-bad.json", [], raw="{")
