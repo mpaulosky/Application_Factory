@@ -211,8 +211,10 @@ if ci_paths is not None:
         for name in files:
             if name.endswith(".py"):
                 path = os.path.relpath(os.path.join(top, name), owned)
-                parts = path.split(os.sep)[:-1]
-                if not any(path.startswith(folder.rstrip("/") + "/") for folder in folders):
+                given = next((folder.rstrip("/") for folder in folders if path.startswith(folder.rstrip("/") + "/")), None)
+                # Only the folders below the one ci.yml names: ruff's default exclude doesn't drop a path it is given.
+                parts = path[len(given) + 1 :].split(os.sep)[:-1] if given else []
+                if given is None:
                     problems.append(f"ci.yml's ruff step doesn't lint the Owned {path}")
                 elif skipped.intersection(parts):
                     problems.append(f"the Owned {path} is under a folder ruff skips by default ({sorted(skipped.intersection(parts))[0]}), so CI's ruff step doesn't lint it")
@@ -838,11 +840,12 @@ STUB
   done
   # The ARG alone installs nothing: the image's pip install takes ruff at that release, or the sandbox's gate fails on a changed *.py.
   # shellcheck disable=SC2016 # the Dockerfile's own ${RUFF_VERSION}, matched as written
-  # Comment lines dropped (Docker drops them inside a continued instruction too), then continued lines joined, CRLF or LF; RUN is any case.
+  # Comment lines dropped (Docker drops them inside a continued instruction too), then continued lines joined, CRLF or LF; RUN is any case,
+  # and the spec is an argument of that pip install, not of a later command on the line.
   python3 -I -c 'import re, sys
 text = re.sub(r"(?m)^[ \t]*#[^\n]*\n", "", open(sys.argv[1], encoding="utf-8").read().replace("\r\n", "\n"))
 text = re.sub(r"\\[ \t]*\n", " ", text)
-sys.exit(0 if re.search(r"^[ \t]*RUN[ \t]+[^\n]*\bpip3?[ \t]+install\b[^\n]*\"ruff==\$\{RUFF_VERSION\}\"", text, re.M | re.I) else 1)' "$seed/.sandcastle/Dockerfile" \
+sys.exit(0 if re.search(r"^[ \t]*(?i:RUN)[ \t]+[^\n]*\bpip3?[ \t]+install\b[^\n&|;]*[ \t]\"ruff==\$\{RUFF_VERSION\}\"", text, re.M) else 1)' "$seed/.sandcastle/Dockerfile" \
     || fail "the Seed .sandcastle/Dockerfile must have \"ruff==\${RUFF_VERSION}\" on a RUN pip install line, the release the gate's Python lint step takes"
   # And the .NET SDK channel global.json pins.
   sdk="$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["sdk"]["version"])' "$owned/global.json")"
