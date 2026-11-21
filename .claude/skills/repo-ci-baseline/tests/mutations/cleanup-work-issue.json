@@ -44,8 +44,8 @@
     },
     {
       "path": ".claude/skills/repo-ci-baseline/template/owned/scripts/cleanup.sh",
-      "old": "[[ -f \"$d/BISECT_START\" && \"$(<\"$d/BISECT_START\")\" == \"$b\" ]]",
-      "new": "[[ -f \"$d/BISECT_START\" && \"$(<\"$d/BISECT_START\")\" == \"$b\"* ]]",
+      "old": "[[ -f \"$d/BISECT_START\" && \"$(< \"$d/BISECT_START\")\" == \"$b\" ]]",
+      "new": "[[ -f \"$d/BISECT_START\" && \"$(< \"$d/BISECT_START\")\" == \"$b\"* ]]",
       "why": "a branch whose name is a prefix of a bisecting branch's is kept"
     },
     {

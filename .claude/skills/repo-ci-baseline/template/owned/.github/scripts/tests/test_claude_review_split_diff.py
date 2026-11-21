@@ -107,6 +107,8 @@ def repo(tmp_path):
 def index(folder):
     """INDEX's pieces: {name: (lines, read, [(kind, path), ...])}, in order."""
     pieces = {}
+    # A file row (it starts with a tab) belongs to the piece row above it, which always comes first.
+    name = None
     for row in (folder / "INDEX").read_text(encoding="utf-8").split("\n")[1:-1]:
         if row in (EXCLUDED_HEADING, COPIES_HEADING, HELD_HEADING):
             break

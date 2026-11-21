@@ -12,7 +12,7 @@ set -uo pipefail
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-python3 -I - "$SKILL_DIR" <<'PY'
+python3 -I - "$SKILL_DIR" << 'PY'
 import re
 import sys
 import tempfile

@@ -11,7 +11,11 @@ set -uo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT" || exit 1
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; RESET='\033[0m'
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+RESET='\033[0m'
 
 # ── Commit only in a linked worktree ───────────────────────────────────────
 # In the primary checkout the git dir is the common one. A repo with no
@@ -27,7 +31,7 @@ if [[ "$GIT_DIR_ABS" == "$COMMON_DIR_ABS" ]] \
   WORKTREES="$(dirname "$ROOT")/$(basename "$ROOT")-worktrees"
   BRANCH="$(git symbolic-ref -q --short HEAD || true)"
   echo -e "${RED}❌  Commit in a worktree, not in the primary checkout ($ROOT).${RESET}"
-  if [[ -n "$BRANCH" && "$BRANCH" != main ]] && git rev-parse -q --verify "refs/heads/$BRANCH" >/dev/null; then
+  if [[ -n "$BRANCH" && "$BRANCH" != main ]] && git rev-parse -q --verify "refs/heads/$BRANCH" > /dev/null; then
     # The branch already exists and is checked out here, so it can't also be
     # checked out in a worktree until the primary checkout is back on main.
     FOLDER="${BRANCH//\//-}"
@@ -68,7 +72,7 @@ MARKDOWNLINT_BIN=""
 # Only markdownlint-cli2 reads .markdownlint-cli2.jsonc, the config CI uses.
 if [[ -x "$ROOT/node_modules/.bin/markdownlint-cli2" ]]; then
   MARKDOWNLINT_BIN="$ROOT/node_modules/.bin/markdownlint-cli2"
-elif command -v markdownlint-cli2 &>/dev/null; then
+elif command -v markdownlint-cli2 &> /dev/null; then
   MARKDOWNLINT_BIN="markdownlint-cli2"
 fi
 

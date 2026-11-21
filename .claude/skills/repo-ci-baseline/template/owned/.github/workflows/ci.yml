@@ -290,8 +290,8 @@ jobs:
   # Unit tests for the scripts in .github/scripts (the release blog generator,
   # Claude Review's script and the rest), among them the gh check
   # (check_gh_repo.py), the Owned files check (check_owned_files.py) and the
-  # gh-repo job that runs them. Deliberately not a required status check on
-  # main's ruleset.
+  # gh-repo job that runs them, and ruff over the Template's Python. Deliberately
+  # not a required status check on main's ruleset.
   python-tests:
     name: Python tests
     runs-on: ubuntu-latest
@@ -328,6 +328,11 @@ jobs:
         run: |
           python -m pip install --require-hashes --no-deps --only-binary=:all: -r .github/scripts/requirements-tests.txt
 
+      # ruff's bug-finding rules (F and B) over the Template's Python, with the flags scripts/gate.sh and the edit-time lint pass (test.sh
+      # keeps them equal); --isolated, so no config is read. The gate lints a repo's own Python files as a branch changes them.
+      - name: Run ruff
+        run: python -m ruff check --isolated --no-cache --select F,B --target-version py312 -- .github/scripts .claude/skills/hardening-review/scripts
+
       - name: Run pytest
         run: python -m pytest .github/scripts/tests
 
@@ -346,8 +351,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # pre-push.test.sh runs the gate, whose gh check reads each script's syntax tree from shfmt and so needs shfmt v3.14
-      # or a later v3: the gh-repo job's pinned and checked release.
+      # pre-push.test.sh runs the gate, whose gh check reads each script's syntax tree from shfmt and whose Shell format step
+      # runs shfmt -d, so it needs shfmt v3.14 or a later v3: the gh-repo job's pinned and checked release.
       - name: Install shfmt
         env:
           SHFMT_VERSION: "3.14.1"
@@ -383,6 +388,9 @@ jobs:
       - name: Run work-issue script tests
         run: bash scripts/tests/work-issue.test.sh
 
+      # The hook's own cases use stub linters. Its real-shellcheck block runs when the job has shellcheck (ubuntu-latest does), shfmt v3.14
+      # or a later v3 and a root .editorconfig, and skips with a note when it doesn't; every flag the hook passes is also checked against
+      # the stubs.
       - name: Run edit-time lint hook tests
         run: bash scripts/tests/lint-edited-file.test.sh
 

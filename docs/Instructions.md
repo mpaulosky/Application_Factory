@@ -52,8 +52,9 @@ git commit -m "chore: Apply the repo-ci-baseline Template"
 ```
 
 It also runs `git config core.hooksPath .github/hooks`. The gate the pre-push hook runs needs shfmt v3.14 or a later v3 on `PATH` for its
-gh check (`pacman -S shfmt`, `brew install shfmt`, or the release binaries at <https://github.com/mvdan/sh/releases>); without it the first push fails
-with exit 2. From here on, `pre-commit` refuses commits in the primary checkout: every
+gh check and for its Shell format step on the changed shell files (`pacman -S shfmt`, `brew install shfmt`, or the release binaries at <https://github.com/mvdan/sh/releases>);
+without it the first push fails, naming shfmt. A push that changes a Python file also needs ruff 0.17 (`uv tool install ruff@0.17.6`) or uv, for the gate's
+Python lint step. From here on, `pre-commit` refuses commits in the primary checkout: every
 change, including filling the placeholders the report lists, is made in a worktree under `../[ProjectName]-worktrees/` (see the
 skill's `references/git-hooks.md`).
 
@@ -126,7 +127,8 @@ git add -A
 git commit -m "chore: Apply the repo-ci-baseline Template"
 ```
 
-As in A3, the gate needs shfmt v3.14 or a later v3 on `PATH` before the first push, and wiring the Claude Code hooks in `.claude/settings.json` is
+As in A3, the gate needs shfmt v3.14 or a later v3 on `PATH` before the first push (and ruff 0.17 or uv for one that changes a Python file),
+and wiring the Claude Code hooks in `.claude/settings.json` is
 optional: to lint as Claude writes, you can add the entries A3 names ([Edit-time lint](../.claude/skills/repo-ci-baseline/references/git-hooks.md#edit-time-lint),
 [Session-start check](../.claude/skills/repo-ci-baseline/references/git-hooks.md#session-start-check)).
 

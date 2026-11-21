@@ -8,16 +8,16 @@ set -uo pipefail
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEPENDABOT="$SKILL_DIR/template/seed/.github/dependabot.yml"
 
-if python3 -I -c 'import yaml' &>/dev/null; then
+if python3 -I -c 'import yaml' &> /dev/null; then
   yaml_py=(python3 -I)
-elif command -v uvx &>/dev/null; then
+elif command -v uvx &> /dev/null; then
   yaml_py=(uvx --with pyyaml python -I)
 else
   echo "seed-dependabot.test.sh: needs PyYAML or uvx" >&2
   exit 1
 fi
 
-"${yaml_py[@]}" - "$DEPENDABOT" <<'PY'
+"${yaml_py[@]}" - "$DEPENDABOT" << 'PY'
 import json
 import sys
 import yaml

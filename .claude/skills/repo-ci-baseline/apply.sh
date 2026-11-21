@@ -33,9 +33,15 @@ target=""
 for arg in "$@"; do
   case "$arg" in
     --dry-run) dry_run=true ;;
-    -h|--help) usage ;;
-    -*) echo "apply.sh: unknown option '$arg'" >&2; usage ;;
-    *) [[ -z "$target" ]] || usage; target="$arg" ;;
+    -h | --help) usage ;;
+    -*)
+      echo "apply.sh: unknown option '$arg'" >&2
+      usage
+      ;;
+    *)
+      [[ -z "$target" ]] || usage
+      target="$arg"
+      ;;
   esac
 done
 [[ -n "$target" ]] || usage
@@ -44,7 +50,7 @@ skill_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 owned_dir="$skill_dir/template/owned"
 seed_dir="$skill_dir/template/seed"
 
-if ! git -C "$target" rev-parse --is-inside-work-tree &>/dev/null; then
+if ! git -C "$target" rev-parse --is-inside-work-tree &> /dev/null; then
   echo "apply.sh: '$target' is not a git work tree" >&2
   exit 1
 fi
@@ -52,13 +58,17 @@ target="$(git -C "$target" rev-parse --show-toplevel)"
 
 # ── Guards ──────────────────────────────────────────────────────────────────
 if ! $dry_run; then
-  if git -C "$target" rev-parse --verify --quiet HEAD >/dev/null; then
+  if git -C "$target" rev-parse --verify --quiet HEAD > /dev/null; then
     branch="$(git -C "$target" symbolic-ref --quiet --short HEAD || true)"
     case "$branch" in
-      "") echo "apply.sh: HEAD is detached; check out a work branch first" >&2; exit 1 ;;
-      main|preview|dev)
+      "")
+        echo "apply.sh: HEAD is detached; check out a work branch first" >&2
+        exit 1
+        ;;
+      main | preview | dev)
         echo "apply.sh: refusing to apply on '$branch'; create a branch such as chore/standardize-baseline" >&2
-        exit 1 ;;
+        exit 1
+        ;;
     esac
     if [[ -n "$(git -C "$target" status --porcelain)" ]]; then
       echo "apply.sh: the worktree has uncommitted or untracked changes; commit or stash them first" >&2
@@ -70,14 +80,14 @@ fi
 # Sandcastle's files (.sandcastle/, its workflow and the skills list that workflow reads, the hand-off rules file, and the package.json and
 # pnpm-workspace.yaml it runs with; sandcastle_path() is the list of record) go only into a repo that runs Sandcastle, or a new one (ADR 0006): a repo starts using it by creating .sandcastle/ and Applying again.
 with_sandcastle=false
-if [[ -d "$target/.sandcastle" ]] || ! git -C "$target" rev-parse --verify --quiet HEAD >/dev/null; then with_sandcastle=true; fi
+if [[ -d "$target/.sandcastle" ]] || ! git -C "$target" rev-parse --verify --quiet HEAD > /dev/null; then with_sandcastle=true; fi
 # The local review's skills (pre-push-review and its hardening-review loop), agent and script too: its ledger is .sandcastle/lib/review-ledger.mts.
 sandcastle_path() {
-  [[ "$1" == .sandcastle/* || "$1" == package.json || "$1" == pnpm-workspace.yaml || "$1" == scripts/review.sh \
-    || "$1" == .github/workflows/sandcastle.yml || "$1" == .github/ci/sandcastle-skills.txt \
-    || "$1" == .claude/agents/pre-push-reviewer.md || "$1" == .claude/skills/pre-push-review/* \
-    || "$1" == .claude/skills/hardening-review/* \
-    || "$1" == .claude/rules/sandcastle-hand-off.md ]]
+  [[ "$1" == .sandcastle/* || "$1" == package.json || "$1" == pnpm-workspace.yaml || "$1" == scripts/review.sh ||
+    "$1" == .github/workflows/sandcastle.yml || "$1" == .github/ci/sandcastle-skills.txt ||
+    "$1" == .claude/agents/pre-push-reviewer.md || "$1" == .claude/skills/pre-push-review/* ||
+    "$1" == .claude/skills/hardening-review/* ||
+    "$1" == .claude/rules/sandcastle-hand-off.md ]]
 }
 
 # The ledger imports REPO_SLUG and NOT_OWNED_BASELINE_PATHS from the repo's
@@ -112,7 +122,7 @@ if $with_sandcastle && [[ -f "$target/.sandcastle/check.sh" ]]; then
     [[ -f "$gate_config" ]] || continue
     gate_status=0
     gate_window="$(grep -a -h -A"$gate_window_lines" -E 'GATE_(COMMAND|SCRIPT)' "$gate_config")" || gate_status=$?
-    if (( gate_status == 0 )); then
+    if ((gate_status == 0)); then
       # A line that starts with a comment marker counts only for the text after its first `*/` (a `/* note */ ".sandcastle/check.sh", /* x */`
       # element still does), and only when it names no gate itself; a `//` line is skipped whole.
       printf '%s\n' "$gate_window" | LC_ALL=C awk '
@@ -120,9 +130,9 @@ if $with_sandcastle && [[ -f "$target/.sandcastle/check.sh" ]]; then
         /^[ \t]*(\/\*|\*)/ && !/GATE_(COMMAND|SCRIPT)/ { i = index($0, "*/"); if (!i) next; $0 = substr($0, i + 2) }
         /(^|[^A-Za-z0-9_.-])check\.sh([^A-Za-z0-9_.-]|$)/ { found = 1 }
         END { exit found ? 0 : 1 }' || gate_status=$?
-      if (( gate_status == 0 )); then gate_check_kept=true; fi
+      if ((gate_status == 0)); then gate_check_kept=true; fi
     fi
-    if (( gate_status > 1 )); then
+    if ((gate_status > 1)); then
       echo "apply.sh: can't read $gate_config, so it can't tell whether the config names .sandcastle/check.sh as the sandbox gate; fix it and Apply again" >&2
       exit 1
     fi
@@ -132,7 +142,7 @@ fi
 # ── Placeholder values ──────────────────────────────────────────────────────
 owner=""
 repo=""
-remote_url="$(git -C "$target" remote get-url origin 2>/dev/null || true)"
+remote_url="$(git -C "$target" remote get-url origin 2> /dev/null || true)"
 if [[ "$remote_url" =~ github\.com[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ ]]; then
   owner="${BASH_REMATCH[1]}"
   repo="${BASH_REMATCH[2]%.git}"
@@ -146,7 +156,10 @@ fi
 # {{YEAR}} is the year Apply writes the file: the LICENSE of a repo that has none, so a new project gets its creation year and
 # an existing one keeps the year it has (a Seed file is never overwritten). APPLY_YEAR is for tests.
 year="${APPLY_YEAR:-$(date +%Y)}"
-[[ "$year" =~ ^[0-9]{4}$ ]] || { echo "APPLY_YEAR must be a four-digit year, not '$year'" >&2; exit 1; }
+[[ "$year" =~ ^[0-9]{4}$ ]] || {
+  echo "APPLY_YEAR must be a four-digit year, not '$year'" >&2
+  exit 1
+}
 
 fill_placeholders() {
   local file="$1"
@@ -179,7 +192,10 @@ sandcastle_left=()
 
 # ── Owned ───────────────────────────────────────────────────────────────────
 while IFS= read -r rel; do
-  if ! $with_sandcastle && sandcastle_path "$rel"; then sandcastle_left+=("$rel"); continue; fi
+  if ! $with_sandcastle && sandcastle_path "$rel"; then
+    sandcastle_left+=("$rel")
+    continue
+  fi
   if $gate_check_kept && [[ "$rel" == .sandcastle/check.sh ]]; then continue; fi
   src="$owned_dir/$rel"
   dst="$target/$rel"
@@ -199,7 +215,10 @@ done < <(list_files "$owned_dir")
 
 # ── Seed ────────────────────────────────────────────────────────────────────
 while IFS= read -r rel; do
-  if ! $with_sandcastle && sandcastle_path "$rel"; then sandcastle_left+=("$rel"); continue; fi
+  if ! $with_sandcastle && sandcastle_path "$rel"; then
+    sandcastle_left+=("$rel")
+    continue
+  fi
   src="$seed_dir/$rel"
   dst="$target/$rel"
   if [[ -e "$dst" ]]; then
@@ -226,7 +245,10 @@ fi
 
 # ── Leftovers: files in the Template's directories that it doesn't carry ────
 declare -A in_template=()
-while IFS= read -r rel; do in_template["$rel"]=1; done < <(list_files "$owned_dir"; list_files "$seed_dir")
+while IFS= read -r rel; do in_template["$rel"]=1; done < <(
+  list_files "$owned_dir"
+  list_files "$seed_dir"
+)
 leftovers=()
 for dir in .github/workflows .github/hooks .github/scripts; do
   [[ -d "$target/$dir" ]] || continue
@@ -246,13 +268,14 @@ for f in .copilot-commit-message-instructions.md .claude/rules/git-commit.md; do
   [[ -e "$target/$f" ]] && conflicts+=("$f duplicates .github/instructions/git-commit-instructions.md; delete it, and point CLAUDE.md at docs/PROCESS.md")
 done
 $gate_check_kept && conflicts+=(".sandcastle/check.sh is Owned, but this repo's GATE_COMMAND or GATE_SCRIPT runs it as its sandbox gate, so Apply kept the copy; rename it (e.g. to .sandcastle/sandbox-gate.sh), point both at the new name, and Apply again; if nothing runs it as a gate, put the text that names check.sh (a trailing comment, another constant) on a comment line of its own that names neither GATE_COMMAND nor GATE_SCRIPT, or more than ten lines after them")
-if [[ -d "$target/.squad" ]] || compgen -G "$target/.github/workflows/squad-*" >/dev/null; then
+if [[ -d "$target/.squad" ]] || compgen -G "$target/.github/workflows/squad-*" > /dev/null; then
   conflicts+=("squad is still installed (.squad/ or squad-* workflows); run the remove-squad skill before Applying")
 fi
 
 # ── Report ──────────────────────────────────────────────────────────────────
 section() {
-  local title="$1"; shift
+  local title="$1"
+  shift
   echo
   echo "$title ($#)"
   local item

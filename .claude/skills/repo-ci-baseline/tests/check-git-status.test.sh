@@ -9,13 +9,26 @@ checker="$here/check-git-status.sh"
 work="$(mktemp -d)" || exit 1
 [[ -n "$work" && -d "$work" ]] || exit 1
 trap 'command rm -rf -- "$work"' EXIT
-PASSED=0; FAILED=0
-check() { if eval "$2"; then PASSED=$((PASSED + 1)); echo "ok   - $1"; else FAILED=$((FAILED + 1)); echo "FAIL - $1"; fi; }
+PASSED=0
+FAILED=0
+check() { if eval "$2"; then
+  PASSED=$((PASSED + 1))
+  echo "ok   - $1"
+else
+  FAILED=$((FAILED + 1))
+  echo "FAIL - $1"
+fi; }
 
 # fixture <name> <relative file> <content>: a folder $work/<name> holding that one file
-fixture() { mkdir -p "$work/$1/$(dirname "$2")"; printf '%s\n' "$3" > "$work/$1/$2"; }
+fixture() {
+  mkdir -p "$work/$1/$(dirname "$2")"
+  printf '%s\n' "$3" > "$work/$1/$2"
+}
 # run_checker <name>: exit status in $st, output in $out
-run_checker() { out="$(bash "$checker" "$work/$1" 2>&1)"; st=$?; }
+run_checker() {
+  out="$(bash "$checker" "$work/$1" 2>&1)"
+  st=$?
+}
 
 fixture bad scripts/a.sh '[[ -z "$(git status --porcelain)" ]] || exit 1'
 run_checker bad
@@ -53,16 +66,20 @@ check "a Markdown file is not scanned" "[[ $st == 0 ]]"
 fixture lookalike scripts/a.sh 'my-git status --porcelain'
 run_checker lookalike
 check "another command that ends in git is not git" "[[ $st == 0 ]]"
-bash "$checker" "$work/missing" >/dev/null 2>&1; st=$?
+bash "$checker" "$work/missing" > /dev/null 2>&1
+st=$?
 check "a missing folder is exit 2, not a pass" "[[ $st == 2 ]]"
-bash "$checker" >/dev/null 2>&1; st=$?
+bash "$checker" > /dev/null 2>&1
+st=$?
 check "no argument is exit 2" "[[ $st == 2 ]]"
-bash "$checker" "$here/../template/owned" >/dev/null 2>&1; st=$?
+bash "$checker" "$here/../template/owned" > /dev/null 2>&1
+st=$?
 check "the Template's own Owned scripts pass" "[[ $st == 0 ]]"
 
 # the checkout's own path may hold a folder named tests: only folders below the one given are skipped
 fixture under/tests/owned scripts/a.sh 'git status --porcelain'
-out="$(bash "$checker" "$work/under/tests/owned" 2>&1)"; st=$?
+out="$(bash "$checker" "$work/under/tests/owned" 2>&1)"
+st=$?
 check "a checkout below a folder named tests is still scanned" "[[ $st == 1 ]]"
 fixture skipped scripts/tests/a.sh 'git status --porcelain'
 run_checker skipped
@@ -103,7 +120,6 @@ if [[ "$(id -u)" != 0 ]]; then
   check "an unreadable file is exit 2 and named, not a pass" "[[ $st == 2 ]] && grep -q 'could not read' <<<\"\$out\""
 fi
 chmod 600 "$work/unreadable/scripts/a.sh"
-
 
 # The setting counts only in the call's own words: not another command's -u, nor a comment's text
 fixture u-sort scripts/a.sh '[[ -z "$(git status --porcelain | sort -u)" ]]'
@@ -233,7 +249,8 @@ if [[ "$(id -u)" != 0 ]]; then
   check "a file in a folder that can't be searched is exit 2, not skipped" "[[ $st == 2 ]]"
 fi
 chmod 755 "$work/ro-dir/scripts"
-mkdir -p "$work/dangling/scripts"; ln -s "$work/dangling/nowhere" "$work/dangling/scripts/a.sh"
+mkdir -p "$work/dangling/scripts"
+ln -s "$work/dangling/nowhere" "$work/dangling/scripts/a.sh"
 run_checker dangling
 check "a dangling symlink named *.sh is exit 2, not skipped" "[[ $st == 2 ]]"
 
@@ -336,7 +353,8 @@ out="$(python3 -I -c '
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("cgs", sys.argv[1]); mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
 mod.scan = lambda root: 1 / 0
-sys.exit(mod.guarded_main(["x", sys.argv[2]]))' "$here/check-git-status.py" "$work/crash" 2>&1)"; st=$?
+sys.exit(mod.guarded_main(["x", sys.argv[2]]))' "$here/check-git-status.py" "$work/crash" 2>&1)"
+st=$?
 check "a crash in the scan is exit 2, saying it did not check" "[[ $st == 2 ]] && grep -q 'failed without checking' <<<\"\$out\""
 echo "$PASSED passed, $FAILED failed"
 [[ $FAILED == 0 ]]

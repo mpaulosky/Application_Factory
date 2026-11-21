@@ -138,6 +138,8 @@ export const OWNED_PATHS = [
   ".github/ISSUE_TEMPLATE/feature_request.md",
   ".github/ci/coverage-threshold",
   ".claude/rules/sandcastle-hand-off.md",
+  ".claude/rules/markdown-and-yaml-edits.md",
+  ".claude/rules/script-edits.md",
   ".claude/skills/README.md",
   ".security/README.md",
   ".editorconfig",
@@ -151,7 +153,7 @@ export const OWNED_PATHS = [
 
 // The Owned files whose content is behaviour, not text: the coverage gate
 // ci.yml enforces (any whole percentage passes it, 0 included), the rules
-// file that loads into every Claude session in the repository, and the issue
+// files that load into every Claude session in the repository, or into every one that works on a script (script-edits.md), and the issue
 // templates, whose front matter sets the labels and assignee of every issue
 // opened from them (a `Sandcastle` label would feed the unattended pipeline),
 // the reviewer agent, whose `tools:` front matter is what keeps reviewers
@@ -160,7 +162,9 @@ export const OWNED_PATHS = [
 // local gate's .sandcastle/check.sh, whose watched paths and early exit decide
 // whether the Sandcastle check runs at all, global.json, which sets the SDK and the msbuild-sdks a build runs,
 // docs/PROCESS.md, which review-prompt.md tells a role to follow, scripts/cleanup.sh, which deletes branches, worktrees and origin
-// branches, and scripts/work-issue.sh, which makes a branch and worktree named from issue text, and the gate chain (see OWNED_PATHS above).
+// branches, scripts/work-issue.sh, which makes a branch and worktree named from issue text, scripts/lint-edited-file.sh, which lints
+// each Markdown, YAML, shell or Python file an agent writes, with no Bash prompt, and vets the repository's linter configs as it does, and the
+// gate chain (see OWNED_PATHS above).
 // The other files that moved from Seed to Owned (CODE_OF_CONDUCT.md,
 // the READMEs under .security/ and .claude/skills/) are audited text that no
 // role reads, and a wrong one only misleads a person, so they stay exempt.
@@ -169,8 +173,11 @@ export const OWNED_PATHS = [
 export const REVIEWED_ON_REAPPLY: ReadonlySet<string> = new Set([
   "scripts/cleanup.sh",
   "scripts/work-issue.sh",
+  "scripts/lint-edited-file.sh",
   ".github/ci/coverage-threshold",
   ".claude/rules/sandcastle-hand-off.md",
+  ".claude/rules/markdown-and-yaml-edits.md",
+  ".claude/rules/script-edits.md",
   ".github/ISSUE_TEMPLATE/bug_report.md",
   ".github/ISSUE_TEMPLATE/config.yml",
   ".github/ISSUE_TEMPLATE/feature_request.md",

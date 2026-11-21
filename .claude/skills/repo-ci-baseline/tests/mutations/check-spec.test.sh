@@ -9,15 +9,28 @@ checker="$here/check-spec.py"
 work="$(mktemp -d)" || exit 1
 [[ -n "$work" && -d "$work" ]] || exit 1
 trap 'command rm -rf -- "$work"' EXIT
-PASSED=0; FAILED=0
-check() { if eval "$2"; then PASSED=$((PASSED + 1)); echo "ok   - $1"; else FAILED=$((FAILED + 1)); echo "FAIL - $1"; fi; }
+PASSED=0
+FAILED=0
+check() { if eval "$2"; then
+  PASSED=$((PASSED + 1))
+  echo "ok   - $1"
+else
+  FAILED=$((FAILED + 1))
+  echo "FAIL - $1"
+fi; }
 
 mkdir -p "$work/root/scripts" "$work/specs"
 printf '%s\n' '#!/usr/bin/env bash' 'echo one' 'echo two' 'echo two again' > "$work/root/scripts/a.sh"
 # spec <mutation JSON...>: the spec file specs/s.json with those mutations
-spec() { local IFS=,; printf '{"test": ["true"], "timeout": 5, "mutations": [%s]}\n' "$*" > "$work/specs/s.json"; }
+spec() {
+  local IFS=,
+  printf '{"test": ["true"], "timeout": 5, "mutations": [%s]}\n' "$*" > "$work/specs/s.json"
+}
 mut() { printf '{"path": "scripts/a.sh", "old": %s, "new": %s, "why": %s}' "$1" "$2" "${3:-\"a reason\"}"; }
-run_checker() { out="$(python3 -I "$checker" "$work/root" "$work/specs" 2>&1)"; st=$?; }
+run_checker() {
+  out="$(python3 -I "$checker" "$work/root" "$work/specs" 2>&1)"
+  st=$?
+}
 
 spec "$(mut '"echo one"' '"echo 1"')"
 run_checker
@@ -92,14 +105,17 @@ check "the timeout cap is the one mutate.py has" "[[ \"\$(grep -o 'MAX_TIMEOUT =
 printf '{"test": ["true"], "timeout": 5, "mutations": ["x", 3]}\n' > "$work/specs/s.json"
 run_checker
 check "a mutation that is not an object is found, without a traceback" "[[ $st == 1 ]] && grep -q 'is not an object' <<<\"\$out\" && ! grep -q Traceback <<<\"\$out\""
-python3 -I "$checker" "$work/root" >/dev/null 2>&1; st=$?
+python3 -I "$checker" "$work/root" > /dev/null 2>&1
+st=$?
 check "one argument is exit 2, not a check of this checkout" "[[ $st == 2 ]]"
-python3 -I "$checker" "$work/root" "$work/specs" extra >/dev/null 2>&1; st=$?
+python3 -I "$checker" "$work/root" "$work/specs" extra > /dev/null 2>&1
+st=$?
 check "three arguments are exit 2 too" "[[ $st == 2 ]]"
 command rm -f "$work/specs/s.json"
 run_checker
 check "a folder with no spec is exit 2, not a pass" "[[ $st == 2 ]]"
-python3 -I "$checker" >/dev/null 2>&1; st=$?
+python3 -I "$checker" > /dev/null 2>&1
+st=$?
 check "the real specs fit the real code" "[[ $st == 0 ]]"
 
 echo "$PASSED passed, $FAILED failed"

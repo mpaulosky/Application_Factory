@@ -62,23 +62,36 @@ while [[ $# -gt 0 ]]; do
     --once) once=1 ;;
     --would-skip) would_skip=1 ;;
     --interval | --timeout)
-      if [[ $# -lt 2 ]]; then usage; exit 2; fi
+      if [[ $# -lt 2 ]]; then
+        usage
+        exit 2
+      fi
       if [[ "$1" == "--interval" ]]; then interval="$2"; else timeout_min="$2"; fi
       shift
       ;;
     --interval=*) interval="${1#*=}" ;;
     --timeout=*) timeout_min="${1#*=}" ;;
-    -h | --help) usage; exit 0 ;;
-    -*) echo "watch-pr: unknown option $1" >&2; usage; exit 2 ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    -*)
+      echo "watch-pr: unknown option $1" >&2
+      usage
+      exit 2
+      ;;
     *)
-      if [[ -n "$pr" ]]; then usage; exit 2; fi
+      if [[ -n "$pr" ]]; then
+        usage
+        exit 2
+      fi
       pr="$1"
       ;;
   esac
   shift
 done
 
-if ! command -v jq >/dev/null 2>&1; then
+if ! command -v jq > /dev/null 2>&1; then
   echo "watch-pr: jq is required and was not found on PATH" >&2
   exit 2
 fi
@@ -101,17 +114,29 @@ if ((would_skip)); then
   exit $?
 fi
 
-if [[ -z "$pr" || ! "$pr" =~ ^[1-9][0-9]*$ ]]; then usage; exit 2; fi
-if [[ ! "$interval" =~ ^[1-9][0-9]*$ ]]; then echo "watch-pr: --interval must be a whole number of seconds, 1 or more" >&2; exit 2; fi
-if [[ ! "$timeout_min" =~ ^[1-9][0-9]*$ ]]; then echo "watch-pr: --timeout must be a whole number of minutes, 1 or more" >&2; exit 2; fi
-if [[ ! "$budget" =~ ^[1-9][0-9]{0,8}$ ]]; then echo "watch-pr: WATCH_PR_BUDGET must be a whole number of GraphQL points an hour, 1 to 999999999" >&2; exit 2; fi
+if [[ -z "$pr" || ! "$pr" =~ ^[1-9][0-9]*$ ]]; then
+  usage
+  exit 2
+fi
+if [[ ! "$interval" =~ ^[1-9][0-9]*$ ]]; then
+  echo "watch-pr: --interval must be a whole number of seconds, 1 or more" >&2
+  exit 2
+fi
+if [[ ! "$timeout_min" =~ ^[1-9][0-9]*$ ]]; then
+  echo "watch-pr: --timeout must be a whole number of minutes, 1 or more" >&2
+  exit 2
+fi
+if [[ ! "$budget" =~ ^[1-9][0-9]{0,8}$ ]]; then
+  echo "watch-pr: WATCH_PR_BUDGET must be a whole number of GraphQL points an hour, 1 to 999999999" >&2
+  exit 2
+fi
 
-if ! command -v gh >/dev/null 2>&1; then # gh-repo: ok
+if ! command -v gh > /dev/null 2>&1; then                       # gh-repo: ok
   echo "watch-pr: gh is required and was not found on PATH" >&2 # gh-repo: ok
   exit 2
 fi
 
-url="$(git remote get-url upstream 2>/dev/null || git remote get-url origin 2>/dev/null || true)"
+url="$(git remote get-url upstream 2> /dev/null || git remote get-url origin 2> /dev/null || true)"
 url="${url%.git}"
 repo="${GITHUB_REPOSITORY:-}"
 if [[ -z "$repo" && -n "$url" ]]; then repo="${url#*github.com[:/]}"; fi
@@ -240,12 +265,12 @@ read_rest() {
       checks) path=.statusCheckRollup.contexts flag=hasNextPage cur_field=endCursor order=after query="$PAGE_QUERY_checks" ;;
     esac
     pages=0
-    used=$'\n' # the cursors this list has been read from, one per line
-    : >"$nodesfile" # each page's nodes, one array per line, in the order read
+    used=$'\n'       # the cursors this list has been read from, one per line
+    : > "$nodesfile" # each page's nodes, one array per line, in the order read
     # The list's page information: the first answer's, then the last page's. $resp is left as it is until the list's last page is read.
     info="$(printf '%s' "$resp" | jq -c ".data.repository.pullRequest$path.pageInfo")"
     while [[ "$(jq -rn --argjson info "$info" --arg flag "$flag" '$info[$flag] // false')" == true ]]; do
-      if [[ "$list" == checks ]] && ! printf '%s' "$resp" | jq -e --arg head "$head_oid" '.data.repository.pullRequest.statusCheckRollup.commit.oid == $head' >/dev/null 2>&1; then
+      if [[ "$list" == checks ]] && ! printf '%s' "$resp" | jq -e --arg head "$head_oid" '.data.repository.pullRequest.statusCheckRollup.commit.oid == $head' > /dev/null 2>&1; then
         reason="an incomplete read of the open PR: its checks are not of its head commit yet"
         return 1
       fi
@@ -261,24 +286,24 @@ read_rest() {
       fi
       used+="$cursor"$'\n'
       queries=$((queries + 1))
-      if ! gh api graphql -f query="$query" -f owner="${repo%%/*}" -f name="${repo#*/}" -F number="$pr" -f cursor="$cursor" >"$pagefile" 2>"$errfile"; then
+      if ! gh api graphql -f query="$query" -f owner="${repo%%/*}" -f name="${repo#*/}" -F number="$pr" -f cursor="$cursor" > "$pagefile" 2> "$errfile"; then
         reason="gh failed reading page $((pages + 1)) of the PR's $list: $(head -n 1 "$errfile")"
         return 1
       fi
       # A page naming another head is a push between pages; a page naming none is no list of checks (the shape check below says so).
-      if [[ "$list" == checks ]] && jq -e --arg head "$head_oid" '.data.repository.pullRequest.headRefOid | type == "string" and . != $head' "$pagefile" >/dev/null 2>&1; then
+      if [[ "$list" == checks ]] && jq -e --arg head "$head_oid" '.data.repository.pullRequest.headRefOid | type == "string" and . != $head' "$pagefile" > /dev/null 2>&1; then
         reason="an incomplete read: the PR's head moved while its checks were read"
         return 1
       fi
-      if ! jq -e --arg flag "$flag" ".data.repository.pullRequest$path | type == \"object\" and (.nodes | type == \"array\") and (.pageInfo[\$flag] | type == \"boolean\")" "$pagefile" >/dev/null 2>&1; then
+      if ! jq -e --arg flag "$flag" ".data.repository.pullRequest$path | type == \"object\" and (.nodes | type == \"array\") and (.pageInfo[\$flag] | type == \"boolean\")" "$pagefile" > /dev/null 2>&1; then
         reason="an incomplete read: page $((pages + 1)) of the PR's $list is not a list of them"
         return 1
       fi
-      if [[ "$list" == checks ]] && ! jq -e --arg head "$head_oid" '.data.repository.pullRequest | .headRefOid == $head and .statusCheckRollup.commit.oid == $head' "$pagefile" >/dev/null 2>&1; then
+      if [[ "$list" == checks ]] && ! jq -e --arg head "$head_oid" '.data.repository.pullRequest | .headRefOid == $head and .statusCheckRollup.commit.oid == $head' "$pagefile" > /dev/null 2>&1; then
         reason="an incomplete read: page $((pages + 1)) of the PR's checks is not of its head commit"
         return 1
       fi
-      if ! jq -c ".data.repository.pullRequest$path.nodes" "$pagefile" >>"$nodesfile" \
+      if ! jq -c ".data.repository.pullRequest$path.nodes" "$pagefile" >> "$nodesfile" \
         || ! info="$(jq -c ".data.repository.pullRequest$path.pageInfo" "$pagefile")"; then
         reason="the PR's $list could not be put together"
         return 1
@@ -311,15 +336,15 @@ while true; do
   ok=1
   resp=""
   queries=1 # the queries this poll makes: the first, and one per page read_rest asks for (a failed one too)
-  if ! resp="$(gh api graphql -f query="$QUERY" -f owner="${repo%%/*}" -f name="${repo#*/}" -F number="$pr" 2>"$errfile")"; then
+  if ! resp="$(gh api graphql -f query="$QUERY" -f owner="${repo%%/*}" -f name="${repo#*/}" -F number="$pr" 2> "$errfile")"; then
     ok=0
     reason="gh failed: $(head -n 1 "$errfile")"
-  elif ! printf '%s' "$resp" | jq -e "$BASE_JQ" >/dev/null 2>&1; then
+  elif ! printf '%s' "$resp" | jq -e "$BASE_JQ" > /dev/null 2>&1; then
     ok=0
     reason="the answer is not a pull request"
   elif ! read_rest; then
     ok=0
-  elif ! printf '%s' "$resp" | jq -e "$SHAPE_JQ" >/dev/null 2>&1; then
+  elif ! printf '%s' "$resp" | jq -e "$SHAPE_JQ" > /dev/null 2>&1; then
     ok=0
     reason="an incomplete read of the open PR: its checks are not of its head commit yet, or a list's page information is missing"
   fi
@@ -328,7 +353,7 @@ while true; do
     # The seen ids go to jq from the file, never as an argument: no list of them, however long, can pass the argument length limit.
     seen_from=/dev/null
     if [[ -f "$seen_file" ]]; then seen_from="$seen_file"; fi
-    if ! reasons="$(printf '%s' "$resp" | jq -r --arg session "$MARKER" --rawfile seen "$seen_from" "$REASONS_JQ" 2>/dev/null)"; then
+    if ! reasons="$(printf '%s' "$resp" | jq -r --arg session "$MARKER" --rawfile seen "$seen_from" "$REASONS_JQ" 2> /dev/null)"; then
       ok=0
       reason="the answer could not be read"
     fi
@@ -345,11 +370,14 @@ while true; do
       printed=0
       more=0
       while IFS=$'\x1f' read -r code detail id; do
-        if ((printed >= max_lines)); then more=$((more + 1)); continue; fi
+        if ((printed >= max_lines)); then
+          more=$((more + 1))
+          continue
+        fi
         printed=$((printed + 1))
         echo "watch-pr: $code: $detail"
         # A seen file that can't be written (a read-only git directory, a full disk) doesn't end the poll: the session is still needed.
-        if [[ -n "$id" ]] && ! { echo "$id" >> "$seen_file"; } 2>/dev/null; then
+        if [[ -n "$id" ]] && ! { echo "$id" >> "$seen_file"; } 2> /dev/null; then
           echo "watch-pr: can't record $id in $seen_file; the next run reports it again" >&2
         fi
       done <<< "$reasons"

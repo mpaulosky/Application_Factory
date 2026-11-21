@@ -4,8 +4,10 @@
 # scripts/gate.sh, scripts/check-branch-name.sh,
 # .github/scripts/discover_tests.py and .github/scripts/check_gh_repo.py, with the refs git would
 # pass on stdin. Stub `dotnet`, `pnpm`, `markdownlint-cli2`, `yamllint`,
-# `actionlint`, `zizmor` and `shellcheck` binaries log each call, and fail when the call matches the FAIL glob, so no
-# real build or network access is needed. check_gh_repo.py is the real one, so shfmt (v3.14 or a later v3) must be on PATH.
+# `actionlint`, `zizmor`, `shellcheck` and `ruff` binaries log each call, and fail when the call matches the FAIL glob, so no
+# real build or network access is needed (the ruff stub answers --version with a 0.17 release, the one the gate's Python lint step accepts:
+# the repo tracks two Python files, which the gate lints when there is no origin/main to diff against, and CI's hook-tests job has no ruff or uv). check_gh_repo.py and the Shell format step run the real shfmt (v3.14 or a later v3), which must be on PATH;
+# the repo gets the Template's .editorconfig, so the scripts it is given are written in that style.
 # Usage: .github/hooks/tests/pre-push.test.sh
 set -uo pipefail
 
@@ -25,7 +27,7 @@ LOG="$WORK/gates.log"
 
 # make_stub <dir> <tool>: a stub that logs its call and fails on a FAIL match.
 make_stub() {
-  cat > "$1/$2" <<EOF
+  cat > "$1/$2" << EOF
 #!/usr/bin/env bash
 call="$2 \$*"
 echo "\$call" >> "$LOG"
@@ -37,9 +39,13 @@ EOF
 }
 
 mkdir -p "$STUBS"
-for tool in dotnet pnpm markdownlint-cli2 yamllint actionlint zizmor shellcheck; do
+for tool in dotnet pnpm markdownlint-cli2 yamllint actionlint zizmor shellcheck ruff; do
   make_stub "$STUBS" "$tool"
 done
+# The gate reads ruff's release before it lints, and refuses one that is not 0.17.
+ruff_stub="$(cat "$STUBS/ruff")"
+# shellcheck disable=SC2016 # the line is the stub's code, expanded when it runs
+printf '%s\n%s\n%s\n' "${ruff_stub%%$'\n'*}" '[[ "$*" != --version ]] || { echo "ruff 0.17.6"; exit 0; }' "${ruff_stub#*$'\n'}" > "$STUBS/ruff"
 
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
 # The caller may be iterating with the review check skipped; the cases set what they need.
@@ -56,6 +62,8 @@ mkdir -p "$REPO/tests/Fake.Support"
 echo '<Project />' > "$REPO/tests/Fake.Support/Fake.Support.csproj"
 cp "$SCRIPTS/gate.sh" "$SCRIPTS/check-branch-name.sh" "$REPO/scripts/"
 cp "$DISCOVER" "$CHECK_GH_REPO" "$REPO/.github/scripts/"
+# The Template's .editorconfig, as every repo it is Applied to has: the gate's Shell format step reads its shell style, so the fixture scripts below are written in it.
+cp "$SCRIPTS/../.editorconfig" "$REPO/.editorconfig"
 git -C "$REPO" add .
 git -C "$REPO" commit -q -m init
 git -C "$REPO" update-ref refs/remotes/origin/main main
@@ -70,7 +78,7 @@ STATUS=0
 # switch_to <branch>: check out the branch, creating it from origin/main if new.
 # Existing branches keep their commits.
 switch_to() {
-  git -C "$REPO" switch -q "$1" 2>/dev/null || git -C "$REPO" switch -q -c "$1" origin/main
+  git -C "$REPO" switch -q "$1" 2> /dev/null || git -C "$REPO" switch -q -c "$1" origin/main
 }
 
 # run_hook <checked-out branch> <stdin>
@@ -341,6 +349,31 @@ commit_on feature/6-script scripts/tool.sh '#!/usr/bin/env bash'
 FAIL='shellcheck*scripts/tool.sh*' run_hook feature/6-script "$(push_stdin feature/6-script)"
 expect "a shellcheck failure in a changed script refuses the push" refused any
 
+# The Shell format step: a changed script shfmt would reformat (a 4-space indent, where .editorconfig gives 2) refuses the push, and a changed extensionless
+# scripts/ file, which no .editorconfig section styles, is not formatted.
+commit_on feature/6-format scripts/indented.sh "if true; then
+    echo indented
+fi"
+run_hook feature/6-format "$(push_stdin feature/6-format)"
+expect "a changed shell file shfmt would reformat refuses the push" refused any "run shfmt -w on each file"
+# A changed script in the style .editorconfig gives (a 2-space indent, where shfmt's own default is a tab) is allowed; the same script on a
+# branch that deletes .editorconfig is refused, so the step reads the repo's .editorconfig rather than its own defaults.
+commit_on feature/6-formatted scripts/formatted.sh "if true; then
+  echo formatted
+fi"
+run_hook feature/6-formatted "$(push_stdin feature/6-formatted)"
+expect "a changed shell file in the .editorconfig style is allowed" allowed tests-ran
+git -C "$REPO" rm -q .editorconfig
+git -C "$REPO" commit -q -m "drop .editorconfig"
+run_hook feature/6-formatted "$(push_stdin feature/6-formatted)"
+expect "without .editorconfig the same file is refused: the style comes from .editorconfig" refused any "run shfmt -w on each file"
+commit_on feature/6-extensionless scripts/tool "if true; then
+    echo indented
+fi"
+run_hook feature/6-extensionless "$(push_stdin feature/6-extensionless)"
+expect "a changed extensionless script is not formatted, only shellchecked" allowed tests-ran
+expect_log "a changed extensionless script is shellchecked" ran 'shellcheck*scripts/tool*'
+
 commit_on feature/7-hook-readme .github/hooks/README.md '# Hooks'
 run_hook feature/7-hook-readme "$(push_stdin feature/7-hook-readme)"
 expect_log "a non-hook file under .github/hooks skips shellcheck" not-ran 'shellcheck*'
@@ -359,7 +392,8 @@ git -C "$REPO" checkout -q -- tests/Fake.Tests/Fake.Tests.csproj
 
 # The repo's own checks in .github/ci/gate-checks.sh run before the build, get
 # the merge base, and fail the gate when they fail.
-commit_on feature/9-repo-checks .github/ci/gate-checks.sh "echo \"repo-check base=\$1\" >> '$LOG'; [[ -z \"\${FAIL_REPO_CHECK:-}\" ]]"
+commit_on feature/9-repo-checks .github/ci/gate-checks.sh "echo \"repo-check base=\$1\" >> '$LOG'
+[[ -z \"\${FAIL_REPO_CHECK:-}\" ]]"
 run_hook feature/9-repo-checks "$(push_stdin feature/9-repo-checks)"
 expect "the gate runs .github/ci/gate-checks.sh" allowed tests-ran
 expect_log "gate-checks.sh gets the merge base" ran "repo-check base=$(git -C "$REPO" rev-parse origin/main)"
@@ -374,7 +408,7 @@ git -C "$REPO" switch -q feature/1-x
 # without the ledger code has no review to check, and with no origin/main there is
 # nothing to diff against, so the push is refused rather than waved through.
 commit_on feature/12-local-review .sandcastle/lib/review-ledger.mts "// a placeholder: the stub below stands for the ledger"
-cat > "$REPO/scripts/review.sh" <<EOF
+cat > "$REPO/scripts/review.sh" << EOF
 #!/usr/bin/env bash
 echo "review.sh \$*" >> "$LOG"
 [[ -z "\${GATE_SKIP_SELF_TEST:-}" ]] || echo "GATE_SKIP_SELF_TEST=\$GATE_SKIP_SELF_TEST" >> "$LOG"
@@ -522,6 +556,12 @@ git -C "$REPO" switch -q feature/1-x
 git -C "$REPO" update-ref -d refs/remotes/origin/main
 run_hook feature/1-x "$(push_stdin feature/1-x)"
 expect "without an origin/main the check is skipped and the gate runs" allowed tests-ran "No origin/main"
+# There every tracked file counts as changed, the two Python files among them, so the gate's Python lint step runs on them.
+if grep -q '^ruff check .* -- .*discover_tests\.py' "$LOG"; then
+  pass "without an origin/main the gate lints the tracked Python files"
+else
+  fail "without an origin/main the gate lints the tracked Python files" "no ruff check of discover_tests.py in: $(tr '\n' ' ' < "$LOG")"
+fi
 git -C "$REPO" update-ref refs/remotes/origin/main "$MAIN_BEFORE"
 
 # The hook fetches main first, so it sees what merged since the last fetch.

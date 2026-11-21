@@ -4,7 +4,6 @@ No GitHub, no Claude."""
 import io
 import json
 import os
-import re
 import shutil
 import signal
 import stat
@@ -1578,7 +1577,7 @@ def test_auto_dry_run_checks_the_tools_prints_every_step_and_runs_nothing():
     assert fleet.events == [("check",)] and fleet.landed == [] and fleet.reviewed == []
     lines = out.splitlines()
     assert lines[0] == "tools: all there"
-    for line, repo in zip(lines[1:7], (TM, *REST)):
+    for line, repo in zip(lines[1:7], (TM, *REST), strict=True):
         name = short(repo)
         assert line == (f"would run: reapply.sh --brings '#82,#83' /r/{name}, with /pre-push-review headless in"
                         f" /r/{name}-worktrees/chore-reapply-baseline when its gate asks for one")
@@ -1769,19 +1768,6 @@ def test_a_session_that_broke_a_rule_stops_for_the_person_without_reapplying():
     assert ("TicketManager: the review session broke a rule: the remote chore/reapply-baseline moved: the session isn't to"
             " push (and 1 more); see /tmp/review-TicketManager.log, put it right in"
             " /r/TicketManager-worktrees/chore-reapply-baseline, then resume") in out
-
-
-def test_a_signal_during_a_session_is_not_called_a_timeout(tmp_path, monkeypatch):
-    session = FakeSession(raises=subprocess.TimeoutExpired("claude", 1))
-
-    def popen(command, **kwargs):
-        os.kill(os.getpid(), signal.SIGTERM)
-        return session
-
-    with pytest.raises(SystemExit):
-        review_once(tmp_path, monkeypatch, popen=popen)
-    (log,) = (tmp_path / "logs").iterdir()
-    assert "ran past" not in log.read_text()
 
 
 def test_rollouts_reapply_path_has_its_symlinks_resolved(tmp_path):

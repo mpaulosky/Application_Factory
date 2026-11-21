@@ -12,7 +12,8 @@ Done when every item below is resolved for this repo and `scripts/gate.sh` passe
   or Dependabot's npm updater reports `dependency_file_not_found` every week. The `npm` label comes from `labels.json`,
   so run `github-settings.sh --fix`. Its pip block bumps `.github/scripts/requirements-tests.txt`, the Python tests' hashed pins, and needs only the `dependencies`
   label. A Seed is written only where it's missing, so an Application Applied before the block existed copies it in by hand; without it, the pins move only when
-  a Rollout brings the Template's copy, which the Factory's own pip entry bumps.
+  a Rollout brings the Template's copy, which the Factory's own pip entry bumps. The block ignores ruff, whose pin moves only with the gate's release rule
+  (the Factory's ADR 0011, Update: Python): an Application Applied before the `ignore` existed adds `ignore: [{dependency-name: "ruff"}]` to its pip entry by hand.
 - **Seed files skipped.** Diff each against `template/seed/` and bring over what the repo lacks.
   The repo's version wins on content.
 - **Seed files written.** Check each against what the repo had before.
@@ -25,6 +26,9 @@ Done when every item below is resolved for this repo and `scripts/gate.sh` passe
 - **Analyzer settings only this repo needs** go in an `.editorconfig` beside the code they cover, for the same reason: the root one is Owned.
   IssueManager's root file turned off xUnit1030 and xUnit1051 for `tests/**` and IDE0044 for Razor code-behind; Apply dropped them and
   the build failed, so they moved to `tests/.editorconfig` (`[*.cs]`) and `src/.editorconfig` (`[*.razor.cs]`).
+- **The shell style** is in the Owned `.editorconfig` too: its `[*.sh]` and `[.github/hooks/*]` sections are `shfmt -i 2 -ci -bn -sr`, which shfmt reads when it is given no style flags.
+  The Owned scripts and hooks are formatted that way (the Factory's gate checks them, its ADR 0015). The repo's own gate checks the `*.sh` files and hooks a branch changes (its Shell
+  format step; not an extensionless `scripts/` file, and not in CI), so each of the repo's own scripts takes the style when it is next touched: `shfmt -w` it then, or all of them at once.
 - **Unfilled placeholders.** Fill each `{{...}}` by hand.
 - **Sandcastle.** A repo that runs Sandcastle follows [sandcastle.md](sandcastle.md#migrating-a-repo) for its `.sandcastle/` drift and Seed files.
 - **Leftovers.** Delete `sync-readme.yml` (`release_post.py` already maintains `docs/README.md`) and `label-enforce.yml` (squad's triage labels).

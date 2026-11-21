@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# Tests for scripts/lint-edited-file.sh, the Claude Code PostToolUse hook that lints the Markdown or YAML file a tool just wrote.
+# Tests for scripts/lint-edited-file.sh, the Claude Code PostToolUse hook that lints the Markdown, YAML, shell or Python file a tool just wrote.
 # Wiring it in (.claude/settings.json) is each repo's own.
 #
 # The linters are stubs on PATH, so the suite needs none of them: each stub fails when the file it is given holds the word BAD
 # (CRASH: exit 3), and logs its arguments and working directory, which is how the cases tell which linter ran, on which path,
-# with which config. A last block runs the real markdownlint-cli2 when it is installed; an Application's hook-tests job has none,
-# so there that block is skipped. A self-test runs the suite once more with a TMPDIR that does not exist (LINT_TEST_NESTED=1 keeps
+# with which config. The shfmt stub answers --version with $SHFMT_STUB_VERSION (v3.14.1 when unset), and a stub named in
+# $STUB_PASS passes whatever the file holds; $SHFMT_STUB_VERSION_EXIT is the exit status of shfmt --version (0 when unset). The ruff
+# stub answers --version the same way, from $STUB_RUFF_VERSION (ruff 0.17.6) and $STUB_RUFF_VERSION_EXIT. Last blocks run the real markdownlint-cli2 when it is installed, and the real shellcheck
+# and shfmt together, when shellcheck, shfmt v3.14 or a later v3 and the Template's .editorconfig are all there, and the real ruff when
+# it is a 0.17 release; an Application's
+# hook-tests job may have none, so there those blocks are skipped. A self-test runs the suite once more with a TMPDIR that does not exist (LINT_TEST_NESTED=1 keeps
 # that run from starting another).
 # Usage: scripts/tests/lint-edited-file.test.sh
 set -uo pipefail
@@ -17,15 +21,25 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT="$ROOT/scripts/lint-edited-file.sh"
 BASH_BIN="$(command -v bash)"
 
-command -v python3 > /dev/null 2>&1 || { echo "lint-edited-file.test.sh needs python3" >&2; exit 1; }
+command -v python3 > /dev/null 2>&1 || {
+  echo "lint-edited-file.test.sh needs python3" >&2
+  exit 1
+}
 
 PASSED=0
 FAILED=0
 
 # Canonical: the script logs pwd -P paths, and on macOS mktemp returns /var/..., a symlink to /private/var/....
 # Two steps, each checked: with `cd -P -- "$(mktemp -d)"` a failed mktemp would leave WORK as the current directory.
-tmp="$(mktemp -d)" || { echo "lint-edited-file.test.sh: mktemp -d failed" >&2; exit 1; }
-WORK="$(cd -P -- "$tmp" && pwd -P)" || { echo "lint-edited-file.test.sh: cannot enter $tmp" >&2; rm -rf "$tmp"; exit 1; }
+tmp="$(mktemp -d)" || {
+  echo "lint-edited-file.test.sh: mktemp -d failed" >&2
+  exit 1
+}
+WORK="$(cd -P -- "$tmp" && pwd -P)" || {
+  echo "lint-edited-file.test.sh: cannot enter $tmp" >&2
+  rm -rf "$tmp"
+  exit 1
+}
 trap 'rm -rf "$WORK"' EXIT
 
 # Keep the developer's git config out of every git call here.
@@ -55,12 +69,43 @@ LOG="$WORK/linters.log"
 STUBS="$WORK/stubs"
 mkdir -p "$STUBS"
 # make_stub <dir> <name>: a linter that logs "<name> <cwd> <args>"; exit 4 when its last argument is not a file, 3 when the file
-# holds CRASH, 1 when it holds BAD (BIG<n>: after printing n characters), else 0.
+# holds CRASH, 1 when it holds BAD (BIG<n>: after printing n characters), else 0. Named in $STUB_PASS, it logs and passes.
+# shfmt --version prints $SHFMT_STUB_VERSION and logs nothing, and ruff --version $STUB_RUFF_VERSION. A stub run with SHELLCHECK_OPTS set
+# logs it on a line of its own, as it does each RUFF_ variable it was given, and one
+# given --rcfile (as its own argument or --rcfile=<file>) logs "RCFILE <its arguments>": the hook gives it none, and a test checks that.
+# A shellcheck stub logs "ARGV" and each argument in < >, so a test can tell one argument from two; shellcheck --help prints a usage that
+# lists --extended-analysis under a Usage: line (one without it when SHELLCHECK_STUB_OLD is set, nothing when SHELLCHECK_STUB_HELP_QUIET is), exits
+# $SHELLCHECK_STUB_HELP_EXIT (0 by default) and logs nothing.
 make_stub() {
   cat > "$1/$2" << 'EOF'
 #!/usr/bin/env bash
 name="$(basename "$0")"
+if [[ "$name" == shfmt && "${1:-}" == --version ]]; then
+  echo "${SHFMT_STUB_VERSION-v3.14.1}"
+  exit "${SHFMT_STUB_VERSION_EXIT:-0}"
+fi
+if [[ "$name" == ruff && "${1:-}" == --version ]]; then
+  echo "${STUB_RUFF_VERSION-ruff 0.17.6}"
+  exit "${STUB_RUFF_VERSION_EXIT:-0}"
+fi
+if [[ "$name" == shellcheck && "${1:-}" == --help ]]; then
+  if [[ -z "${SHELLCHECK_STUB_HELP_QUIET:-}" ]]; then
+    echo "Usage: shellcheck [OPTIONS...] FILES..."
+    echo "  -e CODE1,CODE2..    --exclude=CODE1,CODE2..    Exclude types of warnings"
+    [[ -n "${SHELLCHECK_STUB_OLD:-}" ]] || echo "                      --extended-analysis=bool   Perform dataflow analysis (default true)"
+  fi
+  exit "${SHELLCHECK_STUB_HELP_EXIT:-0}"
+fi
 echo "$name $(pwd -P) $*" >> "$STUB_LOG"
+if [[ "$name" == shellcheck ]]; then
+  { printf 'ARGV'; printf ' <%s>' "$@"; echo; } >> "$STUB_LOG"
+fi
+[[ -z "${SHELLCHECK_OPTS+x}" ]] || echo "SHELLCHECK_OPTS=$SHELLCHECK_OPTS" >> "$STUB_LOG"
+for var in $(compgen -v RUFF_); do echo "ENV $var" >> "$STUB_LOG"; done
+for arg in "$@"; do
+  if [[ "$arg" == --rcfile || "$arg" == --rcfile=* ]]; then echo "RCFILE $*" >> "$STUB_LOG"; fi
+done
+[[ " ${STUB_PASS:-} " != *" $name "* ]] || exit 0
 file="${!#}"
 [[ -f "$file" ]] || { echo "$name: $file: no such file" >&2; exit 4; }
 if grep -q CRASH "$file"; then echo "$name crashed" >&2; exit 3; fi
@@ -74,7 +119,19 @@ exit 0
 EOF
   chmod +x "$1/$2"
 }
-for tool in markdownlint-cli2 yamllint actionlint zizmor; do make_stub "$STUBS" "$tool"; done
+for tool in markdownlint-cli2 yamllint actionlint zizmor shellcheck shfmt ruff; do make_stub "$STUBS" "$tool"; done
+# The stub's --rcfile detector itself, in both forms, so a test that finds no RCFILE line in the log can fail. STDOUT and STDERR are
+# set first: check prints them on a failure, and no run_hook has set them yet.
+STDOUT="" STDERR=""
+p=()
+for form in "--rcfile=$WORK/x" "--rcfile $WORK/x"; do
+  : > "$WORK/rcfile-probe.log"
+  # shellcheck disable=SC2086 # the form is split on purpose: --rcfile and its file as two arguments
+  STUB_LOG="$WORK/rcfile-probe.log" STUB_PASS=shellcheck "$STUBS/shellcheck" $form ok.sh
+  grep -q '^RCFILE ' "$WORK/rcfile-probe.log" || p+=("the stub logged no RCFILE for: $form")
+done
+rm "$WORK/rcfile-probe.log"
+check "the shellcheck stub logs RCFILE for --rcfile, in both forms" ${p[@]+"${p[@]}"}
 
 # A PATH holding the stubs and the basic tools the script and stubs need, and no real linter.
 link_tools() {
@@ -307,7 +364,10 @@ rm -r "$WORK/shim" "$WORK/multi"
 # A linter's helpers, and the hook's own python3, git and tr, come from the cleaned PATH too: an agent's copy in the repo, ahead on
 # PATH as an absolute, relative, empty or '.' entry, never runs. The empty and '.' entries name the working directory, so those
 # copies sit in it.
-for helper in python3 bash node env git tr; do attacker_stub "$repo/bin/$helper"; attacker_stub "$repo/$helper"; done
+for helper in python3 bash node env git tr; do
+  attacker_stub "$repo/bin/$helper"
+  attacker_stub "$repo/$helper"
+done
 for first in "$repo/bin" bin "" .; do
   RUN_CWD="$repo" run_hook "$(edit_json "$repo/docs/bad.md")" "$first:$STUBS:$TOOLS"
   p=()
@@ -514,14 +574,725 @@ log_line "yamllint $repo ./config.yml" || p+=("log: $(cat "$LOG")")
 check "without a .yamllint.yml, yamllint runs with its defaults" ${p[@]+"${p[@]}"}
 printf 'rules: {}\n' > "$repo/.yamllint.yml"
 
+# --- Shell ----------------------------------------------------------------
+NOLINT_SH="$WORK/nolint-sh"
+link_tools "$NOLINT_SH"
+mkdir -p "$repo/scripts/sub" "$repo/.github/hooks" "$repo/tools/.github/hooks" "$repo/tmpl/.github/hooks" "$repo/notes"
+printf 'echo ok\n' > "$repo/scripts/ok.sh"
+printf 'BAD\n' > "$repo/scripts/bad.sh"
+printf 'echo ok\n' > "$repo/scripts/tool"
+printf '[.github/hooks/*]\nindent_style = space\n' > "$repo/tmpl/.editorconfig"
+sh_both() { log_line "shellcheck $repo --norc -- ./$1" && log_line "shfmt $repo -d -- ./$1" && [[ "$(ran shellcheck)" == 1 && "$(ran shfmt)" == 1 ]]; }
+
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+sh_both scripts/ok.sh || p+=("want shellcheck and shfmt -d once each, from the repo root, after --: $(cat "$LOG")")
+[[ "$(ran markdownlint-cli2)" == 0 && "$(ran yamllint)" == 0 ]] || p+=("a Markdown or YAML linter ran on a shell file")
+check "a clean .sh passes silently, through shellcheck and shfmt -d (no style flags) from the repo root" ${p[@]+"${p[@]}"}
+
+run_hook "$(edit_json "$repo/scripts/bad.sh")"
+p=()
+[[ $STATUS -eq 2 && -z "$STDOUT" ]] || p+=("exit $STATUS, want 2 with nothing on stdout")
+[[ "$STDERR" == "Lint found problems in scripts/bad.sh. Fix them now; the gate checks the same file before the push."* ]] || p+=("the header: $STDERR")
+[[ "$STDERR" == *"shellcheck (exit 1):"* && "$STDERR" == *"shfmt (exit 1):"* ]] || p+=("not both linters' findings")
+[[ "$STDERR" == *"run shfmt -w ./scripts/bad.sh from the repository root, with no style flags"* ]] || p+=("no shfmt -w hint")
+check "a .sh both linters fail exits 2 with both reports and the shfmt -w hint" ${p[@]+"${p[@]}"}
+
+RUN_ENV=(STUB_PASS=shfmt)
+run_hook "$(edit_json "$repo/scripts/bad.sh")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ $STATUS -eq 2 && "$STDERR" == *"shellcheck (exit 1):"* && "$STDERR" != *"shfmt (exit"* ]] || p+=("exit $STATUS, stderr: $STDERR")
+[[ "$STDERR" != *"run shfmt -w"* ]] || p+=("the shfmt -w hint without a shfmt finding")
+check "a shellcheck finding alone gets no shfmt -w hint" ${p[@]+"${p[@]}"}
+
+RUN_ENV=(STUB_PASS=shellcheck)
+run_hook "$(edit_json "$repo/scripts/bad.sh")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ $STATUS -eq 2 && "$STDERR" == *"shfmt (exit 1):"* && "$STDERR" != *"shellcheck (exit"* ]] || p+=("exit $STATUS, stderr: $STDERR")
+[[ "$STDERR" == *"run shfmt -w ./scripts/bad.sh"* ]] || p+=("no shfmt -w hint")
+check "a shfmt finding alone exits 2 with the shfmt -w hint" ${p[@]+"${p[@]}"}
+
+# A shellcheck or shfmt that crashes (exit 3) is a violation, not a clean file, and gets no shfmt -w hint: it is no diff.
+printf 'CRASH\n' > "$repo/scripts/crash.sh"
+for crasher in shellcheck shfmt; do
+  other=shfmt
+  [[ "$crasher" == shellcheck ]] || other=shellcheck
+  RUN_ENV=(STUB_PASS="$other")
+  run_hook "$(edit_json "$repo/scripts/crash.sh")"
+  RUN_ENV=(RUN_ENV_UNUSED=1)
+  p=()
+  [[ $STATUS -eq 2 && "$STDERR" == *"$crasher (exit 3):"* && "$STDERR" == *"$crasher crashed"* ]] || p+=("exit $STATUS, stderr: $STDERR")
+  [[ "$STDERR" != *"run shfmt -w"* ]] || p+=("a crash got the shfmt -w hint")
+  [[ "$STDERR" == *"tell the person instead of retrying"* ]] || p+=("no hint to hand a broken linter to the person")
+  check "a $crasher that crashes exits 2, with no shfmt -w hint" ${p[@]+"${p[@]}"}
+done
+
+run_hook "$(edit_json "$repo/scripts/tool")"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+log_line "shellcheck $repo --norc -- ./scripts/tool" || p+=("shellcheck did not run: $(cat "$LOG")")
+[[ "$(ran shfmt)" == 0 ]] || p+=("shfmt ran on a file no .editorconfig section styles")
+check "an extensionless script in scripts/ goes through shellcheck only" ${p[@]+"${p[@]}"}
+
+# The hook names the gate takes for a shell file, in the root's .github/hooks and in one under a folder whose .editorconfig has a
+# [.github/hooks/*] section.
+for hook in pre-commit pre-push post-checkout post-rewrite commit-msg prepare-commit-msg; do
+  for at in .github/hooks tmpl/.github/hooks; do
+    printf 'echo ok\n' > "$repo/$at/$hook"
+    run_hook "$(edit_json "$repo/$at/$hook")"
+    p=()
+    [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+    sh_both "$at/$hook" || p+=("not linted and formatted: $(cat "$LOG")")
+    check "the git hook $at/$hook goes through shellcheck and shfmt" ${p[@]+"${p[@]}"}
+  done
+done
+
+# A note about a nested hook says only a gate that takes that folder checks it: an Application's gate takes the root's hooks alone.
+run_hook "$(edit_json "$repo/tmpl/.github/hooks/pre-push")" "$NOLINT_SH"
+p=()
+[[ $STATUS -eq 0 && "$(system_message "$STDOUT")" == *"was not fully linted: shellcheck shfmt not installed (the gate checks it only where it takes the hooks under tmpl, as it doesn't in most repositories)." ]] \
+  || p+=("exit $STATUS, note: $STDOUT")
+check "a nested hook's note says which gate checks it" ${p[@]+"${p[@]}"}
+run_hook "$(edit_json "$repo/.github/hooks/pre-push")" "$NOLINT_SH"
+p=()
+[[ "$(system_message "$STDOUT")" == *"(the gate still checks it before the push)." ]] || p+=("note: $STDOUT")
+check "a root hook's note says the gate still checks it" ${p[@]+"${p[@]}"}
+
+# What is not a shell file the gate checks: each left alone, with nothing run and nothing said.
+printf 'BAD\n' > "$repo/tools/.github/hooks/pre-push"
+printf 'BAD\n' > "$repo/scripts/sub/tool"
+printf 'BAD\n' > "$repo/.github/hooks/README"
+printf 'BAD\n' > "$repo/.github/hooks/Pre-push"
+printf 'BAD\n' > "$repo/.github/hooks/pre-"
+printf 'BAD\n' > "$repo/.github/hooks/pré-push"
+printf 'BAD\n' > "$repo/.github/hooks/my-pre-push"
+printf 'BAD\n' > "$repo/.github/hooks/commit-msgs"
+printf 'BAD\n' > "$repo/notes/pre-push"
+printf 'BAD\n' > "$repo/UPPER.SH"
+printf 'BAD\n' > "$repo/scripts/tool.rb"
+printf 'BAD\n' > "$repo/script.bash"
+# Extensionless names in a scripts folder that isn't the root's, or nested in it: the folder passes the first filter, the path doesn't.
+mkdir -p "$repo/scripts/scripts" "$repo/tools/scripts" "$repo/scripts/.github/hooks"
+for f in scripts/scripts/tool scripts/scripts/pre-push tools/scripts/tool tools/scripts/pre-push scripts/.github/hooks/pre-push; do printf 'BAD\n' > "$repo/$f"; done
+# A newline in a hook's name: the rule is matched against the whole name, never a line of it.
+printf 'BAD\n' > "$repo/.github/hooks/pre-push"$'\n'"x"
+printf 'BAD\n' > "$repo/.github/hooks/x"$'\n'"pre-push"
+for edited in tools/.github/hooks/pre-push scripts/sub/tool .github/hooks/README .github/hooks/Pre-push .github/hooks/pre- .github/hooks/pré-push \
+  .github/hooks/my-pre-push .github/hooks/commit-msgs scripts/scripts/tool scripts/scripts/pre-push tools/scripts/tool tools/scripts/pre-push \
+  scripts/.github/hooks/pre-push ".github/hooks/pre-push"$'\n'"x" ".github/hooks/x"$'\n'"pre-push" \
+  notes/pre-push UPPER.SH scripts/tool.rb script.bash; do
+  run_hook "$(edit_json "$repo/$edited")"
+  p=()
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+  log_empty || p+=("linted: $(cat "$LOG")")
+  check "${edited//$'\n'/\\n} is no shell file the gate checks, so it is left alone" ${p[@]+"${p[@]}"}
+done
+# The hook name is matched in C, as the gate's pick() matches it: in a UTF-8 locale such as en_US.UTF-8, [a-z] can match an accented
+# letter, so pre-pusé would pass for a hook name there. Tried where such a locale is installed.
+# Every installed UTF-8 locale is tried, so the case runs wherever one exists, not only where en_US.UTF-8 does.
+utf8_hook=""
+while IFS= read -r loc; do
+  if LC_ALL="$loc" bash -c '[[ "é" =~ ^[a-z]$ ]]' 2> /dev/null; then
+    utf8_hook="$loc"
+    break
+  fi
+done < <(locale -a 2> /dev/null | grep -iE 'utf-?8' || true)
+if [[ -n "$utf8_hook" ]]; then
+  printf 'BAD\n' > "$repo/.github/hooks/pre-pusé"
+  RUN_ENV=(LC_ALL="$utf8_hook")
+  run_hook "$(edit_json "$repo/.github/hooks/pre-pusé")"
+  RUN_ENV=(RUN_ENV_UNUSED=1)
+  p=()
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_empty || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+  check "[$utf8_hook] .github/hooks/pre-pusé is no hook name: the rule is matched in C" ${p[@]+"${p[@]}"}
+else
+  echo "skip - no installed UTF-8 locale where [a-z] matches é, so the hook name's C locale can't be told apart here"
+fi
+# A repository whose own folder is named scripts: its root files are not in a scripts/ folder of the repository.
+scripts_repo="$(new_repo scripts)"
+printf 'BAD\n' > "$scripts_repo/tool"
+printf 'BAD\n' > "$scripts_repo/pre-push"
+for edited in tool pre-push; do
+  run_hook "$(edit_json "$scripts_repo/$edited")" "$STUBS:$TOOLS" "$scripts_repo"
+  p=()
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_empty || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+  check "a root file $edited of a repository whose folder is named scripts is left alone" ${p[@]+"${p[@]}"}
+done
+# A .github/hooks under a folder with a directory named .editorconfig is not styled by it.
+rm "$repo/tmpl/.editorconfig"
+mkdir "$repo/tmpl/.editorconfig"
+run_hook "$(edit_json "$repo/tmpl/.github/hooks/pre-push")"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_empty || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+check "a hook under a folder whose .editorconfig is a directory is left alone" ${p[@]+"${p[@]}"}
+rmdir "$repo/tmpl/.editorconfig"
+printf '[.github/hooks/*]\nindent_style = space\n' > "$repo/tmpl/.editorconfig"
+# One whose .editorconfig has no [.github/hooks/*] section doesn't style its hooks (a package with its own editor settings), so they are
+# left alone, as the gate leaves them.
+mkdir -p "$repo/pkg/.github/hooks"
+printf '[*.sh]\nindent_style = space\n# [.github/hooks/*]\n' > "$repo/pkg/.editorconfig"
+printf 'BAD\n' > "$repo/pkg/.github/hooks/pre-push"
+run_hook "$(edit_json "$repo/pkg/.github/hooks/pre-push")"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_empty || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+check "a hook under a folder whose .editorconfig has no [.github/hooks/*] section is left alone" ${p[@]+"${p[@]}"}
+# The section header is read as an editorconfig parser reads it: a CRLF line, blanks around it and a byte-order mark before the first line
+# still name the section; a header with more after it, or a comment, doesn't. A symlinked .editorconfig is not read.
+for case in "styled|[.github/hooks/*]\r\n" "styled|  [.github/hooks/*] \t\n" "styled|\xef\xbb\xbf[.github/hooks/*]\n" "styled|root = true\n[.github/hooks/*]" \
+  "unstyled|[.github/hooks/*]x\n" "unstyled|; [.github/hooks/*]\n" "unstyled|\xef\xbb\xbfroot = true\n\xef\xbb\xbf[.github/hooks/*]\n"; do
+  # shellcheck disable=SC2059 # the case is the escaped file content, written as printf reads it
+  printf "${case#*|}" > "$repo/pkg/.editorconfig"
+  run_hook "$(edit_json "$repo/pkg/.github/hooks/pre-push")"
+  p=()
+  if [[ "${case%%|*}" == styled ]]; then
+    [[ $STATUS -eq 2 ]] && sh_both pkg/.github/hooks/pre-push || p+=("exit $STATUS, log: $(cat "$LOG")")
+  else
+    [[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_empty || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+  fi
+  check "an .editorconfig of '${case#*|}' is ${case%%|*} for the hooks under it" ${p[@]+"${p[@]}"}
+done
+printf '[.github/hooks/*]\n' > "$WORK/styled-elsewhere"
+rm "$repo/pkg/.editorconfig"
+ln -s "$WORK/styled-elsewhere" "$repo/pkg/.editorconfig"
+run_hook "$(edit_json "$repo/pkg/.github/hooks/pre-push")"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_empty || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+check "a symlinked .editorconfig is not read, so the hooks under it are left alone" ${p[@]+"${p[@]}"}
+rm "$repo/pkg/.editorconfig"
+# One that can't be read: nothing on stderr, and the note names it (root reads it anyway, so there the case can't be made).
+printf '[.github/hooks/*]\n' > "$repo/pkg/.editorconfig"
+chmod 000 "$repo/pkg/.editorconfig"
+if [[ -r "$repo/pkg/.editorconfig" ]]; then
+  echo "skip - a mode-000 file is still readable here (root), so an unreadable .editorconfig can't be made"
+else
+  run_hook "$(edit_json "$repo/pkg/.github/hooks/pre-push")"
+  p=()
+  [[ $STATUS -eq 0 && -z "$STDERR" ]] && log_empty || p+=("exit $STATUS, stderr: $STDERR, log: $(cat "$LOG")")
+  [[ "$(system_message "$STDOUT")" == "lint-edited-file.sh: pkg/.github/hooks/pre-push was not linted: pkg/.editorconfig, which says whether its hooks are shell files the gate formats, could not be read (the gate still checks the repository's own hooks before the push)." ]] \
+    || p+=("note: $STDOUT")
+  check "a hook under a folder whose .editorconfig can't be read is not linted, and the note says why" ${p[@]+"${p[@]}"}
+fi
+chmod 644 "$repo/pkg/.editorconfig"
+# A line longer than 4096 characters is no section header: one of 4096 (blanks, then the header) still names it, one of 4097 doesn't,
+# and a line of a million blanks is passed over at once.
+for case in "4096|styled" "4097|unstyled" "1000000|unstyled"; do
+  n="${case%|*}"
+  printf '%*s[.github/hooks/*]\n' $((n - 17)) '' > "$repo/pkg/.editorconfig"
+  start=$SECONDS
+  run_hook "$(edit_json "$repo/pkg/.github/hooks/pre-push")"
+  p=()
+  if [[ "${case#*|}" == styled ]]; then
+    [[ $STATUS -eq 2 ]] && sh_both pkg/.github/hooks/pre-push || p+=("exit $STATUS, log: $(cat "$LOG")")
+  else
+    [[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_empty || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+  fi
+  ((SECONDS - start < 10)) || p+=("took $((SECONDS - start)) s")
+  check "a header line of $n characters is ${case#*|} for the hooks under it, read in under 10 s" ${p[@]+"${p[@]}"}
+done
+rm "$repo/pkg/.editorconfig"
+
+printf 'BAD\n' > "$repo/-dash.sh"
+run_hook "$(edit_json "$repo/-dash.sh")"
+p=()
+log_line "shellcheck $repo --norc -- ./-dash.sh" && log_line "shfmt $repo -d -- ./-dash.sh" || p+=("a name starting with - is not guarded: $(cat "$LOG")")
+check "a shell file whose name starts with - reaches both linters as a file" ${p[@]+"${p[@]}"}
+
+# A name with a space reaches both linters whole, and the shfmt -w hint quotes it, so it is one argument as the agent copies it. The hint
+# names both things a shfmt failure can be.
+printf 'BAD\n' > "$repo/scripts/my tool.sh"
+run_hook "$(edit_json "$repo/scripts/my tool.sh")"
+p=()
+log_line "shellcheck $repo --norc -- ./scripts/my tool.sh" && log_line "shfmt $repo -d -- ./scripts/my tool.sh" || p+=("the name was not passed whole: $(cat "$LOG")")
+[[ "$STDERR" == *'run shfmt -w ./scripts/my\ tool.sh from the repository root'* ]] || p+=("the hint doesn't quote the name: $STDERR")
+[[ "$STDERR" == *"If shfmt's output above is a diff"*"If it is a syntax error, fix the syntax."* ]] || p+=("the hint doesn't name a diff and a syntax error: $STDERR")
+check "a shell file with a space in its name reaches both linters whole, and the hint quotes it" ${p[@]+"${p[@]}"}
+latin1_sh="$(printf 'caf\xe9')"
+printf 'BAD\n' > "$repo/scripts/$latin1_sh.sh"
+run_hook "$(edit_json "$repo/scripts/$latin1_sh.sh")"
+p=()
+[[ $STATUS -eq 2 ]] || p+=("exit $STATUS, want 2")
+log_line "shellcheck $repo --norc -- ./scripts/$latin1_sh.sh" && log_line "shfmt $repo -d -- ./scripts/$latin1_sh.sh" || p+=("not passed byte for byte: $(cat "$LOG")")
+check "a shell file whose name isn't valid UTF-8 reaches both linters byte for byte" ${p[@]+"${p[@]}"}
+
+# A relative path with no slash, from the scripts/ folder: the folder is resolved before the name is matched.
+RUN_CWD="$repo/scripts"
+run_hook "$(edit_json "tool")"
+RUN_CWD=
+p=()
+log_line "shellcheck $repo --norc -- ./scripts/tool" || p+=("not linted as ./scripts/tool: $(cat "$LOG")")
+check "a relative path with no slash in scripts/ is linted as scripts/<name>" ${p[@]+"${p[@]}"}
+
+# shfmt runs only when it is v3.14 or a later v3 release, as the gate needs; another is noted, not run, and shellcheck still runs.
+for version in v3.14.0 v3.14.1 v3.15.2 v3.19.0 v3.19.9 v3.20.0 v3.99.9 v3.100.0; do
+  RUN_ENV=(SHFMT_STUB_VERSION="$version")
+  run_hook "$(edit_json "$repo/scripts/ok.sh")"
+  RUN_ENV=(RUN_ENV_UNUSED=1)
+  p=()
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] && sh_both scripts/ok.sh || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+  check "shfmt $version is run" ${p[@]+"${p[@]}"}
+done
+for version in v3.13.9 v3.1.0 v3.9.0 v3.10.0 v3.14 v3.14. v2.7.0 v4.0.0 3.14.1 xv3.14.1 "v3.14.1 extra" "v3.14.1
+v3.14.1"; do
+  RUN_ENV=(SHFMT_STUB_VERSION="$version")
+  run_hook "$(edit_json "$repo/scripts/ok.sh")"
+  RUN_ENV=(RUN_ENV_UNUSED=1)
+  msg="$(system_message "$STDOUT")"
+  p=()
+  [[ $STATUS -eq 0 && -z "$STDERR" ]] || p+=("exit $STATUS, stderr: $STDERR")
+  [[ "$(ran shellcheck)" == 1 && "$(ran shfmt)" == 0 ]] || p+=("want shellcheck alone: $(cat "$LOG")")
+  [[ "$msg" == "lint-edited-file.sh: scripts/ok.sh was not fully linted: shfmt '${version//$'\n'/?}' is not v3.14 or a later v3 release, whose format the gate checks (the gate still checks it before the push)." ]] \
+    || p+=("note: $msg")
+  # A newline in the answer reaches the note as ?, as any control byte does.
+  check "shfmt '${version//$'\n'/\\n}' is noted and not run" ${p[@]+"${p[@]}"}
+done
+# A --version that prints nothing, or fails (even after printing a release the gate takes), leaves the release unknown: noted, not run.
+for case in "|0" "v3.14.1|1" "|1"; do
+  RUN_ENV=(SHFMT_STUB_VERSION="${case%|*}" SHFMT_STUB_VERSION_EXIT="${case#*|}")
+  run_hook "$(edit_json "$repo/scripts/ok.sh")"
+  RUN_ENV=(RUN_ENV_UNUSED=1)
+  p=()
+  [[ $STATUS -eq 0 && -z "$STDERR" && "$(ran shellcheck)" == 1 && "$(ran shfmt)" == 0 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
+  [[ "$(system_message "$STDOUT")" == "lint-edited-file.sh: scripts/ok.sh was not fully linted: shfmt --version failed or printed nothing, so its release is unknown and shfmt was not run (the gate still checks it before the push)." ]] \
+    || p+=("note: $STDOUT")
+  check "a shfmt --version printing '${case%|*}' with exit ${case#*|} is noted as unknown, and shfmt is not run" ${p[@]+"${p[@]}"}
+done
+RUN_ENV=(SHFMT_STUB_VERSION="v3.$(printf '%060d' 1).0")
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ "$(system_message "$STDOUT")" == *"shfmt 'v3.$(printf '%037d' 0)' is not"* ]] || p+=("the version was not cut at 40 characters: $STDOUT")
+check "a long shfmt version is cut at 40 characters in the note" ${p[@]+"${p[@]}"}
+RUN_ENV=(SHFMT_STUB_VERSION=v3.13.0)
+run_hook "$(edit_json "$repo/scripts/bad.sh")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ $STATUS -eq 2 && "$STDERR" == *"shellcheck (exit 1):"* && "$STDERR" != *"run shfmt -w"* && -z "$STDOUT" ]] || p+=("exit $STATUS, stderr: $STDERR")
+check "with an old shfmt, a shellcheck finding still exits 2, with no shfmt -w hint" ${p[@]+"${p[@]}"}
+RUN_ENV=(SHFMT_STUB_VERSION=v3.13.0)
+run_hook "$(edit_json "$repo/scripts/tool")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("an extensionless script, which shfmt doesn't format, noted the release: $OUTPUT")
+check "an old shfmt is not noted for a file shfmt doesn't format" ${p[@]+"${p[@]}"}
+
+# The shell linters found only inside the project are refused, and named apart from a missing one.
+attacker_stub "$repo/bin/shellcheck"
+attacker_stub "$repo/bin/shfmt"
+run_hook "$(edit_json "$repo/scripts/bad.sh")" "$repo/bin:$TOOLS"
+msg="$(system_message "$STDOUT")"
+p=()
+[[ $STATUS -eq 0 ]] && ! log_has "attacker " || p+=("exit $STATUS, or an in-repo shell linter ran: $(cat "$LOG")")
+[[ "$msg" == *"was not fully linted: shellcheck shfmt $found_inside"* ]] || p+=("note: $msg")
+check "shellcheck and shfmt inside the repo are refused" ${p[@]+"${p[@]}"}
+rm "$repo/bin/shfmt"
+run_hook "$(edit_json "$repo/scripts/bad.sh")" "$repo/bin:$TOOLS"
+msg="$(system_message "$STDOUT")"
+p=()
+[[ "$msg" == *"shfmt not installed; shellcheck $found_inside"* ]] || p+=("note: $msg")
+check "a missing shfmt and a shellcheck found only inside are named apart" ${p[@]+"${p[@]}"}
+rm -r "${repo:?}/bin"
+# A missing linter and a note are joined with "; ".
+ONLYSHFMT="$WORK/onlyshfmt"
+link_tools "$ONLYSHFMT"
+make_stub "$ONLYSHFMT" shfmt
+RUN_ENV=(SHFMT_STUB_VERSION=v3.13.0)
+run_hook "$(edit_json "$repo/scripts/ok.sh")" "$ONLYSHFMT"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ "$(system_message "$STDOUT")" == "lint-edited-file.sh: scripts/ok.sh was not fully linted: shellcheck not installed; shfmt 'v3.13.0' is not v3.14 or a later v3 release, whose format the gate checks (the gate still checks it before the push)." ]] \
+  || p+=("note: $STDOUT")
+check "a missing shellcheck and an old shfmt are both noted, joined with '; '" ${p[@]+"${p[@]}"}
+
+# A shellcheck config that could make shellcheck open, or quote, other files keeps it from running (the note says which config and why);
+# one that only tunes the checks doesn't. Its folder and each one above it count, up to the repository root, by either name.
+for case in ".shellcheckrc|external-sources=true" "scripts/shellcheckrc|# turn on CHECK-SOURCED=true" "scripts/.shellcheckrc|disable=SC2086
+external-sources=true"; do
+  rc="${case%%|*}"
+  printf '%s\n' "${case#*|}" > "$repo/$rc"
+  run_hook "$(edit_json "$repo/scripts/ok.sh")"
+  p=()
+  [[ $STATUS -eq 0 && -z "$STDERR" ]] || p+=("exit $STATUS, stderr: $STDERR")
+  [[ "$(ran shellcheck)" == 0 && "$(ran shfmt)" == 1 ]] || p+=("want shfmt alone: $(cat "$LOG")")
+  [[ "$(system_message "$STDOUT")" == "lint-edited-file.sh: scripts/ok.sh was not fully linted: shellcheck was not run: its config $rc names external-sources or check-sourced, which could show this hook's output the lines of other files (the gate still checks it before the push)." ]] \
+    || p+=("note: $STDOUT")
+  check "a shellcheck config $rc naming external-sources or check-sourced keeps shellcheck from running" ${p[@]+"${p[@]}"}
+  rm "$repo/$rc"
+done
+# A symlink is refused whatever it points at: a regular file (which shellcheck would follow), /dev/null, or nothing at all; so is a folder.
+printf 'disable=SC2086\n' > "$WORK/plain-rc"
+for case in "scripts/.shellcheckrc|symlink to a regular file|$WORK/plain-rc" "scripts/.shellcheckrc|symlink to /dev/null|/dev/null" \
+  "scripts/.shellcheckrc|dangling symlink|$WORK/no-such-rc" "scripts/shellcheckrc|folder|"; do
+  IFS='|' read -r rc what to <<< "$case"
+  if [[ -n "$to" ]]; then ln -s "$to" "$repo/$rc"; else mkdir "$repo/$rc"; fi
+  run_hook "$(edit_json "$repo/scripts/ok.sh")"
+  p=()
+  [[ $STATUS -eq 0 && "$(ran shellcheck)" == 0 && "$(ran shfmt)" == 1 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
+  [[ "$(system_message "$STDOUT")" == "lint-edited-file.sh: scripts/ok.sh was not fully linted: shellcheck was not run: its config $rc is a symlink or not a regular file, so the hook can't vouch for what shellcheck would read (the gate still checks it before the push)." ]] \
+    || p+=("note: $STDOUT")
+  check "a shellcheck config $rc that is a $what keeps shellcheck from running" ${p[@]+"${p[@]}"}
+  rm -r "${repo:?}/$rc"
+done
+# One that can't be read. Root reads it anyway, so there the case can't be made.
+printf 'disable=SC2086\n' > "$repo/scripts/.shellcheckrc"
+chmod 000 "$repo/scripts/.shellcheckrc"
+if [[ -r "$repo/scripts/.shellcheckrc" ]]; then
+  echo "skip - a mode-000 file is still readable here (root), so an unreadable shellcheck config can't be made"
+else
+  run_hook "$(edit_json "$repo/scripts/ok.sh")"
+  p=()
+  [[ $STATUS -eq 0 && "$(ran shellcheck)" == 0 && "$(ran shfmt)" == 1 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
+  [[ "$(system_message "$STDOUT")" == "lint-edited-file.sh: scripts/ok.sh was not fully linted: shellcheck was not run: its config scripts/.shellcheckrc could not be read, so the hook can't tell what it turns on (the gate still checks it before the push)." ]] \
+    || p+=("note: $STDOUT")
+  check "a shellcheck config that can't be read keeps shellcheck from running" ${p[@]+"${p[@]}"}
+fi
+chmod 644 "$repo/scripts/.shellcheckrc"
+rm "$repo/scripts/.shellcheckrc"
+# ShellCheck reads no config: it runs with --norc and the nearest config's settings as flags, and the nearer config wins (scripts/ before the
+# root, .shellcheckrc before shellcheckrc). It is never given --rcfile, and no file is made for it.
+printf 'disable=SC2000\n' > "$repo/.shellcheckrc"
+printf 'disable=SC1000\nsource-path=SCRIPTDIR\n' > "$repo/scripts/.shellcheckrc"
+printf 'disable=SC3000\n' > "$repo/scripts/shellcheckrc"
+mkdir -p "$WORK/rctmp"
+RUN_ENV=(TMPDIR="$WORK/rctmp")
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+log_line "shellcheck $repo --norc -e SC1000 -P SCRIPTDIR -- ./scripts/ok.sh" || p+=("shellcheck didn't get the nearest config's flags: $(cat "$LOG")")
+! log_has "RCFILE" || p+=("shellcheck was given --rcfile: $(cat "$LOG")")
+[[ -z "$(ls -A "$WORK/rctmp")" ]] || p+=("a file was made in TMPDIR: $(ls -A "$WORK/rctmp")")
+check "shellcheck runs with --norc and the nearest config's settings as flags, and no file is made" ${p[@]+"${p[@]}"}
+rm "$repo/scripts/.shellcheckrc"
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+p=()
+log_line "shellcheck $repo --norc -e SC3000 -- ./scripts/ok.sh" || p+=("shellcheckrc in scripts/ did not win over the root's: $(cat "$LOG")")
+check "a shellcheckrc in the file's folder wins over the root's .shellcheckrc" ${p[@]+"${p[@]}"}
+rm "$repo/scripts/shellcheckrc"
+# Two folders down the walk still reaches the root's config: scripts/sub/ok.sh takes the root's settings.
+mkdir -p "$repo/scripts/sub"
+printf 'echo ok\n' > "$repo/scripts/sub/ok.sh"
+run_hook "$(edit_json "$repo/scripts/sub/ok.sh")"
+p=()
+log_line "shellcheck $repo --norc -e SC2000 -- ./scripts/sub/ok.sh" || p+=("the root's config didn't reach a file two folders down: $(cat "$LOG")")
+check "a file two folders down takes the root's config" ${p[@]+"${p[@]}"}
+printf 'external-sources=true\n' > "$repo/.shellcheckrc"
+run_hook "$(edit_json "$repo/scripts/sub/ok.sh")"
+p=()
+[[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"its config .shellcheckrc names external-sources"* ]] || p+=("log: $(cat "$LOG"), note: $STDOUT")
+check "a refused config at the root keeps shellcheck from running for a file two folders down" ${p[@]+"${p[@]}"}
+rm "$repo/scripts/sub/ok.sh"
+printf 'disable=SC2000\n' > "$repo/.shellcheckrc"
+printf 'disable=SC1000\n' > "$repo/scripts/.shellcheckrc"
+# On a violation too, shellcheck gets the flags, and the report comes back with exit 2.
+run_hook "$(edit_json "$repo/scripts/bad.sh")"
+p=()
+[[ $STATUS -eq 2 ]] && log_line "shellcheck $repo --norc -e SC1000 -- ./scripts/bad.sh" || p+=("exit $STATUS, log: $(cat "$LOG")")
+check "on a violation shellcheck still gets the config's flags, and the hook exits 2" ${p[@]+"${p[@]}"}
+# Each key becomes its flag, in the order the config gives them, and a value with a space stays one argument; blanks around the = and a
+# CRLF line count for nothing. A value of a form the hook doesn't pass on keeps shellcheck from running, with a note naming the key.
+printf '# tuned\n\n  disable = SC2086,SC2034\r\nenable=require-variable-braces\nshell=bash\nsource-path=lib dir\nextended-analysis=false\n' > "$repo/scripts/.shellcheckrc"
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+log_line "ARGV <--norc> <-e> <SC2086,SC2034> <-o> <require-variable-braces> <-s> <bash> <-P> <lib dir> <--extended-analysis=false> <--> <./scripts/ok.sh>" \
+  || p+=("the flags, argument by argument: $(cat "$LOG")")
+check "each config key becomes its shellcheck flag, each value one argument" ${p[@]+"${p[@]}"}
+# A shellcheck whose --help lists no --extended-analysis (before 0.9) would stop on it with a usage error: the hook doesn't run it, and
+# the note says why; a config without that key runs on such a shellcheck as before.
+RUN_ENV=(SHELLCHECK_STUB_OLD=1)
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+p=()
+[[ $STATUS -eq 0 && "$(ran shellcheck)" == 0 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
+[[ "$(system_message "$STDOUT")" == *"shellcheck was not run: this shellcheck has no --extended-analysis, which its config scripts/.shellcheckrc sets"* ]] || p+=("note: $STDOUT")
+check "a shellcheck without --extended-analysis is not run under a config that sets it" ${p[@]+"${p[@]}"}
+printf 'disable=SC2086\n' > "$repo/scripts/.shellcheckrc"
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_line "ARGV <--norc> <-e> <SC2086> <--> <./scripts/ok.sh>" || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+check "a shellcheck without --extended-analysis still runs under a config that doesn't set it" ${p[@]+"${p[@]}"}
+# Only the extended-analysis key counts: a source-path value spelling the flag is -P's argument, so an old shellcheck still runs.
+printf 'source-path=--extended-analysis=false\n' > "$repo/scripts/.shellcheckrc"
+RUN_ENV=(SHELLCHECK_STUB_OLD=1)
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_line "ARGV <--norc> <-P> <--extended-analysis=false> <--> <./scripts/ok.sh>" \
+  || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+check "a source-path value spelling --extended-analysis doesn't count as the key" ${p[@]+"${p[@]}"}
+# The help is judged by what it prints, not by its exit status: one that lists the flag and exits 1 still runs shellcheck, a usage
+# without the flag that exits 1 gets the "has no --extended-analysis" note, and one that prints nothing gets a note saying so.
+printf 'extended-analysis=false\n' > "$repo/scripts/.shellcheckrc"
+RUN_ENV=(SHELLCHECK_STUB_HELP_EXIT=1)
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_line "ARGV <--norc> <--extended-analysis=false> <--> <./scripts/ok.sh>" \
+  || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+check "a shellcheck --help that lists --extended-analysis and exits 1 still runs shellcheck" ${p[@]+"${p[@]}"}
+RUN_ENV=(SHELLCHECK_STUB_HELP_EXIT=1 SHELLCHECK_STUB_OLD=1)
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+p=()
+[[ $STATUS -eq 0 && "$(ran shellcheck)" == 0 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
+[[ "$(system_message "$STDOUT")" == *"this shellcheck has no --extended-analysis, which its config scripts/.shellcheckrc sets"* ]] || p+=("note: $STDOUT")
+check "a shellcheck --help that prints a usage without --extended-analysis and exits 1 gets the 'has no' note" ${p[@]+"${p[@]}"}
+RUN_ENV=(SHELLCHECK_STUB_HELP_EXIT=2 SHELLCHECK_STUB_HELP_QUIET=1)
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ $STATUS -eq 0 && "$(ran shellcheck)" == 0 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
+[[ "$(system_message "$STDOUT")" == *"shellcheck was not run: its --help (exit 2) printed no usage, so the hook can't tell whether it has --extended-analysis, which its config scripts/.shellcheckrc sets"* ]] \
+  || p+=("note: $STDOUT")
+check "a shellcheck --help that prints no usage gets its own note, not 'has no --extended-analysis'" ${p[@]+"${p[@]}"}
+# Each accepted value, as its flag; a value with an = in it, or one starting with a dash after -P, stays one argument;
+# a repeated key gives its flag twice, in order; tabs around the = count for nothing.
+for case in 'shell=sh|<-s> <sh>' 'shell=dash|<-s> <dash>' 'shell=ksh|<-s> <ksh>' 'shell=busybox|<-s> <busybox>' \
+  'extended-analysis=true|<--extended-analysis=true>' 'disable=SC2086|<-e> <SC2086>' 'enable=all|<-o> <all>' 'disable=2086,SC2034|<-e> <2086,SC2034>' \
+  'source-path=a=b|<-P> <a=b>' 'source-path=--enable=all|<-P> <--enable=all>' 'source-path=-x|<-P> <-x>' \
+  'source-path=lib/*|<-P> <lib/*>' $'disable\t=\tSC1000|<-e> <SC1000>' $'disable=SC1000\ndisable=SC2000|<-e> <SC1000> <-e> <SC2000>'; do
+  printf '%s\n' "${case%%|*}" > "$repo/scripts/.shellcheckrc"
+  run_hook "$(edit_json "$repo/scripts/ok.sh")"
+  p=()
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_line "ARGV <--norc> ${case#*|} <--> <./scripts/ok.sh>" || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+  check "a config line '${case%%|*}' becomes ${case#*|}" ${p[@]+"${p[@]}"}
+done
+# An empty config is a config: shellcheck runs with --norc and no flags, and one farther up (here the root's) is not used.
+: > "$repo/scripts/.shellcheckrc"
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_line "ARGV <--norc> <--> <./scripts/ok.sh>" || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+check "an empty config gives --norc and no flags, shadowing one farther up" ${p[@]+"${p[@]}"}
+# A value of a form the hook doesn't pass on, a known key with no value, an unknown key and a line that isn't <key>=<value> each keep
+# ShellCheck from running, with a note saying which. A disable or enable value starting with a dash is refused too.
+# shellcheck disable=SC2016 # the config lines are text, written as they are
+for case in 'disable=SC2086;x|sets disable to a value' 'disable=SC2086 # why|sets disable to a value' 'enable=$(x)|sets enable to a value' \
+  'disable=--enable=all|sets disable to a value' 'enable=-x|sets enable to a value' 'disable=SC2086=x|sets disable to a value' \
+  'shell=zsh|sets shell to a value' 'shell=bash2|sets shell to a value' 'shell=xbash|sets shell to a value' \
+  'extended-analysis=yes|sets extended-analysis to a value' 'disable=|sets disable with no value' 'source-path=|sets source-path with no value' \
+  'shell=   |sets shell with no value' 'Disable=SC1|sets the key Disable,' 'severity=error|sets the key severity,' \
+  'severity=|sets the key severity,' \
+  'disable SC2086|has a line that is not <key>=<value>'; do
+  printf '%s\n' "${case%%|*}" > "$repo/scripts/.shellcheckrc"
+  run_hook "$(edit_json "$repo/scripts/ok.sh")"
+  p=()
+  [[ $STATUS -eq 0 && "$(ran shellcheck)" == 0 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
+  [[ "$(system_message "$STDOUT")" == *"its config scripts/.shellcheckrc ${case#*|}"* ]] || p+=("note: $STDOUT")
+  check "a config line '${case%%|*}' keeps shellcheck from running: '${case#*|}'" ${p[@]+"${p[@]}"}
+done
+# An unknown key is named by its first 40 bytes, each byte other than a letter, a digit or _ . + - shown as ?: a key of 40 is named
+# whole, one of 41 loses its last byte, and an escape sequence reaches the note as question marks.
+k40="$(printf 'k%.0s' {1..39})Z" k41="$(printf 'k%.0s' {1..40})Z"
+for case in "$k40|sets the key $k40, which" "$k41|sets the key ${k41:0:40}, which"; do
+  key="${case%%|*}"
+  printf '%s=1\n' "$key" > "$repo/scripts/.shellcheckrc"
+  run_hook "$(edit_json "$repo/scripts/ok.sh")"
+  p=()
+  [[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"${case#*|}"* ]] || p+=("note: $STDOUT")
+  check "an unknown key of ${#key} bytes is named by its first 40" ${p[@]+"${p[@]}"}
+done
+printf '\033]0;x\007k\303\251=1\n' > "$repo/scripts/.shellcheckrc"
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+p=()
+note="$(system_message "$STDOUT")"
+[[ "$(ran shellcheck)" == 0 && "$note" == *"sets the key ??0?x?k??, which"* ]] || p+=("note: $STDOUT")
+[[ "$note" != *$'\033'* && "$note" != *$'\007'* ]] || p+=("a control byte reached the note")
+check "an unknown key's control and non-ASCII bytes reach the note as ?" ${p[@]+"${p[@]}"}
+# A path holds what an agent chose too: a folder named with an escape sequence and a C1 byte reaches the note as ?, in every part of it.
+esc_dir="$repo/scripts/"$'\033]0;x\007\302\233'"d"
+mkdir -p "$esc_dir"
+printf 'echo ok\n' > "$esc_dir/ok.sh"
+printf 'external-sources=true\n' > "$esc_dir/.shellcheckrc"
+run_hook "$(edit_json "$esc_dir/ok.sh")"
+p=()
+note="$(system_message "$STDOUT")"
+[[ "$(ran shellcheck)" == 0 && "$note" == *"scripts/?]0;x??d/ok.sh was not fully linted"* && "$note" == *"its config scripts/?]0;x??d/.shellcheckrc names"* ]] \
+  || p+=("note: $STDOUT")
+[[ "$note" != *$'\033'* && "$note" != *$'\007'* && "$note" != *$'\302\233'* ]] || p+=("a control byte reached the note")
+check "a path's control bytes reach the note as ?" ${p[@]+"${p[@]}"}
+rm -r "$esc_dir"
+# emit_message itself, each edge of what it hides: a C0 control but a tab, DEL and C1 (\x08, \x0a, \x1f, \x7f, U+0080, U+009F), a
+# format character (a bidi override, isolate and mark, a zero-width space and joiner, a BOM), a line and paragraph separator, and a
+# byte that isn't UTF-8, in a C locale too. A tab, a space, ~, a no-break space and a letter outside ASCII stay as they are.
+# shellcheck disable=SC2016 # expanded by the inner bash
+em() { LC_ALL="${2:-C.UTF-8}" GIT_FILE_SCRIPT="$SCRIPT" bash -c 'eval "$(sed -n "/^emit_message() {/,/^}/p" "$GIT_FILE_SCRIPT")"; emit_message "$1"' _ "$1"; }
+p=()
+for case in $'\x08|?' $'\t|\t' $'\n|?' $'\x1f|?' ' | ' '~|~' $'\x7f|?' $'\xc2\x80|?' $'\xc2\x9f|?' $'\xc2\xa0|\xc2\xa0' \
+  $'\xc3\xa9|\xc3\xa9' $'\xe2\x80\xae|?' $'\xe2\x81\xa6|?' $'\xe2\x80\x8f|?' $'\xe2\x80\x8b|?' $'\xe2\x80\x8d|?' \
+  $'\xef\xbb\xbf|?' $'\xe2\x80\xa8|?' $'\xe2\x80\xa9|?' $'\xff|?' $'\xed\xa0\x80|???'; do
+  out="$(em "[${case%%|*}]")"
+  [[ "$(system_message "$out")" == "[${case#*|}]" ]] || p+=("$(printf '%q' "${case%%|*}") gave $out, want [$(printf '%q' "${case#*|}")]")
+  [[ "$out" != *'\udc'* ]] || p+=("$(printf '%q' "${case%%|*}") left a surrogate escape: $out")
+done
+out="$(em $'a\xffb' C)"
+[[ "$(system_message "$out")" == "a?b" ]] || p+=("in a C locale, a byte that isn't UTF-8 gave $out")
+check "emit_message shows each character that isn't plain text as ?, and keeps a tab and the rest" ${p[@]+"${p[@]}"}
+# In a single-byte locale python3 would read \xff as the letter ÿ: -X utf8 reads the arguments as UTF-8 there too. Tried where one is
+# installed.
+latin1="$(locale -a 2> /dev/null | grep -iE '\.(iso88591|iso-8859-1)$' | head -n 1 || true)"
+if [[ -n "$latin1" ]]; then
+  p=()
+  out="$(em $'a\xffb' "$latin1")"
+  [[ "$(system_message "$out")" == "a?b" ]] || p+=("in $latin1, a byte that isn't UTF-8 gave $out")
+  check "emit_message shows a byte that isn't UTF-8 as ? in a single-byte locale ($latin1)" ${p[@]+"${p[@]}"}
+else
+  echo "skip - no ISO-8859-1 locale is installed, so emit_message isn't tried in a single-byte locale"
+fi
+# Every systemMessage goes through emit_message: outside comments, the key appears in the hook only in emit_message's own python.
+p=()
+sm_all="$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'systemMessage')"
+sm_em="$(sed -n '/^emit_message() {/,/^}/p' "$SCRIPT" | grep -v '^[[:space:]]*#' | grep -c 'systemMessage')"
+[[ "$sm_all" == 1 && "$sm_em" == 1 ]] || p+=("systemMessage outside emit_message: $(grep -n 'systemMessage' "$SCRIPT" | grep -v '^[0-9]*:[[:space:]]*#')")
+check "the hook writes a systemMessage only through emit_message" ${p[@]+"${p[@]}"}
+# Lines up to 4096 bytes are read, one over is refused; a config over 65536 bytes is refused, and only that much and one more is read.
+for case in "4096|ok" "4097|refused"; do
+  n="${case%|*}"
+  {
+    printf 'disable='
+    printf '%*s' $((n - 8)) '' | tr ' ' 'A'
+    echo
+  } > "$repo/scripts/.shellcheckrc"
+  run_hook "$(edit_json "$repo/scripts/ok.sh")"
+  p=()
+  if [[ "${case#*|}" == ok ]]; then
+    [[ $STATUS -eq 0 && "$(ran shellcheck)" == 1 ]] || p+=("exit $STATUS, log: $(head -c 300 "$LOG")")
+  else
+    [[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"has a line longer than 4096 bytes"* ]] || p+=("note: ${STDOUT:0:300}")
+  fi
+  check "a config line of $n characters is ${case#*|}" ${p[@]+"${p[@]}"}
+done
+for case in "65536|ok" "65537|refused"; do
+  n="${case%|*}"
+  # Comment lines of 100 characters, then a last line making it n characters in all.
+  python3 -I -c 'import sys; n = int(sys.argv[1]); sys.stdout.write(("#" * 99 + "\n") * (n // 100) + "#" * (n % 100))' "$n" > "$repo/scripts/.shellcheckrc"
+  run_hook "$(edit_json "$repo/scripts/ok.sh")"
+  p=()
+  [[ "$(wc -c < "$repo/scripts/.shellcheckrc" | tr -d ' ')" == "$n" ]] || p+=("the fixture is not $n characters")
+  if [[ "${case#*|}" == ok ]]; then
+    [[ $STATUS -eq 0 && "$(ran shellcheck)" == 1 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
+  else
+    [[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"is longer than 65536 bytes"* ]] || p+=("note: $STDOUT")
+  fi
+  check "a config of $n characters is ${case#*|}" ${p[@]+"${p[@]}"}
+done
+# A config of 65536 bytes and a newline is 65537 bytes: refused, not read as the 65536 before the newline.
+python3 -I -c 'import sys; sys.stdout.write(("#" * 99 + "\n") * 655 + "#" * 36 + "\n")' > "$repo/scripts/.shellcheckrc"
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+p=()
+[[ "$(wc -c < "$repo/scripts/.shellcheckrc" | tr -d ' ')" == 65537 ]] || p+=("the fixture is not 65537 bytes")
+[[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"is longer than 65536 bytes"* ]] || p+=("note: $STDOUT")
+check "a config whose 65537th byte is a newline is refused" ${p[@]+"${p[@]}"}
+# A NUL byte is refused before the read, which would drop it: a config of 65537 bytes with ten NULs would otherwise measure 65527, and a
+# short one would be vetted without them.
+for size in long short; do
+  if [[ "$size" == long ]]; then
+    python3 -I -c 'import sys; sys.stdout.buffer.write(b"#" * 65000 + b"\0" * 10 + b"\n" + b"disable=SC1000\n" * 100)' > "$repo/scripts/.shellcheckrc"
+  else
+    printf 'disable=SC1000\n\000\n' > "$repo/scripts/.shellcheckrc"
+  fi
+  run_hook "$(edit_json "$repo/scripts/ok.sh")"
+  p=()
+  [[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"its config scripts/.shellcheckrc holds a NUL byte"* ]] || p+=("note: ${STDOUT:0:300}")
+  [[ "$STDERR" != *"null byte"* ]] || p+=("bash warned of the NUL: $STDERR")
+  check "a $size config holding a NUL byte is refused" ${p[@]+"${p[@]}"}
+done
+# A config of 20 MB is refused at once: the hook reads its first 65537 bytes, not all of it.
+python3 -I -c 'import sys; sys.stdout.write(("#" * 99 + "\n") * 200000)' > "$repo/scripts/.shellcheckrc"
+start=$SECONDS
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+p=()
+((SECONDS - start < 10)) || p+=("took $((SECONDS - start)) s")
+[[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"is longer than 65536 bytes"* ]] || p+=("note: ${STDOUT:0:300}")
+check "a config of 20 MB is refused without being read whole" ${p[@]+"${p[@]}"}
+# A farther config with a value the hook doesn't pass on is refused though the nearer one is fine: every config on the path is vetted.
+printf 'disable=SC1000\n' > "$repo/scripts/.shellcheckrc"
+printf 'shell=zsh\n' > "$repo/.shellcheckrc"
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+p=()
+[[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"its config .shellcheckrc sets shell to a value"* ]] || p+=("log: $(cat "$LOG"), note: $STDOUT")
+check "a farther config with a value the hook doesn't pass on is refused, though a nearer one is fine" ${p[@]+"${p[@]}"}
+printf 'disable=SC2000\n' > "$repo/.shellcheckrc"
+printf 'disable=SC1000\n' > "$repo/scripts/.shellcheckrc"
+# A config farther up that the hook won't hand over keeps shellcheck from running, though a nearer one is fine.
+printf 'external-sources=true\n' > "$repo/.shellcheckrc"
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+p=()
+[[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"shellcheck was not run: its config .shellcheckrc names external-sources"* ]] || p+=("log: $(cat "$LOG"), note: $STDOUT")
+check "a refused config farther up the path keeps shellcheck from running, though a nearer one is fine" ${p[@]+"${p[@]}"}
+printf 'disable=SC2000\n' > "$repo/.shellcheckrc"
+# A byte that isn't valid text before external-sources doesn't hide it: the check reads the config in C. Tried in a UTF-8 locale where
+# one is installed (BSD tr fails on such a byte there).
+printf '# \xe9 external-sources=true\n' > "$repo/scripts/.shellcheckrc"
+RUN_ENV=(LC_ALL="${utf8_hook:-C}")
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"its config scripts/.shellcheckrc names external-sources or check-sourced"* ]] || p+=("log: $(cat "$LOG"), note: $STDOUT")
+check "a byte that isn't valid text before external-sources doesn't hide it" ${p[@]+"${p[@]}"}
+rm "$repo/scripts/.shellcheckrc" "$repo/.shellcheckrc"
+# The keys handed over: blanks, comments and disable, enable, source-path, shell and extended-analysis, a CRLF line among them. Any other
+# key, however spelled (a later shellcheck's, a typo, a BOM before it), keeps shellcheck from running.
+printf '# tuned\n\ndisable=SC2086\r\n  enable = require-variable-braces\nsource-path=SCRIPTDIR\nshell=bash\nextended-analysis=false\n' > "$repo/.shellcheckrc"
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" && "$(ran shellcheck)" == 1 ]] || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+check "a config of blanks, comments and the five known keys is handed to shellcheck" ${p[@]+"${p[@]}"}
+for case in 'severity=error|sets the key severity, which this hook' 'external=true|sets the key external, which this hook' \
+  'disable=SC2086\nexternal_sources=true|sets the key external_sources, which this hook' \
+  '\xef\xbb\xbfdisable=SC2086|which this hook doesn'"'"'t hand to shellcheck (it takes disable, enable, source-path, shell and extended-analysis)' \
+  'disable|has a line that is not <key>=<value>'; do
+  text="${case%%|*}"
+  # shellcheck disable=SC2059 # the case is the escaped file content, written as printf reads it
+  printf "$text\n" > "$repo/.shellcheckrc"
+  run_hook "$(edit_json "$repo/scripts/ok.sh")"
+  p=()
+  [[ $STATUS -eq 0 && "$(ran shellcheck)" == 0 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
+  [[ "$(system_message "$STDOUT")" == *"shellcheck was not run: its config .shellcheckrc "*"${case#*|}"* ]] || p+=("note: $STDOUT")
+  check "a config holding '$text' keeps shellcheck from running" ${p[@]+"${p[@]}"}
+done
+rm "$repo/.shellcheckrc"
+# A config above the repository root is never read: the walk stops at the root, and shellcheck gets --norc, so it doesn't find that one itself.
+printf 'external-sources=true\n' > "$WORK/.shellcheckrc"
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] && sh_both scripts/ok.sh || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+check "a config above the repository root is not read, and shellcheck is run with --norc" ${p[@]+"${p[@]}"}
+rm "$WORK/.shellcheckrc"
+# Two notes (a refused shellcheck config and an old shfmt) are joined with "; ".
+printf 'external-sources=true\n' > "$repo/.shellcheckrc"
+RUN_ENV=(SHFMT_STUB_VERSION=v3.13.0)
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ "$(system_message "$STDOUT")" == "lint-edited-file.sh: scripts/ok.sh was not fully linted: shellcheck was not run: its config .shellcheckrc names external-sources or check-sourced, which could show this hook's output the lines of other files; shfmt 'v3.13.0' is not v3.14 or a later v3 release, whose format the gate checks (the gate still checks it before the push)." ]] \
+  || p+=("note: $STDOUT")
+check "two notes are joined with '; '" ${p[@]+"${p[@]}"}
+# A violation wins: shellcheck not run and a shfmt finding give exit 2 with the report alone, and no note on stdout.
+run_hook "$(edit_json "$repo/scripts/bad.sh")"
+p=()
+[[ $STATUS -eq 2 && -z "$STDOUT" && "$STDERR" == *"shfmt (exit 1):"* && "$(ran shellcheck)" == 0 ]] || p+=("exit $STATUS, stdout: $STDOUT, log: $(cat "$LOG")")
+check "a violation with a note exits 2 with the report alone" ${p[@]+"${p[@]}"}
+rm "$repo/.shellcheckrc"
+printf 'disable=SC2086\nsource-path=SCRIPTDIR\n' > "$repo/.shellcheckrc"
+RUN_ENV=(SHELLCHECK_OPTS=--check-sourced)
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" && "$(ran shellcheck)" == 1 ]] && log_line "shellcheck $repo --norc -e SC2086 -P SCRIPTDIR -- ./scripts/ok.sh" \
+  || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+! log_has "SHELLCHECK_OPTS=" || p+=("SHELLCHECK_OPTS reached shellcheck: $(cat "$LOG")")
+check "a shellcheck config that only tunes the checks is used, and SHELLCHECK_OPTS never reaches shellcheck" ${p[@]+"${p[@]}"}
+rm "$repo/.shellcheckrc"
+
 # --- Not linted -----------------------------------------------------------
-printf 'BAD\n' > "$repo/script.sh"
-run_hook "$(edit_json "$repo/script.sh")"
+printf 'BAD\n' > "$repo/script.rb"
+run_hook "$(edit_json "$repo/script.rb")"
 p=()
 [[ $STATUS -eq 0 ]] || p+=("exit $STATUS, want 0")
-log_empty || p+=("a .sh file was linted: $(cat "$LOG")")
+log_empty || p+=("a .rb file was linted: $(cat "$LOG")")
 [[ -z "$OUTPUT" ]] || p+=("output: $OUTPUT")
-check "a file that is neither Markdown nor YAML is left alone" ${p[@]+"${p[@]}"}
+check "a file that is not Markdown, YAML, shell or Python is left alone" ${p[@]+"${p[@]}"}
 
 run_hook "$(edit_json "$repo/docs/missing.md")"
 p=()
@@ -1077,8 +1848,8 @@ mv "$WORK/vet-wt/bin" "$vet/bin"
 wt_git="$(cat "$WORK/vet-wt/.git")"
 printf 'gitdir: ../vetted/.git/worktrees/vet-wt\n' > "$WORK/vet-wt/.git"
 p=()
-[[ "$vet" == "$WORK/vetted" && "$(git -C "$WORK/vet-wt" rev-parse --show-toplevel 2> /dev/null)" == "$WORK/vet-wt" ]] ||
-  p+=("git doesn't read the relative gitdir, so this case proves nothing")
+[[ "$vet" == "$WORK/vetted" && "$(git -C "$WORK/vet-wt" rev-parse --show-toplevel 2> /dev/null)" == "$WORK/vet-wt" ]] \
+  || p+=("git doesn't read the relative gitdir, so this case proves nothing")
 # Run from / so a relative gitdir left unresolved can't happen to name the right folder from the working directory.
 RUN_CWD=/ run_hook "$(edit_json "$WORK/vet-wt/docs/deep/ok.md")" "$vet/bin:$STUBS:$TOOLS" "$WORK/vet-wt"
 [[ $STATUS -eq 0 && "$(ran markdownlint-cli2)" == 1 ]] || p+=("exit $STATUS, ran $(ran markdownlint-cli2)")
@@ -1159,7 +1930,7 @@ rgf_case() {
   local got
   printf '%b' "$3" > "$rgf/f"
   # shellcheck disable=SC2016 # expanded by the inner bash
-  got="$(GIT_FILE_SCRIPT="$SCRIPT" bash -c 'eval "$(sed -n "/^GIT_FILE_MAX=/p; /^read_git_file() {/,/^}/p" "$GIT_FILE_SCRIPT")"
+  got="$(GIT_FILE_SCRIPT="$SCRIPT" bash -c 'eval "$(sed -n "/^GIT_FILE_MAX=/p; /^plain_path() {/,/^}/p; /^read_git_file() {/,/^}/p" "$GIT_FILE_SCRIPT")"
     if read_git_file "$1" out "${2:-}"; then printf "%s" "$out" | od -An -c | tr -s " "; else echo "<1>"; fi' _ "$rgf/f" "${4:-}")"
   p=()
   [[ "$got" == "$2" ]] || p+=("got '$got', want '$2'")
@@ -1174,14 +1945,30 @@ rgf_case "an empty file holds nothing" "<1>" ''
 max="$(sed -n 's/^GIT_FILE_MAX=//p' "$SCRIPT")"
 head -c "$max" /dev/zero | tr '\0' x > "$rgf/f"
 # shellcheck disable=SC2016 # expanded by the inner bash
-got="$(GIT_FILE_SCRIPT="$SCRIPT" bash -c 'eval "$(sed -n "/^GIT_FILE_MAX=/p; /^read_git_file() {/,/^}/p" "$GIT_FILE_SCRIPT")"; read_git_file "$1" out && echo "${#out}"' _ "$rgf/f" 2>&1)"
+got="$(GIT_FILE_SCRIPT="$SCRIPT" bash -c 'eval "$(sed -n "/^GIT_FILE_MAX=/p; /^plain_path() {/,/^}/p; /^read_git_file() {/,/^}/p" "$GIT_FILE_SCRIPT")"; read_git_file "$1" out && echo "${#out}"' _ "$rgf/f" 2>&1)"
 p=()
 [[ "$got" == "$max" ]] || p+=("a file of $max characters: '$got'")
 printf x >> "$rgf/f"
 # shellcheck disable=SC2016 # expanded by the inner bash
-got="$(GIT_FILE_SCRIPT="$SCRIPT" bash -c 'eval "$(sed -n "/^GIT_FILE_MAX=/p; /^read_git_file() {/,/^}/p" "$GIT_FILE_SCRIPT")"; read_git_file "$1" out; echo "reached"' _ "$rgf/f" 2>&1)"
+got="$(GIT_FILE_SCRIPT="$SCRIPT" bash -c 'eval "$(sed -n "/^GIT_FILE_MAX=/p; /^plain_path() {/,/^}/p; /^read_git_file() {/,/^}/p" "$GIT_FILE_SCRIPT")"; read_git_file "$1" out; echo "reached"' _ "$rgf/f" 2>&1)"
 [[ "$got" == *"is longer than any git file that names a folder (over $max characters)"* && "$got" != *reached* ]] || p+=("a file of $((max + 1)) characters: '$got'")
 check "read_git_file reads a file of GIT_FILE_MAX characters ($max) and stops the hook at one more" ${p[@]+"${p[@]}"}
+# The exit-1 message names the file with every byte but printable ASCII as ?: a folder an agent named with an escape sequence, a
+# C1 byte or a bidi override reaches the person's terminal as plain text.
+esc_rgf="$rgf/"$'a\033]0;x\007\302\233\342\200\256b'
+mkdir -p "$esc_rgf"
+head -c $((max + 1)) /dev/zero | tr '\0' x > "$esc_rgf/f"
+# One ? per byte in a UTF-8 locale too, where U+009B and the bidi override would otherwise be one ? each.
+rgf_utf8="$(locale -a 2> /dev/null | grep -ixE '(en_US|C)\.utf-?8' | head -n 1 || true)"
+[[ -n "$rgf_utf8" ]] || echo "skip - no C.UTF-8 or en_US.UTF-8 locale here, so plain_path is tried in C only"
+for loc in ${rgf_utf8:+"$rgf_utf8"} C; do
+  # shellcheck disable=SC2016 # expanded by the inner bash
+  got="$(LC_ALL="$loc" GIT_FILE_SCRIPT="$SCRIPT" bash -c 'eval "$(sed -n "/^GIT_FILE_MAX=/p; /^plain_path() {/,/^}/p; /^read_git_file() {/,/^}/p" "$GIT_FILE_SCRIPT")"; read_git_file "$1" out' _ "$esc_rgf/f" 2>&1)"
+  p=()
+  [[ "$got" == *"$rgf/a?]0;x??????b/f is longer than any git file"* ]] || p+=("got: $got")
+  [[ "$got" != *$'\033'* && "$got" != *$'\007'* ]] || p+=("a control byte reached the message")
+  check "[$loc] read_git_file's exit-1 message shows a path's bytes outside printable ASCII as ?" ${p[@]+"${p[@]}"}
+done
 rm -r "$rgf"
 rm -r "${vet:?}/bin"
 # A project inside a checkout whose .git file names a gitdir that doesn't exist: the checkout itself is still dropped, though
@@ -1326,6 +2113,17 @@ p=()
 [[ "$msg" == *"yamllint actionlint zizmor not installed"* ]] || p+=("the note doesn't name all three: $STDOUT")
 check "without the YAML linters, the note names each missing one" ${p[@]+"${p[@]}"}
 
+run_hook "$(edit_json "$repo/scripts/bad.sh")" "$NOLINT"
+msg="$(system_message "$STDOUT")"
+p=()
+[[ $STATUS -eq 0 && -z "$STDERR" ]] || p+=("exit $STATUS, stderr: $STDERR")
+[[ "$msg" == "lint-edited-file.sh: scripts/bad.sh was not fully linted: shellcheck shfmt not installed (the gate still checks it before the push)." ]] || p+=("note: $STDOUT")
+check "without the shell linters, the note names both" ${p[@]+"${p[@]}"}
+run_hook "$(edit_json "$repo/scripts/tool")" "$NOLINT"
+p=()
+[[ "$(system_message "$STDOUT")" == *"was not fully linted: shellcheck not installed (the gate"* ]] || p+=("note: $STDOUT")
+check "without shellcheck, an extensionless script's note names shellcheck alone" ${p[@]+"${p[@]}"}
+
 # Only zizmor missing.
 NOZIZ="$WORK/noziz"
 link_tools "$NOZIZ"
@@ -1363,10 +2161,15 @@ for entry in "$repo/bin" bin; do
 done
 rm -r "${repo:?}/bin"
 
-run_hook "$(edit_json "$repo/script.sh")" "$STUBS:$NOGIT"
+run_hook "$(edit_json "$repo/script.rb")" "$STUBS:$NOGIT"
 p=()
-[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT: a file that is not Markdown or YAML needs no git")
-check "without git, a file that is neither Markdown nor YAML still exits 0 silently" ${p[@]+"${p[@]}"}
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT: a file that is not Markdown, YAML, shell or Python needs no git")
+check "without git, a file that is not Markdown, YAML, shell or Python still exits 0 silently" ${p[@]+"${p[@]}"}
+run_hook "$(edit_json "$repo/scripts/bad.sh")" "$STUBS:$NOGIT"
+p=()
+[[ $STATUS -eq 1 && "$STDERR" == *"git not found"* && -z "$STDOUT" ]] || p+=("exit $STATUS, stderr: $STDERR")
+log_empty || p+=("a linter ran without git: $(cat "$LOG")")
+check "without git, a shell file makes the hook exit 1 with a message" ${p[@]+"${p[@]}"}
 
 # A git that cannot list worktrees with -z (before 2.36): the hook says so and does not lint, instead of silently skipping.
 OLDGIT="$WORK/oldgit"
@@ -1441,6 +2244,274 @@ EOF
   check "markdownlint-cli2 itself: a name with * is linted, not matched as a glob" ${p[@]+"${p[@]}"}
 else
   echo "skip - markdownlint-cli2 is not installed (or does not run), so its own run is not tested"
+fi
+
+# --- Python: ruff ------------------------------------------------------------
+# A *.py is linted by ruff with the gate's flags, --isolated so it reads no config, and only when ruff is a 0.17 release.
+mkdir -p "$repo/py" "$repo/py/-x"
+printf 'x = 1\n' > "$repo/py/ok.py"
+printf 'BAD\n' > "$repo/py/bad.py"
+printf 'CRASH\n' > "$repo/py/crash.py"
+printf 'BAD\n' > "$repo/py/UPPER.PY"
+printf 'BAD\n' > "$repo/py/stub.pyi"
+printf 'BAD\n' > "$repo/py/ok.pyc"
+printf 'BAD\n' > "$repo/py/-x/-dash.py"
+py_args="check --isolated --no-cache --select F,B --target-version py312 --"
+run_hook "$(edit_json "$repo/py/ok.py")"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+log_line "ruff $repo $py_args ./py/ok.py" && [[ "$(ran ruff)" == 1 ]] || p+=("ruff was not run once with the gate's flags from the root: $(cat "$LOG")")
+[[ "$(wc -l < "$LOG")" -eq 1 ]] || p+=("another linter ran: $(cat "$LOG")")
+check "a clean Python file is linted by ruff alone, with the gate's flags, from the repository root, and exits 0" ${p[@]+"${p[@]}"}
+run_hook "$(edit_json "$repo/py/bad.py")"
+p=()
+[[ $STATUS -eq 2 && -z "$STDOUT" && "$STDERR" == *"Lint found problems in py/bad.py."*"ruff (exit 1):"*"a violation"* ]] || p+=("exit $STATUS, stderr: $STDERR")
+[[ "$STDERR" != *"run shfmt -w"* ]] || p+=("the shfmt hint was given for a Python file")
+check "a ruff finding exits 2 with ruff's report for the agent" ${p[@]+"${p[@]}"}
+run_hook "$(edit_json "$repo/py/crash.py")"
+p=()
+[[ $STATUS -eq 2 && "$STDERR" == *"ruff (exit 3):"*"ruff crashed"* ]] || p+=("exit $STATUS, stderr: $STDERR")
+check "a ruff that crashes counts as a violation, not as clean" ${p[@]+"${p[@]}"}
+run_hook "$(edit_json "$repo/py/-x/-dash.py")"
+p=()
+[[ $STATUS -eq 2 ]] && log_line "ruff $repo $py_args ./py/-x/-dash.py" || p+=("exit $STATUS, log: $(cat "$LOG")")
+check "a Python file whose folder and name start with a dash reaches ruff after --, as ./<path>" ${p[@]+"${p[@]}"}
+for other in UPPER.PY stub.pyi ok.pyc; do
+  run_hook "$(edit_json "$repo/py/$other")"
+  p=()
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_empty || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+  check "$other is not linted: the gate takes *.py alone, case and all" ${p[@]+"${p[@]}"}
+done
+# Every RUFF_ variable is cleared: RUFF_OUTPUT_FILE would send the report to a file, and the agent would see a clean edit.
+RUN_ENV=(RUFF_OUTPUT_FILE="$WORK/ruff-out" RUFF_OUTPUT_FORMAT=json RUFF_CACHE_DIR="$repo/.cache" RUFF_NO_CACHE=false RUFF_ANYTHING=1)
+run_hook "$(edit_json "$repo/py/bad.py")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ $STATUS -eq 2 ]] || p+=("exit $STATUS, want 2")
+! log_has "ENV RUFF_" || p+=("a RUFF_ variable reached ruff: $(grep '^ENV' "$LOG")")
+check "no RUFF_ variable the session has reaches ruff" ${p[@]+"${p[@]}"}
+# The stub's own RUFF_ logging, so the case above can fail.
+: > "$WORK/ruff-probe.log"
+STUB_LOG="$WORK/ruff-probe.log" STUB_PASS=ruff RUFF_OUTPUT_FILE=x "$STUBS/ruff" check ok.py
+p=()
+grep -qx 'ENV RUFF_OUTPUT_FILE' "$WORK/ruff-probe.log" || p+=("the stub logged no RUFF_ variable: $(cat "$WORK/ruff-probe.log")")
+rm "$WORK/ruff-probe.log"
+check "the ruff stub logs each RUFF_ variable it is given" ${p[@]+"${p[@]}"}
+for version in "ruff 0.17.0" "ruff 0.17.6" "ruff 0.17.10"; do
+  RUN_ENV=(STUB_RUFF_VERSION="$version")
+  run_hook "$(edit_json "$repo/py/ok.py")"
+  RUN_ENV=(RUN_ENV_UNUSED=1)
+  p=()
+  [[ $STATUS -eq 0 && -z "$OUTPUT" && "$(ran ruff)" == 1 ]] || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+  check "$version is run" ${p[@]+"${p[@]}"}
+done
+for version in "ruff 0.16.9" "ruff 0.18.0" "ruff 1.17.0" "ruff 0.17" "0.17.6" "ruff 0.17.6 extra" "xruff 0.17.6" "ruff 0.170.1" "ruff 0.17.6
+ruff 0.17.6"; do
+  RUN_ENV=(STUB_RUFF_VERSION="$version")
+  run_hook "$(edit_json "$repo/py/bad.py")"
+  RUN_ENV=(RUN_ENV_UNUSED=1)
+  p=()
+  [[ $STATUS -eq 0 && -z "$STDERR" && "$(ran ruff)" == 0 ]] || p+=("exit $STATUS, stderr: $STDERR, log: $(cat "$LOG")")
+  [[ "$(system_message "$STDOUT")" == "lint-edited-file.sh: py/bad.py was not fully linted: ruff '${version//$'\n'/?}' is not a 0.17 release, the one the gate checks with (the gate still checks it before the push)." ]] \
+    || p+=("note: $STDOUT")
+  check "ruff '${version//$'\n'/\\n}' is noted and not run" ${p[@]+"${p[@]}"}
+done
+for case in "|0" "ruff 0.17.6|1" "|1"; do
+  RUN_ENV=(STUB_RUFF_VERSION="${case%|*}" STUB_RUFF_VERSION_EXIT="${case#*|}")
+  run_hook "$(edit_json "$repo/py/bad.py")"
+  RUN_ENV=(RUN_ENV_UNUSED=1)
+  p=()
+  [[ $STATUS -eq 0 && -z "$STDERR" && "$(ran ruff)" == 0 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
+  [[ "$(system_message "$STDOUT")" == "lint-edited-file.sh: py/bad.py was not fully linted: ruff --version failed or printed nothing, so its release is unknown and ruff was not run (the gate still checks it before the push)." ]] \
+    || p+=("note: $STDOUT")
+  check "a ruff --version printing '${case%|*}' with exit ${case#*|} is noted as unknown, and ruff is not run" ${p[@]+"${p[@]}"}
+done
+RUN_ENV=(STUB_RUFF_VERSION=$'ruff 0.1\033]0;x\007\303\251'"$(printf '%040d' 0)")
+run_hook "$(edit_json "$repo/py/ok.py")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ "$(system_message "$STDOUT")" == *"ruff 'ruff 0.1??0?x???$(printf '%024d' 0)' is not"* ]] || p+=("note: $STDOUT")
+[[ "$STDOUT" != *$'\033'* ]] || p+=("an escape byte reached the note")
+check "a ruff release is noted with only plain bytes, cut at 40" ${p[@]+"${p[@]}"}
+run_hook "$(edit_json "$repo/py/bad.py")" "$TOOLS"
+p=()
+[[ $STATUS -eq 0 && "$(system_message "$STDOUT")" == "lint-edited-file.sh: py/bad.py was not fully linted: ruff not installed (the gate still checks it before the push)." ]] || p+=("exit $STATUS, note: $STDOUT")
+check "a missing ruff is noted, and the file isn't linted" ${p[@]+"${p[@]}"}
+attacker_stub "$repo/bin/ruff"
+run_hook "$(edit_json "$repo/py/bad.py")" "$repo/bin:$TOOLS"
+p=()
+[[ $STATUS -eq 0 ]] && ! log_has "attacker " || p+=("exit $STATUS, or an in-repo ruff ran: $(cat "$LOG")")
+[[ "$(system_message "$STDOUT")" == *"was not fully linted: ruff $found_inside"* ]] || p+=("note: $STDOUT")
+check "a ruff inside the repo is refused" ${p[@]+"${p[@]}"}
+rm -r "${repo:?}/bin"
+
+# --- The real shellcheck and shfmt, when installed ---------------------------
+# The repo's own .editorconfig gives the style, as in every repo the Template is Applied to.
+# shellcheck disable=SC2016 # the scripts' own text, and shfmt's diff of it, written as they are
+if PATH="$REAL_PATH" shellcheck --version > /dev/null 2>&1 \
+  && [[ "$(PATH="$REAL_PATH" shfmt --version 2> /dev/null)" =~ ^v3\.(1[4-9]|[2-9][0-9]|[1-9][0-9]{2,})\.[0-9]+$ ]] && [[ -f "$ROOT/.editorconfig" ]]; then
+  realsh="$(new_repo realsh)"
+  cp "$ROOT/.editorconfig" "$realsh/.editorconfig"
+  mkdir -p "$realsh/scripts" "$realsh/.github/hooks"
+  printf '#!/usr/bin/env bash\nif true; then\n  echo "$1"\nfi\n' > "$realsh/scripts/good.sh"
+  printf '#!/usr/bin/env bash\nif true; then\n    echo "$1"\nfi\n' > "$realsh/scripts/indented.sh"
+  printf '#!/usr/bin/env bash\necho $1\n' > "$realsh/scripts/unquoted.sh"
+  printf '#!/usr/bin/env bash\nif true; then\n    echo "$1"\nfi\n' > "$realsh/.github/hooks/pre-push"
+  run_hook "$(edit_json "$realsh/scripts/good.sh")" "$REAL_PATH" "$realsh"
+  p=()
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+  check "shellcheck and shfmt themselves: a clean script exits 0" ${p[@]+"${p[@]}"}
+  run_hook "$(edit_json "$realsh/scripts/indented.sh")" "$REAL_PATH" "$realsh"
+  p=()
+  [[ $STATUS -eq 2 && "$STDERR" == *"shfmt (exit 1):"* && "$STDERR" == *'+  echo "$1"'* && "$STDERR" != *"shellcheck (exit"* ]] || p+=("exit $STATUS, stderr: $STDERR")
+  check "shfmt itself: a 4-space indent is a diff to the .editorconfig style" ${p[@]+"${p[@]}"}
+  run_hook "$(edit_json "$realsh/scripts/unquoted.sh")" "$REAL_PATH" "$realsh"
+  p=()
+  [[ $STATUS -eq 2 && "$STDERR" == *SC2086* && "$STDERR" != *"shfmt (exit"* ]] || p+=("exit $STATUS, stderr: $STDERR")
+  check "shellcheck itself: an unquoted \$1 is SC2086" ${p[@]+"${p[@]}"}
+  run_hook "$(edit_json "$realsh/.github/hooks/pre-push")" "$REAL_PATH" "$realsh"
+  p=()
+  [[ $STATUS -eq 2 && "$STDERR" == *'+  echo "$1"'* ]] || p+=("exit $STATUS, stderr: $STDERR")
+  check "shfmt itself: a git hook takes the .editorconfig style of its own section" ${p[@]+"${p[@]}"}
+  # A file a source line names, with a finding of its own: shellcheck -a (from SHELLCHECK_OPTS) would print its lines. Neither that nor a
+  # config naming external-sources lets them reach the hook's output.
+  printf 'SENTINEL_LINE=1\necho $SENTINEL_LINE`x`\n' > "$WORK/sourced-secret"
+  printf '#!/usr/bin/env bash\n# shellcheck source=/dev/null\nsource "%s"\necho "$1"\n' "$WORK/sourced-secret" > "$realsh/scripts/sources.sh"
+  printf '#!/usr/bin/env bash\nsource "%s"\necho $1\n' "$WORK/sourced-secret" > "$realsh/scripts/sources-bad.sh"
+  RUN_ENV=(SHELLCHECK_OPTS="-x -a")
+  for edited in sources.sh sources-bad.sh; do
+    run_hook "$(edit_json "$realsh/scripts/$edited")" "$REAL_PATH" "$realsh"
+    p=()
+    [[ "$OUTPUT" != *SENTINEL_LINE* ]] || p+=("a sourced file's line reached the output: $OUTPUT")
+    check "shellcheck itself: SHELLCHECK_OPTS=-x -a never quotes a sourced file ($edited)" ${p[@]+"${p[@]}"}
+  done
+  RUN_ENV=(RUN_ENV_UNUSED=1)
+  p=()
+  [[ $STATUS -eq 2 && "$STDERR" == *SC2086* ]] || p+=("exit $STATUS, stderr: $STDERR")
+  check "shellcheck itself: the script's own finding still comes back with SHELLCHECK_OPTS set" ${p[@]+"${p[@]}"}
+  printf 'external-sources=true\n' > "$realsh/.shellcheckrc"
+  run_hook "$(edit_json "$realsh/scripts/sources-bad.sh")" "$REAL_PATH" "$realsh"
+  p=()
+  [[ $STATUS -eq 0 && "$OUTPUT" != *SENTINEL_LINE* && "$STDERR" != *SC2086* ]] || p+=("exit $STATUS, shellcheck ran under external-sources: $OUTPUT")
+  [[ "$(system_message "$STDOUT")" == *"shellcheck was not run: its config .shellcheckrc names external-sources or check-sourced"* ]] || p+=("note: $STDOUT")
+  check "shellcheck itself: a config naming external-sources keeps it from running" ${p[@]+"${p[@]}"}
+  rm "$realsh/.shellcheckrc"
+  # One above the repository root is never read: shellcheck gets --norc, so its disable=SC2086 doesn't quiet the unquoted $1 (and HOME is
+  # $WORK here, so the same file stands for the person's own config too).
+  printf 'disable=SC2086\n' > "$WORK/.shellcheckrc"
+  run_hook "$(edit_json "$realsh/scripts/unquoted.sh")" "$REAL_PATH" "$realsh"
+  p=()
+  [[ $STATUS -eq 2 && "$STDERR" == *SC2086* ]] || p+=("exit $STATUS, output: $OUTPUT")
+  check "shellcheck itself: a config above the repository root is not read" ${p[@]+"${p[@]}"}
+  # And with a config in the repository, the repository's config, as flags, is the only one read: the one above (enable=all, which would add findings on
+  # the unquoted $1) is not.
+  printf 'enable=all\n' > "$WORK/.shellcheckrc"
+  printf 'disable=SC2086\n' > "$realsh/.shellcheckrc"
+  run_hook "$(edit_json "$realsh/scripts/unquoted.sh")" "$REAL_PATH" "$realsh"
+  p=()
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+  check "shellcheck itself: with a repository config, only its flags apply" ${p[@]+"${p[@]}"}
+  rm "$WORK/.shellcheckrc" "$realsh/.shellcheckrc"
+  # A config in the repository that only tunes the checks still applies, through its flags: disable=SC2086 quiets the unquoted $1.
+  printf 'disable=SC2086\n' > "$realsh/.shellcheckrc"
+  run_hook "$(edit_json "$realsh/scripts/unquoted.sh")" "$REAL_PATH" "$realsh"
+  p=()
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+  check "shellcheck itself: the repository's config reaches shellcheck as flags" ${p[@]+"${p[@]}"}
+  rm "$realsh/.shellcheckrc"
+  # Every key at once is a set of flags the real shellcheck takes: no usage error (exit 3 or 4, which the hook would report). A shellcheck
+  # before 0.9 has no --extended-analysis: there the hook runs nothing under that key and says so.
+  printf 'disable=SC2086\nenable=require-variable-braces\nshell=bash\nsource-path=SCRIPTDIR\nextended-analysis=false\n' > "$realsh/.shellcheckrc"
+  run_hook "$(edit_json "$realsh/scripts/unquoted.sh")" "$REAL_PATH" "$realsh"
+  p=()
+  if [[ "$(PATH="$REAL_PATH" shellcheck --help 2>&1)" == *--extended-analysis=* ]]; then
+    [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+    check "shellcheck itself: the five keys' flags together are taken" ${p[@]+"${p[@]}"}
+  else
+    [[ $STATUS -eq 0 && "$(system_message "$STDOUT")" == *"this shellcheck has no --extended-analysis"* ]] || p+=("exit $STATUS, output: $OUTPUT")
+    check "shellcheck itself, a release before 0.9: a config setting extended-analysis is not handed to it" ${p[@]+"${p[@]}"}
+  fi
+  # enable reaches it as -o: require-variable-braces flags a named variable (SC2250) only with the config.
+  printf '#!/usr/bin/env bash\nx=1\necho "$x"\n' > "$realsh/scripts/braces.sh"
+  printf 'enable=require-variable-braces\n' > "$realsh/.shellcheckrc"
+  run_hook "$(edit_json "$realsh/scripts/braces.sh")" "$REAL_PATH" "$realsh"
+  p=()
+  [[ $STATUS -eq 2 && "$STDERR" == *SC2250* ]] || p+=("exit $STATUS, output: $OUTPUT")
+  check "shellcheck itself: enable=require-variable-braces reaches it as -o" ${p[@]+"${p[@]}"}
+  # shell reaches it as -s: a [[ in a #!/bin/sh script is SC3010 unless the config says shell=bash.
+  printf '#!/bin/sh\nif [[ -n "$1" ]]; then echo "$1"; fi\n' > "$realsh/scripts/bashism.sh"
+  rm "$realsh/.shellcheckrc"
+  run_hook "$(edit_json "$realsh/scripts/bashism.sh")" "$REAL_PATH" "$realsh"
+  p=()
+  [[ $STATUS -eq 2 && "$STDERR" == *SC3010* ]] || p+=("without the config: exit $STATUS, output: $OUTPUT")
+  printf 'shell=bash\n' > "$realsh/.shellcheckrc"
+  run_hook "$(edit_json "$realsh/scripts/bashism.sh")" "$REAL_PATH" "$realsh"
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("with shell=bash: exit $STATUS, output: $OUTPUT")
+  check "shellcheck itself: shell=bash reaches it as -s" ${p[@]+"${p[@]}"}
+  # source-path reaches it as -P, and still follows no source line without -x: a sourced file's own finding never reaches the output.
+  printf 'SENTINEL_LIB=1\necho $SENTINEL_LIB\n' > "$realsh/scripts/lib.sh"
+  printf '#!/usr/bin/env bash\n# shellcheck source=lib.sh\nsource lib.sh\necho "$1"\n' > "$realsh/scripts/sources-lib.sh"
+  printf 'source-path=SCRIPTDIR\n' > "$realsh/.shellcheckrc"
+  run_hook "$(edit_json "$realsh/scripts/sources-lib.sh")" "$REAL_PATH" "$realsh"
+  p=()
+  [[ "$OUTPUT" != *SENTINEL_LIB* && "$STDERR" == *SC1091* ]] || p+=("exit $STATUS, output: $OUTPUT")
+  check "shellcheck itself: source-path with a source= directive opens no sourced file" ${p[@]+"${p[@]}"}
+  # A source-path value spelling -x is -P's own argument to the real shellcheck too, so it turns external sources on no more than
+  # SCRIPTDIR does: the sourced file is still not followed. (A value naming --external-sources or --check-sourced is refused by name.)
+  for value in -x -xa; do
+    printf 'source-path=%s\n' "$value" > "$realsh/.shellcheckrc"
+    run_hook "$(edit_json "$realsh/scripts/sources-lib.sh")" "$REAL_PATH" "$realsh"
+    p=()
+    [[ "$OUTPUT" != *SENTINEL_LIB* && "$STDERR" == *SC1091* ]] || p+=("exit $STATUS, output: $OUTPUT")
+    check "shellcheck itself: source-path=$value is -P's value and follows no source line" ${p[@]+"${p[@]}"}
+  done
+  rm "$realsh/.shellcheckrc" "$realsh/scripts/lib.sh" "$realsh/scripts/sources-lib.sh" "$realsh/scripts/braces.sh" "$realsh/scripts/bashism.sh"
+else
+  echo "skip - shellcheck, or shfmt v3.14 or a later v3, is not installed (or there is no .editorconfig), so their own runs are not tested"
+fi
+
+# The hook feeds no data through a here-string or a heredoc: bash writes those to a temp file (always before 5.1), which fails where no
+# temporary folder can be written, so the config would read as empty and shellcheck would run without its flags.
+p=()
+heredoc_re='<<<|<<-?[[:space:]]*["'"'"'\\]?[A-Za-z_]'
+! grep -nE -- "$heredoc_re" "$SCRIPT" || p+=("the hook uses a here-string or heredoc")
+# The pattern itself: each form a here-string or heredoc takes matches, and a shift by a number doesn't. A shift by a variable ($((1<<n)))
+# matches too, so the hook keeps to numbers there.
+# shellcheck disable=SC2016 # the forms are code text, written as they are
+for form in 'cat <<EOF' "cat <<-'EOF'" 'cat <<"EOF"' 'cat <<\EOF' 'cat << EOF' 'read -r x <<< "$y"'; do
+  grep -qE -- "$heredoc_re" <<< "$form" || p+=("the pattern misses: $form")
+done
+# shellcheck disable=SC2016 # code text, written as it is
+! grep -qE -- "$heredoc_re" <<< 'echo $((a<<2))' || p+=("the pattern matches a shift")
+check "the hook reads no data through a here-string or heredoc" ${p[@]+"${p[@]}"}
+
+# --- The real ruff, when it is a 0.17 release ----------------------------------
+# --isolated is what keeps a repository's config out: a pyproject.toml and a ruff.toml that turn F401 off, and one that turns on E501,
+# change nothing, and a B rule is reported.
+if [[ "$(PATH="$REAL_PATH" ruff --version 2> /dev/null)" =~ ^ruff\ 0\.17\.[0-9]+$ ]]; then
+  realpy="$(new_repo realpy)"
+  printf '[tool.ruff.lint]\nignore = ["F401"]\nextend-select = ["E501"]\n' > "$realpy/pyproject.toml"
+  printf '[lint]\nignore = ["F401"]\n' > "$realpy/ruff.toml"
+  printf 'x = 1\nprint("%s")\n' "$(printf '%0100d' 0)" > "$realpy/long.py"
+  printf 'import os\n' > "$realpy/unused.py"
+  printf 'def f(a=[]):\n    return a\n' > "$realpy/default.py"
+  run_hook "$(edit_json "$realpy/long.py")" "$REAL_PATH" "$realpy"
+  p=()
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+  check "ruff itself: a clean file passes, though the repo's config turns on E501" ${p[@]+"${p[@]}"}
+  run_hook "$(edit_json "$realpy/unused.py")" "$REAL_PATH" "$realpy"
+  p=()
+  [[ $STATUS -eq 2 && "$STDERR" == *"ruff (exit 1):"*F401* ]] || p+=("exit $STATUS, stderr: $STDERR")
+  check "ruff itself: F401 is reported, though the repo's configs ignore it" ${p[@]+"${p[@]}"}
+  run_hook "$(edit_json "$realpy/default.py")" "$REAL_PATH" "$realpy"
+  p=()
+  [[ $STATUS -eq 2 && "$STDERR" == *B006* ]] || p+=("exit $STATUS, stderr: $STDERR")
+  check "ruff itself: a B rule is reported" ${p[@]+"${p[@]}"}
+  p=()
+  [[ ! -e "$realpy/.ruff_cache" ]] || p+=("ruff wrote $realpy/.ruff_cache")
+  check "ruff itself: no .ruff_cache is written" ${p[@]+"${p[@]}"}
+else
+  echo "skip - no ruff 0.17 here, so the real ruff isn't tried"
 fi
 
 if [[ -x "$SCRIPT" ]]; then

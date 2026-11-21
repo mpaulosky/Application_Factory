@@ -41,8 +41,15 @@ def review_node(review):
     return node
 
 
+# pr_node's default for comments: a fresh comments_of() per node, where a default value would be one dict every node shares.
+# None is not the default, since None is a comments read that failed.
+NO_COMMENTS_GIVEN = object()
+
+
 def pr_node(number=7, title="feat: Something", draft=False, merge_state="CLEAN", reviews=(), threads=(),
-            contexts=(), armed=False, comments=comments_of(), events=()):
+            contexts=(), armed=False, comments=NO_COMMENTS_GIVEN, events=()):
+    if comments is NO_COMMENTS_GIVEN:
+        comments = comments_of()
     return {
         "id": f"PR_{number}", "comments": comments,
         # The PR's review:claude label events, all of them oldest first, as gh_graphql reads them (EVENTS_QUERY, paged)

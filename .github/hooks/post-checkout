@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+REPO_ROOT="$(git rev-parse --show-toplevel 2> /dev/null)" || exit 0
 [[ -n "$REPO_ROOT" ]] || exit 0
 
 EXPECTED_HOOKS_PATH=".github/hooks"

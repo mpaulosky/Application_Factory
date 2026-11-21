@@ -21,8 +21,14 @@ trap 'rm -rf "$work"' EXIT
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
 
 git init -q -b main "$work/repo"
-"$skill_dir/apply.sh" "$work/repo" > "$work/apply.log" 2>&1 || { cat "$work/apply.log" >&2; exit 1; }
-[[ -d "$work/repo/.sandcastle" ]] || { echo "sandcastle-check: Apply left no .sandcastle/ in the new repo" >&2; exit 1; }
+"$skill_dir/apply.sh" "$work/repo" > "$work/apply.log" 2>&1 || {
+  cat "$work/apply.log" >&2
+  exit 1
+}
+[[ -d "$work/repo/.sandcastle" ]] || {
+  echo "sandcastle-check: Apply left no .sandcastle/ in the new repo" >&2
+  exit 1
+}
 
 # Tests about the Template itself (its Seed prompts, Owned prompts and docs), which ran in dotfiles when the Template lived there.
 # They run inside the Applied repo, so they sit among its own tests, and read the Template through this variable.

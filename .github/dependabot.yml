@@ -83,6 +83,10 @@ updates:
       default-days: 7
     labels:
       - "dependencies"
+    # ruff is bumped by hand, never here: its pin must be the release scripts/gate.sh's RUFF_VERSION names, inside RUFF_RELEASE's line, and
+    # the Seed Dockerfile's ARG, so a bump of the pin alone fails test.sh (ADR 0011, Update: Python).
+    ignore:
+      - dependency-name: "ruff"
     groups:
       # Minor and patch only: a major bump arrives as its own PR to look at.
       minor-and-patch-pip:

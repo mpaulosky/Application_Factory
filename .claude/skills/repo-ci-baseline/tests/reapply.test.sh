@@ -15,14 +15,20 @@
 set -euo pipefail
 
 skill_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-command -v jq >/dev/null || { echo "reapply.test.sh: jq is not installed; skipped" >&2; exit 0; }
+command -v jq > /dev/null || {
+  echo "reapply.test.sh: jq is not installed; skipped" >&2
+  exit 0
+}
 work="$(mktemp -d)"
 trap 'command rm -rf "$work"' EXIT
 
 pass=0
 failed=0
 ok() { pass=$((pass + 1)); }
-bad() { echo "FAIL: $1" >&2; failed=$((failed + 1)); }
+bad() {
+  echo "FAIL: $1" >&2
+  failed=$((failed + 1))
+}
 check() { if eval "$2"; then ok; else bad "$1"; fi; }
 
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
@@ -37,7 +43,7 @@ printf 'name: CI\n' > "$skill/template/owned/.github/workflows/ci.yml"
 printf '# {{REPO}} security policy\n' > "$skill/template/seed/docs/SECURITY.md"
 stub="$work/stub"
 mkdir -p "$stub"
-cat > "$skill/template/owned/.github/hooks/pre-push" <<EOF
+cat > "$skill/template/owned/.github/hooks/pre-push" << EOF
 #!/usr/bin/env bash
 echo gate >> "$stub/push.log"
 if [[ -e "$stub/fail-push" ]]; then echo "gate: the build failed"; exit 1; fi
@@ -66,7 +72,7 @@ reapply="$skill/reapply.sh"
 # The repo starts each case without any label: `pr edit --add-label <l>` and `pr create --label <l>` fail as gh
 # does ("could not add label: '<l>' not found") unless a `label create <l>` is in $stub/gh.log before them.
 mkdir -p "$work/bin"
-cat > "$work/bin/gh" <<'EOF'
+cat > "$work/bin/gh" << 'EOF'
 #!/usr/bin/env bash
 stub="@STUB@"
 printf '%s\n' "$*" >> "$stub/gh.log"
@@ -148,7 +154,11 @@ export PATH="$work/bin:$PATH"
 # Hooks off for the test's own git calls.
 git_q() { git -c core.hooksPath=/dev/null "$@"; }
 reset_gh() {
-  : > "$stub/gh.log"; : > "$stub/open"; : > "$stub/merged"; : > "$stub/all-prs"; echo '[]' > "$stub/comments.json"
+  : > "$stub/gh.log"
+  : > "$stub/open"
+  : > "$stub/merged"
+  : > "$stub/all-prs"
+  echo '[]' > "$stub/comments.json"
   command rm -f "$stub/already" "$stub/dropped" "$stub/request-fails" "$stub/requests" "$stub/reviews" \
     "$stub/comment-fails" "$stub/comments-fail" "$stub/comment-body" "$stub/merged-fails" "$stub/all-fails" "$stub/open-cross" \
     "$stub/label-fails"
@@ -159,11 +169,11 @@ reset_gh() {
 origin="$work/origin.git"
 git init -q --bare -b main "$origin"
 repo="$work/Widget"
-git_q clone -q "$origin" "$repo" 2>/dev/null
-git -C "$repo" switch -q -c main 2>/dev/null || true
+git_q clone -q "$origin" "$repo" 2> /dev/null
+git -C "$repo" switch -q -c main 2> /dev/null || true
 printf '# Widget\n' > "$repo/README.md"
 mkdir -p "$repo/scripts"
-cat > "$repo/scripts/review.sh" <<EOF
+cat > "$repo/scripts/review.sh" << EOF
 #!/usr/bin/env bash
 echo "\$PWD \$* GATE_SKIP_REVIEW=\${GATE_SKIP_REVIEW-unset}" >> "$work/stub/check.log"
 if [[ -s "$work/stub/check-says" ]]; then cat "$work/stub/check-says" >&2; exit 1; fi
@@ -255,7 +265,7 @@ git_q -C "$hub" add -A && git_q -C "$hub" commit -q -m "feat: other work"
 git_q -C "$hub" push -q origin main
 git_q -C "$hub" fetch -q origin
 git_q -C "$hub" switch -q -c chore/reapply-baseline origin/chore/reapply-baseline
-git_q -C "$hub" merge -q --no-edit main   # gh pr update-branch
+git_q -C "$hub" merge -q --no-edit main # gh pr update-branch
 git_q -C "$hub" push -q origin chore/reapply-baseline
 printf 'name: CI v2\n' > "$skill/template/owned/.github/workflows/ci.yml"
 out="$("$reapply" --brings mpaulosky/Other#82 "$repo" 2>&1)" && rc=0 || rc=$?
@@ -304,8 +314,14 @@ command rm -f "$stub/fail-push"
 # asks the worktree's scripts/review.sh check itself, never the push's log, so what the gate printed can't pose as one.
 no_review="No review is recorded for this diff. Run /pre-push-review, which reviews, fixes and records it."
 findings="2 review finding(s) wait for a person. Fix them and run /pre-push-review again, or the person you work for accepts each one (never an agent on their behalf):"
-check_says() { : > "$stub/check-says"; for part in "$@"; do printf '%s\n' "$part" >> "$stub/check-says"; done; }
-gate_says() { : > "$stub/gate-log"; for part in "$@"; do printf '%s\n' "$part" >> "$stub/gate-log"; done; }
+check_says() {
+  : > "$stub/check-says"
+  for part in "$@"; do printf '%s\n' "$part" >> "$stub/check-says"; done
+}
+gate_says() {
+  : > "$stub/gate-log"
+  for part in "$@"; do printf '%s\n' "$part" >> "$stub/gate-log"; done
+}
 step_line() { printf '\033[0;36m\342\226\266 %s\033[0m' "$1"; }
 review_step="$(step_line "Local review (scripts/review.sh check)")"
 refused() { # <name> <expected exit>: run reapply.sh with the gate failing, as gate_says and check_says set it up
@@ -396,7 +412,7 @@ git_q -C "$hub" fetch -q origin
 git_q -C "$hub" switch -q main
 git_q -C "$hub" merge -q --ff-only origin/main
 old_tip="$(git -C "$origin" rev-parse chore/reapply-baseline)"
-git_q -C "$hub" merge -q --squash origin/chore/reapply-baseline >/dev/null
+git_q -C "$hub" merge -q --squash origin/chore/reapply-baseline > /dev/null
 git_q -C "$hub" commit -q -m "chore: Re-apply the repo-ci-baseline Template (#7)"
 git_q -C "$hub" push -q origin main
 git_q -C "$hub" push -q origin --delete chore/reapply-baseline
@@ -459,7 +475,11 @@ rerun() {
   out="$("$reapply" --brings '#90' "$repo" 2>&1)" && rc=0 || rc=$?
 }
 # A fresh PR state, then rerun.
-scenario() { reset_gh; echo 7 > "$stub/open"; rerun; }
+scenario() {
+  reset_gh
+  echo 7 > "$stub/open"
+  rerun
+}
 comments_posted() { grep -c '^pr comment ' "$stub/gh.log" || true; }
 marker_comments() { jq '[.[] | select(.body | contains("<!-- pr-automerge:copilot-asked -->"))] | length' "$stub/comments.json"; }
 
@@ -468,16 +488,26 @@ scenario
 check "ask record, request registers: exits 0 and says Copilot requested" '[[ $rc -eq 0 ]] && grep -q "Copilot requested" <<< "$out"'
 check "ask record, request registers: no comment posted" '[[ "$(comments_posted)" -eq 0 ]]'
 scenario_reg() { # registers as: $1
-  reset_gh; echo 7 > "$stub/open"; printf '%s\n' "$1" > "$stub/requests"; rerun
+  reset_gh
+  echo 7 > "$stub/open"
+  printf '%s\n' "$1" > "$stub/requests"
+  rerun
 }
 scenario_reg copilot-pull-request-reviewer[bot]
 check "ask record, request by copilot-pull-request-reviewer[bot] registers: no comment posted" '[[ $rc -eq 0 && "$(comments_posted)" -eq 0 ]]'
-reset_gh; echo 7 > "$stub/open"; : > "$stub/requests"; echo copilot-pull-request-reviewer[bot] > "$stub/reviews"; rerun
+reset_gh
+echo 7 > "$stub/open"
+: > "$stub/requests"
+echo copilot-pull-request-reviewer[bot] > "$stub/reviews"
+rerun
 check "ask record, a review of the head by copilot-pull-request-reviewer[bot] counts as registered: no comment posted" \
   '[[ $rc -eq 0 && "$(comments_posted)" -eq 0 ]]'
 
 # Criterion 1: a request that doesn't register gets the record, once.
-reset_gh; echo 7 > "$stub/open"; touch "$stub/dropped"; rerun
+reset_gh
+echo 7 > "$stub/open"
+touch "$stub/dropped"
+rerun
 check "ask record, request dropped: exits 0" '[[ $rc -eq 0 ]] || { echo "$out" >&2; false; }'
 check "ask record, request dropped: one comment posted on #7" '[[ "$(comments_posted)" -eq 1 ]] && grep -q "^pr comment 7 --body " "$stub/gh.log"'
 check "ask record, request dropped: the comment is landing.py's ask comment, marker included" \
@@ -492,7 +522,10 @@ check "ask record, re-run: exits 0, still warns the request didn't register" '[[
 check "ask record, re-run: no second comment" '[[ "$(comments_posted)" -eq 0 && "$(marker_comments)" -eq 1 ]]'
 check "ask record, re-run: says the record was already there" 'grep -qi "already recorded" <<< "$out"'
 
-reset_gh; echo 7 > "$stub/open"; touch "$stub/request-fails"; rerun
+reset_gh
+echo 7 > "$stub/open"
+touch "$stub/request-fails"
+rerun
 check "ask record, request refused: exits 0 and posts one comment, the ask comment" \
   '[[ $rc -eq 0 && "$(comments_posted)" -eq 1 && "$(cat "$stub/comment-body" 2>/dev/null)" == "$expected_comment" ]]'
 rerun
@@ -503,40 +536,83 @@ seed_comment() { # login, body
   jq --arg l "$1" --arg b "$2" '. + [{author: {login: $l}, body: $b}]' "$stub/comments.json" > "$stub/comments.tmp"
   mv "$stub/comments.tmp" "$stub/comments.json"
 }
-reset_gh; echo 7 > "$stub/open"; touch "$stub/dropped"; seed_comment mallory "$marker"; rerun
+reset_gh
+echo 7 > "$stub/open"
+touch "$stub/dropped"
+seed_comment mallory "$marker"
+rerun
 check "ask record: a marker comment by a stranger is no record, so one is posted" '[[ "$(comments_posted)" -eq 1 ]]'
-reset_gh; echo 7 > "$stub/open"; touch "$stub/dropped"; seed_comment "github-actions[bot]" "$marker"; rerun
+reset_gh
+echo 7 > "$stub/open"
+touch "$stub/dropped"
+seed_comment "github-actions[bot]" "$marker"
+rerun
 check "ask record: a record by github-actions[bot] counts, so none is posted" '[[ $rc -eq 0 && "$(comments_posted)" -eq 0 ]]'
-reset_gh; echo 7 > "$stub/open"; touch "$stub/dropped"; seed_comment github-actions "$marker"; rerun
+reset_gh
+echo 7 > "$stub/open"
+touch "$stub/dropped"
+seed_comment github-actions "$marker"
+rerun
 check "ask record: a record by github-actions counts, so none is posted" '[[ "$(comments_posted)" -eq 0 ]]'
-reset_gh; echo 7 > "$stub/open"; touch "$stub/dropped"; seed_comment acme "$marker"; rerun
+reset_gh
+echo 7 > "$stub/open"
+touch "$stub/dropped"
+seed_comment acme "$marker"
+rerun
 check "ask record: a record by the owner counts, so none is posted" '[[ "$(comments_posted)" -eq 0 ]]'
-reset_gh; echo 7 > "$stub/open"; touch "$stub/dropped"; seed_comment acme "a comment with no marker"; rerun
+reset_gh
+echo 7 > "$stub/open"
+touch "$stub/dropped"
+seed_comment acme "a comment with no marker"
+rerun
 check "ask record: an owner comment without the marker is no record, so one is posted" '[[ "$(comments_posted)" -eq 1 ]]'
 
 # Copilot is the exact bot: a login that merely contains "copilot" is nobody's request.
-reset_gh; echo 7 > "$stub/open"; echo copilot-x > "$stub/requests"; rerun
+reset_gh
+echo 7 > "$stub/open"
+echo copilot-x > "$stub/requests"
+rerun
 check "ask record: a request by copilot-x is not Copilot's, so the record is posted" '[[ "$(comments_posted)" -eq 1 ]]'
-reset_gh; echo 7 > "$stub/open"; : > "$stub/requests"; echo copilot-x > "$stub/reviews"; rerun
+reset_gh
+echo 7 > "$stub/open"
+: > "$stub/requests"
+echo copilot-x > "$stub/reviews"
+rerun
 check "ask record: a review of the head by copilot-x is not Copilot's, so the record is posted" '[[ "$(comments_posted)" -eq 1 ]]'
-reset_gh; echo 7 > "$stub/open"; : > "$stub/requests"; echo not-copilot-pull-request-reviewer[bot] > "$stub/reviews"; rerun
+reset_gh
+echo 7 > "$stub/open"
+: > "$stub/requests"
+echo not-copilot-pull-request-reviewer[bot] > "$stub/reviews"
+rerun
 check "ask record: a review by not-copilot-pull-request-reviewer[bot] is not Copilot's, so the record is posted" '[[ "$(comments_posted)" -eq 1 ]]'
-reset_gh; echo 7 > "$stub/open"; echo myCopilotFork > "$stub/requests"; rerun
+reset_gh
+echo 7 > "$stub/open"
+echo myCopilotFork > "$stub/requests"
+rerun
 check "ask record: a request by myCopilotFork is not Copilot's, so the record is posted" '[[ "$(comments_posted)" -eq 1 ]]'
 
 # A failing gh never fails the run.
-reset_gh; echo 7 > "$stub/open"; touch "$stub/dropped" "$stub/comment-fails"; rerun
+reset_gh
+echo 7 > "$stub/open"
+touch "$stub/dropped" "$stub/comment-fails"
+rerun
 check "ask record: a failed post exits 0" '[[ $rc -eq 0 ]] || { echo "$out" >&2; false; }'
 check "ask record: a failed post warns with gh's message" \
   'grep -q "warning: recording the ask for Copilot.s review on #7 failed: HTTP 403: Resource not accessible" <<< "$out"'
 check "ask record: a failed post still names land.sh as the next step" 'grep -q "next: land.sh acme/Widget#7" <<< "$out"'
-reset_gh; echo 7 > "$stub/open"; touch "$stub/dropped" "$stub/comments-fail"; rerun
+reset_gh
+echo 7 > "$stub/open"
+touch "$stub/dropped" "$stub/comments-fail"
+rerun
 check "ask record: an unreadable comment list counts as no record, so the record is posted" '[[ $rc -eq 0 && "$(comments_posted)" -eq 1 ]]'
 check "ask record: an unreadable comment list never adds review:claude" 'only_apply_label'
 
 # A new PR whose request is dropped gets the record too (the first PR of a repo).
 # (the old branch's work counts as merged, so this run starts a new branch and PR)
-reset_gh; touch "$stub/dropped"; git -C "$origin" rev-parse chore/reapply-baseline > "$stub/merged"; rerun
+reset_gh
+touch "$stub/dropped"
+git -C "$origin" rev-parse chore/reapply-baseline > "$stub/merged"
+rerun
 check "ask record: a PR opened by this run with the request dropped gets one comment on #7" \
   '[[ $rc -eq 0 ]] && grep -q "^pr create" "$stub/gh.log" && [[ "$(comments_posted)" -eq 1 ]] && grep -q "^pr comment 7 --body " "$stub/gh.log"'
 
@@ -554,7 +630,7 @@ check "unmerged: branch kept" '[[ "$(git -C "$wt" rev-parse HEAD)" == "$tip" ]]'
 # alone can't mean "never pushed": the branch keeps the upstream `push -u` set, and its unmerged
 # commits are refused.
 reset_gh
-git -C "$origin" branch -D chore/reapply-baseline >/dev/null
+git -C "$origin" branch -D chore/reapply-baseline > /dev/null
 pushed_tip="$(git -C "$wt" rev-parse HEAD)"
 out="$("$reapply" --brings '#85' "$repo" 2>&1)" && rc=0 || rc=$?
 check "pushed, remote branch deleted: refused" '[[ $rc -ne 0 ]] && grep -q "commits no open or merged PR carries" <<< "$out"'
@@ -587,7 +663,7 @@ check "never pushed: the PR is opened" 'grep -q "^pr create" "$stub/gh.log"'
 # The same with the worktree gone and the local branch kept.
 reset_gh
 git -C "$repo" worktree remove "$wt"
-git -C "$origin" branch -D chore/reapply-baseline >/dev/null
+git -C "$origin" branch -D chore/reapply-baseline > /dev/null
 git -C "$repo" config --unset branch.chore/reapply-baseline.merge
 git -C "$repo" config --unset branch.chore/reapply-baseline.remote
 kept_tip="$(git -C "$repo" rev-parse refs/heads/chore/reapply-baseline)"
@@ -600,7 +676,7 @@ check "never pushed, no worktree: the local commits are pushed" '[[ "$(git -C "$
 # A branch pushed without -u has no upstream; once a PR for it closed unmerged and its remote branch
 # was deleted, it still isn't new: a PR whose head the branch carries (and main doesn't) refuses it.
 reset_gh
-git -C "$origin" branch -D chore/reapply-baseline >/dev/null
+git -C "$origin" branch -D chore/reapply-baseline > /dev/null
 git -C "$repo" config --unset branch.chore/reapply-baseline.merge
 git -C "$repo" config --unset branch.chore/reapply-baseline.remote
 closed_tip="$(git -C "$wt" rev-parse HEAD)"
@@ -653,7 +729,7 @@ check "earlier rounds' PRs: the local commits are pushed" '[[ "$(git -C "$origin
 
 # A PR from a fork with this branch name is not this repo's: it can't refuse the carry-on.
 reset_gh
-git -C "$origin" branch -D chore/reapply-baseline >/dev/null
+git -C "$origin" branch -D chore/reapply-baseline > /dev/null
 git -C "$repo" config --unset branch.chore/reapply-baseline.merge
 git -C "$repo" config --unset branch.chore/reapply-baseline.remote
 fork_tip="$(git -C "$wt" rev-parse HEAD)"
@@ -663,7 +739,7 @@ check "a fork's PR of the same name: ignored, the branch is carried on" '[[ $rc 
 
 # The PR lookup, like the merged one, ends the run when gh fails.
 reset_gh
-git -C "$origin" branch -D chore/reapply-baseline >/dev/null
+git -C "$origin" branch -D chore/reapply-baseline > /dev/null
 git -C "$repo" config --unset branch.chore/reapply-baseline.merge
 git -C "$repo" config --unset branch.chore/reapply-baseline.remote
 touch "$stub/all-fails"
@@ -712,7 +788,7 @@ reset_gh
 broken="$(git -C "$repo" commit-tree -m "its walk fails" "$(git -C "$repo" rev-parse 'origin/main^{tree}')")"
 real_git="$(command -v git)"
 mkdir -p "$work/gitfail"
-cat > "$work/gitfail/git" <<WRAP
+cat > "$work/gitfail/git" << WRAP
 #!/usr/bin/env bash
 if [[ "\$*" == *"merge-base --is-ancestor"* && "\$*" == *"$broken"* ]]; then echo "fatal: bad object" >&2; exit 128; fi
 exec "$real_git" "\$@"
@@ -735,7 +811,7 @@ check "a merged head ahead of the tip: the branch is replaced" '[[ $rc -eq 0 ]] 
 # The ERR trap covers every command, so gh pr create exiting 3 must not read as "needs a review".
 reset_gh
 : > "$stub/open"
-git -C "$repo" rev-parse refs/heads/chore/reapply-baseline > "$stub/merged"  # its work merged: a fresh branch from main
+git -C "$repo" rev-parse refs/heads/chore/reapply-baseline > "$stub/merged" # its work merged: a fresh branch from main
 touch "$stub/create-exits-3"
 printf 'name: CI v9\n' > "$skill/template/owned/.github/workflows/ci.yml"
 out="$("$reapply" --brings '#83' "$repo" 2>&1)" && rc=0 || rc=$?
@@ -745,7 +821,7 @@ command rm -f "$stub/create-exits-3"
 
 # ── A checkout whose path holds a space: the printed commands quote it ────────
 spaced="$work/Wid get"
-git_q clone -q "$origin" "$spaced" 2>/dev/null
+git_q clone -q "$origin" "$spaced" 2> /dev/null
 spaced_wt="$work/Wid get-worktrees/chore-reapply-baseline"
 printf 'name: CI v10\n' > "$skill/template/owned/.github/workflows/ci.yml"
 for case in none findings; do

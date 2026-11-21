@@ -37,6 +37,25 @@ indent_size = 2
 end_of_line = lf
 
 #############################
+# Shell (shfmt reads these: shfmt -i 2 -ci -bn -sr)
+#############################
+# The git hooks have no extension, so they get a section of their own. A section whose glob has a / is anchored to this
+# file's folder, so the two can't be one {*.sh,.github/hooks/*} section: *.sh would match only the scripts at the root.
+[*.sh]
+indent_style = space
+indent_size = 2
+switch_case_indent = true
+binary_next_line = true
+space_redirects = true
+
+[.github/hooks/*]
+indent_style = space
+indent_size = 2
+switch_case_indent = true
+binary_next_line = true
+space_redirects = true
+
+#############################
 # Web files (HTML/CSS/JSON/XML)
 #############################
 [*.{html,htm,css,xml,json,js,ts,jsx,razor,razor.cshtml,csproj,props,targets,slnx}]

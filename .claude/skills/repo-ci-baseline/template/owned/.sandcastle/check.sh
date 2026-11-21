@@ -50,7 +50,7 @@ warn() { printf '⚠ .sandcastle/check-paths.txt: %s %s\n' "${1//[[:cntrl:]]/?}"
 if ((${#listed[@]} > 0)); then
   for line in "${listed[@]}"; do
     [[ "$line" =~ $exclude ]] && continue
-    if found="$(git ls-files -- "$line" 2>/dev/null)"; then
+    if found="$(git ls-files -- "$line" 2> /dev/null)"; then
       [[ -n "$found" ]] || warn "$line" "matches no tracked file, so it watches nothing until a matching file is added"
     else
       warn "$line" "is not a pathspec git accepts, so the check always runs"

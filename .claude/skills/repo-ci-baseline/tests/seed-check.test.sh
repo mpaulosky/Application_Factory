@@ -22,7 +22,7 @@ export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.com
 export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.com
 
 mkdir -p "$STUBS"
-cat > "$STUBS/pnpm" <<STUB
+cat > "$STUBS/pnpm" << STUB
 #!/usr/bin/env bash
 echo "pnpm \$*" >> "$LOG"
 echo "GIT_DIR=\${GIT_DIR-unset} GIT_WORK_TREE=\${GIT_WORK_TREE-unset} GIT_INDEX_FILE=\${GIT_INDEX_FILE-unset} GIT_PREFIX=\${GIT_PREFIX-unset}" >> "$ENVLOG"
@@ -54,15 +54,20 @@ run_check() { # run_check [<merge-base>]
   OUTPUT="$(cd "$REPO" && PATH="$STUBS:$PATH" bash .sandcastle/check.sh "$@" 2>&1)"
   STATUS=$?
 }
-pass() { PASSED=$((PASSED + 1)); echo "ok   - $1"; }
+pass() {
+  PASSED=$((PASSED + 1))
+  echo "ok   - $1"
+}
 fail() {
-  FAILED=$((FAILED + 1)); echo "FAIL - $1"
+  FAILED=$((FAILED + 1))
+  echo "FAIL - $1"
   echo "       | exit $STATUS; calls: $(tr '\n' ';' < "$LOG")"
   while IFS= read -r line; do echo "       | $line"; done <<< "$OUTPUT"
 }
 ran_check() { grep -q -- "pnpm run check:sandcastle" "$LOG"; }
 check() { # check <name> <condition...>
-  local name="$1"; shift
+  local name="$1"
+  shift
   if "$@"; then pass "$name"; else fail "$name"; fi
 }
 not() { ! "$@"; }
@@ -104,7 +109,8 @@ git init -q -b main "$DECOY"
 git -C "$DECOY" commit -q --allow-empty -m decoy
 
 run_check_in_hook() { # run_check_in_hook [<merge-base>]: the four variables set, as under a hook
-  : > "$LOG"; : > "$ENVLOG"
+  : > "$LOG"
+  : > "$ENVLOG"
   OUTPUT="$(cd "$REPO" && PATH="$STUBS:$PATH" GIT_DIR="$DECOY/.git" GIT_WORK_TREE="$DECOY" \
     GIT_INDEX_FILE="$DECOY/.git/index" GIT_PREFIX="decoy/" bash .sandcastle/check.sh "$@" 2>&1)"
   STATUS=$?

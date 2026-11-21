@@ -46,11 +46,12 @@ STEPS_OF_ACTION = load_yaml(ACTION)["runs"]["steps"]
 
 
 def install_steps():
-    """Every step that installs shfmt, by where it is: the Owned ci.yml's jobs and the template-tools action."""
-    found = {f"ci.yml {name}": step for name, job in WORKFLOW["jobs"].items() for step in job.get("steps", [])
-             if INSTALLS in str(step.get("run", ""))}
-    found.update({"template-tools": step for step in STEPS_OF_ACTION if INSTALLS in str(step.get("run", ""))})
-    return found
+    """Every step that installs shfmt, by where it is: the Owned ci.yml's jobs and the template-tools action, each step by its place
+    in its job, so two install steps in one job or in the action are two entries, not one keeping the last."""
+    places = [(f"ci.yml {name}", job.get("steps", [])) for name, job in WORKFLOW["jobs"].items()]
+    places.append(("template-tools", STEPS_OF_ACTION))
+    return {f"{place} step {number}": step for place, steps in places for number, step in enumerate(steps, 1)
+            if INSTALLS in str(step.get("run", ""))}
 
 
 def dockerfile_pins():
@@ -142,10 +143,11 @@ def test_an_install_step_retries_a_failed_download(where):
 
 
 def sh_version_check():
-    """test.sh's shfmt version check, the two lines that start with [[ "$(shfmt --version)"."""
+    """test.sh's shfmt version check: from the line that starts with [[ "$(shfmt --version)" to the } that ends its || { ... } block (shfmt puts the block on lines of its own)."""
     lines = (SKILL / "test.sh").read_text().splitlines()
     first = next(index for index, line in enumerate(lines) if line.startswith('[[ "$(shfmt --version)" =~'))
-    return "\n".join(lines[first:first + 2]) + "\n"
+    last = next(index for index in range(first + 1, len(lines)) if lines[index].strip() == "}")
+    return "\n".join(lines[first:last + 1]) + "\n"
 
 
 @pytest.mark.parametrize("version", [

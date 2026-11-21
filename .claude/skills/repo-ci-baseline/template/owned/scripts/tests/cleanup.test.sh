@@ -27,28 +27,44 @@ mkdir "$work/no-template"
 export GIT_TEMPLATE_DIR="$work/no-template" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 export HOME="$work" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 # a developer's own git config (signing, hooks, insteadOf) must not reach the throwaway repos
 
-if ! command -v jq >/dev/null 2>&1; then # gh-repo: ok
+if ! command -v jq > /dev/null 2>&1; then                                  # gh-repo: ok
   echo "jq is not installed, and the fake gh runs cleanup.sh's jq with it" # gh-repo: ok
-  [[ -z "${CI:-}" ]] && { echo "skip"; exit 0; } # a developer machine may skip; CI must not
+  # a developer machine may skip; CI must not
+  [[ -z "${CI:-}" ]] && {
+    echo "skip"
+    exit 0
+  }
   exit 1
 fi
 
-PASSED=0; FAILED=0
-ok() { PASSED=$((PASSED + 1)); echo "ok   - $1"; }
-bad() { FAILED=$((FAILED + 1)); echo "FAIL - $1"; }
+PASSED=0
+FAILED=0
+ok() {
+  PASSED=$((PASSED + 1))
+  echo "ok   - $1"
+}
+bad() {
+  FAILED=$((FAILED + 1))
+  echo "FAIL - $1"
+}
 check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 # A command the suite calls that does not exist (a helper called before it is defined, say) would print one line and let the check go on: it fails the suite. A subshell inherits this
 # function, so the name goes to a file; a child bash does not, which is what the scenarios that run the script with a bare PATH rely on.
 not_found="$work/.command-not-found"
-command_not_found_handle() { echo "FAIL - command not found: $1" >&2; echo "$1" >> "$not_found"; return 127; }
+command_not_found_handle() {
+  echo "FAIL - command not found: $1" >&2
+  echo "$1" >> "$not_found"
+  return 127
+}
 # The guard itself: a missing command in a subshell is recorded (then forgotten, so the end of the suite doesn't fail on this one).
-( no-such-command-for-the-guard ) 2>/dev/null || true
+(no-such-command-for-the-guard) 2> /dev/null || true
 check "the not-found guard records a command that does not exist" "[[ -s \"\$not_found\" ]] && grep -qx no-such-command-for-the-guard \"\$not_found\""
 : > "$not_found"
 
-export GH_FIX="$work/fix"; mkdir "$GH_FIX"
+export GH_FIX="$work/fix"
+mkdir "$GH_FIX"
 mkdir "$work/bin"
-cat > "$work/bin/gh" <<'GH' # gh-repo: ok
+cat > "$work/bin/gh" << 'GH' # gh-repo: ok
 #!/usr/bin/env bash
 args="$*"
 if [[ $# == 12 && "$1 $2 $3 $4 $5 $6 $7" == "pr list --state open --limit 100 --base" && -n "$8" && "$9 ${10} ${11} ${12}" == "--json number --jq length" ]]; then
@@ -75,19 +91,24 @@ export PATH="$work/bin:$PATH"
 export GITHUB_REPOSITORY=o/r
 
 git init -q --bare -b main "$work/origin.git"
-git clone -q "$work/origin.git" "$work/repo" 2>/dev/null
+git clone -q "$work/origin.git" "$work/repo" 2> /dev/null
 repo="$work/repo"
 cd "$repo" || exit 1
-git config fetch.prune false; git config remote.origin.prune false # a user's own config must not prune for the script: only its --prune may
+# a user's own config must not prune for the script: only its --prune may
+git config fetch.prune false
+git config remote.origin.prune false
 git checkout -q -b main
 mkdir scripts
 cp "$SCRIPTS/check-branch-name.sh" "$SCRIPTS/cleanup.sh" scripts/
-{ git add . && git commit -q -m init && git push -q origin main; } || { echo "setup failed"; exit 1; }
+{ git add . && git commit -q -m init && git push -q origin main; } || {
+  echo "setup failed"
+  exit 1
+}
 git remote set-head origin main
 main_init=$(git rev-parse main)
 
 # A second clone, to push to origin as someone else would.
-git clone -q "$work/origin.git" "$work/other" 2>/dev/null
+git clone -q "$work/origin.git" "$work/other" 2> /dev/null
 other_push() { # other_push <ref> <file>: a commit on top of origin's <ref>, pushed from the second clone
   git -C "$work/other" fetch -q origin && git -C "$work/other" checkout -q -B tmp "origin/$1" \
     && echo "$2" > "$work/other/$2" && git -C "$work/other" add "$2" && git -C "$work/other" commit -q -m "$2" \
@@ -99,14 +120,19 @@ branch() {
   local dir="$work/wt/${1//\//-}"
   git worktree add -q -b "$1" "$dir" main >&2 || exit 1
   echo x > "$dir/f" && git -C "$dir" add f && git -C "$dir" commit -q -m "work on $1"
-  if [[ "$2" == yes ]]; then git -C "$dir" push -q origin "$1" 2>/dev/null || exit 1; fi
-  git -C "$dir" config "branch.$1.remote" origin; git -C "$dir" config "branch.$1.merge" "refs/heads/$1" # the branch's own config section, which deleting the branch must take with it
+  if [[ "$2" == yes ]]; then git -C "$dir" push -q origin "$1" 2> /dev/null || exit 1; fi
+  git -C "$dir" config "branch.$1.remote" origin
+  git -C "$dir" config "branch.$1.merge" "refs/heads/$1" # the branch's own config section, which deleting the branch must take with it
   git -C "$dir" rev-parse HEAD
 }
 scrub() { # scrub <branch>: undo whatever a scenario left, so the next one starts clean
   local d="$work/wt/${1//\//-}"
-  git worktree unlock "$d" 2>/dev/null; git worktree remove -f -f "$d" 2>/dev/null; command rm -f "$repo/.git/refs/heads/$1.lock"
-  git branch -q -D "$1" 2>/dev/null; git -C "$work/other" push -q origin --delete "$1" 2>/dev/null; git fetch -q --prune origin
+  git worktree unlock "$d" 2> /dev/null
+  git worktree remove -f -f "$d" 2> /dev/null
+  command rm -f "$repo/.git/refs/heads/$1.lock"
+  git branch -q -D "$1" 2> /dev/null
+  git -C "$work/other" push -q origin --delete "$1" 2> /dev/null
+  git fetch -q --prune origin
 }
 pr() { # pr <branch> <STATE> <oid> [base] [head repository, owner/name; - for none, as for a deleted fork]
   jq -nc --arg s "$2" --arg o "$3" --arg b "${4:-main}" --arg r "${5:-o/r}" \
@@ -114,112 +140,232 @@ pr() { # pr <branch> <STATE> <oid> [base] [head repository, owner/name; - for no
 }
 remote_only() { git worktree remove "$work/wt/${1//\//-}" && git branch -q -D "$1"; }
 
-tip=$(branch feature/1-merged yes) || exit 1;       pr feature/1-merged MERGED "$tip"
-tip=$(branch fix/2-dirty yes) || exit 1;            pr fix/2-dirty MERGED "$tip"; echo dirt > "$work/wt/fix-2-dirty/f"
-tip=$(branch chore/open-one yes) || exit 1;         pr chore/open-one OPEN "$tip"
-tip=$(branch fix/3-unpushed yes) || exit 1;         pr fix/3-unpushed MERGED "$tip"
-echo more > "$work/wt/fix-3-unpushed/g"; git -C "$work/wt/fix-3-unpushed" add g; git -C "$work/wt/fix-3-unpushed" commit -q -m more
-tip=$(branch feature/4-closed yes) || exit 1;       pr feature/4-closed CLOSED "$tip"
+tip=$(branch feature/1-merged yes) || exit 1
+pr feature/1-merged MERGED "$tip"
+tip=$(branch fix/2-dirty yes) || exit 1
+pr fix/2-dirty MERGED "$tip"
+echo dirt > "$work/wt/fix-2-dirty/f"
+tip=$(branch chore/open-one yes) || exit 1
+pr chore/open-one OPEN "$tip"
+tip=$(branch fix/3-unpushed yes) || exit 1
+pr fix/3-unpushed MERGED "$tip"
+echo more > "$work/wt/fix-3-unpushed/g"
+git -C "$work/wt/fix-3-unpushed" add g
+git -C "$work/wt/fix-3-unpushed" commit -q -m more
+tip=$(branch feature/4-closed yes) || exit 1
+pr feature/4-closed CLOSED "$tip"
 tip=$(branch chore/nopr no)
-tip=$(branch chore/remote-only yes) || exit 1;      pr chore/remote-only MERGED "$tip"; remote_only chore/remote-only
-tip=$(branch chore/forked yes) || exit 1;           pr chore/forked MERGED "$tip" main someone/r; remote_only chore/forked
-tip=$(branch chore/stacked yes) || exit 1;          pr chore/stacked MERGED "$tip" feature/9-base; remote_only chore/stacked
-tip=$(branch chore/open-and-merged yes) || exit 1;  pr chore/open-and-merged MERGED "$tip"; pr chore/open-and-merged OPEN "$tip"
-tip=$(branch chore/closed-then-merged yes) || exit 1; pr chore/closed-then-merged CLOSED "$tip"; pr chore/closed-then-merged MERGED "$tip"
-tip=$(branch chore/locked yes) || exit 1;           pr chore/locked MERGED "$tip"; git worktree lock "$work/wt/chore-locked"
-tip=$(branch chore/owner-case yes) || exit 1;       pr chore/owner-case MERGED "$tip" main Acme/R
-tip=$(branch chore/stale yes) || exit 1;            pr chore/stale MERGED "$tip"; command rm -rf "$work/wt/chore-stale"
-tip=$(branch chore/unreadable yes) || exit 1;       pr chore/unreadable MERGED "$tip"; echo garbage > "$repo/.git/worktrees/chore-unreadable/index"
-tip=$(branch chore/delfail yes) || exit 1;          pr chore/delfail MERGED "$tip"; git worktree remove "$work/wt/chore-delfail"; touch "$repo/.git/refs/heads/chore/delfail.lock"
-tip=$(branch chore/pre yes) || exit 1;              pr chore/pre OPEN "$tip"
-tip=$(branch chore/pre-fix yes) || exit 1;          pr chore/pre-fix MERGED "$tip"; remote_only chore/pre-fix
-tip=$(branch chore/gone-race yes) || exit 1;        pr chore/gone-race MERGED "$tip"; remote_only chore/gone-race
-tip=$(branch chore/deleted-fork yes) || exit 1;     pr chore/deleted-fork MERGED "$tip" main -; remote_only chore/deleted-fork
-tip=$(branch chore/stale-locked yes) || exit 1;     pr chore/stale-locked MERGED "$tip"; git worktree lock "$work/wt/chore-stale-locked"; command rm -rf "$work/wt/chore-stale-locked"
-tip=$(branch chore/net-fail yes) || exit 1;         pr chore/net-fail MERGED "$tip"; remote_only chore/net-fail
+tip=$(branch chore/remote-only yes) || exit 1
+pr chore/remote-only MERGED "$tip"
+remote_only chore/remote-only
+tip=$(branch chore/forked yes) || exit 1
+pr chore/forked MERGED "$tip" main someone/r
+remote_only chore/forked
+tip=$(branch chore/stacked yes) || exit 1
+pr chore/stacked MERGED "$tip" feature/9-base
+remote_only chore/stacked
+tip=$(branch chore/open-and-merged yes) || exit 1
+pr chore/open-and-merged MERGED "$tip"
+pr chore/open-and-merged OPEN "$tip"
+tip=$(branch chore/closed-then-merged yes) || exit 1
+pr chore/closed-then-merged CLOSED "$tip"
+pr chore/closed-then-merged MERGED "$tip"
+tip=$(branch chore/locked yes) || exit 1
+pr chore/locked MERGED "$tip"
+git worktree lock "$work/wt/chore-locked"
+tip=$(branch chore/owner-case yes) || exit 1
+pr chore/owner-case MERGED "$tip" main Acme/R
+tip=$(branch chore/stale yes) || exit 1
+pr chore/stale MERGED "$tip"
+command rm -rf "$work/wt/chore-stale"
+tip=$(branch chore/unreadable yes) || exit 1
+pr chore/unreadable MERGED "$tip"
+echo garbage > "$repo/.git/worktrees/chore-unreadable/index"
+tip=$(branch chore/delfail yes) || exit 1
+pr chore/delfail MERGED "$tip"
+git worktree remove "$work/wt/chore-delfail"
+touch "$repo/.git/refs/heads/chore/delfail.lock"
+tip=$(branch chore/pre yes) || exit 1
+pr chore/pre OPEN "$tip"
+tip=$(branch chore/pre-fix yes) || exit 1
+pr chore/pre-fix MERGED "$tip"
+remote_only chore/pre-fix
+tip=$(branch chore/gone-race yes) || exit 1
+pr chore/gone-race MERGED "$tip"
+remote_only chore/gone-race
+tip=$(branch chore/deleted-fork yes) || exit 1
+pr chore/deleted-fork MERGED "$tip" main -
+remote_only chore/deleted-fork
+tip=$(branch chore/stale-locked yes) || exit 1
+pr chore/stale-locked MERGED "$tip"
+git worktree lock "$work/wt/chore-stale-locked"
+command rm -rf "$work/wt/chore-stale-locked"
+tip=$(branch chore/net-fail yes) || exit 1
+pr chore/net-fail MERGED "$tip"
+remote_only chore/net-fail
 # A worktree whose gitdir file holds a relative path (what git 2.48+ writes with worktree.useRelativePaths), written by hand so the test does not depend on git's version
-tip=$(branch chore/relative-path yes) || exit 1; pr chore/relative-path MERGED "$tip"
+tip=$(branch chore/relative-path yes) || exit 1
+pr chore/relative-path MERGED "$tip"
 printf '%s\n' "../../../../wt/chore-relative-path/.git" > "$repo/.git/worktrees/chore-relative-path/gitdir"
 command rm -rf "$work/wt/chore-relative-path"
-rel_ok=false; wlist="$(git worktree list --porcelain)"; grep -qx "worktree $work/wt/chore-relative-path" <<<"$wlist" && rel_ok=true # no pipe: grep -q may close it early
+rel_ok=false
+wlist="$(git worktree list --porcelain)"
+grep -qx "worktree $work/wt/chore-relative-path" <<< "$wlist" && rel_ok=true # no pipe: grep -q may close it early
 git worktree add -q --detach "$work/wt/detached" main
-tip=$(branch chore/lease-race yes) || exit 1;       pr chore/lease-race MERGED "$tip"; remote_only chore/lease-race
+tip=$(branch chore/lease-race yes) || exit 1
+pr chore/lease-race MERGED "$tip"
+remote_only chore/lease-race
 git push -q origin main:refs/heads/Bad_Name
-pr Bad_Name MERGED "$main_init"; git branch -q Bad_Local main; pr Bad_Local MERGED "$main_init" # non-standard names, with a merged PR at their tip: still kept
-tip=$(branch fix/10-untracked yes) || exit 1;       pr fix/10-untracked MERGED "$tip"; echo u > "$work/wt/fix-10-untracked/untracked"
+pr Bad_Name MERGED "$main_init"
+git branch -q Bad_Local main
+pr Bad_Local MERGED "$main_init" # non-standard names, with a merged PR at their tip: still kept
+tip=$(branch fix/10-untracked yes) || exit 1
+pr fix/10-untracked MERGED "$tip"
+echo u > "$work/wt/fix-10-untracked/untracked"
 tip=$(branch chore/ignored no) || exit 1
-echo ignored.txt > "$work/wt/chore-ignored/.gitignore"; git -C "$work/wt/chore-ignored" add .gitignore; git -C "$work/wt/chore-ignored" commit -q -m ignore
-git -C "$work/wt/chore-ignored" push -q origin chore/ignored 2>/dev/null || exit 1
-pr chore/ignored MERGED "$(git -C "$work/wt/chore-ignored" rev-parse HEAD)"; echo secret > "$work/wt/chore-ignored/ignored.txt"
+echo ignored.txt > "$work/wt/chore-ignored/.gitignore"
+git -C "$work/wt/chore-ignored" add .gitignore
+git -C "$work/wt/chore-ignored" commit -q -m ignore
+git -C "$work/wt/chore-ignored" push -q origin chore/ignored 2> /dev/null || exit 1
+pr chore/ignored MERGED "$(git -C "$work/wt/chore-ignored" rev-parse HEAD)"
+echo secret > "$work/wt/chore-ignored/ignored.txt"
 sp="$work/wt sp/ré d" # spaces and a non-ASCII letter in the worktree's path
 mkdir -p "$work/wt sp"
-{ git worktree add -q -b chore/spaced "$sp" main && echo x > "$sp/f" && git -C "$sp" add f && git -C "$sp" commit -q -m spaced && git -C "$sp" push -q origin chore/spaced 2>/dev/null; } || exit 1
+{ git worktree add -q -b chore/spaced "$sp" main && echo x > "$sp/f" && git -C "$sp" add f && git -C "$sp" commit -q -m spaced && git -C "$sp" push -q origin chore/spaced 2> /dev/null; } || exit 1
 pr chore/spaced MERGED "$(git -C "$sp" rev-parse HEAD)"
 np="$work/wt-np/w" # a worktree whose parent folder can't be searched is out of reach, not deleted
-{ git worktree add -q -b chore/noperm "$np" main && echo x > "$np/f" && git -C "$np" add f && git -C "$np" commit -q -m noperm && git -C "$np" push -q origin chore/noperm 2>/dev/null; } || exit 1
+{ git worktree add -q -b chore/noperm "$np" main && echo x > "$np/f" && git -C "$np" add f && git -C "$np" commit -q -m noperm && git -C "$np" push -q origin chore/noperm 2> /dev/null; } || exit 1
 pr chore/noperm MERGED "$(git -C "$np" rev-parse HEAD)"
-noperm_ok=false; if [[ "$(id -u)" != 0 ]]; then chmod 000 "$work/wt-np"; [[ ! -x "$work/wt-np" ]] && noperm_ok=true; fi
-tip=$(branch chore/symlinked yes) || exit 1;        pr chore/symlinked MERGED "$tip" # git's entry for it is a symlink to a folder elsewhere: never followed
-command rm -rf "$work/wt/chore-symlinked"; mv "$repo/.git/worktrees/chore-symlinked" "$work/elsewhere-entry"; ln -s "$work/elsewhere-entry" "$repo/.git/worktrees/chore-symlinked"
-tip=$(branch chore/local-race yes) || exit 1;       pr chore/local-race MERGED "$tip"
+noperm_ok=false
+if [[ "$(id -u)" != 0 ]]; then
+  chmod 000 "$work/wt-np"
+  [[ ! -x "$work/wt-np" ]] && noperm_ok=true
+fi
+tip=$(branch chore/symlinked yes) || exit 1
+pr chore/symlinked MERGED "$tip" # git's entry for it is a symlink to a folder elsewhere: never followed
+command rm -rf "$work/wt/chore-symlinked"
+mv "$repo/.git/worktrees/chore-symlinked" "$work/elsewhere-entry"
+ln -s "$work/elsewhere-entry" "$repo/.git/worktrees/chore-symlinked"
+tip=$(branch chore/local-race yes) || exit 1
+pr chore/local-race MERGED "$tip"
 wt_at() { # wt_at <branch> <dir>: a pushed worktree at <dir>, with a merged PR at its tip
-  { git worktree add -q -b "$1" "$2" main && echo x > "$2/f" && git -C "$2" add f && git -C "$2" commit -q -m "$1" && git -C "$2" push -q origin "$1" 2>/dev/null; } || exit 1
+  { git worktree add -q -b "$1" "$2" main && echo x > "$2/f" && git -C "$2" add f && git -C "$2" commit -q -m "$1" && git -C "$2" push -q origin "$1" 2> /dev/null; } || exit 1
   pr "$1" MERGED "$(git -C "$2" rev-parse HEAD)"
 }
 # A folder whose parent is empty or gone can't be told from an unmounted drive: kept, with the hint to prune
-wt_at chore/only-child "$work/wt-oc/oc"; command rm -rf "$work/wt-oc/oc"
-wt_at chore/parent-gone "$work/wt-pg/pg"; command rm -rf "$work/wt-pg"
+wt_at chore/only-child "$work/wt-oc/oc"
+command rm -rf "$work/wt-oc/oc"
+wt_at chore/parent-gone "$work/wt-pg/pg"
+command rm -rf "$work/wt-pg"
 # Four merged branches under one parent: clean ones before and after the hand-deleted ones. Removing the clean ones empties the parent, but the answer was decided before the run.
 wt_at chore/ord-a-clean "$work/wt-ord/a"
-wt_at chore/ord-b-stale "$work/wt-ord/b"; command rm -rf "$work/wt-ord/b"
+wt_at chore/ord-b-stale "$work/wt-ord/b"
+command rm -rf "$work/wt-ord/b"
 wt_at chore/ord-c-clean "$work/wt-ord/c"
-wt_at chore/ord-d-stale "$work/wt-ord/d"; command rm -rf "$work/wt-ord/d"
+wt_at chore/ord-d-stale "$work/wt-ord/d"
+command rm -rf "$work/wt-ord/d"
 # A hand-deleted worktree whose folder name ends in a space is still found (the path is read whole, not trimmed), and its parent is not empty
-mkdir -p "$work/wt-ts"; touch "$work/wt-ts/other"
-wt_at chore/trail-space "$work/wt-ts/t "; command rm -rf "$work/wt-ts/t "
-wt_at chore/parent-file "$work/wt-pf/pf"; command rm -rf "$work/wt-pf"; touch "$work/wt-pf"; chmod 755 "$work/wt-pf" # the parent is now an executable file, not a folder
+mkdir -p "$work/wt-ts"
+touch "$work/wt-ts/other"
+wt_at chore/trail-space "$work/wt-ts/t "
+command rm -rf "$work/wt-ts/t "
+wt_at chore/parent-file "$work/wt-pf/pf"
+command rm -rf "$work/wt-pf"
+touch "$work/wt-pf"
+chmod 755 "$work/wt-pf" # the parent is now an executable file, not a folder
 # A branch a worktree is rebasing shows as detached in the worktree list: git branch -D refuses it
 wt_at chore/rebasing "$work/wt/chore-rebasing"
-(cd "$work/wt/chore-rebasing" && GIT_SEQUENCE_EDITOR="sed -i.bak 's/^pick/edit/'" git rebase -q -i -f main >/dev/null 2>&1)
-[[ -d "$repo/.git/worktrees/chore-rebasing/rebase-merge" ]] || { echo "setup failed: the rebase did not stop"; exit 1; }
+(cd "$work/wt/chore-rebasing" && GIT_SEQUENCE_EDITOR="sed -i.bak 's/^pick/edit/'" git rebase -q -i -f main > /dev/null 2>&1)
+[[ -d "$repo/.git/worktrees/chore-rebasing/rebase-merge" ]] || {
+  echo "setup failed: the rebase did not stop"
+  exit 1
+}
 # A branch a worktree is rebasing with the apply backend (rebase-apply/head-name), and one whose name starts like the interactive one's (the match is exact)
 wt_at chore/apply-busy "$work/wt/chore-apply-busy"
-( cd "$work/wt/chore-apply-busy" && git checkout -q --detach main && echo other > f && git add f && git commit -q -m other && o=$(git rev-parse HEAD) && git checkout -q chore/apply-busy && git rebase --apply "$o" >/dev/null 2>&1 )
-[[ -d "$repo/.git/worktrees/chore-apply-busy/rebase-apply" ]] || { echo "setup failed: the apply rebase did not stop"; exit 1; }
-wt_at chore/rebasing-2 "$work/wt/chore-rebasing-2"; wt_at chore/apply "$work/wt/chore-apply"; wt_at chore/bisect "$work/wt/chore-bisect" # clean branches whose names are a prefix of (or extend) a busy one's
+(cd "$work/wt/chore-apply-busy" && git checkout -q --detach main && echo other > f && git add f && git commit -q -m other && o=$(git rev-parse HEAD) && git checkout -q chore/apply-busy && git rebase --apply "$o" > /dev/null 2>&1)
+[[ -d "$repo/.git/worktrees/chore-apply-busy/rebase-apply" ]] || {
+  echo "setup failed: the apply rebase did not stop"
+  exit 1
+}
+# clean branches whose names are a prefix of (or extend) a busy one's
+wt_at chore/rebasing-2 "$work/wt/chore-rebasing-2"
+wt_at chore/apply "$work/wt/chore-apply"
+wt_at chore/bisect "$work/wt/chore-bisect"
 # A bisect that moved HEAD off the branch: the worktree list shows it detached, BISECT_START still holds the branch's name
 { git worktree add -q -b chore/bisecting2 "$work/wt/chore-bisecting2" main && for i in 1 2 3; do echo "$i" > "$work/wt/chore-bisecting2/b$i" && git -C "$work/wt/chore-bisecting2" add . && git -C "$work/wt/chore-bisecting2" commit -q -m "c$i"; done \
-  && git -C "$work/wt/chore-bisecting2" push -q origin chore/bisecting2 2>/dev/null; } || exit 1
+  && git -C "$work/wt/chore-bisecting2" push -q origin chore/bisecting2 2> /dev/null; } || exit 1
 pr chore/bisecting2 MERGED "$(git -C "$work/wt/chore-bisecting2" rev-parse HEAD)"
-git -C "$work/wt/chore-bisecting2" bisect start HEAD HEAD~2 >/dev/null 2>&1
-[[ -z "$(git -C "$work/wt/chore-bisecting2" branch --show-current)" ]] || { echo "setup failed: the bisect did not detach HEAD"; exit 1; }
+git -C "$work/wt/chore-bisecting2" bisect start HEAD HEAD~2 > /dev/null 2>&1
+[[ -z "$(git -C "$work/wt/chore-bisecting2" branch --show-current)" ]] || {
+  echo "setup failed: the bisect did not detach HEAD"
+  exit 1
+}
 # A hand-deleted worktree whose branch moves while gh is asked: git's entry for it must stay
-wt_at chore/stale-race "$work/wt/stale-race"; command rm -rf "$work/wt/stale-race"
+wt_at chore/stale-race "$work/wt/stale-race"
+command rm -rf "$work/wt/stale-race"
 # A branch that is an alias (a symbolic ref) of a branch that is kept: only the alias may go
-git symbolic-ref refs/heads/chore/sym refs/heads/fix/2-dirty; pr chore/sym MERGED "$(git rev-parse fix/2-dirty)"
+git symbolic-ref refs/heads/chore/sym refs/heads/fix/2-dirty
+pr chore/sym MERGED "$(git rev-parse fix/2-dirty)"
 # A branch a worktree is bisecting keeps its name in BISECT_START; the worktree list shows nothing for it
-wt_at chore/bisecting "$work/wt/chore-bisecting"; git -C "$work/wt/chore-bisecting" bisect start >/dev/null 2>&1
-[[ -f "$repo/.git/worktrees/chore-bisecting/BISECT_START" ]] || { echo "setup failed: the bisect did not start"; exit 1; }
+wt_at chore/bisecting "$work/wt/chore-bisecting"
+git -C "$work/wt/chore-bisecting" bisect start > /dev/null 2>&1
+[[ -f "$repo/.git/worktrees/chore-bisecting/BISECT_START" ]] || {
+  echo "setup failed: the bisect did not start"
+  exit 1
+}
 # A branch that moves between cleanup's last check and its delete (the shim lands a commit just before update-ref -d)
-tip=$(branch chore/race2 yes) || exit 1; pr chore/race2 MERGED "$tip"; race2_tip="$tip"
+tip=$(branch chore/race2 yes) || exit 1
+pr chore/race2 MERGED "$tip"
+race2_tip="$tip"
 # The verdict, beyond the single-PR cases
-tip=$(branch chore/v-other-main yes) || exit 1;     pr chore/v-other-main MERGED "$tip" feature/9-base; pr chore/v-other-main MERGED "$tip"; remote_only chore/v-other-main
-tip=$(branch chore/v-closed-other yes) || exit 1;   pr chore/v-closed-other CLOSED "$tip"; pr chore/v-closed-other MERGED "$tip" develop; remote_only chore/v-closed-other
-tip=$(branch chore/v-closed-old yes) || exit 1;     pr chore/v-closed-old CLOSED "$main_init"; remote_only chore/v-closed-old
-tip=$(branch chore/v-open-old yes) || exit 1;       pr chore/v-open-old OPEN "$main_init"; pr chore/v-open-old MERGED "$tip"; remote_only chore/v-open-old
+tip=$(branch chore/v-other-main yes) || exit 1
+pr chore/v-other-main MERGED "$tip" feature/9-base
+pr chore/v-other-main MERGED "$tip"
+remote_only chore/v-other-main
+tip=$(branch chore/v-closed-other yes) || exit 1
+pr chore/v-closed-other CLOSED "$tip"
+pr chore/v-closed-other MERGED "$tip" develop
+remote_only chore/v-closed-other
+tip=$(branch chore/v-closed-old yes) || exit 1
+pr chore/v-closed-old CLOSED "$main_init"
+remote_only chore/v-closed-old
+tip=$(branch chore/v-open-old yes) || exit 1
+pr chore/v-open-old OPEN "$main_init"
+pr chore/v-open-old MERGED "$tip"
+remote_only chore/v-open-old
 # gh is asked for 100 PRs at most: 99 rows are all of them, 100 may have cut the branch's own PR off
-tip=$(branch chore/cap99 yes) || exit 1;            pr chore/cap99 MERGED "$tip"; for _ in $(seq 98); do pr chore/cap99 CLOSED "$main_init" main x/y; done; remote_only chore/cap99
-tip=$(branch chore/cap100 yes) || exit 1;           pr chore/cap100 MERGED "$tip"; for _ in $(seq 99); do pr chore/cap100 CLOSED "$main_init" main x/y; done; remote_only chore/cap100
+tip=$(branch chore/cap99 yes) || exit 1
+pr chore/cap99 MERGED "$tip"
+for _ in $(seq 98); do pr chore/cap99 CLOSED "$main_init" main x/y; done
+remote_only chore/cap99
+tip=$(branch chore/cap100 yes) || exit 1
+pr chore/cap100 MERGED "$tip"
+for _ in $(seq 99); do pr chore/cap100 CLOSED "$main_init" main x/y; done
+remote_only chore/cap100
 # The verdict with its rows the other way round (gh lists the newest PR first): the answer must not depend on the order
-tip=$(branch chore/rev-merged-closed yes) || exit 1; pr chore/rev-merged-closed MERGED "$tip"; pr chore/rev-merged-closed CLOSED "$tip"; remote_only chore/rev-merged-closed
-tip=$(branch chore/rev-main-other yes) || exit 1;    pr chore/rev-main-other MERGED "$tip"; pr chore/rev-main-other MERGED "$tip" develop; remote_only chore/rev-main-other
-tip=$(branch chore/rev-other-closed yes) || exit 1;  pr chore/rev-other-closed MERGED "$tip" develop; pr chore/rev-other-closed CLOSED "$tip"; remote_only chore/rev-other-closed
+tip=$(branch chore/rev-merged-closed yes) || exit 1
+pr chore/rev-merged-closed MERGED "$tip"
+pr chore/rev-merged-closed CLOSED "$tip"
+remote_only chore/rev-merged-closed
+tip=$(branch chore/rev-main-other yes) || exit 1
+pr chore/rev-main-other MERGED "$tip"
+pr chore/rev-main-other MERGED "$tip" develop
+remote_only chore/rev-main-other
+tip=$(branch chore/rev-other-closed yes) || exit 1
+pr chore/rev-other-closed MERGED "$tip" develop
+pr chore/rev-other-closed CLOSED "$tip"
+remote_only chore/rev-other-closed
 # A merged branch an open PR is based on (a stacked PR) is kept, local and origin copies alike
-tip=$(branch chore/stack-base yes) || exit 1;        pr chore/stack-base MERGED "$tip"; echo 1 > "$GH_FIX/_base_chore_stack-base"
-tip=$(branch chore/stack-base-remote yes) || exit 1; pr chore/stack-base-remote MERGED "$tip"; echo 2 > "$GH_FIX/_base_chore_stack-base-remote"; remote_only chore/stack-base-remote
+tip=$(branch chore/stack-base yes) || exit 1
+pr chore/stack-base MERGED "$tip"
+echo 1 > "$GH_FIX/_base_chore_stack-base"
+tip=$(branch chore/stack-base-remote yes) || exit 1
+pr chore/stack-base-remote MERGED "$tip"
+echo 2 > "$GH_FIX/_base_chore_stack-base-remote"
+remote_only chore/stack-base-remote
 
 mkdir "$work/shim"
-cat > "$work/shim/git" <<SHIM
+cat > "$work/shim/git" << SHIM
 #!/usr/bin/env bash
 if [[ "\$1 \$2 \$3" == "remote get-url origin" && -n "\${SHIM_ORIGIN_URL:-}" ]]; then echo "\$SHIM_ORIGIN_URL"; exit 0; fi
 if [[ "\$1" == fetch && -n "\${SHIM_FETCH_FAIL:-}" ]]; then # all: every fetch fails; closing: the first passes and the later ones fail
@@ -238,7 +384,7 @@ exec "$(command -v git)" "\$@"
 SHIM
 chmod +x "$work/shim/git"
 has_local() { git show-ref --verify --quiet "refs/heads/$1"; }
-has_remote() { git ls-remote --exit-code --heads origin "refs/heads/$1" >/dev/null 2>&1; }
+has_remote() { git ls-remote --exit-code --heads origin "refs/heads/$1" > /dev/null 2>&1; }
 
 main_before=$(git rev-parse main)
 other_push main from-someone-else
@@ -246,20 +392,24 @@ other_push main from-someone-else
 # gh failing is an error, and nothing is removed. A branch deleted on origin since the last fetch is pruned before gh is asked (the first fetch --prune).
 git push -q origin main:refs/heads/chore/preprune && git fetch -q origin && git -C "$work/other" push -q origin --delete chore/preprune
 touch "$GH_FIX/_fail"
-out=$(bash scripts/cleanup.sh 2>&1); st=$?
+out=$(bash scripts/cleanup.sh 2>&1)
+st=$?
 rm -f "$GH_FIX/_fail"
 git reset -q --hard "$main_before"
 check "a gh failure fails the run" "[[ $st != 0 ]] && grep -q 'gh pr list failed' <<<\"\$out\"" # gh-repo: ok
 check "the first fetch prunes a branch deleted on origin" "! git show-ref --verify --quiet refs/remotes/origin/chore/preprune"
 touch "$GH_FIX/_failbase"
-out2=$(bash scripts/cleanup.sh 2>&1); st2=$?
+out2=$(bash scripts/cleanup.sh 2>&1)
+st2=$?
 rm -f "$GH_FIX/_failbase"
 git reset -q --hard "$main_before"
 check "a failing lookup of the PRs based on a branch fails the run and removes nothing" "[[ $st2 == 1 ]] && grep -q 'gh pr list --base failed for' <<<\"\$out2\" && has_local feature/1-merged && [[ -d $work/wt/feature-1-merged ]] && has_remote chore/remote-only" # gh-repo: ok
+
 check "a gh failure removes nothing" "has_local feature/1-merged && [[ -d $work/wt/feature-1-merged ]] && has_remote chore/remote-only" # gh-repo: ok
 
 # --dry-run
-out=$(bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+out=$(bash scripts/cleanup.sh --dry-run 2>&1)
+st=$?
 check "dry run succeeds" "[[ $st == 0 ]]"
 check "the dry run's summary says so" "grep -q '^Done: [0-9]* removed, [0-9]* kept (dry run)\\.\$' <<<\"\$out\""
 o2=$(bash scripts/cleanup.sh --dry-run --include-closed 2>&1)
@@ -269,7 +419,8 @@ check "a dry run keeps the busy branches as the real run does" "grep -q 'keep   
 check "dry run lists every step" "grep -q 'would: git worktree remove .*feature-1-merged' <<<\"\$out\" && grep -q 'would: git update-ref --no-deref -d refs/heads/feature/1-merged' <<<\"\$out\" && grep -q 'would: git push .*feature/1-merged' <<<\"\$out\" && grep -q 'would: git merge --ff-only origin/main' <<<\"\$out\""
 
 check "a dry run keeps a locked worktree with a missing folder, as the real run does" "grep -q 'keep   chore/stale-locked: its worktree is locked and its folder is missing' <<<\"\$out\" && ! grep -q 'remove chore/stale-locked' <<<\"\$out\" && ! grep -q 'would: git update-ref --no-deref -d refs/heads/chore/stale-locked' <<<\"\$out\""
-if [[ "$rel_ok" == true ]]; then check "a dry run finds the entry of a worktree git stored with a relative path" "grep -q 'would: forget the missing worktree .*chore-relative-path' <<<\"\$out\""
+if [[ "$rel_ok" == true ]]; then
+  check "a dry run finds the entry of a worktree git stored with a relative path" "grep -q 'would: forget the missing worktree .*chore-relative-path' <<<\"\$out\""
 elif [[ -n "${CI:-}" ]]; then bad "this git can't read a worktree stored with a relative path, and CI must test it"; else echo "skip - this git can't read a relative worktree path"; fi
 check "a dry run says it would forget both hand-deleted worktrees, whichever side of the clean ones they sort" "grep -q 'would: forget the missing worktree .*wt-ord/b' <<<\"\$out\" && grep -q 'would: forget the missing worktree .*wt-ord/d' <<<\"\$out\" && ! grep -q 'keep   chore/ord-' <<<\"\$out\""
 check "a dry run forgets no worktree entry, but says it would" "grep -q '^remove chore/stale\$' <<<\"\$out\" && grep -q 'would: forget the missing worktree .*chore-stale\$' <<<\"\$out\" && grep -q 'would: git update-ref --no-deref -d refs/heads/chore/stale ' <<<\"\$out\" && [[ -d $repo/.git/worktrees/chore-stale ]] && has_local chore/stale"
@@ -306,22 +457,31 @@ git remote add upstream https://github.com/up/r.git
 o=$(env -u GITHUB_REPOSITORY EXPECT_GH_REPO=up/r EXPECT_GH_BASE_REPO=acme/r PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=git@github.com:acme/r.git bash scripts/cleanup.sh --dry-run 2>&1)
 git remote remove upstream
 check "an upstream remote, not origin, names the repository gh is asked about" "grep -q 'remove chore/owner-case' <<<\"\$o\"" # gh-repo: ok
-o=$(env -u GITHUB_REPOSITORY PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+o=$(env -u GITHUB_REPOSITORY PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r bash scripts/cleanup.sh --dry-run 2>&1)
+st=$?
 check "a non-GitHub origin with no GITHUB_REPOSITORY fails, saying why" "[[ $st != 0 ]] && grep -q \"can't tell which repository\" <<<\"\$o\""
 
 # origin's push URLs: a different repository than the fetch URL's is refused before anything is read or removed; the same repository in another URL form is fine
 git config remote.origin.pushurl https://github.com/evil/fork.git
-o=$(bash scripts/cleanup.sh --dry-run 2>&1); st=$?; git config --unset remote.origin.pushurl
+o=$(bash scripts/cleanup.sh --dry-run 2>&1)
+st=$?
+git config --unset remote.origin.pushurl
 check "a push URL of another repository is refused, saying so" "[[ $st == 1 ]] && grep -q \"origin's push URL (https://github.com/evil/fork.git)\" <<<\"\$o\" && ! grep -q '^remove ' <<<\"\$o\""
-git config remote.origin.pushurl "$work/origin.git"; git config --add remote.origin.pushurl https://github.com/evil/fork.git
-o=$(bash scripts/cleanup.sh --dry-run 2>&1); st=$?; git config --unset-all remote.origin.pushurl
+git config remote.origin.pushurl "$work/origin.git"
+git config --add remote.origin.pushurl https://github.com/evil/fork.git
+o=$(bash scripts/cleanup.sh --dry-run 2>&1)
+st=$?
+git config --unset-all remote.origin.pushurl
 check "one of several push URLs naming another repository is refused" "[[ $st == 1 ]] && grep -q 'push URL (https://github.com/evil/fork.git)' <<<\"\$o\""
-o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/Acme/R SHIM_PUSH_URLS="git@github.com:acme/r.git;ssh://git@github.com/ACME/r.git" EXPECT_GH_BASE_REPO=acme/r bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/Acme/R SHIM_PUSH_URLS="git@github.com:acme/r.git;ssh://git@github.com/ACME/r.git" EXPECT_GH_BASE_REPO=acme/r bash scripts/cleanup.sh --dry-run 2>&1)
+st=$?
 check "push URLs of the same repository in other forms (and case) are accepted" "[[ $st == 0 ]] && grep -q 'remove chore/owner-case' <<<\"\$o\""
-o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS="https://git.example.com/other/r" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS="https://git.example.com/other/r" bash scripts/cleanup.sh --dry-run 2>&1)
+st=$?
 check "push URLs that differ for a non-GitHub origin are refused" "[[ $st == 1 ]] && grep -q 'push URL (https://git.example.com/other/r)' <<<\"\$o\""
 for pu in git@github.com:evil/r.git https://github.com/acme/other ssh://git@github.com/acme.git; do
-  o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+  o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1)
+  st=$?
   shown="${pu/#ssh:\/\/git@/ssh://***@}" # a scheme URL's userinfo is never printed
   check "a github.com push URL ($pu) of another owner or name than the fetch URL's is refused" "[[ $st == 1 ]] && grep -qF \"push URL ($shown)\" <<<\"\$o\""
 done
@@ -329,7 +489,8 @@ NOTE='[the masked text holds a ?, #, \ or @, so another URL reader may take anot
 # A URL's userinfo can hold a credential (https://TOKEN@host/..., https://user:password@host/...): the refusal and the CLEANUP_PUSH_URL_OK=1 warning print
 # both URLs without it, in place of it ***, and the comparison still sees the URLs as they are.
 for creds in 'ghp_SECRETtoken123' 'me:SECRETpass' 'x-access-token:SECRET@x'; do
-  o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL="https://$creds@github.com/acme/r" SHIM_PUSH_URLS="https://$creds@github.com/evil/r" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+  o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL="https://$creds@github.com/acme/r" SHIM_PUSH_URLS="https://$creds@github.com/evil/r" bash scripts/cleanup.sh --dry-run 2>&1)
+  st=$?
   check "a refused push URL with userinfo ($creds) is printed without it, and so is the fetch URL" "[[ $st == 1 ]] && ! grep -q SECRET <<<\"\$o\" && grep -qF 'push URL (https://***@github.com/evil/r' <<<\"\$o\" && grep -qF 'read from (https://***@github.com/acme/r' <<<\"\$o\""
   o=$(PATH="$work/shim:$PATH" CLEANUP_PUSH_URL_OK=1 SHIM_ORIGIN_URL="https://$creds@ghe.example.com/acme/r" SHIM_PUSH_URLS="https://$creds@ghe.example.com/other/r" bash scripts/cleanup.sh --dry-run 2>&1)
   check "the CLEANUP_PUSH_URL_OK=1 warning prints a push URL with userinfo ($creds) without it, and the fetch URL too" "! grep -q SECRET <<<\"\$o\" && grep -qF 'push URL (https://***@ghe.example.com/other/r' <<<\"\$o\" && grep -qF 'read from (https://***@ghe.example.com/acme/r' <<<\"\$o\""
@@ -339,71 +500,91 @@ done
 # says another reader may take another host: the host is never hidden without a word.
 for pu in 'https://me:pa#SECRET@github.com/evil/r' 'https://me:pa?SECRET@github.com/evil/r' 'https://evil.com\SECRET@github.com/evil/r' \
   'https://a@SECRET@github.com/evil/r'; do
-  o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+  o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1)
+  st=$?
   check "a push URL whose userinfo holds a ?, #, \\ or @ ($pu) is masked, with a word on the host" "[[ $st == 1 ]] && ! grep -q SECRET <<<\"\$o\" && grep -qF \"push URL (https://***@github.com/evil/r \$NOTE)\" <<<\"\$o\""
 done
 # Every scheme is masked (letters, digits, + . - after the first letter, in any case), and so is an empty userinfo; a URL with no scheme, or none
 # of whose @ comes before the first /, is printed as it is.
 for pu in 'http://SECRET@git.example.com/other/r' 'git+ssh://SECRET@git.example.com/other/r' 'HTTPS://SECRET@git.example.com/other/r' \
   'svn.x-1://SECRET@git.example.com/other/r' 'https://@git.example.com/other/r'; do
-  o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+  o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1)
+  st=$?
   check "a push URL $pu is printed with its userinfo masked" "[[ $st == 1 ]] && ! grep -q SECRET <<<\"\$o\" && grep -qF \"push URL (\${pu%%://*}://***@git.example.com/other/r)\" <<<\"\$o\""
 done
 for pu in 'git@ghe.example.com:other/r.git' '1https://SECRET@git.example.com/other/r'; do
-  o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+  o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1)
+  st=$?
   check "a push URL with no scheme ($pu) is printed as it is" "[[ $st == 1 ]] && grep -qF \"push URL ($pu)\" <<<\"\$o\""
 done
 # The match runs in the C locale (shown_url's local LC_ALL=C): in a UTF-8 locale a byte that is no character can stop bash's [^/]* and print the
 # URL, token and all. Run it under each UTF-8 locale the machine has, and pin the line, which holds on a machine with none.
-for loc in $(locale -a 2>/dev/null | grep -iE 'utf-?8$'); do
-  o=$(LC_ALL="$loc" PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS=$'https://tok\xffSECRET\xc3@git.example.com/other/r' bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+for loc in $(locale -a 2> /dev/null | grep -iE 'utf-?8$'); do
+  o=$(LC_ALL="$loc" PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS=$'https://tok\xffSECRET\xc3@git.example.com/other/r' bash scripts/cleanup.sh --dry-run 2>&1)
+  st=$?
   check "under $loc, userinfo with bytes that are no UTF-8 character is masked" "[[ $st == 1 ]] && ! grep -q SECRET <<<\"\$o\" && grep -qF 'push URL (https://***@git.example.com/other/r)' <<<\"\$o\""
 done
 # Control characters (ESC, CR, ...) in a URL could redraw the terminal line and hide its host: each is printed as ?.
-o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS=$'https://evil.com/\e[2K\rgit.example.com/acme/r' bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS=$'https://evil.com/\e[2K\rgit.example.com/acme/r' bash scripts/cleanup.sh --dry-run 2>&1)
+st=$?
 check "a push URL's control characters are printed as ?" "[[ $st == 1 && \$o != *\$'\\e'* && \$o != *\$'\\r'* ]] && grep -qF 'push URL (https://evil.com/?[2K?git.example.com/acme/r)' <<<\"\$o\""
-o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS=$'https://SECRET@git.example.com/other/r\x7f\x01' bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS=$'https://SECRET@git.example.com/other/r\x7f\x01' bash scripts/cleanup.sh --dry-run 2>&1)
+st=$?
 check "a masked push URL's control characters are printed as ? too" "[[ $st == 1 && \$o != *\$'\\x7f'* && \$o != *\$'\\x01'* ]] && ! grep -q SECRET <<<\"\$o\" && grep -qF 'push URL (https://***@git.example.com/other/r??)' <<<\"\$o\""
 # Every byte that is not printable ASCII (a UTF-8 C1 control such as U+009B, a bidi override such as U+202E) is printed as ? too.
-o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS=$'https://evil.com/\xc2\x9b2K\xe2\x80\xaegit.example.com/acme/r' bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS=$'https://evil.com/\xc2\x9b2K\xe2\x80\xaegit.example.com/acme/r' bash scripts/cleanup.sh --dry-run 2>&1)
+st=$?
 check "a push URL's non-ASCII bytes are printed as ?" "[[ $st == 1 ]] && ! LC_ALL=C grep -q '[^ -~]' <<<\"\$(grep -o 'push URL ([^)]*)' <<<\"\$o\")\" && grep -qF 'push URL (https://evil.com/??2K???git.example.com/acme/r)' <<<\"\$o\""
-o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS=$'https://SECRET@git.example.com/\xc2\x9bother/r' bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS=$'https://SECRET@git.example.com/\xc2\x9bother/r' bash scripts/cleanup.sh --dry-run 2>&1)
+st=$?
 check "a masked push URL's non-ASCII bytes are printed as ? too" "[[ $st == 1 ]] && ! grep -q SECRET <<<\"\$o\" && grep -qF 'push URL (https://***@git.example.com/??other/r)' <<<\"\$o\""
 # Only the shim's own line: it starts with "if [[", which this check's line does not, and [|] is no | in this line's text.
 check "the git shim splits push URLs in the C locale" "grep -Eq '^if .*remote get-url --push --all origin.*[|] LC_ALL=C tr ' '$SCRIPTS/tests/cleanup.test.sh'"
 check "shown_url matches in the C locale" "sed -n '/^shown_url() {/,/^}/p' scripts/cleanup.sh | grep -qx '  local LC_ALL=C'"
 # An @ after the host, in the path, is not userinfo: such a URL is printed as it is.
-o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS="https://git.example.com/other/r@x" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r SHIM_PUSH_URLS="https://git.example.com/other/r@x" bash scripts/cleanup.sh --dry-run 2>&1)
+st=$?
 check "a push URL with an @ only in its path is printed as it is" "[[ $st == 1 ]] && grep -qF 'push URL (https://git.example.com/other/r@x)' <<<\"\$o\""
 # The same credentials in both URLs, of the same repository, still compare as the same: only what is printed changes.
-o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL="https://me:SECRET@git.example.com/acme/r" SHIM_PUSH_URLS="https://me:SECRET@git.example.com/acme/r" EXPECT_GH_REPO=acme/r EXPECT_GH_BASE_REPO=acme/r GITHUB_REPOSITORY=acme/r bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL="https://me:SECRET@git.example.com/acme/r" SHIM_PUSH_URLS="https://me:SECRET@git.example.com/acme/r" EXPECT_GH_REPO=acme/r EXPECT_GH_BASE_REPO=acme/r GITHUB_REPOSITORY=acme/r bash scripts/cleanup.sh --dry-run 2>&1)
+st=$?
 check "a push URL the same as the fetch URL, credentials included, is accepted" "[[ $st == 0 ]]"
-o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="git@ghe.example.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="git@ghe.example.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1)
+st=$?
 check "an ssh push URL for an https fetch URL of a non-github.com host is refused (only the same text is shown to be the same)" "[[ $st == 1 ]] && grep -q 'CLEANUP_PUSH_URL_OK=1' <<<\"\$o\""
-o=$(PATH="$work/shim:$PATH" CLEANUP_PUSH_URL_OK=1 SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="git@ghe.example.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+o=$(PATH="$work/shim:$PATH" CLEANUP_PUSH_URL_OK=1 SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="git@ghe.example.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1)
+st=$?
 check "CLEANUP_PUSH_URL_OK=1 accepts it" "[[ $st == 0 ]]"
-o=$(PATH="$work/shim:$PATH" CLEANUP_PUSH_URL_OK=0 SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="git@ghe.example.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+o=$(PATH="$work/shim:$PATH" CLEANUP_PUSH_URL_OK=0 SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="git@ghe.example.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1)
+st=$?
 check "only CLEANUP_PUSH_URL_OK=1 does: 0 does not" "[[ $st == 1 ]]"
 o=$(PATH="$work/shim:$PATH" CLEANUP_PUSH_URL_OK=1 SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="git@ghe.example.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1)
 check "CLEANUP_PUSH_URL_OK=1 says which push URL it let through unchecked" "grep -qF 'CLEANUP_PUSH_URL_OK=1: origin'\"'\"'s push URL (git@ghe.example.com:acme/r.git)' <<<\"\$o\""
-o=$(EXPECT_GH_BASE_REPO=acme/r PATH="$work/shim:$PATH" CLEANUP_PUSH_URL_OK=1 SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="git@github.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+o=$(EXPECT_GH_BASE_REPO=acme/r PATH="$work/shim:$PATH" CLEANUP_PUSH_URL_OK=1 SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="git@github.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1)
+st=$?
 check "and says nothing for a push URL that is shown to match" "[[ $st == 0 ]] && ! grep -q 'CLEANUP_PUSH_URL_OK' <<<\"\$o\""
-o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="https://ghe.example.com/acme/r" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="https://ghe.example.com/acme/r" bash scripts/cleanup.sh --dry-run 2>&1)
+st=$?
 check "a push URL with the fetch URL's own text is accepted on any host" "[[ $st == 0 ]]"
 for pair in "https://git.example.com/a/team/app|https://git.example.com/b/team/app" "file:///a/acme/r|file:///b/acme/r" "https://[::1]/a/b|https://[::2]/a/b" "/srv/a.git|/srv/b.git" "C:/a/acme/r|C:/b/acme/r"; do
-  o=$(PATH="$work/shim:$PATH" GITHUB_REPOSITORY=acme/r SHIM_ORIGIN_URL="${pair%%|*}" SHIM_PUSH_URLS="${pair##*|}" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+  o=$(PATH="$work/shim:$PATH" GITHUB_REPOSITORY=acme/r SHIM_ORIGIN_URL="${pair%%|*}" SHIM_PUSH_URLS="${pair##*|}" bash scripts/cleanup.sh --dry-run 2>&1)
+  st=$?
   check "different URLs a parser can't read as github.com (${pair%%|*} vs ${pair##*|}) are refused" "[[ $st == 1 ]] && grep -qF \"push URL (${pair##*|})\" <<<\"\$o\""
 done
-o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="git@other.example.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://ghe.example.com/acme/r SHIM_PUSH_URLS="git@other.example.com:acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1)
+st=$?
 check "the same owner/name on another host is refused" "[[ $st == 1 ]] && grep -q 'push URL (git@other.example.com:acme/r.git)' <<<\"\$o\""
-o=$(EXPECT_GH_BASE_REPO=acme/r PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="ssh://git@ssh.github.com:443/acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+o=$(EXPECT_GH_BASE_REPO=acme/r PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="ssh://git@ssh.github.com:443/acme/r.git" bash scripts/cleanup.sh --dry-run 2>&1)
+st=$?
 check "github.com's ssh-over-443 host counts as github.com" "[[ $st == 0 ]]"
 for pu in https://github.com/acme/r/ https://www.github.com/acme/r.git https://GitHub.com/ACME/r HTTPS://github.com/acme/r http://github.com/acme/r github.com:acme/r "https://x:y@github.com/acme/r.git/" ssh://git@SSH.GitHub.com:443/acme/r git://github.com/acme/r.git www.github.com:acme/r "https://us%40er:p~w@github.com/acme/r"; do
-  o=$(EXPECT_GH_BASE_REPO=acme/r PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+  o=$(EXPECT_GH_BASE_REPO=acme/r PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1)
+  st=$?
   check "the push URL $pu is read as github.com's acme/r" "[[ $st == 0 ]]"
 done
 for pu in "https://evil.com#@github.com/acme/r" "https://github.com:/acme/r" "https://github.com/foo/acme/r" "https://github.com/acme/r/extra" "https://github.com/acme/r?x=1" "https://github.com/" "https://ssh.github.com.evil.com/acme/r" "https://user@evil.com/@github.com/acme/r" "file:///github.com/acme/r" "https://[::1]/acme/r" "git@github.com:/acme/r" "https://gitlab.com/a/team/app" "evil.com:x@github.com:acme/r" "x:@github.com:acme/r" "https://github.com/acme /r"; do
-  o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+  o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="$pu" bash scripts/cleanup.sh --dry-run 2>&1)
+  st=$?
   case "$pu" in # a lookalike is printed as it is, save a scheme URL's text up to the last @ before its first /, which is masked
     "https://evil.com#@github.com/acme/r") shown="https://***@github.com/acme/r $NOTE" ;;
     "https://user@evil.com/@github.com/acme/r") shown="https://***@evil.com/@github.com/acme/r" ;;
@@ -411,56 +592,88 @@ for pu in "https://evil.com#@github.com/acme/r" "https://github.com:/acme/r" "ht
   esac
   check "the push URL $pu is not read as github.com's acme/r" "[[ $st == 1 ]] && grep -qF \"push URL ($shown)\" <<<\"\$o\""
 done
-o=$(PATH="$work/shim:$PATH" SHIM_PUSH_EMPTY=1 bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+o=$(PATH="$work/shim:$PATH" SHIM_PUSH_EMPTY=1 bash scripts/cleanup.sh --dry-run 2>&1)
+st=$?
 check "push URLs that print nothing refuse the run too" "[[ $st == 1 ]] && grep -q \"can't read origin's push URLs\" <<<\"\$o\""
-o=$(PATH="$work/shim:$PATH" SHIM_PUSH_FAIL=1 bash scripts/cleanup.sh --dry-run 2>&1); st=$?
+o=$(PATH="$work/shim:$PATH" SHIM_PUSH_FAIL=1 bash scripts/cleanup.sh --dry-run 2>&1)
+st=$?
 check "push URLs that can't be read refuse the run" "[[ $st == 1 ]] && grep -q \"can't read origin's push URLs\" <<<\"\$o\""
-o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="git@github.com:evil/r.git" SHIM_FETCH_FAIL=all SHIM_FETCH_COUNT="$work/fc0" bash scripts/cleanup.sh 2>&1); st=$?
+o=$(PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://github.com/acme/r SHIM_PUSH_URLS="git@github.com:evil/r.git" SHIM_FETCH_FAIL=all SHIM_FETCH_COUNT="$work/fc0" bash scripts/cleanup.sh 2>&1)
+st=$?
 check "a refused push URL stops the real run before it fetches or merges anything" "[[ $st == 1 ]] && grep -q 'push URL' <<<\"\$o\" && [[ ! -e $work/fc0 ]] && [[ \$(git rev-parse main) == $main_before ]]"
 
 # Refusals (main is behind origin/main here, as it is for the real run below)
-o=$( cd "$work/wt/feature-1-merged" && bash "$repo/scripts/cleanup.sh" 2>&1 ); st=$?
+o=$(cd "$work/wt/feature-1-merged" && bash "$repo/scripts/cleanup.sh" 2>&1)
+st=$?
 check "refuses in a linked worktree" "[[ $st != 0 ]] && grep -q 'primary checkout' <<<\"\$o\" && [[ \$(git rev-parse main) == $main_before ]]"
-git checkout -q -b chore/elsewhere; o=$(bash scripts/cleanup.sh 2>&1); st=$?; git checkout -q main; git branch -q -D chore/elsewhere
+git checkout -q -b chore/elsewhere
+o=$(bash scripts/cleanup.sh 2>&1)
+st=$?
+git checkout -q main
+git branch -q -D chore/elsewhere
 check "refuses off main" "[[ $st != 0 ]] && grep -q 'run this on main' <<<\"\$o\" && has_local feature/1-merged && [[ \$(git rev-parse main) == $main_before ]]"
-echo dirt >> scripts/check-branch-name.sh; o=$(bash scripts/cleanup.sh 2>&1); st=$?; git checkout -q -- scripts
+echo dirt >> scripts/check-branch-name.sh
+o=$(bash scripts/cleanup.sh 2>&1)
+st=$?
+git checkout -q -- scripts
 check "refuses a dirty main" "[[ $st != 0 ]] && grep -q 'uncommitted changes' <<<\"\$o\" && has_local feature/1-merged"
-echo x > untracked-file; git config status.showUntrackedFiles no; o=$(bash scripts/cleanup.sh 2>&1); st=$?; git config --unset status.showUntrackedFiles; command rm -f untracked-file
+echo x > untracked-file
+git config status.showUntrackedFiles no
+o=$(bash scripts/cleanup.sh 2>&1)
+st=$?
+git config --unset status.showUntrackedFiles
+command rm -f untracked-file
 check "refuses a main with an untracked file even when status.showUntrackedFiles is no" "[[ $st != 0 ]] && grep -q 'uncommitted changes' <<<\"\$o\" && has_local feature/1-merged"
-wt_at chore/x-untracked "$work/wt/chore-x-untracked"; echo x > "$work/wt/chore-x-untracked/new-file"
-git config status.showUntrackedFiles no; o=$(bash scripts/cleanup.sh --dry-run 2>&1); git config --unset status.showUntrackedFiles
+wt_at chore/x-untracked "$work/wt/chore-x-untracked"
+echo x > "$work/wt/chore-x-untracked/new-file"
+git config status.showUntrackedFiles no
+o=$(bash scripts/cleanup.sh --dry-run 2>&1)
+git config --unset status.showUntrackedFiles
 check "keeps a worktree with an untracked file even when status.showUntrackedFiles is no" "grep -q 'keep   chore/x-untracked: its worktree has uncommitted changes' <<<\"\$o\""
 scrub chore/x-untracked
 check "the untracked-file scenario is cleaned up before the next one" "! has_local chore/x-untracked && ! has_remote chore/x-untracked && [[ ! -e $work/wt/chore-x-untracked ]]"
-o=$(bash scripts/cleanup.sh --bogus 2>&1); st=$?
+o=$(bash scripts/cleanup.sh --bogus 2>&1)
+st=$?
 check "refuses an unknown flag" "[[ $st != 0 ]] && grep -q '^usage:' <<<\"\$o\" && has_local feature/1-merged && [[ \$(git rev-parse main) == $main_before ]]"
-mv scripts/check-branch-name.sh "$work/cbn.sh"; o=$(bash scripts/cleanup.sh 2>&1); st=$?; mv "$work/cbn.sh" scripts/check-branch-name.sh
+mv scripts/check-branch-name.sh "$work/cbn.sh"
+o=$(bash scripts/cleanup.sh 2>&1)
+st=$?
+mv "$work/cbn.sh" scripts/check-branch-name.sh
 check "refuses without check-branch-name.sh" "[[ $st != 0 ]] && grep -q 'check-branch-name.sh is missing' <<<\"\$o\" && has_local feature/1-merged && [[ \$(git rev-parse main) == $main_before ]]"
-mkdir "$work/nogh"; ln -s "$(command -v git)" "$work/nogh/git"
-o=$(PATH="$work/nogh" "$(command -v bash)" scripts/cleanup.sh 2>&1); st=$?
+mkdir "$work/nogh"
+ln -s "$(command -v git)" "$work/nogh/git"
+o=$(PATH="$work/nogh" "$(command -v bash)" scripts/cleanup.sh 2>&1)
+st=$?
 check "refuses without gh" "[[ $st != 0 ]] && grep -q 'gh is needed' <<<\"\$o\" && has_local feature/1-merged" # gh-repo: ok
 echo local > local-main && git add local-main && git commit -q -m "local main commit"
-o=$(bash scripts/cleanup.sh 2>&1); st=$?; git reset -q --hard "$main_before"
+o=$(bash scripts/cleanup.sh 2>&1)
+st=$?
+git reset -q --hard "$main_before"
 check "refuses when main can't fast-forward" "[[ $st != 0 ]] && grep -q \"can't fast-forward\" <<<\"\$o\" && has_local feature/1-merged"
 
-cat > "$GH_FIX/chore_lease-race.hook" <<HOOK
+cat > "$GH_FIX/chore_lease-race.hook" << HOOK
 git -C "$work/other" fetch -q origin && git -C "$work/other" checkout -q -B tmp origin/chore/lease-race && echo late > "$work/other/late" \
   && git -C "$work/other" add late && git -C "$work/other" commit -q -m late && git -C "$work/other" push -q origin tmp:refs/heads/chore/lease-race
 HOOK
 echo "git -C \"$work/other\" push -q origin --delete chore/gone-race" > "$GH_FIX/chore_gone-race.hook"
-cat > "$GH_FIX/chore_net-fail.hook" <<HOOK
+cat > "$GH_FIX/chore_net-fail.hook" << HOOK
 git -C "$work/other" fetch -q origin && git -C "$work/other" checkout -q -B tmp origin/chore/net-fail && echo late > "$work/other/late2" \
   && git -C "$work/other" add late2 && git -C "$work/other" commit -q -m late2 && git -C "$work/other" push -q origin tmp:refs/heads/chore/net-fail
 HOOK
 echo "git -C \"$work/wt/chore-local-race\" commit -q --allow-empty -m late-local" > "$GH_FIX/chore_local-race.hook"
 echo "git -C \"$repo\" update-ref refs/heads/chore/stale-race \"\$(git -C \"$repo\" commit-tree 'chore/stale-race^{tree}' -p chore/stale-race -m late)\"" > "$GH_FIX/chore_stale-race.hook"
-git fetch -q origin; lease_tip_before=$(git rev-parse origin/chore/lease-race)
+git fetch -q origin
+lease_tip_before=$(git rev-parse origin/chore/lease-race)
 # The real run: several removals are refused (a locked worktree, a ref lock, a moved origin tip, a failed ls-remote), so it exits 1 after doing the rest
-local_before=$(git for-each-ref refs/heads | wc -l | tr -d ' '); origin_before=$(git ls-remote --heads origin | wc -l | tr -d ' ')
-out=$(PATH="$work/shim:$PATH" SHIM_LSREMOTE_FAIL=chore/net-fail SHIM_ADVANCE=chore/race2 bash scripts/cleanup.sh 2>&1); st=$?
+local_before=$(git for-each-ref refs/heads | wc -l | tr -d ' ')
+origin_before=$(git ls-remote --heads origin | wc -l | tr -d ' ')
+out=$(PATH="$work/shim:$PATH" SHIM_LSREMOTE_FAIL=chore/net-fail SHIM_ADVANCE=chore/race2 bash scripts/cleanup.sh 2>&1)
+st=$?
 check "exits 1 when git refused a removal, after doing the rest" "[[ $st == 1 ]]"
-local_after=$(git for-each-ref refs/heads | wc -l | tr -d ' '); origin_after=$(git ls-remote --heads origin | wc -l | tr -d ' ')
-removed_n=$(( local_before - local_after + origin_before - origin_after )); kept_n=$(grep -c '^keep ' <<<"$out")
+local_after=$(git for-each-ref refs/heads | wc -l | tr -d ' ')
+origin_after=$(git ls-remote --heads origin | wc -l | tr -d ' ')
+removed_n=$((local_before - local_after + origin_before - origin_after))
+kept_n=$(grep -c '^keep ' <<< "$out")
 check "the summary counts what was removed and what was kept" "grep -qx 'Done: $removed_n removed, $kept_n kept.' <<<\"\$out\" && [[ $removed_n -gt 5 && $kept_n -gt 5 ]]"
 check "the closing fetch prunes the tracking ref of a branch deleted on origin during the run" "! git show-ref --verify --quiet refs/remotes/origin/chore/gone-race"
 check "a worktree folder deleted by hand is forgotten and its branch removed in the same run" "! has_local chore/stale && ! has_remote chore/stale && [[ ! -d $repo/.git/worktrees/chore-stale ]]"
@@ -524,8 +737,19 @@ check "an origin branch deleted by GitHub since the fetch counts as removed, not
 check "keeps an origin branch that moved after the fetch" "has_remote chore/lease-race && [[ \$(git rev-parse origin/chore/lease-race) != $lease_tip_before ]] && grep -q 'keep   origin/chore/lease-race: git could not delete it' <<<\"\$out\""
 
 # A later run, once what git refused is out of the way, finishes the job and exits 0
-chmod 755 "$work/wt-np" 2>/dev/null; git -C "$work/wt/chore-rebasing" rebase --abort >/dev/null 2>&1; git -C "$work/wt/chore-bisecting" bisect reset >/dev/null 2>&1; git -C "$work/wt/chore-bisecting2" bisect reset >/dev/null 2>&1; git -C "$work/wt/chore-apply-busy" rebase --abort >/dev/null 2>&1; git worktree prune; git worktree unlock "$work/wt/chore-locked"; command rm -f "$repo/.git/worktrees/chore-unreadable/index"; git -C "$work/wt/chore-unreadable" read-tree HEAD; git worktree unlock "$work/wt/chore-stale-locked"; command rm -f "$repo/.git/refs/heads/chore/delfail.lock"
-bash scripts/cleanup.sh --include-closed >/dev/null 2>&1; st=$?
+chmod 755 "$work/wt-np" 2> /dev/null
+git -C "$work/wt/chore-rebasing" rebase --abort > /dev/null 2>&1
+git -C "$work/wt/chore-bisecting" bisect reset > /dev/null 2>&1
+git -C "$work/wt/chore-bisecting2" bisect reset > /dev/null 2>&1
+git -C "$work/wt/chore-apply-busy" rebase --abort > /dev/null 2>&1
+git worktree prune
+git worktree unlock "$work/wt/chore-locked"
+command rm -f "$repo/.git/worktrees/chore-unreadable/index"
+git -C "$work/wt/chore-unreadable" read-tree HEAD
+git worktree unlock "$work/wt/chore-stale-locked"
+command rm -f "$repo/.git/refs/heads/chore/delfail.lock"
+bash scripts/cleanup.sh --include-closed > /dev/null 2>&1
+st=$?
 check "a later run with nothing refused exits 0" "[[ $st == 0 ]]"
 check "--include-closed removes a closed-unmerged branch" "! has_local feature/4-closed && ! has_remote feature/4-closed"
 check "an unlocked worktree with a missing folder is forgotten by the later run, and its branch goes" "! has_local chore/stale-locked && ! has_remote chore/stale-locked && [[ ! -d $repo/.git/worktrees/chore-stale-locked ]]"
@@ -540,63 +764,103 @@ check "--include-closed still keeps a branch merged elsewhere, and one an open P
 
 # Each documented cause of exit 1, alone: the run exits 1, and still removes a clean merged branch beside it
 alone() { # alone <label> <the keep line it must print> [<branch ls-remote fails for>]: run once with only that cause, with a clean sibling beside it
-  tip=$(branch chore/x-ok yes) || exit 1; pr chore/x-ok MERGED "$tip"; remote_only chore/x-ok
-  o=$(PATH="$work/shim:$PATH" SHIM_LSREMOTE_FAIL="${3:-}" bash scripts/cleanup.sh 2>&1); st=$?
+  tip=$(branch chore/x-ok yes) || exit 1
+  pr chore/x-ok MERGED "$tip"
+  remote_only chore/x-ok
+  o=$(PATH="$work/shim:$PATH" SHIM_LSREMOTE_FAIL="${3:-}" bash scripts/cleanup.sh 2>&1)
+  st=$?
   check "$1: exit 1 for that cause, and the clean branch beside it is still removed" "[[ $st == 1 ]] && grep -qF -- '$2' <<<\"\$o\" && ! has_remote chore/x-ok"
 }
-tip=$(branch chore/x-locked yes) || exit 1; pr chore/x-locked MERGED "$tip"; git worktree lock "$work/wt/chore-x-locked"
-alone "a worktree git won't remove" 'keep   chore/x-locked: git could not remove its worktree'; scrub chore/x-locked
-tip=$(branch chore/x-lock yes) || exit 1; pr chore/x-lock MERGED "$tip"; git worktree remove "$work/wt/chore-x-lock"; touch "$repo/.git/refs/heads/chore/x-lock.lock"
-alone "a branch git won't delete" 'keep   chore/x-lock: git could not delete the branch'; scrub chore/x-lock
-tip=$(branch chore/x-late yes) || exit 1; pr chore/x-late MERGED "$tip"; echo "git -C \"$work/wt/chore-x-late\" commit -q --allow-empty -m late" > "$GH_FIX/chore_x-late.hook"
-alone "a commit made after the branch was judged" 'keep   chore/x-late: it has a commit that was made after it was judged'; scrub chore/x-late
-tip=$(branch chore/x-moved yes) || exit 1; pr chore/x-moved MERGED "$tip"; remote_only chore/x-moved
-cat > "$GH_FIX/chore_x-moved.hook" <<HOOK
+tip=$(branch chore/x-locked yes) || exit 1
+pr chore/x-locked MERGED "$tip"
+git worktree lock "$work/wt/chore-x-locked"
+alone "a worktree git won't remove" 'keep   chore/x-locked: git could not remove its worktree'
+scrub chore/x-locked
+tip=$(branch chore/x-lock yes) || exit 1
+pr chore/x-lock MERGED "$tip"
+git worktree remove "$work/wt/chore-x-lock"
+touch "$repo/.git/refs/heads/chore/x-lock.lock"
+alone "a branch git won't delete" 'keep   chore/x-lock: git could not delete the branch'
+scrub chore/x-lock
+tip=$(branch chore/x-late yes) || exit 1
+pr chore/x-late MERGED "$tip"
+echo "git -C \"$work/wt/chore-x-late\" commit -q --allow-empty -m late" > "$GH_FIX/chore_x-late.hook"
+alone "a commit made after the branch was judged" 'keep   chore/x-late: it has a commit that was made after it was judged'
+scrub chore/x-late
+tip=$(branch chore/x-moved yes) || exit 1
+pr chore/x-moved MERGED "$tip"
+remote_only chore/x-moved
+cat > "$GH_FIX/chore_x-moved.hook" << HOOK
 git -C "$work/other" fetch -q origin && git -C "$work/other" checkout -q -B tmp origin/chore/x-moved && echo m > "$work/other/m" \
   && git -C "$work/other" add m && git -C "$work/other" commit -q -m m && git -C "$work/other" push -q origin tmp:refs/heads/chore/x-moved
 HOOK
-alone "an origin branch that moved after the fetch" 'keep   origin/chore/x-moved: git could not delete it (it may have moved'; scrub chore/x-moved
-tip=$(branch chore/x-ls yes) || exit 1; pr chore/x-ls MERGED "$tip"; remote_only chore/x-ls
-cat > "$GH_FIX/chore_x-ls.hook" <<HOOK
+alone "an origin branch that moved after the fetch" 'keep   origin/chore/x-moved: git could not delete it (it may have moved'
+scrub chore/x-moved
+tip=$(branch chore/x-ls yes) || exit 1
+pr chore/x-ls MERGED "$tip"
+remote_only chore/x-ls
+cat > "$GH_FIX/chore_x-ls.hook" << HOOK
 git -C "$work/other" fetch -q origin && git -C "$work/other" checkout -q -B tmp origin/chore/x-ls && echo l > "$work/other/l" \
   && git -C "$work/other" add l && git -C "$work/other" commit -q -m l && git -C "$work/other" push -q origin tmp:refs/heads/chore/x-ls
 HOOK
-alone "an origin check that failed" 'keep   origin/chore/x-ls: git could not delete it, and origin could not be checked' chore/x-ls; scrub chore/x-ls
-tip=$(branch chore/x-busy yes) || exit 1; pr chore/x-busy MERGED "$tip"
-( cd "$work/wt/chore-x-busy" && GIT_SEQUENCE_EDITOR="sed -i.bak 's/^pick/edit/'" git rebase -q -i -f main >/dev/null 2>&1 )
-alone "a branch a worktree is rebasing" 'keep   chore/x-busy: a worktree is rebasing or bisecting it'; scrub chore/x-busy
-o=$(bash scripts/cleanup.sh 2>&1); st=$?
+alone "an origin check that failed" 'keep   origin/chore/x-ls: git could not delete it, and origin could not be checked' chore/x-ls
+scrub chore/x-ls
+tip=$(branch chore/x-busy yes) || exit 1
+pr chore/x-busy MERGED "$tip"
+(cd "$work/wt/chore-x-busy" && GIT_SEQUENCE_EDITOR="sed -i.bak 's/^pick/edit/'" git rebase -q -i -f main > /dev/null 2>&1)
+alone "a branch a worktree is rebasing" 'keep   chore/x-busy: a worktree is rebasing or bisecting it'
+scrub chore/x-busy
+o=$(bash scripts/cleanup.sh 2>&1)
+st=$?
 check "once those are scrubbed, the run exits 0 again" "[[ $st == 0 ]]"
 
 # A branch someone else deleted between cleanup's last check and its own delete is gone, which is what was wanted
-tip=$(branch chore/x-gone yes) || exit 1; pr chore/x-gone MERGED "$tip"
-o=$(PATH="$work/shim:$PATH" SHIM_VANISH=chore/x-gone bash scripts/cleanup.sh 2>&1); st=$?
+tip=$(branch chore/x-gone yes) || exit 1
+pr chore/x-gone MERGED "$tip"
+o=$(PATH="$work/shim:$PATH" SHIM_VANISH=chore/x-gone bash scripts/cleanup.sh 2>&1)
+st=$?
 check "a branch already deleted by someone else counts as removed, not as a late commit" "[[ $st == 0 ]] && ! has_local chore/x-gone && ! has_remote chore/x-gone && grep -q 'chore/x-gone is already gone' <<<\"\$o\" && ! grep -q 'made after it was judged' <<<\"\$o\" && ! git config --get-regexp '^branch\\.chore/x-gone\\.' >/dev/null"
 # ...but an alias left in its place is not "gone": the branch is still there
-tip=$(branch chore/x-dangle yes) || exit 1; pr chore/x-dangle MERGED "$tip"
-o=$(PATH="$work/shim:$PATH" SHIM_VANISH=chore/x-dangle SHIM_DANGLE=1 bash scripts/cleanup.sh 2>&1); st=$?
+tip=$(branch chore/x-dangle yes) || exit 1
+pr chore/x-dangle MERGED "$tip"
+o=$(PATH="$work/shim:$PATH" SHIM_VANISH=chore/x-dangle SHIM_DANGLE=1 bash scripts/cleanup.sh 2>&1)
+st=$?
 check "an alias that points nowhere in a deleted branch's place is kept, not counted as gone" "[[ $st == 1 ]] && grep -q 'keep   chore/x-dangle: git could not delete the branch' <<<\"\$o\" && ! grep -q 'x-dangle is already gone' <<<\"\$o\""
-git update-ref --no-deref -d refs/heads/chore/x-dangle; scrub chore/x-dangle
+git update-ref --no-deref -d refs/heads/chore/x-dangle
+scrub chore/x-dangle
 # A branch deleted by someone else while gh was being asked is kept, with its worktree
-wt_at chore/x-deleted "$work/wt/x-deleted"; command rm -rf "$work/wt/x-deleted" # a hand-deleted worktree: only git's entry is left
+wt_at chore/x-deleted "$work/wt/x-deleted"
+command rm -rf "$work/wt/x-deleted" # a hand-deleted worktree: only git's entry is left
 echo "git -C \"$repo\" update-ref -d refs/heads/chore/x-deleted" > "$GH_FIX/chore_x-deleted.hook"
-o=$(bash scripts/cleanup.sh 2>&1); st=$?
+o=$(bash scripts/cleanup.sh 2>&1)
+st=$?
 check "a branch deleted while it was being judged is kept with git's entry for its worktree, saying so, and fails the run" "[[ $st == 1 ]] && grep -q 'keep   chore/x-deleted: it was deleted after it was judged' <<<\"\$o\" && [[ -d $repo/.git/worktrees/x-deleted ]]"
-git worktree prune; scrub chore/x-deleted
+git worktree prune
+scrub chore/x-deleted
 # ...and one that became an alias pointing nowhere in the meantime says so, not "a commit"
-wt_at chore/x-alias "$work/wt/x-alias"; command rm -rf "$work/wt/x-alias"
+wt_at chore/x-alias "$work/wt/x-alias"
+command rm -rf "$work/wt/x-alias"
 echo "git -C \"$repo\" update-ref -d refs/heads/chore/x-alias && git -C \"$repo\" symbolic-ref refs/heads/chore/x-alias refs/heads/nowhere" > "$GH_FIX/chore_x-alias.hook"
-o=$(bash scripts/cleanup.sh 2>&1); st=$?
+o=$(bash scripts/cleanup.sh 2>&1)
+st=$?
 check "a branch that became an alias to nowhere while it was being judged is kept, saying so, and fails the run" "[[ $st == 1 ]] && grep -q 'keep   chore/x-alias: its ref became an alias that points nowhere' <<<\"\$o\" && ! grep -q 'x-alias: it has a commit' <<<\"\$o\""
-git update-ref --no-deref -d refs/heads/chore/x-alias; git worktree prune; scrub chore/x-alias
+git update-ref --no-deref -d refs/heads/chore/x-alias
+git worktree prune
+scrub chore/x-alias
 
 # The fetch of origin failing: the opening one stops the run, the closing one fails it after the rest was done
-tip=$(branch chore/closing yes) || exit 1; pr chore/closing MERGED "$tip"
-o=$(PATH="$work/shim:$PATH" SHIM_FETCH_FAIL=all SHIM_FETCH_COUNT="$work/fc1" bash scripts/cleanup.sh 2>&1); st=$?
+tip=$(branch chore/closing yes) || exit 1
+pr chore/closing MERGED "$tip"
+o=$(PATH="$work/shim:$PATH" SHIM_FETCH_FAIL=all SHIM_FETCH_COUNT="$work/fc1" bash scripts/cleanup.sh 2>&1)
+st=$?
 check "refuses when origin can't be fetched, and removes nothing" "[[ $st != 0 ]] && grep -q \"can't fetch origin\" <<<\"\$o\" && has_local chore/closing && has_remote chore/closing"
-o=$(PATH="$work/shim:$PATH" SHIM_FETCH_FAIL=closing SHIM_FETCH_COUNT="$work/fc2" bash scripts/cleanup.sh 2>&1); st=$?
+o=$(PATH="$work/shim:$PATH" SHIM_FETCH_FAIL=closing SHIM_FETCH_COUNT="$work/fc2" bash scripts/cleanup.sh 2>&1)
+st=$?
 check "a failed closing fetch is reported and fails the run, after the rest was done" "[[ $st == 1 ]] && grep -q 'the closing fetch of origin failed' <<<\"\$o\" && ! has_local chore/closing && ! has_remote chore/closing && grep -q '^Done: ' <<<\"\$o\""
 
-if [[ -s "$not_found" ]]; then FAILED=$((FAILED + 1)); echo "FAIL - the suite called commands that do not exist: $(sort -u "$not_found" | tr '\n' ' ')"; fi
+if [[ -s "$not_found" ]]; then
+  FAILED=$((FAILED + 1))
+  echo "FAIL - the suite called commands that do not exist: $(sort -u "$not_found" | tr '\n' ' ')"
+fi
 echo "$PASSED passed, $FAILED failed"
 [[ $FAILED == 0 ]]
