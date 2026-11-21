@@ -29,7 +29,7 @@ RESET='\033[0m'
 step() { echo -e "\n${CYAN}▶ $1${RESET}"; }
 
 # Files added, copied, modified or renamed since this branch left origin/main.
-# Without an origin/main (a fresh clone of a fork, say) lint every tracked file.
+# Without an origin/main (a fresh clone of a fork, say) lint every tracked file; the Shell format step skips then (below).
 # NUL-separated, so a name git would quote (non-ASCII, a tab, a newline, a quote) reaches the linters as it is on disk. Written to a
 # file first, so a git that fails stops the gate here (set -e) instead of leaving every list empty.
 CHANGED_FILE="$(mktemp)"
@@ -161,12 +161,15 @@ fi
 # Each changed shell file is formatted as shfmt formats it, in the style .editorconfig gives, so a repo's own scripts take the
 # style as they are touched, with no one-off reformat. shfmt gets no style flags, so it reads that file. It must be v3.14 or a later
 # v3 release, the one check_gh_repo.py below needs too: another release can format the same file differently.
-step "Shell format (${#SHFMT_FILES[@]} changed file(s))"
 # Without an origin/main the changed files are every tracked file, and a repo's own scripts would all have to be reformatted at once:
 # the step is skipped, as there is no branch to tell its changes by.
 if [[ -z "$BASE" ]]; then
+  step "Shell format"
   echo -e "${YELLOW}⚠️  No origin/main, so no changed files to tell apart: skipping the shell format check (git fetch origin main to run it).${RESET}"
-elif [[ ${#SHFMT_FILES[@]} -gt 0 ]]; then
+else
+  step "Shell format (${#SHFMT_FILES[@]} changed file(s))"
+fi
+if [[ -n "$BASE" && ${#SHFMT_FILES[@]} -gt 0 ]]; then
   if ! command -v shfmt &> /dev/null; then
     echo "❌ Shell format needs shfmt v3.14 or a later v3 release (check_gh_repo.py needs it too): install it on PATH." >&2
     exit 1

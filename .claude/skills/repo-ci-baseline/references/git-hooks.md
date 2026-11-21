@@ -220,21 +220,23 @@ at the repo root or under any folder (the Factory edits the Template's originals
 These are the checks the CI lint workflows run; a gate runs `actionlint` and `zizmor` only where it lints workflows (an Application's gate does when a workflow changed; the Factory's does not).
 A shell file goes through `shellcheck` and `shfmt -d`, the gate's Shell lint and Shell format steps, on the files the gate takes for shell files: a `*.sh`, an extensionless file in the
 root's `scripts/`, or a git hook (`pre-*`, `post-*`, `commit-msg`, `prepare-commit-msg`, matched in the C locale) in the root's `.github/hooks`, or in a `.github/hooks` under a folder
-whose `.editorconfig` has a `[.github/hooks/*]` section (the Template's copy in the Factory, which only the Factory's gate checks: an Application's takes the root's hooks alone, and
-the hook's note says so). shfmt gets no style flags, so it reads `.editorconfig`; it skips the extensionless `scripts/` files, which no section styles, and runs only when it
-is v3.14 or a later v3 release, as the gate needs (another, or a `--version` that fails or prints nothing, is named in the note, and shellcheck still runs). When shfmt exits 1
-(a diff, or a file it can't parse) the report adds the `shfmt -w` command that writes the format, with the path quoted for a shell, and says to fix the syntax if the output is a
-syntax error; a shfmt that crashes gets no such hint. Neither tool runs code from the repository, and shfmt reads only `.editorconfig`.
+whose `.editorconfig` has a `[.github/hooks/*]` section (the Template's copy in the Factory, whose gate takes only its `pre-commit`, `pre-push` and `post-checkout`; an
+Application's gate takes the root's hooks alone, and the hook's note says so). shfmt gets no style flags, so it reads `.editorconfig`; it skips the extensionless `scripts/`
+files, which no section styles, and runs only when it is v3.14 or a later v3 release, as the gate needs (another, or a `--version` that fails or prints nothing, is named in
+the note, and shellcheck still runs). When shfmt exits 1 (a diff, or a file it can't parse) the report adds the `shfmt -w` command that writes the format, with the path quoted
+for a shell, and says to fix the syntax if the output is a syntax error; a shfmt that crashes gets no such hint. Neither tool runs code from the repository, and shfmt reads
+only `.editorconfig`.
 
 shellcheck reads its `.shellcheckrc`, and `external-sources` there lets it open the files a `source` line names; `--check-sourced` would then quote their lines in the report the
 agent reads. So the hook clears `SHELLCHECK_OPTS`, and shellcheck never looks for a config itself: the hook reads the `.shellcheckrc` or `shellcheckrc` on the file's path (its
-folder and each one above it, up to the repository root, in the order shellcheck looks) and hands shellcheck a private copy of the nearest one (`--rcfile`, written with `mktemp`
-under an absolute `TMPDIR` and removed with `rm` however the hook ends), or `--norc` when there is none. A config above the repository root, or the person's own in their home, is
-not read at edit time; the gate reads it. The config is read without a here-string, which bash may write to a temp file of its own. shellcheck is not run while a config on the
-path is a symlink, not a regular file, unreadable, names `external-sources` or `check-sourced` in any case, or holds a line other than a blank, a comment or one of the keys
-`disable`, `enable`, `source-path`, `shell` and `extended-analysis` (an allow-list, so a key a later shellcheck adds can't slip past), or when the private copy can't be made
-(`mktemp` missing, failing or printing nothing, a relative `TMPDIR` or one inside the project's checkouts, where the copy could be swapped, or a failed write): the note names
-the config and why, and the gate still checks the file. A missing `mktemp` costs only that shellcheck run, and a missing `rm` leaves the private copy in `TMPDIR`.
+folder and each one above it, up to the repository root, in the order shellcheck looks) and hands shellcheck a private copy of the nearest one (`--rcfile`, made with `mktemp`
+in `TMPDIR` resolved, so no symlink is left on its path, and removed with `rm` however the hook ends), or `--norc` when there is none. A config above the repository root, or
+the person's own in their home, is not read at edit time; the gate reads it. The config is read without a here-string, which bash may write to a temp file of its own.
+shellcheck is not run while a config on the path is a symlink, not a regular file, unreadable, names `external-sources` or `check-sourced` in any case, or holds a line other
+than a blank, a comment or one of the keys `disable`, `enable`, `source-path`, `shell` and `extended-analysis` (an allow-list, so a key a later shellcheck adds can't slip
+past), or when the private copy can't be made (`mktemp` missing, failing or printing a path outside its folder, a `TMPDIR` that is relative, unresolvable or inside the
+project's checkouts, where the copy could be swapped, or a failed write): the note names the config and why, and the gate still checks the file. A missing `mktemp` costs only
+that shellcheck run, and a missing `rm` leaves the private copy in `TMPDIR`.
 
 A hook under a nested `.github/hooks` whose `.editorconfig` can't be read is not linted, with a note; a line of it longer than 4,096 characters is no section header. A violation
 wins over a note: the hook exits 2 with the report alone. `test.sh` checks that the hook's hook-name rule is the gate's and the Lint Actions shellcheck job's, and that its shfmt

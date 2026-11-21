@@ -945,9 +945,9 @@ FAKE_MKTEMP="$WORK/fake-mktemp"
 mkdir -p "$FAKE_MKTEMP"
 printf '#!/bin/sh\necho "%s"\n' "$WORK/dirtmp/copy-is-a-folder" > "$FAKE_MKTEMP/mktemp"
 chmod +x "$FAKE_MKTEMP/mktemp"
-for case in "TMPDIR=$WORK/no-such-tmp|$STUBS:$TOOLS|the hook could not create a private copy of its config scripts/.shellcheckrc (mktemp failed)" \
+for case in "TMPDIR=$WORK/no-such-tmp|$STUBS:$TOOLS|TMPDIR is not a folder the hook can resolve, so it made no private copy of its config scripts/.shellcheckrc" \
   "TMPDIR=reltmp|$STUBS:$TOOLS|TMPDIR is not an absolute path, so the hook made no private copy of its config scripts/.shellcheckrc" \
-  "RUN_ENV_UNUSED=1|$FAKE_MKTEMP:$STUBS:$TOOLS|the hook could not write a private copy of its config scripts/.shellcheckrc"; do
+  "TMPDIR=$WORK/dirtmp|$FAKE_MKTEMP:$STUBS:$TOOLS|the hook could not write a private copy of its config scripts/.shellcheckrc"; do
   IFS='|' read -r setting path_for want <<< "$case"
   RUN_ENV=("$setting")
   run_hook "$(edit_json "$repo/scripts/ok.sh")" "$path_for"
@@ -997,6 +997,66 @@ p=()
 [[ -z "$(ls -A "$repo/tmp")" ]] || p+=("the copy was left: $(ls -A "$repo/tmp")")
 check "a TMPDIR inside the project is not used for the private copy" ${p[@]+"${p[@]}"}
 rmdir "$repo/tmp"
+# tmp_run <TMPDIR> [<PATH>]: the hook on scripts/ok.sh with that TMPDIR; STATUS, the log and the note as run_hook leaves them.
+tmp_run() {
+  RUN_ENV=(TMPDIR="$1")
+  run_hook "$(edit_json "$repo/scripts/ok.sh")" "${2:-$STUBS:$TOOLS}"
+  RUN_ENV=(RUN_ENV_UNUSED=1)
+}
+inside_note="shellcheck was not run: TMPDIR is inside the project's checkouts, where the private copy of its config scripts/.shellcheckrc could be swapped"
+# The repository itself is inside; a sibling folder whose name starts with the repository's is not.
+tmp_run "$repo"
+p=()
+[[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"$inside_note"* ]] || p+=("log: $(cat "$LOG"), note: $STDOUT")
+check "a TMPDIR that is the repository itself is not used for the private copy" ${p[@]+"${p[@]}"}
+mkdir -p "$repo-sibling"
+tmp_run "$repo-sibling"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] && grep -qE "^shellcheck $repo --rcfile $repo-sibling/lint-edited-file\.[^ /]+ -- " "$LOG" || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+[[ -z "$(ls -A "$repo-sibling")" ]] || p+=("the copy was left: $(ls -A "$repo-sibling")")
+check "a TMPDIR beside the repository, its name starting with the repository's, is used" ${p[@]+"${p[@]}"}
+# A TMPDIR reached through a symlink is judged, and used, as the folder it resolves to: one inside the repository pointing out is used
+# at the folder outside, with no symlink left on the copy's path; one outside pointing in is refused.
+mkdir -p "$WORK/outside-tmp" "$repo/tmp-in"
+ln -s "$WORK/outside-tmp" "$repo/tmp-link-out"
+ln -s "$repo/tmp-in" "$WORK/tmp-link-in"
+tmp_run "$repo/tmp-link-out"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] && grep -qE "^shellcheck $repo --rcfile $WORK/outside-tmp/lint-edited-file\.[^ /]+ -- " "$LOG" || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+check "a TMPDIR symlinked out of the repository is used at the folder it resolves to" ${p[@]+"${p[@]}"}
+tmp_run "$WORK/tmp-link-in"
+p=()
+[[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"$inside_note"* ]] || p+=("log: $(cat "$LOG"), note: $STDOUT")
+[[ -z "$(ls -A "$repo/tmp-in")" ]] || p+=("a copy was made: $(ls -A "$repo/tmp-in")")
+check "a TMPDIR symlinked into the repository is not used, and no copy is made there" ${p[@]+"${p[@]}"}
+rm "$repo/tmp-link-out" "$WORK/tmp-link-in"
+rmdir "$repo/tmp-in" "$repo-sibling" "$WORK/outside-tmp"
+# A mktemp that fails, or prints a path outside the folder it was given, makes no copy the hook uses.
+for fake in 'exit 1' "echo '$WORK/elsewhere/lint-edited-file.x'"; do
+  printf '#!/bin/sh\n%s\n' "$fake" > "$FAKE_MKTEMP/mktemp"
+  tmp_run "$WORK/rctmp" "$FAKE_MKTEMP:$STUBS:$TOOLS"
+  p=()
+  [[ $STATUS -eq 0 && "$(ran shellcheck)" == 0 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
+  [[ "$(system_message "$STDOUT")" == *"the hook could not create a private copy of its config scripts/.shellcheckrc (mktemp failed)"* ]] || p+=("note: $STDOUT")
+  check "a mktemp that does '$fake' makes no copy the hook uses" ${p[@]+"${p[@]}"}
+done
+# The edited file in a linked worktree: a TMPDIR inside that worktree (the file's own repository) and one inside the main checkout the
+# project lists are both refused.
+wtmain="$(new_repo wtmain)"
+git -C "$wtmain" -c user.name=t -c user.email=t@t commit --quiet --allow-empty -m init
+git -C "$wtmain" worktree add --quiet "$WORK/wtmain-wt" 2> /dev/null
+mkdir -p "$WORK/wtmain-wt/scripts" "$WORK/wtmain-wt/tmp" "$wtmain/tmp"
+printf 'echo ok\n' > "$WORK/wtmain-wt/scripts/ok.sh"
+printf 'disable=SC1000\n' > "$WORK/wtmain-wt/.shellcheckrc"
+for tmp in "$WORK/wtmain-wt/tmp" "$wtmain/tmp"; do
+  RUN_ENV=(TMPDIR="$tmp")
+  run_hook "$(edit_json "$WORK/wtmain-wt/scripts/ok.sh")" "$STUBS:$TOOLS" "$wtmain"
+  RUN_ENV=(RUN_ENV_UNUSED=1)
+  p=()
+  [[ $STATUS -eq 0 && "$(ran shellcheck)" == 0 && "$(ran shfmt)" == 1 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
+  [[ "$(system_message "$STDOUT")" == *"shellcheck was not run: TMPDIR is inside the project's checkouts"* ]] || p+=("note: $STDOUT")
+  check "a TMPDIR at ${tmp#"$WORK"/} is inside the project's checkouts, for a file in a linked worktree" ${p[@]+"${p[@]}"}
+done
 # Without rm the copy stays in TMPDIR, the run is otherwise clean, and nothing is said on stderr.
 NORM="$WORK/norm"
 link_tools "$NORM"
@@ -1019,7 +1079,6 @@ RUN_ENV=(RUN_ENV_UNUSED=1)
 p=()
 [[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"its config scripts/.shellcheckrc names external-sources or check-sourced"* ]] || p+=("log: $(cat "$LOG"), note: $STDOUT")
 check "a byte that isn't valid text before external-sources doesn't hide it" ${p[@]+"${p[@]}"}
-rm "$repo/scripts/.shellcheckrc" "$repo/.shellcheckrc"
 rm "$repo/scripts/.shellcheckrc" "$repo/.shellcheckrc"
 # The keys handed over: blanks, comments and disable, enable, source-path, shell and extended-analysis, a CRLF line among them. Any other
 # key, however spelled (a later shellcheck's, a typo, a BOM before it), keeps shellcheck from running.
@@ -2098,7 +2157,15 @@ fi
 # The hook feeds no data through a here-string or a heredoc: bash writes those to a temp file (always before 5.1), which fails where no
 # temporary folder can be written, so a shellcheck config would read as one with an unknown key.
 p=()
-! grep -nE -- '<<<|<<-?[[:space:]]*["'"'"']?[A-Za-z_]' "$SCRIPT" || p+=("the hook uses a here-string or heredoc")
+heredoc_re='<<<|<<-?[[:space:]]*["'"'"'\\]?[A-Za-z_]'
+! grep -nE -- "$heredoc_re" "$SCRIPT" || p+=("the hook uses a here-string or heredoc")
+# The pattern itself: each form a here-string or heredoc takes matches, and a shift doesn't.
+# shellcheck disable=SC2016 # the forms are code text, written as they are
+for form in 'cat <<EOF' "cat <<-'EOF'" 'cat <<"EOF"' 'cat <<\EOF' 'cat << EOF' 'read -r x <<< "$y"'; do
+  grep -qE -- "$heredoc_re" <<< "$form" || p+=("the pattern misses: $form")
+done
+# shellcheck disable=SC2016 # code text, written as it is
+! grep -qE -- "$heredoc_re" <<< 'echo $((a<<2))' || p+=("the pattern matches a shift")
 check "the hook reads no data through a here-string or heredoc" ${p[@]+"${p[@]}"}
 
 if [[ -x "$SCRIPT" ]]; then

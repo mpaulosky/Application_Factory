@@ -27,12 +27,13 @@
 # differently). Neither tool runs code from the repository, and shfmt reads only .editorconfig. A shellcheck config could let it open
 # the files a source line names (external-sources) and, with check-sourced, quote their lines back to the agent. So SHELLCHECK_OPTS is
 # cleared (it could pass --check-sourced), and shellcheck never looks for a config itself: the hook reads the one shellcheck would use
-# from the repository and hands it a private copy (--rcfile, written with mktemp under an absolute TMPDIR and removed with rm), or
+# from the repository and hands it a private copy (--rcfile, made with mktemp in TMPDIR resolved, outside the project's checkouts, and
+# removed with rm), or
 # --norc when the repository has none, so no config above the repository root, or one swapped in after the check, is read.
 # ShellCheck is not run while a config on the file's path is a symlink, not a regular file, unreadable, names external-sources or
 # check-sourced, or holds a line other than a blank, a comment or one of the keys disable, enable, source-path, shell and
-# extended-analysis (see sc_config_refused), or while the private copy can't be made (mktemp missing or failing, a relative TMPDIR, a
-# failed write): the person is told, and the gate still checks the file. A hook under a nested .github/hooks whose .editorconfig can't
+# extended-analysis (see sc_config_refused), or while the private copy can't be made (mktemp missing, failing or printing nothing, a
+# TMPDIR that is relative, unresolvable or inside the project's checkouts, a failed write): the person is told, and the gate still checks the file. A hook under a nested .github/hooks whose .editorconfig can't
 # be read is not linted either, and the person is told.
 #
 # Only files in the project's own checkout, or in a linked worktree that checkout lists in `git worktree list`, are linted
@@ -350,7 +351,8 @@ styles_hooks() {
 # A shell file is linted only where the gate checks it (the header has the rule), and formatted only where .editorconfig styles it.
 shell_format=0
 # What the notes say still checks the file: a repository's gate checks the shell files it takes (its root's hooks among them), but a
-# hook under a nested .github/hooks only where that repository's own gate takes that folder too, as the Factory's does for its copy.
+# hook under a nested .github/hooks only where that repository's own gate takes that folder too, as a repo that keeps a copy of the
+# Template's hooks may.
 gate_checks="the gate still checks it before the push"
 if [[ "$kind" == shell ]]; then
   hooks="${rel%/*}"
@@ -514,7 +516,8 @@ sc_keys_known() {
   done < <(printf '%s\n' "$1")
 }
 sc_config_refused() {
-  local at="$dir" rc path text
+  # In C, so a byte that isn't valid text in the caller's locale stops neither tr nor the =~ match (BSD tr and regexec reject one).
+  local LC_ALL=C at="$dir" rc path text
   while :; do
     for rc in .shellcheckrc shellcheckrc; do
       path="$at/$rc"
@@ -528,8 +531,7 @@ sc_config_refused() {
         sc_rc_why="could not be read, so the hook can't tell what it turns on"
         return 0
       }
-      # In C, so bytes that aren't valid text in the caller's locale can't stop tr (BSD tr fails on them) and cut the text short.
-      if [[ "$(printf '%s' "$text" | LC_ALL=C tr '[:upper:]' '[:lower:]')" =~ external-sources|check-sourced ]]; then
+      if [[ "$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')" =~ external-sources|check-sourced ]]; then
         sc_rc_why="names external-sources or check-sourced, which could show this hook's output the lines of other files"
         return 0
       fi
@@ -547,20 +549,19 @@ sc_config_refused() {
     at="${at%/*}"
   done
 }
-# in_checkouts <dir>: 0 when <dir>, resolved, is the file's repository, the project directory or a worktree the project lists, or is
-# inside one, the folders an agent writes with no prompt; 1 otherwise, and when <dir> can't be resolved (no file can be written there, and
-# the write that follows fails with its own note).
+# in_checkouts <resolved dir>: 0 when the folder is the file's repository or a worktree the project lists, or is inside one, the folders
+# an agent writes with no prompt; 1 otherwise. (The project directory is always one of those or inside one, so it needs no check of its own.)
 in_checkouts() {
-  local d='' trusted
-  canon "$1" d || return 1
-  for trusted in "$root" ${PROJECT_ROOTS[@]+"${PROJECT_ROOTS[@]}"} ${project_canon:+"$project_canon"}; do
-    case "$d/" in
+  local trusted
+  for trusted in "$root" ${PROJECT_ROOTS[@]+"${PROJECT_ROOTS[@]}"}; do
+    case "$1/" in
       "$trusted"/*) return 0 ;;
     esac
   done
   return 1
 }
-# The private copy of the config shellcheck is handed, removed however the hook ends.
+# The private copy of the config shellcheck is handed, removed however the hook ends, and the resolved folder it is made in.
+tmp_canon=""
 rc_copy=""
 trap '[[ -z "$rc_copy" ]] || rm -f -- "$rc_copy" 2> /dev/null' EXIT
 
@@ -583,15 +584,19 @@ elif [[ "$kind" == shell ]]; then
     notes+=("shellcheck was not run: its config $sc_rc_path $sc_rc_why")
   elif ((! sc_rc_found)); then
     run_linter shellcheck "$bin" --norc -- "$target"
-  elif ! rc_copy="$(mktemp 2> /dev/null)" || [[ -z "$rc_copy" ]]; then
+  # The copy's folder is TMPDIR resolved before anything is made, and mktemp makes the copy in that resolved folder: no symlink is left on
+  # its path for an agent to re-point between the check and shellcheck's read. Relative (shellcheck runs from the repository root, where
+  # it names another folder), unresolvable, or inside the project's checkouts (where an agent writes with no prompt): no copy.
+  elif [[ "${TMPDIR:-/tmp}" != /* ]]; then
+    notes+=("shellcheck was not run: TMPDIR is not an absolute path, so the hook made no private copy of its config $sc_rc_near")
+  elif ! canon "${TMPDIR:-/tmp}" tmp_canon; then
+    notes+=("shellcheck was not run: TMPDIR is not a folder the hook can resolve, so it made no private copy of its config $sc_rc_near")
+  elif in_checkouts "$tmp_canon"; then
+    notes+=("shellcheck was not run: TMPDIR is inside the project's checkouts, where the private copy of its config $sc_rc_near could be swapped")
+  elif ! rc_copy="$(mktemp "$tmp_canon/lint-edited-file.XXXXXXXXXX" 2> /dev/null)" || [[ "$rc_copy" != "$tmp_canon"/?* ]]; then
+    # A failed mktemp, or one that printed nothing or a path outside the folder it was given: no copy of its making is used.
     rc_copy=""
     notes+=("shellcheck was not run: the hook could not create a private copy of its config $sc_rc_near (mktemp failed)")
-  elif [[ "$rc_copy" != /* ]]; then
-    # ShellCheck runs from the repository root, where a relative path names another file, and a copy beside the project could be swapped.
-    notes+=("shellcheck was not run: TMPDIR is not an absolute path, so the hook made no private copy of its config $sc_rc_near")
-  elif in_checkouts "${rc_copy%/*}"; then
-    # The project's checkouts are where an agent writes with no prompt: a copy there could be swapped before shellcheck reads it.
-    notes+=("shellcheck was not run: TMPDIR is inside the project's checkouts, where the private copy of its config $sc_rc_near could be swapped")
   elif ! printf '%s\n' "$sc_rc_text" 2> /dev/null > "$rc_copy"; then
     notes+=("shellcheck was not run: the hook could not write a private copy of its config $sc_rc_near")
   else
