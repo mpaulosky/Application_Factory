@@ -98,8 +98,9 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
      Land that PR, fix any finding Template first, then run `rollout.sh` again: once it has merged,
      it re-Applies the other repos in order, one pre-push gate at a time, reports a repo that fails and goes on.
      Start with `--dry-run`. It ends with the `land.sh` command for the PRs it left open.
-   - **Roll out unattended:** `rollout.sh --auto --brings '#<n>,#<n>'` does all of that in one run ([ADR 0016](../../../docs/adr/0016-a-rollout-runs-each-applications-review-headless-and-sandboxed-in-its-worktree.md)).
-     It checks the tools (bubblewrap and socat for the sandbox among them) and the Template's `global.json` SDK first (`--dry-run` stops there and prints the plan).
+   - **Roll out unattended:** `rollout.sh --auto --brings '#<n>,#<n>'` does all of that in one run (the Factory's [ADR 0016](../../../docs/adr/0016-a-rollout-runs-each-applications-review-headless-and-sandboxed-in-its-worktree.md)).
+     It checks the tools (on Linux, bubblewrap and socat for the sandbox among them, and that bubblewrap can make one), ruff 0.17 or uv,
+     and the Template's `global.json` SDK first (`--dry-run` stops there and prints the plan).
      When the gate asks for a review it runs the pre-push review headless in the repo's re-Apply worktree, in Claude Code's sandbox: its shell reads none of your
      credentials, writes only the worktree, the clone's git folder and a folder of its own, and reaches only the package registries and GitHub; it has no GitHub
      sign-in, loads none of the repository's settings, and takes the skill and its agent from the Template. The round stops when a session broke a rule it checks after.

@@ -9,10 +9,12 @@ repo could stop at the review again. A missing tool, such as the .NET SDK the Te
 
 ## Decision
 
-`rollout.sh --auto` (`github/auto_rollout.py`) drives a round to the end. Before anything runs it checks the tools the gates, `reapply.sh` and the review need (bubblewrap and socat
-for the sandbox among them), an shfmt the gate's gh check accepts, `gh`'s sign-in and the SDK the Template's `global.json` names, and takes a lock so a second `--auto` run can't work
-the same worktrees (a person running `reapply.sh` or the review by hand there meanwhile isn't kept out). When the gate refuses the push for want of a review, `reapply.sh` exits 3
-(and 4 when one is recorded but findings in it wait for a person). Only a push whose gate stopped at its Local review step is asked about, and then the worktree's own
+`rollout.sh --auto` (`github/auto_rollout.py`) drives a round to the end. Before anything runs it checks the tools the gates, `reapply.sh` and the review need (on Linux, bubblewrap
+and socat for the sandbox among them, and that bubblewrap can make one there), a `claude` that runs, an shfmt the gate's gh check accepts, ruff 0.17 or uv for the gate's Python lint,
+`gh`'s sign-in and the SDK the Template's `global.json` names, and takes a lock so a second `--auto` run can't work the same worktrees (a person running `reapply.sh` or the review by
+hand there meanwhile isn't kept out). Every child the round starts holds the lock too, so a session or gate still running after `rollout.sh` is killed keeps the next run out.
+When the gate refuses the push for want of a review, `reapply.sh` exits 3 (and 4 when one is recorded but findings in it wait for a person).
+Only a push whose gate stopped at its Local review step is asked about, and then the worktree's own
 `scripts/review.sh check` says how it refuses: the refusal is never read from the push's log. Every other failure exits 1. On a 3 the Rollout runs the pre-push review headless
 (`claude -p` started in the repo's re-Apply worktree), then `reapply.sh` again to push and open the PR, and lands TicketManager's PR with `land.sh` before it starts the rest. It reads
 only the repo's own PRs (not a fork's of the same name), the one at the worktree's head when the branch has commits main lacks, since every round shares the branch's name; an OPEN PR
@@ -23,19 +25,23 @@ The session runs unattended and reads text people without write access may have 
 Linux) on every Bash command and everything it starts:
 
 - **The sandbox.** Its Bash reads none of the person's credentials (`~/.ssh`, `~/.config/gh`, `~/.git-credentials`, `~/.netrc`, the keyrings, cloud and package-registry
-  sign-ins, Claude Code's own credentials file, the other sessions' logs), writes only the worktree, the clone's git folder (not its config, hooks or info), the main checkout's
-  `.security` and a temporary folder of its own, and reaches only the package registries and GitHub. It can't leave the sandbox (`allowUnsandboxedCommands: false`), and the session
-  refuses to start without it (`failIfUnavailable`). Builds and installs keep their caches in the temporary folder.
-- **The file tools**, which run outside the sandbox, follow `dontAsk` permissions: anything not allowed is refused. They may read anywhere but the same credentials, edit only the
-  worktree and the temporary folder, start the reviewer agent, and run Bash, which is sandboxed.
-- **Nothing of the repository's own applies to it.** It loads only the person's user settings (`--setting-sources user`) and no MCP server, and takes the skill's text and its
-  reviewer agent from the Template, not the worktree: the repository's hooks, permission rules and settings never run or widen it.
+  sign-ins, shell histories, Claude Code's own credentials and state, the other sessions' logs). It writes only the worktree (not its `.git` link), the parts of the clone's git
+  folder its commits and the review ledgers need (the objects, the `chore/` branches, `origin`'s remote branches, the worktree's own git folder and `review/`: not the config, hooks,
+  info or other branches), the main checkout's `.security` and a temporary folder of its own, and reaches only the package registries and GitHub. It can't leave the sandbox
+  (`allowUnsandboxedCommands: false`), and the session refuses to start without it (`failIfUnavailable`). Builds and installs keep their caches in the temporary folder.
+- **The file tools**, which run outside the sandbox, follow `dontAsk` permissions: anything not allowed is refused. They may read only the worktree, `.security` and the temporary
+  folder, edit only the worktree (not its `.git` link) and the temporary folder, start the reviewer agent, and run Bash, which is sandboxed. Only the built-in tools the review needs
+  exist in the session (`--tools`).
+- **Nothing of the repository's own or the person's applies to it.** It loads no settings file at all (`--setting-sources ""`; its settings are passed on the command line, so the
+  session can't rewrite them) and no MCP server, and takes the skill's text and its reviewer agent from the Template, not the worktree: neither the repository's nor the person's
+  hooks, permission rules, plugins or settings run or widen it.
 - **Layers behind the sandbox.** Its environment has no GitHub sign-in (`gh` points at an empty config; names that look like secrets are dropped, Claude Code's own sign-in aside),
   git's push to GitHub is sent nowhere, and deny rules name the commands that must never run. The prompt names the Owned files the branch changes, says it runs unattended, and says a
   finding in an Owned file stays open for a person, since its fix goes into the Template first.
-- **Checks after it.** A session after which the remote branch moved (or can't be read), the Template changed, an Owned file the branch changes is no longer the Template's, or one of
-  this branch's review ledgers gained an accepted finding stops the round for the person. The ledgers are compared by content with what they held before the session, and a ledger is
-  this branch's when it names the branch or its head is one of the worktree's commits, so the person's own accept on another branch meanwhile isn't the session's.
+- **Checks after it.** A session after which the worktree's `.git` link changed (then no git runs there), the remote branch moved (or can't be read), the Template changed, an Owned
+  file the branch changes is no longer the Template's, any review ledger of the clone gained an accepted finding, or the `.security` record lost or changed an entry other than marking an
+  open one fixed, or gained an accepted one, stops the round for the person. The ledgers are compared finding by finding, by content, with what they held before the session, whatever
+  branch or head they name, since the session can write those too: an accept the person makes on another branch meanwhile stops the round as well.
 - **Its processes.** It runs in a process group of its own, killed whole however it ends (it exits, or runs past three hours); an interrupt, a SIGTERM or a SIGHUP while it runs is
   held until the group is gone, then passed on, and one the caller ignores (`nohup`) stays ignored. `reapply.sh` and `land.sh` run in groups of their own too, which a SIGTERM or SIGHUP
   of the round kills. Its log is kept, `0600`, in a `0700` folder of the person's own, `~/.cache/repo-ci-baseline/logs`, since it can hold the session's report of security findings.
@@ -64,6 +70,11 @@ The gate, the ledger and the review's rules are unchanged: the push still needs 
   stays open for the follow-up issue, whose body the session writes to its run folder. Making the fix automatically is a follow-up, not this decision.
 - `reapply.sh` knows the gate stopped at its Local review step by the step's name, and how the check refuses by the ledger's own text on its stderr; a test holds them equal to
   `gate.sh`'s and `checkReview`'s, so rewording either fails `test.sh` until both change.
-- The sandbox holds only as far as Claude Code enforces it: a host on the allowed list (GitHub, the registries) is reachable for anything, and the person's own user settings and
-  plugins still load. The session reads no PR threads or issue, which a re-Apply reviewed before its first push hasn't got, and a session that ends without recording a review is run
-  once more, then the round stops. A SIGKILL of `rollout.sh` can't be caught, and leaves a running session to finish on its own.
+- The sandbox holds only as far as Claude Code enforces it: a host on the allowed list (GitHub, the registries) is reachable for anything, what the sandbox shows of `/proc` and of
+  Unix sockets is Claude Code's, and Claude Code's own sign-in variables stay visible to the session's Bash (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` would hide them, but in Claude Code
+  2.1.326 it also forces the permission mode back to `default`, so it isn't used). The session reads no PR threads or issue, which a re-Apply reviewed before its first push hasn't
+  got, and a session that ends without recording a review is run once more, then the round stops. A SIGKILL of `rollout.sh` can't be caught, and leaves a running session to finish on
+  its own, holding the lock.
+- What the session commits and edits in the worktree runs later outside the sandbox, as the person: the gate `reapply.sh` runs on the push, and the Application's own tests and
+  build. The checks after the session catch an Owned file that changed, not an Application file, so a session misled by what it read could leave code that runs then. This is open,
+  for the person to decide (a session that reviews and records but never edits, or a stop when it changed a file that runs).

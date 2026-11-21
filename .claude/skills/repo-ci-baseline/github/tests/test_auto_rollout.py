@@ -9,6 +9,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -123,9 +124,12 @@ def test_sdk_hint_finds_a_plain_version_only(text, version):
     assert auto.sdk_hint(text) == version
 
 
-def fake_preflight(on_path=auto.TOOLS + auto.SANDBOX_TOOLS + ("dotnet",), answers=None, global_json='{"sdk": {"version": "10.0.403"}}',
-                   tmp_path=None):
-    answers = {"shfmt": (0, "v3.14.1\n", ""), "gh": (0, "", ""), "dotnet": (0, "10.0.404\n", "")} | dict(answers or {})
+ALL_TOOLS = auto.TOOLS + auto.SANDBOX_TOOLS + ("dotnet", "uvx")
+
+
+def fake_preflight(on_path=ALL_TOOLS, answers=None, global_json='{"sdk": {"version": "10.0.403"}}', tmp_path=None):
+    answers = {"shfmt": (0, "v3.14.1\n", ""), "gh": (0, "", ""), "dotnet": (0, "10.0.404\n", ""), "bwrap": (0, "", ""),
+               "claude": (0, "2.1.326 (Claude Code)\n", ""), "ruff": (0, "ruff 0.17.6\n", "")} | dict(answers or {})
     calls = []
 
     def run(command, cwd=None, env=None):
@@ -161,8 +165,7 @@ def test_preflight_runs_shfmt_with_path_alone_as_the_gh_check_does(tmp_path, mon
 
 @pytest.mark.parametrize("tool", auto.TOOLS)
 def test_preflight_names_each_missing_tool_and_runs_nothing_of_it(tool, tmp_path):
-    problems, calls = fake_preflight(on_path=tuple(t for t in auto.TOOLS + auto.SANDBOX_TOOLS + ("dotnet",) if t != tool),
-                                     tmp_path=tmp_path)
+    problems, calls = fake_preflight(on_path=tuple(t for t in ALL_TOOLS if t != tool), tmp_path=tmp_path)
     assert problems == [f"{tool} isn't on PATH"]
     assert not any(call["command"][0] == tool for call in calls)
 
@@ -178,8 +181,60 @@ def test_preflight_refuses_an_old_shfmt_and_a_gh_that_fails(tmp_path):
 def test_preflight_names_each_missing_sandbox_tool(tmp_path):
     if not auto.SANDBOX_TOOLS:
         pytest.skip("the sandbox needs no tools here")
-    problems, _ = fake_preflight(on_path=auto.TOOLS + ("dotnet",), tmp_path=tmp_path)
+    problems, calls = fake_preflight(on_path=auto.TOOLS + ("dotnet", "uvx"), tmp_path=tmp_path)
     assert problems == [f"{tool} isn't on PATH: the review session's sandbox needs it" for tool in auto.SANDBOX_TOOLS]
+    assert not any(call["command"][0] == "bwrap" for call in calls)
+
+
+def test_ruff_rule_is_the_template_gates_own():
+    gate = (SKILL / "template/owned/scripts/gate.sh").read_text()
+    assert f"RUFF_RELEASE='{auto.RUFF_RELEASE.pattern}'" in gate
+    assert f'RUFF_VERSION="{auto.RUFF_VERSION}"' in gate
+    assert "if have_uvx; then" in gate, "the gate falls back to uvx, so uvx alone will do"
+
+
+@pytest.mark.parametrize("on_path, ruff, problem", [
+    (("uvx",), None, None),
+    (("uvx", "ruff"), (0, "ruff 0.16.0\n", ""), None),
+    (("ruff",), (0, "ruff 0.17.0\n", ""), None),
+    (("ruff",), (0, "ruff 0.17.12\n", ""), None),
+    (("ruff",), (0, "", "ruff 0.17.6\n"), None),
+    (("ruff",), (0, "ruff 0.16.9\n", ""), "ruff is 'ruff 0.16.9' (exit 0), not a 0.17 release"),
+    (("ruff",), (0, "ruff 0.18.0\n", ""), "ruff is 'ruff 0.18.0' (exit 0), not a 0.17 release"),
+    (("ruff",), (0, "ruff 0.17.6 extra\n", ""), "ruff is 'ruff 0.17.6 extra' (exit 0), not a 0.17 release"),
+    (("ruff",), (2, "", ""), "ruff is 'silent' (exit 2), not a 0.17 release"),
+    (("ruff",), (1, "ruff 0.17.6\n", ""), "ruff is 'ruff 0.17.6' (exit 1), not a 0.17 release"),
+    ((), None, "neither ruff 0.17 nor uv is installed, and the gate's Python lint needs one: uv tool install ruff@0.17.6"),
+])
+def test_preflight_wants_the_gates_python_lint(on_path, ruff, problem, tmp_path):
+    answers = {"ruff": ruff} if ruff else {}
+    problems, calls = fake_preflight(on_path=auto.TOOLS + auto.SANDBOX_TOOLS + ("dotnet", *on_path), answers=answers,
+                                     tmp_path=tmp_path)
+    if problem is None:
+        assert problems == []
+    else:
+        assert len(problems) == 1 and problems[0].startswith(problem)
+        if "release" in problem:
+            assert problems[0].endswith("and uv isn't installed for the gate to run the pinned one: uv tool install ruff@0.17.6")
+    if "uvx" in on_path:
+        assert not any(call["command"][0] == "ruff" for call in calls), "with uvx there is no need to ask ruff"
+
+
+def test_preflight_tries_the_sandbox_and_claude(tmp_path):
+    problems, calls = fake_preflight(tmp_path=tmp_path)
+    commands = [call["command"] for call in calls]
+    assert ("claude", "--version") in commands
+    if auto.SANDBOX_TOOLS:
+        assert ("bwrap", "--unshare-all", "--ro-bind", "/", "/", "--dev", "/dev", "true") in commands
+    problems, _ = fake_preflight(answers={"bwrap": (1, "", "bwrap: setting up uid map: Permission denied\n"),
+                                          "claude": (127, "", "No such file")}, tmp_path=tmp_path)
+    expected = ["claude --version failed (exit 127): No such file"]
+    if auto.SANDBOX_TOOLS:
+        expected.insert(0, "bubblewrap can't make the review session's sandbox here (exit 1): bwrap: setting up uid map:"
+                           " Permission denied; the host may refuse unprivileged user namespaces")
+    assert problems == expected
+    problems, _ = fake_preflight(answers={"bwrap": (1, "", ""), "claude": (1, "", "")}, tmp_path=tmp_path)
+    assert all(problem.split(": ", 1)[1].startswith("no answer") for problem in problems)
 
 
 def test_preflight_names_an_sdk_it_cant_check(tmp_path, monkeypatch):
@@ -218,8 +273,8 @@ def test_preflight_never_builds_an_install_command_from_an_unreadable_version(tm
 
 
 def test_preflight_wants_dotnet_only_when_the_template_has_a_global_json(tmp_path):
-    assert fake_preflight(on_path=auto.TOOLS + auto.SANDBOX_TOOLS, global_json=None, tmp_path=tmp_path)[0] == []
-    problems, _ = fake_preflight(on_path=auto.TOOLS + auto.SANDBOX_TOOLS, tmp_path=tmp_path)
+    assert fake_preflight(on_path=auto.TOOLS + auto.SANDBOX_TOOLS + ("uvx",), global_json=None, tmp_path=tmp_path)[0] == []
+    problems, _ = fake_preflight(on_path=auto.TOOLS + auto.SANDBOX_TOOLS + ("uvx",), tmp_path=tmp_path)
     assert problems == ["the Template's global.json names .NET SDK 10.0.403, and dotnet isn't on PATH"]
 
 
@@ -322,7 +377,9 @@ class FakeSession:
 def fake_guard(tmp_path):
     common = tmp_path / "clone" / ".git"
     (common / "review").mkdir(parents=True, exist_ok=True)
-    return auto.Guard(worktree="w", remote_branch="", template={}, ledgers=str(common / "review"), ledgers_before={})
+    return auto.Guard(worktree="w", remote_branch="", template={}, ledgers=str(common / "review"), ledgers_before={},
+                      common=str(common), gitdir=str(common / "worktrees" / "chore-reapply-baseline"), link=b"gitdir: x\n",
+                      security=str(tmp_path / "clone" / ".security"), security_before={})
 
 
 SKILL_TEXT = "# Pre-push review\n\nThe skill's own steps.\n"
@@ -337,7 +394,8 @@ def review_once(tmp_path, monkeypatch, popen=None, changes=None, worktree=None, 
 
     def fake_popen(command, **kwargs):
         seen.update(command=command, **kwargs)
-        seen["settings"] = json.loads(Path(command[command.index("--settings") + 1]).read_text())
+        seen["settings"] = json.loads(command[command.index("--settings") + 1])
+        seen["tmp"] = os.path.dirname(kwargs["env"]["TMPDIR"])
         seen["gh_config"] = sorted(os.listdir(kwargs["env"]["GH_CONFIG_DIR"]))
         kwargs["stdout"].write("the session's own output\n")
         return session
@@ -360,13 +418,24 @@ def test_the_review_session_runs_sandboxed_in_the_worktree_with_the_templates_sk
     assert code == 0
     command = seen["command"]
     assert command[:2] == ["claude", "-p"]
-    flag = lambda name: command[command.index(name) + 1]  # noqa: E731
+    def flag(name):
+        return command[command.index(name) + 1]
+
     assert flag("--permission-mode") == "dontAsk", "anything not allowed is refused"
-    assert flag("--setting-sources") == "user", "the repository's settings, hooks and permission rules aren't loaded"
+    assert flag("--setting-sources") == "", "no settings file is loaded: neither the repository's nor the person's"
+    assert flag("--tools") == ",".join(auto.SESSION_BUILTINS), "only these built-in tools exist in the session"
     assert "--strict-mcp-config" in command and "--mcp-config" not in command, "no MCP server"
     assert json.loads(flag("--agents")) == AGENTS
     assert "--add-dir" not in command and "--bare" not in command
-    assert seen["settings"]["sandbox"]["enabled"] is True
+    assert command[command.index("--disallowedTools") + 1:] == list(auto.DENIED_TOOLS), \
+        "the deny rules are passed on the command line too, last, so the variadic flag takes nothing else"
+    clone = tmp_path / "clone" / ".git"
+    assert seen["settings"] == auto.session_settings(worktree, str(clone), str(clone / "worktrees" / "chore-reapply-baseline"),
+                                                     seen["tmp"]), "the settings are built from the guard's folders"
+    assert seen["tmp"].startswith(tempfile.gettempdir()) and os.path.basename(seen["tmp"]).startswith("rollout-session.")
+    for folder in auto.session_git_writes(str(clone), str(clone / "worktrees" / "chore-reapply-baseline")):
+        assert os.path.isdir(folder), f"{folder} is made before the session, so the sandbox can let it be written"
+    assert seen["pass_fds"] == (), "no lock held here, so none is passed on"
     assert seen["cwd"] == worktree and seen["start_new_session"] is True
     assert seen["stdin"] is subprocess.DEVNULL and seen["stderr"] is subprocess.STDOUT
     assert "the session's own output" in Path(log).read_text(), "the session's output is the log"
@@ -393,38 +462,77 @@ def test_the_sessions_folders_and_settings_are_gone_after_it(tmp_path, monkeypat
 def test_the_session_settings_sandbox_its_bash_and_fence_its_file_tools(tmp_path):
     home = str(tmp_path / "home")
     common = str(tmp_path / "clone" / ".git")
-    settings = auto.session_settings("/w/wt", common, "/t/session", home=home)
+    gitdir = os.path.join(common, "worktrees", "wt")
+    settings = auto.session_settings("/w/wt", common, gitdir, "/t/session", home=home)
     sandbox = settings["sandbox"]
     assert (sandbox["enabled"], sandbox["failIfUnavailable"], sandbox["allowUnsandboxedCommands"],
             sandbox["excludedCommands"]) == (True, True, False, [])
-    guarded = [os.path.join(common, name) for name in ("config", "config.worktree", "hooks", "info")]
+    guarded = ["/w/wt/.git", *(os.path.join(gitdir, name) for name in ("config.worktree", "gitdir", "commondir")),
+               *(os.path.join(common, name) for name in ("config", "config.worktree", "hooks", "info"))]
+    security = str(tmp_path / "clone" / ".security")
+    credentials = [home + path[1:] for path in auto.CREDENTIAL_PATHS]
     assert sandbox["filesystem"] == {
-        "allowWrite": [common, str(tmp_path / "clone" / ".security"), "/t/session"],
+        "allowWrite": [os.path.join(common, "objects"), os.path.join(common, "refs", "heads", "chore"),
+                       os.path.join(common, "logs", "refs", "heads", "chore"), os.path.join(common, "refs", "remotes", "origin"),
+                       os.path.join(common, "logs", "refs", "remotes", "origin"), gitdir, os.path.join(common, "review"),
+                       security, "/t/session"],
         "denyWrite": guarded,
-        "denyRead": [path.replace("~", home, 1) for path in auto.CREDENTIAL_PATHS],
+        "denyRead": credentials,
     }
+    assert common not in sandbox["filesystem"]["allowWrite"], "not the whole git folder: its config, hooks, other branches"
     assert sandbox["network"] == {"allowedDomains": list(auto.SANDBOX_DOMAINS)}
     permissions = settings["permissions"]
-    assert permissions["allow"] == [*auto.SESSION_TOOLS, "Edit(//w/wt/**)", "Edit(//t/session/**)"]
+    assert permissions["allow"] == [*auto.SESSION_TOOLS, "Read(//w/wt/**)", f"Read(/{security}/**)", "Read(//t/session/**)",
+                                    "Edit(//w/wt/**)", "Edit(//t/session/**)"]
+    assert not {"Read", "Glob", "Grep"} & set(permissions["allow"]), "reads are allowed by path only"
     deny = permissions["deny"]
     assert deny[:len(auto.DENIED_TOOLS)] == list(auto.DENIED_TOOLS)
-    for path in auto.CREDENTIAL_PATHS:
-        assert f"Read(/{path.replace('~', home, 1)})" in deny and f"Read(/{path.replace('~', home, 1)}/**)" in deny
+    for path in credentials:
+        assert f"Read(/{path})" in deny and f"Read(/{path}/**)" in deny
     for path in guarded:
         assert f"Edit(/{path})" in deny and f"Edit(/{path}/**)" in deny
     assert not any(rule.startswith("Write(") for rule in permissions["allow"] + deny), "Edit rules cover every file-editing tool"
 
 
+def test_the_session_settings_expand_the_real_home_and_take_the_main_checkout_from_git(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "me"))
+    settings = auto.session_settings("/w/wt", "/x/Repo.git", "/x/Repo.git/worktrees/wt", "/t")
+    assert settings["sandbox"]["filesystem"]["denyRead"][0] == str(tmp_path / "me" / ".ssh")
+    assert not any("~" in path for path in settings["sandbox"]["filesystem"]["denyRead"])
+    assert "/x/.security" in settings["sandbox"]["filesystem"]["allowWrite"], \
+        "the .security record is beside the git folder whatever it is called, as reapply.sh finds the main checkout"
+
+
+def test_expand_home_replaces_a_leading_tilde_only():
+    assert auto.expand_home("~/.ssh", "/h") == "/h/.ssh"
+    assert auto.expand_home("/a/~b", "/h") == "/a/~b"
+
+
 def test_the_sandbox_and_session_lists_word_for_word():
-    assert auto.SESSION_TOOLS == ("Read", "Glob", "Grep", "Bash", "Agent", "Task", "TodoWrite")
+    assert auto.SESSION_BUILTINS == ("Read", "Write", "Edit", "Glob", "Grep", "Bash", "Agent", "TodoWrite", "SendMessage")
+    assert auto.SESSION_TOOLS == ("Bash", "Agent", "Task", "TodoWrite", "SendMessage")
     assert auto.CREDENTIAL_PATHS == (
-        "~/.ssh", "~/.config/gh", "~/.git-credentials", "~/.config/git/credentials", "~/.netrc", "~/.gnupg",
-        "~/.docker", "~/.npmrc", "~/.aws", "~/.azure", "~/.config/gcloud", "~/.kube", "~/.local/share/keyrings",
-        "~/.password-store", "~/.claude/.credentials.json", "~/.cache/repo-ci-baseline")
+        "~/.ssh", "~/.config/gh", "~/.config/glab-cli", "~/.config/hub", "~/.git-credentials", "~/.config/git/credentials",
+        "~/.netrc", "~/.gnupg", "~/.docker", "~/.aws", "~/.azure", "~/.config/gcloud", "~/.kube", "~/.terraform.d",
+        "~/.npmrc", "~/.yarnrc", "~/.yarnrc.yml", "~/.config/pnpm", "~/.nuget/NuGet", "~/.config/NuGet", "~/.pypirc",
+        "~/.config/pip", "~/.config/uv", "~/.cargo/credentials", "~/.cargo/credentials.toml", "~/.gem/credentials",
+        "~/.m2/settings.xml", "~/.local/share/keyrings", "~/.password-store", "~/.vault-token", "~/.config/op",
+        "~/.pgpass", "~/.bash_history", "~/.zsh_history", "~/.local/share/fish/fish_history", "~/.claude.json",
+        "~/.claude/.credentials.json", "~/.cache/repo-ci-baseline")
     assert auto.SANDBOX_DOMAINS == ("registry.npmjs.org", "api.nuget.org", "github.com", "pypi.org", "files.pythonhosted.org")
     assert auto.SANDBOX_TOOLS == (("bwrap", "socat") if sys.platform.startswith("linux") else ())
     assert auto.TOOLS == ("git", "gh", "python3", "node", "pnpm", "shfmt", "claude")
     assert (auto.GROUP_WAIT_SECONDS, auto.SESSION_BROKE_A_RULE) == (10, 126)
+    assert auto.NO_PUSH == "https://push.invalid/"
+    assert auto.SESSION_GIT_CONFIG == (
+        ("credential.helper", ""),
+        ("credential.https://github.com.helper", ""),
+        ("url.https://push.invalid/.pushInsteadOf", "https://github.com/"),
+        ("url.https://push.invalid/.pushInsteadOf", "git@github.com:"),
+        ("url.https://push.invalid/.pushInsteadOf", "ssh://git@github.com/"),
+        ("gc.auto", "0"),
+    )
+    assert auto.FLAG_ON == ("1", "true", "yes", "on")
 
 
 def test_the_agent_comes_from_the_templates_file():
@@ -441,6 +549,9 @@ def test_the_agent_comes_from_the_templates_file():
     ("# no front matter\n", "has no front matter"),
     ("---\nname: x\ndescription: y\n---\nbody\n", "has no tools"),
     ("---\nname: x\ntools: Read\n---\nbody\n", "has no description"),
+    ("---\ndescription: y\ntools: Read\n---\nbody\n", "has no name"),
+    ("---\nname: x\ndescription: y\ntools: Read\nbody without a close\n", "front matter is never closed"),
+    ("----\nname: x\n---\nbody\n", "has no front matter"),
 ])
 def test_an_agent_file_that_doesnt_read_is_refused(tmp_path, text, problem):
     (tmp_path / "a.md").write_text(text)
@@ -448,10 +559,29 @@ def test_an_agent_file_that_doesnt_read_is_refused(tmp_path, text, problem):
         auto.agent_definition(str(tmp_path / "a.md"))
 
 
+@pytest.mark.parametrize("marker", [">-", ">", "|"])
+def test_an_agent_files_folded_fields_and_body_are_read_whole(tmp_path, marker):
+    (tmp_path / "a.md").write_text(f"---\nname: x\ndescription: {marker}\n  one\n\ttwo\ntools: Read, Grep ,\n---\n\n- a list"
+                                   " first\n---\nmore\n")
+    agent = auto.agent_definition(str(tmp_path / "a.md"))["x"]
+    assert agent == {"description": "one two", "prompt": "- a list first\n---\nmore\n", "tools": ["Read", "Grep"]}, \
+        "no model: none is passed; a body that opens with a dash or holds a rule is kept whole"
+
+
 def test_the_skill_comes_from_the_templates_file_without_its_front_matter():
     text = auto.read_skill()
     assert not text.startswith("---") and text.startswith("# Pre-push review")
     assert auto.SKILL_FILE == os.path.join(auto.OWNED, ".claude", "skills", "pre-push-review", "SKILL.md")
+
+
+@pytest.mark.parametrize("text, body", [
+    ("# no front matter\n---\nx\n", "# no front matter\n---\nx\n"),
+    ("---\nname: a\ndescription: b --- c\n---\n\n# Body\n", "# Body\n"),
+    ("---\nname: a\n---\n# Body\n---\nafter\n", "# Body\n---\nafter\n"),
+])
+def test_read_skill_leaves_out_the_front_matter_alone(tmp_path, text, body):
+    (tmp_path / "s.md").write_text(text)
+    assert auto.read_skill(str(tmp_path / "s.md")) == body
 
 
 def test_the_deny_rules_word_for_word():
@@ -485,10 +615,13 @@ def test_an_existing_log_folder_is_set_to_0700_and_a_symlink_is_refused(tmp_path
     link.symlink_to(tmp_path / "elsewhere")
     code, log, _ = auto.run_review(TM, str(tmp_path), log_dir=str(link))
     assert code == 127 and "isn't a folder of the user's own" in log
+    monkeypatch.setattr(auto.os, "getuid", lambda: os.stat(tmp_path / "logs").st_uid + 1)
+    code, log, _ = auto.run_review(TM, str(tmp_path), log_dir=str(tmp_path / "logs"))
+    assert code == 127 and "isn't a folder of the user's own" in log, "another user's folder is refused too"
 
 
 def test_the_prompt_says_none_when_no_owned_file_changes():
-    prompt = auto.review_command(TM, "/w", [], "/s.json", AGENTS, SKILL_TEXT)[2]
+    prompt = auto.review_command(TM, "/w", [], {}, AGENTS, SKILL_TEXT)[2]
     assert "These files the branch changes are Owned Baseline files, which the next Apply overwrites: none." in prompt
 
 
@@ -703,10 +836,45 @@ def test_run_in_group_starts_its_own_group_and_ends_it_on_an_interrupt():
         return FakeSession(code=3)
 
     assert auto.run_in_group(["x"], popen=popen) == 3
-    assert seen == {"command": ["x"], "start_new_session": True}
+    assert seen == {"command": ["x"], "start_new_session": True, "pass_fds": ()}
     with pytest.raises(SystemExit):
         auto.run_in_group(["x"], popen=lambda c, **k: _Raising(), end=ended.append)
     assert len(ended) == 1
+
+
+def test_run_in_group_holds_a_second_signal_and_passes_the_first_on():
+    ended = []
+
+    class Signalled(FakeSession):
+        def wait(self, timeout=None):
+            os.kill(os.getpid(), signal.SIGTERM)
+            os.kill(os.getpid(), signal.SIGINT)
+            time.sleep(0.05)
+            raise subprocess.TimeoutExpired("x", timeout)
+
+    with pytest.raises(SystemExit) as stop:
+        auto.run_in_group(["x"], popen=lambda c, **k: Signalled(), end=ended.append)
+    assert stop.value.code == 128 + signal.SIGTERM and len(ended) == 1
+
+
+def test_run_in_group_that_cant_start_passes_a_signal_on_before_its_error():
+    def popen(command, **kwargs):
+        os.kill(os.getpid(), signal.SIGHUP)
+        time.sleep(0.05)
+        raise FileNotFoundError(2, "No such file", "x")
+
+    with pytest.raises(SystemExit) as stop:
+        auto.run_in_group(["x"], popen=popen)
+    assert stop.value.code == 128 + signal.SIGHUP
+    with pytest.raises(FileNotFoundError):
+        auto.run_in_group(["/nonexistent/x"])
+
+
+def test_run_in_group_passes_the_lock_on_to_the_command(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(auto, "LOCK_FDS", [7])
+    auto.run_in_group(["x"], popen=lambda c, **k: seen.update(k) or FakeSession())
+    assert seen["pass_fds"] == (7,)
 
 
 class _Raising(FakeSession):
@@ -775,7 +943,9 @@ DROPPED = ("GH_TOKEN", "GITHUB_TOKEN", "gh_token", "RELEASE_PR_PAT", "AWS_PROFIL
            "GIT_CONFIG_KEY_9", "GIT_CONFIG_PARAMETERS", "GATE_SKIP_REVIEW", "CLIENT_SECRET", "GOOGLE_APPLICATION_CREDENTIALS",
            "AZURE_CLIENT_ID", "NPM_CONFIG__AUTH", "DOCKER_AUTH_CONFIG", "STRIPE_APIKEY", "API_KEY_PROD", "DATABASE_URL",
            "SENTRY_DSN", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH_COMMAND", "GIT_SSH", "DBUS_SESSION_BUS_ADDRESS",
-           "GPG_PASSPHRASE", "SESSION_COOKIE", "MY_BEARER", "DOCKER_CREDENTIAL", "XSSH_AUTH_SOCK", "XAUTHORITY")
+           "GPG_PASSPHRASE", "SESSION_COOKIE", "MY_BEARER", "DOCKER_CREDENTIAL", "XSSH_AUTH_SOCK", "XAUTHORITY",
+           "OPENAI_KEY", "STRIPE_KEY", "GOOGLE_CLOUD_PROJECT", "AZURE_TENANT", "AWS_REGION", "XCLAUDE_TOKEN", "MY_PAT",
+           "SENTRY_AUTH", "GIT_SSH_VARIANT")
 KEPT = ("PATH", "HOME", "LANG", "LD_LIBRARY_PATH", "MONKEY", "KEYBOARD", "MYAWS_X", "GIT_CONFIG_GLOBAL",
         "GIT_CONFIG_NOSYSTEM", "GIT_AUTHOR_NAME", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "XSSH_X")
 
@@ -800,8 +970,18 @@ def test_the_sessions_caches_and_temporary_folders_are_its_own(tmp_path):
 
 @pytest.mark.parametrize("flag, prefix", list(auto.CLOUD_SIGN_IN.items()))
 def test_a_cloud_sign_in_keeps_its_own_variables(tmp_path, flag, prefix):
-    env = auto.session_env({flag: "1", f"{prefix}PROFILE": "p", "GH_TOKEN": "t"}, str(tmp_path))
+    others = [p for p in auto.CLOUD_SIGN_IN.values() if p != prefix]
+    base = {flag: "1", f"{prefix}PROFILE": "p", "GH_TOKEN": "t", **{f"{p}PROFILE": "q" for p in others}}
+    env = auto.session_env(base, str(tmp_path))
     assert env[f"{prefix}PROFILE"] == "p" and "GH_TOKEN" not in env
+    assert not any(f"{p}PROFILE" in env for p in others), "only the cloud in use keeps its variables"
+
+
+@pytest.mark.parametrize("value, kept", [("1", True), ("true", True), (" Yes ", True), ("ON", True), ("0", False),
+                                         ("false", False), ("", False), ("no", False), ("off", False), ("2", False)])
+def test_a_cloud_flag_is_on_only_for_a_value_that_turns_it_on(tmp_path, value, kept):
+    env = auto.session_env({"CLAUDE_CODE_USE_BEDROCK": value, "AWS_PROFILE": "p"}, str(tmp_path))
+    assert ("AWS_PROFILE" in env) is kept
 
 
 def test_git_in_the_sessions_environment_cannot_push_to_github(tmp_path):
@@ -835,22 +1015,27 @@ def git_repo(path):
 
 
 class Guarded:
-    """A real worktree repo with an Owned file equal to the Template's, and its ledger folder; the remote read is
-    faked, the rest is real git."""
+    """A real linked worktree of a primary checkout, with an Owned file equal to the Template's, the clone's ledger
+    folder and the main checkout's .security; the remote read is faked (and recorded), the rest is real git."""
 
     def __init__(self, tmp_path):
-        self.worktree, self.owned = tmp_path / "w", tmp_path / "owned"
-        self.git = git_repo(self.worktree)
+        self.primary, self.worktree, self.owned = tmp_path / "main", tmp_path / "w", tmp_path / "owned"
+        self.git = git_repo(self.primary)
+        self.git("worktree", "add", "-q", "-b", "chore/reapply-baseline", str(self.worktree))
         (self.owned / "scripts").mkdir(parents=True)
         (self.owned / "scripts" / "gate.sh").write_text("gate\n")
         (self.worktree / "scripts").mkdir()
         (self.worktree / "scripts" / "gate.sh").write_text("gate\n")
-        self.ledgers = self.worktree / ".git" / "review"
+        self.ledgers = self.primary / ".git" / "review"
         self.ledgers.mkdir()
+        self.security = self.primary / ".security"
+        self.security.mkdir()
         self.remote = {"sha": "abc\trefs/heads/chore/reapply-baseline"}
         self.changed = ["scripts/gate.sh"]
+        self.reads = []
 
     def read(self, command, cwd=None):
+        self.reads.append(command)
         if "ls-remote" in command:
             return self.remote["sha"]
         return auto.run_text(command, cwd)
@@ -868,21 +1053,45 @@ class Guarded:
         path.write_text(raw if raw is not None else json.dumps({"branch": branch, "head": head, "findings": findings}))
         return path
 
+    def entry(self, name, status, text="the weakness"):
+        path = self.security / name
+        path.write_text(f"# {name}\n\n- Status: {status}\n- Lens: Security\n\n## Weakness\n\n{text}\n")
+        return path
+
 
 def test_a_session_that_kept_the_rules_broke_none(tmp_path):
     g = Guarded(tmp_path)
+    g.entry("0001-a.md", "open")
     g.guard()
     assert g.check() == []
-    assert g.taken.ledgers == str(g.worktree / ".git" / "review")
+    assert g.taken.ledgers == str(g.ledgers)
+    assert g.taken.common == str(g.primary / ".git")
+    assert g.taken.gitdir == str(g.primary / ".git" / "worktrees" / "w")
+    assert g.taken.security == str(g.security)
+    assert g.taken.link == f"gitdir: {g.primary / '.git' / 'worktrees' / 'w'}\n".encode()
 
 
-def test_a_guard_that_cant_read_the_remote_or_the_git_folder_starts_no_session(tmp_path):
+def test_the_guard_reads_the_remote_branch_by_its_full_name_before_and_after(tmp_path):
+    g = Guarded(tmp_path)
+    g.guard()
+    g.check()
+    remote = ["git", "-C", str(g.worktree), "ls-remote", "origin", "refs/heads/chore/reapply-baseline"]
+    assert [command for command in g.reads if "ls-remote" in command] == [remote, remote]
+
+
+def test_a_guard_that_cant_read_the_link_the_remote_or_the_git_folders_starts_no_session(tmp_path):
     g = Guarded(tmp_path)
     g.remote["sha"] = None
     with pytest.raises(auto.GuardUnreadable, match="can't read the remote chore/reapply-baseline before the session"):
         g.guard()
-    with pytest.raises(auto.GuardUnreadable, match="can't find the git folder"):
-        auto.session_guard(str(tmp_path / "not-a-repo"), owned=str(g.owned), read=lambda c, cwd=None: "" if "ls-remote" in c else None)
+    with pytest.raises(auto.GuardUnreadable, match=r"\.git isn't the plain file a linked worktree has"):
+        auto.session_guard(str(tmp_path / "not-a-repo"), owned=str(g.owned), read=lambda c, cwd=None: "")
+    with pytest.raises(auto.GuardUnreadable, match=r"\.git isn't the plain file"):
+        auto.session_guard(str(g.primary), owned=str(g.owned), read=lambda c, cwd=None: "")
+    for missing in ("--git-common-dir", "--git-dir"):
+        with pytest.raises(auto.GuardUnreadable, match="can't find the git folder"):
+            auto.session_guard(str(g.worktree), owned=str(g.owned),
+                               read=lambda c, cwd=None, missing=missing: None if missing in c else "" if "ls-remote" in c else "/x")
 
 
 def test_a_remote_branch_that_doesnt_exist_yet_is_a_reading_not_a_failure(tmp_path):
@@ -901,6 +1110,25 @@ def test_a_session_after_which_the_remote_moved_or_cant_be_read_is_a_stop(tmp_pa
     assert g.check() == ["the remote chore/reapply-baseline moved during the session (the session, or anyone who pushed to it meanwhile)"]
     g.remote["sha"] = None
     assert g.check() == ["can't read the remote chore/reapply-baseline after the session, so whether it was pushed can't be told"]
+
+
+@pytest.mark.parametrize("how", ["rewritten", "removed", "symlink", "folder"])
+def test_a_changed_git_link_is_a_stop_and_no_git_runs_in_the_worktree(tmp_path, how):
+    g = Guarded(tmp_path)
+    g.guard()
+    link = g.worktree / ".git"
+    link.unlink()
+    if how == "rewritten":
+        link.write_text(f"gitdir: {tmp_path / 'planted'}\n")
+    elif how == "symlink":
+        link.symlink_to(g.primary / ".git" / "worktrees" / "w")
+    elif how == "folder":
+        link.mkdir()
+    g.reads.clear()
+    listed = []
+    broke = g.check(changes=lambda w: listed.append(w) or [])
+    assert len(broke) == 1 and broke[0].startswith(f"{link} changed during the session")
+    assert g.reads == [] and listed == [], "neither the remote read nor the Owned list runs git there"
 
 
 def test_a_template_that_changed_during_the_session_is_a_stop(tmp_path):
@@ -929,7 +1157,7 @@ def test_an_owned_list_that_fails_after_the_session_is_a_stop(tmp_path):
     assert g.check(changes=broken) == ["can't list the Owned files the branch changes: git diff failed"]
 
 
-def test_a_ledger_of_this_branch_that_gained_an_accepted_finding_is_caught_whatever_its_mtime(tmp_path):
+def test_a_ledger_that_gained_an_accepted_finding_is_caught_whatever_its_mtime(tmp_path):
     g = Guarded(tmp_path)
     g.ledger("before.json", [{"id": "R1", "status": "accepted"}])
     g.guard()
@@ -946,7 +1174,7 @@ def test_a_ledger_that_kept_its_accepted_findings_breaks_nothing(tmp_path):
     assert g.check() == []
 
 
-def test_a_ledger_of_this_branch_gaining_an_accepted_finding_in_place_is_caught(tmp_path):
+def test_a_ledger_gaining_an_accepted_finding_in_place_is_caught(tmp_path):
     g = Guarded(tmp_path)
     g.ledger("l.json", [{"id": "R1", "status": "open"}])
     g.guard()
@@ -954,19 +1182,29 @@ def test_a_ledger_of_this_branch_gaining_an_accepted_finding_in_place_is_caught(
     assert g.check() == [f"{path} gained R1 accepted during the session: only the person accepts"]
 
 
-def test_the_persons_own_accept_on_another_branch_of_the_clone_is_not_the_sessions(tmp_path):
+def test_a_finding_put_in_place_under_an_id_already_accepted_is_caught(tmp_path):
     g = Guarded(tmp_path)
+    g.ledger("l.json", [{"id": "R1", "status": "accepted", "path": "a", "summary": "one"}])
     g.guard()
-    g.ledger("other.json", [{"id": "R9", "status": "accepted"}], branch="feature/7-x", head="1" * 40)
-    assert g.check() == []
+    path = g.ledger("l.json", [{"id": "R1", "status": "accepted", "path": "b", "summary": "another"}])
+    assert g.check() == [f"{path} gained R1 accepted during the session: only the person accepts"]
 
 
-def test_a_ledger_at_one_of_the_worktrees_commits_is_this_branchs_whatever_branch_it_names(tmp_path):
+@pytest.mark.parametrize("branch, head", [("feature/7-x", "1" * 40), ("something-else", None), ("chore/reapply-baseline", None)])
+def test_an_accept_in_any_ledger_of_the_clone_is_caught_whatever_branch_or_head_it_names(tmp_path, branch, head):
+    # The session can write those fields too, so a ledger can't vouch for itself.
     g = Guarded(tmp_path)
     g.guard()
-    head = g.git("rev-parse", "HEAD")
-    path = g.ledger("renamed.json", [{"id": "R4", "status": "accepted"}], branch="something-else", head=head)
-    assert g.check() == [f"{path} gained R4 accepted during the session: only the person accepts"]
+    path = g.ledger("other.json", [{"id": "R9", "status": "accepted"}], branch=branch, head=head)
+    assert g.check() == [f"{path} gained R9 accepted during the session: only the person accepts"]
+
+
+def test_a_ledger_that_didnt_read_before_and_reads_with_an_accept_after_is_caught(tmp_path):
+    g = Guarded(tmp_path)
+    g.ledger("l.json", [], raw="{")
+    g.guard()
+    path = g.ledger("l.json", [{"id": "R1", "status": "accepted"}])
+    assert g.check() == [f"{path} gained R1 accepted during the session: only the person accepts"]
 
 
 @pytest.mark.parametrize("raw", ['{"findings": 5}', '{"findings": "x"}', "[]", "{", '{"findings": null}'])
@@ -990,6 +1228,81 @@ def test_a_ledger_finding_that_isnt_an_object_is_skipped(tmp_path):
     g.guard()
     g.ledger("l.json", ["R1", {"id": "R2", "status": "fixed"}])
     assert g.check() == []
+
+
+def test_a_ledger_that_didnt_read_before_and_is_unchanged_is_not_the_sessions(tmp_path):
+    g = Guarded(tmp_path)
+    g.ledger("old-bad.json", [], raw="{")
+    g.guard()
+    assert g.check() == []
+
+
+def test_the_security_record_may_gain_entries_and_mark_an_open_one_fixed(tmp_path):
+    g = Guarded(tmp_path)
+    g.entry("0001-a.md", "open")
+    g.entry("0002-b.md", "fixed")
+    (g.security / "README.md").write_text("# The record\n")
+    g.guard()
+    g.entry("0001-a.md", "fixed", text="the weakness\n\n## Policy\n\nthe fix")
+    g.entry("0003-c.md", "open")
+    g.entry("0004-d.md", "fixed")
+    assert g.check() == []
+
+
+@pytest.mark.parametrize("name, before, after", [
+    ("0001-a.md", "accepted", None),
+    ("0001-a.md", "open", "accepted"),
+    ("0001-a.md", "fixed", "open"),
+    ("0001-a.md", "fixed", "fixed"),
+    ("0001-a.md", "accepted", "fixed"),
+    ("0001-a.md", "open", "open"),
+    ("README.md", "plain", "plain"),
+])
+def test_the_security_record_losing_or_changing_an_entry_is_caught(tmp_path, name, before, after):
+    g = Guarded(tmp_path)
+    if before == "plain":
+        (g.security / name).write_text("# The record\n")
+    else:
+        g.entry(name, before)
+    g.guard()
+    if after is None:
+        (g.security / name).unlink()
+    elif after == "plain":
+        (g.security / name).write_text("# The record, rewritten\n")
+    else:
+        g.entry(name, after, text="another weakness")
+    broke = g.check()
+    assert len(broke) == 1 and broke[0].startswith(str(g.security / name)), broke
+
+
+def test_a_new_security_entry_that_is_accepted_is_caught(tmp_path):
+    g = Guarded(tmp_path)
+    g.guard()
+    path = g.entry("0009-z.md", "accepted")
+    broke = g.check()
+    assert len(broke) == 1 and broke[0].startswith(str(path)) and "accepted" in broke[0]
+
+
+def test_a_missing_security_record_reads_as_no_entries(tmp_path):
+    assert auto.security_state(str(tmp_path / "none")) == {}
+    (tmp_path / "rec").mkdir()
+    (tmp_path / "rec" / "sub").mkdir()
+    (tmp_path / "rec" / "x.md").write_text("- Status: maybe\n")
+    state = auto.security_state(str(tmp_path / "rec"))
+    assert list(state) == ["x.md"] and state["x.md"][1] is None
+
+
+def test_link_text_reads_only_a_plain_file(tmp_path):
+    assert auto.link_text(str(tmp_path)) is None
+    (tmp_path / ".git").write_bytes(b"gitdir: /x\n")
+    assert auto.link_text(str(tmp_path)) == b"gitdir: /x\n"
+
+
+def test_run_text_strips_trailing_newlines_only_and_gives_none_for_a_failure(tmp_path):
+    assert auto.run_text(["printf", "  a\\n\\n"]) == "  a"
+    assert auto.run_text(["false"]) is None
+    assert auto.run_text(["/nonexistent/tool"]) is None
+    assert auto.run_text(["pwd"], cwd=str(tmp_path)) == str(tmp_path)
 
 
 def test_a_missing_ledger_folder_reads_as_no_ledgers(tmp_path):
@@ -1042,10 +1355,45 @@ def test_group_alive_counts_live_members_only(tmp_path):
     assert auto.group_alive(77, proc=str(proc)) is True
 
 
+def test_group_alive_reads_the_group_field_not_the_session_or_parent(tmp_path):
+    proc = tmp_path / "proc"
+    (proc / "20").mkdir(parents=True)
+    (proc / "20" / "stat").write_text("20 (x) S 77 88 77 0 -1\n")  # parent and session 77, group 88
+    (proc / "21").mkdir()
+    (proc / "21" / "stat").write_text("21 (x) S\n")  # too short to have a group
+    (proc / "22").mkdir()  # no stat: gone while listed
+    assert auto.group_alive(77, proc=str(proc)) is False
+    assert auto.group_alive(88, proc=str(proc)) is True
+
+
 def test_group_alive_without_proc_asks_the_kernel(tmp_path, monkeypatch):
     seen = []
     monkeypatch.setattr(auto.os, "killpg", lambda pid, sig: seen.append((pid, sig)))
     assert auto.group_alive(77, proc=str(tmp_path / "no-proc")) is True and seen == [(77, 0)]
+
+    def gone(pid, sig):
+        raise ProcessLookupError
+
+    monkeypatch.setattr(auto.os, "killpg", gone)
+    assert auto.group_alive(77, proc=str(tmp_path / "no-proc")) is False
+
+
+@pytest.mark.parametrize("which, error", [("skill", ValueError("x.md: front matter is never closed")),
+                                          ("agents", OSError(2, "No such file")), ("agents", ValueError("has no tools"))])
+def test_a_skill_or_agent_that_doesnt_read_starts_no_session(tmp_path, monkeypatch, which, error):
+    def broken():
+        raise error
+
+    monkeypatch.setenv("GATE_SKIP_REVIEW", "1")
+    worktree = tmp_path / "w"
+    worktree.mkdir()
+    started = []
+    code, log, broke = auto.run_review(TM, str(worktree), popen=lambda c, **k: started.append(c),
+                                       changes=lambda w: [], log_dir=str(tmp_path / "logs"),
+                                       guard=lambda w: fake_guard(tmp_path), check=lambda g: [],
+                                       **{"skill": lambda: SKILL_TEXT, "agents": lambda: AGENTS, which: broken})
+    assert (code, broke, started) == (127, [], [])
+    assert f"rollout.sh: can't set the session up: {error}" in Path(log).read_text()
 
 
 def test_a_claude_that_cannot_start_is_127_with_its_reason_in_the_log(tmp_path, monkeypatch):
@@ -1102,6 +1450,9 @@ def short(repo):
 class Lock:
     def __init__(self):
         self.closed = False
+
+    def fileno(self):
+        return 42
 
     def close(self):
         self.closed = True
@@ -1299,7 +1650,10 @@ def test_auto_stops_for_a_person_when_findings_wait_and_holds_the_rest():
     code, out, _ = run_auto(["--brings", "#82"], fleet)
     assert code == 1
     assert reapplied(fleet) == ["TicketManager", "TicketManager"]
-    assert "TicketManager: review findings wait for you: cd /r/TicketManager-worktrees/chore-reapply-baseline && scripts/review.sh accept-open" in out
+    worktree = "/r/TicketManager-worktrees/chore-reapply-baseline"
+    assert (f"TicketManager: review findings wait for you (cd {worktree} && scripts/review.sh report): fix one in an Owned file"
+            " in the Factory's template/owned/ first and add that PR to --brings, or accept them:"
+            f" cd {worktree} && scripts/review.sh accept-open") in out
     assert "held: IssueTracker, Blazor-Server, IssueManager, Articles, SuggestionApp" in out
     assert "resume with: rollout.sh --auto --brings '#82'\n" in out
     assert fleet.landed == []
@@ -1604,10 +1958,12 @@ def test_the_round_without_auto_is_unchanged():
 def test_the_header_says_what_holds_and_what_only_backs_it_up():
     doc = " ".join(auto.__doc__.split())
     assert "it runs in Claude Code's sandbox (session_settings; ADR 0016)" in doc
-    assert "can't leave the sandbox; the session refuses to start without bubblewrap" in doc
-    assert "the repository's hooks and permission rules never apply" in doc
+    assert "can't leave the sandbox; the session refuses to start without the sandbox (bubblewrap and socat on Linux" in doc
+    assert "not its config, hooks, other branches or worktrees" in doc
+    assert "the worktree's .git link changed" in doc
     assert "git's push is sent nowhere: layers behind the sandbox" in doc
-    assert "a SIGKILL of rollout.sh can't be caught, and leaves the session running" in doc
+    assert "a SIGKILL of rollout.sh can't be caught, and leaves the session running (holding the lock until it ends)" in doc
+    assert "every child the round starts holds the lock as well" in doc
 
 
 def test_git_branch_says_whether_the_branch_has_commits_main_lacks(tmp_path, monkeypatch):
@@ -1793,13 +2149,6 @@ def test_git_branch_gives_up_on_a_git_that_hangs(monkeypatch):
     assert all(kwargs.get("timeout") == 120 for kwargs in seen) and len(seen) == 2
 
 
-def test_a_ledger_that_didnt_read_before_and_is_unchanged_is_not_the_sessions(tmp_path):
-    g = Guarded(tmp_path)
-    g.ledger("old-bad.json", [], raw="{")
-    g.guard()
-    assert g.check() == []
-
-
 def test_a_sigterm_while_a_repo_is_reapplied_ends_the_round_with_its_resume_command():
     fleet = Fleet()
     reapply = fleet.reapply
@@ -1814,6 +2163,15 @@ def test_a_sigterm_while_a_repo_is_reapplied_ends_the_round_with_its_resume_comm
     assert code == 128 + signal.SIGTERM
     assert "rollout.sh: interrupted; resume with: rollout.sh --auto --brings '#82'" in err
     assert fleet.locks[0].closed
+
+
+def test_the_round_passes_its_lock_to_what_it_runs_and_lets_go_after():
+    fleet = Fleet()
+    reapply, held = fleet.reapply, []
+    fleet.reapply = lambda brings, path: held.append(auto.held_lock_fds()) or reapply(brings, path)
+    run_auto(["--brings", "#82"], fleet)
+    assert held and all(fds == (42,) for fds in held), "a child a SIGKILL of rollout.sh leaves running keeps the lock"
+    assert auto.held_lock_fds() == ()
 
 
 def test_a_session_that_broke_one_rule_names_it_alone():
@@ -1835,12 +2193,10 @@ def test_the_guard_of_a_linked_worktree_reads_the_primary_checkouts_ledgers(tmp_
                                read=lambda c, cwd=None: "" if "ls-remote" in c else auto.run_text(c, cwd))
     assert guard.ledgers == str(primary / ".git" / "review")
     assert set(guard.ledgers_before) == {"l.json"}
-    head = subprocess.run(["git", "-C", str(worktree), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-    (primary / ".git" / "review" / "l.json").write_text(json.dumps({"branch": "x", "head": head,
-                                                                    "findings": [{"id": "R1", "status": "accepted"}]}))
+    assert guard.security == str(primary / ".security")
+    (primary / ".git" / "review" / "l.json").write_text(json.dumps({"branch": "x", "findings": [{"id": "R1", "status": "accepted"}]}))
     broke = auto.broken_rules(guard, owned=str(owned), read=lambda c, cwd=None: "", changes=lambda w: [])
-    assert broke == [f"{primary / '.git' / 'review' / 'l.json'} gained R1 accepted during the session: only the person accepts"], \
-        "the real is_ours: its head is one of the worktree's commits"
+    assert broke == [f"{primary / '.git' / 'review' / 'l.json'} gained R1 accepted during the session: only the person accepts"]
 
 
 def test_the_adr_says_what_the_sandbox_doesnt_cover():

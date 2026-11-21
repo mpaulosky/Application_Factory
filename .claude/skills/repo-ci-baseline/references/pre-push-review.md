@@ -124,8 +124,8 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   push, which leaves the Apply commit on `chore/reapply-baseline` unpushed. Review it in that worktree with `/pre-push-review`, then run `reapply.sh` again: step 1
   carries the never-pushed branch on. `reapply.sh` exits 3 for that refusal and 4 when a recorded review's findings wait for a person, asked of the worktree's
   own `scripts/review.sh check`, and `rollout.sh --auto` runs the review headless on a 3 and stops for the person on a 4
-  ([ADR 0016](../../../../docs/adr/0016-a-rollout-runs-each-applications-review-headless-and-sandboxed-in-its-worktree.md)).
-  A finding in a Template file goes to the Template in a dotfiles PR, not to an edit in the repo.
+  (the Factory's [ADR 0016](../../../../docs/adr/0016-a-rollout-runs-each-applications-review-headless-and-sandboxed-in-its-worktree.md)).
+  A finding in a Template file goes to the Template in a Factory PR, not to an edit in the repo.
 - `GATE_SKIP_REVIEW=1` skips the check for gate runs while iterating, never for a push: the pre-push hook runs the gate without it. Sandcastle's sandboxes set it (`SANDBOX_ENV` in `lib/skills.mts`):
   the host runs the review's rounds on a built branch itself, after checkpoint 2 ([below](#sandcastle-runs-the-review-on-the-host)), so the sandbox's gate need not.
 - Reviewers run as `pre-push-reviewer` (in the host's `subagents` mode, as `lens-<id>` subagents with the same tools, below),
