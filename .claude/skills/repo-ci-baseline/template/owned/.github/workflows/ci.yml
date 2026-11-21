@@ -383,8 +383,9 @@ jobs:
       - name: Run work-issue script tests
         run: bash scripts/tests/work-issue.test.sh
 
-      # The hook's own cases use stub linters. Its real-shellcheck block runs the runner image's shellcheck when there is one (ubuntu-latest
-      # has it) and skips with a note when there isn't; every flag the hook passes is also checked against the stubs.
+      # The hook's own cases use stub linters. Its real-shellcheck block runs when the job has shellcheck (ubuntu-latest does), shfmt v3.14
+      # or a later v3 and a root .editorconfig, and skips with a note when it doesn't; every flag the hook passes is also checked against
+      # the stubs.
       - name: Run edit-time lint hook tests
         run: bash scripts/tests/lint-edited-file.test.sh
 

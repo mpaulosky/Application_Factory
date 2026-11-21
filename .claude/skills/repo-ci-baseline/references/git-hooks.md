@@ -238,9 +238,11 @@ time; the gate reads it. The config is read without a here-string, which bash ma
 symlink, not a regular file, unreadable, names `external-sources` or `check-sourced` in any case, holds a line other than a blank, a comment or one of those five keys (an
 allow-list, so a key a later shellcheck adds can't slip past), gives one no value or a value of a form the hook doesn't pass on (`disable` and `enable` take codes or check
 names with commas, starting with a letter or digit, `shell` one of `sh`, `bash`, `dash`, `ksh` and `busybox`, `extended-analysis` `true` or `false`), has a line over 4,096
-characters or is over 65,536 in all (more than shellcheck's arguments could carry), or sets `extended-analysis` for a shellcheck whose `--help` lists no
-`--extended-analysis` (before 0.9), which would stop on it with a usage error: the note names the config and why (an unknown key by name), and the gate still checks the
-file. Each value is one argument of its flag, even one that starts with a dash.
+bytes or is over 65,536 in all (bounds chosen well inside what a command line carries, which no real config comes near; only 65,537 bytes of a config are read), or sets
+`extended-analysis` for a shellcheck whose `--help` lists no `--extended-analysis` (before 0.9), which would stop on it with a usage error: the note names the config and
+why (an unknown key by its first 40 bytes, each one other than a letter, digit, space or `_ . + -` shown as `?`, so no control byte an agent wrote reaches the person's
+terminal), and the gate still checks the file. A `--help` that fails without listing the flag gets a note of its own. Each value is one argument of its flag: `source-path`
+may start with a dash, since shellcheck takes the argument after `-P` as its value, and `disable` and `enable` may not.
 
 A hook under a nested `.github/hooks` whose `.editorconfig` can't be read is not linted, with a note; a line of it longer than 4,096 characters is no section header. A violation
 wins over a note: the hook exits 2 with the report alone. `test.sh` checks that the hook's hook-name rule is the gate's and the Lint Actions shellcheck job's, and that its shfmt
@@ -251,8 +253,8 @@ tells agents to write Markdown and YAML with Write and Edit for that reason, in 
 load it when a session works on a shell or Python script, says the same for shell scripts (the hook lints no Python) and lists the checks reviewers keep raising on them:
 a test that fails without each new branch, the header or docstring updated in the same edit, the edge cases that keep coming back (a missing tool, an empty,
 relative or odd path, CRLF or a byte-order mark, a symlink, a variable a caller left set), and the script's error contract.
-In a repo that runs Sandcastle, which is where the review ledger is, a re-Apply that rewrites either, or the hook itself (which runs linters on every agent write with no
-Bash prompt and vets the configs they read), needs a local review (`REVIEWED_ON_REAPPLY`), as the hand-off rules do;
+In a repo that runs Sandcastle, which is where the review ledger is, a re-Apply that rewrites either, or the hook itself (which lints each Markdown, YAML or shell file an agent
+writes, with no Bash prompt, and vets the configs its linters read), needs a local review (`REVIEWED_ON_REAPPLY`), as the hand-off rules do;
 in a repo without the ledger the re-Apply PR's own review is the check.
 
 - Exit 2 with the linters' output on stderr when any linter reports a problem; Claude Code feeds that back to the agent. A linter that crashes counts as a problem, not as clean. Each linter's

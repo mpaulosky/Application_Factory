@@ -982,8 +982,8 @@ describe("checkReview", () => {
     assert.equal(checkReview(repo, mergeBase(repo), {}).ok, true);
   });
 
-  it("reviews a re-Apply that changes an Owned file that carries behaviour (the coverage gate, the rules files that load in every session, an issue template, the reviewer agent, a judging prompt, the local gate's check.sh, global.json, the pre-push-review skill's files, docs/PROCESS.md, the gate chain), though all are Owned: they carry behaviour a path alone can't vouch for", () => {
-    for (const path of [".github/ci/coverage-threshold", ".claude/rules/sandcastle-hand-off.md", ".claude/rules/markdown-and-yaml-edits.md", ".claude/rules/script-edits.md", ".github/ISSUE_TEMPLATE/bug_report.md", ".github/ISSUE_TEMPLATE/config.yml", ".github/ISSUE_TEMPLATE/feature_request.md", ".claude/agents/pre-push-reviewer.md", ".sandcastle/critique-prompt.md", ".sandcastle/intake-prompt.md", ".sandcastle/check.sh", "global.json", ".claude/skills/pre-push-review/SKILL.md", ".claude/skills/pre-push-review/lenses.md", ".claude/skills/pre-push-review/review-bar.md", "docs/PROCESS.md", "scripts/gate.sh", "scripts/review.sh", ".github/hooks/pre-push", ".sandcastle/lib/review-ledger.mts", ".sandcastle/lib/host-safety.mts", ".sandcastle/lib/sandbox-env.mts", ".sandcastle/lib/host-review.mts", ".sandcastle/lib/host-review-prompts.mts", ".sandcastle/lib/build.mts", ".sandcastle/main.mts", ".sandcastle/status.mts"]) {
+  it("reviews a re-Apply that changes an Owned file that carries behaviour (the coverage gate, the rules files that load in every session, an issue template, the reviewer agent, a judging prompt, the local gate's check.sh, global.json, the pre-push-review skill's files, docs/PROCESS.md, the edit-time lint hook, the gate chain), though all are Owned: they carry behaviour a path alone can't vouch for", () => {
+    for (const path of [".github/ci/coverage-threshold", ".claude/rules/sandcastle-hand-off.md", ".claude/rules/markdown-and-yaml-edits.md", ".claude/rules/script-edits.md", ".github/ISSUE_TEMPLATE/bug_report.md", ".github/ISSUE_TEMPLATE/config.yml", ".github/ISSUE_TEMPLATE/feature_request.md", ".claude/agents/pre-push-reviewer.md", ".sandcastle/critique-prompt.md", ".sandcastle/intake-prompt.md", ".sandcastle/check.sh", "global.json", ".claude/skills/pre-push-review/SKILL.md", ".claude/skills/pre-push-review/lenses.md", ".claude/skills/pre-push-review/review-bar.md", "docs/PROCESS.md", "scripts/lint-edited-file.sh", "scripts/gate.sh", "scripts/review.sh", ".github/hooks/pre-push", ".sandcastle/lib/review-ledger.mts", ".sandcastle/lib/host-safety.mts", ".sandcastle/lib/sandbox-env.mts", ".sandcastle/lib/host-review.mts", ".sandcastle/lib/host-review-prompts.mts", ".sandcastle/lib/build.mts", ".sandcastle/main.mts", ".sandcastle/status.mts"]) {
       run(repo, "switch", "--quiet", "-C", "chore/reapply-baseline", "origin/main");
       mkdirSync(join(repo, dirname(path)), { recursive: true });
       commit(repo, ".editorconfig", "{}\n", "re-Apply");
@@ -1019,6 +1019,19 @@ describe("checkReview", () => {
     assert.equal(result.ok, false);
     assert.match(result.message, /No review is recorded for this diff/);
     assert.match(result.message, /\.github\/ci\/coverage-threshold/);
+    assert.doesNotMatch(result.message, /\.editorconfig/);
+  });
+
+  it("names the edit-time lint hook in the message when a re-Apply rewrites it, since the hook runs linters with no Bash prompt", () => {
+    run(repo, "switch", "--quiet", "-C", "chore/reapply-baseline", "origin/main");
+    mkdirSync(join(repo, "scripts"), { recursive: true });
+    commit(repo, ".editorconfig", "{}\n", "re-Apply");
+    commit(repo, "scripts/lint-edited-file.sh", "#!/usr/bin/env bash\n", "re-Apply");
+
+    const result = checkReview(repo, mergeBase(repo), {});
+
+    assert.equal(result.ok, false);
+    assert.match(result.message, /scripts\/lint-edited-file\.sh/);
     assert.doesNotMatch(result.message, /\.editorconfig/);
   });
 
@@ -4004,7 +4017,7 @@ describe("OWNED_PATHS", () => {
   // The Factory's owned-paths test pins these too, but an Application doesn't carry it. An entry dropped from OWNED_PATHS makes a
   // re-Apply that rewrites the script need a review of its own; one dropped from REVIEWED_ON_REAPPLY lets a re-Apply that rewrites
   // cleanup.sh (which deletes branches, worktrees and origin branches), work-issue.sh (which names a branch from issue text) or
-  // lint-edited-file.sh (which runs linters on every agent write with no prompt, and vets the configs they read) pass unread.
+  // lint-edited-file.sh (which lints each Markdown, YAML or shell file an agent writes, with no prompt, and vets the configs its linters read) pass unread.
   it("names the edit-time lint, cleanup and work-issue scripts as Owned, and reviews all three on a re-Apply", () => {
     for (const path of ["scripts/lint-edited-file.sh", "scripts/cleanup.sh", "scripts/work-issue.sh"]) {
       assert.equal((OWNED_PATHS as readonly string[]).includes(path), true, `${path} is an OWNED_PATHS entry`);

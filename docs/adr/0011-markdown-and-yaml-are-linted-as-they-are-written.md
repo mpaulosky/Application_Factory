@@ -76,8 +76,10 @@ key has (`disable` as `-e`, `enable` as `-o`, `shell` as `-s`, `source-path` as 
 above the root, or one changed after the check, is never read. Two hand-overs were tried first and dropped. A temporary copy, a named file in a shared folder, can be swapped
 before shellcheck reads it. A pipe (`--rcfile <(...)`) can be reached by another process running as the person through `/proc/<pid>/fd`, and is a named FIFO in `TMPDIR` on a
 bash without `/dev/fd`. Flags leave nothing to reach. It doesn't run shellcheck under a config that is a symlink, not a regular file, unreadable, names `external-sources` or
-`check-sourced`, sets a key outside an allow-list (`disable`, `enable`, `source-path`, `shell`, `extended-analysis`), or gives one a value of a form the hook doesn't pass on;
-the note says so. Plain `--norc` alone was not chosen: a repo's own `disable=` lines would then fail files its gate passes, and the flags keep them.
+`check-sourced`, sets a key outside an allow-list (`disable`, `enable`, `source-path`, `shell`, `extended-analysis`), gives one no value or a value of a form the hook
+doesn't pass on, has a line over 4,096 bytes or is over 65,536 in all (of which the hook reads no more than one byte past the cap), or sets `extended-analysis` for a
+shellcheck whose `--help` doesn't list that flag (before 0.9); the note says so, and quotes an agent-written key with every byte but a letter, digit, space or `_ . + -` as `?`.
+Plain `--norc` alone was not chosen: a repo's own `disable=` lines would then fail files its gate passes, and the flags keep them.
 `test.sh` keeps the hook's hook-name and shfmt release rules equal to the gate's. The report's first line now says only that the gate checks the same file
 before the push, which is true of every kind; the pre-commit hook lints only Markdown, and an Application's CI doesn't check shell format. A note about a hook under a nested
 `.github/hooks` says instead that the gate checks it only where it takes that folder, since an Application's gate takes the root's hooks alone.
@@ -90,6 +92,6 @@ Factory carries a copy of it (`scripts/gate.sh` lists it): the Factory's session
 The Markdown and YAML rule has no copy, since the Factory's `CLAUDE.md` says the same.
 
 These reach the Fleet by a Rollout: the Owned `scripts/lint-edited-file.sh`, `scripts/gate.sh` and `.claude/rules/script-edits.md` arrive at each Application's next
-Rollout. All three are in `REVIEWED_ON_REAPPLY`, so that re-Apply needs a local review where the ledger is: the hook joined the set with this Update, since it now runs
-linters on every file an agent writes, with no Bash prompt, and vets the configs they read. The Seed `.sandcastle/roles/shared-rules.md` and
+Rollout. All three are in `REVIEWED_ON_REAPPLY`, so that re-Apply needs a local review where the ledger is: the hook joined the set with this Update, since it now lints
+each Markdown, YAML or shell file an agent writes, with no Bash prompt, and vets the configs its linters read. The Seed `.sandcastle/roles/shared-rules.md` and
 `Dockerfile` changes never reach an Application that has them; it brings them over by hand (the skill's `references/sandcastle.md`, Migrating a repo).

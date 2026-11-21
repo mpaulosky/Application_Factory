@@ -31,8 +31,9 @@
 # --extended-analysis), so nothing a process could change between the check and shellcheck's run is read, and no config above the
 # repository root is. ShellCheck is not run while a config on the file's path is a symlink, not a regular file, unreadable, names
 # external-sources or check-sourced, holds a line other than a blank, a comment or one of those keys, gives one of them no value or a
-# value of a form the hook doesn't pass on, or is too long to pass on (see sc_config_refused and sc_config_flags), or while it sets
-# extended-analysis for a shellcheck without that flag: the person is told, and the gate still checks the file. A hook under a
+# value of a form the hook doesn't pass on, or is over the size the hook reads (see sc_config_refused and sc_config_flags), or while it
+# sets extended-analysis for a shellcheck whose --help doesn't list that flag: the person is told, and the gate still checks the file. A
+# key or shfmt release the note names is shown with only letters, digits, spaces and _ . + -, so it carries no control byte. A hook under a
 # nested .github/hooks whose .editorconfig can't be read is not linted either, and the person is told.
 #
 # Only files in the project's own checkout, or in a linked worktree that checkout lists in `git worktree list`, are linted
@@ -491,33 +492,55 @@ print("-" if key is None else json.dumps(key))' "$path" 2> /dev/null || true)"
   done
 }
 
+# plain_text <text> <n>: the text's first n bytes, each byte other than a letter, a digit, a space or _ . + - shown as ?, so a note quoting
+# what an agent wrote carries no escape or control byte to the person's terminal.
+plain_text() {
+  # Its own line: the words of one local are expanded before it sets LC_ALL, so the cut would count the caller's characters.
+  local LC_ALL=C text
+  text="${1:0:$2}"
+  printf '%s' "${text//[!A-Za-z0-9 _.+-]/?}"
+}
+
+# sc_help_lists_ea <shellcheck>: 0 when its --help lists --extended-analysis, whatever --help exits with; sc_help_rc is that exit
+# status. The help is taken whole and matched in bash, in the folder the linter runs in (a version manager's shim picks its release
+# by folder): a pipe into grep would fail under pipefail when grep stopped reading early, or wasn't on PATH.
+sc_help_rc=0
+sc_help_lists_ea() {
+  local help
+  help="$(cd "$root" && "$1" --help 2>&1)"
+  sc_help_rc=$?
+  [[ "$help" == *--extended-analysis=* ]]
+}
+
 # sc_config_refused: reads the shellcheck configs on the file's path (its folder and each one above it, up to the repository root,
 # .shellcheckrc before shellcheckrc in each, the order shellcheck looks in), so shellcheck is given the nearest one's settings as flags
 # and never looks for one itself. 0, with sc_rc_path and sc_rc_why set, for the first the hook won't hand over: a symlink or not a
 # regular file (it could be any file, read as a config), one that can't be read (what it turns on is unknown), one longer than
-# SC_TEXT_MAX characters, one that names external-sources (which lets shellcheck open the files a source line names) or check-sourced
+# SC_TEXT_MAX bytes (only that much and one more is read), one that names external-sources (which lets shellcheck open the files a source line names) or check-sourced
 # (which quotes their lines in the report the agent reads), in any case, a comment included, or one sc_config_flags can't turn into
 # flags: a key this hook doesn't know could be a later shellcheck's way to turn either on. 1 otherwise, with sc_flags and sc_rc_near the
-# nearest one's flags and path (no flags when there is no config). A config above the repository root, or the person's own in their
+# nearest one's flags and path (no flags when there is no config), and sc_ea 1 when it sets extended-analysis. A config above the repository root, or the person's own in their
 # home, is not read: shellcheck runs with --norc, and the gate reads it.
 sc_rc_path="" sc_rc_why="" sc_rc_found=0 sc_rc_near=""
-sc_flags=() sc_flags_new=() sc_flag_why=""
+sc_flags=() sc_flags_new=() sc_flag_why="" sc_ea=0 sc_ea_new=0
+# The caps are a bound chosen well inside what a command line carries, not a limit of shellcheck's: no real config comes near them,
+# and one that does is not read on every edit.
 SC_TEXT_MAX=65536
 # sc_config_flags <text>: 0, with sc_flags_new the shellcheck flags that say what the config says, when every line of it is blank, a
 # comment, or <key>=<value> (blanks allowed before the key and around the =; a CRLF line's CR is a blank) for one of the keys that open
 # no other file and quote nothing, with a value of the form the hook passes on: disable and enable a list of codes or check names
 # (letters, digits, commas, dashes, starting with a letter or digit), shell one of sh, bash, dash, ksh and busybox, extended-analysis
-# true or false, and source-path any value. 1 otherwise, with sc_flag_why saying which line or key and why: a line longer than
-# SC_LINE_MAX characters (a value that long could not reach shellcheck as one argument), a line that is not <key>=<value>, a key that is
+# true or false, and source-path any value (sc_ea_new is 1 when extended-analysis is set). 1 otherwise, with sc_flag_why saying which line or key and why: a line longer than
+# SC_LINE_MAX bytes, a line that is not <key>=<value>, a key that is
 # not one of those (named), or a key with no value or one of another form. A key's spelling is matched as shellcheck reads it, so
 # external_sources and Disable are no keys.
 SC_LINE_MAX=4096
 sc_config_flags() {
   local LC_ALL=C line key value
-  sc_flags_new=() sc_flag_why=""
+  sc_flags_new=() sc_flag_why="" sc_ea_new=0
   while IFS= read -r line || [[ -n "$line" ]]; do
     if ((${#line} > SC_LINE_MAX)); then
-      sc_flag_why="has a line longer than $SC_LINE_MAX characters, which this hook doesn't pass to shellcheck"
+      sc_flag_why="has a line longer than $SC_LINE_MAX bytes, which this hook doesn't pass to shellcheck"
       return 1
     fi
     [[ ! "$line" =~ ^[[:space:]]*(#|$) ]] || continue
@@ -531,7 +554,7 @@ sc_config_flags() {
     case "$key" in
       disable | enable | shell | extended-analysis | source-path) ;;
       *)
-        sc_flag_why="sets the key ${key:0:40}, which this hook doesn't hand to shellcheck (it takes disable, enable, source-path, shell and extended-analysis)"
+        sc_flag_why="sets the key $(plain_text "$key" 40), which this hook doesn't hand to shellcheck (it takes disable, enable, source-path, shell and extended-analysis)"
         return 1
         ;;
     esac
@@ -560,6 +583,7 @@ sc_config_flags() {
           return 1
         }
         sc_flags_new+=("--extended-analysis=$value")
+        sc_ea_new=1
         ;;
       # Its own argument, after -P: shellcheck takes the next one as -P's value even when it starts with a dash.
       source-path) sc_flags_new+=(-P "$value") ;;
@@ -580,13 +604,15 @@ sc_config_refused() {
         sc_rc_why="is a symlink or not a regular file, so the hook can't vouch for what shellcheck would read"
         return 0
       fi
-      text="$(cat -- "$path" 2> /dev/null)" || {
+      # One byte over the cap at most, so a huge config is never read whole. The x keeps the trailing newlines $(...) drops, so the
+      # length is the file's own, and a file cut at the cap is refused, never vetted as the part read.
+      text="$(head -c $((SC_TEXT_MAX + 1)) -- "$path" 2> /dev/null && printf x)" || {
         sc_rc_why="could not be read, so the hook can't tell what it turns on"
         return 0
       }
-      # A config this long holds more than shellcheck's arguments could carry (a single argument tops out near 128 KiB on Linux).
+      text="${text%x}"
       if ((${#text} > SC_TEXT_MAX)); then
-        sc_rc_why="is longer than $SC_TEXT_MAX characters, which this hook doesn't pass to shellcheck"
+        sc_rc_why="is longer than $SC_TEXT_MAX bytes, which this hook doesn't pass to shellcheck"
         return 0
       fi
       # LC_ALL=C on tr itself: the local above is not exported, so a child doesn't see it unless the caller exported LC_ALL.
@@ -603,6 +629,7 @@ sc_config_refused() {
         sc_rc_found=1
         sc_rc_near="$sc_rc_path"
         sc_flags=(${sc_flags_new[@]+"${sc_flags_new[@]}"})
+        sc_ea="$sc_ea_new"
       fi
     done
     [[ "$at" != "$root" ]] || return 1
@@ -627,10 +654,14 @@ elif [[ "$kind" == shell ]]; then
     skipped+=("shellcheck")
   elif sc_config_refused; then
     notes+=("shellcheck was not run: its config $sc_rc_path $sc_rc_why")
-  elif [[ " ${sc_flags[*]-} " == *" --extended-analysis="* ]] && ! "$bin" --help 2>&1 | grep -qF -- --extended-analysis; then
+  elif ((sc_ea)) && ! sc_help_lists_ea "$bin"; then
     # The one flag a still-common shellcheck lacks (it came in 0.9): without it the call would fail with a usage error, which run_linter
     # would report to the agent as a violation in the file.
-    notes+=("shellcheck was not run: this shellcheck has no --extended-analysis, which its config $sc_rc_near sets")
+    if ((sc_help_rc)); then
+      notes+=("shellcheck was not run: its --help failed (exit $sc_help_rc), so the hook can't tell whether it has --extended-analysis, which its config $sc_rc_near sets")
+    else
+      notes+=("shellcheck was not run: this shellcheck has no --extended-analysis, which its config $sc_rc_near sets")
+    fi
   else
     # --norc, with the vetted config's settings as flags: shellcheck reads no config file, and so nothing another process could change.
     run_linter shellcheck "$bin" --norc ${sc_flags[@]+"${sc_flags[@]}"} -- "$target"
@@ -648,7 +679,7 @@ elif [[ "$kind" == shell ]]; then
         run_linter shfmt "$bin" -d -- "$target"
         ((LAST_RC != 1)) || shfmt_failed=1
       else
-        notes+=("shfmt '${shfmt_version:0:40}' is not v3.14 or a later v3 release, whose format the gate checks")
+        notes+=("shfmt '$(plain_text "$shfmt_version" 40)' is not v3.14 or a later v3 release, whose format the gate checks")
       fi
     fi
   fi

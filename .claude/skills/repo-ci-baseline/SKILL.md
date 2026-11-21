@@ -100,7 +100,8 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
      prepares the `chore/reapply-baseline` worktree, merges the remote branch and `main`, commits `apply.sh`'s output alone,
      pushes through the gate (which asks for a review when Apply writes the coverage threshold,
      a rules file that loads in every session (the hand-off or the Markdown and YAML edit rules) or the script edit rules, an issue template, the reviewer agent,
-     a Sandcastle prompt (intake, critique, plan, review or a role's), the local gate's check.sh, global.json or the edit-time lint hook),
+     a Sandcastle prompt (intake, critique, plan, review or a role's), the local gate's check.sh, global.json, the edit-time lint hook,
+     or another file the ledger reviews on a re-Apply; [pre-push-review.md](references/pre-push-review.md) has the full list),
      opens the re-Apply PR ready (or adds the commit to the open one) with the `baseline:apply` label, which `owned-files.yml`'s Owned files check needs to exempt it, and requests Copilot;
      it records Copilot's ask on the PR when the request doesn't register, so Claude Review runs (a first re-Apply PR has the old PR Auto-Merge).
      Its header comment has the details; name the head it prints in thread replies.

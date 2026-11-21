@@ -162,8 +162,8 @@ export const OWNED_PATHS = [
 // local gate's .sandcastle/check.sh, whose watched paths and early exit decide
 // whether the Sandcastle check runs at all, global.json, which sets the SDK and the msbuild-sdks a build runs,
 // docs/PROCESS.md, which review-prompt.md tells a role to follow, scripts/cleanup.sh, which deletes branches, worktrees and origin
-// branches, scripts/work-issue.sh, which makes a branch and worktree named from issue text, scripts/lint-edited-file.sh, which runs
-// shellcheck and shfmt on every file an agent writes, with no Bash prompt, and vets the repository's linter configs as it does, and the
+// branches, scripts/work-issue.sh, which makes a branch and worktree named from issue text, scripts/lint-edited-file.sh, which lints
+// each Markdown, YAML or shell file an agent writes, with no Bash prompt, and vets the repository's linter configs as it does, and the
 // gate chain (see OWNED_PATHS above).
 // The other files that moved from Seed to Owned (CODE_OF_CONDUCT.md,
 // the READMEs under .security/ and .claude/skills/) are audited text that no

@@ -9,7 +9,7 @@
 # a command without the quotes around CLAUDE_PROJECT_DIR or naming another script, a non-executable script and a file that is not JSON.
 # It also checks the shfmt step (ADR 0015): every shell file, changed or not, the three hooks among them, is formatted in the style .editorconfig gives; a file that is not a shell file,
 # a hook name outside the root's and the Template's .github/hooks, a tracked file deleted from the working tree and an ignored file are left alone; a name with a space, a non-ASCII byte or a leading - is checked as a
-# file; a file shfmt can't parse fails with its error; git failing fails the step; no temp file is left; and shfmt is refused when missing or outside test.sh's version rule, which is the same.
+# file; a file shfmt can't parse fails with its error; a shfmt that exits with a status other than 0 or 1 fails the step as a failed shfmt, with no shfmt -w advice; git failing fails the step; no temp file is left; and shfmt is refused when missing or outside test.sh's version rule, which is the same.
 # It also checks GATE_PART (ADR 0012) and TEST_SH_SHARD (ADR 0013, only the template part runs a shard; test.sh's steps each sit in one shard; the workflow's matrix lists them all): each part runs alone, a bad value, or --quick or --sync with a part, is refused, the Sandcastle check runs in a full gate only when the branch changed
 # a file it reads (and is remembered per clean tree), and the CI workflow has one job per part and a Template tests job that needs them all.
 #

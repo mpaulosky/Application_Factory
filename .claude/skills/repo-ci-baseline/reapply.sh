@@ -35,9 +35,11 @@
 #      threshold, a rules file that loads in every session (the hand-off or the Markdown
 #      and YAML edit rules) or the script edit rules, an issue template, the reviewer agent, a
 #      Sandcastle prompt (intake, critique, plan, review or a role's), the local gate's check.sh, global.json or the edit-time
-#      lint hook, the gate asks for one
-#      (its message names them): run /pre-push-review in the worktree, then run
-#      this again.
+#      lint hook, or another file the ledger's REVIEWED_ON_REAPPLY names (the
+#      pre-push review skill's files, docs/PROCESS.md, cleanup.sh, work-issue.sh
+#      or the gate chain; references/pre-push-review.md has the full list), the
+#      gate asks for one (its message names them): run /pre-push-review in the
+#      worktree, then run this again.
 #   5. Open the re-Apply PR (ready, not a draft), or add a line for this Apply
 #      commit to the open one's description, with the baseline:apply label either
 #      way (owned-files.yml's Owned files check exempts an Apply PR only with it;
