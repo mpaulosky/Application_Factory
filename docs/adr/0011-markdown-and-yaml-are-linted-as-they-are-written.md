@@ -90,5 +90,6 @@ Factory carries a copy of it (`scripts/gate.sh` lists it): the Factory's session
 The Markdown and YAML rule has no copy, since the Factory's `CLAUDE.md` says the same.
 
 These reach the Fleet by a Rollout: the Owned `scripts/lint-edited-file.sh`, `scripts/gate.sh` and `.claude/rules/script-edits.md` arrive at each Application's next
-Rollout (the rules file is in `REVIEWED_ON_REAPPLY`, so that re-Apply needs a local review where the ledger is). The Seed `.sandcastle/roles/shared-rules.md` and
+Rollout (the rules file and `scripts/gate.sh` are in `REVIEWED_ON_REAPPLY`, so that re-Apply needs a local review where the ledger is; `scripts/lint-edited-file.sh`
+is not, which is left open for the person to decide). The Seed `.sandcastle/roles/shared-rules.md` and
 `Dockerfile` changes never reach an Application that has them; it brings them over by hand (the skill's `references/sandcastle.md`, Migrating a repo).

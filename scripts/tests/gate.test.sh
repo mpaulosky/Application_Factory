@@ -404,6 +404,13 @@ for version in v3.13.9 v3.14.0 v3.14.1 v3.20.0 v3.99.0 v3.100.0 v2.6.4 v4.0.0 v3
     *) check "shfmt $version is refused, naming it" "$([[ $status == 1 ]] && grep -qF "not '$version'" "$repoH/out" && echo 0 || echo 1)" ;;
   esac
 done
+# A shfmt that answers --version but fails the check itself (exit 3, a crash) stops the gate as a failed shfmt, not as a diff to fix.
+# shellcheck disable=SC2016 # the stub's own code, written as it is
+printf '#!/usr/bin/env bash\n[[ "${1:-}" == --version ]] && { echo v3.14.1; exit 0; }\nexit 3\n' > "$work/stubshfmt/shfmt"
+chmod +x "$work/stubshfmt/shfmt"
+status=0
+(cd "$repoH" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/stubshfmt" bash scripts/gate.sh --quick > "$repoH/out" 2>&1) || status=$?
+check "a shfmt that fails (exit 3) stops the gate as a failed shfmt, not a diff" "$([[ $status == 1 ]] && grep -q 'shfmt failed (exit 3) without checking the format' "$repoH/out" && ! grep -q 'run shfmt -w' "$repoH/out" && echo 0 || echo 1)"
 version_rule() { grep -oE '"\$\(shfmt --version\)" =~ [^ ]+' "$1"; }
 check "the gate's shfmt version rule is test.sh's" "$([[ -n "$(version_rule "$here/scripts/gate.sh")" && "$(version_rule "$here/scripts/gate.sh")" == "$(version_rule "$here/$skill/test.sh")" ]] && echo 0 || echo 1)"
 

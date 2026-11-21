@@ -69,7 +69,9 @@ mkdir -p "$STUBS"
 # make_stub <dir> <name>: a linter that logs "<name> <cwd> <args>"; exit 4 when its last argument is not a file, 3 when the file
 # holds CRASH, 1 when it holds BAD (BIG<n>: after printing n characters), else 0. Named in $STUB_PASS, it logs and passes.
 # shfmt --version prints $SHFMT_STUB_VERSION and logs nothing. A stub run with SHELLCHECK_OPTS set logs it on a line of its own, and one
-# given --rcfile logs "RCFILE <file>": the hook gives it none, and a test checks that.
+# given --rcfile (as its own argument or --rcfile=<file>) logs "RCFILE <its arguments>": the hook gives it none, and a test checks that.
+# A shellcheck stub logs "ARGV" and each argument in < >, so a test can tell one argument from two; shellcheck --help prints a usage that
+# lists --extended-analysis (one without it when SHELLCHECK_STUB_OLD is set) and logs nothing.
 make_stub() {
   cat > "$1/$2" << 'EOF'
 #!/usr/bin/env bash
@@ -78,9 +80,19 @@ if [[ "$name" == shfmt && "${1:-}" == --version ]]; then
   echo "${SHFMT_STUB_VERSION-v3.14.1}"
   exit "${SHFMT_STUB_VERSION_EXIT:-0}"
 fi
+if [[ "$name" == shellcheck && "${1:-}" == --help ]]; then
+  echo "  -e CODE1,CODE2..    --exclude=CODE1,CODE2..    Exclude types of warnings"
+  [[ -n "${SHELLCHECK_STUB_OLD:-}" ]] || echo "                      --extended-analysis=bool   Perform dataflow analysis (default true)"
+  exit 0
+fi
 echo "$name $(pwd -P) $*" >> "$STUB_LOG"
+if [[ "$name" == shellcheck ]]; then
+  { printf 'ARGV'; printf ' <%s>' "$@"; echo; } >> "$STUB_LOG"
+fi
 [[ -z "${SHELLCHECK_OPTS+x}" ]] || echo "SHELLCHECK_OPTS=$SHELLCHECK_OPTS" >> "$STUB_LOG"
-if [[ " $* " == *" --rcfile "* ]]; then echo "RCFILE $*" >> "$STUB_LOG"; fi
+for arg in "$@"; do
+  if [[ "$arg" == --rcfile || "$arg" == --rcfile=* ]]; then echo "RCFILE $*" >> "$STUB_LOG"; fi
+done
 [[ " ${STUB_PASS:-} " != *" $name "* ]] || exit 0
 file="${!#}"
 [[ -f "$file" ]] || { echo "$name: $file: no such file" >&2; exit 4; }
@@ -934,7 +946,7 @@ p=()
 log_line "shellcheck $repo --norc -e SC3000 -- ./scripts/ok.sh" || p+=("shellcheckrc in scripts/ did not win over the root's: $(cat "$LOG")")
 check "a shellcheckrc in the file's folder wins over the root's .shellcheckrc" ${p[@]+"${p[@]}"}
 rm "$repo/scripts/shellcheckrc"
-# Two folders down the walk still reaches the root's config (R103): scripts/sub/ok.sh takes the root's settings.
+# Two folders down the walk still reaches the root's config: scripts/sub/ok.sh takes the root's settings.
 mkdir -p "$repo/scripts/sub"
 printf 'echo ok\n' > "$repo/scripts/sub/ok.sh"
 run_hook "$(edit_json "$repo/scripts/sub/ok.sh")"
@@ -960,23 +972,96 @@ printf '# tuned\n\n  disable = SC2086,SC2034\r\nenable=require-variable-braces\n
 run_hook "$(edit_json "$repo/scripts/ok.sh")"
 p=()
 [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
-log_line "shellcheck $repo --norc -e SC2086,SC2034 -o require-variable-braces -s bash -P lib dir --extended-analysis=false -- ./scripts/ok.sh" \
-  || p+=("the flags: $(cat "$LOG")")
-check "each config key becomes its shellcheck flag" ${p[@]+"${p[@]}"}
+log_line "ARGV <--norc> <-e> <SC2086,SC2034> <-o> <require-variable-braces> <-s> <bash> <-P> <lib dir> <--extended-analysis=false> <--> <./scripts/ok.sh>" \
+  || p+=("the flags, argument by argument: $(cat "$LOG")")
+check "each config key becomes its shellcheck flag, each value one argument" ${p[@]+"${p[@]}"}
+# A shellcheck whose --help lists no --extended-analysis (before 0.9) would stop on it with a usage error: the hook doesn't run it, and
+# the note says why; a config without that key runs on such a shellcheck as before.
+RUN_ENV=(SHELLCHECK_STUB_OLD=1)
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+p=()
+[[ $STATUS -eq 0 && "$(ran shellcheck)" == 0 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
+[[ "$(system_message "$STDOUT")" == *"shellcheck was not run: this shellcheck has no --extended-analysis, which its config scripts/.shellcheckrc sets"* ]] || p+=("note: $STDOUT")
+check "a shellcheck without --extended-analysis is not run under a config that sets it" ${p[@]+"${p[@]}"}
+printf 'disable=SC2086\n' > "$repo/scripts/.shellcheckrc"
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_line "ARGV <--norc> <-e> <SC2086> <--> <./scripts/ok.sh>" || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+check "a shellcheck without --extended-analysis still runs under a config that doesn't set it" ${p[@]+"${p[@]}"}
+# Each accepted value, as its flag; a value with an = in it, or one starting with a dash after -P, stays one argument;
+# a repeated key gives its flag twice, in order; tabs around the = count for nothing.
+for case in 'shell=sh|<-s> <sh>' 'shell=dash|<-s> <dash>' 'shell=ksh|<-s> <ksh>' 'shell=busybox|<-s> <busybox>' \
+  'extended-analysis=true|<--extended-analysis=true>' 'disable=SC2086|<-e> <SC2086>' 'enable=all|<-o> <all>' 'disable=2086,SC2034|<-e> <2086,SC2034>' \
+  'source-path=a=b|<-P> <a=b>' 'source-path=--enable=all|<-P> <--enable=all>' 'source-path=-x|<-P> <-x>' \
+  'source-path=lib/*|<-P> <lib/*>' $'disable\t=\tSC1000|<-e> <SC1000>' $'disable=SC1000\ndisable=SC2000|<-e> <SC1000> <-e> <SC2000>'; do
+  printf '%s\n' "${case%%|*}" > "$repo/scripts/.shellcheckrc"
+  run_hook "$(edit_json "$repo/scripts/ok.sh")"
+  p=()
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_line "ARGV <--norc> ${case#*|} <--> <./scripts/ok.sh>" || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+  check "a config line '${case%%|*}' becomes ${case#*|}" ${p[@]+"${p[@]}"}
+done
+# An empty config is a config: shellcheck runs with --norc and no flags, and one farther up (here the root's) is not used.
+: > "$repo/scripts/.shellcheckrc"
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_line "ARGV <--norc> <--> <./scripts/ok.sh>" || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+check "an empty config gives --norc and no flags, shadowing one farther up" ${p[@]+"${p[@]}"}
+# A value of a form the hook doesn't pass on, a known key with no value, an unknown key and a line that isn't <key>=<value> each keep
+# ShellCheck from running, with a note saying which. A disable or enable value starting with a dash is refused too.
 # shellcheck disable=SC2016 # the config lines are text, written as they are
-for case in 'disable=SC2086;x|disable' 'disable=SC2086 # why|disable' 'enable=$(x)|enable' 'shell=zsh|shell' 'shell=bash2|shell' \
-  'extended-analysis=yes|extended-analysis' 'disable=|key'; do
-  printf '%s\n' "${case%|*}" > "$repo/scripts/.shellcheckrc"
+for case in 'disable=SC2086;x|sets disable to a value' 'disable=SC2086 # why|sets disable to a value' 'enable=$(x)|sets enable to a value' \
+  'disable=--enable=all|sets disable to a value' 'enable=-x|sets enable to a value' 'disable=SC2086=x|sets disable to a value' \
+  'shell=zsh|sets shell to a value' 'shell=bash2|sets shell to a value' 'shell=xbash|sets shell to a value' \
+  'extended-analysis=yes|sets extended-analysis to a value' 'disable=|sets disable with no value' 'source-path=|sets source-path with no value' \
+  'shell=   |sets shell with no value' 'Disable=SC1|sets the key Disable,' 'severity=error|sets the key severity,' \
+  'disable SC2086|has a line that is not <key>=<value>'; do
+  printf '%s\n' "${case%%|*}" > "$repo/scripts/.shellcheckrc"
   run_hook "$(edit_json "$repo/scripts/ok.sh")"
   p=()
   [[ $STATUS -eq 0 && "$(ran shellcheck)" == 0 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
-  if [[ "${case#*|}" == key ]]; then
-    [[ "$(system_message "$STDOUT")" == *"sets a key other than disable, enable"* ]] || p+=("note: $STDOUT")
-  else
-    [[ "$(system_message "$STDOUT")" == *"sets ${case#*|} to a value this hook doesn't pass to shellcheck"* ]] || p+=("note: $STDOUT")
-  fi
-  check "a config line '${case%|*}' keeps shellcheck from running" ${p[@]+"${p[@]}"}
+  [[ "$(system_message "$STDOUT")" == *"its config scripts/.shellcheckrc ${case#*|}"* ]] || p+=("note: $STDOUT")
+  check "a config line '${case%%|*}' keeps shellcheck from running: '${case#*|}'" ${p[@]+"${p[@]}"}
 done
+# Lines up to 4096 characters are read, one over is refused; a config over 65536 characters is refused before it is read.
+for case in "4096|ok" "4097|refused"; do
+  n="${case%|*}"
+  {
+    printf 'disable='
+    printf '%*s' $((n - 8)) '' | tr ' ' 'A'
+    echo
+  } > "$repo/scripts/.shellcheckrc"
+  run_hook "$(edit_json "$repo/scripts/ok.sh")"
+  p=()
+  if [[ "${case#*|}" == ok ]]; then
+    [[ $STATUS -eq 0 && "$(ran shellcheck)" == 1 ]] || p+=("exit $STATUS, log: $(head -c 300 "$LOG")")
+  else
+    [[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"has a line longer than 4096 characters"* ]] || p+=("note: ${STDOUT:0:300}")
+  fi
+  check "a config line of $n characters is ${case#*|}" ${p[@]+"${p[@]}"}
+done
+for case in "65536|ok" "65537|refused"; do
+  n="${case%|*}"
+  # Comment lines of 100 characters, then a last line making it n characters in all.
+  python3 -I -c 'import sys; n = int(sys.argv[1]); sys.stdout.write(("#" * 99 + "\n") * (n // 100) + "#" * (n % 100))' "$n" > "$repo/scripts/.shellcheckrc"
+  run_hook "$(edit_json "$repo/scripts/ok.sh")"
+  p=()
+  [[ "$(wc -c < "$repo/scripts/.shellcheckrc" | tr -d ' ')" == "$n" ]] || p+=("the fixture is not $n characters")
+  if [[ "${case#*|}" == ok ]]; then
+    [[ $STATUS -eq 0 && "$(ran shellcheck)" == 1 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
+  else
+    [[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"is longer than 65536 characters"* ]] || p+=("note: $STDOUT")
+  fi
+  check "a config of $n characters is ${case#*|}" ${p[@]+"${p[@]}"}
+done
+# A farther config with a value the hook doesn't pass on is refused though the nearer one is fine: every config on the path is vetted.
+printf 'disable=SC1000\n' > "$repo/scripts/.shellcheckrc"
+printf 'shell=zsh\n' > "$repo/.shellcheckrc"
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+p=()
+[[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"its config .shellcheckrc sets shell to a value"* ]] || p+=("log: $(cat "$LOG"), note: $STDOUT")
+check "a farther config with a value the hook doesn't pass on is refused, though a nearer one is fine" ${p[@]+"${p[@]}"}
+printf 'disable=SC2000\n' > "$repo/.shellcheckrc"
 printf 'disable=SC1000\n' > "$repo/scripts/.shellcheckrc"
 # A config farther up that the hook won't hand over keeps shellcheck from running, though a nearer one is fine.
 printf 'external-sources=true\n' > "$repo/.shellcheckrc"
@@ -1002,14 +1087,17 @@ run_hook "$(edit_json "$repo/scripts/ok.sh")"
 p=()
 [[ $STATUS -eq 0 && -z "$OUTPUT" && "$(ran shellcheck)" == 1 ]] || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
 check "a config of blanks, comments and the five known keys is handed to shellcheck" ${p[@]+"${p[@]}"}
-for text in 'severity=error' 'external=true' 'disable=SC2086\nexternal_sources=true' '\xef\xbb\xbfdisable=SC2086' 'disable'; do
+for case in 'severity=error|sets the key severity, which this hook' 'external=true|sets the key external, which this hook' \
+  'disable=SC2086\nexternal_sources=true|sets the key external_sources, which this hook' \
+  '\xef\xbb\xbfdisable=SC2086|which this hook doesn'"'"'t hand to shellcheck (it takes disable, enable, source-path, shell and extended-analysis)' \
+  'disable|has a line that is not <key>=<value>'; do
+  text="${case%%|*}"
   # shellcheck disable=SC2059 # the case is the escaped file content, written as printf reads it
   printf "$text\n" > "$repo/.shellcheckrc"
   run_hook "$(edit_json "$repo/scripts/ok.sh")"
   p=()
   [[ $STATUS -eq 0 && "$(ran shellcheck)" == 0 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
-  [[ "$(system_message "$STDOUT")" == *"shellcheck was not run: its config .shellcheckrc sets a key other than disable, enable, source-path, shell and extended-analysis, which this hook doesn't hand to shellcheck"* ]] \
-    || p+=("note: $STDOUT")
+  [[ "$(system_message "$STDOUT")" == *"shellcheck was not run: its config .shellcheckrc "*"${case#*|}"* ]] || p+=("note: $STDOUT")
   check "a config holding '$text' keeps shellcheck from running" ${p[@]+"${p[@]}"}
 done
 rm "$repo/.shellcheckrc"
@@ -2065,12 +2153,44 @@ if PATH="$REAL_PATH" shellcheck --version > /dev/null 2>&1 \
   [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
   check "shellcheck itself: the repository's config reaches shellcheck as flags" ${p[@]+"${p[@]}"}
   rm "$realsh/.shellcheckrc"
+  # Every key at once is a set of flags the real shellcheck takes: no usage error (exit 3 or 4, which the hook would report).
+  printf 'disable=SC2086\nenable=require-variable-braces\nshell=bash\nsource-path=SCRIPTDIR\nextended-analysis=false\n' > "$realsh/.shellcheckrc"
+  run_hook "$(edit_json "$realsh/scripts/unquoted.sh")" "$REAL_PATH" "$realsh"
+  p=()
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+  check "shellcheck itself: the five keys' flags together are taken" ${p[@]+"${p[@]}"}
+  # enable reaches it as -o: require-variable-braces flags a named variable (SC2250) only with the config.
+  printf '#!/usr/bin/env bash\nx=1\necho "$x"\n' > "$realsh/scripts/braces.sh"
+  printf 'enable=require-variable-braces\n' > "$realsh/.shellcheckrc"
+  run_hook "$(edit_json "$realsh/scripts/braces.sh")" "$REAL_PATH" "$realsh"
+  p=()
+  [[ $STATUS -eq 2 && "$STDERR" == *SC2250* ]] || p+=("exit $STATUS, output: $OUTPUT")
+  check "shellcheck itself: enable=require-variable-braces reaches it as -o" ${p[@]+"${p[@]}"}
+  # shell reaches it as -s: a [[ in a #!/bin/sh script is SC3010 unless the config says shell=bash.
+  printf '#!/bin/sh\nif [[ -n "$1" ]]; then echo "$1"; fi\n' > "$realsh/scripts/bashism.sh"
+  rm "$realsh/.shellcheckrc"
+  run_hook "$(edit_json "$realsh/scripts/bashism.sh")" "$REAL_PATH" "$realsh"
+  p=()
+  [[ $STATUS -eq 2 && "$STDERR" == *SC3010* ]] || p+=("without the config: exit $STATUS, output: $OUTPUT")
+  printf 'shell=bash\n' > "$realsh/.shellcheckrc"
+  run_hook "$(edit_json "$realsh/scripts/bashism.sh")" "$REAL_PATH" "$realsh"
+  [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("with shell=bash: exit $STATUS, output: $OUTPUT")
+  check "shellcheck itself: shell=bash reaches it as -s" ${p[@]+"${p[@]}"}
+  # source-path reaches it as -P, and still follows no source line without -x: a sourced file's own finding never reaches the output.
+  printf 'SENTINEL_LIB=1\necho $SENTINEL_LIB\n' > "$realsh/scripts/lib.sh"
+  printf '#!/usr/bin/env bash\n# shellcheck source=lib.sh\nsource lib.sh\necho "$1"\n' > "$realsh/scripts/sources-lib.sh"
+  printf 'source-path=SCRIPTDIR\n' > "$realsh/.shellcheckrc"
+  run_hook "$(edit_json "$realsh/scripts/sources-lib.sh")" "$REAL_PATH" "$realsh"
+  p=()
+  [[ "$OUTPUT" != *SENTINEL_LIB* && "$STDERR" == *SC1091* ]] || p+=("exit $STATUS, output: $OUTPUT")
+  check "shellcheck itself: source-path with a source= directive opens no sourced file" ${p[@]+"${p[@]}"}
+  rm "$realsh/.shellcheckrc" "$realsh/scripts/lib.sh" "$realsh/scripts/sources-lib.sh" "$realsh/scripts/braces.sh" "$realsh/scripts/bashism.sh"
 else
   echo "skip - shellcheck, or shfmt v3.14 or a later v3, is not installed (or there is no .editorconfig), so their own runs are not tested"
 fi
 
 # The hook feeds no data through a here-string or a heredoc: bash writes those to a temp file (always before 5.1), which fails where no
-# temporary folder can be written, so a shellcheck config would read as one with an unknown key.
+# temporary folder can be written, so the config would read as empty and shellcheck would run without its flags.
 p=()
 heredoc_re='<<<|<<-?[[:space:]]*["'"'"'\\]?[A-Za-z_]'
 ! grep -nE -- "$heredoc_re" "$SCRIPT" || p+=("the hook uses a here-string or heredoc")

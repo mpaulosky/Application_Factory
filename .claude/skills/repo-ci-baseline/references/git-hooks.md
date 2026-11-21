@@ -136,7 +136,8 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
   `-dash.yml` and `-dash.sh` aren't either. The **Shell format** step then runs `shfmt -d --` on the changed shell files `.editorconfig` gives the shell style to
   (a `*.sh` or a hook in `.github/hooks`; an extensionless `scripts/` file is in no section, so shellcheck alone checks it), with no style flags, so shfmt reads
   `.editorconfig`: a repo's own scripts take the style as they are touched, with no one-off reformat ([the Factory's ADR 0015](../../../../docs/adr/0015-shell-files-are-formatted-with-shfmt.md)).
-  It needs shfmt v3.14 or a later v3 release, which `check_gh_repo.py` needs too, and stops, naming it, without one. Without an `origin/main` it is skipped with a note, since the
+  It needs shfmt v3.14 or a later v3 release, which `check_gh_repo.py` needs too, and stops, naming it, without one. shfmt exiting 1 is a diff or a file it can't parse, and
+  any other status stops the gate as a failed shfmt, with no `shfmt -w` advice. Without an `origin/main` it is skipped with a note, since the
   changed files are then every tracked file. `tests/owned-gate-files.test.sh` (the Factory's) runs those lines in a throwaway
   repo, in a UTF-8 locale and in C, the YAML, shell lint and shell format steps with stubs, and the Markdown step with a stub and, when installed, the real tool;
   `.github/hooks/tests/pre-push.test.sh` runs the whole gate with the real shfmt, and shows it reads the repo's `.editorconfig`. Then build and run each test
@@ -235,8 +236,11 @@ nearest the file (its folder and each one above it, up to the repository root, i
 process to change, and the hook needs a shellcheck with `--norc`, not `--rcfile`. A config above the repository root, or the person's own in their home, is not read at edit
 time; the gate reads it. The config is read without a here-string, which bash may write to a temp file of its own. shellcheck is not run while a config on the path is a
 symlink, not a regular file, unreadable, names `external-sources` or `check-sourced` in any case, holds a line other than a blank, a comment or one of those five keys (an
-allow-list, so a key a later shellcheck adds can't slip past), or gives one a value of a form the hook doesn't pass on (`disable` and `enable` take codes or check names with
-commas, `shell` one of `sh`, `bash`, `dash`, `ksh` and `busybox`, `extended-analysis` `true` or `false`): the note names the config and why, and the gate still checks the file.
+allow-list, so a key a later shellcheck adds can't slip past), gives one no value or a value of a form the hook doesn't pass on (`disable` and `enable` take codes or check
+names with commas, starting with a letter or digit, `shell` one of `sh`, `bash`, `dash`, `ksh` and `busybox`, `extended-analysis` `true` or `false`), has a line over 4,096
+characters or is over 65,536 in all (more than shellcheck's arguments could carry), or sets `extended-analysis` for a shellcheck whose `--help` lists no
+`--extended-analysis` (before 0.9), which would stop on it with a usage error: the note names the config and why (an unknown key by name), and the gate still checks the
+file. Each value is one argument of its flag, even one that starts with a dash.
 
 A hook under a nested `.github/hooks` whose `.editorconfig` can't be read is not linted, with a note; a line of it longer than 4,096 characters is no section header. A violation
 wins over a note: the hook exits 2 with the report alone. `test.sh` checks that the hook's hook-name rule is the gate's and the Lint Actions shellcheck job's, and that its shfmt

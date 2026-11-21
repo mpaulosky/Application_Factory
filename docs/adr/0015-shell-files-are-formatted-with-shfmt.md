@@ -69,5 +69,6 @@ skipped with a note rather than ask for every script at once.
 The edit-time lint ([ADR 0011](0011-markdown-and-yaml-are-linted-as-they-are-written.md), its Update) runs `shfmt -d` on the same files as each is written, in the Factory and in
 Applications, so the format is fixed in the turn that broke it. The Factory's gate still checks every shell file.
 
-The Owned `scripts/gate.sh` reaches each Application at its next Rollout. From then on, a push that changes a `*.sh` file or a git hook needs shfmt v3.14 or a later v3 on
+The Owned `scripts/gate.sh` reaches each Application at its next Rollout (it is in `REVIEWED_ON_REAPPLY`, so in an Application that runs Sandcastle that re-Apply needs a
+local review). From then on, a push that changes a `*.sh` file or a git hook needs shfmt v3.14 or a later v3 on
 `PATH`, as the gh check already did, and fails the gate on a changed shell file not in the `.editorconfig` style. The Seed Sandcastle `Dockerfile` already installs shfmt.

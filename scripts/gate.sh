@@ -266,12 +266,18 @@ run_static() {
     [[ -f "$f" ]] || continue
     if is_shell_file "$f"; then shell_all+=("$f"); fi
   done < "$all_list"
-  # shfmt exits 1 both for a file it would change (it prints the diff) and for one it can't parse (it prints the error), so the message names both.
+  # shfmt exits 1 both for a file it would change (it prints the diff) and for one it can't parse (it prints the error), so the message names both; any
+  # other status is shfmt itself failing (a crash, a usage error), with no diff to follow.
   if ((${#shell_all[@]})); then
-    shfmt -d -- "${shell_all[@]}" || {
+    shfmt_rc=0
+    shfmt -d -- "${shell_all[@]}" || shfmt_rc=$?
+    if ((shfmt_rc == 1)); then
       echo -e "${RED}❌ shfmt: run shfmt -w on each file whose diff is shown above (it reads .editorconfig; for the Template's style edit the Template's, then scripts/gate.sh --sync), and fix the syntax of any file shfmt could not parse.${RESET}" >&2
       exit 1
-    }
+    elif ((shfmt_rc != 0)); then
+      echo -e "${RED}❌ shfmt failed (exit $shfmt_rc) without checking the format: this is no format problem in the files. Check the shfmt install.${RESET}" >&2
+      exit 1
+    fi
   fi
   echo "${#shell_all[@]} shell file(s) formatted as shfmt formats them."
 
