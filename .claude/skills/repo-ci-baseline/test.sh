@@ -153,7 +153,8 @@ owned, test_sh = sys.argv[1], sys.argv[2]
 read = lambda path: open(path, encoding="utf-8").read()
 hook, gate, actions = read(f"{owned}/scripts/lint-edited-file.sh"), read(f"{owned}/scripts/gate.sh"), read(f"{owned}/.github/workflows/lint-actions.yml")
 problems = []
-names = re.findall(r'^  \[\[ "\$1" =~ \^(.+)\$ \]\]$', hook, re.M)
+# The rule is the one in hook_name's own body: other functions match their argument with a line of the same shape.
+names = re.findall(r'^hook_name\(\) \{\n(?:  [^\n]*\n)*?  \[\[ "\$1" =~ \^(.+)\$ \]\]\n\}$', hook, re.M)
 if len(names) != 1:
     problems.append(f"lint-edited-file.sh's hook_name rule is not found once ({len(names)} found)")
 else:
