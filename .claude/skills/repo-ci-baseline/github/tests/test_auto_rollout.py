@@ -708,7 +708,7 @@ def test_a_signal_after_a_record_that_left_its_group_says_to_check_the_report_fi
     with pytest.raises(KeyboardInterrupt):
         review_once(tmp_path, monkeypatch, record=record, guard=head_guard(tmp_path), worktree=worktree)
     err = capsys.readouterr().err
-    assert "rollout.sh: what review.sh record left ...\n" in err
+    assert err.count("rollout.sh: what review.sh record left ...\n") == 1, "said once, not again as a failed record's"
     assert (f"whether the review was recorded can't be told: cd '{worktree}' && scripts/review.sh report shows it;"
             " if it wasn't, record it with: ") in err
 
@@ -724,6 +724,16 @@ def test_a_signal_after_a_prepare_that_left_its_group_names_the_group(tmp_path, 
     err = capsys.readouterr().err
     assert err.index("rollout.sh: what review.sh prepare left ...: see it with pgrep -l -g 7\n") \
         < err.index("what the session staged is kept in"), "the group, which holds the lock, comes first"
+
+
+def test_a_signal_with_a_broken_rule_prints_no_rule_on_the_terminal(tmp_path, monkeypatch, capsys):
+    def record(worktree, run, out, head, keep, got, unseen):
+        interrupt()
+        return auto.SESSION_BROKE_A_RULE, ["R2 was staged fixed"]
+
+    with pytest.raises(KeyboardInterrupt):
+        review_once(tmp_path, monkeypatch, record=record, guard=head_guard(tmp_path))
+    assert "R2 was staged fixed" not in capsys.readouterr().err, "only a group a failed record names is written there"
 
 
 def test_a_signal_with_another_reviews_findings_kept_prints_no_command(tmp_path, monkeypatch, capsys):
