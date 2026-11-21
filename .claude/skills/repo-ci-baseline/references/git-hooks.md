@@ -230,7 +230,9 @@ only `.editorconfig`.
 shellcheck reads its `.shellcheckrc`, and `external-sources` there lets it open the files a `source` line names; `--check-sourced` would then quote their lines in the report the
 agent reads. So the hook clears `SHELLCHECK_OPTS`, and shellcheck never looks for a config itself: the hook reads the `.shellcheckrc` or `shellcheckrc` on the file's path (its
 folder and each one above it, up to the repository root, in the order shellcheck looks) and hands shellcheck the nearest one's text through a pipe (`--rcfile <(...)`), or
-`--norc` when there is none. A pipe has no name, so no other process can swap it between the check and shellcheck's read, and no file is made or left. A config above the
+`--norc` when there is none. Where bash has `/dev/fd` the pipe is a descriptor (`/dev/fd/N`), which no other process can open, so nothing can be swapped between the check
+and shellcheck's read, and no file is made or left. A bash without `/dev/fd` would pass a named FIFO in `TMPDIR` instead, which another process could open first: the hook
+doesn't run shellcheck then, and the note says why. A config above the
 repository root, or the person's own in their home, is not read at edit time; the gate reads it. The config is read without a here-string, which bash may write to a temp file
 of its own. shellcheck is not run while a config on the path is a symlink, not a regular file, unreadable, names `external-sources` or `check-sourced` in any case, or holds a
 line other than a blank, a comment or one of the keys `disable`, `enable`, `source-path`, `shell` and `extended-analysis` (an allow-list, so a key a later shellcheck adds

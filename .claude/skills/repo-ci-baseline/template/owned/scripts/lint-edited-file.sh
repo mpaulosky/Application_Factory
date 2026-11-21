@@ -27,12 +27,13 @@
 # differently). Neither tool runs code from the repository, and shfmt reads only .editorconfig. A shellcheck config could let it open
 # the files a source line names (external-sources) and, with check-sourced, quote their lines back to the agent. So SHELLCHECK_OPTS is
 # cleared (it could pass --check-sourced), and shellcheck never looks for a config itself: the hook reads the one shellcheck would use
-# from the repository and hands shellcheck that text through a pipe (--rcfile <(...)), a file no one else can name or swap, or --norc
+# from the repository and hands shellcheck that text through a pipe (--rcfile <(...)), a descriptor no one else can open, or --norc
 # when the repository has none, so no config above the repository root, or one changed after the check, is read. ShellCheck is not run
 # while a config on the file's path is a symlink, not a regular file, unreadable, names external-sources or check-sourced, or holds a
 # line other than a blank, a comment or one of the keys disable, enable, source-path, shell and extended-analysis (see
-# sc_config_refused): the person is told, and the gate still checks the file. A hook under a nested .github/hooks whose .editorconfig
-# can't be read is not linted either, and the person is told.
+# sc_config_refused), or where bash has no /dev/fd and would pass the pipe as a named FIFO (sc_pipe_ok): the person is told, and the
+# gate still checks the file. A hook under a nested .github/hooks whose .editorconfig can't be read is not linted either, and the person
+# is told.
 #
 # Only files in the project's own checkout, or in a linked worktree that checkout lists in `git worktree list`, are linted
 # (CLAUDE_PROJECT_DIR, which Claude Code sets and which is required). A file in another clone, in a directory that merely
@@ -546,6 +547,23 @@ sc_config_refused() {
   done
 }
 
+# sc_pipe_ok <path>: 0 when the path process substitution gave is a descriptor of this process (/dev/fd/N or /proc/self/fd/N), which no
+# other process can open; 1 otherwise, as for the named FIFO bash makes in TMPDIR where it has no /dev/fd, which another process running
+# as the person could open first and feed shellcheck a config the hook never read.
+sc_pipe_ok() {
+  [[ "$1" =~ ^/(dev/fd|proc/self/fd)/[0-9]+$ ]]
+}
+# sc_run <pipe>: runs shellcheck with the config the pipe carries, or, for a pipe that isn't a descriptor, notes why not; that one is
+# opened and closed once, so the writer bash started for it isn't left waiting for a reader.
+sc_run() {
+  if sc_pipe_ok "$1"; then
+    run_linter shellcheck "$bin" --rcfile "$1" -- "$target"
+  else
+    : 2> /dev/null < "$1"
+    notes+=("shellcheck was not run: this bash hands a config over through a named pipe (it has no /dev/fd), which another process could open first")
+  fi
+}
+
 if [[ "$kind" == markdown ]]; then
   path_bin markdownlint-cli2 bin
   # Called directly, not in $(...): it sets unvetted_path and unvetted_why, kept apart so a tab or newline in the path can't blur them.
@@ -566,9 +584,9 @@ elif [[ "$kind" == shell ]]; then
   elif ((! sc_rc_found)); then
     run_linter shellcheck "$bin" --norc -- "$target"
   else
-    # The text the hook read and vetted, through a pipe (/dev/fd): no file with a name, so nothing for another process to swap between
-    # the check and shellcheck's read, and nothing to remove.
-    run_linter shellcheck "$bin" --rcfile <(printf '%s\n' "$sc_rc_text") -- "$target"
+    # The text the hook read and vetted, through a pipe: no file with a name, so nothing for another process to swap between the check
+    # and shellcheck's read, and nothing to remove (sc_run refuses a named FIFO, which bash uses where it has no /dev/fd).
+    sc_run <(printf '%s\n' "$sc_rc_text")
   fi
   if ((shell_format)); then
     path_bin shfmt bin

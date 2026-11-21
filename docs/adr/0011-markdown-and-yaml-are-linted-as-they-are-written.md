@@ -73,7 +73,8 @@ is named in the `systemMessage`. Neither tool runs code from the repository, and
 opens the files a `source` line names, and `--check-sourced` quotes their lines in the report the agent reads, a way round what the person's settings deny Claude. So the hook clears
 `SHELLCHECK_OPTS`, reads the configs between the file and the repository root itself, and hands shellcheck the nearest one's text through a pipe (`--rcfile <(...)`), or
 `--norc` when there is none: shellcheck never looks for one, so a config above the root, or one changed after the check, is never read. A temporary copy was tried first and
-dropped: a named file in a shared folder can be swapped before shellcheck reads it, which a pipe can't. It doesn't run shellcheck under a config that is a symlink, not a
+dropped: a named file in a shared folder can be swapped before shellcheck reads it, which a descriptor can't. The pipe is used only where bash gives a descriptor
+(`/dev/fd/N`); a bash without `/dev/fd` would give a named FIFO, which the hook refuses with a note. It doesn't run shellcheck under a config that is a symlink, not a
 regular file, unreadable, names `external-sources` or `check-sourced`, or sets a key outside an allow-list (`disable`, `enable`, `source-path`, `shell`, `extended-analysis`);
 the note says so. Plain `--norc` alone was not chosen: a repo's own `disable=` lines would then fail files its gate passes, and the pipe keeps them.
 `test.sh` keeps the hook's hook-name and shfmt release rules equal to the gate's. The report's first line now says only that the gate checks the same file

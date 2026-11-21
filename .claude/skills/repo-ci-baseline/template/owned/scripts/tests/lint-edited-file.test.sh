@@ -1021,6 +1021,54 @@ p=()
 check "a shellcheck config that only tunes the checks is used, and SHELLCHECK_OPTS never reaches shellcheck" ${p[@]+"${p[@]}"}
 rm "$repo/.shellcheckrc"
 
+# The pipe is used only when process substitution gives a descriptor (/dev/fd/N, /proc/self/fd/N). A bash with no /dev/fd gives a named
+# FIFO in TMPDIR instead, which another process could open first: sc_run refuses it with a note, and opens it once so its writer ends.
+# Taken from the hook and run alone, since this system's bash always gives a descriptor.
+pipe_fns="$WORK/pipe-fns.sh"
+sed -n '/^sc_pipe_ok() {/,/^}/p; /^sc_run() {/,/^}/p' "$SCRIPT" > "$pipe_fns"
+p=()
+grep -q '^sc_pipe_ok() {' "$pipe_fns" && grep -q '^sc_run() {' "$pipe_fns" || p+=("the functions were not found in the hook")
+check "the hook's sc_pipe_ok and sc_run are found" ${p[@]+"${p[@]}"}
+for case in "/dev/fd/63|ok" "/proc/self/fd/12|ok" "/dev/fd/|no" "/dev/fd/6x|no" "/tmp/sh-np-a1b2|no" "dev/fd/63|no" "/dev/fd/63/x|no" "x/dev/fd/63|no"; do
+  # shellcheck disable=SC1090 # the hook's own functions
+  got="$(source "$pipe_fns" && sc_pipe_ok "${case%|*}" && echo ok || echo no)"
+  p=()
+  [[ "$got" == "${case#*|}" ]] || p+=("sc_pipe_ok said $got")
+  check "sc_pipe_ok takes '${case%|*}' as ${case#*|}" ${p[@]+"${p[@]}"}
+done
+mkfifo "$WORK/named-pipe"
+fifo_out="$WORK/fifo-out"
+# shellcheck disable=SC2016 # the stand-ins' code, written as it is
+(
+  # shellcheck disable=SC1090 # the hook's own functions
+  source "$pipe_fns"
+  notes=() ran_linter=0
+  # shellcheck disable=SC2329 # called by sc_run
+  run_linter() { ran_linter=1; }
+  printf 'disable=SC2086\n' > "$WORK/named-pipe" &
+  writer=$!
+  sc_run "$WORK/named-pipe"
+  wait "$writer"
+  printf '%s|%s|%s\n' "$ran_linter" "$?" "${notes[*]-}"
+) > "$fifo_out" 2>&1 &
+fifo_pid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  kill -0 "$fifo_pid" 2> /dev/null || break
+  sleep 0.5
+done
+p=()
+if kill -0 "$fifo_pid" 2> /dev/null; then
+  kill "$fifo_pid" 2> /dev/null
+  p+=("sc_run blocked on the named FIFO")
+fi
+wait "$fifo_pid" 2> /dev/null
+# The writer ends, by its own exit or by SIGPIPE when the pipe is closed unread (141): any status, as long as the wait returned.
+fifo_got="$(cat "$fifo_out")"
+[[ "${fifo_got%%|*}" == 0 && "${fifo_got#*|*|}" == "shellcheck was not run: this bash hands a config over through a named pipe (it has no /dev/fd), which another process could open first" ]] \
+  || p+=("got: $(cat "$fifo_out")")
+check "a named FIFO is not handed to shellcheck: the note says why, and its writer isn't left waiting" ${p[@]+"${p[@]}"}
+rm "$WORK/named-pipe"
+
 # --- Not linted -----------------------------------------------------------
 printf 'BAD\n' > "$repo/script.py"
 run_hook "$(edit_json "$repo/script.py")"
@@ -2024,21 +2072,21 @@ if PATH="$REAL_PATH" shellcheck --version > /dev/null 2>&1 \
   p=()
   [[ $STATUS -eq 2 && "$STDERR" == *SC2086* ]] || p+=("exit $STATUS, output: $OUTPUT")
   check "shellcheck itself: a config above the repository root is not read" ${p[@]+"${p[@]}"}
-  # And with a config in the repository, the private copy is the only one read: the one above (enable=all, which would add findings on
+  # And with a config in the repository, the config the hook hands over is the only one read: the one above (enable=all, which would add findings on
   # the unquoted $1) is not.
   printf 'enable=all\n' > "$WORK/.shellcheckrc"
   printf 'disable=SC2086\n' > "$realsh/.shellcheckrc"
   run_hook "$(edit_json "$realsh/scripts/unquoted.sh")" "$REAL_PATH" "$realsh"
   p=()
   [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
-  check "shellcheck itself: with --rcfile, only the private copy is read" ${p[@]+"${p[@]}"}
+  check "shellcheck itself: with --rcfile, only the config the hook hands over is read" ${p[@]+"${p[@]}"}
   rm "$WORK/.shellcheckrc" "$realsh/.shellcheckrc"
-  # A config in the repository that only tunes the checks still applies, through the copy: disable=SC2086 quiets the unquoted $1.
+  # A config in the repository that only tunes the checks still applies, through the pipe: disable=SC2086 quiets the unquoted $1.
   printf 'disable=SC2086\n' > "$realsh/.shellcheckrc"
   run_hook "$(edit_json "$realsh/scripts/unquoted.sh")" "$REAL_PATH" "$realsh"
   p=()
   [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
-  check "shellcheck itself: the repository's config reaches shellcheck through the private copy" ${p[@]+"${p[@]}"}
+  check "shellcheck itself: the repository's config reaches shellcheck through the pipe" ${p[@]+"${p[@]}"}
   rm "$realsh/.shellcheckrc"
 else
   echo "skip - shellcheck, or shfmt v3.14 or a later v3, is not installed (or there is no .editorconfig), so their own runs are not tested"
