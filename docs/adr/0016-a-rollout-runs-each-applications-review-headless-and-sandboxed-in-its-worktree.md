@@ -39,9 +39,10 @@ enforces (bubblewrap on Linux) on every Bash command and everything it starts:
   entry, which the person's accept of the finding then accepts too, and the session could name any entry, an open one of another branch's; the record matches a
   repeat by its path and summary (case and spacing aside), and one worded otherwise gets an open entry of its own. Both commands run in process groups of their own,
   holding the lock, killed whole when they end, for at most ten minutes each; an interrupt stops `prepare`, and waits for `record`, which a kill could leave half written,
-  so a signal can be held up to ten minutes; signals are held from the end of the session until what it staged is recorded or kept. That is kept beside the log
+  so a signal can be held up to ten minutes; signals are held from the start of the session until what it staged is recorded or kept. That is kept beside the log
   with the HEAD it reviewed before either runs, and removed once it is recorded: a record that failed, a group either left behind or an interrupt prints the command
-  that records it (one `sh -c`, so it runs the same in any shell), which records only at that HEAD and says why when it doesn't. A broken rule (HEAD moved, a
+  that records it (one `sh -c`, so it runs the same in any shell), which records only at that HEAD and says why when it doesn't. An interrupt names a group
+  `prepare` left, which still holds the lock, and after a group `record` left it says to check `scripts/review.sh report` before recording again. A broken rule (HEAD moved, a
   changed file) keeps nothing, since the findings vouch for code that is no longer there. A group `record` left behind is a stop of its own: the review may be
   recorded, and `scripts/review.sh report` tells. The round refuses to record without `node_modules/.bin/tsx`, which `scripts/review.sh` would otherwise install
   into the worktree it has just checked.

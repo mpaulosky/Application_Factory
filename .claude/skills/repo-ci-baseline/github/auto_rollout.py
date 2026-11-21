@@ -71,14 +71,15 @@ a SIGTERM, SIGHUP or interrupt of the round kills; one whose group is still
 there after the kill stops the round (GroupLeft). The round's own
 scripts/review.sh prepare and record run in groups of their own as well
 (run_bounded), for at most RECORD_TIMEOUT_SECONDS each; an interrupt stops
-prepare, and waits for record to end, and signals are held from the end of the
-session until what it staged is recorded or kept. That is kept beside the log
-(staged_copy) with the HEAD it reviewed: a record that failed, a group record
-left, or an interrupt prints the command that records it, at that HEAD only. A
-broken rule (HEAD moved, a changed file) keeps nothing, since the findings vouch
-for code that is no longer there. Its log is kept, 0600, in a 0700 folder of the
-user's own, ~/.cache/repo-ci-baseline/logs: it can hold the session's report of
-security findings.
+prepare, and waits for record to end, and signals are held from the start of the
+session until what it staged is recorded or kept; after a group record left, the
+interrupt says to check scripts/review.sh report before recording again. That is
+kept beside the log (staged_copy) with the HEAD it reviewed: a record that
+failed, a group record left, or an interrupt prints the command that records it,
+at that HEAD only. A broken rule (HEAD moved, a changed file) keeps nothing,
+since the findings vouch for code that is no longer there. Its log is kept,
+0600, in a 0700 folder of the user's own, ~/.cache/repo-ci-baseline/logs: it can
+hold the session's report of security findings.
 
 A PR is the repo's own (never a fork's of the same branch name), and when the
 worktree's branch has commits main lacks, it is the one at the worktree's head:
@@ -1133,25 +1134,26 @@ def tsx_installed(worktree):
 
 def record_review(worktree, run, out, head, keep, got=(), unseen=lambda: [], bounded=run_bounded,
                   installed=tsx_installed):
-    """Record the findings the session staged in run, as the review's record: scripts/review.sh prepare in a folder of
-    the round's own gives the key and HEAD of the code, and scripts/review.sh record takes them, with the staged
+    """Record the findings the session staged in run, as the review's record: scripts/review.sh prepare in a folder
+    of the round's own gives the key and HEAD of the code, and scripts/review.sh record takes them, with the staged
     findings copied there 0600 (record reads only a file of the person's own). Both are the worktree's, its Owned
     copies the Template's, and run as the gate on the push runs them, outside the sandbox (run_bounded); unseen() is
     asked once more just before record runs (unseen_changes). head is the HEAD the guard read before the session: a
     prepare at another one means something committed there since, and nothing is recorded. A finding's repeats is
     dropped (and said in the log): it would tie the finding to a .security entry, which the person's accept of the
     finding then accepts too, and the session could name any entry, an open one of another branch's; the record then
-    matches it by its path and summary, and one worded otherwise gets an entry of its own, open. What the session staged
-    is kept in keep (staged_copy) before anything runs, and removed once it is recorded or a Rule is found broken (the
-    code changed since the session read it, so it vouches for none of it); any other failure, a GroupLeft or a bug
-    too, leaves it there. tsx not installed is a failure before prepare runs, since scripts/review.sh would install
-    it into the worktree just checked. (exit code, the Rules broken): 0 when it recorded; NOTHING_STAGED when the
-    session staged nothing, not even []; RECORD_FAILED when prepare or record refused, ran past its time, was stopped
-    by a signal (got), can't be told to have printed the key and HEAD, or prepare's group was left (it writes only the
-    round's own folder, so nothing was recorded), and the log says why and how to record the kept findings;
-    SESSION_BROKE_A_RULE with the Rules when the staged findings break one (staged_findings), HEAD moved, or unseen()
-    names one; a GroupLeft from record is raised. prepare's stdout is read for its key and HEAD; everything else
-    either prints goes to out, the log."""
+    matches it by its path and summary, and one worded otherwise gets an entry of its own, open. What the session
+    staged is kept in keep (staged_copy) before anything runs, and removed once it is recorded or a Rule is found
+    broken (the code changed since the session read it, so it vouches for none of it); any other failure, a
+    GroupLeft or a bug too, leaves it there. tsx not installed is a failure before prepare runs, since
+    scripts/review.sh would install it into the worktree just checked. (exit code, the Rules broken): 0 when it
+    recorded; NOTHING_STAGED when the session staged nothing, not even []; RECORD_FAILED when prepare or record
+    refused, ran past its time, was stopped by a signal (got), can't be told to have printed the key and HEAD, or
+    prepare's group was left (it writes only the round's own folder, so nothing was recorded; the list then holds
+    that group, not a Rule, since it still holds the lock), and the log says why and how to record the kept
+    findings; SESSION_BROKE_A_RULE with the Rules when the staged findings break one (staged_findings), HEAD moved,
+    or unseen() names one; a GroupLeft from record is raised. prepare's stdout is read for its key and HEAD;
+    everything else either prints goes to out, the log."""
     findings, broke = staged_findings(run)
     if broke:
         return SESSION_BROKE_A_RULE, broke
@@ -1429,6 +1431,9 @@ def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, ti
                     out.write(f"rollout.sh: recording the review failed:\n{traceback.format_exc()}")
                     code = RECORD_FAILED
         if got:
+            if code == RECORD_FAILED:
+                for left in broke:  # a group prepare left: it holds the lock, so it must be ended before a record
+                    sys.stderr.write(f"rollout.sh: {left}\n")
             if kept_head(keep) == head:
                 # The stop that would print it isn't reached: the signal ends the round here. After RECORD_LEFT the
                 # review may be recorded already, so the person checks that before recording it again.

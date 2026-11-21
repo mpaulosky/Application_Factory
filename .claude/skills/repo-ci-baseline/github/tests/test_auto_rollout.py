@@ -611,6 +611,13 @@ def test_the_records_outcome_is_the_reviews(tmp_path, monkeypatch, outcome, code
         assert f"rollout.sh: the session broke a rule: {rule}" in Path(log).read_text()
 
 
+def test_a_failed_record_naming_a_group_prepare_left_is_no_broken_rule(tmp_path, monkeypatch):
+    left = ["what review.sh prepare left ..."]
+    code, log, seen, _ = review_once(tmp_path, monkeypatch, record=lambda *args: (auto.RECORD_FAILED, left))
+    assert code == auto.RECORD_FAILED and seen["broke"] == left
+    assert "broke a rule" not in Path(log).read_text()
+
+
 @pytest.mark.parametrize("error", [OSError("no space"), PermissionError(13, "Permission denied"),
                                    subprocess.SubprocessError("Exception occurred in preexec_fn.")])
 def test_a_record_that_cant_run_is_record_failed_with_its_reason_in_the_log(tmp_path, monkeypatch, error):
@@ -696,13 +703,27 @@ def test_a_signal_after_a_record_that_left_its_group_says_to_check_the_report_fi
         interrupt()
         raise auto.GroupLeft("what review.sh record left ...")
 
+    worktree = tmp_path / "Ticket Manager" / "chore-reapply-baseline"
+    worktree.mkdir(parents=True)
+    with pytest.raises(KeyboardInterrupt):
+        review_once(tmp_path, monkeypatch, record=record, guard=head_guard(tmp_path), worktree=worktree)
+    err = capsys.readouterr().err
+    assert "rollout.sh: what review.sh record left ...\n" in err
+    assert (f"whether the review was recorded can't be told: cd '{worktree}' && scripts/review.sh report shows it;"
+            " if it wasn't, record it with: ") in err
+
+
+def test_a_signal_after_a_prepare_that_left_its_group_names_the_group(tmp_path, monkeypatch, capsys):
+    def record(worktree, run, out, head, keep, got, unseen):
+        auto.write_staged(keep, "[]", head)
+        interrupt()
+        return auto.RECORD_FAILED, ["what review.sh prepare left ...: see it with pgrep -l -g 7"]
+
     with pytest.raises(KeyboardInterrupt):
         review_once(tmp_path, monkeypatch, record=record, guard=head_guard(tmp_path))
     err = capsys.readouterr().err
-    worktree = str(tmp_path / "TicketManager-worktrees" / "chore-reapply-baseline")
-    assert "rollout.sh: what review.sh record left ...\n" in err
-    assert (f"whether the review was recorded can't be told: cd {worktree} && scripts/review.sh report shows it;"
-            " if it wasn't, record it with: ") in err
+    assert err.index("rollout.sh: what review.sh prepare left ...: see it with pgrep -l -g 7\n") \
+        < err.index("what the session staged is kept in"), "the group, which holds the lock, comes first"
 
 
 def test_a_signal_with_another_reviews_findings_kept_prints_no_command(tmp_path, monkeypatch, capsys):
@@ -1902,6 +1923,16 @@ def test_a_file_that_cant_be_read_swapped_for_one_of_its_size_is_a_change(tmp_pa
         (root / "tool").chmod(0o111)
         os.utime(root / "tool", ns=(old.st_atime_ns, old.st_mtime_ns + 10**9))
         assert os.stat(root / "tool").st_ino == inode, "only the mtime tells this rewrite"
+        assert auto.tree_changes(before, auto.tree_state(str(root))) == ["tool"]
+        before = auto.tree_state(str(root))
+        kept = os.stat(root / "tool")
+        (root / "tool").chmod(0o600)
+        (root / "tool").write_text("longer")
+        (root / "tool").chmod(0o111)
+        os.utime(root / "tool", ns=(kept.st_atime_ns, kept.st_mtime_ns))
+        now = os.stat(root / "tool")
+        assert (now.st_ino, now.st_mtime_ns, now.st_mode) == (kept.st_ino, kept.st_mtime_ns, kept.st_mode), \
+            "only the size tells this rewrite"
         assert auto.tree_changes(before, auto.tree_state(str(root))) == ["tool"]
     finally:
         for name in ("tool", "new"):
