@@ -7,7 +7,8 @@
    gate's Python lint, a claude that doesn't run, a sandbox bubblewrap can't
    make (on Linux), gh signed out, and the .NET SDK the Template's global.json
    names (an Owned file, so Apply writes it into every re-Apply worktree and the
-   gate builds with it). One problem stops the round before anything runs. A
+   gate builds with it), and a sign-in secret in the environment the review
+   session would inherit. One problem stops the round before anything runs. A
    second --auto run while the lock is held stops too, since both would work
    the same worktrees and review ledgers; every child the round starts holds
    the lock as well, so one a SIGKILL of rollout.sh leaves running keeps it.
@@ -23,27 +24,32 @@
    and the rest's PRs together once each has been reapplied.
 
 The session runs unattended, reading text people without write access may have
-written, so it runs in Claude Code's sandbox (session_settings; ADR 0016). Its
-Bash can't read the person's credentials (CREDENTIAL_PATHS), writes only the
-worktree (not its .git link), what of the clone's git folder its commits and
-the ledger need (session_git_writes: not its config, hooks, other branches or
-worktrees), the main checkout's .security and a temporary folder of its own,
-reaches only SANDBOX_DOMAINS, and can't leave the sandbox; the session refuses
-to start without the sandbox (bubblewrap and socat on Linux, which the
-preflight checks for). Its file tools, which run outside the sandbox, may read
-only the worktree, the .security record and that folder, and edit only the
-worktree and that folder (dontAsk: anything not allowed is refused). It loads
-no settings file (neither the repository's nor the person's), no MCP server and
-only SESSION_BUILTINS, gets its settings as JSON on its command line, and the
-skill and its reviewer agent from the Template, so no hook, permission rule or
-plugin but these applies. Its environment has no GitHub sign-in (gh points at an
-empty config; names that look like secrets are dropped, Claude Code's own
-sign-in aside) and git's push is sent nowhere: layers behind the sandbox. After
-the session the round checks what it still could do: a session after which the
-worktree's .git link changed, the remote branch moved (or can't be read), the
-Template changed, an Owned file is no longer the Template's, any of the clone's
-ledgers gained an accepted finding, or the .security record lost or changed an
-entry (record marking an open one fixed aside), stops the round for the person.
+written, so it reviews only, and runs in Claude Code's sandbox (session_settings;
+ADR 0016). It runs one review-only round and records what it finds, open: it
+edits, fixes and commits nothing, and runs no gate, so nothing it wrote runs
+later as the person. Its Bash can't read the person's credentials
+(CREDENTIAL_PATHS, ~/.claude among them), writes only the clone's review
+ledgers, the main checkout's .security and a temporary folder of its own
+(session_writes: never the worktree or the rest of its git folder), reaches
+only SANDBOX_DOMAINS, and can't leave the sandbox; the session refuses to start
+without the sandbox (bubblewrap and socat on Linux, which the preflight checks
+for). Its file tools, which run outside the sandbox, may read only the
+worktree, the .security record and that folder, and edit only that folder
+(dontAsk: anything not allowed is refused). It loads no settings file (neither
+the repository's nor the person's), no MCP server and only SESSION_BUILTINS,
+gets its settings as JSON on its command line, and the skill and its reviewer
+agent from the Template, so no hook, permission rule or plugin but these
+applies. Its environment has no sign-in secret (gh points at an empty config;
+names that look like secrets are dropped, and of Claude Code's own only
+CLAUDE_KEPT is kept, while the preflight refuses a round with a Claude Code or
+cloud sign-in secret set, since the session would inherit it) and git's push is
+sent nowhere: layers behind the sandbox. After the session the round checks what
+it still could do: a session after which the worktree's .git link changed, the
+remote branch moved (or can't be read), the worktree's HEAD, branch or status
+changed, the Template changed, an Owned file is no longer the Template's, any of
+the clone's ledgers gained an accepted finding, or the .security record lost or
+changed an entry (record marking an open one fixed aside), stops the round for
+the person.
 It runs in a process group of its own, killed whole however it ends (it exits,
 or runs past its time); an interrupt, a SIGTERM or a SIGHUP while it runs is
 held until the group is gone, then passed on, and a SIGKILL of rollout.sh can't
@@ -106,7 +112,7 @@ REVIEW_NEEDED = 3
 FINDINGS_WAIT = 4
 # Review sessions per repo per run: a second covers a session that ended before it recorded; more would loop.
 MAX_REVIEWS = 2
-# A review session's wall clock: a large re-Apply takes several rounds of parallel reviewers and fixes.
+# A review session's wall clock: one round of parallel reviewers over a large re-Apply, with room to spare.
 REVIEW_TIMEOUT_MINUTES = 180
 # Reads of a PR that doesn't yet show the worktree's head, and the seconds between them.
 LOOKUP_TRIES = 5
@@ -159,34 +165,51 @@ CREDENTIAL_PATHS = (
     "~/.config/pip", "~/.config/uv", "~/.cargo/credentials", "~/.cargo/credentials.toml", "~/.gem/credentials",
     "~/.m2/settings.xml", "~/.local/share/keyrings", "~/.password-store", "~/.vault-token", "~/.config/op",
     "~/.pgpass", "~/.bash_history", "~/.zsh_history", "~/.local/share/fish/fish_history", "~/.claude.json",
-    "~/.claude/.credentials.json", "~/.cache/repo-ci-baseline",
+    "~/.claude", "~/.cache/repo-ci-baseline",
 )
-# The hosts the session's Bash may reach: package registries for the gate's installs and builds, and GitHub for
-# fetching. There is nothing to push with: no credential is readable and none is in its environment.
-SANDBOX_DOMAINS = ("registry.npmjs.org", "api.nuget.org", "github.com", "pypi.org", "files.pythonhosted.org")
+# The hosts the session's Bash may reach: GitHub alone, for the skill's git fetch. It builds and installs nothing (it
+# runs no gate), so no package registry; and there is nothing to push with: no credential is readable and none is in
+# its environment.
+SANDBOX_DOMAINS = ("github.com",)
 # What the sandbox runs on Linux (bubblewrap and socat); failIfUnavailable makes the session refuse to start without.
 SANDBOX_TOOLS = ("bwrap", "socat") if sys.platform.startswith("linux") else ()
 # The headless review's instructions, then the skill's own text from the Template. Nobody answers, the Owned files'
 # fixes belong in the Template, and pushing, posting and deciding stay with the round and the person.
 REVIEW_PROMPT = """You are running the pre-push-review skill, unattended, for rollout.sh --auto, in {worktree}, the re-Apply worktree of {repo}. The skill's instructions are below, from the Factory's Template; its base directory is {skill_dir}, the worktree's copy of the same files. Follow them, with these changes.
 Nobody will answer a question: never ask one or wait for a reply; where the skill says to ask the person or show them text first, don't, and say so in your last message.
-These files the branch changes are Owned Baseline files, which the next Apply overwrites: {owned}.
-Never edit an Owned file here. A finding in one is needsPerson: record it open, with a fix that says what to change in the Factory's template/owned/.
-Fix only findings in this repository's own files, as the skill says. Don't push, don't file the follow-up issue, and don't edit a PR: write the advisory body to the run folder and name its path.
+Review only: this session changes nothing in the repository. Don't edit, fix or commit anything, and don't run the gate (reapply.sh runs it on the push). Run one round over the whole branch, as the skill's last, review-only round: record every finding it keeps open, with its suggested fix, and the person fixes or accepts them. The worktree is read-only to you; write only to the run folder.
+These files the branch changes are Owned Baseline files, which the next Apply overwrites: {owned}. A finding in one says, in its fix, what to change in the Factory's template/owned/.
+Don't push, don't file the follow-up issue, and don't edit a PR: write the advisory body to the run folder and name its path.
 Your shell runs in a sandbox with no GitHub sign-in, and git can't push: skip the skill's GitHub reads (the PR's threads, the issue) and say you did. reapply.sh has just fetched origin, so if git fetch fails, go on with origin/main as it is.
 End with the output of scripts/review.sh report.
 
 {skill}"""
 # A name the session's environment leaves out: a token, secret, password, passphrase, key, credential, auth value or
 # cookie of any tool, the helpers that hand one over (askpass, SSH), the keyring's bus, the X server's cookie, and the
-# caller's own GIT_CONFIG_ entries, which session_env replaces. Claude Code's own sign-in is kept, and so are the
-# cloud variables of its Bedrock, Vertex or Foundry sign-in when one is in use (CLAUDE_CODE_USE_*). A layer only: the
-# sandbox, which reads none of the credential files, is what holds.
+# caller's own GIT_CONFIG_ entries, which session_env replaces. Of Claude Code's own names only CLAUDE_KEPT is kept,
+# and of the cloud in use (CLAUDE_CODE_USE_*) only the names SIGN_IN_SECRET doesn't match. A layer only: the sandbox,
+# which reads none of the credential files, is what holds.
 SECRET_NAME = re.compile(
     r"TOKEN|SECRET|PASSW|PASSPHRASE|CREDENTIAL|API_?KEY|AUTH(?!OR)|COOKIE|BEARER|_PAT$|_KEY$|_DSN$|^DATABASE_URL$|ASKPASS"
     r"|^GIT_SSH|^SSH_|^DBUS_SESSION_BUS_ADDRESS$|^XAUTHORITY$|^GIT_CONFIG_(COUNT|PARAMETERS|KEY_[0-9]+|VALUE_[0-9]+)$"
     r"|^AWS_|^AZURE_|^GOOGLE_", re.I)
 CLAUDE_SIGN_IN = re.compile(r"^(ANTHROPIC_|CLAUDE_)")
+# Claude Code's names the session keeps: where its config is and which model, endpoint and cloud it uses, none a
+# secret. Every other ANTHROPIC_ or CLAUDE_ name is left out: a key or token, and the calling session's own (its id,
+# its messaging socket and token, its IDE's port), which the session's shell would otherwise see.
+CLAUDE_KEPT = (
+    "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_VERTEX_PROJECT_ID",
+    "ANTHROPIC_FOUNDRY_RESOURCE", "ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_VERTEX_BASE_URL", "ANTHROPIC_FOUNDRY_BASE_URL",
+    "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+)
+# Claude Code's sign-in secrets: the preflight refuses a round with one set, since the session's own claude would
+# need it in the environment its shell inherits. Claude Code signs in from its credentials file (claude /login), or
+# a cloud's profile files, which the sandbox keeps from the shell.
+CLAUDE_SECRETS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_FOUNDRY_API_KEY",
+                  "ANTHROPIC_CUSTOM_HEADERS")
+# A cloud variable that is a secret, or names a file of one: refused by the preflight, left out by session_env.
+SIGN_IN_SECRET = re.compile(r"TOKEN|SECRET|PASSW|API_?KEY|ACCESS_KEY|AUTH(?!OR)|CREDENTIAL|_KEY$|COOKIE|BEARER", re.I)
 CLOUD_SIGN_IN = {"CLAUDE_CODE_USE_BEDROCK": "AWS_", "CLAUDE_CODE_USE_VERTEX": "GOOGLE_", "CLAUDE_CODE_USE_FOUNDRY": "AZURE_"}
 # The values of a CLAUDE_CODE_USE_* flag that turn its cloud on; any other (0, false, empty) leaves it off.
 FLAG_ON = ("1", "true", "yes", "on")
@@ -250,11 +273,13 @@ def run_quiet(command, cwd=None, env=None):
     return done.returncode, done.stdout, done.stderr
 
 
-def preflight(which=shutil.which, run=run_quiet, template_global_json=TEMPLATE_GLOBAL_JSON):
+def preflight(which=shutil.which, run=run_quiet, template_global_json=TEMPLATE_GLOBAL_JSON, environ=None):
     """What would stop the round partway through, as a list of problems (empty when there's none)."""
+    environ = os.environ if environ is None else environ
     problems = [f"{tool} isn't on PATH" for tool in TOOLS if which(tool) is None]
     problems += [f"{tool} isn't on PATH: the review session's sandbox needs it" for tool in SANDBOX_TOOLS if which(tool) is None]
     problems += ruff_problems(which, run)
+    problems += sign_in_problems(environ)
     if SANDBOX_TOOLS and which("bwrap") is not None:
         # The sandbox needs unprivileged user namespaces, which a host can refuse (AppArmor's restriction on Ubuntu
         # 24.04, some containers): then the binaries are there and the first review session still can't start.
@@ -282,6 +307,22 @@ def preflight(which=shutil.which, run=run_quiet, template_global_json=TEMPLATE_G
     if os.path.lexists(template_global_json):
         problems += sdk_problems(template_global_json, which, run)
     return problems
+
+
+def kept_clouds(base):
+    """The prefixes of the clouds Claude Code signs in through (CLAUDE_CODE_USE_* on), whose variables it needs."""
+    return tuple(prefix for flag, prefix in CLOUD_SIGN_IN.items() if base.get(flag, "").strip().lower() in FLAG_ON)
+
+
+def sign_in_problems(environ):
+    """A sign-in secret in the environment the session would inherit: one of CLAUDE_SECRETS, or a secret of the cloud
+    in use. Its shell would see it, so the round doesn't start."""
+    clouds = kept_clouds(environ)
+    found = sorted(name for name, value in environ.items() if value and (
+        name in CLAUDE_SECRETS or (clouds and name.startswith(clouds) and SIGN_IN_SECRET.search(name))))
+    return [f"{name} is set, and the review session's shell would see it: unset it for the round, and sign Claude Code in"
+            " with its own credentials file (claude /login) or the cloud's profile files, which the sandbox keeps from"
+            " the shell" for name in found]
 
 
 def ruff_problems(which, run):
@@ -408,37 +449,31 @@ def expand_home(path, home):
     return home + path[1:] if path.startswith("~") else path
 
 
-def session_git_writes(common, gitdir):
-    """What of the clone's git folder a review session writes: the objects its commits add, its branch's ref and log
-    (git makes a lock file beside the ref, so the ref's folder), origin's remote-tracking refs (git fetch), its own
-    worktree's folder (index, HEAD, logs) and the review ledgers. Not the clone's config, hooks, other branches or
-    worktrees, submodules or packed-refs."""
-    branch_dir = os.path.dirname(BRANCH)
-    return [os.path.join(common, "objects"), os.path.join(common, "refs", "heads", branch_dir),
-            os.path.join(common, "logs", "refs", "heads", branch_dir), os.path.join(common, "refs", "remotes", "origin"),
-            os.path.join(common, "logs", "refs", "remotes", "origin"), gitdir, os.path.join(common, "review")]
+def session_writes(common, security, tmp):
+    """All the session writes: the clone's review ledgers, the main checkout's .security record (scripts/review.sh
+    record writes both) and its temporary folder. Not the worktree or anything else of the clone's git folder."""
+    return [os.path.join(common, "review"), security, tmp]
 
 
-def session_settings(worktree, common, gitdir, tmp, home=None):
+def session_settings(worktree, common, gitdir, tmp, home=None, config_dir=None):
     """The session's settings (--settings, passed as JSON so no file of them exists for it to change): dontAsk
     permissions that allow only SESSION_TOOLS, reads of the worktree, the main checkout's .security and tmp, and edits
-    in the worktree and tmp, and deny the credentials, the Factory, ~/.claude, the worktree's .git link and its git
-    folder's own config; and a sandbox for its Bash that can't be turned off, refuses to start without its sandbox
-    (bubblewrap on Linux), reads none of CREDENTIAL_PATHS, writes only the worktree (never its .git link),
-    session_git_writes (never the worktree's config.worktree, gitdir or commondir), the main checkout's .security and
-    tmp, and reaches only SANDBOX_DOMAINS. The main checkout is the git common folder's parent, as reapply.sh has it."""
+    in tmp alone, and deny the credentials, the Factory, ~/.claude and every edit in the worktree; and a sandbox for its
+    Bash that can't be turned off, refuses to start without its sandbox (bubblewrap on Linux), reads none of
+    CREDENTIAL_PATHS (nor Claude Code's CLAUDE_CONFIG_DIR, when one is set), writes only session_writes (never the
+    worktree, which a sandbox otherwise lets its working folder be written, nor its git folder), and reaches only
+    SANDBOX_DOMAINS. The main checkout is the git common folder's parent, as reapply.sh has it."""
     home = home or os.path.expanduser("~")
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR") if config_dir is None else config_dir
     security = os.path.join(os.path.dirname(common), ".security")
-    git_guarded = [os.path.join(worktree, ".git"), *(os.path.join(gitdir, name) for name in ("config.worktree", "gitdir", "commondir")),
-                   *(os.path.join(common, name) for name in ("config", "config.worktree", "hooks", "info"))]
-    credentials = [expand_home(path, home) for path in CREDENTIAL_PATHS]
+    read_only = [worktree, gitdir]
+    credentials = [expand_home(path, home) for path in CREDENTIAL_PATHS] + ([config_dir] if config_dir else [])
     return {
         "permissions": {
-            "allow": [*SESSION_TOOLS, f"Read(/{worktree}/**)", f"Read(/{security}/**)", f"Read(/{tmp}/**)",
-                      f"Edit(/{worktree}/**)", f"Edit(/{tmp}/**)"],
+            "allow": [*SESSION_TOOLS, f"Read(/{worktree}/**)", f"Read(/{security}/**)", f"Read(/{tmp}/**)", f"Edit(/{tmp}/**)"],
             "deny": [*DENIED_TOOLS,
                      *(f"Read(/{path})" for path in credentials), *(f"Read(/{path}/**)" for path in credentials),
-                     *(f"Edit(/{path})" for path in git_guarded), *(f"Edit(/{path}/**)" for path in git_guarded)],
+                     *(f"Edit(/{path})" for path in read_only), *(f"Edit(/{path}/**)" for path in read_only)],
         },
         "sandbox": {
             "enabled": True,
@@ -446,8 +481,8 @@ def session_settings(worktree, common, gitdir, tmp, home=None):
             "allowUnsandboxedCommands": False,
             "excludedCommands": [],
             "filesystem": {
-                "allowWrite": [*session_git_writes(common, gitdir), security, tmp],
-                "denyWrite": git_guarded,
+                "allowWrite": session_writes(common, security, tmp),
+                "denyWrite": read_only,
                 "denyRead": credentials,
             },
             "network": {"allowedDomains": list(SANDBOX_DOMAINS)},
@@ -478,14 +513,23 @@ def own_log_dir(log_dir):
 
 def session_env(base, tmp):
     """The review session's environment: base without GATE_SKIP_REVIEW (the gate's review check must run in it) or the
-    names SECRET_NAME matches (a cloud sign-in's own kept when Claude Code uses it); gh pointed at an empty config;
+    names SECRET_NAME matches, Claude Code's own but CLAUDE_KEPT, and the cloud in use's secrets; gh pointed at an
+    empty config; GIT_OPTIONAL_LOCKS off;
     SESSION_GIT_CONFIG; and every cache and temporary folder a build or install writes (NuGet, pnpm under both its
     old npm_config_ and its pnpm 12 pnpm_config_ name, XDG, dotnet's home, TMPDIR) moved into tmp, the one folder
     outside the worktree the sandbox lets it write."""
-    kept_cloud = tuple(prefix for flag, prefix in CLOUD_SIGN_IN.items() if base.get(flag, "").strip().lower() in FLAG_ON)
-    env = {name: value for name, value in base.items()
-           if name != "GATE_SKIP_REVIEW"
-           and (CLAUDE_SIGN_IN.match(name) or name.startswith(kept_cloud or ("\0",)) or not SECRET_NAME.search(name))}
+    clouds = kept_clouds(base)
+
+    def kept(name):
+        if name == "GATE_SKIP_REVIEW":
+            return False
+        if CLAUDE_SIGN_IN.match(name):
+            return name in CLAUDE_KEPT
+        if clouds and name.startswith(clouds):
+            return not SIGN_IN_SECRET.search(name)
+        return not SECRET_NAME.search(name)
+
+    env = {name: value for name, value in base.items() if kept(name)}
     folders = {"GH_CONFIG_DIR": "gh", "TMPDIR": "tmp", "NUGET_PACKAGES": "nuget-packages",
                "NUGET_HTTP_CACHE_PATH": "nuget-http", "npm_config_store_dir": "pnpm-store",
                "pnpm_config_store_dir": "pnpm-store", "XDG_CACHE_HOME": "cache",
@@ -494,6 +538,7 @@ def session_env(base, tmp):
         env[name] = os.path.join(tmp, folder)
         os.makedirs(env[name], exist_ok=True)
     env["DOTNET_NOLOGO"] = env["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1"
+    env["GIT_OPTIONAL_LOCKS"] = "0"  # git status reads the index without writing it back: the worktree is read-only
     env["GIT_CONFIG_COUNT"] = str(len(SESSION_GIT_CONFIG))
     for index, (key, value) in enumerate(SESSION_GIT_CONFIG):
         env[f"GIT_CONFIG_KEY_{index}"], env[f"GIT_CONFIG_VALUE_{index}"] = key, value
@@ -604,11 +649,25 @@ class Guard:
     link: bytes
     security: str
     security_before: dict
+    worktree_state: tuple
 
 
 def remote_branch_command(worktree):
     """The read of the remote branch, before the session and after it: whether the session pushed."""
     return ["git", "-C", worktree, "ls-remote", "origin", f"refs/heads/{BRANCH}"]
+
+
+def worktree_state_commands(worktree):
+    """The reads of what the session leaves of the worktree: its HEAD, its branch and its status (untracked files
+    included). The session reviews only, so all three are as they were before it."""
+    return [["git", "-C", worktree, "rev-parse", "HEAD"],
+            ["git", "-C", worktree, "rev-parse", "--verify", "--quiet", f"refs/heads/{BRANCH}"],
+            ["git", "-C", worktree, "status", "--porcelain=v1", "-z", "--untracked-files=all"]]
+
+
+def worktree_state(worktree, read):
+    """(HEAD, branch, status) of the worktree, a None in place of a read that failed."""
+    return tuple(read(command) for command in worktree_state_commands(worktree))
 
 
 def session_guard(worktree, owned=OWNED, read=run_text):
@@ -626,9 +685,12 @@ def session_guard(worktree, owned=OWNED, read=run_text):
     gitdir = read(["git", "-C", worktree, "rev-parse", "--path-format=absolute", "--git-dir"])
     if not common or not gitdir:
         raise GuardUnreadable(f"can't find the git folders of {worktree} (git 2.31 or later reads them)")
+    state = worktree_state(worktree, read)
+    if None in state:
+        raise GuardUnreadable(f"can't read the HEAD, the branch {BRANCH} or the status of {worktree}")
     ledgers = os.path.join(common, "review")
     security = os.path.join(os.path.dirname(common), ".security")
-    return Guard(worktree=worktree, remote_branch=remote, template=tree_hashes(owned), ledgers=ledgers,
+    return Guard(worktree_state=state, worktree=worktree, remote_branch=remote, template=tree_hashes(owned), ledgers=ledgers,
                  ledgers_before=ledger_state(ledgers), common=common, gitdir=gitdir, link=link, security=security,
                  security_before=security_state(security))
 
@@ -636,7 +698,7 @@ def session_guard(worktree, owned=OWNED, read=run_text):
 def broken_rules(guard, owned=OWNED, read=run_text, changes=owned_changes):
     """The Rules a finished session broke, as a list of what happened (empty when it broke none): the worktree's .git
     link changed (then no git command runs in the worktree, since git would obey whatever folder it now names), the
-    remote branch moved or can't be read, the Template changed, an Owned file the branch changes is no longer the
+    remote branch moved or can't be read, the worktree's HEAD, branch or status changed, the Template changed, an Owned file the branch changes is no longer the
     Template's as it was when the session started, any ledger of the clone gained an accepted finding or stopped
     reading as one, or the .security record lost an entry, or one changed other than from open to fixed (which
     record writes), or gained one that is accepted. Every ledger counts, whatever branch or head it names, since the
@@ -652,6 +714,12 @@ def broken_rules(guard, owned=OWNED, read=run_text, changes=owned_changes):
             broke.append(f"can't read the remote {BRANCH} after the session, so whether it was pushed can't be told")
         elif remote != guard.remote_branch:
             broke.append(f"the remote {BRANCH} moved during the session (the session, or anyone who pushed to it meanwhile)")
+        state = worktree_state(guard.worktree, read)
+        if None in state:
+            broke.append(f"can't read the HEAD, the branch {BRANCH} or the status of {guard.worktree} after the session")
+        elif state != guard.worktree_state:
+            broke.append(f"{guard.worktree} changed during the session (its HEAD, its branch or its files): the session"
+                         " reviews only, so it commits and edits nothing")
     if tree_hashes(owned) != guard.template:
         broke.append("the Template changed during the session (the session, or your own edit in the Factory checkout)")
     if link_kept:
@@ -810,8 +878,7 @@ def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, ti
         try:
             owned = changes(worktree)
             before = guard(worktree)
-            for folder in session_git_writes(before.common, before.gitdir):
-                os.makedirs(folder, exist_ok=True)  # the sandbox can let it write only a folder that exists
+            os.makedirs(os.path.join(before.common, "review"), exist_ok=True)  # the sandbox lets it write only what exists
             settings = session_settings(worktree, before.common, before.gitdir, tmp)
             command = review_command(repo, worktree, owned, settings, agents(), skill())
             env = session_env(os.environ, tmp)
@@ -961,8 +1028,9 @@ def drive(repo, path, brings, reapply, review, say):
             return Outcome("ok")
         if code == FINDINGS_WAIT:
             return Outcome("person", f"review findings wait for you (cd {shlex.quote(worktree)} && scripts/review.sh report):"
-                           " fix one in an Owned file in the Factory's template/owned/ first and add that PR to --brings, or"
-                           f" accept them: cd {shlex.quote(worktree)} && scripts/review.sh accept-open")
+                           " fix them with /pre-push-review there (one in an Owned file goes to the Factory's template/owned/"
+                           f" first: add that PR to --brings), or accept them: cd {shlex.quote(worktree)} &&"
+                           " scripts/review.sh accept-open")
         if code != REVIEW_NEEDED:
             return Outcome("failed", f"reapply.sh exited {code}; retry it with: {retry}")
         if reviews == MAX_REVIEWS:

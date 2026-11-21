@@ -123,7 +123,7 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   that writes one of the reviewed files (a repo whose `coverage-threshold` isn't already `80`, or that lacks the file, gets it from its first one) is refused at `reapply.sh`'s first
   push, which leaves the Apply commit on `chore/reapply-baseline` unpushed. Review it in that worktree with `/pre-push-review`, then run `reapply.sh` again: step 1
   carries the never-pushed branch on. `reapply.sh` exits 3 for that refusal and 4 when a recorded review's findings wait for a person, asked of the worktree's
-  own `scripts/review.sh check`, and `rollout.sh --auto` runs the review headless on a 3 and stops for the person on a 4
+  own `scripts/review.sh check`, and `rollout.sh --auto` runs the review headless and review-only on a 3 (it records its findings open and fixes nothing), and stops for the person on a 4
   (the Factory's [ADR 0016](../../../../docs/adr/0016-a-rollout-runs-each-applications-review-headless-and-sandboxed-in-its-worktree.md)).
   A finding in a Template file goes to the Template in a Factory PR, not to an edit in the repo.
 - `GATE_SKIP_REVIEW=1` skips the check for gate runs while iterating, never for a push: the pre-push hook runs the gate without it. Sandcastle's sandboxes set it (`SANDBOX_ENV` in `lib/skills.mts`):

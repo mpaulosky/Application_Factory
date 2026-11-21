@@ -100,11 +100,13 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
      Start with `--dry-run`. It ends with the `land.sh` command for the PRs it left open.
    - **Roll out unattended:** `rollout.sh --auto --brings '#<n>,#<n>'` does all of that in one run (the Factory's [ADR 0016](../../../docs/adr/0016-a-rollout-runs-each-applications-review-headless-and-sandboxed-in-its-worktree.md)).
      It checks the tools (on Linux, bubblewrap and socat for the sandbox among them, and that bubblewrap can make one), ruff 0.17 or uv,
-     and the Template's `global.json` SDK first (`--dry-run` stops there and prints the plan).
-     When the gate asks for a review it runs the pre-push review headless in the repo's re-Apply worktree, in Claude Code's sandbox: its shell reads none of your
-     credentials, writes only the worktree, the clone's git folder and a folder of its own, and reaches only the package registries and GitHub; it has no GitHub
-     sign-in, loads none of the repository's settings, and takes the skill and its agent from the Template. The round stops when a session broke a rule it checks after.
-     Then it reapplies. It lands TicketManager's PR before the rest start, and the rest's PRs together.
+     and the Template's `global.json` SDK first (`--dry-run` stops there and prints the plan). It refuses to start with a Claude Code or cloud sign-in secret in the
+     environment (`ANTHROPIC_API_KEY`, say): sign Claude Code in with `claude /login` instead.
+     When the gate asks for a review it runs the pre-push review headless in the repo's re-Apply worktree, review-only: one round that records every finding open and
+     edits, fixes and commits nothing. It runs in Claude Code's sandbox: its shell reads none of your credentials, writes only the review ledgers, `.security` and a
+     folder of its own, and reaches only GitHub; it has no GitHub sign-in, loads no settings file, and takes the skill and its agent from
+     the Template. The round stops when a session broke a rule it checks after, such as a changed worktree.
+     Then it reapplies: a Critical or Warning finding stops the round for you to fix or accept. It lands TicketManager's PR before the rest start, and the rest's PRs together.
      Its lock keeps a second `--auto` run out, not a person: don't run `reapply.sh` or the review by hand in a re-Apply worktree while it runs. It stops only where a person decides
      (findings that wait for one, a PR that doesn't land or can't be read, a failed reapply or review session), printing the command that decides it and the one that resumes.
      A Critical or Warning finding in an Owned file stops it too: fix it Template first, then add that PR to `--brings` and resume. `github/auto_rollout.py`'s header has the details.

@@ -127,7 +127,8 @@ def test_sdk_hint_finds_a_plain_version_only(text, version):
 ALL_TOOLS = auto.TOOLS + auto.SANDBOX_TOOLS + ("dotnet", "uvx")
 
 
-def fake_preflight(on_path=ALL_TOOLS, answers=None, global_json='{"sdk": {"version": "10.0.403"}}', tmp_path=None):
+def fake_preflight(on_path=ALL_TOOLS, answers=None, global_json='{"sdk": {"version": "10.0.403"}}', tmp_path=None,
+                   environ=None):
     answers = {"shfmt": (0, "v3.14.1\n", ""), "gh": (0, "", ""), "dotnet": (0, "10.0.404\n", ""), "bwrap": (0, "", ""),
                "claude": (0, "2.1.326 (Claude Code)\n", ""), "ruff": (0, "ruff 0.17.6\n", "")} | dict(answers or {})
     calls = []
@@ -143,8 +144,31 @@ def fake_preflight(on_path=ALL_TOOLS, answers=None, global_json='{"sdk": {"versi
     if global_json is not None and tmp_path:
         Path(path).write_text(global_json)
     problems = auto.preflight(which=lambda tool: f"/bin/{tool}" if tool in on_path else None, run=run,
-                              template_global_json=path)
+                              template_global_json=path, environ=environ or {"PATH": "/bin"})
     return problems, calls
+
+
+SIGN_IN = ("is set, and the review session's shell would see it: unset it for the round, and sign Claude Code in with its"
+           " own credentials file (claude /login) or the cloud's profile files, which the sandbox keeps from the shell")
+
+
+@pytest.mark.parametrize("environ, refused", [
+    ({"ANTHROPIC_API_KEY": "k"}, ["ANTHROPIC_API_KEY"]),
+    ({"CLAUDE_CODE_OAUTH_TOKEN": "t", "ANTHROPIC_AUTH_TOKEN": "t"}, ["ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]),
+    ({"ANTHROPIC_FOUNDRY_API_KEY": "k", "ANTHROPIC_CUSTOM_HEADERS": "x"}, ["ANTHROPIC_CUSTOM_HEADERS", "ANTHROPIC_FOUNDRY_API_KEY"]),
+    ({"ANTHROPIC_API_KEY": ""}, []),
+    ({"CLAUDE_CODE_MESSAGING_TOKEN": "t", "ANTHROPIC_MODEL": "m"}, []),
+    ({"CLAUDE_CODE_USE_BEDROCK": "1", "AWS_SECRET_ACCESS_KEY": "s", "AWS_ACCESS_KEY_ID": "i", "AWS_SESSION_TOKEN": "t",
+      "AWS_PROFILE": "p", "AWS_REGION": "r"}, ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]),
+    ({"CLAUDE_CODE_USE_BEDROCK": "0", "AWS_SECRET_ACCESS_KEY": "s"}, []),
+    ({"CLAUDE_CODE_USE_VERTEX": "true", "GOOGLE_APPLICATION_CREDENTIALS": "/f", "GOOGLE_CLOUD_PROJECT": "p"},
+     ["GOOGLE_APPLICATION_CREDENTIALS"]),
+    ({"CLAUDE_CODE_USE_FOUNDRY": "1", "AZURE_CLIENT_SECRET": "s", "AZURE_TENANT_ID": "t"}, ["AZURE_CLIENT_SECRET"]),
+])
+def test_preflight_refuses_a_sign_in_secret_the_session_would_inherit(environ, refused):
+    # Not a sign-in the session needs in its environment: the messaging token is the caller's, dropped by session_env.
+    problems, _ = fake_preflight(environ={"PATH": "/bin", **environ})
+    assert problems == [f"{name} {SIGN_IN}" for name in refused]
 
 
 def test_preflight_passes_with_every_tool_and_the_templates_sdk(tmp_path):
@@ -328,6 +352,15 @@ def test_review_worktree_is_beside_the_checkout_with_symlinks_resolved(tmp_path)
     assert auto.review_worktree(str(tmp_path / "real" / "TicketManager") + "/") == expected
 
 
+def test_review_worktree_of_a_linked_worktree_is_beside_the_primary_checkout(tmp_path):
+    git = git_repo(tmp_path / "TicketManager")
+    git("worktree", "add", "-q", "-b", "elsewhere", str(tmp_path / "other" / "tm-feature"))
+    expected = str(tmp_path / "TicketManager-worktrees" / "chore-reapply-baseline")
+    assert auto.review_worktree(str(tmp_path / "other" / "tm-feature")) == expected, "as reapply.sh names it"
+    assert auto.review_worktree(str(tmp_path / "TicketManager")) == expected
+    assert auto.review_worktree("/c", read=lambda command: "/x/Repo/.git") == "/x/Repo-worktrees/chore-reapply-baseline"
+
+
 def test_a_lock_that_cannot_be_taken_raises(tmp_path):
     (tmp_path / "file").write_text("")
     with pytest.raises(OSError):
@@ -379,7 +412,7 @@ def fake_guard(tmp_path):
     (common / "review").mkdir(parents=True, exist_ok=True)
     return auto.Guard(worktree="w", remote_branch="", template={}, ledgers=str(common / "review"), ledgers_before={},
                       common=str(common), gitdir=str(common / "worktrees" / "chore-reapply-baseline"), link=b"gitdir: x\n",
-                      security=str(tmp_path / "clone" / ".security"), security_before={})
+                      security=str(tmp_path / "clone" / ".security"), security_before={}, worktree_state=("h", "h", ""))
 
 
 SKILL_TEXT = "# Pre-push review\n\nThe skill's own steps.\n"
@@ -433,8 +466,7 @@ def test_the_review_session_runs_sandboxed_in_the_worktree_with_the_templates_sk
     assert seen["settings"] == auto.session_settings(worktree, str(clone), str(clone / "worktrees" / "chore-reapply-baseline"),
                                                      seen["tmp"]), "the settings are built from the guard's folders"
     assert seen["tmp"].startswith(tempfile.gettempdir()) and os.path.basename(seen["tmp"]).startswith("rollout-session.")
-    for folder in auto.session_git_writes(str(clone), str(clone / "worktrees" / "chore-reapply-baseline")):
-        assert os.path.isdir(folder), f"{folder} is made before the session, so the sandbox can let it be written"
+    assert (clone / "review").is_dir(), "the ledger folder is made before the session, so the sandbox can let it be written"
     assert seen["pass_fds"] == (), "no lock held here, so none is passed on"
     assert seen["cwd"] == worktree and seen["start_new_session"] is True
     assert seen["stdin"] is subprocess.DEVNULL and seen["stderr"] is subprocess.STDOUT
@@ -448,7 +480,10 @@ def test_the_review_session_runs_sandboxed_in_the_worktree_with_the_templates_sk
     assert prompt.endswith(SKILL_TEXT), "the skill's text is the Template's, carried in the prompt"
     assert worktree in prompt and TM in prompt and ".github/hooks/pre-push, scripts/gate.sh" in prompt
     assert os.path.join(worktree, ".claude", "skills", "pre-push-review") in prompt
-    for rule in ("never ask one", "Never edit an Owned file", "record it open", "template/owned/", "Don't push",
+    for rule in ("never ask one", "Review only: this session changes nothing in the repository",
+                 "Don't edit, fix or commit anything, and don't run the gate", "the skill's last, review-only round",
+                 "record every finding it keeps open, with its suggested fix", "The worktree is read-only to you",
+                 "what to change in the Factory's template/owned/", "Don't push",
                  "don't file the follow-up issue", "don't edit a PR", "skip the skill's GitHub reads",
                  "if git fetch fails, go on with origin/main", "End with the output of scripts/review.sh report"):
         assert rule in prompt, rule
@@ -463,39 +498,44 @@ def test_the_session_settings_sandbox_its_bash_and_fence_its_file_tools(tmp_path
     home = str(tmp_path / "home")
     common = str(tmp_path / "clone" / ".git")
     gitdir = os.path.join(common, "worktrees", "wt")
-    settings = auto.session_settings("/w/wt", common, gitdir, "/t/session", home=home)
+    settings = auto.session_settings("/w/wt", common, gitdir, "/t/session", home=home, config_dir="")
     sandbox = settings["sandbox"]
     assert (sandbox["enabled"], sandbox["failIfUnavailable"], sandbox["allowUnsandboxedCommands"],
             sandbox["excludedCommands"]) == (True, True, False, [])
-    guarded = ["/w/wt/.git", *(os.path.join(gitdir, name) for name in ("config.worktree", "gitdir", "commondir")),
-               *(os.path.join(common, name) for name in ("config", "config.worktree", "hooks", "info"))]
     security = str(tmp_path / "clone" / ".security")
     credentials = [home + path[1:] for path in auto.CREDENTIAL_PATHS]
     assert sandbox["filesystem"] == {
-        "allowWrite": [os.path.join(common, "objects"), os.path.join(common, "refs", "heads", "chore"),
-                       os.path.join(common, "logs", "refs", "heads", "chore"), os.path.join(common, "refs", "remotes", "origin"),
-                       os.path.join(common, "logs", "refs", "remotes", "origin"), gitdir, os.path.join(common, "review"),
-                       security, "/t/session"],
-        "denyWrite": guarded,
+        "allowWrite": [os.path.join(common, "review"), security, "/t/session"],
+        "denyWrite": ["/w/wt", gitdir],
         "denyRead": credentials,
-    }
-    assert common not in sandbox["filesystem"]["allowWrite"], "not the whole git folder: its config, hooks, other branches"
+    }, "it writes the ledgers, .security and its own folder: not the worktree, its working folder, nor its git folder"
     assert sandbox["network"] == {"allowedDomains": list(auto.SANDBOX_DOMAINS)}
     permissions = settings["permissions"]
     assert permissions["allow"] == [*auto.SESSION_TOOLS, "Read(//w/wt/**)", f"Read(/{security}/**)", "Read(//t/session/**)",
-                                    "Edit(//w/wt/**)", "Edit(//t/session/**)"]
+                                    "Edit(//t/session/**)"], "it edits its own folder alone"
     assert not {"Read", "Glob", "Grep"} & set(permissions["allow"]), "reads are allowed by path only"
     deny = permissions["deny"]
     assert deny[:len(auto.DENIED_TOOLS)] == list(auto.DENIED_TOOLS)
     for path in credentials:
         assert f"Read(/{path})" in deny and f"Read(/{path}/**)" in deny
-    for path in guarded:
+    for path in ("/w/wt", gitdir):
         assert f"Edit(/{path})" in deny and f"Edit(/{path}/**)" in deny
     assert not any(rule.startswith("Write(") for rule in permissions["allow"] + deny), "Edit rules cover every file-editing tool"
 
 
+def test_the_session_settings_keep_claude_codes_own_config_folder_from_it(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/cfg/claude")
+    settings = auto.session_settings("/w", "/c/.git", "/c/.git/worktrees/w", "/t", home="/h")
+    assert settings["sandbox"]["filesystem"]["denyRead"][-1] == "/cfg/claude"
+    assert "Read(//cfg/claude/**)" in settings["permissions"]["deny"]
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+    assert auto.session_settings("/w", "/c/.git", "/c/.git/worktrees/w", "/t", home="/h")["sandbox"]["filesystem"]["denyRead"] == \
+        ["/h" + path[1:] for path in auto.CREDENTIAL_PATHS]
+
+
 def test_the_session_settings_expand_the_real_home_and_take_the_main_checkout_from_git(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "me"))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     settings = auto.session_settings("/w/wt", "/x/Repo.git", "/x/Repo.git/worktrees/wt", "/t")
     assert settings["sandbox"]["filesystem"]["denyRead"][0] == str(tmp_path / "me" / ".ssh")
     assert not any("~" in path for path in settings["sandbox"]["filesystem"]["denyRead"])
@@ -518,8 +558,8 @@ def test_the_sandbox_and_session_lists_word_for_word():
         "~/.config/pip", "~/.config/uv", "~/.cargo/credentials", "~/.cargo/credentials.toml", "~/.gem/credentials",
         "~/.m2/settings.xml", "~/.local/share/keyrings", "~/.password-store", "~/.vault-token", "~/.config/op",
         "~/.pgpass", "~/.bash_history", "~/.zsh_history", "~/.local/share/fish/fish_history", "~/.claude.json",
-        "~/.claude/.credentials.json", "~/.cache/repo-ci-baseline")
-    assert auto.SANDBOX_DOMAINS == ("registry.npmjs.org", "api.nuget.org", "github.com", "pypi.org", "files.pythonhosted.org")
+        "~/.claude", "~/.cache/repo-ci-baseline")
+    assert auto.SANDBOX_DOMAINS == ("github.com",), "it builds and installs nothing, so no package registry"
     assert auto.SANDBOX_TOOLS == (("bwrap", "socat") if sys.platform.startswith("linux") else ())
     assert auto.TOOLS == ("git", "gh", "python3", "node", "pnpm", "shfmt", "claude")
     assert (auto.GROUP_WAIT_SECONDS, auto.SESSION_BROKE_A_RULE) == (10, 126)
@@ -533,6 +573,13 @@ def test_the_sandbox_and_session_lists_word_for_word():
         ("gc.auto", "0"),
     )
     assert auto.FLAG_ON == ("1", "true", "yes", "on")
+    assert auto.CLAUDE_KEPT == (
+        "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_VERTEX_PROJECT_ID",
+        "ANTHROPIC_FOUNDRY_RESOURCE", "ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_VERTEX_BASE_URL", "ANTHROPIC_FOUNDRY_BASE_URL",
+        "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY")
+    assert auto.CLAUDE_SECRETS == ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
+                                   "ANTHROPIC_FOUNDRY_API_KEY", "ANTHROPIC_CUSTOM_HEADERS")
 
 
 def test_the_agent_comes_from_the_templates_file():
@@ -945,9 +992,11 @@ DROPPED = ("GH_TOKEN", "GITHUB_TOKEN", "gh_token", "RELEASE_PR_PAT", "AWS_PROFIL
            "SENTRY_DSN", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH_COMMAND", "GIT_SSH", "DBUS_SESSION_BUS_ADDRESS",
            "GPG_PASSPHRASE", "SESSION_COOKIE", "MY_BEARER", "DOCKER_CREDENTIAL", "XSSH_AUTH_SOCK", "XAUTHORITY",
            "OPENAI_KEY", "STRIPE_KEY", "GOOGLE_CLOUD_PROJECT", "AZURE_TENANT", "AWS_REGION", "XCLAUDE_TOKEN", "MY_PAT",
-           "SENTRY_AUTH", "GIT_SSH_VARIANT")
+           "SENTRY_AUTH", "GIT_SSH_VARIANT", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN",
+           "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_SSE_PORT",
+           "CLAUDE_PID", "ANTHROPIC_CUSTOM_HEADERS", "ANTHROPIC_ANYTHING")
 KEPT = ("PATH", "HOME", "LANG", "LD_LIBRARY_PATH", "MONKEY", "KEYBOARD", "MYAWS_X", "GIT_CONFIG_GLOBAL",
-        "GIT_CONFIG_NOSYSTEM", "GIT_AUTHOR_NAME", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "XSSH_X")
+        "GIT_CONFIG_NOSYSTEM", "GIT_AUTHOR_NAME", "XSSH_X", *auto.CLAUDE_KEPT)
 
 
 def test_the_sessions_environment_has_no_secrets_but_claudes_sign_in(tmp_path):
@@ -957,6 +1006,7 @@ def test_the_sessions_environment_has_no_secrets_but_claudes_sign_in(tmp_path):
     pairs = [(env[f"GIT_CONFIG_KEY_{n}"], env[f"GIT_CONFIG_VALUE_{n}"]) for n in range(int(env["GIT_CONFIG_COUNT"]))]
     assert pairs == list(auto.SESSION_GIT_CONFIG), "the caller's GIT_CONFIG_ entries are replaced, not kept"
     assert "GIT_CONFIG_KEY_9" not in env
+    assert env["GIT_OPTIONAL_LOCKS"] == "0", "git status doesn't write the read-only worktree's index"
 
 
 def test_the_sessions_caches_and_temporary_folders_are_its_own(tmp_path):
@@ -971,9 +1021,11 @@ def test_the_sessions_caches_and_temporary_folders_are_its_own(tmp_path):
 @pytest.mark.parametrize("flag, prefix", list(auto.CLOUD_SIGN_IN.items()))
 def test_a_cloud_sign_in_keeps_its_own_variables(tmp_path, flag, prefix):
     others = [p for p in auto.CLOUD_SIGN_IN.values() if p != prefix]
-    base = {flag: "1", f"{prefix}PROFILE": "p", "GH_TOKEN": "t", **{f"{p}PROFILE": "q" for p in others}}
+    base = {flag: "1", f"{prefix}PROFILE": "p", "GH_TOKEN": "t", f"{prefix}SECRET_ACCESS_KEY": "s",
+            **{f"{p}PROFILE": "q" for p in others}}
     env = auto.session_env(base, str(tmp_path))
     assert env[f"{prefix}PROFILE"] == "p" and "GH_TOKEN" not in env
+    assert f"{prefix}SECRET_ACCESS_KEY" not in env, "even the cloud in use's secrets are left out"
     assert not any(f"{p}PROFILE" in env for p in others), "only the cloud in use keeps its variables"
 
 
@@ -1071,6 +1123,50 @@ def test_a_session_that_kept_the_rules_broke_none(tmp_path):
     assert g.taken.link == f"gitdir: {g.primary / '.git' / 'worktrees' / 'w'}\n".encode()
 
 
+CHANGED = "{} changed during the session (its HEAD, its branch or its files): the session reviews only, so it commits and edits nothing"
+
+
+@pytest.mark.parametrize("how", ["commit", "edit", "new file", "branch moved", "checkout"])
+def test_a_session_that_commits_or_edits_in_the_worktree_is_caught(tmp_path, how):
+    g = Guarded(tmp_path)
+    g.guard()
+    wt = ["-C", str(g.worktree)]
+    if how == "commit":
+        g.git(*wt, "commit", "-q", "--allow-empty", "-m", "the session's")
+    elif how == "edit":
+        (g.worktree / "README.md").write_text("x")
+        g.git(*wt, "add", "README.md")
+    elif how == "new file":
+        (g.worktree / "src.cs").write_text("x")
+    elif how == "branch moved":
+        g.git("commit", "-q", "--allow-empty", "-m", "two")
+        g.git("update-ref", "refs/heads/chore/reapply-baseline", "main")
+    else:
+        g.git(*wt, "checkout", "-q", "--detach")
+        g.git(*wt, "commit", "-q", "--allow-empty", "-m", "elsewhere")
+    assert g.check(changes=lambda w: []) == [CHANGED.format(g.worktree)]
+
+
+def test_a_worktree_state_that_cant_be_read_is_refused_before_and_broken_after(tmp_path):
+    g = Guarded(tmp_path)
+    read = g.read
+    g.read = lambda command, cwd=None: None if "status" in command else read(command, cwd)
+    with pytest.raises(auto.GuardUnreadable, match="can't read the HEAD, the branch chore/reapply-baseline or the status"):
+        g.guard()
+    g.read = read
+    g.guard()
+    g.read = lambda command, cwd=None: None if "HEAD" in command else read(command, cwd)
+    assert g.check(changes=lambda w: []) == [f"can't read the HEAD, the branch chore/reapply-baseline or the status of {g.worktree}"
+                                             " after the session"]
+
+
+def test_the_worktree_state_reads_word_for_word():
+    assert auto.worktree_state_commands("/w") == [
+        ["git", "-C", "/w", "rev-parse", "HEAD"],
+        ["git", "-C", "/w", "rev-parse", "--verify", "--quiet", "refs/heads/chore/reapply-baseline"],
+        ["git", "-C", "/w", "status", "--porcelain=v1", "-z", "--untracked-files=all"]]
+
+
 def test_the_guard_reads_the_remote_branch_by_its_full_name_before_and_after(tmp_path):
     g = Guarded(tmp_path)
     g.guard()
@@ -1141,10 +1237,11 @@ def test_a_template_that_changed_during_the_session_is_a_stop(tmp_path):
 def test_an_owned_file_edited_or_deleted_by_the_session_is_caught(tmp_path):
     g = Guarded(tmp_path)
     g.guard()
+    owned = "scripts/gate.sh is an Owned file and no longer the Template's: edit the Template, not the copy"
     (g.worktree / "scripts" / "gate.sh").write_text("gate, edited\n")
-    assert g.check() == ["scripts/gate.sh is an Owned file and no longer the Template's: edit the Template, not the copy"]
+    assert g.check() == [owned], "an untracked file edited: the status reads the same, the Owned check catches it"
     (g.worktree / "scripts" / "gate.sh").unlink()
-    assert g.check() == ["scripts/gate.sh is an Owned file and no longer the Template's: edit the Template, not the copy"]
+    assert g.check() == [CHANGED.format(g.worktree), owned]
 
 
 def test_an_owned_list_that_fails_after_the_session_is_a_stop(tmp_path):
@@ -1651,9 +1748,9 @@ def test_auto_stops_for_a_person_when_findings_wait_and_holds_the_rest():
     assert code == 1
     assert reapplied(fleet) == ["TicketManager", "TicketManager"]
     worktree = "/r/TicketManager-worktrees/chore-reapply-baseline"
-    assert (f"TicketManager: review findings wait for you (cd {worktree} && scripts/review.sh report): fix one in an Owned file"
-            " in the Factory's template/owned/ first and add that PR to --brings, or accept them:"
-            f" cd {worktree} && scripts/review.sh accept-open") in out
+    assert (f"TicketManager: review findings wait for you (cd {worktree} && scripts/review.sh report): fix them with"
+            " /pre-push-review there (one in an Owned file goes to the Factory's template/owned/ first: add that PR to"
+            f" --brings), or accept them: cd {worktree} && scripts/review.sh accept-open") in out
     assert "held: IssueTracker, Blazor-Server, IssueManager, Articles, SuggestionApp" in out
     assert "resume with: rollout.sh --auto --brings '#82'\n" in out
     assert fleet.landed == []
@@ -1757,7 +1854,8 @@ def test_auto_holds_when_a_landed_pr_never_reads_as_merged():
 def test_a_landed_pr_that_was_closed_holds_the_round():
     fleet = Fleet(opens={TM: 130}, closes={f"{TM}#130"})
     code, out, _ = run_auto(["--brings", "#82"], fleet)
-    assert code == 1 and "TicketManager#130 is CLOSED, not merged" in out
+    assert code == 1 and (f"TicketManager#130 is CLOSED, not merged: reopen it (gh pr reopen 130 -R {TM}) and land it with"
+                          f" land.sh {TM}#130, or delete its branch and resume for a new PR") in out
 
 
 @pytest.mark.parametrize("reads, lands", [(auto.LOOKUP_TRIES - 1, True), (auto.LOOKUP_TRIES, False)])
@@ -1840,7 +1938,8 @@ def test_a_crash_on_ticketmanager_still_ends_with_the_resume_command_and_a_trace
     fleet = Fleet(raises={TM: PermissionError(13, "Permission denied")})
     code, out, err = run_auto(["--brings", "#82"], fleet)
     assert code == 1
-    assert "TicketManager: PermissionError: [Errno 13] Permission denied (traceback on stderr)" in out and "resume with:" in out
+    assert ("TicketManager: PermissionError: [Errno 13] Permission denied (traceback on stderr); run it by hand with:"
+            " reapply.sh --brings '#82' /r/TicketManager") in out and "resume with:" in out
     assert "rollout.sh: TicketManager crashed:\nTraceback (most recent call last):" in err
 
 
@@ -1912,7 +2011,7 @@ def test_a_crash_on_one_of_the_rest_is_reported_and_the_round_goes_on():
     code, out, err = run_auto(["--brings", "#82"], fleet)
     assert code == 1
     assert reapplied(fleet) == ["TicketManager", *map(short, REST)]
-    assert "  Articles: OSError: [Errno 8] Exec format error (traceback on stderr)" in out
+    assert "  Articles: OSError: [Errno 8] Exec format error (traceback on stderr); run it by hand with: reapply.sh --brings '#82' /r/Articles" in out
     assert "rollout.sh: Articles crashed:\nTraceback" in err
 
 
@@ -1957,9 +2056,11 @@ def test_the_round_without_auto_is_unchanged():
 
 def test_the_header_says_what_holds_and_what_only_backs_it_up():
     doc = " ".join(auto.__doc__.split())
-    assert "it runs in Claude Code's sandbox (session_settings; ADR 0016)" in doc
+    assert "so it reviews only, and runs in Claude Code's sandbox (session_settings; ADR 0016)" in doc
+    assert "it edits, fixes and commits nothing, and runs no gate, so nothing it wrote runs later as the person" in doc
+    assert "the worktree's HEAD, branch or status changed" in doc
     assert "can't leave the sandbox; the session refuses to start without the sandbox (bubblewrap and socat on Linux" in doc
-    assert "not its config, hooks, other branches or worktrees" in doc
+    assert "never the worktree or the rest of its git folder" in doc
     assert "the worktree's .git link changed" in doc
     assert "git's push is sent nowhere: layers behind the sandbox" in doc
     assert "a SIGKILL of rollout.sh can't be caught, and leaves the session running (holding the lock until it ends)" in doc
@@ -2195,7 +2296,8 @@ def test_the_guard_of_a_linked_worktree_reads_the_primary_checkouts_ledgers(tmp_
     assert set(guard.ledgers_before) == {"l.json"}
     assert guard.security == str(primary / ".security")
     (primary / ".git" / "review" / "l.json").write_text(json.dumps({"branch": "x", "findings": [{"id": "R1", "status": "accepted"}]}))
-    broke = auto.broken_rules(guard, owned=str(owned), read=lambda c, cwd=None: "", changes=lambda w: [])
+    broke = auto.broken_rules(guard, owned=str(owned), read=lambda c, cwd=None: "" if "ls-remote" in c else auto.run_text(c, cwd),
+                              changes=lambda w: [])
     assert broke == [f"{primary / '.git' / 'review' / 'l.json'} gained R1 accepted during the session: only the person accepts"]
 
 
@@ -2203,6 +2305,6 @@ def test_the_adr_says_what_the_sandbox_doesnt_cover():
     adr = next((SKILL.parents[2] / "docs" / "adr").glob("0016-*.md")).read_text()
     text = " ".join(adr.split())
     assert "The sandbox holds only as far as Claude Code enforces it" in text
-    assert "a host on the allowed list (GitHub, the registries) is reachable for anything" in text
+    assert "GitHub, the one host on the allowed list, is reachable for anything" in text
     assert "A SIGKILL of `rollout.sh` can't be caught" in text
     assert "however it is spelled" not in text and "this is not a sandbox" not in text, "the earlier overclaims are gone"
