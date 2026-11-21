@@ -4,7 +4,8 @@
 
 1. It checks what would stop the round partway through: a tool missing from
    PATH, an shfmt the gate's gh check refuses, neither ruff 0.17 nor uv for the
-   gate's Python lint, a claude that doesn't run or isn't signed in, a sandbox bubblewrap can't
+   gate's Python lint, a claude that doesn't run or isn't signed in (as it is
+   with no settings file; a cloud's sign-in isn't asked), a sandbox bubblewrap can't
    make (on Linux), gh signed out, and the .NET SDK the Template's global.json
    names (an Owned file, so Apply writes it into every re-Apply worktree and the
    gate builds with it), and a sign-in secret in the environment the review
@@ -51,9 +52,13 @@ it still could do: a session after which the worktree's .git link changed, the
 remote branch moved (or can't be read), the worktree's HEAD, branch or status
 changed, the Template changed, an Owned file is no longer the Template's, a
 ledger or entry map of the clone that was there before changed or went, a new
-ledger holds a finding accepted or fixed, or the .security record lost or
-changed an entry or gained one that isn't open, stops the round for the person:
-a review-only record writes only a new ledger and new open entries.
+ledger holds a finding accepted or fixed or a security one dismissed, a new
+entry map sends a finding to an entry that doesn't hold its weakness, the
+ledgers' lock is left, the .security record lost or changed an entry or gained
+one that isn't open or has another's number, or the session's group outlived
+its kill, stops the round for the person: a review-only record writes only a
+new ledger and new open entries. A file it didn't read (a symlink, a FIFO) is
+compared by what lstat says of it.
 It runs in a process group of its own, killed whole however it ends (it exits,
 or runs past its time); an interrupt, a SIGTERM or a SIGHUP while it runs is
 held until the group is gone, then passed on, and a SIGKILL of rollout.sh can't
@@ -135,6 +140,8 @@ RUFF_VERSION = "0.17.6"
 RUFF_INSTALL = (f"install uv (https://docs.astral.sh/uv/), or put a ruff 0.17 first on PATH (uv tool install"
                 f" ruff@{RUFF_VERSION} once uv is there)")
 # The preflight's try of the review session's sandbox, as the person can run it again.
+# How the preflight asks whether claude is signed in: with no settings file, as the review session runs.
+CLAUDE_AUTH_STATUS = ("claude", "--setting-sources", "", "auth", "status", "--json")
 BWRAP_PROBE = ("bwrap", "--unshare-all", "--ro-bind", "/", "/", "--dev", "/dev", "true")
 # The Template's own copies of the skill the session runs and of its reviewer agent. The session gets both from here,
 # never from the repository it reviews: it loads no settings file at all (--setting-sources ""), so the repository's
@@ -252,14 +259,25 @@ SESSION_BROKE_A_RULE = 126
 # The README and a temporary file of a write in progress aren't entries.
 SECURITY_ENTRY = re.compile(r"^(\d+)-.*\.md$", re.A)
 SECURITY_STATUS = re.compile(r"^- Status: (fixed|accepted|open)\s*$", re.M | re.A)
+SECURITY_FINGERPRINT = re.compile(r"^- Fingerprint: ([0-9a-f]{64})\s*$", re.M | re.A)
+# The record's patterns are JavaScript's, whose \s also matches these, and whose ^ and $ (with m) also stop at \r, U+2028
+# and U+2029: as_the_record_reads maps them to what Python's ASCII \s and \n do, so each pattern reads a text as the
+# record reads it.
+JS_SPACES = "\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u202f\u205f\u3000\ufeff"
+JS_TEXT = str.maketrans({**dict.fromkeys(JS_SPACES, " "), "\r": "\n", "\u2028": "\n", "\u2029": "\n"})
+# An entry map's values, as readEntryMap takes them.
+ENTRY_ID = re.compile(r"^\d{4,}$", re.A)
 # The review ledger folder's own files, which record writes: the ledgers and the entry maps beside them. Its lock and
 # a temporary file of a write in progress are left out.
 LEDGER_FILE = re.compile(r"\.(json|entries)$")
+# The lock record and accept hold while they write the ledger folder.
+LEDGER_LOCK = ".lock"
 # The most a ledger or .security entry read after the session may hold, a hundred times a large ledger: the session
 # writes them, so a bigger file isn't read.
 RECORD_BYTES = 16 * 1024 * 1024
-# What the children the round starts are told, so the gate's build leaves no server running after it: one would keep
-# the round's lock (its descriptor is passed on) after the round ends.
+# What the commands run_in_group starts (reapply.sh, with the gate its push runs, and land.sh) are told, so the gate's
+# build leaves no server running after it: one would keep the round's lock (its descriptor is passed on) after the
+# round ends. The review session has an environment of its own (session_env): it builds nothing.
 NO_BUILD_SERVERS = {"MSBUILDDISABLENODEREUSE": "1", "DOTNET_CLI_USE_MSBUILD_SERVER": "0", "UseSharedCompilation": "false"}
 
 
@@ -327,7 +345,7 @@ def preflight(which=shutil.which, run=run_quiet, template_global_json=TEMPLATE_G
         if code != 0:
             problems.append(f"claude --version failed (exit {code}): {error.strip() or 'no answer'}")
         else:
-            problems += claude_sign_in_problems(run)
+            problems += claude_sign_in_problems(run, environ)
     if which("shfmt") is not None:
         # As check_gh_repo.py runs it: PATH alone, stdout alone.
         code, out, error = run(["shfmt", "--version"], env={"PATH": os.environ.get("PATH", "")})
@@ -362,20 +380,30 @@ def sign_in_problems(environ):
             " the shell" for name in found]
 
 
-def claude_sign_in_problems(run):
-    """Whether claude is signed in, as claude auth status --json says (its loggedIn; the rest of what it prints, the
-    account, is never shown). The session loads no settings file, so a sign-in only a settings file's apiKeyHelper
-    gives isn't one it has."""
-    code, out, error = run(["claude", "auth", "status", "--json"])
-    try:
-        signed_in = code == 0 and json.loads(out).get("loggedIn") is True
-    except (ValueError, AttributeError):
-        signed_in = False
-    if signed_in:
+def claude_sign_in_problems(run, environ):
+    """Whether claude is signed in as the session will be: CLAUDE_AUTH_STATUS, which reads no settings file as the
+    session reads none (so a sign-in only a settings file's apiKeyHelper gives doesn't count), must say loggedIn. Only
+    its loggedIn is read: the rest of what it prints, the account, is never shown, nor is its stderr. With a cloud's
+    flag on (kept_clouds), Claude Code signs in through the cloud's profile, which it doesn't report, so nothing is
+    asked: the first session is where a cloud sign-in that fails shows."""
+    if kept_clouds(environ):
         return []
-    why = f" (exit {code})" if code != 0 else ""
-    return [f"claude isn't signed in{why}, as claude auth status says: sign it in with claude /login (the review session"
-            " reads no settings file, so an apiKeyHelper in one isn't used)"]
+    code, out, _ = run(list(CLAUDE_AUTH_STATUS))
+    command = shlex.join(CLAUDE_AUTH_STATUS)
+    if code != 0:
+        return [f"{command} failed (exit {code}), so whether claude is signed in can't be told: run it to see why, and"
+                " sign claude in with claude /login if it says you're signed out"]
+    try:
+        status = json.loads(out)
+    except ValueError:
+        status = None
+    if not isinstance(status, dict) or "loggedIn" not in status:
+        return [f"{command} doesn't say whether claude is signed in (no loggedIn in what it prints): update claude, or"
+                " run rollout.sh without --auto"]
+    if status["loggedIn"] is not True:
+        return [f"claude isn't signed in, as {command} says: sign it in with claude /login (the review session reads no"
+                " settings file, so an apiKeyHelper in one isn't used)"]
+    return []
 
 
 def ruff_problems(which, run):
@@ -499,8 +527,8 @@ def agent_definition(path=AGENT_FILE):
 
 
 def expand_home(path, home):
-    """path with a leading ~ replaced by home."""
-    return home + path[1:] if path.startswith("~") else path
+    """path with a leading ~ (alone, or before a /) replaced by home; ~user and anything else as it is."""
+    return home + path[1:] if path == "~" or path.startswith("~/") else path
 
 
 def session_writes(common, security, tmp):
@@ -510,8 +538,9 @@ def session_writes(common, security, tmp):
 
 
 def absolute(path, home):
-    """path as an absolute path with no trailing slash: a leading ~ is home, a relative one is from the current
-    folder, as the program reading the variable would take it. None for an empty or blank one."""
+    """path as an absolute path with no trailing slash: a leading ~ or ~/ is home, and a relative one is taken from
+    rollout.sh's folder (a program in the session, whose folder is the worktree, would take it from there, which the
+    session may read anyway). None for an empty or blank one."""
     path = (path or "").strip()
     if not path:
         return None
@@ -544,8 +573,8 @@ def session_settings(worktree, common, gitdir, tmp, home=None, config_dir=None, 
     permissions that allow only SESSION_TOOLS, reads of the worktree, the main checkout's .security and tmp, and edits
     in tmp alone, and deny the credentials, the Factory, ~/.claude and every edit in the worktree; and a sandbox for its
     Bash that can't be turned off, refuses to start without its sandbox (bubblewrap on Linux), reads none of
-    CREDENTIAL_PATHS (nor Claude Code's CLAUDE_CONFIG_DIR, nor where environ's CREDENTIAL_VARS move a credential, each
-    as an absolute path and where its symlinks lead), writes only session_writes (never the worktree, which a sandbox
+    CREDENTIAL_PATHS (nor Claude Code's CLAUDE_CONFIG_DIR, nor where environ's CREDENTIAL_VARS move a credential), each
+    as an absolute path and where its symlinks lead (a dotfiles repo's links),, writes only session_writes (never the worktree, which a sandbox
     otherwise lets its working folder be written, nor its git folder), and reaches only SANDBOX_DOMAINS (none). The
     main checkout is the git common folder's parent, as reapply.sh has it."""
     home = home or os.path.expanduser("~")
@@ -554,8 +583,8 @@ def session_settings(worktree, common, gitdir, tmp, home=None, config_dir=None, 
     security = os.path.join(os.path.dirname(common), ".security")
     read_only = [worktree, gitdir]
     moved = ([config_dir] if config_dir else []) + relocated_credentials(environ, home)
-    credentials = list(dict.fromkeys([expand_home(path, home) for path in CREDENTIAL_PATHS]
-                                     + [form for path in moved for form in both_forms(path)]))
+    credentials = list(dict.fromkeys(form for path in [expand_home(path, home) for path in CREDENTIAL_PATHS] + moved
+                                     for form in both_forms(path)))
     return {
         "permissions": {
             "allow": [*SESSION_TOOLS, f"Read(/{worktree}/**)", f"Read(/{security}/**)", f"Read(/{tmp}/**)", f"Edit(/{tmp}/**)"],
@@ -709,37 +738,78 @@ def names_in(folder, pattern):
         return []
 
 
+def identity(path, data):
+    """What a file the session may have written is, to tell whether it changed: the sha256 of the bytes record_bytes
+    read, or, for one it didn't read (a symlink, a FIFO, one too big), what lstat says of it and where a symlink
+    leads, so swapping one such file for another still reads as a change."""
+    if data is not None:
+        return hashlib.sha256(data).hexdigest()
+    try:
+        info = os.lstat(path)
+        target = os.readlink(path) if stat.S_ISLNK(info.st_mode) else ""
+    except OSError:
+        return "gone"
+    return f"unread {info.st_mode:o} {info.st_ino} {info.st_size} {info.st_mtime_ns} {target}"
+
+
+def ledger_body(name, data):
+    """A ledger's findings (a list of objects), or an entry map ({finding id: entry id}, as readEntryMap reads it);
+    None when the file doesn't read as one."""
+    try:
+        value = json.loads(data.decode("utf-8"))
+    except (AttributeError, ValueError, RecursionError):  # None, not UTF-8 or JSON, or nested past the parser
+        return None
+    if name.endswith(".entries"):
+        if not isinstance(value, dict) or not all(isinstance(entry, str) and ENTRY_ID.match(entry) for entry in value.values()):
+            return None
+        return value
+    findings = value.get("findings") if isinstance(value, dict) else None
+    if not isinstance(findings, list) or not all(isinstance(finding, dict) for finding in findings):
+        return None
+    return findings
+
+
 def ledger_state(folder):
-    """{file name: (sha256 or None, its decided findings or None)} for each ledger (*.json) and entry map (*.entries)
-    in the review ledger folder (record_bytes reads them). A ledger's decided findings are those accepted or fixed, as
-    "<id> <status>"; an entry map has none; a ledger that doesn't read as one has None."""
+    """{file name: (identity, body)} for each ledger (*.json) and entry map (*.entries) in the review ledger folder,
+    read by record_bytes (ledger_body; None for one that doesn't read), and for the ledger's lock (.lock), if there."""
     state = {}
     for name in names_in(folder, LEDGER_FILE):
-        data = record_bytes(os.path.join(folder, name))
-        digest = hashlib.sha256(data).hexdigest() if data is not None else None
-        if name.endswith(".entries"):
-            state[name] = (digest, frozenset())
-            continue
-        try:
-            ledger = json.loads(data.decode("utf-8"))
-            findings = ledger.get("findings") if isinstance(ledger, dict) else None
-            if not isinstance(findings, list):
-                raise ValueError("no list of findings")
-            state[name] = (digest, frozenset(f"{finding.get('id')} {finding.get('status')}" for finding in findings
-                                             if isinstance(finding, dict) and finding.get("status") in ("accepted", "fixed")))
-        except (AttributeError, ValueError, TypeError):
-            state[name] = (digest, None)
+        path = os.path.join(folder, name)
+        data = record_bytes(path)
+        state[name] = (identity(path, data), ledger_body(name, data))
+    lock = os.path.join(folder, LEDGER_LOCK)
+    if os.path.lexists(lock):
+        state[LEDGER_LOCK] = (identity(lock, None), None)
     return state
 
 
+def as_the_record_reads(text):
+    """text with JavaScript's other spaces and line ends mapped to the ASCII ones (JS_TEXT)."""
+    return text.translate(JS_TEXT)
+
+
+def record_fingerprint(path, summary):
+    """The record's fingerprint of a finding (security-record.mts's fingerprint: path and summary, the summary in lower
+    case with its spacing collapsed); None for text it can't be computed from, which then matches no entry."""
+    if not isinstance(path, str) or not isinstance(summary, str):
+        return None
+    words = re.sub(r"\s+", " ", as_the_record_reads(summary.lower()), flags=re.A).strip(" ")
+    try:
+        return hashlib.sha256(f"{path}\0{words}".encode("utf-8")).hexdigest()
+    except UnicodeEncodeError:  # a lone surrogate, which JavaScript would encode differently
+        return None
+
+
 def security_state(folder):
-    """{entry file name: (sha256 or None, its status or None)} for each entry (SECURITY_ENTRY) of the .security
-    record, read by record_bytes."""
+    """{entry file name: (identity, its status or None, its fingerprint or None)} for each entry (SECURITY_ENTRY) of
+    the .security record, read by record_bytes and as the record reads it (as_the_record_reads)."""
     state = {}
     for name in names_in(folder, SECURITY_ENTRY):
-        data = record_bytes(os.path.join(folder, name))
-        found = SECURITY_STATUS.search(data.decode("utf-8", errors="replace")) if data is not None else None
-        state[name] = (hashlib.sha256(data).hexdigest() if data is not None else None, found.group(1) if found else None)
+        path = os.path.join(folder, name)
+        data = record_bytes(path)
+        text = as_the_record_reads(data.decode("utf-8", errors="replace")) if data is not None else ""
+        status, print_ = SECURITY_STATUS.search(text), SECURITY_FINGERPRINT.search(text)
+        state[name] = (identity(path, data), status.group(1) if status else None, print_.group(1) if print_ else None)
     return state
 
 
@@ -808,18 +878,19 @@ def session_guard(worktree, owned=OWNED, read=run_text):
     if remote is None:
         raise GuardUnreadable(f"can't read the remote {BRANCH} before the session (the network, or git); see why with:"
                               f" {shlex.join(remote_branch_command(worktree))}")
-    folders = ["git", "-C", worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"]
-    common = read(folders)
-    gitdir = read(["git", "-C", worktree, "rev-parse", "--path-format=absolute", "--git-dir"])
+    folders = [["git", "-C", worktree, "rev-parse", "--path-format=absolute", which] for which in ("--git-common-dir", "--git-dir")]
+    common, gitdir = (read(command) for command in folders)
     if not common or not gitdir:
+        failed = folders[0] if not common else folders[1]
         raise GuardUnreadable(f"can't find the git folders of {worktree} (git 2.31 or later reads them); see why with:"
-                              f" {shlex.join(folders)}")
+                              f" {shlex.join(failed)}")
     state = worktree_state(worktree, read)
     if None in state:
         failed = next(command for command, value in zip(worktree_state_commands(worktree), state, strict=True)
                       if value is None)
+        # --quiet keeps the read's failure silent; the hint runs it without, so it says why.
         raise GuardUnreadable(f"can't read the HEAD, the branch {BRANCH} or the status of {worktree}; see why with:"
-                              f" {shlex.join(failed)}")
+                              f" {shlex.join(part for part in failed if part != '--quiet')}")
     ledgers = os.path.join(common, "review")
     security = os.path.join(os.path.dirname(common), ".security")
     return Guard(worktree_state=state, worktree=worktree, remote_branch=remote, template=tree_hashes(owned), ledgers=ledgers,
@@ -863,51 +934,111 @@ def broken_rules(guard, owned=OWNED, read=run_text, changes=owned_changes):
         for path in changed:
             if file_hash(os.path.join(guard.worktree, path)) != guard.template.get(path):
                 broke.append(f"{path} is an Owned file and no longer the Template's: edit the Template, not the copy")
-    broke += ledger_changes(guard.ledgers, guard.ledgers_before)
+    broke += ledger_changes(guard.ledgers, guard.ledgers_before, guard.security, guard.security_before)
     broke += security_changes(guard.security, guard.security_before)
     return broke
 
 
-def ledger_changes(folder, before):
+def is_security(finding):
+    """Whether a ledger's finding is a security one, as the ledger's isSecurity has it."""
+    lens = finding.get("lens")
+    return (finding.get("severity") == "warning" or finding.get("security") is not False
+            or (isinstance(lens, str) and "security" in lens.lower()))
+
+
+def ledger_changes(folder, before, security=None, security_before=None):
     """What happened to the clone's review ledgers that a review-only session's record doesn't do. Its record writes
-    one new ledger with its entry map, so any ledger or entry map that was there before and was removed or changed
-    counts, whatever branch or head it names (the session can write those fields too), and so does a new ledger that
-    doesn't read as one or holds a finding accepted (only the person accepts) or fixed (the session fixes nothing)."""
+    one new ledger with its entry map, so these count: a ledger or entry map that was there before and was removed or
+    changed, whatever branch or head it names (the session can write those fields too; a record replacing an earlier
+    record of the same diff counts as well, and the person resumes); a new ledger that doesn't read as one, or holds a
+    finding accepted (only the person accepts), fixed (the session fixes nothing) or a security one dismissed (only
+    the person decides one); a new entry map that doesn't read as one, has no new ledger of its own, or sends a
+    finding to an entry that doesn't hold its weakness (an accept of the finding would change that entry: security is
+    the .security record, read as the record reads it); and a ledger lock the session's record left behind."""
     after, broke = ledger_state(folder), []
+    entries = security_state(security) if security else {}
     for name, (digest, _) in before.items():
         now = after.get(name)
-        if now is None or now[0] != digest:
+        if name != LEDGER_LOCK and (now is None or now[0] != digest):
             broke.append(f"{os.path.join(folder, name)} was {'removed' if now is None else 'changed'} during the session"
-                         " (the session, or your own review on another branch meanwhile): a review-only session writes"
-                         " only a new ledger")
-    for name, (_, decided) in after.items():
-        if name in before:
+                         " (by the session, by its record replacing an earlier record of the same diff, or by your own"
+                         " review on another branch meanwhile): a review-only session writes only a new ledger")
+    if LEDGER_LOCK in after and after[LEDGER_LOCK][0] != before.get(LEDGER_LOCK, (None,))[0]:
+        lock = os.path.join(folder, LEDGER_LOCK)
+        broke.append(f"{lock} is there after the session (its record was ended while it held it, or your own review is"
+                     f" running): once no review is running there, remove it with: rm {shlex.quote(lock)}")
+    for name, (_, body) in after.items():
+        if name in before or name == LEDGER_LOCK:
             continue
         path = os.path.join(folder, name)
-        if decided is None:
-            broke.append(f"{path} appeared during the session and doesn't read as a ledger")
-        elif decided:
-            broke.append(f"{path} appeared during the session with {', '.join(sorted(decided))}: a review-only session"
-                         " fixes nothing, and only the person accepts")
+        if body is None:
+            broke.append(f"{path} appeared during the session and doesn't read as {'an entry map' if name.endswith('.entries') else 'a ledger'}")
+        elif name.endswith(".entries"):
+            broke += entry_map_problems(path, body, after.get(name[:-len(".entries")] + ".json"),
+                                        name[:-len(".entries")] + ".json" in before, entries)
+        else:
+            decided = sorted(f"{finding.get('id')} {finding.get('status')}" for finding in body
+                             if finding.get("status") in ("accepted", "fixed"))
+            dismissed = sorted(str(finding.get("id")) for finding in body
+                               if finding.get("status") == "dismissed" and is_security(finding))
+            if decided:
+                broke.append(f"{path} appeared during the session with {', '.join(decided)}: a review-only session"
+                             " fixes nothing, and only the person accepts")
+            if dismissed:
+                broke.append(f"{path} appeared during the session with {', '.join(dismissed)} dismissed, a security"
+                             " finding: only the person decides one")
     return broke
+
+
+def entry_map_problems(path, entry_map, ledger, ledger_was_there, entries):
+    """What is wrong with a new entry map (path; entry_map its {finding id: entry id}): its ledger (ledger, the
+    (identity, body) of the same key's ledger after the session) must be new too, and each finding it names must be
+    one that ledger holds, sent to the entry accept would find by that number (the first, as the record sorts them,
+    whose status reads) whose fingerprint is the finding's."""
+    if ledger is None or ledger_was_there or ledger[1] is None:
+        return [f"{path} appeared during the session without a new ledger of its own beside it"]
+    findings = {finding.get("id"): finding for finding in ledger[1]}
+    by_number = sorted((int(SECURITY_ENTRY.match(name).group(1)), name, state) for name, state in entries.items())
+    problems = []
+    for finding_id, entry_id in sorted(entry_map.items()):
+        finding = findings.get(finding_id)
+        if finding is None:
+            problems.append(f"{path} names {finding_id}, a finding its ledger doesn't hold")
+            continue
+        entry = next((state for number, _, state in by_number if number == int(entry_id) and state[1] is not None), None)
+        if entry is None or entry[2] is None or entry[2] != record_fingerprint(finding.get("path"), finding.get("summary")):
+            problems.append(f"{path} sends {finding_id} to entry {entry_id}, which doesn't hold its weakness: an accept"
+                            f" of {finding_id} would change that entry")
+    return problems
 
 
 def security_changes(folder, before):
     """What happened to the .security record that a review-only session's record doesn't do. It marks no entry fixed
-    (it records no finding fixed) and writes only open ones, so an entry removed or changed counts, and so does a new
-    one that isn't open."""
+    (it records no finding fixed) and writes only open ones, each with a number of its own, so an entry removed or
+    changed counts, and so does a new one that isn't open, or whose number another entry has (accept finds an entry
+    by its number)."""
     after, broke = security_state(folder), []
-    for name, (digest, status) in before.items():
+    for name, (digest, status, _) in before.items():
         now = after.get(name)
         if now is None:
             broke.append(f"{os.path.join(folder, name)} was removed during the session")
         elif now[0] != digest:
             broke.append(f"{os.path.join(folder, name)} changed during the session ({status} to {now[1]}): a review-only"
                          " session's record changes no entry")
-    for name, (_, status) in after.items():
-        if name not in before and status != "open":
-            broke.append(f"{os.path.join(folder, name)} appeared during the session as {status or 'unreadable'}: a"
-                         " review-only session's record writes only open entries")
+    numbers = {}
+    for name in after:
+        numbers.setdefault(int(SECURITY_ENTRY.match(name).group(1)), []).append(name)
+    for name, (_, status, _) in after.items():
+        if name in before:
+            continue
+        path = os.path.join(folder, name)
+        if status != "open":
+            broke.append(f"{path} appeared during the session as {status or 'unreadable'}: a review-only session's"
+                         " record writes only open entries")
+        others = [other for other in numbers[int(SECURITY_ENTRY.match(name).group(1))] if other != name]
+        if others:
+            broke.append(f"{path} appeared during the session with the number of {', '.join(others)}: the record gives"
+                         " each entry a number of its own")
     return broke
 
 
@@ -985,7 +1116,8 @@ def group_alive(pgid, proc="/proc"):
 def end_group(session, wait_seconds=GROUP_WAIT_SECONDS, sleep=time.sleep, clock=time.monotonic, alive=group_alive):
     """Kill the session's whole process group, reap its leader, and wait until no live process is left in the group,
     for at most wait_seconds in all: whether it is gone. The group's id is the leader's pid, which can't be another
-    group's while a member of this one is left, so a signal to it after the leader is reaped reaches only its members."""
+    group's while the leader is unreaped (wait_for leaves it a zombie) or a member is left, so the signal reaches only
+    this group: the leader is reaped only after it."""
     deadline = clock() + wait_seconds
     try:
         os.killpg(session.pid, signal.SIGKILL)
@@ -1036,7 +1168,7 @@ def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, ti
         except (OSError, RuntimeError, ValueError) as error:
             return stop(f"can't set the session up: {error}")
         out.flush()
-        code, started = None, True
+        code, started, survived = None, True, False
         with deferred_signals() as got:
             try:
                 session = popen(command, cwd=worktree, env=env, stdin=subprocess.DEVNULL, stdout=out,
@@ -1052,6 +1184,7 @@ def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, ti
                         code = 124
                 finally:
                     if not end(session):
+                        survived = True
                         out.write(f"\nrollout.sh: the session's process group was still there {GROUP_WAIT_SECONDS} s after"
                                   " it was killed\n")
         if got:
@@ -1059,6 +1192,10 @@ def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, ti
         if not started:
             return 127, log, []
         broke = check(before)
+        if survived:
+            # What is left of it can still write after the check read the ledgers.
+            broke.append(f"the session's process group was still there {GROUP_WAIT_SECONDS} s after it was killed, and"
+                         f" can still write: see it with pgrep -a -g {session.pid}, and end it before you resume")
         for rule in broke:
             out.write(f"rollout.sh: the session broke a rule: {rule}\n")
         return (SESSION_BROKE_A_RULE if broke else code), log, broke
@@ -1066,14 +1203,31 @@ def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, ti
 
 def wait_for(session, timeout, got, clock=time.monotonic):
     """The session's exit code, or None once timeout seconds pass or a deferred signal arrives (got holds it). It polls,
-    since with the signals deferred nothing interrupts a wait."""
+    since with the signals deferred nothing interrupts a wait, and leaves the leader unreaped (exit_unreaped)."""
     deadline = clock() + timeout
     while True:
         try:
-            return session.wait(timeout=max(0.0, min(0.5, deadline - clock())))
+            return exit_unreaped(session, max(0.0, min(0.5, deadline - clock())))
         except subprocess.TimeoutExpired:
             if got or clock() >= deadline:
                 return None
+
+
+def exit_unreaped(session, seconds, sleep=time.sleep, clock=time.monotonic):
+    """As session.wait(timeout=seconds), but a leader that exited stays a zombie, unreaped (waitid's WNOWAIT): its pid,
+    the group's id, then can't be another process's until end_group has signalled the group and reaped it. A session
+    that isn't this process's child, or was reaped already, is waited as Popen waits."""
+    deadline = clock() + seconds
+    while True:
+        try:
+            info = os.waitid(os.P_PID, session.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        except ChildProcessError:
+            return session.wait(timeout=max(0.0, deadline - clock()))
+        if info is not None and info.si_pid == session.pid:
+            return info.si_status if info.si_code == os.CLD_EXITED else -info.si_status
+        if clock() >= deadline:
+            raise subprocess.TimeoutExpired(getattr(session, "args", "session"), seconds)
+        sleep(min(0.05, max(0.0, deadline - clock())))
 
 
 def run_in_group(command, popen=subprocess.Popen, end=None, clock=time.monotonic):
@@ -1094,7 +1248,10 @@ def run_in_group(command, popen=subprocess.Popen, end=None, clock=time.monotonic
                 code = wait_for(child, math.inf, got, clock)
             finally:
                 # However it ends: what it left running in its group (a build server) holds the round's lock.
-                (end or end_group)(child)
+                if not (end or end_group)(child):
+                    sys.stderr.write(f"rollout.sh: what {os.path.basename(command[0])} left in its process group was still"
+                                     f" there {GROUP_WAIT_SECONDS} s after it was killed, and holds the round's lock:"
+                                     f" see it with: pgrep -a -g {child.pid}\n")
     if got:
         raise passed_on(got[0])
     if failed is not None:
@@ -1103,7 +1260,7 @@ def run_in_group(command, popen=subprocess.Popen, end=None, clock=time.monotonic
 
 
 def child_env(base):
-    """The environment of what the round runs: base with NO_BUILD_SERVERS."""
+    """The environment of the commands run_in_group starts: base with NO_BUILD_SERVERS."""
     return {**base, **NO_BUILD_SERVERS}
 
 
@@ -1190,7 +1347,7 @@ def drive(repo, path, brings, reapply, review, say):
             return Outcome("failed", f"reapply.sh exited {code}; retry it with: {retry}")
         if reviews == MAX_REVIEWS:
             return Outcome("failed", f"the gate still asks for a review after {reviews} review session(s): main or the Template may have"
-                           f" moved since the last one, or the session stopped short in its sandbox (no GitHub sign-in, few hosts;"
+                           f" moved since the last one, or the session stopped short in its sandbox (no GitHub sign-in, no network;"
                            f" see {log}); run /pre-push-review in {shlex.quote(worktree)}, then resume")
         reviews += 1
         say(f"── rollout: {short_name(repo)}: the gate asks for a review; running /pre-push-review headless in {worktree}")
@@ -1300,7 +1457,7 @@ def auto_round(order, brings, resume, checkout, reapply, review, land, pr_of, pr
             say(f"── rollout: landing {short_name(first)}#{number}")
             try:
                 landed = land([f"{first}#{number}"])
-            except Exception as error:  # noqa: BLE001 - the stop names land.sh, not the reapply.sh a crash would
+            except OSError as error:  # land.sh couldn't start: the stop names land.sh, not the reapply.sh a crash would
                 return held(f"{short_name(first)}#{number}: land.sh failed: {type(error).__name__}: {error}; land it with"
                             f" land.sh {first}#{number}")
             if landed != 0:

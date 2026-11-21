@@ -1,10 +1,11 @@
 """Tests for github/auto_rollout.py (rollout.sh --auto), with reapply, the review session, land.sh, gh and git faked.
 No GitHub, no Claude."""
 
+import hashlib
 import io
 import json
-import re
 import os
+import re
 import shutil
 import signal
 import stat
@@ -140,7 +141,7 @@ def fake_preflight(on_path=ALL_TOOLS, answers=None, global_json='{"sdk": {"versi
         if cwd is not None and os.path.isfile(os.path.join(cwd, "global.json")):
             seen = Path(cwd, "global.json").read_text()
         calls.append({"command": tuple(command), "cwd": cwd, "env": env, "global.json": seen})
-        return answers["claude auth" if tuple(command[:2]) == ("claude", "auth") else command[0]]
+        return answers["claude auth" if "auth" in command and command[0] == "claude" else command[0]]
 
     path = os.path.join(tmp_path, "global.json") if tmp_path else "/nonexistent/global.json"
     if global_json is not None and tmp_path:
@@ -287,30 +288,54 @@ def test_preflight_tries_the_sandbox_and_claude(tmp_path):
     assert all(problem.split(": ", 1)[1].startswith("no answer") for problem in problems)
 
 
-NOT_SIGNED_IN = ("as claude auth status says: sign it in with claude /login (the review session reads no settings file,"
-                 " so an apiKeyHelper in one isn't used)")
+AUTH = "claude --setting-sources '' auth status --json"
+NOT_SIGNED_IN = (f"claude isn't signed in, as {AUTH} says: sign it in with claude /login (the review session reads no"
+                 " settings file, so an apiKeyHelper in one isn't used)")
+CANT_TELL = f"{AUTH} doesn't say whether claude is signed in (no loggedIn in what it prints): update claude, or run rollout.sh without --auto"
 
 
 @pytest.mark.parametrize("answer, problem", [
     ((0, '{"loggedIn": true, "email": "someone@example.com"}', ""), None),
-    ((0, '{"loggedIn": false, "email": "someone@example.com"}', ""), f"claude isn't signed in, {NOT_SIGNED_IN}"),
-    ((0, '{"loggedIn": "true"}', ""), f"claude isn't signed in, {NOT_SIGNED_IN}"),
-    ((0, '{"email": "someone@example.com"}', ""), f"claude isn't signed in, {NOT_SIGNED_IN}"),
-    ((0, "[]", ""), f"claude isn't signed in, {NOT_SIGNED_IN}"),
-    ((0, "not json", ""), f"claude isn't signed in, {NOT_SIGNED_IN}"),
-    ((1, '{"loggedIn": true}', "x"), f"claude isn't signed in (exit 1), {NOT_SIGNED_IN}"),
+    ((0, '{"loggedIn": false, "email": "someone@example.com"}', ""), NOT_SIGNED_IN),
+    ((0, '{"loggedIn": "true"}', ""), NOT_SIGNED_IN),
+    ((0, '{"loggedIn": null}', ""), NOT_SIGNED_IN),
+    ((0, '{"email": "someone@example.com"}', ""), CANT_TELL),
+    ((0, "[]", ""), CANT_TELL),
+    ((0, "not json", ""), CANT_TELL),
+    ((0, "", ""), CANT_TELL),
+    ((1, '{"loggedIn": true}', "someone@example.com x"),
+     f"{AUTH} failed (exit 1), so whether claude is signed in can't be told: run it to see why, and sign claude in with"
+     " claude /login if it says you're signed out"),
+    ((124, "", "claude didn't answer in 120 s"),
+     f"{AUTH} failed (exit 124), so whether claude is signed in can't be told: run it to see why, and sign claude in with"
+     " claude /login if it says you're signed out"),
 ])
 def test_preflight_wants_claude_signed_in_and_shows_nothing_of_the_account(answer, problem, tmp_path):
     problems, calls = fake_preflight(answers={"claude auth": answer}, tmp_path=tmp_path)
     assert problems == ([] if problem is None else [problem])
-    assert ("claude", "auth", "status", "--json") in [call["command"] for call in calls]
-    assert not any("someone@example.com" in text for text in problems), "the account isn't printed"
+    assert auto.CLAUDE_AUTH_STATUS == ("claude", "--setting-sources", "", "auth", "status", "--json")
+    assert auto.CLAUDE_AUTH_STATUS in [call["command"] for call in calls], "it reads no settings file, as the session"
+    assert not any("someone@example.com" in text for text in problems), "neither the account nor stderr is printed"
+
+
+@pytest.mark.parametrize("flag", sorted(auto.CLOUD_SIGN_IN))
+def test_a_cloud_sign_in_isnt_asked_of_claude_auth_status(flag, tmp_path):
+    problems, calls = fake_preflight(answers={"claude auth": (0, '{"loggedIn": false}', "")}, tmp_path=tmp_path,
+                                     environ={"PATH": "/bin", flag: "1"})
+    assert problems == []
+    assert auto.CLAUDE_AUTH_STATUS not in [call["command"] for call in calls]
+
+
+def test_a_cloud_flag_thats_off_still_asks_claude_auth_status(tmp_path):
+    problems, _ = fake_preflight(answers={"claude auth": (0, '{"loggedIn": false}', "")}, tmp_path=tmp_path,
+                                 environ={"PATH": "/bin", "CLAUDE_CODE_USE_BEDROCK": "0"})
+    assert problems == [NOT_SIGNED_IN]
 
 
 def test_a_claude_that_doesnt_run_isnt_asked_whether_it_is_signed_in(tmp_path):
     problems, calls = fake_preflight(answers={"claude": (127, "", "No such file")}, tmp_path=tmp_path)
     assert problems == ["claude --version failed (exit 127): No such file"]
-    assert not any(call["command"][:2] == ("claude", "auth") for call in calls)
+    assert auto.CLAUDE_AUTH_STATUS not in [call["command"] for call in calls]
 
 
 def test_preflight_names_an_sdk_it_cant_check(tmp_path, monkeypatch):
@@ -491,7 +516,7 @@ def review_once(tmp_path, monkeypatch, popen=None, changes=None, worktree=None, 
     if worktree is None:
         worktree = tmp_path / "TicketManager-worktrees" / "chore-reapply-baseline"
         worktree.mkdir(parents=True)
-    code, log, _ = auto.run_review(TM, str(worktree), popen=popen or fake_popen,
+    code, log, seen["broke"] = auto.run_review(TM, str(worktree), popen=popen or fake_popen,
                                    changes=changes or (lambda path: [".github/hooks/pre-push", "scripts/gate.sh"]),
                                    log_dir=str(tmp_path / "logs"), end=end or (lambda s: ended.append(s) or True),
                                    guard=guard or (lambda w: seen.setdefault("guarded", w) and fake_guard(tmp_path)),
@@ -603,6 +628,45 @@ def test_the_session_settings_sandbox_its_bash_and_fence_its_file_tools(tmp_path
     for path in ("/w/wt", gitdir):
         assert f"Edit(/{path})" in deny and f"Edit(/{path}/**)" in deny
     assert not any(rule.startswith("Write(") for rule in permissions["allow"] + deny), "Edit rules cover every file-editing tool"
+
+
+def test_the_session_settings_read_the_real_environment_by_default(monkeypatch):
+    # run_review passes no environ: what the person's environment moves is denied all the same.
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/cfg/claude")
+    monkeypatch.setenv("KUBECONFIG", "/k/config")
+    monkeypatch.setenv("XDG_CONFIG_HOME", "/x")
+    deny = auto.session_settings("/w", "/c/.git", "/c/.git/worktrees/w", "/t", home="/h")
+    for path in ("/cfg/claude", "/k/config", "/x/gh", "/x/git"):
+        assert path in deny["sandbox"]["filesystem"]["denyRead"] and f"Read(/{path}/**)" in deny["permissions"]["deny"]
+
+
+def test_a_listed_credential_that_is_a_symlink_is_denied_where_it_leads(tmp_path):
+    # ~/.bashrc and ~/.gitconfig are often links into a dotfiles repo.
+    home = tmp_path / "home"
+    (home / ".config").mkdir(parents=True)
+    (tmp_path / "dotfiles" / "git").mkdir(parents=True)
+    (tmp_path / "dotfiles" / "bashrc").write_text("export TOKEN=x\n")
+    (home / ".bashrc").symlink_to(tmp_path / "dotfiles" / "bashrc")
+    (home / ".config" / "git").symlink_to(tmp_path / "dotfiles" / "git")
+    deny = auto.session_settings("/w", "/c/.git", "/c/.git/worktrees/w", "/t", home=str(home), environ={})
+    found = deny["sandbox"]["filesystem"]["denyRead"]
+    for path in (home / ".bashrc", tmp_path / "dotfiles" / "bashrc", home / ".config" / "git", tmp_path / "dotfiles" / "git"):
+        assert str(path) in found and f"Read(/{path})" in deny["permissions"]["deny"]
+    assert len(found) == len(set(found))
+
+
+def test_a_credential_named_twice_is_denied_once():
+    environ = {"GIT_CONFIG_GLOBAL": "~/.gitconfig", "GH_CONFIG_DIR": "~/.config/gh", "KUBECONFIG": "/k:/k"}
+    deny = auto.session_settings("/w", "/c/.git", "/c/.git/worktrees/w", "/t", home="/h", environ=environ)
+    found = deny["sandbox"]["filesystem"]["denyRead"]
+    assert len(found) == len(set(found)) and found.count("/h/.gitconfig") == 1 and found.count("/k") == 1
+    assert denied_beyond_the_list(environ) == ["/k"]
+
+
+@pytest.mark.parametrize("path, expanded", [("~", "/h"), ("~/x", "/h/x"), ("~user/x", "~user/x"), ("a~/x", "a~/x"),
+                                            ("/abs", "/abs")])
+def test_expand_home_takes_only_a_tilde_of_its_own(path, expanded):
+    assert auto.expand_home(path, "/h") == expanded
 
 
 def denied_beyond_the_list(environ, home="/h"):
@@ -864,10 +928,14 @@ def test_an_interrupted_review_session_ends_its_group_and_passes_the_interrupt_o
     assert ended == [session]
 
 
-def test_a_group_that_does_not_go_away_is_noted_in_the_log(tmp_path, monkeypatch):
-    code, log, _, _ = review_once(tmp_path, monkeypatch, end=lambda s: False)
-    assert code == 0
-    assert f"process group was still there {auto.GROUP_WAIT_SECONDS} s after it was killed" in Path(log).read_text()
+def test_a_group_that_does_not_go_away_is_a_broken_rule(tmp_path, monkeypatch):
+    # What is left of it can still write after the check read the ledgers.
+    code, log, seen, _ = review_once(tmp_path, monkeypatch, end=lambda s: False)
+    assert code == auto.SESSION_BROKE_A_RULE
+    rule = (f"the session's process group was still there {auto.GROUP_WAIT_SECONDS} s after it was killed, and can still"
+            " write: see it with pgrep -a -g 999999, and end it before you resume")
+    assert seen["broke"] == [rule]
+    assert f"rollout.sh: the session broke a rule: {rule}" in Path(log).read_text()
 
 
 def wait_gone(pid):
@@ -1288,9 +1356,10 @@ class Guarded:
         path.write_text(raw if raw is not None else json.dumps({"branch": branch, "head": head, "findings": findings}))
         return path
 
-    def entry(self, name, status, text="the weakness"):
+    def entry(self, name, status, text="the weakness", fingerprint=None):
         path = self.security / name
-        path.write_text(f"# {name}\n\n- Status: {status}\n- Lens: Security\n\n## Weakness\n\n{text}\n")
+        print_ = f"- Fingerprint: {fingerprint}\n" if fingerprint else ""
+        path.write_text(f"# {name}\n\n- Status: {status}\n- Lens: Security\n{print_}\n## Weakness\n\n{text}\n")
         return path
 
 
@@ -1328,6 +1397,22 @@ def test_a_session_that_commits_or_edits_in_the_worktree_is_caught(tmp_path, how
         g.git(*wt, "checkout", "-q", "--detach")
         g.git(*wt, "commit", "-q", "--allow-empty", "-m", "elsewhere")
     assert g.check(changes=lambda w: []) == [CHANGED.format(g.worktree)]
+
+
+@pytest.mark.parametrize("failing, hint", [
+    (0, "rev-parse HEAD"),
+    (1, "rev-parse --verify refs/heads/chore/reapply-baseline"),
+    (2, "status --porcelain=v1 -z --untracked-files=all"),
+])
+def test_the_worktree_read_that_fails_is_the_one_the_hint_names(tmp_path, failing, hint):
+    # The branch read's --quiet would keep its failure silent: the hint runs it without.
+    g = Guarded(tmp_path)
+    read, commands = g.read, auto.worktree_state_commands(str(g.worktree))
+    g.read = lambda command, cwd=None: None if command == commands[failing] else read(command, cwd)
+    with pytest.raises(auto.GuardUnreadable) as refused:
+        g.guard()
+    assert str(refused.value) == (f"can't read the HEAD, the branch chore/reapply-baseline or the status of {g.worktree};"
+                                  f" see why with: git -C {g.worktree} {hint}")
 
 
 def test_a_worktree_state_that_cant_be_read_is_refused_before_and_broken_after(tmp_path):
@@ -1378,7 +1463,7 @@ def test_a_guard_that_cant_read_the_link_the_remote_or_the_git_folders_starts_no
             auto.session_guard(str(g.worktree), owned=str(g.owned),
                                read=lambda c, cwd=None, missing=missing: None if missing in c else "" if "ls-remote" in c else "/x")
         assert str(refused.value) == (f"can't find the git folders of {g.worktree} (git 2.31 or later reads them); see why"
-                                      f" with: git -C {g.worktree} rev-parse --path-format=absolute --git-common-dir")
+                                      f" with: git -C {g.worktree} rev-parse --path-format=absolute {missing}"), "the read that failed"
 
 
 def test_a_remote_branch_that_doesnt_exist_yet_is_a_reading_not_a_failure(tmp_path):
@@ -1445,21 +1530,172 @@ def test_an_owned_list_that_fails_after_the_session_is_a_stop(tmp_path):
     assert g.check(changes=broken) == ["can't list the Owned files the branch changes: git diff failed"]
 
 
-LEDGER_CHANGED = ("{} was {} during the session (the session, or your own review on another branch meanwhile): a"
-                  " review-only session writes only a new ledger")
+LEDGER_CHANGED = ("{} was {} during the session (by the session, by its record replacing an earlier record of the same"
+                  " diff, or by your own review on another branch meanwhile): a review-only session writes only a new ledger")
 NEW_DECIDED = "{} appeared during the session with {}: a review-only session fixes nothing, and only the person accepts"
+
+
+WEAK = {"id": "R1", "status": "open", "severity": "warning", "security": True, "lens": "Security", "path": "a.py",
+        "summary": "The weakness"}
+NOT_SECURITY = {"severity": "critical", "security": False, "lens": "Tests"}
 
 
 def test_a_new_ledger_and_its_entry_map_with_open_and_dismissed_findings_break_nothing(tmp_path):
     g = Guarded(tmp_path)
     g.ledger("old.json", [{"id": "R1", "status": "accepted"}])
     (g.ledgers / "old.entries").write_text("{}\n")
+    g.entry("0001-old.md", "open", fingerprint=auto.record_fingerprint("b.py", "An older weakness"))
     g.guard()
-    g.ledger("new.json", [{"id": "R1", "status": "open"}, {"id": "R2", "status": "dismissed"}, "R3"])
-    (g.ledgers / "new.entries").write_text('{"R1": "0001"}\n')
-    (g.ledgers / ".lock").write_text("pid")
-    (g.ledgers / "new.json.123.tmp").write_text("{")
-    assert g.check() == [], "record's lock and a write in progress aren't the ledgers"
+    g.ledger("new.json", [WEAK, {**WEAK, "id": "R2", "path": "b.py", "summary": "an  OLDER weakness"},
+                          {"id": "R3", "status": "dismissed", "reason": "x", **NOT_SECURITY}])
+    g.entry("0002-new.md", "open", fingerprint=auto.record_fingerprint("a.py", "The weakness"))
+    (g.ledgers / "new.entries").write_text('{"R1": "0002", "R2": "0001"}\n')  # R2 repeats the older entry
+    (g.ledgers / "new.json.123.ab12.tmp").write_text("{")
+    assert g.check() == [], "a write in progress isn't a ledger, and a repeat goes to the entry of its weakness"
+
+
+MAP_TO_ELSEWHERE = "{} sends R1 to entry {}, which doesn't hold its weakness: an accept of R1 would change that entry"
+
+
+@pytest.mark.parametrize("how", ["another weakness", "no fingerprint", "no such entry", "an entry that doesn't read",
+                                 "the first of a number"])
+def test_a_new_entry_map_that_sends_a_finding_to_an_entry_of_another_weakness_is_caught(tmp_path, how):
+    # accept goes by the entry map: a forged one would have the person's accept of a harmless-looking finding accept
+    # a real weakness's entry.
+    g = Guarded(tmp_path)
+    mine = auto.record_fingerprint("a.py", "The weakness")
+    if how == "another weakness":
+        g.entry("0001-real.md", "open", fingerprint=auto.record_fingerprint("src/real.cs", "A real weakness"))
+    elif how == "no fingerprint":
+        g.entry("0001-real.md", "open")
+    elif how == "an entry that doesn't read":
+        g.entry("0001-real.md", "maybe", fingerprint=mine)
+    elif how == "the first of a number":
+        # accept takes the first entry of the number, as the record sorts them: 0001-a before 0001-b.
+        g.entry("0001-a.md", "open", fingerprint=auto.record_fingerprint("src/real.cs", "A real weakness"))
+        g.entry("0001-b.md", "open", fingerprint=mine)
+    g.guard()
+    g.ledger("new.json", [WEAK])
+    path = g.ledgers / "new.entries"
+    path.write_text('{"R1": "0001"}')
+    assert g.check() == [MAP_TO_ELSEWHERE.format(path, "0001")]
+
+
+def test_a_new_entry_map_naming_a_finding_its_ledger_doesnt_hold_is_caught(tmp_path):
+    g = Guarded(tmp_path)
+    g.guard()
+    g.ledger("new.json", [WEAK])
+    g.entry("0001-a.md", "open", fingerprint=auto.record_fingerprint("a.py", "The weakness"))
+    path = g.ledgers / "new.entries"
+    path.write_text('{"R1": "0001", "R7": "0001"}')
+    assert g.check() == [f"{path} names R7, a finding its ledger doesn't hold"]
+
+
+@pytest.mark.parametrize("ledger", ["none", "there before", "doesn't read"])
+def test_a_new_entry_map_without_a_new_ledger_of_its_own_is_caught(tmp_path, ledger):
+    g = Guarded(tmp_path)
+    if ledger == "there before":
+        g.ledger("k.json", [WEAK])
+    g.guard()
+    if ledger == "doesn't read":
+        g.ledger("k.json", [], raw="{")
+    path = g.ledgers / "k.entries"
+    path.write_text('{"R1": "0001"}')
+    expected = [f"{path} appeared during the session without a new ledger of its own beside it"]
+    if ledger == "doesn't read":
+        expected.append(f"{g.ledgers / 'k.json'} appeared during the session and doesn't read as a ledger")
+    assert g.check() == expected
+
+
+@pytest.mark.parametrize("raw", ["{", "[]", '{"R1": 1}', '{"R1": "001"}', '{"R1": "0001x"}', '{"R1": "\u0661\u0662\u0663\u0664"}',
+                                 "[" * 100000])
+def test_a_new_entry_map_that_doesnt_read_as_one_is_caught(tmp_path, raw):
+    g = Guarded(tmp_path)
+    g.guard()
+    path = g.ledgers / "k.entries"
+    path.write_text(raw)
+    assert g.check() == [f"{path} appeared during the session and doesn't read as an entry map"]
+
+
+def test_an_entry_map_and_ledger_that_read_are_read_as_the_ledger_reads_them():
+    assert auto.ledger_body("k.entries", b'{"R1": "0001", "R2": "12345"}') == {"R1": "0001", "R2": "12345"}
+    assert auto.ledger_body("k.entries", b"{}") == {}
+    assert auto.ledger_body("k.json", b'{"findings": [{"id": "R1"}]}') == [{"id": "R1"}]
+    assert auto.ledger_body("k.json", b'{"findings": ["R1"]}') is None, "a finding is an object"
+    assert auto.ledger_body("k.json", None) is None
+
+
+def test_a_new_ledger_nested_past_the_parser_doesnt_read_and_crashes_nothing(tmp_path):
+    g = Guarded(tmp_path)
+    g.guard()
+    path = g.ledgers / "deep.json"
+    path.write_text("[" * 200000)
+    assert g.check() == [f"{path} appeared during the session and doesn't read as a ledger"]
+
+
+@pytest.mark.parametrize("finding, dismissed", [
+    ({"severity": "warning", "security": False, "lens": "Tests"}, True),
+    ({"severity": "critical", "lens": "Tests"}, True),
+    ({"severity": "critical", "security": True, "lens": "Tests"}, True),
+    ({"severity": "advisory", "security": False, "lens": "Bar/Security"}, True),
+    ({"severity": "critical", "security": False, "lens": "Tests"}, False),
+    ({"severity": "advisory", "security": False, "lens": "Docs match the code"}, False),
+])
+def test_a_new_ledger_with_a_security_finding_dismissed_is_caught(tmp_path, finding, dismissed):
+    # Only the person decides a security finding, as the ledger's isSecurity tells one.
+    g = Guarded(tmp_path)
+    g.guard()
+    path = g.ledger("new.json", [{"id": "R5", "status": "dismissed", "reason": "x", **finding}])
+    assert g.check() == ([f"{path} appeared during the session with R5 dismissed, a security finding: only the person"
+                          " decides one"] if dismissed else [])
+
+
+LOCK_LEFT = ("{} is there after the session (its record was ended while it held it, or your own review is running): once"
+             " no review is running there, remove it with: rm {}")
+
+
+def test_a_ledger_lock_the_session_left_is_a_stop_that_says_how_to_clear_it(tmp_path):
+    g = Guarded(tmp_path)
+    g.guard()
+    lock = g.ledgers / ".lock"
+    lock.write_text("12 abc")
+    assert g.check() == [LOCK_LEFT.format(lock, lock)]
+
+
+def test_a_ledger_lock_there_before_and_kept_or_gone_is_no_stop(tmp_path):
+    g = Guarded(tmp_path)
+    lock = g.ledgers / ".lock"
+    lock.write_text("12 abc")
+    g.guard()
+    assert g.check() == []
+    lock.unlink()
+    assert g.check() == []
+    lock.write_text("13 def")
+    assert g.check() == [LOCK_LEFT.format(lock, lock)], "another lock, made during the session"
+
+
+@pytest.mark.parametrize("where", ["ledger", "entry"])
+def test_a_file_that_didnt_read_before_and_was_swapped_for_another_is_caught(tmp_path, where):
+    g = Guarded(tmp_path)
+    folder, name = (g.ledgers, "l.json") if where == "ledger" else (g.security, "0001-a.md")
+    (tmp_path / "one").write_text("x")
+    (tmp_path / "two").write_text("x")
+    (folder / name).symlink_to(tmp_path / "one")
+    g.guard()
+    assert g.check() == []
+    (folder / name).unlink()
+    (folder / name).symlink_to(tmp_path / "two")
+    broke = g.check()
+    assert len(broke) == 1 and broke[0].startswith(f"{folder / name} {'was changed' if where == 'ledger' else 'changed'} during the session")
+
+
+def test_an_unread_files_identity_is_what_lstat_says_and_where_it_leads(tmp_path):
+    (tmp_path / "l").symlink_to("/somewhere")
+    info = os.lstat(tmp_path / "l")
+    assert auto.identity(str(tmp_path / "l"), None) == (f"unread {info.st_mode:o} {info.st_ino} {info.st_size}"
+                                                        f" {info.st_mtime_ns} /somewhere")
+    assert auto.identity(str(tmp_path / "missing"), None) == "gone"
+    assert auto.identity("x", b"abc") == hashlib.sha256(b"abc").hexdigest()
 
 
 @pytest.mark.parametrize("findings, decided", [
@@ -1628,8 +1864,8 @@ def test_a_missing_security_record_reads_as_no_entries(tmp_path):
     (tmp_path / "rec" / "0002-x.md").write_text("- Status: maybe\n")
     (tmp_path / "rec" / "x.md").write_text("- Status: open\n")
     state = auto.security_state(str(tmp_path / "rec"))
-    assert list(state) == ["0001-sub.md", "0002-x.md"] and state["0001-sub.md"] == (None, None)
-    assert state["0002-x.md"][1] is None
+    assert list(state) == ["0001-sub.md", "0002-x.md"] and state["0001-sub.md"][1:] == (None, None)
+    assert state["0001-sub.md"][0].startswith("unread ") and state["0002-x.md"][1:] == (None, None)
 
 
 @pytest.mark.parametrize("text, status", [
@@ -1644,10 +1880,50 @@ def test_a_missing_security_record_reads_as_no_entries(tmp_path):
     ("Status: open\n", None),
     ("x- Status: open\n", None),
     ("- Status: open x\n", None),
+    # JavaScript's ^ and $ also stop at \r, U+2028 and U+2029, and its \s takes the other spaces: read as it reads them.
+    ("- Status: accepted\u2028\n- Status: open\n", "accepted"),
+    ("- Status: accepted\r- Status: open\n", "accepted"),
+    ("- Status: fixed\u2029", "fixed"),
+    ("- Status: open\u00a0\n", "open"),
+    ("- Status: accepted\u3000\n- Status: open\n", "accepted"),
+    ("- Status: accepted\ufeff\n", "accepted"),
+    ("- Status: open\x85\n", None),
+    ("- Status: open\x1c\n", None),
 ])
 def test_an_entrys_status_line_reads_as_the_record_reads_it(tmp_path, text, status):
-    (tmp_path / "0001-a.md").write_text(text)
+    (tmp_path / "0001-a.md").write_bytes(text.encode("utf-8"))
     assert auto.security_state(str(tmp_path))["0001-a.md"][1] == status
+
+
+@pytest.mark.parametrize("path, summary, digest", [
+    # Each digest is what security-record.mts's fingerprint gives (node, Claude Code 2.1.326's era).
+    ("a.py", "The  Weakness\n", "fdb62a7484e90320a1e980eca6ec6bd2efcd9391f9deb7d49c46b1f0ab7327b1"),
+    ("a.py", "x\u00a0Y\u2028z\u3000", "7a1de819938ef981be70a1afe50c5e5aa0576c42f17a150bf2a053563640ead5"),
+    ("src/\u00c9.cs", "  \u00c9COLE\t\u0130 ", "e134800818919562a2c23ab939c33e98785899c0e645c94f196262c2839a0291"),
+    ("p", "\x85A\x1c", "935ad8e21d833df8b971ef2159048fc0df1eec9653679914db1e029e46d1ca50"),
+])
+def test_a_findings_fingerprint_is_the_records(path, summary, digest):
+    assert auto.record_fingerprint(path, summary) == digest
+
+
+def test_a_fingerprint_of_what_isnt_text_is_none():
+    assert auto.record_fingerprint(None, "x") is None and auto.record_fingerprint("p", 5) is None
+    assert auto.record_fingerprint("p", "\ud800") is None
+
+
+def test_the_fingerprint_is_computed_as_the_record_computes_it():
+    record = (SKILL / "template/owned/.sandcastle/lib/security-record.mts").read_text()
+    assert 'update(`${path}\\0${summary.toLowerCase().replace(/\\s+/g, " ").trim()}`).digest("hex")' in record
+    assert f"/{auto.SECURITY_FINGERPRINT.pattern}/m.exec(text)" in record
+
+
+def test_a_new_entry_with_another_entrys_number_is_caught(tmp_path):
+    g = Guarded(tmp_path)
+    g.entry("0001-a.md", "open")
+    g.guard()
+    path = g.entry("1-b.md", "open")
+    assert g.check() == [f"{path} appeared during the session with the number of 0001-a.md: the record gives each entry a"
+                         " number of its own"]
 
 
 @pytest.mark.parametrize("name, entry", [("0001-a.md", True), ("12-b.md", True), ("0001-.md", True), ("0001a.md", False),
@@ -1661,7 +1937,21 @@ def test_the_entry_name_and_status_patterns_are_the_records_own():
     record = (SKILL / "template/owned/.sandcastle/lib/security-record.mts").read_text()
     assert f"/{auto.SECURITY_ENTRY.pattern}/.exec(file)" in record
     assert f"/{auto.SECURITY_STATUS.pattern}/m.exec(text)" in record
-    assert auto.SECURITY_STATUS.flags & re.M and auto.SECURITY_ENTRY.flags & re.A
+    for pattern in (auto.SECURITY_STATUS, auto.SECURITY_FINGERPRINT):
+        assert pattern.flags & re.M and pattern.flags & re.A, "\\s read as ASCII once as_the_record_reads maps the rest"
+    assert auto.SECURITY_ENTRY.flags & re.A
+
+
+def test_the_ledger_folders_names_are_the_records_own():
+    ledger = (SKILL.parents[2] / ".sandcastle/lib/review-ledger.mts").read_text()
+    record = (SKILL / "template/owned/.sandcastle/lib/security-record.mts").read_text()
+    assert "join(ledgerDir(cwd), `${key}.json`)" in ledger and "join(ledgerDir(cwd), `${key}.entries`)" in ledger
+    assert f'join(ledgerDir(cwd), "{auto.LEDGER_LOCK}")' in ledger
+    assert 'const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;' in record
+    assert "replaceFile(ledgerPath(cwd, ledger.key)" in ledger and "replaceFile(path, `${JSON.stringify(entries)}" in ledger
+    for name, matched in [("k.json", True), ("k.entries", True), (".lock", False), ("k.json.12.ab12cd34.tmp", False),
+                          ("k.entries.12.ab12cd34.tmp", False), ("k.jsonx", False)]:
+        assert bool(auto.LEDGER_FILE.search(name)) is matched, name
 
 
 def test_link_text_reads_only_a_plain_file(tmp_path):
@@ -1679,6 +1969,39 @@ def test_run_text_strips_trailing_newlines_only_and_gives_none_for_a_failure(tmp
 
 def test_a_missing_ledger_folder_reads_as_no_ledgers(tmp_path):
     assert auto.ledger_state(str(tmp_path / "none")) == {}
+
+
+@needs_proc
+def test_a_leader_that_exited_stays_unreaped_until_its_group_is_ended():
+    # Its pid is the group's id: reaped before the group is signalled, it could be another process's by then.
+    session = subprocess.Popen(["sh", "-c", "exit 3"], start_new_session=True)
+    assert auto.wait_for(session, 10, []) == 3
+    assert Path(f"/proc/{session.pid}/stat").read_text().rsplit(")", 1)[1].split()[0] == "Z", "still a zombie"
+    assert session.returncode is None
+    assert auto.end_group(session) is True and session.returncode == 3
+    with pytest.raises(ChildProcessError):
+        os.waitid(os.P_PID, session.pid, os.WEXITED | os.WNOHANG)
+
+
+def test_exit_unreaped_gives_a_signal_as_popen_does_and_times_out_as_it_does():
+    killed = subprocess.Popen(["sh", "-c", "kill -9 $$"], start_new_session=True)
+    assert auto.exit_unreaped(killed, 10) == -signal.SIGKILL
+    killed.wait()
+    running = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            auto.exit_unreaped(running, 0.1)
+    finally:
+        running.kill()
+        running.wait()
+    assert auto.exit_unreaped(FakeSession(code=5), 1) == 5, "not this process's child: waited as Popen waits"
+
+
+def test_a_group_a_command_left_that_wont_go_is_said(capsys):
+    code = auto.run_in_group(["/bin/true"], end=lambda child: False)
+    assert code == 0
+    assert re.fullmatch(r"rollout\.sh: what true left in its process group was still there 10 s after it was killed, and"
+                        r" holds the round's lock: see it with: pgrep -a -g \d+\n", capsys.readouterr().err)
 
 
 def test_end_group_of_a_group_already_gone_returns_at_once():
@@ -2067,7 +2390,7 @@ def test_auto_gives_up_after_two_review_sessions_when_the_gate_still_asks():
     assert code == 1
     assert len(fleet.reviewed) == 2 and len(reapplied(fleet)) == 3
     assert "the gate still asks for a review after 2 review session(s): main or the Template may have moved" in out
-    assert "stopped short in its sandbox (no GitHub sign-in, few hosts; see /tmp/review-TicketManager.log)" in out
+    assert "stopped short in its sandbox (no GitHub sign-in, no network; see /tmp/review-TicketManager.log)" in out
 
 
 def test_auto_reviews_a_second_time_when_the_first_session_left_no_record():
@@ -2325,6 +2648,13 @@ def test_a_land_sh_that_cant_start_for_ticketmanager_names_land_sh_not_reapply_s
     assert ("rollout: TicketManager#130: land.sh failed: OSError: [Errno 8] Exec format error; land it with land.sh"
             " mpaulosky/TicketManager#130; held:") in out
     assert "run it by hand" not in out and "crashed" not in err
+
+
+def test_a_bug_while_landing_ticketmanager_is_a_crash_with_its_traceback():
+    fleet = Fleet(opens={TM: 130}, land_raises=TypeError("a bug"))
+    code, out, err = run_auto(["--brings", "#82"], fleet)
+    assert code == 1
+    assert "land.sh failed" not in out and "TypeError: a bug" in err and "Traceback" in err
 
 
 def test_a_crash_on_one_of_the_rest_is_reported_and_the_round_goes_on():

@@ -10,7 +10,8 @@ repo could stop at the review again. A missing tool, such as the .NET SDK the Te
 ## Decision
 
 `rollout.sh --auto` (`github/auto_rollout.py`) drives a round to the end. Before anything runs it checks the tools the gates, `reapply.sh` and the review need (on Linux, bubblewrap
-and socat for the sandbox among them, and that bubblewrap can make one there), a `claude` that runs and is signed in, an shfmt the gate's gh check accepts, ruff 0.17 or uv for
+and socat for the sandbox among them, and that bubblewrap can make one there), a `claude` that runs and is signed in with no settings file read, as the session runs (a
+cloud's sign-in, which `claude auth status` doesn't report, isn't asked), an shfmt the gate's gh check accepts, ruff 0.17 or uv for
 the gate's Python lint, `gh`'s sign-in and the SDK the Template's `global.json` names, and takes a lock so a second `--auto` run can't work the same worktrees (a person running
 `reapply.sh` or the review by hand there meanwhile isn't kept out). Every child the round starts holds the lock too, so a session or gate still running after `rollout.sh` is killed
 keeps the next run out; each child's process group is killed when it exits, and the gate's build is told to leave no build server running, so nothing a child leaves keeps the lock
@@ -49,10 +50,14 @@ enforces (bubblewrap on Linux) on every Bash command and everything it starts:
 - **Checks after it.** A session after which the worktree's `.git` link changed (then no git runs there), the remote branch moved (or can't be read), the worktree's HEAD, branch or
   status changed, the Template changed, an Owned file the branch changes is no longer the Template's, or the ledgers or `.security` changed other than as a review-only record
   changes them, stops the round for the person. That record writes one new ledger with its entry map, holding no finding fixed or accepted, and new open entries: so a ledger or
-  entry map that was there before and changed or went, whatever branch or head it names (the session can write those too), a new ledger with a finding fixed or accepted, an entry
-  removed or changed, or a new one that isn't open, stops it. A review the person records on another branch meanwhile stops the round as well. These files are read without
-  following a symlink, waiting on a FIFO or reading past a size, since the session made them.
-- **Its processes.** It runs in a process group of its own, killed whole however it ends (it exits, or runs past three hours); an interrupt, a SIGTERM or a SIGHUP while it runs is
+  entry map that was there before and changed or went, whatever branch or head it names (the session can write those too; a record replacing an earlier one of the same diff
+  counts too), a new ledger with a finding fixed or accepted or a security one dismissed, a new entry map without a new ledger beside it or sending a finding to an entry that
+  doesn't hold its weakness by the record's fingerprint (`accept` goes by it, so the person's accept would change that entry), an entry removed or changed, a new one that isn't
+  open or has another's number, or the ledgers' lock left behind, stops it. A review the person records on another branch meanwhile stops the round as well. These files are
+  read without following a symlink, waiting on a FIFO or reading past a size, since the session made them, and as the record's JavaScript reads them; one that can't be read is
+  compared by what `lstat` says of it.
+- **Its processes.** It runs in a process group of its own, killed whole however it ends (it exits, or runs past three hours), while its exited leader is still unreaped, so
+  the group's id can't be another's; a group still there after the kill stops the round, since it could still write. An interrupt, a SIGTERM or a SIGHUP while it runs is
   held until the group is gone, then passed on, and one the caller ignores (`nohup`) stays ignored. `reapply.sh` and `land.sh` run in groups of their own too, which a SIGTERM or SIGHUP
   of the round kills. Its log is kept, `0600`, in a `0700` folder of the person's own, `~/.cache/repo-ci-baseline/logs`, since it can hold the session's report of security findings.
 
