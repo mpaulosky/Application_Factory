@@ -1091,6 +1091,19 @@ note="$(system_message "$STDOUT")"
 [[ "$(ran shellcheck)" == 0 && "$note" == *"sets the key ??0?x?k??, which"* ]] || p+=("note: $STDOUT")
 [[ "$note" != *$'\033'* && "$note" != *$'\007'* ]] || p+=("a control byte reached the note")
 check "an unknown key's control and non-ASCII bytes reach the note as ?" ${p[@]+"${p[@]}"}
+# A path holds what an agent chose too: a folder named with an escape sequence and a C1 byte reaches the note as ?, in every part of it.
+esc_dir="$repo/scripts/"$'\033]0;x\007\302\233'"d"
+mkdir -p "$esc_dir"
+printf 'echo ok\n' > "$esc_dir/ok.sh"
+printf 'external-sources=true\n' > "$esc_dir/.shellcheckrc"
+run_hook "$(edit_json "$esc_dir/ok.sh")"
+p=()
+note="$(system_message "$STDOUT")"
+[[ "$(ran shellcheck)" == 0 && "$note" == *"scripts/?]0;x??d/ok.sh was not fully linted"* && "$note" == *"its config scripts/?]0;x??d/.shellcheckrc names"* ]] \
+  || p+=("note: $STDOUT")
+[[ "$note" != *$'\033'* && "$note" != *$'\007'* && "$note" != *$'\302\233'* ]] || p+=("a control byte reached the note")
+check "a path's control bytes reach the note as ?" ${p[@]+"${p[@]}"}
+rm -r "$esc_dir"
 # Lines up to 4096 bytes are read, one over is refused; a config over 65536 bytes is refused, and only that much and one more is read.
 for case in "4096|ok" "4097|refused"; do
   n="${case%|*}"

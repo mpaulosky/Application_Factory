@@ -142,14 +142,14 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
   repo, in a UTF-8 locale and in C, the YAML, shell lint and shell format steps with stubs, and the Markdown step with a stub and, when installed, the real tool;
   `.github/hooks/tests/pre-push.test.sh` runs the whole gate with the real shfmt, and shows it reads the repo's `.editorconfig`. Then build and run each test
   project, where the stack allows it locally. Which steps it runs depends on the repo; what's standard is that
-  everything it checks, CI checks too, except the Shell format step, which only the gate runs (CI would need the PR's base to know which files changed).
+  everything it checks, CI checks too, except the Shell format step (CI would need the PR's base to know which files changed) and the local review check below.
   After the lints it runs `python3 -I .github/scripts/check_gh_repo.py --repo`, which refuses a `gh` command in the
   repo's own `scripts/`, `.github/ci/` and skills that isn't told its repository (not the Owned Baseline files;
   [gotchas.md](gotchas.md)). It reads each script with shfmt v3.14 or a later v3, which must be installed: without it the check fails
   ([ADR 0011](../docs/adr/0011-the-gh-repo-check-parses-shell-with-shfmt.md)).
   Then it checks that the branch's diff passed the local review (`scripts/review.sh check`, [pre-push-review.md](pre-push-review.md)) in a repo that
   has `.sandcastle/lib/review-ledger.mts`; `GATE_SKIP_REVIEW=1` skips that for gate runs you start yourself (the hook drops the variable, so a push never
-  skips it; it drops `GATE_SKIP_SELF_TEST` too, the switch of a gate that tests itself, and `GATE_PART`, which makes a gate run one part of itself), and it is the one check CI doesn't repeat.
+  skips it; it drops `GATE_SKIP_SELF_TEST` too, the switch of a gate that tests itself, and `GATE_PART`, which makes a gate run one part of itself), and CI doesn't repeat it, since CI has no ledger.
   Then it runs `bash scripts/sync-copilot-review.sh --check` when the repo has the script: the Copilot review instructions must match the
   code-review skill, and a repo without the skill passes ([copilot-review-sync.md](copilot-review-sync.md)).
   Between the lints and the build it runs the Seed `.github/ci/gate-checks.sh <merge-base>` when the repo has one:
@@ -242,7 +242,8 @@ bash would drop as it reads, so the length would come out short), has a line ove
 bytes or is over 65,536 in all (bounds chosen well inside what a command line carries, which no real config comes near; only 65,537 bytes of a config are read), or sets
 `extended-analysis` for a shellcheck whose `--help` lists no `--extended-analysis` (before 0.9), which would stop on it with a usage error: the note names the config and
 why (an unknown key by its first 40 bytes, each one other than a letter, digit, space or `_ . + -` shown as `?`, so no control byte an agent wrote reaches the person's
-terminal), and the gate still checks the file. The help is judged by what it prints, not its exit status: a usage without the flag gets
+terminal; every note, of every kind, shows a control character other than a tab, or a byte that isn't UTF-8, as `?`, so a folder an agent named
+can't carry one either), and the gate still checks the file. The help is judged by what it prints, not its exit status: a usage without the flag gets
 that note, and a `--help` that prints no usage gets one of its own. Each value is one argument of its flag: `source-path`
 may start with a dash, since shellcheck takes the argument after `-P` as its value, and `disable` and `enable` may not.
 

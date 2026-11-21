@@ -34,8 +34,8 @@
 # value of a form the hook doesn't pass on, holds a NUL byte, or is over the size the hook reads (see sc_config_refused and
 # sc_config_flags), or while it sets extended-analysis for a shellcheck whose --help doesn't list that flag: the person is told,
 # and the gate still checks the file. A key or shfmt release the note names is shown with only letters, digits, spaces and _ . + -,
-# so it carries no control byte. A hook under a nested .github/hooks whose .editorconfig can't be read is not linted either, and the
-# person is told.
+# and every control byte in a note (a path's included) is shown as ? (emit_message). A hook under a nested .github/hooks whose
+# .editorconfig can't be read is not linted either, and the person is told.
 #
 # Only files in the project's own checkout, or in a linked worktree that checkout lists in `git worktree list`, are linted
 # (CLAUDE_PROJECT_DIR, which Claude Code sets and which is required). A file in another clone, in a directory that merely
@@ -69,6 +69,14 @@ set -uo pipefail
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR CDPATH
 # ShellCheck reads its options from this too, and --check-sourced there would quote the lines of a file a source line names.
 unset SHELLCHECK_OPTS
+
+# emit_message <text>: the systemMessage Claude Code shows the person, as JSON on stdout. Every control character but a tab (C0, DEL, C1) and
+# every byte that isn't valid UTF-8 becomes ?: the text quotes paths and config text an agent chose, which must not reach the person's
+# terminal as escape sequences.
+emit_message() {
+  python3 -I -c 'import json, re, sys
+print(json.dumps({"systemMessage": re.sub("[\x00-\x08\x0a-\x1f\x7f-\x9f\ud800-\udfff]", "?", sys.argv[1])}))' "$1"
+}
 
 # The most a linter's output may add to the message the agent reads; a generated file can have thousands of violations.
 MAX_OUTPUT=6000
@@ -368,7 +376,7 @@ if [[ "$kind" == shell ]]; then
         case $? in
           0) gate_checks="the gate checks it only where it takes the hooks under ${hooks%/.github/hooks}, as it doesn't in most repositories" ;;
           2)
-            python3 -I -c 'import json, sys; print(json.dumps({"systemMessage": sys.argv[1]}))' \
+            emit_message \
               "lint-edited-file.sh: $rel was not linted: $styled, which says whether its hooks are shell files the gate formats, could not be read (the gate still checks the repository's own hooks before the push)."
             exit 0
             ;;
@@ -749,7 +757,7 @@ fi
 if [[ -n "$unvetted_path" ]]; then
   advice="the gate and CI still check it."
   [[ "$unvetted_why" != "isn't committed as it is" ]] || advice="commit it (or undo the change) and edit the file again; the gate and CI still check it."
-  python3 -I -c 'import json, sys; print(json.dumps({"systemMessage": sys.argv[1]}))' \
+  emit_message \
     "lint-edited-file.sh: $rel was not linted: its markdownlint config $unvetted_path $unvetted_why, and this hook runs no code it can't vouch for: $advice"
   exit 0
 fi
@@ -771,7 +779,7 @@ if ((${#skipped[@]} > 0 || ${#notes[@]} > 0)); then
     [[ -z "$note" ]] || note+="; "
     note+="$extra"
   done
-  python3 -I -c 'import json, sys; print(json.dumps({"systemMessage": sys.argv[1]}))' \
+  emit_message \
     "lint-edited-file.sh: $rel was not fully linted: $note ($gate_checks)."
 fi
 exit 0

@@ -173,7 +173,11 @@ elif [[ ${#SHFMT_FILES[@]} -gt 0 ]]; then
     echo "❌ Shell format needs shfmt v3.14 or a later v3 release (check_gh_repo.py needs it too): install it on PATH." >&2
     exit 1
   fi
-  SHFMT_FOUND="$(shfmt --version 2>&1)" || SHFMT_FOUND=""
+  # A --version that fails or prints nothing says nothing of the release: it gets its own message, not an empty release.
+  if ! SHFMT_FOUND="$(shfmt --version 2>&1)" || [[ -z "$SHFMT_FOUND" ]]; then
+    echo "❌ Shell format needs shfmt v3.14 or a later v3 release, and shfmt --version failed or printed nothing, so its release is unknown: check the shfmt install." >&2
+    exit 1
+  fi
   if ! [[ "$SHFMT_FOUND" =~ ^v3\.(1[4-9]|[2-9][0-9]|[1-9][0-9]{2,})\.[0-9]+$ ]]; then
     echo "❌ Shell format needs shfmt v3.14 or a later v3 release, not '${SHFMT_FOUND:0:80}'." >&2
     exit 1

@@ -227,16 +227,20 @@ for version in v3.14.0 v3.14.1 v3.15.2 v3.19.0 v3.19.9 v3.20.0 v3.99.9 v3.100.0;
   SHFMT_STUB_VERSION="$version" format_run
   check "shell format: shfmt $version runs" "[[ $fst == 0 ]] && grep -qF -- '-dash.sh' '$work/md-args'"
 done
-for version in v3.13.9 v3.1.0 v3.9.0 v3.10.0 v3.14 v3.14. v2.6.4 v4.0.0 3.14.1 xv3.14.1 "" "v3.14.1 extra" "v3.14.1
+for version in v3.13.9 v3.1.0 v3.9.0 v3.10.0 v3.14 v3.14. v2.6.4 v4.0.0 3.14.1 xv3.14.1 "v3.14.1 extra" "v3.14.1
 v3.14.1"; do
   SHFMT_STUB_VERSION="$version" format_run
   check "shell format: shfmt '${version//$'\n'/\\n}' is refused, by name, before it runs" \
     "[[ $fst != 0 ]] && [[ \"\$ferr\" == *'v3.14 or a later v3 release, not'* ]] && ! grep -qF -- '-dash.sh' '$work/md-args'"
 done
-# A --version that fails after printing a release the gate takes is refused too: its answer can't be trusted.
+# A --version that fails, even after printing a release the gate takes, or that prints nothing, is refused with its own message: its
+# answer can't be trusted, and it names no release.
 SHFMT_STUB_VERSION=v3.14.1 SHFMT_STUB_VERSION_EXIT=1 format_run
-check "shell format: a shfmt whose --version fails is refused, before it runs" \
-  "[[ $fst != 0 ]] && [[ \"\$ferr\" == *\"v3.14 or a later v3 release, not ''.\"* ]] && ! grep -qF -- '-dash.sh' '$work/md-args'"
+check "shell format: a shfmt whose --version fails is refused, before it runs, as failed" \
+  "[[ $fst != 0 ]] && [[ \"\$ferr\" == *'shfmt --version failed or printed nothing, so its release is unknown'* && \"\$ferr\" != *\"not ''\"* ]] && ! grep -qF -- '-dash.sh' '$work/md-args'"
+SHFMT_STUB_VERSION="" format_run
+check "shell format: a shfmt whose --version prints nothing is refused, before it runs, as failed" \
+  "[[ $fst != 0 ]] && [[ \"\$ferr\" == *'shfmt --version failed or printed nothing, so its release is unknown'* ]] && ! grep -qF -- '-dash.sh' '$work/md-args'"
 # The answer is cut at 80 characters in the message: 79, 80 and 81 characters of it.
 for n in 79 80 81; do
   long="v3.$(printf '%0*d' $((n - 3)) 0)"
