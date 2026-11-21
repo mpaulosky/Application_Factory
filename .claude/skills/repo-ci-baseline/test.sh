@@ -319,6 +319,10 @@ PY
     file="${pair%%|*}" dir="${pair#*|}"
     awk -v dir="$dir" '/package-ecosystem: "pip"/ { pip = 1; next } /package-ecosystem:/ { pip = 0 } pip && $0 ~ "directory: \"" dir "\"" { found = 1 } END { exit !found }' "$file" \
       || fail "$file must have a pip entry for $dir, so Dependabot bumps requirements-tests.txt"
+    # But never ruff: its pin moves by hand with gate.sh's RUFF_VERSION and release rule (ADR 0011, Update: Python).
+    awk '/package-ecosystem: "pip"/ { pip = 1; next } /package-ecosystem:/ { pip = 0 } pip && /^ *ignore:/ { ign = 1; next } pip && /^    [a-z]/ { ign = 0 }
+      pip && ign && /^ *- dependency-name: "ruff" *$/ { found = 1 } END { exit !found }' "$file" \
+      || fail "$file's pip entry must ignore ruff, whose pin moves only with gate.sh's RUFF_VERSION and release rule"
   done
   python3 - "$owned/.github/scripts/requirements-tests.txt" << 'PY_REQ' || fail "requirements-tests.txt must pin each package exactly, with at least one sha256 hash, pytest and pyyaml among them"
 import re, sys

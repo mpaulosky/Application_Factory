@@ -218,24 +218,33 @@ fi
 # could write, agrees with the gate. Like the shell lint it lints every tracked Python file without an origin/main.
 step "Python lint (${#PY_FILES[@]} changed file(s))"
 if [[ ${#PY_FILES[@]} -gt 0 ]]; then
+  # An installed ruff 0.17 is used; another release, or one whose release is unknown, is passed over for the pinned one through uvx, so
+  # a newer ruff from the system's packages doesn't stop the push. uvx runs with --no-config: it reads no uv.toml or pyproject.toml from
+  # the checkout, which could send the fetch to another index.
+  RUFF=() RUFF_SKIPPED=""
   if command -v ruff &> /dev/null; then
     RUFF_VERSION_RC=0
     RUFF_FOUND="$(ruff --version 2>&1)" || RUFF_VERSION_RC=$?
     RUFF_SHOWN="$(printable "$RUFF_FOUND")"
     if ((RUFF_VERSION_RC != 0)) || [[ -z "$RUFF_FOUND" ]]; then
-      echo "❌ Python lint needs ruff 0.17, and ruff --version exited $RUFF_VERSION_RC and printed '$RUFF_SHOWN', so its release is unknown: check the ruff install." >&2
+      RUFF_SKIPPED="ruff --version exited $RUFF_VERSION_RC and printed '$RUFF_SHOWN', so its release is unknown: check the ruff install"
+    elif ! [[ "$RUFF_FOUND" =~ $RUFF_RELEASE ]]; then
+      RUFF_SKIPPED="the installed ruff is '$RUFF_SHOWN', not a 0.17 release: put ruff 0.17 first on PATH (uv tool install ruff@${RUFF_VERSION})"
+    else
+      RUFF=(ruff)
+    fi
+  fi
+  if ((${#RUFF[@]} == 0)); then
+    if have_uvx; then
+      [[ -z "$RUFF_SKIPPED" ]] || echo "  ${RUFF_SKIPPED}; running uvx ruff@${RUFF_VERSION} instead."
+      RUFF=(uvx --no-config "ruff@${RUFF_VERSION}")
+    elif [[ -n "$RUFF_SKIPPED" ]]; then
+      echo "❌ Python lint needs ruff 0.17: ${RUFF_SKIPPED}, or install uv." >&2
+      exit 1
+    else
+      echo "❌ Python lint needs ruff 0.17: uv tool install ruff@${RUFF_VERSION}, or install uv." >&2
       exit 1
     fi
-    if ! [[ "$RUFF_FOUND" =~ $RUFF_RELEASE ]]; then
-      echo "❌ Python lint needs ruff 0.17, not '$RUFF_SHOWN': uv tool install ruff@${RUFF_VERSION}." >&2
-      exit 1
-    fi
-    RUFF=(ruff)
-  elif have_uvx; then
-    RUFF=(uvx "ruff@${RUFF_VERSION}")
-  else
-    echo "❌ Python lint needs ruff 0.17: uv tool install ruff@${RUFF_VERSION}, or install uv." >&2
-    exit 1
   fi
   # ruff exits 1 for a problem it found (it lists them) and 2 for its own failure (a usage error, a file it can't read).
   RUFF_RC=0

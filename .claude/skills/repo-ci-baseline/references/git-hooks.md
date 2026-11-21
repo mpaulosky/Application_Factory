@@ -140,9 +140,10 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
   any other status stops the gate as a failed shfmt, with no `shfmt -w` advice. Without an `origin/main` it is skipped with a note, since the
   changed files are then every tracked file. The **Python lint** step runs ruff's bug-finding rules on the changed `*.py` files, with the flags the edit-time lint
   passes (`check --isolated --no-cache --select F,B --target-version py312 --`): `--isolated` reads no `pyproject.toml` or `ruff.toml`, so every repo checks the same rules
-  ([the Factory's ADR 0011](../../../../docs/adr/0011-markdown-and-yaml-are-linted-as-they-are-written.md), Update: Python). An installed ruff must be a 0.17 release, since a
-  later one adds rules (another, or a `--version` that fails, stops the gate, naming what it printed with every byte but printable ASCII as `?`); without one it runs
-  `uvx ruff@0.17.6`, and without uv it stops, naming both. ruff exiting 1 is a finding, and any other status stops the gate as a failed ruff. Unlike shell format it runs
+  ([the Factory's ADR 0011](../../../../docs/adr/0011-markdown-and-yaml-are-linted-as-they-are-written.md), Update: Python). An installed ruff 0.17 is used, since a
+  later one adds rules. Without one, or with another release or a `--version` that fails, it runs `uvx --no-config ruff@0.17.6` (`--no-config`: no uv config from the
+  checkout can send the fetch elsewhere), first saying why it passed the installed one over, naming what it printed with every byte but printable ASCII as `?`; without uv
+  it stops, saying the same and naming both. ruff exiting 1 is a finding, and any other status stops the gate as a failed ruff. Unlike shell format it runs
   without an `origin/main` too, on every tracked Python file, as the shell lint does. `tests/owned-gate-files.test.sh` (the Factory's) runs those lines in a throwaway
   repo, in a UTF-8 locale and in C, the YAML, shell lint, shell format and Python lint steps with stubs, and the Markdown step with a stub and, when installed, the real tool;
   `.github/hooks/tests/pre-push.test.sh` runs the whole gate with the real shfmt, and shows it reads the repo's `.editorconfig`. Then build and run each test

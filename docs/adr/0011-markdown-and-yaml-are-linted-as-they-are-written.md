@@ -109,9 +109,11 @@ linted at all three places, with the same command: `ruff check --isolated --no-c
   code from the repository. The hook also clears every `RUFF_` variable, since `RUFF_OUTPUT_FILE` would send the report to a file and the agent would see a clean edit.
   Style rules and `ruff format` are not chosen: like shfmt before ADR 0015, they would be a new standard, not a check on bugs.
 - **One release line.** A later ruff adds rules to F and B, so the same file could pass on one machine and fail on another. The hook and both gates take only a 0.17 release
-  (`RUFF_RELEASE`), and the Template gate falls back to `uvx ruff@0.17.6` (`RUFF_VERSION`) when none is installed. The Template's hashed `requirements-tests.txt` pins the
-  same release for CI, and the Seed Sandcastle `Dockerfile` installs it. `test.sh` fails when the hook's and the gate's rule or flags differ, when CI's flags differ, when
-  the pin isn't the gate's release, or when the messages name another line, so a Dependabot bump to 0.18 fails until the rule moves with it on purpose.
+  (`RUFF_RELEASE`). The Template gate runs `uvx --no-config ruff@0.17.6` (`RUFF_VERSION`) when none is installed, or when the installed one is another release, saying so,
+  so a newer ruff from a distro's packages doesn't stop the push; `--no-config` keeps the checkout's uv config from changing where it is fetched from. The Template's hashed
+  `requirements-tests.txt` pins the same release for CI, and the Seed Sandcastle `Dockerfile` installs it. `test.sh` fails when the hook's and the gate's rule or flags differ,
+  when CI's flags differ, when the pin isn't the gate's release, or when the messages name another line. So Dependabot's pip entries, the Factory's and the Seed's, ignore
+  ruff (`test.sh` checks it): a bump of the pin alone would fail, and hold the group's other bumps with it. ruff moves by hand, with the rule.
 - **Where each runs.** The hook lints each `*.py` Edit, Write or MultiEdit writes; another ruff release, or none, is a `systemMessage`, as for shfmt. The Template gate's
   Python lint step lints the Python files a branch changes, so an Application's own Python takes the rules as it is touched. CI's `python-tests` job lints the Template's
   Python folders (`.github/scripts` and the hardening-review scripts) before pytest, and so any Python of an Application's own it keeps there; it doesn't lint the rest of an

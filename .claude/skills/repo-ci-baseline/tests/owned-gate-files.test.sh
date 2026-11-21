@@ -343,10 +343,14 @@ for tool in bash env; do ln -s "$(command -v "$tool")" "$noshfmt/$tool"; done
 format_run "$noshfmt"
 check "shell format: without shfmt the gate stops and names it" "[[ $fst != 0 ]] && [[ \"\$ferr\" == *'needs shfmt v3.14 or a later v3 release (check_gh_repo.py needs it too): install it on PATH'* ]]"
 
-# The Python lint step alone, on one name, with the ruff and uvx stubs: an installed ruff must be a 0.17 release, whose answer is shown
-# as printable() shows it; without one the pinned release runs through uvx; without either the gate stops, naming ruff.
-# py_run [<PATH>]: the step on -dash.py (on no file when PY_NONE is set) with that PATH (the stubs first when unset); status in pst, stderr in
-# perr, and each argument the stubs got in PARGS ("RF <arg>" or "UV <arg>").
+# The Python lint step alone, on one name, with the ruff and uvx stubs: an installed ruff 0.17 is used; another release, or one whose
+# --version fails, is passed over for the pinned release through uvx, saying why (its answer shown as printable() shows it); without
+# uv, either stops the gate. The noruff folder holds bash and env alone, so no real ruff or uvx is found.
+noruff="$work/noruff"
+mkdir -p "$noruff"
+for tool in bash env; do ln -s "$(command -v "$tool")" "$noruff/$tool"; done
+# py_run [<PATH>]: the step on -dash.py (on no file when PY_NONE is set) with that PATH (the ruff stub and no uvx when unset); status in pst,
+# stderr in perr, stdout in $work/py-out, and each argument the stubs got in PARGS ("RF <arg>" or "UV <arg>").
 py_run() {
   : > "$work/steps"
   # shellcheck disable=SC2034 # read inside the checks' eval strings
@@ -360,12 +364,12 @@ py_run() {
     export MD_ARGS_FILE
     : > "$MD_ARGS_FILE"
     # shellcheck disable=SC2030,SC2031 # the step's own PATH, in this subshell only
-    PATH="${1:-$stubs:$PATH}"
+    PATH="${1:-$stubs:$noruff}"
     # shellcheck disable=SC1090 # the gate's own helpers and ruff settings
     source "$helpers"
     # shellcheck disable=SC1090 # the gate's own Python lint step
     source "$py_step"
-  ) 2>&1 > /dev/null)"
+  ) 2>&1 > "$work/py-out")"
   pst=$?
   mapfile -d '' -t PARGS < "$work/md-args"
   PARGS=("${PARGS[@]/#RF_ARG$'\t'/RF }")
@@ -381,20 +385,27 @@ for version in "ruff 0.17.0" "ruff 0.17.6" "ruff 0.17.10"; do
 done
 for version in "ruff 0.16.9" "ruff 0.18.0" "ruff 1.17.0" "ruff 0.17" "0.17.6" "ruff 0.17.6 extra" "xruff 0.17.6" "ruff 0.170.1" "ruff 0.17.6
 ruff 0.17.6"; do
+  label="${version//$'\n'/\\n}"
   STUB_RUFF_VERSION="$version" py_run
-  check "python lint: '${version//$'\n'/\\n}' is refused, by name, before it runs" \
-    "[[ $pst != 0 && \${#PARGS[@]} == 0 ]] && [[ \"\$perr\" == *'needs ruff 0.17, not'*'uv tool install ruff@0.17.6'* ]]"
+  check "python lint: without uv, '$label' is refused, by name, before it runs" \
+    "[[ $pst != 0 && \${#PARGS[@]} == 0 ]] && [[ \"\$perr\" == *\"needs ruff 0.17: the installed ruff is '\"*\"', not a 0.17 release: put ruff 0.17 first on PATH (uv tool install ruff@0.17.6), or install uv\"* ]]"
+  STUB_RUFF_VERSION="$version" py_run "$stubs:$noruff:$uvx_stubs"
+  check "python lint: with uv, '$label' is passed over for uvx ruff@0.17.6, saying so" \
+    "[[ $pst == 0 && \"\${PARGS[0]:-} \${PARGS[1]:-}\" == 'UV --no-config UV ruff@0.17.6' && \"\${PARGS[*]}\" != *'RF '* ]] && grep -qF \"not a 0.17 release: put ruff 0.17 first on PATH (uv tool install ruff@0.17.6); running uvx ruff@0.17.6 instead.\" '$work/py-out'"
 done
 STUB_RUFF_VERSION_EXIT=1 py_run
-check "python lint: a ruff whose --version fails is refused, before it runs, as failed" \
-  "[[ $pst != 0 && \${#PARGS[@]} == 0 ]] && [[ \"\$perr\" == *\"ruff --version exited 1 and printed 'ruff 0.17.6', so its release is unknown\"* && \"\$perr\" != *\"not '\"* ]]"
+check "python lint: without uv, a ruff whose --version fails is refused, before it runs, as failed" \
+  "[[ $pst != 0 && \${#PARGS[@]} == 0 ]] && [[ \"\$perr\" == *\"ruff --version exited 1 and printed 'ruff 0.17.6', so its release is unknown: check the ruff install, or install uv\"* && \"\$perr\" != *'not a 0.17'* ]]"
+STUB_RUFF_VERSION_EXIT=1 py_run "$stubs:$noruff:$uvx_stubs"
+check "python lint: with uv, a ruff whose --version fails is passed over for uvx, saying so" \
+  "[[ $pst == 0 && \"\${PARGS[1]:-}\" == 'UV ruff@0.17.6' ]] && grep -qF \"so its release is unknown: check the ruff install; running uvx ruff@0.17.6 instead.\" '$work/py-out'"
 STUB_RUFF_VERSION="" py_run
-check "python lint: a ruff whose --version prints nothing is refused, before it runs, as failed" \
+check "python lint: without uv, a ruff whose --version prints nothing is refused, before it runs, as failed" \
   "[[ $pst != 0 && \${#PARGS[@]} == 0 ]] && [[ \"\$perr\" == *\"ruff --version exited 0 and printed '', so its release is unknown\"* ]]"
 for loc in ${utf8:+"$utf8"} C; do
   LC_ALL="$loc" STUB_RUFF_VERSION=$'ruff 0.1\033]0;x\007\303\251' py_run
   check "[$loc] python lint: a release's control bytes and bytes outside ASCII are shown as one ? each" \
-    "[[ $pst != 0 ]] && [[ \"\$perr\" == *\"not 'ruff 0.1?]0;x???'\"* && \"\$perr\" != *\$'\\033'* ]]"
+    "[[ $pst != 0 ]] && [[ \"\$perr\" == *\"ruff is 'ruff 0.1?]0;x???', not\"* && \"\$perr\" != *\$'\\033'* ]]"
 done
 STUB_RUFF_EXIT=1 py_run
 check "python lint: a problem ruff finds stops the gate, saying to fix it or mark a false alarm" \
@@ -404,13 +415,10 @@ for code in 2 3 126; do
   check "python lint: a ruff that exits $code stops the gate as a failed ruff, not a problem in the files" \
     "[[ $pst != 0 ]] && [[ \"\$perr\" == *'ruff failed (exit $code) without checking the files'* && \"\$perr\" != *'fix each problem'* ]]"
 done
-# Without ruff, the pinned release through uvx; without either, the gate stops. The tools folder holds bash and env alone, then uvx.
-noruff="$work/noruff"
-mkdir -p "$noruff"
-for tool in bash env; do ln -s "$(command -v "$tool")" "$noruff/$tool"; done
+# Without ruff, the pinned release through uvx; without either, the gate stops.
 py_run "$noruff:$uvx_stubs"
 check "python lint: without ruff, uvx runs ruff@0.17.6 with the gate's flags" \
-  "[[ $pst == 0 && \"\${PARGS[*]}\" == 'UV ruff@0.17.6 UV check UV --isolated UV --no-cache UV --select UV F,B UV --target-version UV py312 UV -- UV -dash.py' ]]"
+  "[[ $pst == 0 && \"\${PARGS[*]}\" == 'UV --no-config UV ruff@0.17.6 UV check UV --isolated UV --no-cache UV --select UV F,B UV --target-version UV py312 UV -- UV -dash.py' ]]"
 STUB_RUFF_EXIT=1 py_run "$noruff:$uvx_stubs"
 check "python lint: a problem ruff finds through uvx stops the gate too" "[[ $pst != 0 ]] && [[ \"\$perr\" == *'ruff: fix each problem shown above'* ]]"
 # shellcheck disable=SC2031 # this shell's own PATH, which only py_run's subshell changes
