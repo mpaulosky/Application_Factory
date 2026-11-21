@@ -69,7 +69,8 @@ enforces (bubblewrap on Linux) on every Bash command and everything it starts:
   changed, an Owned file the branch changes is no longer the Template's, any file of the ledgers or `.security` was added, removed or changed (the session writes
   neither, so a review the person records on another branch meanwhile stops it as well), any path of the worktree changed in content, mode or link target (a
   snapshot of every file's bytes taken before the session, so an ignored one git status doesn't show, such as `node_modules/.bin/tsx`, which the record runs,
-  counts; times and link counts are left out, so another project's pnpm install changes nothing; read last, and again just before `record`), or it staged a
+  counts; times and link counts are left out, so another project's pnpm install changes nothing, except for a file the check can't read, compared by its
+  mode, size, inode and mtime; read last, and again just before `record`), or it staged a
   finding other than open or dismissed, or a security one dismissed, stops the round for the person, and nothing is recorded. A dismissed
   finding counts as a security one when the ledger could read it as one, read wider: graded Warning, not marked `security: false`, or a lens that names security
   once all but its letters are dropped. Files are read without following a symlink, waiting on a FIFO or reading past a size; one that can't be read is compared by

@@ -652,15 +652,68 @@ def test_a_signal_during_the_checks_is_held_until_the_findings_are_kept_and_the_
         auto.write_staged(keep, "[]", head)
         return auto.RECORD_FAILED, []
 
-    guard = lambda w: dataclasses.replace(fake_guard(tmp_path), worktree_state=(HEAD, "branchname", ""))  # noqa: E731
     with pytest.raises(KeyboardInterrupt):
-        review_once(tmp_path, monkeypatch, check=check, record=record, guard=guard)
+        review_once(tmp_path, monkeypatch, check=check, record=record, guard=head_guard(tmp_path))
     assert seen["got"] == [signal.SIGINT], "the record is still run, told of the signal, so it keeps the findings"
     log = str(next((tmp_path / "logs").glob("*.log")))
     keep = auto.staged_copy(log)
     worktree = str(tmp_path / "TicketManager-worktrees" / "chore-reapply-baseline")
     assert (f"rollout.sh: what the session staged is kept in {keep} (see {log}); record it with:"
             f" {auto.record_command(worktree, keep, HEAD)}\n") in capsys.readouterr().err
+
+
+def head_guard(tmp_path):
+    def guard(worktree):
+        return dataclasses.replace(fake_guard(tmp_path), worktree_state=(HEAD, "branchname", ""))
+    return guard
+
+
+def interrupt():
+    os.kill(os.getpid(), signal.SIGINT)
+    time.sleep(0.2)
+
+
+def test_a_signal_between_the_session_and_the_checks_is_held_too(tmp_path, monkeypatch, capsys):
+    real = auto.staged_copy
+
+    def staged_copy(log):
+        interrupt()  # the first thing after the session's group is gone
+        return real(log)
+
+    def record(worktree, run, out, head, keep, got, unseen):
+        auto.write_staged(keep, "[]", head)
+        return auto.RECORD_FAILED, []
+
+    monkeypatch.setattr(auto, "staged_copy", staged_copy)
+    with pytest.raises(KeyboardInterrupt):
+        review_once(tmp_path, monkeypatch, record=record, guard=head_guard(tmp_path))
+    assert "what the session staged is kept in" in capsys.readouterr().err, "held, so the findings were kept"
+
+
+def test_a_signal_after_a_record_that_left_its_group_says_to_check_the_report_first(tmp_path, monkeypatch, capsys):
+    def record(worktree, run, out, head, keep, got, unseen):
+        auto.write_staged(keep, "[]", head)
+        interrupt()
+        raise auto.GroupLeft("what review.sh record left ...")
+
+    with pytest.raises(KeyboardInterrupt):
+        review_once(tmp_path, monkeypatch, record=record, guard=head_guard(tmp_path))
+    err = capsys.readouterr().err
+    worktree = str(tmp_path / "TicketManager-worktrees" / "chore-reapply-baseline")
+    assert "rollout.sh: what review.sh record left ...\n" in err
+    assert (f"whether the review was recorded can't be told: cd {worktree} && scripts/review.sh report shows it;"
+            " if it wasn't, record it with: ") in err
+
+
+def test_a_signal_with_another_reviews_findings_kept_prints_no_command(tmp_path, monkeypatch, capsys):
+    def record(worktree, run, out, head, keep, got, unseen):
+        auto.write_staged(keep, "[]", "f" * 40)
+        interrupt()
+        return auto.RECORD_FAILED, []
+
+    with pytest.raises(KeyboardInterrupt):
+        review_once(tmp_path, monkeypatch, record=record, guard=head_guard(tmp_path))
+    assert "is kept in" not in capsys.readouterr().err
 
 
 def test_a_signal_with_nothing_kept_prints_no_command(tmp_path, monkeypatch, capsys):
@@ -1835,9 +1888,20 @@ def test_a_file_that_cant_be_read_swapped_for_one_of_its_size_is_a_change(tmp_pa
     try:
         before = auto.tree_state(str(root))
         assert before["tool"][0] == "unread"
+        old = os.stat(root / "tool")
         (root / "new").write_text("two")
         (root / "new").chmod(0o111)
+        os.utime(root / "new", ns=(old.st_atime_ns, old.st_mtime_ns))
         os.replace(root / "new", root / "tool")
+        assert auto.tree_state(str(root))["tool"][4] == old.st_mtime_ns, "only the inode tells this swap"
+        assert auto.tree_changes(before, auto.tree_state(str(root))) == ["tool"]
+        before = auto.tree_state(str(root))
+        inode = os.stat(root / "tool").st_ino
+        (root / "tool").chmod(0o600)
+        (root / "tool").write_text("six")
+        (root / "tool").chmod(0o111)
+        os.utime(root / "tool", ns=(old.st_atime_ns, old.st_mtime_ns + 10**9))
+        assert os.stat(root / "tool").st_ino == inode, "only the mtime tells this rewrite"
         assert auto.tree_changes(before, auto.tree_state(str(root))) == ["tool"]
     finally:
         for name in ("tool", "new"):
@@ -2259,7 +2323,8 @@ def test_a_group_prepare_left_is_a_failed_record_that_keeps_the_findings(tmp_pat
         raise auto.GroupLeft("what review.sh prepare left in its process group was still there")
 
     result, out = recorded(tmp_path, [OPEN], bounded)
-    assert result == (auto.RECORD_FAILED, []), "prepare writes only the round's folder: nothing was recorded"
+    assert result == (auto.RECORD_FAILED, ["what review.sh prepare left in its process group was still there"]), \
+        "prepare writes only the round's folder: nothing was recorded, and the stop names the group that holds the lock"
     failed_and_kept(tmp_path, out, "what review.sh prepare left in its process group was still there")
 
 
@@ -2416,7 +2481,18 @@ def test_the_kept_findings_record_with_the_command_given_only_at_the_head_review
                              text=True)
     assert failing.returncode != 0 and failing.stderr.endswith("scripts/review.sh prepare failed: nothing recorded\n")
     monkeypatch.delenv("PREPARE_EXIT")
-    for shell in [name for name in ("bash", "zsh", "fish") if shutil.which(name)]:
+    monkeypatch.setenv("HEAD", f"{HEAD} extra")
+    words = subprocess.run(["sh", "-c", auto.record_command(str(worktree), str(keep), HEAD)], capture_output=True,
+                           text=True)
+    assert words.returncode != 0 and not (calls / "input.json").exists()
+    assert words.stderr.endswith("scripts/review.sh prepare printed 3 word(s), not its key and HEAD: nothing recorded\n")
+    monkeypatch.setenv("HEAD", HEAD)
+    gone = subprocess.run(["sh", "-c", auto.record_command(str(tmp_path / "gone"), str(keep), HEAD)], cwd=worktree,
+                          capture_output=True, text=True)
+    assert gone.returncode != 0 and not (calls / "input.json").exists(), "a missing worktree runs nothing where it was pasted"
+    shells = [name for name in ("bash", "zsh", "fish") if shutil.which(name)]
+    assert "bash" in shells
+    for shell in shells:
         (calls / "input.json").unlink(missing_ok=True)
         subprocess.run([shell, "-c", auto.record_command(str(worktree), str(keep), HEAD)], check=True, capture_output=True)
         assert json.loads((calls / "input.json").read_text()) == {"reviewedKey": "k" * 64, "reviewedHead": HEAD,
@@ -2974,6 +3050,13 @@ def drive_once(tmp_path, code, broke=(), head=HEAD):
     outcome = auto.drive(TM, "/r/TicketManager", "#82", lambda brings, path: auto.REVIEW_NEEDED,
                          lambda repo, worktree: (code, str(log), list(broke)), said.append)
     return outcome, auto.staged_copy(str(log))
+
+
+def test_a_failed_record_whose_prepare_left_a_group_names_it_on_the_stop(tmp_path):
+    outcome, _ = drive_once(tmp_path, auto.RECORD_FAILED, ["what review.sh prepare left ...: see it with pgrep -l -g 7"])
+    assert outcome.status == "failed", "a failed record, not a broken rule"
+    assert ("staged findings the round couldn't record (scripts/review.sh prepare or record failed, or the round did;"
+            " the log says why): what review.sh prepare left ...: see it with pgrep -l -g 7 (see") in outcome.detail
 
 
 def test_a_stop_with_findings_kept_prints_the_command_that_records_them(tmp_path):
