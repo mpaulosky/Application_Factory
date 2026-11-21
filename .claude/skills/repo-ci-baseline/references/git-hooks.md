@@ -229,14 +229,12 @@ only `.editorconfig`.
 
 shellcheck reads its `.shellcheckrc`, and `external-sources` there lets it open the files a `source` line names; `--check-sourced` would then quote their lines in the report the
 agent reads. So the hook clears `SHELLCHECK_OPTS`, and shellcheck never looks for a config itself: the hook reads the `.shellcheckrc` or `shellcheckrc` on the file's path (its
-folder and each one above it, up to the repository root, in the order shellcheck looks) and hands shellcheck a private copy of the nearest one (`--rcfile`, made with `mktemp`
-in `TMPDIR` resolved, so no symlink is left on its path, and removed with `rm` however the hook ends), or `--norc` when there is none. A config above the repository root, or
-the person's own in their home, is not read at edit time; the gate reads it. The config is read without a here-string, which bash may write to a temp file of its own.
-shellcheck is not run while a config on the path is a symlink, not a regular file, unreadable, names `external-sources` or `check-sourced` in any case, or holds a line other
-than a blank, a comment or one of the keys `disable`, `enable`, `source-path`, `shell` and `extended-analysis` (an allow-list, so a key a later shellcheck adds can't slip
-past), or when the private copy can't be made (`mktemp` missing, failing or printing a path outside its folder, a `TMPDIR` that is relative, unresolvable or inside the
-project's checkouts, where the copy could be swapped, or a failed write): the note names the config and why, and the gate still checks the file. A missing `mktemp` costs only
-that shellcheck run, and a missing `rm` leaves the private copy in `TMPDIR`.
+folder and each one above it, up to the repository root, in the order shellcheck looks) and hands shellcheck the nearest one's text through a pipe (`--rcfile <(...)`), or
+`--norc` when there is none. A pipe has no name, so no other process can swap it between the check and shellcheck's read, and no file is made or left. A config above the
+repository root, or the person's own in their home, is not read at edit time; the gate reads it. The config is read without a here-string, which bash may write to a temp file
+of its own. shellcheck is not run while a config on the path is a symlink, not a regular file, unreadable, names `external-sources` or `check-sourced` in any case, or holds a
+line other than a blank, a comment or one of the keys `disable`, `enable`, `source-path`, `shell` and `extended-analysis` (an allow-list, so a key a later shellcheck adds
+can't slip past): the note names the config and why, and the gate still checks the file.
 
 A hook under a nested `.github/hooks` whose `.editorconfig` can't be read is not linted, with a note; a line of it longer than 4,096 characters is no section header. A violation
 wins over a note: the hook exits 2 with the report alone. `test.sh` checks that the hook's hook-name rule is the gate's and the Lint Actions shellcheck job's, and that its shfmt

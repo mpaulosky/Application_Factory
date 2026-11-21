@@ -162,14 +162,13 @@ fi
 # style as they are touched, with no one-off reformat. shfmt gets no style flags, so it reads that file. It must be v3.14 or a later
 # v3 release, the one check_gh_repo.py below needs too: another release can format the same file differently.
 # Without an origin/main the changed files are every tracked file, and a repo's own scripts would all have to be reformatted at once:
-# the step is skipped, as there is no branch to tell its changes by.
+# the step is skipped, as there is no branch to tell its changes by, and its heading gives no count.
+SHFMT_COUNT=""
+[[ -z "$BASE" ]] || SHFMT_COUNT=" (${#SHFMT_FILES[@]} changed file(s))"
+step "Shell format${SHFMT_COUNT}"
 if [[ -z "$BASE" ]]; then
-  step "Shell format"
   echo -e "${YELLOW}⚠️  No origin/main, so no changed files to tell apart: skipping the shell format check (git fetch origin main to run it).${RESET}"
-else
-  step "Shell format (${#SHFMT_FILES[@]} changed file(s))"
-fi
-if [[ -n "$BASE" && ${#SHFMT_FILES[@]} -gt 0 ]]; then
+elif [[ ${#SHFMT_FILES[@]} -gt 0 ]]; then
   if ! command -v shfmt &> /dev/null; then
     echo "❌ Shell format needs shfmt v3.14 or a later v3 release (check_gh_repo.py needs it too): install it on PATH." >&2
     exit 1

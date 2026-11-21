@@ -69,7 +69,7 @@ mkdir -p "$STUBS"
 # make_stub <dir> <name>: a linter that logs "<name> <cwd> <args>"; exit 4 when its last argument is not a file, 3 when the file
 # holds CRASH, 1 when it holds BAD (BIG<n>: after printing n characters), else 0. Named in $STUB_PASS, it logs and passes.
 # shfmt --version prints $SHFMT_STUB_VERSION and logs nothing. A stub run with SHELLCHECK_OPTS set logs it on a line of its own, and one
-# given --rcfile <file> logs "RCFILE <the file's lines joined with |>", read while it runs (the hook removes the file after).
+# given --rcfile <file> logs "RCFILE <the file's lines joined with |>" and "RCFILE_KIND pipe" or "RCFILE_KIND file", read while it runs.
 make_stub() {
   cat > "$1/$2" << 'EOF'
 #!/usr/bin/env bash
@@ -80,7 +80,10 @@ if [[ "$name" == shfmt && "${1:-}" == --version ]]; then
 fi
 echo "$name $(pwd -P) $*" >> "$STUB_LOG"
 [[ -z "${SHELLCHECK_OPTS+x}" ]] || echo "SHELLCHECK_OPTS=$SHELLCHECK_OPTS" >> "$STUB_LOG"
-if [[ "${1:-}" == --rcfile ]]; then echo "RCFILE $(tr '\n' '|' < "$2")" >> "$STUB_LOG"; fi
+if [[ "${1:-}" == --rcfile ]]; then
+  if [[ -p "$2" ]]; then echo "RCFILE_KIND pipe" >> "$STUB_LOG"; else echo "RCFILE_KIND file" >> "$STUB_LOG"; fi
+  echo "RCFILE $(tr '\n' '|' < "$2")" >> "$STUB_LOG"
+fi
 [[ " ${STUB_PASS:-} " != *" $name "* ]] || exit 0
 file="${!#}"
 [[ -f "$file" ]] || { echo "$name: $file: no such file" >&2; exit 4; }
@@ -913,64 +916,43 @@ else
 fi
 chmod 644 "$repo/scripts/.shellcheckrc"
 rm "$repo/scripts/.shellcheckrc"
-# ShellCheck is handed a private copy of the nearest config (--rcfile), never left to look for one: the copy holds that config's text, the
-# nearer one wins (scripts/ before the root, .shellcheckrc before shellcheckrc), and the copy is gone when the hook ends.
-mkdir -p "$WORK/rctmp"
+# ShellCheck is handed the nearest config's text through a pipe (--rcfile <(...)), never left to look for one: the pipe holds that config's
+# text, and the nearer one wins (scripts/ before the root, .shellcheckrc before shellcheckrc). A pipe has no name for another process to
+# swap, so no file is made anywhere for it.
 printf 'disable=SC2000\n' > "$repo/.shellcheckrc"
 printf 'disable=SC1000\nsource-path=SCRIPTDIR\n' > "$repo/scripts/.shellcheckrc"
 printf 'disable=SC3000\n' > "$repo/scripts/shellcheckrc"
+mkdir -p "$WORK/rctmp"
 RUN_ENV=(TMPDIR="$WORK/rctmp")
 run_hook "$(edit_json "$repo/scripts/ok.sh")"
 RUN_ENV=(RUN_ENV_UNUSED=1)
 p=()
 [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
-grep -qE "^shellcheck $repo --rcfile $WORK/rctmp/[^ ]+ -- \./scripts/ok\.sh\$" "$LOG" || p+=("shellcheck was not handed a copy in TMPDIR: $(cat "$LOG")")
-log_line "RCFILE disable=SC1000|source-path=SCRIPTDIR|" || p+=("the copy doesn't hold the nearest config: $(cat "$LOG")")
-[[ -z "$(ls -A "$WORK/rctmp")" ]] || p+=("the copy was left behind: $(ls -A "$WORK/rctmp")")
-check "shellcheck gets a private copy of the nearest config (--rcfile), removed after" ${p[@]+"${p[@]}"}
+grep -qE "^shellcheck $repo --rcfile [^ ]+ -- \./scripts/ok\.sh\$" "$LOG" || p+=("shellcheck was not handed --rcfile: $(cat "$LOG")")
+log_line "RCFILE_KIND pipe" || p+=("--rcfile named a file, not a pipe: $(cat "$LOG")")
+log_line "RCFILE disable=SC1000|source-path=SCRIPTDIR|" || p+=("the pipe doesn't hold the nearest config: $(cat "$LOG")")
+[[ -z "$(ls -A "$WORK/rctmp")" ]] || p+=("a file was made in TMPDIR: $(ls -A "$WORK/rctmp")")
+check "shellcheck gets the nearest config's text through a pipe (--rcfile), and no file is made" ${p[@]+"${p[@]}"}
 rm "$repo/scripts/.shellcheckrc"
-RUN_ENV=(TMPDIR="$WORK/rctmp")
 run_hook "$(edit_json "$repo/scripts/ok.sh")"
-RUN_ENV=(RUN_ENV_UNUSED=1)
 p=()
 log_line "RCFILE disable=SC3000|" || p+=("shellcheckrc in scripts/ did not win over the root's: $(cat "$LOG")")
 check "a shellcheckrc in the file's folder wins over the root's .shellcheckrc" ${p[@]+"${p[@]}"}
 rm "$repo/scripts/shellcheckrc"
-# Where no private copy can be made, shellcheck is not run under the config, and the note names the config it would have copied: the
-# nearest (scripts/.shellcheckrc here, with the root's above it). mktemp failing, a relative TMPDIR (shellcheck runs from the repository
-# root, where that path names another file) and a failed write each say so.
 printf 'disable=SC1000\n' > "$repo/scripts/.shellcheckrc"
-mkdir -p "$WORK/cwd/reltmp" "$WORK/dirtmp/copy-is-a-folder"
-FAKE_MKTEMP="$WORK/fake-mktemp"
-mkdir -p "$FAKE_MKTEMP"
-printf '#!/bin/sh\necho "%s"\n' "$WORK/dirtmp/copy-is-a-folder" > "$FAKE_MKTEMP/mktemp"
-chmod +x "$FAKE_MKTEMP/mktemp"
-for case in "TMPDIR=$WORK/no-such-tmp|$STUBS:$TOOLS|TMPDIR is not a folder the hook can resolve, so it made no private copy of its config scripts/.shellcheckrc" \
-  "TMPDIR=reltmp|$STUBS:$TOOLS|TMPDIR is not an absolute path, so the hook made no private copy of its config scripts/.shellcheckrc" \
-  "TMPDIR=$WORK/dirtmp|$FAKE_MKTEMP:$STUBS:$TOOLS|the hook could not write a private copy of its config scripts/.shellcheckrc"; do
-  IFS='|' read -r setting path_for want <<< "$case"
-  RUN_ENV=("$setting")
-  run_hook "$(edit_json "$repo/scripts/ok.sh")" "$path_for"
-  RUN_ENV=(RUN_ENV_UNUSED=1)
-  p=()
-  [[ $STATUS -eq 0 && -z "$STDERR" && "$(ran shellcheck)" == 0 && "$(ran shfmt)" == 1 ]] || p+=("exit $STATUS, stderr: $STDERR, log: $(cat "$LOG")")
-  [[ "$(system_message "$STDOUT")" == *"shellcheck was not run: $want (the gate"* ]] || p+=("note: $STDOUT")
-  check "with $setting${path_for%%:*}, shellcheck is not run and the note names the nearest config" ${p[@]+"${p[@]}"}
-done
-p=()
-[[ -z "$(ls -A "$WORK/cwd/reltmp")" ]] || p+=("left: $(ls -A "$WORK/cwd/reltmp")")
-check "the copy made under a relative TMPDIR is removed" ${p[@]+"${p[@]}"}
-p=()
-[[ -d "$WORK/dirtmp/copy-is-a-folder" ]] || p+=("the folder is gone")
-check "a copy path that can't be written to is left as it was" ${p[@]+"${p[@]}"}
-# The copy is removed however the hook ends: on a violation (exit 2) too.
-RUN_ENV=(TMPDIR="$WORK/rctmp")
+# On a violation too, shellcheck gets the config, and the report comes back with exit 2.
 run_hook "$(edit_json "$repo/scripts/bad.sh")"
-RUN_ENV=(RUN_ENV_UNUSED=1)
 p=()
 [[ $STATUS -eq 2 ]] && log_line "RCFILE disable=SC1000|" || p+=("exit $STATUS, log: $(cat "$LOG")")
-[[ -z "$(ls -A "$WORK/rctmp")" ]] || p+=("the copy was left behind: $(ls -A "$WORK/rctmp")")
-check "the private copy is removed when the hook exits 2" ${p[@]+"${p[@]}"}
+check "on a violation shellcheck still gets the config, and the hook exits 2" ${p[@]+"${p[@]}"}
+# The pipe needs neither mktemp nor rm: without them on PATH, shellcheck still gets the config, with nothing said.
+NOTMP="$WORK/notmp"
+link_tools "$NOTMP"
+rm "$NOTMP/mktemp" "$NOTMP/rm"
+run_hook "$(edit_json "$repo/scripts/ok.sh")" "$STUBS:$NOTMP"
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_line "RCFILE disable=SC1000|" || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+check "without mktemp or rm on PATH, shellcheck still gets the config" ${p[@]+"${p[@]}"}
 # A config farther up that the hook won't hand over keeps shellcheck from running, though a nearer one is fine.
 printf 'external-sources=true\n' > "$repo/.shellcheckrc"
 run_hook "$(edit_json "$repo/scripts/ok.sh")"
@@ -978,98 +960,6 @@ p=()
 [[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"shellcheck was not run: its config .shellcheckrc names external-sources"* ]] || p+=("log: $(cat "$LOG"), note: $STDOUT")
 check "a refused config farther up the path keeps shellcheck from running, though a nearer one is fine" ${p[@]+"${p[@]}"}
 printf 'disable=SC2000\n' > "$repo/.shellcheckrc"
-# A mktemp that succeeds and prints nothing made no copy either.
-printf '#!/bin/sh\nexit 0\n' > "$FAKE_MKTEMP/mktemp"
-run_hook "$(edit_json "$repo/scripts/ok.sh")" "$FAKE_MKTEMP:$STUBS:$TOOLS"
-p=()
-[[ $STATUS -eq 0 && -z "$STDERR" && "$(ran shellcheck)" == 0 && "$(ran shfmt)" == 1 ]] || p+=("exit $STATUS, stderr: $STDERR, log: $(cat "$LOG")")
-[[ "$(system_message "$STDOUT")" == *"shellcheck was not run: the hook could not create a private copy of its config scripts/.shellcheckrc (mktemp failed)"* ]] || p+=("note: $STDOUT")
-check "a mktemp that prints nothing makes no copy, and the note says mktemp failed" ${p[@]+"${p[@]}"}
-# A TMPDIR inside the project's checkouts, where an agent writes with no prompt: the copy there could be swapped, so it isn't used.
-mkdir -p "$repo/tmp"
-RUN_ENV=(TMPDIR="$repo/tmp")
-run_hook "$(edit_json "$repo/scripts/ok.sh")"
-RUN_ENV=(RUN_ENV_UNUSED=1)
-p=()
-[[ $STATUS -eq 0 && -z "$STDERR" && "$(ran shellcheck)" == 0 ]] || p+=("exit $STATUS, stderr: $STDERR, log: $(cat "$LOG")")
-[[ "$(system_message "$STDOUT")" == *"shellcheck was not run: TMPDIR is inside the project's checkouts, where the private copy of its config scripts/.shellcheckrc could be swapped"* ]] \
-  || p+=("note: $STDOUT")
-[[ -z "$(ls -A "$repo/tmp")" ]] || p+=("the copy was left: $(ls -A "$repo/tmp")")
-check "a TMPDIR inside the project is not used for the private copy" ${p[@]+"${p[@]}"}
-rmdir "$repo/tmp"
-# tmp_run <TMPDIR> [<PATH>]: the hook on scripts/ok.sh with that TMPDIR; STATUS, the log and the note as run_hook leaves them.
-tmp_run() {
-  RUN_ENV=(TMPDIR="$1")
-  run_hook "$(edit_json "$repo/scripts/ok.sh")" "${2:-$STUBS:$TOOLS}"
-  RUN_ENV=(RUN_ENV_UNUSED=1)
-}
-inside_note="shellcheck was not run: TMPDIR is inside the project's checkouts, where the private copy of its config scripts/.shellcheckrc could be swapped"
-# The repository itself is inside; a sibling folder whose name starts with the repository's is not.
-tmp_run "$repo"
-p=()
-[[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"$inside_note"* ]] || p+=("log: $(cat "$LOG"), note: $STDOUT")
-check "a TMPDIR that is the repository itself is not used for the private copy" ${p[@]+"${p[@]}"}
-mkdir -p "$repo-sibling"
-tmp_run "$repo-sibling"
-p=()
-[[ $STATUS -eq 0 && -z "$OUTPUT" ]] && grep -qE "^shellcheck $repo --rcfile $repo-sibling/lint-edited-file\.[^ /]+ -- " "$LOG" || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
-[[ -z "$(ls -A "$repo-sibling")" ]] || p+=("the copy was left: $(ls -A "$repo-sibling")")
-check "a TMPDIR beside the repository, its name starting with the repository's, is used" ${p[@]+"${p[@]}"}
-# A TMPDIR reached through a symlink is judged, and used, as the folder it resolves to: one inside the repository pointing out is used
-# at the folder outside, with no symlink left on the copy's path; one outside pointing in is refused.
-mkdir -p "$WORK/outside-tmp" "$repo/tmp-in"
-ln -s "$WORK/outside-tmp" "$repo/tmp-link-out"
-ln -s "$repo/tmp-in" "$WORK/tmp-link-in"
-tmp_run "$repo/tmp-link-out"
-p=()
-[[ $STATUS -eq 0 && -z "$OUTPUT" ]] && grep -qE "^shellcheck $repo --rcfile $WORK/outside-tmp/lint-edited-file\.[^ /]+ -- " "$LOG" || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
-check "a TMPDIR symlinked out of the repository is used at the folder it resolves to" ${p[@]+"${p[@]}"}
-tmp_run "$WORK/tmp-link-in"
-p=()
-[[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"$inside_note"* ]] || p+=("log: $(cat "$LOG"), note: $STDOUT")
-[[ -z "$(ls -A "$repo/tmp-in")" ]] || p+=("a copy was made: $(ls -A "$repo/tmp-in")")
-check "a TMPDIR symlinked into the repository is not used, and no copy is made there" ${p[@]+"${p[@]}"}
-rm "$repo/tmp-link-out" "$WORK/tmp-link-in"
-rmdir "$repo/tmp-in" "$repo-sibling" "$WORK/outside-tmp"
-# A mktemp that fails, or prints a path outside the folder it was given, makes no copy the hook uses.
-for fake in 'exit 1' "echo '$WORK/elsewhere/lint-edited-file.x'"; do
-  printf '#!/bin/sh\n%s\n' "$fake" > "$FAKE_MKTEMP/mktemp"
-  tmp_run "$WORK/rctmp" "$FAKE_MKTEMP:$STUBS:$TOOLS"
-  p=()
-  [[ $STATUS -eq 0 && "$(ran shellcheck)" == 0 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
-  [[ "$(system_message "$STDOUT")" == *"the hook could not create a private copy of its config scripts/.shellcheckrc (mktemp failed)"* ]] || p+=("note: $STDOUT")
-  check "a mktemp that does '$fake' makes no copy the hook uses" ${p[@]+"${p[@]}"}
-done
-# The edited file in a linked worktree: a TMPDIR inside that worktree (the file's own repository) and one inside the main checkout the
-# project lists are both refused.
-wtmain="$(new_repo wtmain)"
-git -C "$wtmain" -c user.name=t -c user.email=t@t commit --quiet --allow-empty -m init
-git -C "$wtmain" worktree add --quiet "$WORK/wtmain-wt" 2> /dev/null
-mkdir -p "$WORK/wtmain-wt/scripts" "$WORK/wtmain-wt/tmp" "$wtmain/tmp"
-printf 'echo ok\n' > "$WORK/wtmain-wt/scripts/ok.sh"
-printf 'disable=SC1000\n' > "$WORK/wtmain-wt/.shellcheckrc"
-for tmp in "$WORK/wtmain-wt/tmp" "$wtmain/tmp"; do
-  RUN_ENV=(TMPDIR="$tmp")
-  run_hook "$(edit_json "$WORK/wtmain-wt/scripts/ok.sh")" "$STUBS:$TOOLS" "$wtmain"
-  RUN_ENV=(RUN_ENV_UNUSED=1)
-  p=()
-  [[ $STATUS -eq 0 && "$(ran shellcheck)" == 0 && "$(ran shfmt)" == 1 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
-  [[ "$(system_message "$STDOUT")" == *"shellcheck was not run: TMPDIR is inside the project's checkouts"* ]] || p+=("note: $STDOUT")
-  check "a TMPDIR at ${tmp#"$WORK"/} is inside the project's checkouts, for a file in a linked worktree" ${p[@]+"${p[@]}"}
-done
-# Without rm the copy stays in TMPDIR, the run is otherwise clean, and nothing is said on stderr.
-NORM="$WORK/norm"
-link_tools "$NORM"
-rm "$NORM/rm"
-mkdir -p "$WORK/rctmp-norm"
-RUN_ENV=(TMPDIR="$WORK/rctmp-norm")
-run_hook "$(edit_json "$repo/scripts/ok.sh")" "$STUBS:$NORM"
-RUN_ENV=(RUN_ENV_UNUSED=1)
-p=()
-[[ $STATUS -eq 0 && -z "$OUTPUT" && "$(ran shellcheck)" == 1 ]] || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
-[[ -n "$(ls -A "$WORK/rctmp-norm")" ]] || p+=("no copy left behind, though rm is missing")
-check "without rm the private copy stays in TMPDIR, and the run is otherwise clean" ${p[@]+"${p[@]}"}
-rm -r "$WORK/rctmp-norm"
 # A byte that isn't valid text before external-sources doesn't hide it: the check reads the config in C. Tried in a UTF-8 locale where
 # one is installed (BSD tr fails on such a byte there).
 printf '# \xe9 external-sources=true\n' > "$repo/scripts/.shellcheckrc"
@@ -2159,7 +2049,8 @@ fi
 p=()
 heredoc_re='<<<|<<-?[[:space:]]*["'"'"'\\]?[A-Za-z_]'
 ! grep -nE -- "$heredoc_re" "$SCRIPT" || p+=("the hook uses a here-string or heredoc")
-# The pattern itself: each form a here-string or heredoc takes matches, and a shift doesn't.
+# The pattern itself: each form a here-string or heredoc takes matches, and a shift by a number doesn't. A shift by a variable ($((1<<n)))
+# matches too, so the hook keeps to numbers there.
 # shellcheck disable=SC2016 # the forms are code text, written as they are
 for form in 'cat <<EOF' "cat <<-'EOF'" 'cat <<"EOF"' 'cat <<\EOF' 'cat << EOF' 'read -r x <<< "$y"'; do
   grep -qE -- "$heredoc_re" <<< "$form" || p+=("the pattern misses: $form")

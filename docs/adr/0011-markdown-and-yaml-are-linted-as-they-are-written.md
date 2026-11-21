@@ -71,15 +71,14 @@ whose Update makes an Application's gate check the changed shell files' format).
 Factory). shfmt skips the extensionless `scripts/` files, which no `.editorconfig` section styles, and runs only when it is v3.14 or a later v3 release, as the gate needs; another
 is named in the `systemMessage`. Neither tool runs code from the repository, and shfmt reads only `.editorconfig`. shellcheck's `.shellcheckrc` can turn on `external-sources`, which
 opens the files a `source` line names, and `--check-sourced` quotes their lines in the report the agent reads, a way round what the person's settings deny Claude. So the hook clears
-`SHELLCHECK_OPTS`, reads the configs between the file and the repository root itself, and hands shellcheck a private copy of the nearest (`--rcfile`), or `--norc` when there is none:
-shellcheck never looks for one, so a config above the root, or one swapped in after the check, is never read. It doesn't run shellcheck under a config that is a symlink, not a
-regular file, unreadable, names `external-sources` or `check-sourced`, or sets a key outside an allow-list (`disable`, `enable`, `source-path`, `shell`, `extended-analysis`), nor
-when the private copy can't be made (a `TMPDIR` that is relative, unresolvable or inside the project's checkouts among the causes: the copy is made in `TMPDIR` resolved, so no
-symlink is left on its path for an agent to re-point); the note says so. Plain `--norc` alone was not chosen: a repo's own `disable=` lines would then fail files
-its gate passes, and the copy keeps them. `test.sh` keeps the hook's hook-name and shfmt release rules equal to
-the gate's. The report's first line now says only that the gate checks the same file before the push, which is true of every kind; the pre-commit hook lints only Markdown, and an
-Application's CI doesn't check shell format. A note about a hook under a nested `.github/hooks` says instead that the gate checks it only where it takes that folder, since an
-Application's gate takes the root's hooks alone.
+`SHELLCHECK_OPTS`, reads the configs between the file and the repository root itself, and hands shellcheck the nearest one's text through a pipe (`--rcfile <(...)`), or
+`--norc` when there is none: shellcheck never looks for one, so a config above the root, or one changed after the check, is never read. A temporary copy was tried first and
+dropped: a named file in a shared folder can be swapped before shellcheck reads it, which a pipe can't. It doesn't run shellcheck under a config that is a symlink, not a
+regular file, unreadable, names `external-sources` or `check-sourced`, or sets a key outside an allow-list (`disable`, `enable`, `source-path`, `shell`, `extended-analysis`);
+the note says so. Plain `--norc` alone was not chosen: a repo's own `disable=` lines would then fail files its gate passes, and the pipe keeps them.
+`test.sh` keeps the hook's hook-name and shfmt release rules equal to the gate's. The report's first line now says only that the gate checks the same file
+before the push, which is true of every kind; the pre-commit hook lints only Markdown, and an Application's CI doesn't check shell format. A note about a hook under a nested
+`.github/hooks` says instead that the gate checks it only where it takes that folder, since an Application's gate takes the root's hooks alone.
 
 The Owned `.claude/rules/script-edits.md` says the same for shell scripts as the Markdown and YAML rule does (the hook lints no Python), and lists the checks reviewers keep
 raising on script changes: a test that fails without each new branch, the header or docstring updated in the same edit, the edge cases that keep coming back (a missing tool

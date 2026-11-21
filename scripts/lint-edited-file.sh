@@ -27,14 +27,12 @@
 # differently). Neither tool runs code from the repository, and shfmt reads only .editorconfig. A shellcheck config could let it open
 # the files a source line names (external-sources) and, with check-sourced, quote their lines back to the agent. So SHELLCHECK_OPTS is
 # cleared (it could pass --check-sourced), and shellcheck never looks for a config itself: the hook reads the one shellcheck would use
-# from the repository and hands it a private copy (--rcfile, made with mktemp in TMPDIR resolved, outside the project's checkouts, and
-# removed with rm), or
-# --norc when the repository has none, so no config above the repository root, or one swapped in after the check, is read.
-# ShellCheck is not run while a config on the file's path is a symlink, not a regular file, unreadable, names external-sources or
-# check-sourced, or holds a line other than a blank, a comment or one of the keys disable, enable, source-path, shell and
-# extended-analysis (see sc_config_refused), or while the private copy can't be made (mktemp missing, failing or printing nothing, a
-# TMPDIR that is relative, unresolvable or inside the project's checkouts, a failed write): the person is told, and the gate still checks the file. A hook under a nested .github/hooks whose .editorconfig can't
-# be read is not linted either, and the person is told.
+# from the repository and hands shellcheck that text through a pipe (--rcfile <(...)), a file no one else can name or swap, or --norc
+# when the repository has none, so no config above the repository root, or one changed after the check, is read. ShellCheck is not run
+# while a config on the file's path is a symlink, not a regular file, unreadable, names external-sources or check-sourced, or holds a
+# line other than a blank, a comment or one of the keys disable, enable, source-path, shell and extended-analysis (see
+# sc_config_refused): the person is told, and the gate still checks the file. A hook under a nested .github/hooks whose .editorconfig
+# can't be read is not linted either, and the person is told.
 #
 # Only files in the project's own checkout, or in a linked worktree that checkout lists in `git worktree list`, are linted
 # (CLAUDE_PROJECT_DIR, which Claude Code sets and which is required). A file in another clone, in a directory that merely
@@ -52,12 +50,10 @@
 #
 # Exit 0: the file is clean, is missing, is not Markdown, YAML or shell, is not in the project, is Markdown under a markdownlint config the
 # hook won't run (above), a linter for it is not installed or is found only where the hook runs nothing from (above), shfmt is
-# another release or its --version fails, shellcheck is not run under a shellcheck config or without a private copy of it, or a
-# nested hook's .editorconfig can't be read (above) (this hook only helps; the gate still checks, and the commit hook and CI where
+# another release or its --version fails, shellcheck is not run under a shellcheck config, or a nested hook's .editorconfig can't be
+# read (above) (this hook only helps; the gate still checks, and the commit hook and CI where
 # they lint that kind of file). Each of these, and a skipped linter, is reported as a systemMessage on stdout, which Claude Code shows
-# to the person; a missing mktemp costs only the shellcheck run, and a missing rm leaves its private copy in TMPDIR, unlike a missing
-# python3 or git (exit 1, below). A violation
-# wins: when a linter reports one, the hook exits 2 with the report alone, and a note about a linter that was not run comes with the
+# to the person. A violation wins: when a linter reports one, the hook exits 2 with the report alone, and a note about a linter that was not run comes with the
 # next edit of the file that finds none. Exit 2: a linter reported a violation; its output goes to stderr, which Claude Code feeds
 # back to the agent. Exit 1: the hook could not run (CLAUDE_PROJECT_DIR unset, or a git file of the project's checkouts longer than any
 # that names a folder, both for any edit, since they are checked before the input is read; python3 missing or found only where the
@@ -500,10 +496,10 @@ print("-" if key is None else json.dumps(key))' "$path" 2> /dev/null || true)"
 # could be any file, read as a config), one that can't be read (what it turns on is unknown), or one that names external-sources (which
 # lets shellcheck open the files a source line names) or check-sourced (which quotes their lines in the report the agent reads), in any
 # case, a comment included, or one with a line other than a blank, a comment or one of the keys sc_keys_known names: a key this hook
-# doesn't know could be a later shellcheck's way to turn either on. 1 otherwise, with sc_rc_found 1 and sc_rc_text and sc_rc_near the
-# nearest one's text and path, or sc_rc_found 0 when there is none. A config above the repository root, or the person's own in their
+# doesn't know could be a later shellcheck's way to turn either on. 1 otherwise, with sc_rc_found 1 and sc_rc_text the
+# nearest one's text, or sc_rc_found 0 when there is none. A config above the repository root, or the person's own in their
 # home, is not read: shellcheck gets --norc then, and the gate reads it.
-sc_rc_path="" sc_rc_why="" sc_rc_text="" sc_rc_near="" sc_rc_found=0
+sc_rc_path="" sc_rc_why="" sc_rc_text="" sc_rc_found=0
 # sc_keys_known <text>: 0 when every line of a shellcheck config is blank, a comment, or sets one of the keys that open no other file
 # and quote nothing (disable, enable, source-path, shell, extended-analysis). A key's spelling is matched as shellcheck reads it, at the
 # start of the line, before its =; a CRLF line's CR is a blank, so a blank or comment line with one still counts.
@@ -531,7 +527,8 @@ sc_config_refused() {
         sc_rc_why="could not be read, so the hook can't tell what it turns on"
         return 0
       }
-      if [[ "$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')" =~ external-sources|check-sourced ]]; then
+      # LC_ALL=C on tr itself: the local above is not exported, so a child doesn't see it unless the caller exported LC_ALL.
+      if [[ "$(printf '%s' "$text" | LC_ALL=C tr '[:upper:]' '[:lower:]')" =~ external-sources|check-sourced ]]; then
         sc_rc_why="names external-sources or check-sourced, which could show this hook's output the lines of other files"
         return 0
       fi
@@ -542,28 +539,12 @@ sc_config_refused() {
       if ((! sc_rc_found)); then
         sc_rc_found=1
         sc_rc_text="$text"
-        sc_rc_near="$sc_rc_path"
       fi
     done
     [[ "$at" != "$root" ]] || return 1
     at="${at%/*}"
   done
 }
-# in_checkouts <resolved dir>: 0 when the folder is the file's repository or a worktree the project lists, or is inside one, the folders
-# an agent writes with no prompt; 1 otherwise. (The project directory is always one of those or inside one, so it needs no check of its own.)
-in_checkouts() {
-  local trusted
-  for trusted in "$root" ${PROJECT_ROOTS[@]+"${PROJECT_ROOTS[@]}"}; do
-    case "$1/" in
-      "$trusted"/*) return 0 ;;
-    esac
-  done
-  return 1
-}
-# The private copy of the config shellcheck is handed, removed however the hook ends, and the resolved folder it is made in.
-tmp_canon=""
-rc_copy=""
-trap '[[ -z "$rc_copy" ]] || rm -f -- "$rc_copy" 2> /dev/null' EXIT
 
 if [[ "$kind" == markdown ]]; then
   path_bin markdownlint-cli2 bin
@@ -584,23 +565,10 @@ elif [[ "$kind" == shell ]]; then
     notes+=("shellcheck was not run: its config $sc_rc_path $sc_rc_why")
   elif ((! sc_rc_found)); then
     run_linter shellcheck "$bin" --norc -- "$target"
-  # The copy's folder is TMPDIR resolved before anything is made, and mktemp makes the copy in that resolved folder: no symlink is left on
-  # its path for an agent to re-point between the check and shellcheck's read. Relative (shellcheck runs from the repository root, where
-  # it names another folder), unresolvable, or inside the project's checkouts (where an agent writes with no prompt): no copy.
-  elif [[ "${TMPDIR:-/tmp}" != /* ]]; then
-    notes+=("shellcheck was not run: TMPDIR is not an absolute path, so the hook made no private copy of its config $sc_rc_near")
-  elif ! canon "${TMPDIR:-/tmp}" tmp_canon; then
-    notes+=("shellcheck was not run: TMPDIR is not a folder the hook can resolve, so it made no private copy of its config $sc_rc_near")
-  elif in_checkouts "$tmp_canon"; then
-    notes+=("shellcheck was not run: TMPDIR is inside the project's checkouts, where the private copy of its config $sc_rc_near could be swapped")
-  elif ! rc_copy="$(mktemp "$tmp_canon/lint-edited-file.XXXXXXXXXX" 2> /dev/null)" || [[ "$rc_copy" != "$tmp_canon"/?* ]]; then
-    # A failed mktemp, or one that printed nothing or a path outside the folder it was given: no copy of its making is used.
-    rc_copy=""
-    notes+=("shellcheck was not run: the hook could not create a private copy of its config $sc_rc_near (mktemp failed)")
-  elif ! printf '%s\n' "$sc_rc_text" 2> /dev/null > "$rc_copy"; then
-    notes+=("shellcheck was not run: the hook could not write a private copy of its config $sc_rc_near")
   else
-    run_linter shellcheck "$bin" --rcfile "$rc_copy" -- "$target"
+    # The text the hook read and vetted, through a pipe (/dev/fd): no file with a name, so nothing for another process to swap between
+    # the check and shellcheck's read, and nothing to remove.
+    run_linter shellcheck "$bin" --rcfile <(printf '%s\n' "$sc_rc_text") -- "$target"
   fi
   if ((shell_format)); then
     path_bin shfmt bin

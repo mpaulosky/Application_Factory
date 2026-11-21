@@ -82,8 +82,7 @@ sed -n '/^step "Markdown lint/,/^fi$/p' "$gate" > "$md_step"
 other_steps="$work/other-steps.sh"
 sed -n '/^SHELLCHECK_VERSION=/p; /^run_tool() {/,/^}/p; /^step "YAML lint/,/^fi$/p; /^step "Shell lint/,/^fi$/p' "$gate" > "$other_steps"
 format_step="$work/format-step.sh"
-# From the step's own comment to the next step's, which is left off: the step is two if blocks, the first choosing its heading.
-sed -n '/^# Each changed shell file is formatted/,/^# A gh command not told its repository/p' "$gate" | sed '$d' > "$format_step"
+sed -n '/^# Each changed shell file is formatted/,/^fi$/p' "$gate" > "$format_step"
 lists() {
   (
     cd "$repo" || exit 1
@@ -143,7 +142,7 @@ check "the gate's Markdown step is found" "grep -q 'markdownlint-cli2' '$md_step
 check "the gate's YAML and shell steps and run_tool are found" \
   "grep -q '^run_tool() {' '$other_steps' && grep -q '^step \"YAML lint' '$other_steps' && grep -q '^step \"Shell lint' '$other_steps'"
 check "the gate's shell format step is found, and only it" \
-  "grep -q 'step \"Shell format' '$format_step' && grep -q 'shfmt -d --' '$format_step' && ! grep -q 'check_gh_repo.py --repo' '$format_step'"
+  "grep -q '^step \"Shell format' '$format_step' && grep -q 'shfmt -d --' '$format_step' && ! grep -q 'check_gh_repo.py --repo' '$format_step'"
 
 # The gate runs in whatever locale the caller has: a UTF-8 one and C are both tried.
 utf8="$(locale -a 2> /dev/null | grep -iE '^(C|en_US)\.utf-?8$' | head -n 1 || true)"
@@ -204,13 +203,15 @@ unset LC_ALL
 
 # The shell format step alone, on one name, with the shfmt stub: a release other than v3.14 or a later v3, a missing shfmt and a file shfmt
 # would change each stop the gate with a message; a v3 release from v3.14 on runs it.
-# format_run [<PATH>]: the step on -dash.sh with that PATH (the stubs first when unset); status in fst, stderr in ferr.
+# format_run [<PATH>]: the step on -dash.sh with that PATH (the stubs first when unset); status in fst, stderr in ferr, and the step's
+# heading in $work/steps.
 format_run() {
+  : > "$work/steps"
   # shellcheck disable=SC2034 # read inside the checks' eval strings
   ferr="$(cd "$repo" && (
     set -euo pipefail
     # shellcheck disable=SC2329 # called by the sourced step
-    step() { :; }
+    step() { printf '%s\n' "$1" >> "$work/steps"; }
     # shellcheck disable=SC2034 # read by the sourced step; FORMAT_BASE stands for the merge base the gate found (empty: no origin/main)
     SHFMT_FILES=(-dash.sh) MD_ARGS_FILE="$work/md-args" BASE="${FORMAT_BASE-base}" YELLOW='' RESET=
     export MD_ARGS_FILE
@@ -251,6 +252,9 @@ unset SHFMT_STUB_EXIT
 FORMAT_BASE='' format_run
 check "shell format: with no origin/main the step is skipped, saying why, and shfmt doesn't run" \
   "[[ $fst == 0 ]] && ! grep -qF -- '-dash.sh' '$work/md-args'"
+check "shell format: with no origin/main the heading gives no count" "[[ \"\$(cat '$work/steps')\" == 'Shell format' ]]"
+format_run
+check "shell format: with an origin/main the heading counts the changed files" "[[ \"\$(cat '$work/steps')\" == 'Shell format (1 changed file(s))' ]]"
 # shellcheck disable=SC2034 # read inside the check's eval string
 skip_out="$(cd "$repo" && (
   set -euo pipefail
