@@ -223,9 +223,12 @@ whose `.editorconfig` has a `[.github/hooks/*]` section (the Template's copy in 
 files, which no section styles, and runs only when it is v3.14 or a later v3 release, as the gate needs (another, or a `--version` that fails or prints nothing, is named in the note, and
 shellcheck still runs). On a shfmt failure the report adds the `shfmt -w` command that writes the format, with the path quoted for a shell, and says to fix the syntax if the output is a
 syntax error. Neither tool runs code from the repository, and shfmt reads only `.editorconfig`. shellcheck reads its `.shellcheckrc`, and `external-sources` there lets it open the files a
-`source` line names; `--check-sourced` would then quote their lines in the report the agent reads. So the hook clears `SHELLCHECK_OPTS`, and doesn't run shellcheck while a `.shellcheckrc`
-or `shellcheckrc` on the file's path (its folder and each one above it, up to the repository root) is a symlink, not a regular file, or names `external-sources` or `check-sourced` in any
-case: the note names the config, and the gate still checks the file. `test.sh` checks that the hook's hook-name rule is the gate's and the Lint Actions shellcheck job's, and that its shfmt
+`source` line names; `--check-sourced` would then quote their lines in the report the agent reads. So the hook clears `SHELLCHECK_OPTS`, and shellcheck never looks for a config itself:
+the hook reads the `.shellcheckrc` or `shellcheckrc` on the file's path (its folder and each one above it, up to the repository root, in the order shellcheck looks) and hands shellcheck a
+private copy of the nearest one (`--rcfile`, written with `mktemp` and removed after), or `--norc` when there is none. A config above the repository root, or the person's own in their home,
+is not read at edit time; the gate reads it. shellcheck is not run while a config on the path is a symlink, not a regular file, unreadable, or names `external-sources` or `check-sourced`
+in any case, or when no private copy can be written: the note names the config and why, and the gate still checks the file. A violation wins over a note: the hook exits 2 with the
+report alone. `test.sh` checks that the hook's hook-name rule is the gate's and the Lint Actions shellcheck job's, and that its shfmt
 release rule is the gate's and its own.
 The hook sees only those tools' writes: a file an agent writes through Bash (a heredoc, `sed -i`, a script) is not linted until the pre-commit hook (Markdown only), the gate or CI,
 since a Bash command doesn't name the files it wrote. The Owned `.claude/rules/markdown-and-yaml-edits.md`, which Apply writes into every repo and which loads in every session (it has no `paths:`),

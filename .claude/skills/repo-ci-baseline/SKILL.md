@@ -50,7 +50,8 @@ The one rule worth adding to it, denying Claude Code the local review's ledgers 
 The hooks worth adding by hand are `scripts/check-git-hooks.sh` ([git-hooks.md](references/git-hooks.md#session-start-check))
 and `scripts/lint-edited-file.sh`, which lints a Markdown, YAML or shell file as Claude writes it ([git-hooks.md](references/git-hooks.md#edit-time-lint)).
 The Owned `.claude/rules/markdown-and-yaml-edits.md` goes into every repo, with or without the hook: it tells every session to write those files with Write and Edit, which the hook sees.
-So does `.claude/rules/script-edits.md`, which loads when a session works on a script: the same for shell and Python scripts, and the checks reviewers keep raising on them.
+So does `.claude/rules/script-edits.md`, which loads when a session works on a script: the same for shell scripts (the hook lints no Python), and the checks reviewers keep raising on
+shell and Python scripts.
 A repo that got a `.claude/settings.json` from an earlier Apply deletes it by hand, since `apply.sh` never deletes.
 The Factory has a `.claude/settings.json` of its own for the edit-time lint hook
 ([the Factory's ADR 0011](../../../docs/adr/0011-markdown-and-yaml-are-linted-as-they-are-written.md)); an Application does not receive it.

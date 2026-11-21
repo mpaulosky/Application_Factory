@@ -71,8 +71,10 @@ whose Update makes an Application's gate check the changed shell files' format).
 Factory). shfmt skips the extensionless `scripts/` files, which no `.editorconfig` section styles, and runs only when it is v3.14 or a later v3 release, as the gate needs; another
 is named in the `systemMessage`. Neither tool runs code from the repository, and shfmt reads only `.editorconfig`. shellcheck's `.shellcheckrc` can turn on `external-sources`, which
 opens the files a `source` line names, and `--check-sourced` quotes their lines in the report the agent reads, a way round what the person's settings deny Claude. So the hook clears
-`SHELLCHECK_OPTS` and doesn't run shellcheck under a config on the file's path that is not a regular file or names `external-sources` or `check-sourced`; the note says so. Running it
-with `--norc` instead was not chosen: a repo's own `disable=` lines would then fail files its gate passes. `test.sh` keeps the hook's hook-name and shfmt release rules equal to
+`SHELLCHECK_OPTS`, reads the configs between the file and the repository root itself, and hands shellcheck a private copy of the nearest (`--rcfile`), or `--norc` when there is none:
+shellcheck never looks for one, so a config above the root, or one swapped in after the check, is never read. It doesn't run shellcheck under a config that is a symlink, not a
+regular file, unreadable, or names `external-sources` or `check-sourced`; the note says so. Plain `--norc` alone was not chosen: a repo's own `disable=` lines would then fail files
+its gate passes, and the copy keeps them. `test.sh` keeps the hook's hook-name and shfmt release rules equal to
 the gate's. The report's first line now says only that the gate checks the same file before the push, which is true of every kind; the pre-commit hook lints only Markdown, and an
 Application's CI doesn't check shell format.
 
