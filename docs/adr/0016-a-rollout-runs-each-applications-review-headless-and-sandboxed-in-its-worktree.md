@@ -39,9 +39,12 @@ enforces (bubblewrap on Linux) on every Bash command and everything it starts:
   entry, which the person's accept of the finding then accepts too, and the session could name any entry, an open one of another branch's; the record matches a
   repeat by its path and summary (case and spacing aside), and one worded otherwise gets an open entry of its own. Both commands run in process groups of their own,
   holding the lock, killed whole when they end, for at most ten minutes each; an interrupt stops `prepare`, and waits for `record`, which a kill could leave half written,
-  so a signal can be held up to ten minutes. What the session staged is kept beside the log with the HEAD it reviewed before either runs, and removed once it is
-  recorded, so a stop that didn't record it, whatever the cause, prints the command that does, which records only at that HEAD. A group `record` left behind is a stop
-  of its own: the review may be recorded, and `scripts/review.sh report` tells.
+  so a signal can be held up to ten minutes; signals are held from the end of the session until what it staged is recorded or kept. That is kept beside the log
+  with the HEAD it reviewed before either runs, and removed once it is recorded: a record that failed, a group either left behind or an interrupt prints the command
+  that records it (one `sh -c`, so it runs the same in any shell), which records only at that HEAD and says why when it doesn't. A broken rule (HEAD moved, a
+  changed file) keeps nothing, since the findings vouch for code that is no longer there. A group `record` left behind is a stop of its own: the review may be
+  recorded, and `scripts/review.sh report` tells. The round refuses to record without `node_modules/.bin/tsx`, which `scripts/review.sh` would otherwise install
+  into the worktree it has just checked.
 - **The sandbox.** Its Bash reads none of the person's credentials (`~/.ssh`, `~/.config/gh`, `~/.git-credentials`, `~/.netrc`, `~/.gitconfig`, the shells' start-up
   files, .NET's user secrets, the keyrings, cloud and package-registry sign-ins, shell histories, all of `~/.claude` and Claude Code's `CLAUDE_CONFIG_DIR`, the other sessions'
   logs, and wherever a variable such as `KUBECONFIG` or `XDG_CONFIG_HOME` moves one). It writes only a temporary folder of its own, its run folder among it: not the
@@ -61,7 +64,8 @@ enforces (bubblewrap on Linux) on every Bash command and everything it starts:
 - **Layers behind the sandbox.** git's push to GitHub is sent nowhere, and deny rules name the commands that must never run. The prompt names the Owned files the branch changes,
   says it runs unattended and review-only, and says a finding in an Owned file is fixed in the Template first.
 - **Checks after it.** A session after which the worktree's `.git` link changed, or the clone's git `config`, a `config.worktree`, `hooks` or `info` (in either case no git
-  runs there after it, since git runs what they name), the remote branch moved (or can't be read), the worktree's HEAD, branch or status changed, the Template
+  runs there after it, since git runs what they name; the whole file is compared, not the keys that run a command, so the person's own `git push -u` or
+  `git remote set-url` in the clone meanwhile stops it too, as a review they record does), the remote branch moved (or can't be read), the worktree's HEAD, branch or status changed, the Template
   changed, an Owned file the branch changes is no longer the Template's, any file of the ledgers or `.security` was added, removed or changed (the session writes
   neither, so a review the person records on another branch meanwhile stops it as well), any path of the worktree changed in content, mode or link target (a
   snapshot of every file's bytes taken before the session, so an ignored one git status doesn't show, such as `node_modules/.bin/tsx`, which the record runs,

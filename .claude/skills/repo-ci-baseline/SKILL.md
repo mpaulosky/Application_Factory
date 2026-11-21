@@ -107,8 +107,9 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
      it isn't a security one, and edits, fixes and commits nothing. It runs in Claude Code's sandbox: its shell reads none of your credentials, writes only a
      folder of its own, and reaches no host; it has no GitHub sign-in, loads no settings file, and takes the skill and its agent from the Template. Once it ends, the round
      records what it staged with the worktree's `scripts/review.sh prepare` and `record`, so the ledgers and `.security` are written only by the record's own code. Each
-     runs for at most ten minutes; an interrupt stops `prepare` and waits for `record`. Until it is recorded, what the session staged is kept beside the log, and a stop
-     that didn't record it prints the command that does. The round stops, recording nothing, when a session broke a rule it checks after, such as a changed worktree
+     runs for at most ten minutes; an interrupt stops `prepare` and waits for `record`. Until it is recorded, what the session staged is kept beside the log, and a
+     failed record, a group left behind or an interrupt prints the command that records it. The round stops, recording and keeping nothing, when a session broke a rule
+     it checks after, such as a changed worktree
      (any file's bytes, mode or link, an ignored one such as `node_modules` included), a changed git config or hook in the clone, a ledger or `.security` file changed,
      or a finding staged fixed or accepted, and when it staged nothing at all.
      Then it reapplies: a Critical or Warning finding stops the round for you to fix or accept. It lands TicketManager's PR before the rest start, and the rest's PRs together.

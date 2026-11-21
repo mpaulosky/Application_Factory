@@ -71,9 +71,12 @@ a SIGTERM, SIGHUP or interrupt of the round kills; one whose group is still
 there after the kill stops the round (GroupLeft). The round's own
 scripts/review.sh prepare and record run in groups of their own as well
 (run_bounded), for at most RECORD_TIMEOUT_SECONDS each; an interrupt stops
-prepare, and waits for record to end. What the session staged is kept beside
-the log (staged_copy) with the HEAD it reviewed, and removed once it is
-recorded, so a stop that didn't record it prints the command that does. Its log is kept, 0600, in a 0700 folder of the
+prepare, and waits for record to end, and signals are held from the end of the
+session until what it staged is recorded or kept. That is kept beside the log
+(staged_copy) with the HEAD it reviewed: a record that failed, a group record
+left, or an interrupt prints the command that records it, at that HEAD only. A
+broken rule (HEAD moved, a changed file) keeps nothing, since the findings vouch
+for code that is no longer there. Its log is kept, 0600, in a 0700 folder of the
 user's own, ~/.cache/repo-ci-baseline/logs: it can hold the session's report of
 security findings.
 
@@ -274,8 +277,8 @@ RECORD_FAILED = 256
 NOTHING_STAGED = 257
 # The round's record left a process group behind, so whether the review was recorded can't be told.
 RECORD_LEFT = 258
-# How long scripts/review.sh prepare and record may each run when the round records a review, a first pnpm install
-# included.
+# How long scripts/review.sh prepare and record may each run when the round records a review (tsx is installed by
+# then: the round refuses to record without it, so neither installs packages into the worktree it has just checked).
 RECORD_TIMEOUT_SECONDS = 600
 # The most of a text the session wrote (an id, a status, a file name) that a message prints.
 SHOWN_CHARS = 120
@@ -807,8 +810,8 @@ class Guard:
     security: str
     security_before: dict
     worktree_state: tuple
-    files: dict = None
-    git_files: dict = None
+    files: dict
+    git_files: dict
 
 
 def remote_branch_command(worktree):
@@ -832,8 +835,11 @@ def worktree_state(worktree, read):
 def session_guard(worktree, owned=OWNED, read=run_text):
     """Read what the session may not change: the worktree's .git link (git obeys the folder it names), the remote
     branch (the session doesn't push), the Template (its fixes go Template first, by a person), and the clone's review
-    ledgers and the main checkout's .security record (folder_state: the round records, not the session). Raises GuardUnreadable when the link,
-    the remote or the clone's git folders can't be read, since a check against nothing would pass whatever happened."""
+    ledgers and the main checkout's .security record (folder_state: the round records, not the session), every path
+    of the worktree (tree_state: content, mode and link target, ignored files included) and the clone's git config,
+    config.worktree, hooks and info (git_files_state). broken_rules compares them after the session, and record_review
+    reads the worktree again just before record. Raises GuardUnreadable when the link, the remote or the clone's git
+    folders can't be read, since a check against nothing would pass whatever happened."""
     link = link_text(worktree)
     if link is None:
         raise GuardUnreadable(f"{worktree}/.git isn't the plain file a linked worktree has (see: ls -la"
@@ -874,8 +880,9 @@ def broken_rules(guard, owned=OWNED, read=run_text, changes=owned_changes):
     ignored file git status doesn't show, such as node_modules/.bin/tsx, which the record runs) breaks one too."""
     broke = []
     link_kept = link_text(guard.worktree) == guard.link
-    git_now = None if guard.git_files is None else git_files_state(guard.common, guard.gitdir)
-    git_changed = [] if git_now is None else [name for name in guard.git_files if git_now[name] != guard.git_files[name]]
+    git_now = git_files_state(guard.common, guard.gitdir)
+    # git_files_state reads the same names each time; one the guard lacks counts as changed.
+    git_changed = [name for name in git_now if git_now[name] != guard.git_files.get(name)]
     if not link_kept:
         broke.append(f"{guard.worktree}/.git changed during the session: git wasn't run there after it, and the link"
                      f" must be put back ({guard.link!r}) before it is")
@@ -915,13 +922,11 @@ def broken_rules(guard, owned=OWNED, read=run_text, changes=owned_changes):
     return broke
 
 
-def unseen_changes(guard, read=None):
+def unseen_changes(guard):
     """The Rule broken when a path of the worktree changed since the guard read it (tree_state: content, mode or link
     target, so an ignored file git status doesn't show, such as node_modules/.bin/tsx, counts): one rule naming the
     first UNSEEN_SHOWN of them, relative to the worktree, and how many there are; [] when none did."""
-    if guard.files is None:
-        return []
-    touched = tree_changes(guard.files, (read or tree_state)(guard.worktree))
+    touched = tree_changes(guard.files, tree_state(guard.worktree))
     if not touched:
         return []
     named = ", ".join(shown(path) for path in touched[:UNSEEN_SHOWN])
@@ -965,17 +970,24 @@ def entry_state(path):
         try:
             fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         except OSError:
-            return ("unread", info.st_mode, info.st_size)
+            return unread(info)
         try:
             digest = hashlib.sha256()
             while chunk := os.read(fd, 1 << 20):
                 digest.update(chunk)
             return ("file", info.st_mode, digest.hexdigest())
         except OSError:
-            return ("unread", info.st_mode, info.st_size)
+            return unread(info)
         finally:
             os.close(fd)
     return ("other", info.st_mode)
+
+
+def unread(info):
+    """What entry_state says of a regular file it can't read (one only its owner may run, mode 0111, say): its mode,
+    size, inode and mtime, so a same-size file swapped in, which the round's scripts could still run, counts as a
+    change. Only these files are judged by times, so pnpm's hard links elsewhere still change nothing."""
+    return ("unread", info.st_mode, info.st_size, info.st_ino, info.st_mtime_ns)
 
 
 def tree_state(root, skip=(".git",)):
@@ -1055,12 +1067,17 @@ def record_command(worktree, staged, head):
     """The command the person runs to record findings kept in staged themselves, once what refused them is put right:
     the key and HEAD of the worktree's code now, from scripts/review.sh prepare, given to scripts/review.sh record,
     only while that HEAD is head, the one the session reviewed (a commit since would have the findings vouch for code
-    the session never read)."""
-    here, folder = shlex.quote(worktree), shlex.quote(staged)
-    return (f"cd {here} && set -- $(scripts/review.sh prepare \"$(mktemp -d)\") && [ \"$2\" = {shlex.quote(head)} ]"
-            " && printf"
-            f" '{{\"reviewedKey\":\"%s\",\"reviewedHead\":\"%s\",\"rounds\":1,\"reviewerAgent\":\"{REVIEWER_AGENT}\"}}'"
-            f" \"$1\" \"$2\" | scripts/review.sh record - --staged {folder}")
+    the session never read); otherwise it says why and records nothing. It is one sh -c, so it runs the same pasted
+    into zsh or fish as into bash."""
+    script = (f"cd {shlex.quote(worktree)} || exit 1\n"
+              'out=$(scripts/review.sh prepare "$(mktemp -d)") || { echo "scripts/review.sh prepare failed: nothing'
+              ' recorded" >&2; exit 1; }\n'
+              'set -- $out\n'
+              f'if [ "$#" -ne 2 ] || [ "$2" != {shlex.quote(head)} ]; then echo "the worktree\'s HEAD is not {head},'
+              ' the one the session reviewed: nothing recorded" >&2; exit 1; fi\n'
+              f"printf '{{\"reviewedKey\":\"%s\",\"reviewedHead\":\"%s\",\"rounds\":1,\"reviewerAgent\":"
+              f"\"{REVIEWER_AGENT}\"}}' \"$1\" \"$2\" | scripts/review.sh record - --staged {shlex.quote(staged)}\n")
+    return f"sh -c {shlex.quote(script)}"
 
 
 def write_staged(folder, text, head=None):
@@ -1092,7 +1109,7 @@ def run_bounded(command, cwd, stdin, stdout, stderr, timeout=RECORD_TIMEOUT_SECO
     own that holds the round's lock: its exit code, or None when it ran past timeout seconds or a deferred signal
     came (got, run_review's list, holds it: given for prepare, which writes only a folder of its own, and not for
     record, which a kill could leave half-written). Its group is killed whole however it ends, so nothing it started
-    (tsx's node, a first pnpm install) goes on writing the ledgers or holding their lock, and a terminal's interrupt
+    (tsx's node) goes on writing the ledgers or holding their lock, and a terminal's interrupt
     reaches only the round. Raises GroupLeft when the group is still there after the kill."""
     child = popen(command, cwd=cwd, stdin=stdin, stdout=stdout, stderr=stderr, start_new_session=True,
                   pass_fds=held_lock_fds())
@@ -1107,7 +1124,13 @@ def run_bounded(command, cwd, stdin, stdout, stderr, timeout=RECORD_TIMEOUT_SECO
     return code
 
 
-def record_review(worktree, run, out, head, keep, got=(), unseen=lambda: [], bounded=run_bounded):
+def tsx_installed(worktree):
+    """Whether the worktree's node_modules/.bin/tsx is there for scripts/review.sh to run, so it installs nothing."""
+    return os.access(os.path.join(worktree, "node_modules", ".bin", "tsx"), os.X_OK)
+
+
+def record_review(worktree, run, out, head, keep, got=(), unseen=lambda: [], bounded=run_bounded,
+                  installed=tsx_installed):
     """Record the findings the session staged in run, as the review's record: scripts/review.sh prepare in a folder of
     the round's own gives the key and HEAD of the code, and scripts/review.sh record takes them, with the staged
     findings copied there 0600 (record reads only a file of the person's own). Both are the worktree's, its Owned
@@ -1117,13 +1140,16 @@ def record_review(worktree, run, out, head, keep, got=(), unseen=lambda: [], bou
     dropped (and said in the log): it would tie the finding to a .security entry, which the person's accept of the
     finding then accepts too, and the session could name any entry, an open one of another branch's; the record then
     matches it by its path and summary, and one worded otherwise gets an entry of its own, open. What the session staged
-    is kept in keep (staged_copy) before anything runs, and removed only once it is recorded, so a failure of any
-    kind, a GroupLeft or a bug too, leaves it there. (exit code, the Rules broken): 0 when it recorded;
-    NOTHING_STAGED when the session staged nothing, not even []; RECORD_FAILED when prepare or record refused, ran
-    past its time, was stopped by a signal (got) or can't be told to have printed the key and HEAD, and the log says
-    why and how to record the kept findings; SESSION_BROKE_A_RULE with the Rules when the staged findings break one
-    (staged_findings), HEAD moved, or unseen() names one. prepare's stdout is read for its key and HEAD; everything
-    else either prints goes to out, the log."""
+    is kept in keep (staged_copy) before anything runs, and removed once it is recorded or a Rule is found broken (the
+    code changed since the session read it, so it vouches for none of it); any other failure, a GroupLeft or a bug
+    too, leaves it there. tsx not installed is a failure before prepare runs, since scripts/review.sh would install
+    it into the worktree just checked. (exit code, the Rules broken): 0 when it recorded; NOTHING_STAGED when the
+    session staged nothing, not even []; RECORD_FAILED when prepare or record refused, ran past its time, was stopped
+    by a signal (got), can't be told to have printed the key and HEAD, or prepare's group was left (it writes only the
+    round's own folder, so nothing was recorded), and the log says why and how to record the kept findings;
+    SESSION_BROKE_A_RULE with the Rules when the staged findings break one (staged_findings), HEAD moved, or unseen()
+    names one; a GroupLeft from record is raised. prepare's stdout is read for its key and HEAD; everything else
+    either prints goes to out, the log."""
     findings, broke = staged_findings(run)
     if broke:
         return SESSION_BROKE_A_RULE, broke
@@ -1154,14 +1180,28 @@ def record_review(worktree, run, out, head, keep, got=(), unseen=lambda: [], bou
                       f" record it with:\n  {record_command(worktree, keep, head)}\n")
         return RECORD_FAILED, []
 
+    def broke_rule(rules):
+        # The code changed since the session read it: what it staged vouches for none of it, so nothing is kept.
+        shutil.rmtree(keep, ignore_errors=True)
+        return SESSION_BROKE_A_RULE, rules
+
+    if got:
+        return failed("a signal came before scripts/review.sh prepare ran")
+    if not installed(worktree):
+        return failed(f"{os.path.join(worktree, 'node_modules', '.bin', 'tsx')} isn't installed (pnpm install in the"
+                      " worktree): scripts/review.sh would install it, changing the worktree the round has just checked")
     with tempfile.TemporaryDirectory(prefix="rollout-record.") as own:
         staged = os.path.join(own, "staged")
         write_staged(staged, text)
         printed = os.path.join(own, "prepared")
         out.flush()
         with open(printed, "w+", encoding="utf-8") as key_and_head:
-            code = bounded([review, "prepare", os.path.join(own, "prepare")], cwd=worktree, stdin=subprocess.DEVNULL,
-                           stdout=key_and_head, stderr=out, got=got)
+            try:
+                code = bounded([review, "prepare", os.path.join(own, "prepare")], cwd=worktree,
+                               stdin=subprocess.DEVNULL, stdout=key_and_head, stderr=out, got=got)
+            except GroupLeft as error:
+                # prepare writes only the round's own folder, so nothing was recorded; the group still holds the lock.
+                return failed(str(error))
             key_and_head.seek(0)
             lines = key_and_head.read(4096).split()
         if code is None and got:
@@ -1173,12 +1213,12 @@ def record_review(worktree, run, out, head, keep, got=(), unseen=lambda: [], bou
                           " HEAD")
         key, prepared_head = lines
         if prepared_head != head:
-            return SESSION_BROKE_A_RULE, [f"the worktree's HEAD was {shown(prepared_head)} by the time the review was"
+            return broke_rule([f"the worktree's HEAD was {shown(prepared_head)} by the time the review was"
                                           f" recorded, not {head} as the session reviewed it: something committed there"
-                                          " since, so nothing was recorded"]
+                                          " since, so nothing was recorded"])
         broke = unseen()
         if broke:
-            return SESSION_BROKE_A_RULE, broke
+            return broke_rule(broke)
         given = os.path.join(own, "review.json")
         with open(given, "w", encoding="utf-8") as handle:
             json.dump({"reviewedKey": key, "reviewedHead": prepared_head, "rounds": 1, "reviewerAgent": REVIEWER_AGENT},
@@ -1350,24 +1390,26 @@ def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, ti
             raise passed_on(got[0])
         if not started:
             return 127, log, []
-        try:
-            broke = check(before)
-        except Exception as error:  # noqa: BLE001 - a check that fails can't vouch for the session: a stop, not a crash
-            out.write(f"rollout.sh: the checks after the session failed:\n{traceback.format_exc()}")
-            broke = [f"the checks after the session failed ({type(error).__name__}: {error}; the traceback is in the"
-                     " log), so what it did can't be told"]
-        if survived:
-            # What is left of it can still write after the check read the ledgers.
-            broke.append(f"the session's process group was still there {GROUP_WAIT_SECONDS} s after it was killed, and"
-                         f" can still write: {group_hint(session.pid)}, before you resume")
-        if not broke and code == 0:
-            sys.stderr.write(f"rollout.sh: recording the review (scripts/review.sh prepare, then record, up to"
-                             f" {RECORD_TIMEOUT_SECONDS // 60} minutes each: an interrupt stops prepare, and waits for"
-                             " record to end)\n")
-            with deferred_signals() as got:
+        keep, head = staged_copy(log), before.worktree_state[0]
+        # Held from here until what the session staged is recorded or kept: a signal while the checks run (they read
+        # every file of the worktree) would otherwise lose the run folder, and the session's findings with it.
+        with deferred_signals() as got:
+            try:
+                broke = check(before)
+            except Exception as error:  # noqa: BLE001 - a check that fails can't vouch for the session: a stop, not a crash
+                out.write(f"rollout.sh: the checks after the session failed:\n{traceback.format_exc()}")
+                broke = [f"the checks after the session failed ({type(error).__name__}: {error}; the traceback is in"
+                         " the log), so what it did can't be told"]
+            if survived:
+                # What is left of it can still write after the check read the ledgers.
+                broke.append(f"the session's process group was still there {GROUP_WAIT_SECONDS} s after it was killed,"
+                             f" and can still write: {group_hint(session.pid)}, before you resume")
+            if not broke and code == 0:
+                sys.stderr.write(f"rollout.sh: recording the review (scripts/review.sh prepare, then record, up to"
+                                 f" {RECORD_TIMEOUT_SECONDS // 60} minutes each: an interrupt stops prepare, and waits"
+                                 " for record to end)\n")
                 try:
-                    code, broke = record(worktree, run, out, before.worktree_state[0], staged_copy(log), got,
-                                         lambda: unseen_changes(before))
+                    code, broke = record(worktree, run, out, head, keep, got, lambda: unseen_changes(before))
                 except GroupLeft as error:
                     # record may have written the ledgers before it left the group, so whether it recorded is unknown.
                     out.write(f"rollout.sh: {error}\n")
@@ -1380,8 +1422,12 @@ def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, ti
                 except Exception:  # noqa: BLE001 - a bug while recording is a stop that keeps the signal, not a crash
                     out.write(f"rollout.sh: recording the review failed:\n{traceback.format_exc()}")
                     code = RECORD_FAILED
-            if got:
-                raise passed_on(got[0])
+        if got:
+            if kept_head(keep) == head:
+                # The stop that would print it isn't reached: the signal ends the round here.
+                sys.stderr.write(f"rollout.sh: what the session staged is kept in {keep} (see {log}); record it with:"
+                                 f" {record_command(worktree, keep, head)}\n")
+            raise passed_on(got[0])
         if code == RECORD_LEFT:
             return code, log, broke
         for rule in broke:
