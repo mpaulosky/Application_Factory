@@ -103,11 +103,13 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
      and the Template's `global.json` SDK first (`--dry-run` stops there and prints the plan). It refuses to start with `claude` signed out (as it is with no settings file
      read; a cloud's sign-in, which `claude auth status` doesn't report, isn't asked), or with a Claude Code or cloud sign-in secret in the environment
      (`ANTHROPIC_API_KEY`, say): sign Claude Code in with `claude /login` instead.
-     When the gate asks for a review it runs the pre-push review headless in the repo's re-Apply worktree, review-only: one round that stages every finding open (a
-     security one is never dismissed) and edits, fixes and commits nothing. It runs in Claude Code's sandbox: its shell reads none of your credentials, writes only a
+     When the gate asks for a review it runs the pre-push review headless in the repo's re-Apply worktree, review-only: one round that stages each finding open, or dismissed when
+     it isn't a security one, and edits, fixes and commits nothing. It runs in Claude Code's sandbox: its shell reads none of your credentials, writes only a
      folder of its own, and reaches no host; it has no GitHub sign-in, loads no settings file, and takes the skill and its agent from the Template. Once it ends, the round
-     records what it staged with the worktree's `scripts/review.sh record`, so the ledgers and `.security` are written only by the record's own code. The round stops,
-     recording nothing, when a session broke a rule it checks after, such as a changed worktree, a ledger or `.security` file changed, or a finding staged fixed or accepted.
+     records what it staged with the worktree's `scripts/review.sh prepare` and `record`, so the ledgers and `.security` are written only by the record's own code; when
+     they refuse, what it staged is kept beside the log with the command that records it. The round stops, recording nothing, when a session broke a rule it checks after,
+     such as a changed worktree (an ignored file such as `node_modules` included), a ledger or `.security` file changed, or a finding staged fixed or accepted, and when it
+     staged nothing at all.
      Then it reapplies: a Critical or Warning finding stops the round for you to fix or accept. It lands TicketManager's PR before the rest start, and the rest's PRs together.
      Its lock keeps a second `--auto` run out, not a person: don't run `reapply.sh` or the review by hand in a re-Apply worktree while it runs. It stops only where a person decides
      (findings that wait for one, a PR that doesn't land or can't be read, a failed reapply or review session), printing the command that decides it and the one that resumes.

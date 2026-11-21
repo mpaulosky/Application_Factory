@@ -28,10 +28,10 @@
 
 The session runs unattended, reading text people without write access may have
 written, so it reviews only, and runs in Claude Code's sandbox (session_settings;
-ADR 0016). It runs one review-only round and stages what it finds, open, in a
-run folder of its own; once it ends, the round records that with the worktree's
-scripts/review.sh record (record_review), so the session writes no ledger or
-.security entry itself. It edits, fixes and commits nothing, and runs no gate,
+ADR 0016). It runs one review-only round and stages what it finds in a run
+folder of its own, open, or dismissed when it isn't a security finding; once it
+ends, the round records that with the worktree's scripts/review.sh record
+(record_review), so the session writes no ledger or .security entry itself. It edits, fixes and commits nothing, and runs no gate,
 so nothing it wrote runs later as the person. Its Bash can't read the person's
 credentials (CREDENTIAL_PATHS, ~/.claude among them, and where CREDENTIAL_VARS
 move them), writes only a temporary folder of its own (session_writes: never
@@ -51,7 +51,8 @@ cloud sign-in secret set, since the session would inherit it) and git's push is
 sent nowhere: layers behind the sandbox. After the session the round checks what
 it still could do: a session after which the worktree's .git link changed, the
 remote branch moved (or can't be read), the worktree's HEAD, branch or status
-changed, the Template changed, an Owned file is no longer the Template's, a
+changed, a file of the worktree git status doesn't show (node_modules) changed,
+the Template changed, an Owned file is no longer the Template's, a
 file of the ledgers or of .security was added, removed or changed, the
 session's group outlived its kill, or it staged a finding fixed or accepted, or
 a security one dismissed (only the person decides those), stops the round for
@@ -63,9 +64,13 @@ held until the group is gone, then passed on, and a SIGKILL of rollout.sh can't
 be caught, and leaves the session running (holding the lock until it ends).
 reapply.sh and land.sh run in groups of their own too, held the same way, which
 a SIGTERM, SIGHUP or interrupt of the round kills; one whose group is still
-there after the kill stops the round (GroupLeft). Its log is kept, 0600, in a 0700 folder of the user's own,
-~/.cache/repo-ci-baseline/logs: it can hold the session's report of security
-findings.
+there after the kill stops the round (GroupLeft). The round's own
+scripts/review.sh prepare and record run in groups of their own as well
+(run_bounded), for at most RECORD_TIMEOUT_SECONDS each, and when they can't
+record what the session staged, it is kept beside the log (staged_copy), with
+the command that records it. Its log is kept, 0600, in a 0700 folder of the
+user's own, ~/.cache/repo-ci-baseline/logs: it can hold the session's report of
+security findings.
 
 A PR is the repo's own (never a fork's of the same branch name), and when the
 worktree's branch has commits main lacks, it is the one at the worktree's head:
@@ -203,7 +208,7 @@ SANDBOX_TOOLS = ("bwrap", "socat") if sys.platform.startswith("linux") else ()
 # fixes belong in the Template, and pushing, posting and deciding stay with the round and the person.
 REVIEW_PROMPT = """You are running the pre-push-review skill, unattended, for rollout.sh --auto, in {worktree}, the re-Apply worktree of {repo}. The skill's instructions are below, from the Factory's Template; its base directory is {skill_dir}, the worktree's copy of the same files. Follow them, with these changes.
 Nobody will answer a question: never ask one or wait for a reply; where the skill says to ask the person or show them text first, don't, and say so in your last message.
-Review only: this session changes nothing in the repository. Don't edit, fix or commit anything, and don't run the gate (reapply.sh runs it on the push). Run one round over the whole branch, as the skill's last, review-only round: keep every finding open, with its suggested fix, and the person fixes or accepts them. Never dismiss a security finding (one the skill's triage marks security): stage it open, a repeat of a fixed .security entry too, with that entry's number as repeats and its number in the summary; only a finding that isn't a security one may be dismissed.
+Review only: this session changes nothing in the repository. Don't edit, fix or commit anything, and don't run the gate (reapply.sh runs it on the push). Run one round over the whole branch, as the skill's last, review-only round: stage open every finding the skill's triage doesn't dismiss, with its suggested fix, and the person fixes or accepts them; a finding the triage dismisses, with the skill's reason, is staged dismissed only when it isn't a security one. Never dismiss a security finding (one the skill's triage marks security): stage it open, a repeat of a fixed .security entry too, with that entry's number in the summary; leave repeats out, since rollout.sh drops it.
 Your run folder is {run}, made for you: use it where the skill says to make one with mktemp -d, and write nothing anywhere else. The worktree, the clone's git folder, its review ledgers and the .security record are read-only to you.
 Stage the round's findings with scripts/review.sh stage {run} <file> as the skill's step 5 says, as an empty array [] when it keeps none, and stop there: don't run scripts/review.sh record. rollout.sh records what you staged once the session ends, with the key and HEAD of this code.
 These files the branch changes are Owned Baseline files, which the next Apply overwrites: {owned}. A finding in one says, in its fix, what to change in the Factory's template/owned/.
@@ -257,8 +262,16 @@ SESSION_GIT_CONFIG = (
 )
 # run_review's code for a session that broke one of the Rules the round checks after it.
 SESSION_BROKE_A_RULE = 126
-# run_review's code for a session whose staged findings the round's scripts/review.sh record refused.
-RECORD_FAILED = 125
+# run_review's codes for a session whose staged findings the round couldn't record (scripts/review.sh prepare or
+# record refused, ran past RECORD_TIMEOUT_SECONDS or couldn't run), and for one that exited 0 having staged nothing,
+# not even []: above every exit code, so a session's own exit can't read as either.
+RECORD_FAILED = 256
+NOTHING_STAGED = 257
+# How long scripts/review.sh prepare and record may each run when the round records a review, a first pnpm install
+# included.
+RECORD_TIMEOUT_SECONDS = 600
+# The most of a text the session wrote (an id, a status, a file name) that a message prints.
+SHOWN_CHARS = 120
 # The run folder's file the session stages its findings in (review-ledger.mts's STAGED_FILE; a test holds them equal).
 STAGED_FILE = "findings.json"
 # The statuses a review-only round stages: a finding it keeps open, or one it dismissed that isn't a security one.
@@ -745,8 +758,10 @@ def folder_state(folder):
 
 def shown(text):
     """Text the session wrote (a finding's id or status, a file name), as a message may print it: quoted, with every
-    control character and anything not ASCII escaped, so it can't move the cursor or fake a line of its own."""
-    return ascii(text)
+    control character and anything not ASCII escaped, so it can't move the cursor or fake a line of its own, and cut to
+    SHOWN_CHARS, so it can't flood the terminal."""
+    text = ascii(text)
+    return text if len(text) <= SHOWN_CHARS else f"{text[:SHOWN_CHARS]}... ({len(text)} characters)"
 
 
 def link_text(worktree):
@@ -781,6 +796,7 @@ class Guard:
     security: str
     security_before: dict
     worktree_state: tuple
+    since: int = 0
 
 
 def remote_branch_command(worktree):
@@ -831,7 +847,7 @@ def session_guard(worktree, owned=OWNED, read=run_text):
     security = os.path.join(os.path.dirname(common), ".security")
     return Guard(worktree_state=state, worktree=worktree, remote_branch=remote, template=tree_hashes(owned), ledgers=ledgers,
                  ledgers_before=folder_state(ledgers), common=common, gitdir=gitdir, link=link, security=security,
-                 security_before=folder_state(security))
+                 security_before=folder_state(security), since=change_mark())
 
 
 def broken_rules(guard, owned=OWNED, read=run_text, changes=owned_changes):
@@ -840,7 +856,8 @@ def broken_rules(guard, owned=OWNED, read=run_text, changes=owned_changes):
     remote branch moved or can't be read, the worktree's HEAD, branch or status changed, the Template changed, an Owned file the branch changes is no longer the
     Template's as it was when the session started, or a file of the ledgers or of the .security record was added,
     removed or changed (folder_changes): the session writes neither, so a person's own review on another branch
-    meanwhile stops the round as well."""
+    meanwhile stops the round as well. A file of the worktree git doesn't show (an ignored one) changed since the
+    guard read it (changed_since) breaks one too."""
     broke = []
     link_kept = link_text(guard.worktree) == guard.link
     if not link_kept:
@@ -858,6 +875,13 @@ def broken_rules(guard, owned=OWNED, read=run_text, changes=owned_changes):
         elif state != guard.worktree_state:
             broke.append(f"{guard.worktree} changed during the session (its HEAD, its branch or its files): the session"
                          " reviews only, so it commits and edits nothing")
+        else:
+            touched = changed_since(guard.worktree, guard.since)
+            if touched:
+                broke.append(f"{shown(touched[0])}" + (f" and {len(touched) - 1} more" if len(touched) > 1 else "")
+                             + " changed during the session, though git status shows nothing (an ignored file, such as"
+                             " node_modules): the round would run the worktree's scripts/review.sh after it, so nothing"
+                             " is run or recorded")
     if tree_hashes(owned) != guard.template:
         broke.append("the Template changed during the session (the session, or your own edit in the Factory checkout)")
     if link_kept:
@@ -882,9 +906,47 @@ def folder_changes(folder, before, what):
     for name in sorted(set(before) | set(after)):
         if before.get(name) != after.get(name):
             how = "added" if name not in before else "removed" if name not in after else "changed"
-            broke.append(f"{os.path.join(folder, shown(name)[1:-1])} was {how} during the session, which can't write {what}:"
-                         " your own review or record on another branch meanwhile, or a sandbox that didn't hold")
+            broke.append(f"{shown(name)} in {folder} was {how} during the session, which can't write {what}: your own"
+                         " review or record on another branch meanwhile, or a sandbox that didn't hold")
     return broke
+
+
+def changed_since(root, since):
+    """The paths under root (the worktree, ignored files such as node_modules included, its .git link left to the
+    link's own check) whose inode changed at or after since, the ctime of a file made once the guard had read the
+    worktree: a write, a chmod, a rename or a new file sets a ctime, which no process can set back. git status sees
+    no ignored file, and the round runs the worktree's scripts/review.sh (and its node_modules/.bin/tsx) after the
+    session, outside the sandbox. A folder that can't be walked counts as changed."""
+    changed = []
+
+    def unwalkable(error):
+        changed.append(error.filename or root)
+
+    for folder, folders, files in os.walk(root, onerror=unwalkable):
+        if folder == root:
+            files = [name for name in files if name != ".git"]
+        for name in [*folders, *files]:
+            path = os.path.join(folder, name)
+            try:
+                if os.lstat(path).st_ctime_ns >= since:
+                    changed.append(path)
+            except FileNotFoundError:
+                changed.append(path)  # removed during the session
+            except OSError:
+                changed.append(path)
+    try:
+        if os.lstat(root).st_ctime_ns >= since:
+            changed.append(root)
+    except OSError:
+        changed.append(root)
+    return sorted(set(changed))
+
+
+def change_mark():
+    """The ctime of a file made now (in nanoseconds), from the clock the kernel stamps every inode with: whatever
+    changes after it has a ctime at or after it."""
+    with tempfile.TemporaryFile() as handle:
+        return os.fstat(handle.fileno()).st_ctime_ns
 
 
 def is_security(finding):
@@ -900,7 +962,11 @@ def staged_findings(run):
     """(the findings the session staged in run, the Rules they break): (None, []) when it staged none, and (None,
     [the rule]) when the file isn't a JSON array of objects that record_bytes reads. A review-only round stages each
     finding open, or dismissed when it isn't a security one (only the person decides one): fixed or accepted breaks a
-    rule, and so does a security finding dismissed. Everything else (a field, an id taken) is record's to refuse."""
+    rule, and so does a security finding dismissed. A finding's repeats is dropped (and said in the log): it would tie
+    the finding to a .security entry, which the person's accept of the finding then accepts too, and the session
+    could name any entry, an open one of another branch's. The record then matches a repeat by its text alone, and
+    one worded otherwise gets an entry of its own, open, for the person. Everything else (a field, an id taken) is
+    record's to refuse."""
     path = os.path.join(run, STAGED_FILE)
     if not os.path.lexists(path):
         return None, []
@@ -923,46 +989,122 @@ def staged_findings(run):
     return (None if broke else findings), broke
 
 
-def record_review(worktree, run, out, run_command=None):
+def staged_copy(log):
+    """Where the findings a session staged are kept when the round can't record them: beside its log, in a 0700
+    folder whose findings.json is 0600, as scripts/review.sh record --staged reads them."""
+    return f"{log}.staged"
+
+
+def record_command(worktree, staged):
+    """The command the person runs to record findings kept in staged themselves, once what refused them is put right:
+    the key and HEAD of the worktree's code now, from scripts/review.sh prepare, given to scripts/review.sh record."""
+    here, folder = shlex.quote(worktree), shlex.quote(staged)
+    return (f"cd {here} && set -- $(scripts/review.sh prepare \"$(mktemp -d)\") && printf"
+            f" '{{\"reviewedKey\":\"%s\",\"reviewedHead\":\"%s\",\"rounds\":1,\"reviewerAgent\":\"{REVIEWER_AGENT}\"}}'"
+            f" \"$1\" \"$2\" | scripts/review.sh record - --staged {folder}")
+
+
+def write_staged(folder, text):
+    """Make folder 0700 and write text to its findings.json, 0600, never over a file already there."""
+    os.mkdir(folder, 0o700)
+    fd = os.open(os.path.join(folder, STAGED_FILE), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(text)
+
+
+def run_bounded(command, cwd, stdin, stdout, stderr, timeout=RECORD_TIMEOUT_SECONDS, popen=subprocess.Popen,
+                end=None, clock=time.monotonic):
+    """A command the round runs to record a review (scripts/review.sh prepare or record), in a process group of its
+    own that holds the round's lock: its exit code, or None when it ran past timeout seconds. Its group is killed
+    whole however it ends, so nothing it started (tsx's node, a first pnpm install) goes on writing the ledgers or
+    holding their lock, and a terminal's interrupt reaches only the round, which holds it until the record ends.
+    Raises GroupLeft when the group is still there after the kill."""
+    child = popen(command, cwd=cwd, stdin=stdin, stdout=stdout, stderr=stderr, start_new_session=True,
+                  pass_fds=held_lock_fds())
+    code = None
+    try:
+        code = wait_for(child, timeout, [], clock)
+    finally:
+        if not (end or end_group)(child):
+            raise GroupLeft(f"what {os.path.basename(command[0])} {command[1]} left in its process group was still"
+                            f" there {GROUP_WAIT_SECONDS} s after it was killed, and may still write the review ledgers"
+                            f" and .security: {group_hint(child.pid)}, before you resume")
+    return code
+
+
+def record_review(worktree, run, out, head, keep, bounded=run_bounded):
     """Record the findings the session staged in run, as the review's record: scripts/review.sh prepare in a folder of
-    the round's own gives the key and HEAD of the code (the worktree is as it was before the session, as broken_rules
-    found), and scripts/review.sh record takes them, with the staged findings copied there 0600 (record reads only a
-    file of the person's own). Both are the worktree's, its Owned copies the Template's, and run as the gate on the
-    push runs them, outside the sandbox. (exit code, the Rules broken): 0 when it recorded; 0 too when the session
-    staged nothing, which the gate then still refuses; RECORD_FAILED when prepare or record refused; and
-    SESSION_BROKE_A_RULE with the Rules when the staged findings break one (staged_findings). Their output goes to
-    out, the log."""
-    run_command = run_command or subprocess.run
+    the round's own gives the key and HEAD of the code, and scripts/review.sh record takes them, with the staged
+    findings copied there 0600 (record reads only a file of the person's own). Both are the worktree's, its Owned
+    copies the Template's, and run as the gate on the push runs them, outside the sandbox (run_bounded). head is the
+    HEAD the guard read before the session: a prepare at another one means something committed there since, and
+    nothing is recorded. (exit code, the Rules broken): 0 when it recorded; NOTHING_STAGED when the session staged
+    nothing, not even []; RECORD_FAILED when prepare or record refused, ran past its time or can't be told to have
+    printed the key and HEAD, and then the findings are kept in keep (staged_copy) and the log says how to record
+    them; SESSION_BROKE_A_RULE with the Rules when the staged findings break one (staged_findings), or HEAD moved.
+    Their output goes to out, the log."""
     findings, broke = staged_findings(run)
     if broke:
         return SESSION_BROKE_A_RULE, broke
     if findings is None:
-        out.write(f"rollout.sh: the session staged no findings in {run}, so no review was recorded\n")
-        return 0, []
+        out.write(f"rollout.sh: the session staged no findings in {run}, not even [], so no review was recorded\n")
+        return NOTHING_STAGED, []
+    for finding in findings:
+        if "repeats" in finding:
+            out.write(f"rollout.sh: {shown(finding.get('id'))}'s repeats {shown(finding['repeats'])} was dropped:"
+                      " the record matches the finding to a .security entry by its text alone\n")
+            del finding["repeats"]
+    try:
+        text = json.dumps(findings)
+    except (RecursionError, ValueError):
+        return SESSION_BROKE_A_RULE, [f"{shown(os.path.join(run, STAGED_FILE))} nests too deep to be written again"]
     review = os.path.join(worktree, "scripts", "review.sh")
+
+    def failed(why):
+        out.write(f"rollout.sh: {why}, so the review wasn't recorded\n")
+        try:
+            write_staged(keep, text)
+        except OSError as error:
+            out.write(f"rollout.sh: and what the session staged couldn't be kept ({error}), so it is gone\n")
+        else:
+            out.write(f"rollout.sh: what the session staged is kept in {keep}; once what refused it is put right,"
+                      f" record it with:\n  {record_command(worktree, keep)}\n")
+        return RECORD_FAILED, []
+
     with tempfile.TemporaryDirectory(prefix="rollout-record.") as own:
         staged = os.path.join(own, "staged")
-        os.mkdir(staged, 0o700)
-        fd = os.open(os.path.join(staged, STAGED_FILE), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(findings, handle)
+        write_staged(staged, text)
+        printed = os.path.join(own, "prepared")
         out.flush()
-        prepared = run_command([review, "prepare", os.path.join(own, "prepare")], cwd=worktree, capture_output=True,
-                               text=True, errors="replace", stdin=subprocess.DEVNULL, timeout=600)
-        lines = prepared.stdout.split()
-        if prepared.returncode != 0 or len(lines) != 2:
-            out.write(f"rollout.sh: scripts/review.sh prepare exited {prepared.returncode}, so the review wasn't"
-                      f" recorded:\n{prepared.stderr}")
-            return RECORD_FAILED, []
-        key, head = lines
-        review_input = json.dumps({"reviewedKey": key, "reviewedHead": head, "rounds": 1, "reviewerAgent": REVIEWER_AGENT})
+        with open(printed, "w+", encoding="utf-8") as key_and_head:
+            code = bounded([review, "prepare", os.path.join(own, "prepare")], cwd=worktree, stdin=subprocess.DEVNULL,
+                           stdout=key_and_head, stderr=out)
+            key_and_head.seek(0)
+            lines = key_and_head.read(4096).split()
+        if code is None:
+            return failed(f"scripts/review.sh prepare ran past {RECORD_TIMEOUT_SECONDS} s and was stopped")
+        if code != 0 or len(lines) != 2:
+            return failed(f"scripts/review.sh prepare exited {code} and printed {len(lines)} line(s), not its key and"
+                          " HEAD")
+        key, prepared_head = lines
+        if prepared_head != head:
+            return SESSION_BROKE_A_RULE, [f"the worktree's HEAD was {shown(prepared_head)} by the time the review was"
+                                          f" recorded, not {head} as the session reviewed it: something committed there"
+                                          " since, so nothing was recorded"]
+        given = os.path.join(own, "review.json")
+        with open(given, "w", encoding="utf-8") as handle:
+            json.dump({"reviewedKey": key, "reviewedHead": prepared_head, "rounds": 1, "reviewerAgent": REVIEWER_AGENT},
+                      handle)
         out.write(f"rollout.sh: recording the {len(findings)} finding(s) the session staged\n")
         out.flush()
-        recorded = run_command([review, "record", "-", "--staged", staged], cwd=worktree, input=review_input,
-                               stdout=out, stderr=subprocess.STDOUT, text=True, timeout=600)
-        if recorded.returncode != 0:
-            out.write(f"rollout.sh: scripts/review.sh record exited {recorded.returncode}, so the review wasn't recorded\n")
-            return RECORD_FAILED, []
+        with open(given, encoding="utf-8") as review_input:
+            code = bounded([review, "record", "-", "--staged", staged], cwd=worktree, stdin=review_input, stdout=out,
+                           stderr=subprocess.STDOUT)
+        out.flush()
+        if code is None:
+            return failed(f"scripts/review.sh record ran past {RECORD_TIMEOUT_SECONDS} s and was stopped")
+        if code != 0:
+            return failed(f"scripts/review.sh record exited {code}")
     return 0, []
 
 
@@ -1063,7 +1205,8 @@ def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, ti
                skill=read_skill, agents=agent_definition, record=record_review):
     """/pre-push-review headless in worktree: (exit code, the session's log, the Rules it broke). 124 when it runs past
     its time, 127 when it can't start, SESSION_BROKE_A_RULE when it broke one (they are listed, and in the log too),
-    RECORD_FAILED when what it staged couldn't be recorded. The session runs in Claude Code's sandbox
+    RECORD_FAILED when what it staged couldn't be recorded (it is kept, staged_copy), NOTHING_STAGED when it exited 0
+    having staged nothing. The session runs in Claude Code's sandbox
     (session_settings) with the skill and its agent from the Template, no settings file, no GitHub sign-in and a
     temporary folder of its own, with the run folder it stages its findings in; it leads a process group of its own,
     which is killed whole whenever it ends; a SIGINT, SIGTERM or SIGHUP while it runs is held until the group is gone,
@@ -1130,9 +1273,14 @@ def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, ti
         if not broke and code == 0:
             with deferred_signals() as got:
                 try:
-                    code, broke = record(worktree, run, out)
+                    code, broke = record(worktree, run, out, before.worktree_state[0], staged_copy(log))
+                except GroupLeft as error:
+                    broke = [str(error)]
                 except (OSError, subprocess.SubprocessError) as error:
                     out.write(f"rollout.sh: can't record the review: {type(error).__name__}: {error}\n")
+                    code = RECORD_FAILED
+                except Exception:  # noqa: BLE001 - a bug while recording is a stop that keeps the signal, not a crash
+                    out.write(f"rollout.sh: recording the review failed:\n{traceback.format_exc()}")
                     code = RECORD_FAILED
             if got:
                 raise passed_on(got[0])
@@ -1191,7 +1339,8 @@ def run_in_group(command, popen=subprocess.Popen, end=None, clock=time.monotonic
     starts until its group is gone (a second one meanwhile is dropped), then the first is passed on, as for a review
     session; a command that can't start raises its OSError, and one whose group is still there after the kill raises
     GroupLeft (a stop: it can still work in the worktree, and holds the lock), each after a signal that came
-    meanwhile."""
+    meanwhile, which is passed on in their place (a GroupLeft is then written to stderr, so the person still hears of
+    the group)."""
     code, failed = None, None
     with deferred_signals() as got:
         try:
@@ -1208,6 +1357,8 @@ def run_in_group(command, popen=subprocess.Popen, end=None, clock=time.monotonic
                                        f" {GROUP_WAIT_SECONDS} s after it was killed, and holds the round's lock and"
                                        f" may still work in its worktree: {group_hint(child.pid)}, before you resume")
     if got:
+        if isinstance(failed, GroupLeft):
+            sys.stderr.write(f"rollout.sh: {failed}\n")  # the signal wins, but the person still has to end the group
         raise passed_on(got[0])
     if failed is not None:
         raise failed
@@ -1310,14 +1461,19 @@ def drive(repo, path, brings, reapply, review, say):
         say(f"── rollout: {short_name(repo)}: review session exited {code}; log: {log}")
         if broke:
             here = shlex.quote(worktree)
-            return Outcome("person", f"the review session broke a rule: {broke[0]}"
+            return Outcome("person", f"the review session broke a rule, so nothing was recorded: {broke[0]}"
                            + (f" (and {len(broke) - 1} more)" if len(broke) > 1 else "") + f"; see {log}. Put it right"
-                           f" before you resume, since a resume starts from what it finds: git -C {here} status shows the"
-                           f" worktree, and cd {here} && scripts/review.sh security the .security record")
+                           " before you resume, since a resume starts from what it finds:"
+                           f" git -C {here} status --ignored shows the worktree, cd {here} && scripts/review.sh report"
+                           f" shows the review ledgers, and cd {here} && scripts/review.sh security shows the .security"
+                           " record")
         if code != 0:
             why = {124: f"ran past {REVIEW_TIMEOUT_MINUTES} minutes and was stopped",
                    127: "couldn't be started (the log's rollout.sh: line says why)",
-                   RECORD_FAILED: "staged findings scripts/review.sh record refused (the log says why)"}.get(code, f"exited {code}")
+                   NOTHING_STAGED: "exited 0 having staged no findings, not even [], so no review was recorded",
+                   RECORD_FAILED: "staged findings the round couldn't record (scripts/review.sh prepare or record"
+                                  f" failed; the log says why, and how to record them from {staged_copy(log)} once it"
+                                  " is put right)"}.get(code, f"exited {code}")
             return Outcome("failed", f"the review session {why} (see {log}); run /pre-push-review in"
                            f" {shlex.quote(worktree)}, then resume")
 

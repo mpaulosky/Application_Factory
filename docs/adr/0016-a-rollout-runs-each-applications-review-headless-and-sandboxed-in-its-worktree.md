@@ -27,19 +27,24 @@ stops only where a person must decide, and prints the command that decides it an
 The session runs unattended and reads text people without write access may have written, so it reviews only, and runs in Claude Code's sandbox, which the operating system
 enforces (bubblewrap on Linux) on every Bash command and everything it starts:
 
-- **Review only.** It runs one round over the whole branch, as the skill's last, review-only round, and keeps every finding open with its suggested fix; a security
-  finding is never dismissed, a repeat of a fixed `.security` entry included. It edits, fixes and commits nothing and runs no gate, so nothing it wrote runs later as the
-  person: the gate on the push and the Application's build and tests run only the code the re-Apply wrote. A Critical or Warning finding stops the round for the person,
-  who fixes it with `/pre-push-review` in the worktree or accepts it.
+- **Review only.** It runs one round over the whole branch, as the skill's last, review-only round, and stages each finding open with its suggested fix, or dismissed
+  with the skill's reason when it isn't a security one; a security finding is never dismissed, a repeat of a fixed `.security` entry included. It edits, fixes and
+  commits nothing and runs no gate, so nothing it wrote runs later as the person: the gate on the push and the Application's build and tests run only the code the
+  re-Apply wrote. A Critical or Warning finding stops the round for the person, who fixes it with `/pre-push-review` in the worktree or accepts it.
 - **The round records, not the session.** The session stages its findings (`scripts/review.sh stage`) in a run folder the round made for it, and doesn't record them. Once it
   ends, exited 0 and broke no rule, the round reads the staged file without following a link, copies it into a folder of its own and runs the worktree's
   `scripts/review.sh prepare` for the key and HEAD and `scripts/review.sh record` with them, outside the sandbox, as the gate on the push runs those scripts. So the ledgers,
-  their entry maps and `.security` are written only by the record's own code, which checks each finding, its id and its `repeats` as it does for a person.
+  their entry maps and `.security` are written only by the record's own code, which checks each finding and its id as it does for a person. A HEAD other than the one
+  read before the session means something committed there since, and nothing is recorded. A finding's `repeats` is dropped: it ties the finding to a `.security`
+  entry, which the person's accept of the finding then accepts too, and the session could name any entry, an open one of another branch's; the record matches a
+  repeat by its text alone, and one worded otherwise gets an open entry of its own. Both commands run in process groups of their own, holding the lock, killed whole
+  when they end, for at most ten minutes each; when they refuse or run past it, what the session staged is kept beside the log with the command that records it.
 - **The sandbox.** Its Bash reads none of the person's credentials (`~/.ssh`, `~/.config/gh`, `~/.git-credentials`, `~/.netrc`, `~/.gitconfig`, the shells' start-up
   files, .NET's user secrets, the keyrings, cloud and package-registry sign-ins, shell histories, all of `~/.claude` and Claude Code's `CLAUDE_CONFIG_DIR`, the other sessions'
   logs, and wherever a variable such as `KUBECONFIG` or `XDG_CONFIG_HOME` moves one). It writes only a temporary folder of its own, its run folder among it: not the
-  worktree, which a sandbox otherwise lets its working folder be written, the clone's git folder, its review ledgers or the main checkout's `.security`. It reaches no host (it builds and
-  installs nothing, and a `git fetch` has nowhere to write: `reapply.sh` has just fetched), can't leave the sandbox (`allowUnsandboxedCommands: false`), and the session refuses to start without it (`failIfUnavailable`).
+  worktree, which a sandbox otherwise lets its working folder be written, the clone's git folder, its review ledgers or the main checkout's `.security`. It reaches no
+  host (it builds and installs nothing, and a `git fetch` has nowhere to write: `reapply.sh` has just fetched), can't leave the sandbox
+  (`allowUnsandboxedCommands: false`), and the session refuses to start without it (`failIfUnavailable`).
 - **The file tools**, which run outside the sandbox, follow `dontAsk` permissions: anything not allowed is refused. They may read only the worktree, `.security` and the temporary
   folder, edit only the temporary folder (so never a ledger or a `.security` entry), start the reviewer agent, and run Bash, which is sandboxed.
   Only the built-in tools the review needs exist in the session (`--tools`).
@@ -53,12 +58,14 @@ enforces (bubblewrap on Linux) on every Bash command and everything it starts:
 - **Layers behind the sandbox.** git's push to GitHub is sent nowhere, and deny rules name the commands that must never run. The prompt names the Owned files the branch changes,
   says it runs unattended and review-only, and says a finding in an Owned file is fixed in the Template first.
 - **Checks after it.** A session after which the worktree's `.git` link changed (then no git runs there), the remote branch moved (or can't be read), the worktree's HEAD, branch or
-  status changed, the Template changed, an Owned file the branch changes is no longer the Template's, any file of the ledgers or `.security` was added, removed or changed
-  (the session writes neither, so a review the person records on another branch meanwhile stops it as well), or it staged a finding other than open or dismissed, or a
-  security one dismissed, stops the round for the person, and nothing is recorded. A dismissed finding counts as a security one when the ledger could read it as one, read
-  wider: graded Warning, not marked `security: false`, or a lens that names security once all but its letters are dropped. Files are read without following a symlink,
-  waiting on a FIFO or reading past a size; one that can't be read is compared by what `lstat` says of it. What the session wrote is printed escaped. A check that fails
-  is a stop too, not a crash.
+  status changed, a file of the worktree git status doesn't show changed (an ignored one such as `node_modules/.bin/tsx`, which the record runs: any inode with a ctime
+  after the guard read the worktree, which no process can set back), the Template changed, an Owned file the branch changes is no longer the Template's, any file
+  of the ledgers or `.security` was added, removed or changed (the session writes neither, so a review the person records on another branch meanwhile stops it as
+  well), or it staged a finding other than open or dismissed, or a security one dismissed, stops the round for the person, and nothing is recorded. A dismissed
+  finding counts as a security one when the ledger could read it as one, read wider: graded Warning, not marked `security: false`, or a lens that names security
+  once all but its letters are dropped. Files are read without following a symlink, waiting on a FIFO or reading past a size; one that can't be read is compared by
+  what `lstat` says of it. What the session wrote is printed escaped and cut short. A check that fails is a stop too, not a crash, and so is a session that exited 0
+  having staged nothing, not even `[]`.
 - **Its processes.** It runs in a process group of its own, killed whole however it ends (it exits, or runs past three hours), while its exited leader is still unreaped, so
   the group's id can't be another's (where Python has no `waitid`, macOS, the leader is reaped first: the best that platform allows); a group still there after the kill stops
   the round, since it could still write. An interrupt, a SIGTERM or a SIGHUP while it runs is held until the group is gone, then passed on, and one the caller ignores
@@ -89,7 +96,7 @@ The gate, the ledger and the review's rules are unchanged: the push still needs 
 - A Rollout runs without a person until a decision is needed. A review session costs Claude usage for each repo whose re-Apply writes an Owned file that carries behaviour; it has no
   `gh` sign-in, so it spends none of the owner's GitHub allowance (`references/tokens.md`).
 - Any Critical or Warning finding stops the round for a person (the gate refuses the push), in an Owned file or in the Application's own: a fix in an Owned file is a Factory
-  branch of its own, the Template-first rule. An Advisory one stays open for the follow-up issue, whose body the session writes to its run folder. A session that fixes as it
+  branch of its own, the Template-first rule. An Advisory one stays open in the recorded review, and the person files the follow-up issue. A session that fixes as it
   reviews would stop less often, but what it wrote would run as the person outside the sandbox, and its gate's installs can't run inside it; that is a follow-up, not this decision.
 - `reapply.sh` knows the gate stopped at its Local review step by the step's name, and how the check refuses by the ledger's own text on its stderr; a test holds them equal to
   `gate.sh`'s and `checkReview`'s, so rewording either fails `test.sh` until both change.
@@ -97,8 +104,10 @@ The gate, the ledger and the review's rules are unchanged: the push still needs 
   secret in a file the list doesn't name (another checkout's `.env`, say) is readable; with no host to reach, what the session reads can leave only through what it writes
   (its findings, its folder), which a person reads before publishing. `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` isn't used: in Claude Code 2.1.326 it forces the
   permission mode back to `default`, and the refused sign-in
-  secrets make it unneeded. The session reads no PR threads or issue, which a re-Apply reviewed before its first push hasn't got, and a session that ends without recording a review
-  is run once more, then the round stops. A SIGKILL of `rollout.sh` can't be caught, and leaves a running session to finish on its own, holding the lock.
+  secrets make it unneeded. The session reads no PR threads or issue, which a re-Apply reviewed before its first push hasn't got; a session whose recorded review the
+  gate still refuses (main moved meanwhile, say) is run once more, then the round stops. The record runs the worktree's own scripts (`scripts/review.sh` and its
+  `node_modules`) as the person, as the gate on the push does; the ctime check is what stands between a sandbox that didn't hold and that. A SIGKILL of
+  `rollout.sh` can't be caught, and leaves a running session to finish on its own, holding the lock.
 - What the session hands on is its staged findings, which the round records with the record's own code, never its own copy of the record's rules: an earlier version let
   the session record and checked the ledgers and `.security` after it by reading them as the record does, and every round of review found another way that reading and the
   record's differed. The round's checks can't tell a review's judgment from a steered one that raised less, or chose another `repeats`: that is the review's own trust, as
