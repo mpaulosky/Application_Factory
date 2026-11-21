@@ -21,7 +21,8 @@
 # Shell: shellcheck, and shfmt -d with no style flags, so it reads the repo's .editorconfig and wants the style the gate checks. A shell
 # file is one the gate takes for one: a *.sh, an extensionless file in the root's scripts/, or a git hook (pre-* or post-*, commit-msg
 # or prepare-commit-msg) in the root's .github/hooks, or in a .github/hooks under a folder whose .editorconfig has a [.github/hooks/*]
-# section (a repo that keeps a copy of the Template's hooks). shfmt skips the extensionless scripts/ files, which no .editorconfig
+# section (a repo that keeps a copy of the Template's hooks; only a gate that takes that folder checks those hooks too, and the notes
+# say so). shfmt skips the extensionless scripts/ files, which no .editorconfig
 # section styles, and runs only when it is v3.14 or a later v3 release, as the gate needs (another release can format the same file
 # differently). Neither tool runs code from the repository, and shfmt reads only .editorconfig. A shellcheck config could let it open
 # the files a source line names (external-sources) and, with check-sourced, quote their lines back to the agent. So SHELLCHECK_OPTS is
@@ -348,6 +349,9 @@ styles_hooks() {
 }
 # A shell file is linted only where the gate checks it (the header has the rule), and formatted only where .editorconfig styles it.
 shell_format=0
+# What the notes say still checks the file: a repository's gate checks the shell files it takes (its root's hooks among them), but a
+# hook under a nested .github/hooks only where that repository's own gate takes that folder too, as the Factory's does for its copy.
+gate_checks="the gate still checks it before the push"
 if [[ "$kind" == shell ]]; then
   hooks="${rel%/*}"
   case "$rel" in
@@ -361,7 +365,7 @@ if [[ "$kind" == shell ]]; then
         styled="${hooks%/.github/hooks}/.editorconfig"
         styles_hooks "$root/$styled"
         case $? in
-          0) ;;
+          0) gate_checks="the gate checks it only where it takes the hooks under ${hooks%/.github/hooks}, as it doesn't in most repositories" ;;
           2)
             python3 -I -c 'import json, sys; print(json.dumps({"systemMessage": sys.argv[1]}))' \
               "lint-edited-file.sh: $rel was not linted: $styled, which says whether its hooks are shell files the gate formats, could not be read (the gate still checks the repository's own hooks before the push)."
@@ -381,11 +385,14 @@ skipped=()
 notes=()
 shfmt_failed=0
 
-# run_linter <name> <command...>: runs it from the repo root. Anything but exit 0 is a violation, a crash included.
+# run_linter <name> <command...>: runs it from the repo root. Anything but exit 0 is a violation, a crash included. Sets LAST_RC to its
+# exit status.
+LAST_RC=0
 run_linter() {
   local name="$1" output rc=0
   shift
   output="$(cd "$root" && "$@" 2>&1)" || rc=$?
+  LAST_RC=$rc
   if ((rc != 0)); then
     if ((${#output} > MAX_OUTPUT)); then
       output="${output:0:MAX_OUTPUT}"$'\n'"... output cut at $MAX_OUTPUT of ${#output} characters"
@@ -490,7 +497,7 @@ print("-" if key is None else json.dumps(key))' "$path" 2> /dev/null || true)"
 # looks for one itself. 0, with sc_rc_path and sc_rc_why set, for the first the hook won't hand over: a symlink or not a regular file (it
 # could be any file, read as a config), one that can't be read (what it turns on is unknown), or one that names external-sources (which
 # lets shellcheck open the files a source line names) or check-sourced (which quotes their lines in the report the agent reads), in any
-# case, a comment included), or one with a line other than a blank, a comment or one of the keys sc_keys_known names: a key this hook
+# case, a comment included, or one with a line other than a blank, a comment or one of the keys sc_keys_known names: a key this hook
 # doesn't know could be a later shellcheck's way to turn either on. 1 otherwise, with sc_rc_found 1 and sc_rc_text and sc_rc_near the
 # nearest one's text and path, or sc_rc_found 0 when there is none. A config above the repository root, or the person's own in their
 # home, is not read: shellcheck gets --norc then, and the gate reads it.
@@ -521,7 +528,8 @@ sc_config_refused() {
         sc_rc_why="could not be read, so the hook can't tell what it turns on"
         return 0
       }
-      if [[ "$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')" =~ external-sources|check-sourced ]]; then
+      # In C, so bytes that aren't valid text in the caller's locale can't stop tr (BSD tr fails on them) and cut the text short.
+      if [[ "$(printf '%s' "$text" | LC_ALL=C tr '[:upper:]' '[:lower:]')" =~ external-sources|check-sourced ]]; then
         sc_rc_why="names external-sources or check-sourced, which could show this hook's output the lines of other files"
         return 0
       fi
@@ -538,6 +546,19 @@ sc_config_refused() {
     [[ "$at" != "$root" ]] || return 1
     at="${at%/*}"
   done
+}
+# in_checkouts <dir>: 0 when <dir>, resolved, is the file's repository, the project directory or a worktree the project lists, or is
+# inside one, the folders an agent writes with no prompt; 1 otherwise, and when <dir> can't be resolved (no file can be written there, and
+# the write that follows fails with its own note).
+in_checkouts() {
+  local d='' trusted
+  canon "$1" d || return 1
+  for trusted in "$root" ${PROJECT_ROOTS[@]+"${PROJECT_ROOTS[@]}"} ${project_canon:+"$project_canon"}; do
+    case "$d/" in
+      "$trusted"/*) return 0 ;;
+    esac
+  done
+  return 1
 }
 # The private copy of the config shellcheck is handed, removed however the hook ends.
 rc_copy=""
@@ -568,6 +589,9 @@ elif [[ "$kind" == shell ]]; then
   elif [[ "$rc_copy" != /* ]]; then
     # ShellCheck runs from the repository root, where a relative path names another file, and a copy beside the project could be swapped.
     notes+=("shellcheck was not run: TMPDIR is not an absolute path, so the hook made no private copy of its config $sc_rc_near")
+  elif in_checkouts "${rc_copy%/*}"; then
+    # The project's checkouts are where an agent writes with no prompt: a copy there could be swapped before shellcheck reads it.
+    notes+=("shellcheck was not run: TMPDIR is inside the project's checkouts, where the private copy of its config $sc_rc_near could be swapped")
   elif ! printf '%s\n' "$sc_rc_text" 2> /dev/null > "$rc_copy"; then
     notes+=("shellcheck was not run: the hook could not write a private copy of its config $sc_rc_near")
   else
@@ -582,9 +606,9 @@ elif [[ "$kind" == shell ]]; then
       if ! shfmt_version="$(cd "$root" && "$bin" --version 2> /dev/null)" || [[ -z "$shfmt_version" ]]; then
         notes+=("shfmt --version failed or printed nothing, so its release is unknown and shfmt was not run")
       elif [[ "$shfmt_version" =~ ^v3\.(1[4-9]|[2-9][0-9]|[1-9][0-9]{2,})\.[0-9]+$ ]]; then
-        failed_before=${#failures[@]}
+        # shfmt exits 1 for a diff or a file it can't parse, the two the hint is about; any other status is a crash or a usage error.
         run_linter shfmt "$bin" -d -- "$target"
-        ((${#failures[@]} == failed_before)) || shfmt_failed=1
+        ((LAST_RC != 1)) || shfmt_failed=1
       else
         notes+=("shfmt '${shfmt_version:0:40}' is not v3.14 or a later v3 release, whose format the gate checks")
       fi
@@ -668,6 +692,6 @@ if ((${#skipped[@]} > 0 || ${#notes[@]} > 0)); then
     note+="$extra"
   done
   python3 -I -c 'import json, sys; print(json.dumps({"systemMessage": sys.argv[1]}))' \
-    "lint-edited-file.sh: $rel was not fully linted: $note (the gate still checks it before the push)."
+    "lint-edited-file.sh: $rel was not fully linted: $note ($gate_checks)."
 fi
 exit 0

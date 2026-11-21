@@ -67,8 +67,9 @@ so its E2E tests find Chromium's system libraries in the sandbox. The step runs 
 keep `PLAYWRIGHT_VERSION` near the repo's `Microsoft.Playwright` version. It installs only the libraries: the browser itself is left to the test fixture at run time,
 so a Playwright bump needs no image change.
 A Seed file is written once, so an existing repo keeps its own Dockerfile and adds the step by hand.
-The same goes for shfmt, which the gate's gh check needs (repo-ci-baseline's ADR 0011): a Dockerfile written before it adds the Seed's `SHFMT_VERSION` `ARG`,
-its two `shfmt_sha` values and its download, check and install lines by hand, or the sandbox's gate fails with exit 2.
+The same goes for shfmt, which the gate's gh check (repo-ci-baseline's ADR 0011) and its Shell format step need: a Dockerfile written before it adds the Seed's
+`SHFMT_VERSION` `ARG`, its two `shfmt_sha` values and its download, check and install lines by hand, or the sandbox's gate fails naming shfmt (exit 1 from the Shell format step when
+a `*.sh` file or hook changed, otherwise exit 2 from the gh check).
 A repo that already has a Dockerfile adds `tini` to its `apt-get install` list and replaces its `ENTRYPOINT ["sleep", "infinity"]`
 with `ENTRYPOINT ["tini", "--", "sleep", "infinity"]`: with `sleep` as PID 1,
 nothing reaps the processes the gate orphans, they stay zombies holding their PIDs, and a long build ends unable to fork (the gate fails with `Resource temporarily unavailable`,

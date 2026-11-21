@@ -97,8 +97,8 @@ lists() {
     # The step's own helper and root, which the sourced lines use.
     # shellcheck disable=SC2329,SC2034
     step() { :; }
-    # shellcheck disable=SC2034
-    ROOT="$repo" MD_ARGS_FILE="$work/md-args"
+    # shellcheck disable=SC2034 # read by the sourced steps
+    ROOT="$repo" MD_ARGS_FILE="$work/md-args" YELLOW='' CYAN='' RESET=
     export MD_ARGS_FILE
     : > "$MD_ARGS_FILE"
     # shellcheck disable=SC2030 # the stubs first, in this subshell only
@@ -209,11 +209,11 @@ format_run() {
     set -euo pipefail
     # shellcheck disable=SC2329 # called by the sourced step
     step() { :; }
-    # shellcheck disable=SC2034 # read by the sourced step
-    SHFMT_FILES=(-dash.sh) MD_ARGS_FILE="$work/md-args"
+    # shellcheck disable=SC2034 # read by the sourced step; FORMAT_BASE stands for the merge base the gate found (empty: no origin/main)
+    SHFMT_FILES=(-dash.sh) MD_ARGS_FILE="$work/md-args" BASE="${FORMAT_BASE-base}" YELLOW='' RESET=
     export MD_ARGS_FILE
     : > "$MD_ARGS_FILE"
-    # shellcheck disable=SC2031 # the step's own PATH, in this subshell only
+    # shellcheck disable=SC2030,SC2031 # the step's own PATH, in this subshell only
     PATH="${1:-$stubs:$PATH}"
     # shellcheck disable=SC1090 # the gate's own shell format step
     source "$format_step"
@@ -245,6 +245,23 @@ format_run
 check "shell format: a file shfmt would change, or can't parse, stops the gate, and says to run shfmt -w or fix the syntax" \
   "[[ $fst != 0 ]] && [[ \"\$ferr\" == *'run shfmt -w on each file'*'fix the syntax of any file it could not parse'* ]]"
 unset SHFMT_STUB_EXIT
+# Without an origin/main the changed files are every tracked file: the step is skipped with a note, and shfmt doesn't run.
+FORMAT_BASE='' format_run
+check "shell format: with no origin/main the step is skipped, saying why, and shfmt doesn't run" \
+  "[[ $fst == 0 ]] && ! grep -qF -- '-dash.sh' '$work/md-args'"
+# shellcheck disable=SC2034 # read inside the check's eval string
+skip_out="$(cd "$repo" && (
+  set -euo pipefail
+  # shellcheck disable=SC2329 # called by the sourced step
+  step() { :; }
+  # shellcheck disable=SC2034 # read by the sourced step
+  SHFMT_FILES=(-dash.sh) MD_ARGS_FILE="$work/md-args" BASE='' YELLOW='' RESET=''
+  # shellcheck disable=SC2030,SC2031 # the stubs first, in this subshell only
+  PATH="$stubs:$PATH"
+  # shellcheck disable=SC1090 # the gate's own shell format step
+  source "$format_step"
+) 2>&1)"
+check "shell format: the skip says there is no origin/main" "[[ \"\$skip_out\" == *'No origin/main'*'skipping the shell format check'* ]]"
 noshfmt="$work/noshfmt"
 mkdir -p "$noshfmt"
 for tool in bash env; do ln -s "$(command -v "$tool")" "$noshfmt/$tool"; done

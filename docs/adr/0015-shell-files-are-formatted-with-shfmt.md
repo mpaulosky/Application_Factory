@@ -63,7 +63,8 @@ An Application's gate now checks format too, but only on the shell files a branc
 in a Rollout would bury the Rollout's real changes, so each one takes the style when someone next touches it. An extensionless `scripts/` file, which the gate's shellcheck step
 also checks, is in no `.editorconfig` section, so shfmt would want its own defaults there; it is left out. The step needs shfmt v3.14 or a later v3 release, which the gh check already
 needs, and stops, naming it, without one. An Application's CI doesn't check format: its Lint Actions workflow runs shellcheck on every file, and checking only changed files there
-would need the PR's base, so the gate, which the pre-push hook runs, is the check.
+would need the PR's base, so the gate, which the pre-push hook runs, is the check. Without an `origin/main` the gate's changed files are every tracked file, so the step is
+skipped with a note rather than ask for every script at once.
 
 The edit-time lint ([ADR 0011](0011-markdown-and-yaml-are-linted-as-they-are-written.md), its Update) runs `shfmt -d` on the same files as each is written, in the Factory and in
 Applications, so the format is fixed in the turn that broke it. The Factory's gate still checks every shell file.

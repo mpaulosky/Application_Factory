@@ -5,8 +5,9 @@
 # The linters are stubs on PATH, so the suite needs none of them: each stub fails when the file it is given holds the word BAD
 # (CRASH: exit 3), and logs its arguments and working directory, which is how the cases tell which linter ran, on which path,
 # with which config. The shfmt stub answers --version with $SHFMT_STUB_VERSION (v3.14.1 when unset), and a stub named in
-# $STUB_PASS passes whatever the file holds; $SHFMT_STUB_VERSION_EXIT is the exit status of shfmt --version (0 when unset). Last blocks run the real markdownlint-cli2, shellcheck and shfmt when each is installed;
-# an Application's hook-tests job may have none, so there those blocks are skipped. A self-test runs the suite once more with a TMPDIR that does not exist (LINT_TEST_NESTED=1 keeps
+# $STUB_PASS passes whatever the file holds; $SHFMT_STUB_VERSION_EXIT is the exit status of shfmt --version (0 when unset). Last blocks run the real markdownlint-cli2 when it is installed, and the real shellcheck
+# and shfmt together, when shellcheck, shfmt v3.14 or a later v3 and the Template's .editorconfig are all there; an Application's
+# hook-tests job may have none, so there those blocks are skipped. A self-test runs the suite once more with a TMPDIR that does not exist (LINT_TEST_NESTED=1 keeps
 # that run from starting another).
 # Usage: scripts/tests/lint-edited-file.test.sh
 set -uo pipefail
@@ -538,6 +539,8 @@ check "without a .yamllint.yml, yamllint runs with its defaults" ${p[@]+"${p[@]}
 printf 'rules: {}\n' > "$repo/.yamllint.yml"
 
 # --- Shell ----------------------------------------------------------------
+NOLINT_SH="$WORK/nolint-sh"
+link_tools "$NOLINT_SH"
 mkdir -p "$repo/scripts/sub" "$repo/.github/hooks" "$repo/tools/.github/hooks" "$repo/tmpl/.github/hooks" "$repo/notes"
 printf 'echo ok\n' > "$repo/scripts/ok.sh"
 printf 'BAD\n' > "$repo/scripts/bad.sh"
@@ -576,6 +579,21 @@ p=()
 [[ "$STDERR" == *"run shfmt -w ./scripts/bad.sh"* ]] || p+=("no shfmt -w hint")
 check "a shfmt finding alone exits 2 with the shfmt -w hint" ${p[@]+"${p[@]}"}
 
+# A shellcheck or shfmt that crashes (exit 3) is a violation, not a clean file, and gets no shfmt -w hint: it is no diff.
+printf 'CRASH\n' > "$repo/scripts/crash.sh"
+for crasher in shellcheck shfmt; do
+  other=shfmt
+  [[ "$crasher" == shellcheck ]] || other=shellcheck
+  RUN_ENV=(STUB_PASS="$other")
+  run_hook "$(edit_json "$repo/scripts/crash.sh")"
+  RUN_ENV=(RUN_ENV_UNUSED=1)
+  p=()
+  [[ $STATUS -eq 2 && "$STDERR" == *"$crasher (exit 3):"* && "$STDERR" == *"$crasher crashed"* ]] || p+=("exit $STATUS, stderr: $STDERR")
+  [[ "$STDERR" != *"run shfmt -w"* ]] || p+=("a crash got the shfmt -w hint")
+  [[ "$STDERR" == *"tell the person instead of retrying"* ]] || p+=("no hint to hand a broken linter to the person")
+  check "a $crasher that crashes exits 2, with no shfmt -w hint" ${p[@]+"${p[@]}"}
+done
+
 run_hook "$(edit_json "$repo/scripts/tool")"
 p=()
 [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
@@ -595,6 +613,17 @@ for hook in pre-commit pre-push post-checkout post-rewrite commit-msg prepare-co
     check "the git hook $at/$hook goes through shellcheck and shfmt" ${p[@]+"${p[@]}"}
   done
 done
+
+# A note about a nested hook says only a gate that takes that folder checks it: an Application's gate takes the root's hooks alone.
+run_hook "$(edit_json "$repo/tmpl/.github/hooks/pre-push")" "$NOLINT_SH"
+p=()
+[[ $STATUS -eq 0 && "$(system_message "$STDOUT")" == *"was not fully linted: shellcheck shfmt not installed (the gate checks it only where it takes the hooks under tmpl, as it doesn't in most repositories)." ]] \
+  || p+=("exit $STATUS, note: $STDOUT")
+check "a nested hook's note says which gate checks it" ${p[@]+"${p[@]}"}
+run_hook "$(edit_json "$repo/.github/hooks/pre-push")" "$NOLINT_SH"
+p=()
+[[ "$(system_message "$STDOUT")" == *"(the gate still checks it before the push)." ]] || p+=("note: $STDOUT")
+check "a root hook's note says the gate still checks it" ${p[@]+"${p[@]}"}
 
 # What is not a shell file the gate checks: each left alone, with nothing run and nothing said.
 printf 'BAD\n' > "$repo/tools/.github/hooks/pre-push"
@@ -948,6 +977,49 @@ run_hook "$(edit_json "$repo/scripts/ok.sh")"
 p=()
 [[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"shellcheck was not run: its config .shellcheckrc names external-sources"* ]] || p+=("log: $(cat "$LOG"), note: $STDOUT")
 check "a refused config farther up the path keeps shellcheck from running, though a nearer one is fine" ${p[@]+"${p[@]}"}
+printf 'disable=SC2000\n' > "$repo/.shellcheckrc"
+# A mktemp that succeeds and prints nothing made no copy either.
+printf '#!/bin/sh\nexit 0\n' > "$FAKE_MKTEMP/mktemp"
+run_hook "$(edit_json "$repo/scripts/ok.sh")" "$FAKE_MKTEMP:$STUBS:$TOOLS"
+p=()
+[[ $STATUS -eq 0 && -z "$STDERR" && "$(ran shellcheck)" == 0 && "$(ran shfmt)" == 1 ]] || p+=("exit $STATUS, stderr: $STDERR, log: $(cat "$LOG")")
+[[ "$(system_message "$STDOUT")" == *"shellcheck was not run: the hook could not create a private copy of its config scripts/.shellcheckrc (mktemp failed)"* ]] || p+=("note: $STDOUT")
+check "a mktemp that prints nothing makes no copy, and the note says mktemp failed" ${p[@]+"${p[@]}"}
+# A TMPDIR inside the project's checkouts, where an agent writes with no prompt: the copy there could be swapped, so it isn't used.
+mkdir -p "$repo/tmp"
+RUN_ENV=(TMPDIR="$repo/tmp")
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ $STATUS -eq 0 && -z "$STDERR" && "$(ran shellcheck)" == 0 ]] || p+=("exit $STATUS, stderr: $STDERR, log: $(cat "$LOG")")
+[[ "$(system_message "$STDOUT")" == *"shellcheck was not run: TMPDIR is inside the project's checkouts, where the private copy of its config scripts/.shellcheckrc could be swapped"* ]] \
+  || p+=("note: $STDOUT")
+[[ -z "$(ls -A "$repo/tmp")" ]] || p+=("the copy was left: $(ls -A "$repo/tmp")")
+check "a TMPDIR inside the project is not used for the private copy" ${p[@]+"${p[@]}"}
+rmdir "$repo/tmp"
+# Without rm the copy stays in TMPDIR, the run is otherwise clean, and nothing is said on stderr.
+NORM="$WORK/norm"
+link_tools "$NORM"
+rm "$NORM/rm"
+mkdir -p "$WORK/rctmp-norm"
+RUN_ENV=(TMPDIR="$WORK/rctmp-norm")
+run_hook "$(edit_json "$repo/scripts/ok.sh")" "$STUBS:$NORM"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ $STATUS -eq 0 && -z "$OUTPUT" && "$(ran shellcheck)" == 1 ]] || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
+[[ -n "$(ls -A "$WORK/rctmp-norm")" ]] || p+=("no copy left behind, though rm is missing")
+check "without rm the private copy stays in TMPDIR, and the run is otherwise clean" ${p[@]+"${p[@]}"}
+rm -r "$WORK/rctmp-norm"
+# A byte that isn't valid text before external-sources doesn't hide it: the check reads the config in C. Tried in a UTF-8 locale where
+# one is installed (BSD tr fails on such a byte there).
+printf '# \xe9 external-sources=true\n' > "$repo/scripts/.shellcheckrc"
+RUN_ENV=(LC_ALL="${utf8_hook:-C}")
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
+RUN_ENV=(RUN_ENV_UNUSED=1)
+p=()
+[[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"its config scripts/.shellcheckrc names external-sources or check-sourced"* ]] || p+=("log: $(cat "$LOG"), note: $STDOUT")
+check "a byte that isn't valid text before external-sources doesn't hide it" ${p[@]+"${p[@]}"}
+rm "$repo/scripts/.shellcheckrc" "$repo/.shellcheckrc"
 rm "$repo/scripts/.shellcheckrc" "$repo/.shellcheckrc"
 # The keys handed over: blanks, comments and disable, enable, source-path, shell and extended-analysis, a CRLF line among them. Any other
 # key, however spelled (a later shellcheck's, a typo, a BOM before it), keeps shellcheck from running.
@@ -2026,7 +2098,7 @@ fi
 # The hook feeds no data through a here-string or a heredoc: bash writes those to a temp file (always before 5.1), which fails where no
 # temporary folder can be written, so a shellcheck config would read as one with an unknown key.
 p=()
-! grep -nF -- '<<' "$SCRIPT" || p+=("the hook uses a here-string or heredoc")
+! grep -nE -- '<<<|<<-?[[:space:]]*["'"'"']?[A-Za-z_]' "$SCRIPT" || p+=("the hook uses a here-string or heredoc")
 check "the hook reads no data through a here-string or heredoc" ${p[@]+"${p[@]}"}
 
 if [[ -x "$SCRIPT" ]]; then
