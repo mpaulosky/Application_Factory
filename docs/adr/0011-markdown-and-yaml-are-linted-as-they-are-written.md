@@ -71,12 +71,13 @@ whose Update makes an Application's gate check the changed shell files' format).
 Factory). shfmt skips the extensionless `scripts/` files, which no `.editorconfig` section styles, and runs only when it is v3.14 or a later v3 release, as the gate needs; another
 is named in the `systemMessage`. Neither tool runs code from the repository, and shfmt reads only `.editorconfig`. shellcheck's `.shellcheckrc` can turn on `external-sources`, which
 opens the files a `source` line names, and `--check-sourced` quotes their lines in the report the agent reads, a way round what the person's settings deny Claude. So the hook clears
-`SHELLCHECK_OPTS`, reads the configs between the file and the repository root itself, and hands shellcheck the nearest one's text through a pipe (`--rcfile <(...)`), or
-`--norc` when there is none: shellcheck never looks for one, so a config above the root, or one changed after the check, is never read. A temporary copy was tried first and
-dropped: a named file in a shared folder can be swapped before shellcheck reads it, which a descriptor can't. The pipe is used only where bash gives a descriptor
-(`/dev/fd/N`); a bash without `/dev/fd` would give a named FIFO, which the hook refuses with a note. It doesn't run shellcheck under a config that is a symlink, not a
-regular file, unreadable, names `external-sources` or `check-sourced`, or sets a key outside an allow-list (`disable`, `enable`, `source-path`, `shell`, `extended-analysis`);
-the note says so. Plain `--norc` alone was not chosen: a repo's own `disable=` lines would then fail files its gate passes, and the pipe keeps them.
+`SHELLCHECK_OPTS`, reads the configs between the file and the repository root itself, and runs shellcheck with `--norc` and the nearest config's settings as the flags each
+key has (`disable` as `-e`, `enable` as `-o`, `shell` as `-s`, `source-path` as `-P`, `extended-analysis` as `--extended-analysis`): shellcheck reads no config at all, so one
+above the root, or one changed after the check, is never read. Two hand-overs were tried first and dropped. A temporary copy, a named file in a shared folder, can be swapped
+before shellcheck reads it. A pipe (`--rcfile <(...)`) can be reached by another process running as the person through `/proc/<pid>/fd`, and is a named FIFO in `TMPDIR` on a
+bash without `/dev/fd`. Flags leave nothing to reach. It doesn't run shellcheck under a config that is a symlink, not a regular file, unreadable, names `external-sources` or
+`check-sourced`, sets a key outside an allow-list (`disable`, `enable`, `source-path`, `shell`, `extended-analysis`), or gives one a value of a form the hook doesn't pass on;
+the note says so. Plain `--norc` alone was not chosen: a repo's own `disable=` lines would then fail files its gate passes, and the flags keep them.
 `test.sh` keeps the hook's hook-name and shfmt release rules equal to the gate's. The report's first line now says only that the gate checks the same file
 before the push, which is true of every kind; the pre-commit hook lints only Markdown, and an Application's CI doesn't check shell format. A note about a hook under a nested
 `.github/hooks` says instead that the gate checks it only where it takes that folder, since an Application's gate takes the root's hooks alone.
@@ -87,3 +88,7 @@ or another release, an empty, relative or odd path, CRLF or a byte-order mark, a
 matter loads it when a session works on a shell or Python script, not in every session. It is in `REVIEWED_ON_REAPPLY` too, since it steers how an agent writes code, and the
 Factory carries a copy of it (`scripts/gate.sh` lists it): the Factory's sessions edit scripts more than anything else, and its `CLAUDE.md` holds no such checklist.
 The Markdown and YAML rule has no copy, since the Factory's `CLAUDE.md` says the same.
+
+These reach the Fleet by a Rollout: the Owned `scripts/lint-edited-file.sh`, `scripts/gate.sh` and `.claude/rules/script-edits.md` arrive at each Application's next
+Rollout (the rules file is in `REVIEWED_ON_REAPPLY`, so that re-Apply needs a local review where the ledger is). The Seed `.sandcastle/roles/shared-rules.md` and
+`Dockerfile` changes never reach an Application that has them; it brings them over by hand (the skill's `references/sandcastle.md`, Migrating a repo).

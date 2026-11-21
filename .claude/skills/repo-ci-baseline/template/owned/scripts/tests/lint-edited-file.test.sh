@@ -69,7 +69,7 @@ mkdir -p "$STUBS"
 # make_stub <dir> <name>: a linter that logs "<name> <cwd> <args>"; exit 4 when its last argument is not a file, 3 when the file
 # holds CRASH, 1 when it holds BAD (BIG<n>: after printing n characters), else 0. Named in $STUB_PASS, it logs and passes.
 # shfmt --version prints $SHFMT_STUB_VERSION and logs nothing. A stub run with SHELLCHECK_OPTS set logs it on a line of its own, and one
-# given --rcfile <file> logs "RCFILE <the file's lines joined with |>" and "RCFILE_KIND pipe" or "RCFILE_KIND file", read while it runs.
+# given --rcfile logs "RCFILE <file>": the hook gives it none, and a test checks that.
 make_stub() {
   cat > "$1/$2" << 'EOF'
 #!/usr/bin/env bash
@@ -80,10 +80,7 @@ if [[ "$name" == shfmt && "${1:-}" == --version ]]; then
 fi
 echo "$name $(pwd -P) $*" >> "$STUB_LOG"
 [[ -z "${SHELLCHECK_OPTS+x}" ]] || echo "SHELLCHECK_OPTS=$SHELLCHECK_OPTS" >> "$STUB_LOG"
-if [[ "${1:-}" == --rcfile ]]; then
-  if [[ -p "$2" ]]; then echo "RCFILE_KIND pipe" >> "$STUB_LOG"; else echo "RCFILE_KIND file" >> "$STUB_LOG"; fi
-  echo "RCFILE $(tr '\n' '|' < "$2")" >> "$STUB_LOG"
-fi
+if [[ " $* " == *" --rcfile "* ]]; then echo "RCFILE $*" >> "$STUB_LOG"; fi
 [[ " ${STUB_PASS:-} " != *" $name "* ]] || exit 0
 file="${!#}"
 [[ -f "$file" ]] || { echo "$name: $file: no such file" >&2; exit 4; }
@@ -104,7 +101,7 @@ for tool in markdownlint-cli2 yamllint actionlint zizmor shellcheck shfmt; do ma
 link_tools() {
   mkdir -p "$1"
   local tool src
-  for tool in bash git python3 tr basename dirname env cat grep head mkdir mktemp rm; do
+  for tool in bash git python3 tr basename dirname env cat grep head mkdir; do
     src="$(command -v "$tool")" && ln -s "$src" "$1/$tool"
   done
 }
@@ -916,9 +913,8 @@ else
 fi
 chmod 644 "$repo/scripts/.shellcheckrc"
 rm "$repo/scripts/.shellcheckrc"
-# ShellCheck is handed the nearest config's text through a pipe (--rcfile <(...)), never left to look for one: the pipe holds that config's
-# text, and the nearer one wins (scripts/ before the root, .shellcheckrc before shellcheckrc). A pipe has no name for another process to
-# swap, so no file is made anywhere for it.
+# ShellCheck reads no config: it runs with --norc and the nearest config's settings as flags, and the nearer config wins (scripts/ before the
+# root, .shellcheckrc before shellcheckrc). It is never given --rcfile, and no file is made for it.
 printf 'disable=SC2000\n' > "$repo/.shellcheckrc"
 printf 'disable=SC1000\nsource-path=SCRIPTDIR\n' > "$repo/scripts/.shellcheckrc"
 printf 'disable=SC3000\n' > "$repo/scripts/shellcheckrc"
@@ -928,31 +924,60 @@ run_hook "$(edit_json "$repo/scripts/ok.sh")"
 RUN_ENV=(RUN_ENV_UNUSED=1)
 p=()
 [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
-grep -qE "^shellcheck $repo --rcfile [^ ]+ -- \./scripts/ok\.sh\$" "$LOG" || p+=("shellcheck was not handed --rcfile: $(cat "$LOG")")
-log_line "RCFILE_KIND pipe" || p+=("--rcfile named a file, not a pipe: $(cat "$LOG")")
-log_line "RCFILE disable=SC1000|source-path=SCRIPTDIR|" || p+=("the pipe doesn't hold the nearest config: $(cat "$LOG")")
+log_line "shellcheck $repo --norc -e SC1000 -P SCRIPTDIR -- ./scripts/ok.sh" || p+=("shellcheck didn't get the nearest config's flags: $(cat "$LOG")")
+! log_has "RCFILE" || p+=("shellcheck was given --rcfile: $(cat "$LOG")")
 [[ -z "$(ls -A "$WORK/rctmp")" ]] || p+=("a file was made in TMPDIR: $(ls -A "$WORK/rctmp")")
-check "shellcheck gets the nearest config's text through a pipe (--rcfile), and no file is made" ${p[@]+"${p[@]}"}
+check "shellcheck runs with --norc and the nearest config's settings as flags, and no file is made" ${p[@]+"${p[@]}"}
 rm "$repo/scripts/.shellcheckrc"
 run_hook "$(edit_json "$repo/scripts/ok.sh")"
 p=()
-log_line "RCFILE disable=SC3000|" || p+=("shellcheckrc in scripts/ did not win over the root's: $(cat "$LOG")")
+log_line "shellcheck $repo --norc -e SC3000 -- ./scripts/ok.sh" || p+=("shellcheckrc in scripts/ did not win over the root's: $(cat "$LOG")")
 check "a shellcheckrc in the file's folder wins over the root's .shellcheckrc" ${p[@]+"${p[@]}"}
 rm "$repo/scripts/shellcheckrc"
+# Two folders down the walk still reaches the root's config (R103): scripts/sub/ok.sh takes the root's settings.
+mkdir -p "$repo/scripts/sub"
+printf 'echo ok\n' > "$repo/scripts/sub/ok.sh"
+run_hook "$(edit_json "$repo/scripts/sub/ok.sh")"
+p=()
+log_line "shellcheck $repo --norc -e SC2000 -- ./scripts/sub/ok.sh" || p+=("the root's config didn't reach a file two folders down: $(cat "$LOG")")
+check "a file two folders down takes the root's config" ${p[@]+"${p[@]}"}
+printf 'external-sources=true\n' > "$repo/.shellcheckrc"
+run_hook "$(edit_json "$repo/scripts/sub/ok.sh")"
+p=()
+[[ "$(ran shellcheck)" == 0 && "$(system_message "$STDOUT")" == *"its config .shellcheckrc names external-sources"* ]] || p+=("log: $(cat "$LOG"), note: $STDOUT")
+check "a refused config at the root keeps shellcheck from running for a file two folders down" ${p[@]+"${p[@]}"}
+rm "$repo/scripts/sub/ok.sh"
+printf 'disable=SC2000\n' > "$repo/.shellcheckrc"
 printf 'disable=SC1000\n' > "$repo/scripts/.shellcheckrc"
-# On a violation too, shellcheck gets the config, and the report comes back with exit 2.
+# On a violation too, shellcheck gets the flags, and the report comes back with exit 2.
 run_hook "$(edit_json "$repo/scripts/bad.sh")"
 p=()
-[[ $STATUS -eq 2 ]] && log_line "RCFILE disable=SC1000|" || p+=("exit $STATUS, log: $(cat "$LOG")")
-check "on a violation shellcheck still gets the config, and the hook exits 2" ${p[@]+"${p[@]}"}
-# The pipe needs neither mktemp nor rm: without them on PATH, shellcheck still gets the config, with nothing said.
-NOTMP="$WORK/notmp"
-link_tools "$NOTMP"
-rm "$NOTMP/mktemp" "$NOTMP/rm"
-run_hook "$(edit_json "$repo/scripts/ok.sh")" "$STUBS:$NOTMP"
+[[ $STATUS -eq 2 ]] && log_line "shellcheck $repo --norc -e SC1000 -- ./scripts/bad.sh" || p+=("exit $STATUS, log: $(cat "$LOG")")
+check "on a violation shellcheck still gets the config's flags, and the hook exits 2" ${p[@]+"${p[@]}"}
+# Each key becomes its flag, in the order the config gives them, and a value with a space stays one argument; blanks around the = and a
+# CRLF line count for nothing. A value of a form the hook doesn't pass on keeps shellcheck from running, with a note naming the key.
+printf '# tuned\n\n  disable = SC2086,SC2034\r\nenable=require-variable-braces\nshell=bash\nsource-path=lib dir\nextended-analysis=false\n' > "$repo/scripts/.shellcheckrc"
+run_hook "$(edit_json "$repo/scripts/ok.sh")"
 p=()
-[[ $STATUS -eq 0 && -z "$OUTPUT" ]] && log_line "RCFILE disable=SC1000|" || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
-check "without mktemp or rm on PATH, shellcheck still gets the config" ${p[@]+"${p[@]}"}
+[[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
+log_line "shellcheck $repo --norc -e SC2086,SC2034 -o require-variable-braces -s bash -P lib dir --extended-analysis=false -- ./scripts/ok.sh" \
+  || p+=("the flags: $(cat "$LOG")")
+check "each config key becomes its shellcheck flag" ${p[@]+"${p[@]}"}
+# shellcheck disable=SC2016 # the config lines are text, written as they are
+for case in 'disable=SC2086;x|disable' 'disable=SC2086 # why|disable' 'enable=$(x)|enable' 'shell=zsh|shell' 'shell=bash2|shell' \
+  'extended-analysis=yes|extended-analysis' 'disable=|key'; do
+  printf '%s\n' "${case%|*}" > "$repo/scripts/.shellcheckrc"
+  run_hook "$(edit_json "$repo/scripts/ok.sh")"
+  p=()
+  [[ $STATUS -eq 0 && "$(ran shellcheck)" == 0 ]] || p+=("exit $STATUS, log: $(cat "$LOG")")
+  if [[ "${case#*|}" == key ]]; then
+    [[ "$(system_message "$STDOUT")" == *"sets a key other than disable, enable"* ]] || p+=("note: $STDOUT")
+  else
+    [[ "$(system_message "$STDOUT")" == *"sets ${case#*|} to a value this hook doesn't pass to shellcheck"* ]] || p+=("note: $STDOUT")
+  fi
+  check "a config line '${case%|*}' keeps shellcheck from running" ${p[@]+"${p[@]}"}
+done
+printf 'disable=SC1000\n' > "$repo/scripts/.shellcheckrc"
 # A config farther up that the hook won't hand over keeps shellcheck from running, though a nearer one is fine.
 printf 'external-sources=true\n' > "$repo/.shellcheckrc"
 run_hook "$(edit_json "$repo/scripts/ok.sh")"
@@ -1015,59 +1040,11 @@ RUN_ENV=(SHELLCHECK_OPTS=--check-sourced)
 run_hook "$(edit_json "$repo/scripts/ok.sh")"
 RUN_ENV=(RUN_ENV_UNUSED=1)
 p=()
-[[ $STATUS -eq 0 && -z "$OUTPUT" && "$(ran shellcheck)" == 1 ]] && log_line "RCFILE disable=SC2086|source-path=SCRIPTDIR|" \
+[[ $STATUS -eq 0 && -z "$OUTPUT" && "$(ran shellcheck)" == 1 ]] && log_line "shellcheck $repo --norc -e SC2086 -P SCRIPTDIR -- ./scripts/ok.sh" \
   || p+=("exit $STATUS, output: $OUTPUT, log: $(cat "$LOG")")
 ! log_has "SHELLCHECK_OPTS=" || p+=("SHELLCHECK_OPTS reached shellcheck: $(cat "$LOG")")
 check "a shellcheck config that only tunes the checks is used, and SHELLCHECK_OPTS never reaches shellcheck" ${p[@]+"${p[@]}"}
 rm "$repo/.shellcheckrc"
-
-# The pipe is used only when process substitution gives a descriptor (/dev/fd/N, /proc/self/fd/N). A bash with no /dev/fd gives a named
-# FIFO in TMPDIR instead, which another process could open first: sc_run refuses it with a note, and opens it once so its writer ends.
-# Taken from the hook and run alone, since this system's bash always gives a descriptor.
-pipe_fns="$WORK/pipe-fns.sh"
-sed -n '/^sc_pipe_ok() {/,/^}/p; /^sc_run() {/,/^}/p' "$SCRIPT" > "$pipe_fns"
-p=()
-grep -q '^sc_pipe_ok() {' "$pipe_fns" && grep -q '^sc_run() {' "$pipe_fns" || p+=("the functions were not found in the hook")
-check "the hook's sc_pipe_ok and sc_run are found" ${p[@]+"${p[@]}"}
-for case in "/dev/fd/63|ok" "/proc/self/fd/12|ok" "/dev/fd/|no" "/dev/fd/6x|no" "/tmp/sh-np-a1b2|no" "dev/fd/63|no" "/dev/fd/63/x|no" "x/dev/fd/63|no"; do
-  # shellcheck disable=SC1090 # the hook's own functions
-  got="$(source "$pipe_fns" && sc_pipe_ok "${case%|*}" && echo ok || echo no)"
-  p=()
-  [[ "$got" == "${case#*|}" ]] || p+=("sc_pipe_ok said $got")
-  check "sc_pipe_ok takes '${case%|*}' as ${case#*|}" ${p[@]+"${p[@]}"}
-done
-mkfifo "$WORK/named-pipe"
-fifo_out="$WORK/fifo-out"
-# shellcheck disable=SC2016 # the stand-ins' code, written as it is
-(
-  # shellcheck disable=SC1090 # the hook's own functions
-  source "$pipe_fns"
-  notes=() ran_linter=0
-  # shellcheck disable=SC2329 # called by sc_run
-  run_linter() { ran_linter=1; }
-  printf 'disable=SC2086\n' > "$WORK/named-pipe" &
-  writer=$!
-  sc_run "$WORK/named-pipe"
-  wait "$writer"
-  printf '%s|%s|%s\n' "$ran_linter" "$?" "${notes[*]-}"
-) > "$fifo_out" 2>&1 &
-fifo_pid=$!
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-  kill -0 "$fifo_pid" 2> /dev/null || break
-  sleep 0.5
-done
-p=()
-if kill -0 "$fifo_pid" 2> /dev/null; then
-  kill "$fifo_pid" 2> /dev/null
-  p+=("sc_run blocked on the named FIFO")
-fi
-wait "$fifo_pid" 2> /dev/null
-# The writer ends, by its own exit or by SIGPIPE when the pipe is closed unread (141): any status, as long as the wait returned.
-fifo_got="$(cat "$fifo_out")"
-[[ "${fifo_got%%|*}" == 0 && "${fifo_got#*|*|}" == "shellcheck was not run: this bash hands a config over through a named pipe (it has no /dev/fd), which another process could open first" ]] \
-  || p+=("got: $(cat "$fifo_out")")
-check "a named FIFO is not handed to shellcheck: the note says why, and its writer isn't left waiting" ${p[@]+"${p[@]}"}
-rm "$WORK/named-pipe"
 
 # --- Not linted -----------------------------------------------------------
 printf 'BAD\n' > "$repo/script.py"
@@ -2072,21 +2049,21 @@ if PATH="$REAL_PATH" shellcheck --version > /dev/null 2>&1 \
   p=()
   [[ $STATUS -eq 2 && "$STDERR" == *SC2086* ]] || p+=("exit $STATUS, output: $OUTPUT")
   check "shellcheck itself: a config above the repository root is not read" ${p[@]+"${p[@]}"}
-  # And with a config in the repository, the config the hook hands over is the only one read: the one above (enable=all, which would add findings on
+  # And with a config in the repository, the repository's config, as flags, is the only one read: the one above (enable=all, which would add findings on
   # the unquoted $1) is not.
   printf 'enable=all\n' > "$WORK/.shellcheckrc"
   printf 'disable=SC2086\n' > "$realsh/.shellcheckrc"
   run_hook "$(edit_json "$realsh/scripts/unquoted.sh")" "$REAL_PATH" "$realsh"
   p=()
   [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
-  check "shellcheck itself: with --rcfile, only the config the hook hands over is read" ${p[@]+"${p[@]}"}
+  check "shellcheck itself: with a repository config, only its flags apply" ${p[@]+"${p[@]}"}
   rm "$WORK/.shellcheckrc" "$realsh/.shellcheckrc"
-  # A config in the repository that only tunes the checks still applies, through the pipe: disable=SC2086 quiets the unquoted $1.
+  # A config in the repository that only tunes the checks still applies, through its flags: disable=SC2086 quiets the unquoted $1.
   printf 'disable=SC2086\n' > "$realsh/.shellcheckrc"
   run_hook "$(edit_json "$realsh/scripts/unquoted.sh")" "$REAL_PATH" "$realsh"
   p=()
   [[ $STATUS -eq 0 && -z "$OUTPUT" ]] || p+=("exit $STATUS, output: $OUTPUT")
-  check "shellcheck itself: the repository's config reaches shellcheck through the pipe" ${p[@]+"${p[@]}"}
+  check "shellcheck itself: the repository's config reaches shellcheck as flags" ${p[@]+"${p[@]}"}
   rm "$realsh/.shellcheckrc"
 else
   echo "skip - shellcheck, or shfmt v3.14 or a later v3, is not installed (or there is no .editorconfig), so their own runs are not tested"

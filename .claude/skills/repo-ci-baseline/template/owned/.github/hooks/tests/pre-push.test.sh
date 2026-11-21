@@ -351,6 +351,17 @@ commit_on feature/6-format scripts/indented.sh "if true; then
 fi"
 run_hook feature/6-format "$(push_stdin feature/6-format)"
 expect "a changed shell file shfmt would reformat refuses the push" refused any "run shfmt -w on each file"
+# A changed script in the style .editorconfig gives (a 2-space indent, where shfmt's own default is a tab) is allowed; the same script on a
+# branch that deletes .editorconfig is refused, so the step reads the repo's .editorconfig rather than its own defaults.
+commit_on feature/6-formatted scripts/formatted.sh "if true; then
+  echo formatted
+fi"
+run_hook feature/6-formatted "$(push_stdin feature/6-formatted)"
+expect "a changed shell file in the .editorconfig style is allowed" allowed tests-ran
+git -C "$REPO" rm -q .editorconfig
+git -C "$REPO" commit -q -m "drop .editorconfig"
+run_hook feature/6-formatted "$(push_stdin feature/6-formatted)"
+expect "without .editorconfig the same file is refused: the style comes from .editorconfig" refused any "run shfmt -w on each file"
 commit_on feature/6-extensionless scripts/tool "if true; then
     echo indented
 fi"

@@ -138,7 +138,8 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
   `.editorconfig`: a repo's own scripts take the style as they are touched, with no one-off reformat ([the Factory's ADR 0015](../../../../docs/adr/0015-shell-files-are-formatted-with-shfmt.md)).
   It needs shfmt v3.14 or a later v3 release, which `check_gh_repo.py` needs too, and stops, naming it, without one. Without an `origin/main` it is skipped with a note, since the
   changed files are then every tracked file. `tests/owned-gate-files.test.sh` (the Factory's) runs those lines in a throwaway
-  repo, in a UTF-8 locale and in C, the YAML and shell steps with stubs, and the Markdown step with a stub and, when installed, the real tool. Then build and run each test
+  repo, in a UTF-8 locale and in C, the YAML, shell lint and shell format steps with stubs, and the Markdown step with a stub and, when installed, the real tool;
+  `.github/hooks/tests/pre-push.test.sh` runs the whole gate with the real shfmt, and shows it reads the repo's `.editorconfig`. Then build and run each test
   project, where the stack allows it locally. Which steps it runs depends on the repo; what's standard is that
   everything it checks, CI checks too, except the Shell format step, which only the gate runs (CI would need the PR's base to know which files changed).
   After the lints it runs `python3 -I .github/scripts/check_gh_repo.py --repo`, which refuses a `gh` command in the
@@ -228,15 +229,14 @@ for a shell, and says to fix the syntax if the output is a syntax error; a shfmt
 only `.editorconfig`.
 
 shellcheck reads its `.shellcheckrc`, and `external-sources` there lets it open the files a `source` line names; `--check-sourced` would then quote their lines in the report the
-agent reads. So the hook clears `SHELLCHECK_OPTS`, and shellcheck never looks for a config itself: the hook reads the `.shellcheckrc` or `shellcheckrc` on the file's path (its
-folder and each one above it, up to the repository root, in the order shellcheck looks) and hands shellcheck the nearest one's text through a pipe (`--rcfile <(...)`), or
-`--norc` when there is none. Where bash has `/dev/fd` the pipe is a descriptor (`/dev/fd/N`), which no other process can open, so nothing can be swapped between the check
-and shellcheck's read, and no file is made or left. A bash without `/dev/fd` would pass a named FIFO in `TMPDIR` instead, which another process could open first: the hook
-doesn't run shellcheck then, and the note says why. A config above the
-repository root, or the person's own in their home, is not read at edit time; the gate reads it. The config is read without a here-string, which bash may write to a temp file
-of its own. shellcheck is not run while a config on the path is a symlink, not a regular file, unreadable, names `external-sources` or `check-sourced` in any case, or holds a
-line other than a blank, a comment or one of the keys `disable`, `enable`, `source-path`, `shell` and `extended-analysis` (an allow-list, so a key a later shellcheck adds
-can't slip past): the note names the config and why, and the gate still checks the file.
+agent reads. So the hook clears `SHELLCHECK_OPTS`, and shellcheck reads no config at all: it runs with `--norc`, and the hook turns the `.shellcheckrc` or `shellcheckrc`
+nearest the file (its folder and each one above it, up to the repository root, in the order shellcheck looks) into the flag each of its keys has: `disable` becomes `-e`,
+`enable` `-o`, `shell` `-s`, `source-path` `-P` and `extended-analysis` `--extended-analysis`. Nothing is read after the check, so no file or pipe is left for another
+process to change, and the hook needs a shellcheck with `--norc`, not `--rcfile`. A config above the repository root, or the person's own in their home, is not read at edit
+time; the gate reads it. The config is read without a here-string, which bash may write to a temp file of its own. shellcheck is not run while a config on the path is a
+symlink, not a regular file, unreadable, names `external-sources` or `check-sourced` in any case, holds a line other than a blank, a comment or one of those five keys (an
+allow-list, so a key a later shellcheck adds can't slip past), or gives one a value of a form the hook doesn't pass on (`disable` and `enable` take codes or check names with
+commas, `shell` one of `sh`, `bash`, `dash`, `ksh` and `busybox`, `extended-analysis` `true` or `false`): the note names the config and why, and the gate still checks the file.
 
 A hook under a nested `.github/hooks` whose `.editorconfig` can't be read is not linted, with a note; a line of it longer than 4,096 characters is no section header. A violation
 wins over a note: the hook exits 2 with the report alone. `test.sh` checks that the hook's hook-name rule is the gate's and the Lint Actions shellcheck job's, and that its shfmt
@@ -255,9 +255,10 @@ in a repo without the ledger the re-Apply PR's own review is the check.
   telling the agent to hand a broken linter (a usage error, an old version) to the person.
 - Exit 0 and no output for a file that is not Markdown, YAML or a shell file the gate checks, one that no longer exists, a directory, a symlink, one under `node_modules/`,
   and one outside the project (below).
-- Exit 0 with a `systemMessage` on stdout, which Claude Code shows to the person, when a linter is not installed, or is not run (shfmt another release, shellcheck under a config above): the
-  file is skipped for that linter, the hook only helps, and the gate still checks, as do the pre-commit hook and CI where they lint that kind of file (the pre-commit hook lints Markdown; CI
-  doesn't check shell format). Plain stderr on exit 0 is not shown, which is why the note is JSON. Before it runs anything the hook cleans `PATH`:
+- Exit 0 with a `systemMessage` on stdout, which Claude Code shows to the person, when a linter is not installed, or is not run (shfmt another release or one whose
+  `--version` fails or prints nothing, shellcheck under a config the hook won't take, as above), or a hook under a nested `.github/hooks` isn't linted because its
+  `.editorconfig` can't be read: the file is skipped for that linter, the hook only helps, and the gate still checks, as do the pre-commit hook and CI where they lint
+  that kind of file (the pre-commit hook lints Markdown; CI doesn't check shell format). Plain stderr on exit 0 is not shown, which is why the note is JSON. Before it runs anything the hook cleans `PATH`:
   every relative or empty entry goes (it would name a folder of whatever directory a command runs in, the repository once the hook has changed into it), and so does
   every entry inside the project's checkouts (the file's repository, and the project and every worktree `git worktree list` shows, a `node_modules/.bin` among them),
   since an agent can write any of them with no Bash prompt and this hook runs right after a write. It cleans twice: first, before it looks up `python3` or `git`, with

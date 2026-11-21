@@ -178,11 +178,17 @@ elif [[ ${#SHFMT_FILES[@]} -gt 0 ]]; then
     echo "❌ Shell format needs shfmt v3.14 or a later v3 release, not '${SHFMT_FOUND:0:80}'." >&2
     exit 1
   fi
-  # shfmt exits 1 both for a file it would change (it prints the diff) and for one it can't parse (it prints the error).
-  shfmt -d -- "${SHFMT_FILES[@]}" || {
+  # shfmt exits 1 both for a file it would change (it prints the diff) and for one it can't parse (it prints the error); any other status
+  # is shfmt itself failing (a crash, a usage error), with no diff to follow.
+  SHFMT_RC=0
+  shfmt -d -- "${SHFMT_FILES[@]}" || SHFMT_RC=$?
+  if ((SHFMT_RC == 1)); then
     echo "❌ shfmt: run shfmt -w on each file whose diff is shown above (with no style flags, so it reads .editorconfig), and fix the syntax of any file it could not parse." >&2
     exit 1
-  }
+  elif ((SHFMT_RC != 0)); then
+    echo "❌ shfmt failed (exit $SHFMT_RC) without checking the format: this is no format problem in the files. Check the shfmt install." >&2
+    exit 1
+  fi
 fi
 
 # A gh command not told its repository reaches gh's default one, a fork in a

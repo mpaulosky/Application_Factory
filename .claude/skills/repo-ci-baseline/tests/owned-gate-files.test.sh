@@ -247,6 +247,12 @@ export SHFMT_STUB_EXIT=1
 format_run
 check "shell format: a file shfmt would change, or can't parse, stops the gate, and says to run shfmt -w or fix the syntax" \
   "[[ $fst != 0 ]] && [[ \"\$ferr\" == *'run shfmt -w on each file'*'fix the syntax of any file it could not parse'* ]]"
+# Any other status is shfmt failing, not a diff: the gate stops, saying so, with no shfmt -w advice.
+for code in 2 3 126; do
+  SHFMT_STUB_EXIT=$code format_run
+  check "shell format: a shfmt that exits $code stops the gate as a failed shfmt, not a diff" \
+    "[[ $fst != 0 ]] && [[ \"\$ferr\" == *'shfmt failed (exit $code) without checking the format'* ]] && [[ \"\$ferr\" != *'run shfmt -w'* ]]"
+done
 unset SHFMT_STUB_EXIT
 # Without an origin/main the changed files are every tracked file: the step is skipped with a note, and shfmt doesn't run.
 FORMAT_BASE='' format_run

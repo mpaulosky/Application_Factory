@@ -346,8 +346,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # pre-push.test.sh runs the gate, whose gh check reads each script's syntax tree from shfmt and so needs shfmt v3.14
-      # or a later v3: the gh-repo job's pinned and checked release.
+      # pre-push.test.sh runs the gate, whose gh check reads each script's syntax tree from shfmt and whose Shell format step
+      # runs shfmt -d, so it needs shfmt v3.14 or a later v3: the gh-repo job's pinned and checked release.
       - name: Install shfmt
         env:
           SHFMT_VERSION: "3.14.1"
