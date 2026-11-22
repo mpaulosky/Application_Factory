@@ -359,6 +359,85 @@ describe("a weakness an entry already holds", () => {
   });
 });
 
+// Application_Factory#92: a re-raise of a fixed weakness follows the entries its re-raises were written as ("- Raises again:"),
+// which a person can edit: only one for the same path is followed, a cycle ends, and a note that names nothing is passed over.
+describe("a re-raise of a fixed entry", () => {
+  const fileOf = (id: string) => entryFiles().find((name) => name.startsWith(`${id}-`)) ?? "";
+  // Add a "- Raises again:" note to an entry by hand, as a person editing the record might.
+  const note = (id: string, raises: string) => {
+    const path = join(repo, SECURITY_DIR, fileOf(id));
+    writeFileSync(path, readFileSync(path, "utf8").replace(/^(- Status: .*)$/m, `$1\n- Raises again: ${raises}`));
+  };
+  const reRaise = (id: string, reRaised: string, overrides: Partial<SecurityInput> = {}) =>
+    input({ id, summary: `${id} again: worded anew.`, status: "open", test: null, reRaised, ...overrides });
+
+  // The path is kept as the entry's Path line holds it, so a second re-raise in the same record finds the entry the first wrote.
+  for (const path of ["docs/Q&A.md", "packages/@scope/x.ts", "-dash/x.sh"]) {
+    it(`holds two re-raises of one fixed weakness in one record in one new entry, for the path ${path}`, () => {
+      record([input({ path })]);
+
+      const outcome = record([reRaise("R2", "0001", { path }), reRaise("R3", "0001", { path, summary: "R3 again: worded anew, again." })]);
+
+      assert.deepEqual(outcome.warnings, []);
+      assert.equal(entryFiles().length, 2);
+      assert.deepEqual(outcome.entries, { R2: "0002", R3: "0002" });
+    });
+  }
+
+  it("follows a chain through two fixed entries, and the new entry notes the last", () => {
+    record([input()]);
+    record([reRaise("R2", "0001", { status: "fixed", test: "tests/upload.test.sh::again" })]);
+    assert.match(entryText(fileOf("0002")), /^- Status: fixed$/m);
+
+    const outcome = record([reRaise("R3", "0001")]);
+
+    assert.equal(entryFiles().length, 3);
+    assert.equal(outcome.entries.R3, "0003");
+    assert.match(entryText(fileOf("0003")), /^- Raises again: 0002$/m);
+  });
+
+  // The walk is bounded as well as guarded, so this case fails (the new entry notes 0001, where the bound stopped) rather than
+  // hangs when the cycle guard is gone.
+  it("ends a cycle two fixed entries' notes make, with a new entry that notes where the cycle closed", () => {
+    record([input()]);
+    record([reRaise("R2", "0001", { status: "fixed", test: "tests/upload.test.sh::again" })]);
+    note("0001", "0002");
+
+    const outcome = record([reRaise("R3", "0001")]);
+
+    assert.equal(entryFiles().length, 3);
+    assert.equal(outcome.entries.R3, "0003");
+    assert.match(entryText(fileOf("0003")), /^- Raises again: 0002$/m);
+  });
+
+  it("doesn't follow a note on an entry for another path", () => {
+    record([input()]);
+    record([input({ id: "R2", path: "scripts/other.sh", summary: "Another weakness.", status: "open", test: null })]);
+    note("0002", "0001");
+
+    const outcome = record([reRaise("R3", "0001")]);
+
+    assert.equal(entryFiles().length, 3);
+    assert.equal(outcome.entries.R3, "0003");
+  });
+
+  for (const [what, raises] of [
+    ["a number no fixed entry has", "0009"],
+    ["three digits", "001"],
+  ] as [string, string][]) {
+    it(`passes over a note naming ${what}`, () => {
+      record([input()]);
+      record([input({ id: "R2", summary: "Another weakness in the upload handler.", status: "open", test: null })]);
+      note("0002", raises);
+
+      const outcome = record([reRaise("R3", "0001")]);
+
+      assert.equal(entryFiles().length, 3);
+      assert.equal(outcome.entries.R3, "0003");
+    });
+  }
+});
+
 // Criterion 4, in the part that can be tested here: the entries are only written where git ignores them.
 describe("recordSecurity where .security isn't ignored", () => {
   it("writes nothing and warns to re-Apply the Baseline", () => {

@@ -140,6 +140,26 @@ describe("the pre-push-review skill's follow-up issue", () => {
     assert.doesNotMatch(flat, /kept from the old summary/);
   });
 
+  // Application_Factory#92: record follows a re-raised security finding to its entry only by its summary's opening, so the skill says to open it so.
+  it("opens a re-raised security or fix-asked finding's summary with the old id, the opening record follows to the entry", () => {
+    assert.ok(flat.includes("a new open Warning whose summary opens with the old id (`R3 again: ...`, or `.security/0012 again: ...` for one only the record holds)"));
+    assert.ok(flat.includes("`record` follows only that opening to the entry"));
+    assert.ok(flat.includes("Raise it under a new id, its summary opening with the old one (`R3 again: ...`)."));
+    assert.ok(flat.includes("A summary that opens `R3 again` or `.security/0012 again` finds its entry by itself"));
+    assert.ok(
+      flat.includes(
+        "the open or accepted entry for the finding's own path either way: the one R3 was recorded against in an earlier review of this branch that HEAD still has, or the one `.security/0012` is. An entry for another path is never held this way. A fixed one isn't held either: the finding holds the open or accepted entry for the same path that notes it, directly or through other fixed entries' notes, when one does, and otherwise gets a new entry that notes the last fixed entry of that chain.",
+      ),
+    );
+    assert.ok(
+      flat.includes(
+        "So give `repeats` only when that opening can't find it: the finding's path differs from the entry's (a moved file), the branch was amended or rebased since that review, or the summary opens neither way.",
+      ),
+    );
+    assert.doesNotMatch(flat, /Warning naming the old id/);
+    assert.doesNotMatch(flat, /under a new id naming the old one/);
+  });
+
   // A re-raised finding's id, path and line can all change, and an id can be
   // reused after an amend or rebase, so none of them decides.
   it("counts a finding as listed by the problem it names, never by its id or path", () => {

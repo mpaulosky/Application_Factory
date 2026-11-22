@@ -38,6 +38,8 @@ export type SecurityEntry = {
   lens: string;
   findingPath: string;
   fingerprint?: string;
+  // The fixed entry this one raises again, when a re-raise found its entry fixed and was written as a new one ("- Raises again: NNNN").
+  raisesAgain?: string;
 };
 
 // A finding as `record` hands it over.
@@ -52,6 +54,8 @@ export type SecurityInput = {
   fix: string | null;
   policy?: string | null;
   repeats?: string;
+  // The entry the finding's summary says it raises again ("R3 again", ".security/0012 again"; reRaisedEntry in review-ledger.mts).
+  reRaised?: string;
 };
 
 // What a call did: the entry files it wrote, the findings that repeated a weakness an entry held (and which entry),
@@ -148,6 +152,7 @@ function entriesIn(directory: string): SecurityEntry[] {
     }
     const status = /^- Status: (fixed|accepted|open)\s*$/m.exec(text)?.[1] as EntryStatus | undefined;
     const print = /^- Fingerprint: ([0-9a-f]{64})\s*$/m.exec(text)?.[1];
+    const raisesAgain = /^- Raises again: (\d{4,})\s*$/m.exec(text)?.[1];
     entries.push({
       id,
       file,
@@ -156,6 +161,7 @@ function entriesIn(directory: string): SecurityEntry[] {
       lens: field(text, "Lens") ?? "",
       findingPath: field(text, "Path") ?? "",
       ...(print === undefined ? {} : { fingerprint: print }),
+      ...(raisesAgain === undefined ? {} : { raisesAgain }),
     });
   }
   return entries.sort((a, b) => Number(a.id) - Number(b.id) || a.file.localeCompare(b.file));
@@ -193,7 +199,7 @@ const pinOf = (finding: SecurityInput) =>
   plainText(finding.test ?? "") || (finding.status === "open" ? "Nothing yet: the entry is open." : "None recorded.");
 
 // An entry's text. Every field goes through plainText, so a summary can't start a line that reads as a heading or a field.
-function entryText(id: string, finding: SecurityInput, branch: string, context: { pr?: number; slug: string }): string {
+function entryText(id: string, finding: SecurityInput, branch: string, context: { pr?: number; slug: string }, raisesAgain?: string): string {
   const weakness = plainText(finding.summary);
   // Cut by code point, not UTF-16 unit, and not inside a character reference plainText wrote (&amp; or &lt;): the whole text is under ## Weakness.
   const heading = [...weakness].slice(0, 80).join("").replace(/&[a-z]*$/i, "");
@@ -206,6 +212,7 @@ function entryText(id: string, finding: SecurityInput, branch: string, context: 
     `- Branch: ${plainText(branch)}`,
     `- PR: ${prLine(context)}`,
     `- Fingerprint: ${fingerprint(finding.path, finding.summary)}`,
+    ...(raisesAgain === undefined ? [] : [`- Raises again: ${raisesAgain}`]),
     "",
     "## Weakness",
     "",
@@ -251,12 +258,13 @@ function createEntry(
   branch: string,
   context: { pr?: number; slug: string },
   hooks: RecordHooks,
+  raisesAgain?: string,
 ): { id: string; file: string; path: string } {
   for (let attempt = 0; attempt < ENTRY_NUMBER_TRIES; attempt += 1) {
     const id = nextId(directory);
     const file = `${id}-${slugOf(finding.summary)}.md`;
     const path = join(directory, file);
-    const text = entryText(id, finding, branch, context);
+    const text = entryText(id, finding, branch, context, raisesAgain);
     const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
     try {
       hooks.afterNextId?.(id);
@@ -308,9 +316,50 @@ function directoryProblem(main: string, directory: string): string | undefined {
   }
 }
 
+// The entry a re-raise (`finding.reRaised`) folds into, or, when there is none to fold into, the fixed entry the new one raises
+// again. The summary is a reviewer's words, so the entry it names is taken only when it is for the finding's own path: one for
+// another path, or a number no entry has, is not followed (a new entry, with a warning: never a weakness hidden in another's
+// entry). A fixed entry is not folded into: the weakness is back. The entry a later re-raise of it was written as (its
+// "Raises again" line) is followed instead, so a chain of re-raises of one fixed weakness holds one open entry, not one per review.
+function reRaiseHolder(
+  known: readonly SecurityEntry[],
+  finding: SecurityInput & { reRaised: string },
+  warn: (message: string) => void,
+): { holder?: SecurityEntry; raisesAgain?: string } {
+  // An entry's Path line is the finding's path through plainText.
+  const path = plainText(finding.path).trim();
+  const first = known.find((entry) => holdsWeakness(entry) && Number(entry.id) === Number(finding.reRaised));
+  if (first === undefined) {
+    warn(`${finding.id} says it raises .security/${finding.reRaised} again, but no entry has that number; recorded by its text instead`);
+    return {};
+  }
+  if (first.findingPath !== path) {
+    warn(`${finding.id} says it raises ${first.id} again, but ${first.id} is for another path; recorded as a new entry`);
+    return {};
+  }
+  // Follow the fixed entries' re-raises: `seen` ends a cycle a hand edit made, and only an entry for the same path is followed.
+  // The hop bound is a backstop: while `seen` works it is never reached; if `seen` broke, it would stop the walk, so the cycle test fails instead of hanging.
+  let named: SecurityEntry = first;
+  const seen = new Set<string>();
+  for (let hops = 0; named.status === "fixed"; hops++) {
+    if (hops >= known.length) return { raisesAgain: named.id };
+    seen.add(named.id);
+    const from: SecurityEntry = named;
+    const next: SecurityEntry | undefined = known.find(
+      (entry) => holdsWeakness(entry) && entry.findingPath === path && entry.raisesAgain !== undefined && Number(entry.raisesAgain) === Number(from.id) && !seen.has(entry.id),
+    );
+    if (next === undefined) return { raisesAgain: named.id };
+    named = next;
+  }
+  return { holder: named };
+}
+
 // Write the record's entries for `findings`: the security findings of a review, each recorded fixed or open. A finding
 // that repeats a weakness an entry holds writes no second file: the entry a finding names in `repeats`, else the one with
-// the same fingerprint. An open entry the weakness is now recorded fixed for is updated in place (status, policy and
+// the same fingerprint, else the open or accepted entry it raises again (`reRaised`, reRaiseHolder: one for the same path only),
+// whose words change from review to review. A `repeats` that names no entry still lets the re-raise be followed. A re-raise of
+// a fixed entry is not folded into it: the weakness is back, so it gets an entry of its own, which notes the entry it raises
+// again, and a later re-raise of the fixed one holds that new entry. An open entry the weakness is now recorded fixed for is updated in place (status, policy and
 // pin; its branch and PR stay where it was first raised); any other repeat leaves the entry as it is. Call it holding
 // the ledger lock, so the numbering is safe across worktrees. Never throws.
 export function recordSecurity(
@@ -344,10 +393,15 @@ export function recordSecurity(
       try {
         const print = fingerprint(finding.path, finding.summary);
         let holder = known.find((entry) => holdsWeakness(entry) && entry.fingerprint === print);
+        let raisesAgain: string | undefined;
         if (finding.repeats !== undefined) {
           const named = known.find((entry) => holdsWeakness(entry) && Number(entry.id) === Number(finding.repeats));
           if (named === undefined) outcome.warnings.push(`${finding.id} says it repeats ${finding.repeats}, but no entry has that number; recorded by its text instead`);
           else holder = named;
+        }
+        if (holder === undefined && finding.reRaised !== undefined) {
+          // An exact fingerprint match or a `repeats` above already names the weakness; only a reworded re-raise reaches here.
+          ({ holder, raisesAgain } = reRaiseHolder(known, { ...finding, reRaised: finding.reRaised }, (message) => outcome.warnings.push(message)));
         }
         if (holder !== undefined) {
           if (holder.status === "open" && finding.status === "fixed") {
@@ -362,10 +416,20 @@ export function recordSecurity(
           outcome.entries[finding.id] = holder.id;
           continue;
         }
-        const made = createEntry(directory, finding, ledger.branch, context, hooks);
+        const made = createEntry(directory, finding, ledger.branch, context, hooks, raisesAgain);
         outcome.written.push(made.file);
         outcome.entries[finding.id] = made.id;
-        known.push({ id: made.id, file: made.file, path: made.path, status: finding.status, lens: finding.lens, findingPath: finding.path, fingerprint: print });
+        known.push({
+          id: made.id,
+          file: made.file,
+          path: made.path,
+          status: finding.status,
+          lens: finding.lens,
+          // As entriesIn reads it back (the Path line is the path through plainText), so a later re-raise in this record matches it.
+          findingPath: plainText(finding.path).trim(),
+          fingerprint: print,
+          ...(raisesAgain === undefined ? {} : { raisesAgain }),
+        });
       } catch (error) {
         outcome.warnings.push(`${finding.id}: the security record couldn't be written for this finding: ${(error as Error).message ?? String(error)}`);
       }

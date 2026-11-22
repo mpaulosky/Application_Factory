@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
@@ -28,8 +28,12 @@ import {
   underOwnedPattern,
   ledgerDir,
   main,
+  reRaisedEntry,
+  nearReRaise,
+  mergeEntryMaps,
   stageFindings,
   stagedOwnerProblem,
+  stageTestHooks,
   mergeBase,
   OWNED_PATHS,
   prepareRound,
@@ -3510,6 +3514,15 @@ describe("main", () => {
       ["abc1234", "feature/1-thing"],
       ["-x", "feature/1-thing"],
       ["HEAD", ""],
+      // R100: one digit either side of each full length, upper case, and a full id with a newline after it.
+      ["a".repeat(39), "feature/1-thing"],
+      ["a".repeat(41), "feature/1-thing"],
+      ["a".repeat(63), "feature/1-thing"],
+      ["a".repeat(65), "feature/1-thing"],
+      ["A".repeat(40), "feature/1-thing"],
+      ["A".repeat(64), "feature/1-thing"],
+      [`${"a".repeat(40)}\n`, "feature/1-thing"],
+      [`${"a".repeat(64)}\n`, ""],
     ] as [string, string][]) {
       it(`refuses a review ${branchOf === "" ? "naming no branch" : "of this branch"} whose head is ${JSON.stringify(badHead)}, which isn't a full object id`, () => {
         writeNamed("older.json", ledgerJson([]));
@@ -3527,6 +3540,25 @@ describe("main", () => {
             "It counts as no review, and round 1 and record leave it in place: delete or move it to let recorded runs anchor again, or start again at round 1 with prepare <dir>.\n",
         );
         assert.equal(existsSync(join(dir, "fixes.patch")), false);
+      });
+    }
+
+    // R100's other side: a full id of either length is not refused as malformed, whatever commit it names.
+    for (const goodHead of ["a".repeat(40), "a".repeat(64)]) {
+      it(`doesn't refuse a review of this branch whose head is ${goodHead.length} lower-case hex digits as not a full object id`, () => {
+        // Explicit dates, so the odd review is the later recorded whatever the clock does.
+        writeNamed("older.json", { ...ledgerJson([]), recordedAt: at("2026-01-01T00:00:00Z") });
+        writeNamed("odd.json", { ...ledgerJson([]), head: goodHead, recordedAt: at("2026-01-02T00:00:00Z") });
+        commit(repo, "fix.cs", "the fix\n", "fix");
+
+        const result = cli(["prepare", fresh("delta"), "recorded"]);
+
+        // It names no commit, so it is the newest review and isn't one of HEAD's: refused for that, not for its form.
+        assert.equal(result.code, 1);
+        assert.equal(
+          result.err,
+          `the last review of feature/1-thing was recorded at ${goodHead}, which isn't one of HEAD's commits (an amend or a rebase since): start again at round 1 with prepare <dir>.\n`,
+        );
       });
     }
 
@@ -3592,7 +3624,7 @@ describe("main", () => {
   }
 
   // R33: the second argument is `last`, `recorded` or a commit, checked before the folder is touched.
-  for (const second of ["recordd", "", "-v", "HEAD:app.cs", "HEAD", "origin/main", "feature/1-thing", "a-tag", "SHORT", "UPPER", "ZERO", "TREE", "BLOB", "SHA256"]) {
+  for (const second of ["recordd", "", "-v", "HEAD:app.cs", "HEAD", "origin/main", "feature/1-thing", "a-tag", "SHORT", "UPPER", "ZERO", "TREE", "BLOB", "SHA256", "LEN39"]) {
     it(`prepare refuses ${JSON.stringify(second)} as its second argument, and leaves the run folder as it was`, () => {
       const dir = join(root, "run");
       const printed = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
@@ -3610,6 +3642,10 @@ describe("main", () => {
         TREE: run(repo, "rev-parse", "HEAD^{tree}"),
         BLOB: run(repo, "rev-parse", "HEAD:app.cs"),
         SHA256: "a".repeat(64),
+        // R100: a 39-digit prefix of the commit is one git resolves, so only the pattern refuses it. The other lengths either side of
+        // a full id, and one with a newline after it, name no commit git resolves, so git would refuse them here too: they are tried
+        // as a ledger's head, which no git call checks (the R38 cases).
+        LEN39: printed.slice(0, 39),
       };
       const given = ids[second] ?? second;
 
@@ -4039,6 +4075,113 @@ describe("OWNED_PATHS", () => {
   });
 });
 
+// Application_Factory#92: the opening a re-raised finding's summary is read by, at each edge of its pattern.
+describe("reRaisedEntry", () => {
+  const earlier = { R1: "0001", R3: "0003", R30: "0030" };
+  for (const [summary, expected] of [
+    ["R3 again: x", { named: "R3", entry: "0003" }],
+    ["R30 again: x", { named: "R30", entry: "0030" }],
+    ["R1 again", { named: "R1", entry: "0001" }],
+    ["R1 again.", { named: "R1", entry: "0001" }],
+    ["  \tR1 again: leading space", { named: "R1", entry: "0001" }],
+    ["r1 AGAIN: case", { named: "R1", entry: "0001" }],
+    ["R1  again: two spaces", { named: "R1", entry: "0001" }],
+    ["R1\tagain: a tab", { named: "R1", entry: "0001" }],
+    ["R1\u00a0again: a no-break space", { named: "R1", entry: "0001" }],
+    ["**R1 again**: bold", { named: "R1", entry: "0001" }],
+    ["`R1` again: code", { named: "R1", entry: "0001" }],
+    ["(R1 again): brackets", { named: "R1", entry: "0001" }],
+    ["R1 **again**: bold word", { named: "R1", entry: "0001" }],
+    ["R3, R1 again: a list reads its first", { named: "R3", entry: "0003" }],
+    ["R3 and R1 again: so does this one", { named: "R3", entry: "0003" }],
+    ["R3 & R1 again: and this one", { named: "R3", entry: "0003" }],
+    ["R3, (R1) again: a bracketed second id", { named: "R3", entry: "0003" }],
+    ["R9 again: no earlier review recorded it", { named: "R9" }],
+    [".security/0021 again: x", { named: ".security/0021", entry: "0021" }],
+    [".security/00012 again: five digits", { named: ".security/00012", entry: "00012" }],
+    [".SECURITY/0021 again: case", { named: ".security/0021", entry: "0021" }],
+    ["R0 again: no finding is R0", undefined],
+    ["R01 again: a leading zero", undefined],
+    ["R03 again: a leading zero", undefined],
+    ["R1again: no space", undefined],
+    ["R1 againx: no word break", undefined],
+    ["R1 against: another word", undefined],
+    [".security/001 again: three digits", undefined],
+    ["Beyond R1 again: not the opening", undefined],
+    ["", undefined],
+  ] as [string, { named: string; entry?: string } | undefined][]) {
+    it(`reads ${JSON.stringify(summary)} as ${JSON.stringify(expected)}`, () => {
+      assert.deepEqual(reRaisedEntry(summary, earlier), expected);
+    });
+  }
+
+  it("names no entry for an R<n> when no earlier review recorded one", () => {
+    assert.deepEqual(reRaisedEntry("R3 again: x", {}), { named: "R3" });
+  });
+});
+
+// An opening that reads as a re-raise but isn't one reRaisedEntry reads: the id it opens with, so the person hears it.
+describe("nearReRaise", () => {
+  for (const [summary, expected] of [
+    ["R3: again, worded anew", "R3"],
+    ["R3 raised again", "R3"],
+    ["R3 - again", "R3"],
+    ["[R3](#r3) again", "R3"],
+    ["<b>R3</b> again", "R3"],
+    ["R3again: invisible characters dropped", "R3"],
+    ["r3: AGAIN", "R3"],
+    [".SECURITY/0012: again", ".security/0012"],
+    ["R3 again: read by reRaisedEntry", undefined],
+    ["Beyond R3 again: not the opening", undefined],
+    ["R3: a weakness of its own", undefined],
+    [`R3: ${"x".repeat(40)} again, too far on`, undefined],
+    ["R0: again", undefined],
+    // "again" as a word of its own: not inside "against" or "againstuff"
+    ["R3: a race against another run", undefined],
+    ["R3 againstuff", undefined],
+    // nor with a letter just before it
+    ["R3: a reagain of the upload bug", undefined],
+    ["R3: xagain", undefined],
+    ["R7: bypass against the allow-list, again", "R7"],
+    // the window: "again" ending at the 40th character after the id is read, at the 41st it isn't
+    [`R3: ${".".repeat(33)}again`, "R3"],
+    [`R3: ${".".repeat(34)}again`, undefined],
+    [`R3: ${".".repeat(32)}again.`, "R3"],
+    // a longer word crossing the window's edge is still not "again"
+    [`R3: ${".".repeat(33)}against`, undefined],
+    // an id that ends the summary, and an "again" past the window after an "against" inside it
+    ["R3", undefined],
+    [`R3: against ${".".repeat(40)} again`, undefined],
+  ] as [string, string | undefined][]) {
+    it(`reads ${JSON.stringify(summary)} as ${JSON.stringify(expected)}`, () => {
+      assert.equal(nearReRaise(summary), expected);
+    });
+  }
+});
+
+// Whatever order the reviews come in, the nearest's pair wins, then the later recorded of two as near.
+describe("mergeEntryMaps", () => {
+  const near = { distance: 1, recordedAt: "2026-01-02T00:00:00.000Z", entries: { R1: "0002" } };
+  const far = { distance: 3, recordedAt: "2026-01-03T00:00:00.000Z", entries: { R1: "0001", R2: "0005" } };
+  const sameLater = { distance: 1, recordedAt: "2026-01-04T00:00:00.000Z", entries: { R1: "0007" } };
+  for (const order of [
+    [near, far],
+    [far, near],
+  ]) {
+    it(`takes the nearer review's pair with the reviews in the order ${order.map((review) => review.distance).join(", ")}`, () => {
+      assert.deepEqual(mergeEntryMaps(order), { R1: "0002", R2: "0005" });
+    });
+  }
+  for (const order of [
+    [near, sameLater],
+    [sameLater, near],
+  ]) {
+    it(`takes the later recorded of two as near, with the reviews in the order ${order.map((review) => review.recordedAt.slice(8, 10)).join(", ")}`, () => {
+      assert.deepEqual(mergeEntryMaps(order), { R1: "0007" });
+    });
+  }
+});
+
 // The local, git-ignored record of security findings (.security/ in the main checkout). `record` writes it; two reviews read it
 // through `security`. The unit-level cases are in security-record.test.mts; these go through scripts/review.sh's own command.
 describe("the security record", () => {
@@ -4172,6 +4315,19 @@ describe("the security record", () => {
       assert.match(result.err, /^\.security: marked 0002 accepted$/m);
       assert.match(entry(entries()[0] ?? ""), /^- Status: accepted$/m);
       assert.match(entry(entries()[1] ?? ""), /^- Status: accepted$/m);
+    });
+
+    it("accept turns the open entry accepted that a finding raised again as \"R<n> again\" was folded into", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      commit(repo, "later.cs", "a later change\n", "later change");
+
+      recordHere([weakness({ id: "R2", summary: "R1 again (left open): files can be written above the upload folder.", status: "open", test: null })]);
+      const result = cli(["accept", "R2", "The folder is a sandbox."]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.match(result.err, /^\.security: marked 0001 accepted$/m);
+      assert.deepEqual(entries().length, 1);
+      assert.match(firstEntry(), /^- Status: accepted$/m);
     });
 
     it("accept turns the open entry accepted that a finding was matched to through `repeats` in other words", () => {
@@ -4311,6 +4467,293 @@ describe("the security record", () => {
       recordHere([weakness({ id: "R2", summary: "Uploads can leave their folder.", repeats: "0001" })]);
 
       assert.equal(entries().length, 1);
+    });
+
+    // Application_Factory#92: a finding the review raises again under a new id opens its summary "R<n> again", and its words change each time,
+    // so its fingerprint does too: it follows R<n> to the entry R<n> was recorded against, along the branch's earlier reviews.
+    it("a finding raised again as \"R<n> again\" holds the entry R<n> was recorded against, through each later review", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      const second = recordHere([weakness({ id: "R2", summary: "R1 again (left open): uploads can still leave their folder.", status: "open", test: null })]);
+      commit(repo, "other.cs", "and again\n", "a third change");
+      const third = recordHere([weakness({ id: "R3", summary: "R2 again (.security/0001; left open): the upload path is still not resolved.", status: "open", test: null })]);
+
+      assert.equal(second.code, 0, second.err);
+      assert.equal(third.code, 0, third.err);
+      assert.equal(entries().length, 1);
+      assert.match(second.err, /R2 repeats 0001/);
+      assert.match(third.err, /R3 repeats 0001/);
+    });
+
+    it("a finding raised again as \".security/NNNN again\" holds that entry", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      const again = recordHere([weakness({ id: "R2", summary: ".security/0001 again (left open): uploads can still leave their folder.", status: "open", test: null })]);
+
+      assert.equal(again.code, 0, again.err);
+      assert.equal(entries().length, 1);
+      assert.match(again.err, /R2 repeats 0001/);
+    });
+
+    it("an \"R<n> again\" re-raise recorded fixed updates the entry R<n> left open", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      recordHere([weakness({ id: "R2", summary: "R1 again: fixed now, the path is resolved first." })]);
+
+      assert.equal(entries().length, 1);
+      assert.match(firstEntry(), /^- Status: fixed$/m);
+    });
+
+    it("a re-raise of a weakness recorded fixed gets an entry of its own, so a fix that came undone shows", () => {
+      recordHere([weakness()]);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      const back = recordHere([
+        weakness({ id: "R2", summary: "R1 again: the upload path is no longer resolved.", status: "open", test: null }),
+        weakness({ id: "R3", path: "scripts/b.sh", summary: ".security/0001 again: the same, by its entry.", status: "open", test: null }),
+      ]);
+
+      assert.equal(back.code, 0, back.err);
+      assert.equal(entries().length, 3);
+      assert.match(firstEntry(), /^- Status: fixed$/m);
+    });
+
+    it("an explicit `repeats` wins over the R<n> the summary names", () => {
+      recordHere([weakness({ status: "open", test: null }), weakness({ id: "R2", path: "scripts/other.sh", summary: "Another weakness.", status: "open", test: null })]);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      const again = recordHere([weakness({ id: "R3", summary: "R1 again: but triage named the other entry.", status: "open", test: null, repeats: "0002" })]);
+
+      assert.equal(again.code, 0, again.err);
+      assert.equal(entries().length, 2);
+      assert.match(again.err, /R3 repeats 0002/);
+    });
+
+    it("writes a new entry for a finding that only mentions an entry or an id, or names one no earlier review recorded", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      const beyond = recordHere([
+        weakness({ id: "R2", summary: "Beyond .security/0001 (fixed): a second way out of the folder.", status: "open", test: null }),
+        weakness({ id: "R3", path: "scripts/b.sh", summary: "Unlike R1 again, a symlink is followed.", status: "open", test: null }),
+        weakness({ id: "R4", path: "scripts/c.sh", summary: "R9 again: an id no review of this branch took.", status: "open", test: null }),
+        weakness({ id: "R5", path: "scripts/d.sh", summary: "R1 against the odds, a new weakness.", status: "open", test: null }),
+        weakness({ id: "R6", path: "scripts/e.sh", summary: "R1again: no word break.", status: "open", test: null }),
+        weakness({ id: "R7", path: "scripts/f.sh", summary: ".security/0042 again: a number no entry has.", status: "open", test: null }),
+      ]);
+
+      assert.equal(beyond.code, 0, beyond.err);
+      assert.equal(entries().length, 7);
+      // Application_Factory#92: an id the opening names that leads nowhere is said, so a mistyped one doesn't pass unseen.
+      assert.match(beyond.err, /R4 says it raises R9 again, but no earlier review of this branch recorded R9 against an entry; matched by its text instead/);
+      assert.match(beyond.err, /R7 says it raises \.security\/0042 again, but no entry has that number; recorded by its text instead/);
+      assert.doesNotMatch(beyond.err, /R[2356] says it raises/);
+    });
+
+    // Application_Factory#92: the summary is a reviewer's words, so the entry it names is held only when it is for the finding's own path.
+    it("doesn't fold an \"R<n> again\" or \".security/NNNN again\" into an entry for another path, and leaves that entry as it was", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      commit(repo, "other.cs", "again\n", "another change");
+      const before = firstEntry();
+
+      const again = recordHere([
+        weakness({ id: "R2", path: "scripts/other.sh", summary: "R1 again: fixed, elsewhere.", test: "tests/other.test.sh::x" }),
+        weakness({ id: "R3", path: "scripts/third.sh", summary: ".security/0001 again: fixed, elsewhere too.", test: "tests/third.test.sh::y" }),
+      ]);
+
+      assert.equal(again.code, 0, again.err);
+      assert.equal(entries().length, 3);
+      assert.equal(firstEntry(), before);
+      assert.match(again.err, /R2 says it raises 0001 again, but 0001 is for another path; recorded as a new entry/);
+      assert.match(again.err, /R3 says it raises 0001 again, but 0001 is for another path; recorded as a new entry/);
+    });
+
+    it("follows an \"R<n> again\" whose `repeats` names no entry", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      const again = recordHere([weakness({ id: "R2", summary: "R1 again: worded anew.", status: "open", test: null, repeats: "9999" })]);
+
+      assert.equal(again.code, 0, again.err);
+      assert.equal(entries().length, 1);
+      assert.match(again.err, /R2 says it repeats 9999, but no entry has that number/);
+      assert.match(again.err, /R2 repeats 0001/);
+    });
+
+    it("folds an \"R<n> again\" into the accepted entry R<n> was recorded against, which stays accepted", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      assert.equal(cli(["accept", "R1", "The folder is a sandbox."]).code, 0);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      const again = recordHere([weakness({ id: "R2", summary: "R1 again: worded anew.", status: "open", test: null })]);
+
+      assert.equal(again.code, 0, again.err);
+      assert.equal(entries().length, 1);
+      assert.match(firstEntry(), /^- Status: accepted$/m);
+      assert.match(again.err, /R2 repeats 0001/);
+    });
+
+    it("reads the opening whatever its case, spacing and markup", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      const again = recordHere([weakness({ id: "R2", summary: "**r1  Again**: worded anew.", status: "open", test: null })]);
+
+      assert.equal(again.code, 0, again.err);
+      assert.equal(entries().length, 1);
+      assert.match(again.err, /R2 repeats 0001/);
+    });
+
+    // A fixed weakness raised again gets an entry of its own, noting the fixed one; a later "R1 again" holds that entry, not a third.
+    it("holds one open entry for a fixed weakness raised again in each later review by its first id", () => {
+      recordHere([weakness()]);
+      commit(repo, "other.cs", "again\n", "another change");
+      recordHere([weakness({ id: "R2", summary: "R1 again: the fix came undone.", status: "open", test: null })]);
+      commit(repo, "other.cs", "and again\n", "a third change");
+
+      const third = recordHere([weakness({ id: "R3", summary: "R1 again: still undone, worded anew.", status: "open", test: null })]);
+
+      assert.equal(third.code, 0, third.err);
+      assert.equal(entries().length, 2);
+      assert.match(entry(entries()[1] ?? ""), /^- Raises again: 0001$/m);
+      assert.match(third.err, /R3 repeats 0002/);
+    });
+
+    // The review being recorded again replaces the one at its key, whose ids stay taken: an "R1 again" in it names that review's R1.
+    it("follows an \"R<n> again\" into the review the record replaces", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+
+      const again = recordHere([weakness({ id: "R2", summary: "R1 again: the upload one, worded anew.", status: "open", test: null })]);
+
+      assert.equal(again.code, 0, again.err);
+      assert.equal(entries().length, 1);
+      assert.match(again.err, /R2 repeats 0001/);
+    });
+
+    it("fails the record with no ledger written when the earlier reviews can't be read", () => {
+      const base = mergeBase(repo);
+      const input = { reviewedKey: diffKey(repo, base), reviewedHead: run(repo, "rev-parse", "HEAD"), rounds: 1, findings: [weakness()] };
+
+      assert.throws(
+        () =>
+          recordReview(repo, base, input, new Date(), takenIds, {
+            slug: "o/r",
+            entriesOf: () => {
+              throw new Error("git was killed");
+            },
+          }),
+        /git was killed/,
+      );
+      assert.equal(readLedger(repo, diffKey(repo, base)), undefined);
+      assert.deepEqual(entries(), []);
+    });
+
+    // The map beside an earlier review is a file a person can edit: what isn't a finding id to an entry number is left out, and said.
+    for (const [text, kept, said] of [
+      ["[]", false, /isn't a map of finding ids to entries/],
+      ["null", false, /isn't a map of finding ids to entries/],
+      ['"x"', false, /isn't a map of finding ids to entries/],
+      ["{", false, /couldn't read .*\.entries/],
+      ['{"R1":5}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R1":"12"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R1":"123"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R1":"../x"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R1":"0001x"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R1":"x0001"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R1":"0001/../x"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"foo":"0001"}', false, /holds a pair that isn't a finding id and an entry number/],
+      // the key's anchors and its no-leading-zero rule
+      ['{"R1x":"0001"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"xR1":"0001"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R0":"0001"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R01":"0001"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R":"0001"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R1":"0001","R7":5}', true, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R1":"0001","foo":"0001"}', true, /holds a pair that isn't a finding id and an entry number/],
+    ] as [string, boolean, RegExp][]) {
+      it(`reads an earlier review's entry map of ${text} as ${kept ? "its one good pair" : "nothing"}, and says so`, () => {
+        recordHere([weakness({ status: "open", test: null })]);
+        const maps = readdirSync(ledgerDir(repo)).filter((name) => name.endsWith(".entries"));
+        assert.equal(maps.length, 1);
+        writeFileSync(join(ledgerDir(repo), maps[0] ?? ""), text);
+        commit(repo, "other.cs", "again\n", "another change");
+
+        const again = recordHere([weakness({ id: "R2", summary: "R1 again: worded anew.", status: "open", test: null })]);
+
+        assert.equal(again.code, 0, again.err);
+        assert.equal(entries().length, kept ? 1 : 2);
+        assert.match(again.err, said);
+      });
+    }
+
+    // The other side of those bounds: a two-digit id and a five-digit entry number are a finding id and an entry number.
+    for (const text of ['{"R1":"0001","R10":"0001"}', '{"R1":"00001"}']) {
+      it(`reads an earlier review's entry map of ${text} whole, and says nothing of it`, () => {
+        recordHere([weakness({ status: "open", test: null })]);
+        const maps = readdirSync(ledgerDir(repo)).filter((name) => name.endsWith(".entries"));
+        assert.equal(maps.length, 1);
+        writeFileSync(join(ledgerDir(repo), maps[0] ?? ""), text);
+        commit(repo, "other.cs", "again\n", "another change");
+
+        const again = recordHere([weakness({ id: "R2", summary: "R1 again: worded anew.", status: "open", test: null })]);
+
+        assert.equal(again.code, 0, again.err);
+        assert.equal(entries().length, 1);
+        assert.doesNotMatch(again.err, /couldn't read|isn't a map|holds a pair/);
+      });
+    }
+
+    it("says nothing of an earlier review whose entry map is missing, an older record", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      for (const name of readdirSync(ledgerDir(repo)).filter((file) => file.endsWith(".entries"))) rmSync(join(ledgerDir(repo), name));
+      commit(repo, "other.cs", "again\n", "another change");
+
+      const again = recordHere([weakness({ id: "R2", summary: "R1 again: worded anew.", status: "open", test: null })]);
+
+      assert.equal(again.code, 0, again.err);
+      assert.doesNotMatch(again.err, /couldn't read|isn't a map|holds a pair/);
+    });
+
+    // Two earlier reviews that map one id to different entries: the nearer review's is followed.
+    it("follows an \"R<n> again\" to the entry the nearer of two earlier reviews names", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      commit(repo, "other.cs", "again\n", "another change");
+      recordHere([weakness({ id: "R2", summary: "A second weakness in the upload handler.", status: "open", test: null })]);
+      assert.equal(entries().length, 2);
+      const nearer = readLedger(repo, diffKey(repo, mergeBase(repo)));
+      assert.ok(nearer !== undefined);
+      writeFileSync(join(ledgerDir(repo), `${nearer.key}.entries`), '{"R1":"0002","R2":"0002"}');
+      commit(repo, "other.cs", "and again\n", "a third change");
+
+      const third = recordHere([weakness({ id: "R3", summary: "R1 again: worded anew.", status: "open", test: null })]);
+
+      assert.equal(third.code, 0, third.err);
+      assert.equal(entries().length, 2);
+      assert.match(third.err, /R3 repeats 0002/);
+    });
+
+    it("says when a summary opens with an id and \"again\" in a form it doesn't read, and matches it by its text", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      const again = recordHere([weakness({ id: "R2", summary: "R1: again, worded anew.", status: "open", test: null })]);
+
+      assert.equal(again.code, 0, again.err);
+      assert.equal(entries().length, 2);
+      assert.match(again.err, /R2 opens with R1 and says "again", but not as "R1 again: \.\.\.", so it is matched by its text/);
+    });
+
+    it("doesn't follow an \"R<n> again\" into another branch's review", () => {
+      const other = otherWorktree();
+      recordIn(other, [weakness({ path: "scripts/elsewhere.sh", summary: "Another branch's weakness.", status: "open", test: null })]);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      recordHere([weakness({ id: "R5", summary: "R1 again: this branch never had an R1.", status: "open", test: null })]);
+
+      assert.equal(entries().length, 2);
     });
 
     it("an open entry recorded fixed later is updated in place, not written twice", () => {
@@ -5588,6 +6031,103 @@ describe("staging findings between rounds", () => {
     assert.equal(failed.code, 1);
     assert.match(failed.err, /isn't JSON/);
     assert.equal(existsSync(join(folder(), "findings.json.lock")), false);
+  });
+
+  it("takes over a lock a dead stage left, as the ledger's own lock does, and keeps a live holder's", () => {
+    cli(["stage", folder(), array("a.json", [finding()])]);
+    const lock = join(folder(), "findings.json.lock");
+    // A pid no process can have: the stage that wrote it is gone.
+    writeFileSync(lock, "4194305000 deadtoken\n");
+
+    const taken = cli(["stage", folder(), array("b.json", [finding({ id: "R2" })])]);
+
+    assert.equal(taken.code, 0, taken.err);
+    assert.deepEqual(ids(), ["R1", "R2"]);
+    assert.deepEqual(readdirSync(folder()), ["findings.json"]);
+
+    writeFileSync(lock, `${process.pid} livetoken\n`);
+    const live = cli(["stage", folder(), array("c.json", [finding({ id: "R3" })])]);
+
+    assert.equal(live.code, 1);
+    assert.match(live.err, /another stage is writing/);
+    assert.equal(readFileSync(lock, "utf8"), `${process.pid} livetoken\n`);
+    assert.deepEqual(ids(), ["R1", "R2"]);
+  });
+
+  it("takes over a lock that names no holder only once it is older than a minute", () => {
+    cli(["stage", folder(), array("a.json", [finding()])]);
+    const lock = join(folder(), "findings.json.lock");
+    writeFileSync(lock, "");
+    const old = (Date.now() - 61_000) / 1000;
+    utimesSync(lock, old, old);
+
+    const taken = cli(["stage", folder(), array("b.json", [finding({ id: "R2" })])]);
+
+    assert.equal(taken.code, 0, taken.err);
+    assert.deepEqual(ids(), ["R1", "R2"]);
+    assert.equal(existsSync(lock), false);
+  });
+
+  it("writes its own pid and token into the lock while it stages", () => {
+    let seen = "";
+    let mode = 0;
+    stageFindings(folder(), [finding()], (handle) => {
+      seen = readFileSync(join(folder(), "findings.json.lock"), "utf8");
+      mode = statSync(join(folder(), "findings.json.lock")).mode & 0o777;
+      closeSync(handle);
+    });
+
+    assert.match(seen, new RegExp(`^${process.pid} [0-9a-f]{16}\\n$`));
+    assert.equal(mode, 0o600);
+    assert.equal(existsSync(join(folder(), "findings.json.lock")), false);
+  });
+
+  it("removes its empty lock, and passes the write's error on, when it can't write its id and the close fails too", () => {
+    lockTestHooks.beforeWrite = () => {
+      throw new Error("disk full");
+    };
+    try {
+      assert.throws(
+        () =>
+          stageFindings(folder(), [finding()], () => {
+            throw new Error("close failed");
+          }),
+        /disk full/,
+      );
+    } finally {
+      delete lockTestHooks.beforeWrite;
+    }
+
+    assert.equal(existsSync(join(folder(), "findings.json.lock")), false);
+  });
+
+  // The takeover is best-effort, so two stages can share the lock in a rare race: one that finds the file changed under it refuses
+  // rather than write over the other's findings.
+  it("refuses, and leaves the other's findings, when another stage changed the file while it merged", () => {
+    cli(["stage", folder(), array("a.json", [finding()])]);
+    stageTestHooks.beforeReplace = () => writeStaged(JSON.stringify([finding(), finding({ id: "R9" })]));
+    try {
+      assert.throws(() => stageFindings(folder(), [finding({ id: "R2" })]), /another stage changed .*findings\.json while this one was merging into it; run stage again\./);
+    } finally {
+      delete stageTestHooks.beforeReplace;
+    }
+
+    assert.deepEqual(ids(), ["R1", "R9"]);
+    assert.equal(existsSync(join(folder(), "findings.json.lock")), false);
+    stageFindings(folder(), [finding({ id: "R2" })]);
+    assert.deepEqual(ids(), ["R1", "R9", "R2"]);
+  });
+
+  it("refuses, too, when another stage made the file while this one, the first, merged", () => {
+    makeFolder();
+    stageTestHooks.beforeReplace = () => writeStaged(JSON.stringify([finding({ id: "R9" })]));
+    try {
+      assert.throws(() => stageFindings(folder(), [finding()]), /another stage changed/);
+    } finally {
+      delete stageTestHooks.beforeReplace;
+    }
+
+    assert.deepEqual(ids(), ["R9"]);
   });
 
   it("fails on a staged file that is damaged, names it, and leaves it as it was", () => {

@@ -14,7 +14,9 @@ One file per weakness, numbered like the ADRs: `0001-<slug>.md`, the next number
 - Its status: `fixed`, `accepted` or `open`.
 - The branch and the pull request it came from (or "none when recorded").
 
-A finding that repeats a weakness an entry already holds writes no second file. An `open` entry the weakness is later
+A finding that repeats a weakness an entry already holds writes no second file. A repeat is a finding that names its entry
+(`repeats`), has the entry's path and words, or opens its summary `R3 again` or `.security/0012 again` and is for the entry's path.
+A weakness raised again after its entry is `fixed` gets a new entry, since it is back. An `open` entry the weakness is later
 recorded `fixed` for is updated in place.
 
 ## What the status means

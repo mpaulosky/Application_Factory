@@ -67,11 +67,13 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   earlier review left nothing open or accepted to raise again, and the new record holds only the new run's findings; a review that did leave something is followed by a full round 1,
   which raises it again through `<run>/decisions.md`. `record`, `check` and the gate are unchanged: the record vouches for HEAD's whole diff key, as any other.
 - A run's findings are staged, not held in the session. Each round's triage goes to `scripts/review.sh stage <run> <file>`: each finding is checked as `record` checks it (an
-  `accepted` one is refused), and one staged again under the same id replaces the earlier. The file is owner-only and replaced whole, and a second `stage` at the same time is
-  refused. `stage` refuses a run folder that is a symlink (a trailing slash doesn't hide one), another user's or writable by the group or others. `stage` and `record --staged` refuse a
-  `findings.json` that is a link, not a regular file (a FIFO included), another user's or writable by the group or others. `record - --staged <run>` records
-  `<run>/findings.json` with any findings in the JSON after them, so a long session that was compacted still records every round exactly (ids, lines, tests).
-  The folder is the run's own `mktemp -d`; `record` is still the only writer of the ledger.
+  `accepted` one is refused), and one staged again under the same id replaces the earlier. The file is owner-only and replaced whole. A second `stage` while another holds
+  `findings.json.lock` is refused; a lock a killed `stage` left is taken over, as the ledger's is (below), and a `stage` that finds the file changed since it read it (two
+  sharing the lock in the takeover's rare race) refuses and says to run it again. That narrows a lost round to a `stage` writing in the instant between the check and
+  the rename, which nothing closes. `stage` refuses a run folder that is a symlink (a
+  trailing slash doesn't hide one), another user's or writable by the group or others. `stage` and `record --staged` refuse a `findings.json` that is a link, not a
+  regular file (a FIFO included), another user's or writable by the group or others. `record - --staged <run>` records `<run>/findings.json` with any findings in
+  the JSON after them, so a long session that was compacted still records every round exactly (ids, lines, tests). The folder is the run's own `mktemp -d`; `record` is still the only writer of the ledger.
 - A finding's words are a reviewer agent's, who read hostile diff text, so they are made safe where they enter and where they are published. The ledger removes control and
   invisible characters (an escape, a bidi override, a zero-width space or joiner, a variation selector, U+2800) from a finding's lens, path, summary, test, reason and fix
   when it records one and when it reads an older ledger (a field made only of them is refused as empty), and turns each run of
@@ -83,9 +85,10 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   space `plainText` adds (after an `@` before an ASCII letter or digit, after a `#` or `GH-` before a digit,
   and in `github.com`, so `advisory` and `notes` still print inert mentions) and removes any other; the host's reviewer schema
   applies the same stripping, so a finding of only invisible characters is refused as empty.
-- The ledger's lock names its holder (`<pid> <token>`). A lock whose process is gone is taken over, as is one with no readable holder that is more than a minute old; a lock
-  held by a running command still refuses at once, naming the file. A takeover renames the lock to a name of its own (one command wins), judges it again there by its text and age and deletes it only if
-  it is still stale; a live lock made in between is put back and the command refuses. The holder removes the lock only while it still carries its token.
+- The ledger's lock and `stage`'s `findings.json.lock` name their holder (`<pid> <token>`). A lock whose process is gone is taken over, as is one with no readable
+  holder that is more than a minute old; a lock held by a running command still refuses at once, naming the file. A takeover renames the lock to a name of its own
+  (one command wins), judges it again there by its text and age and deletes it only if it is still stale; a live lock made in between is put back and the command
+  refuses. The holder removes the lock only while it still carries its token.
 - A ledger or a security entry is replaced whole (a temp file with a random name, renamed over it), and a new security entry is written to a temp file and hard-linked to its number
   (on a file system that can't link, it is written in place instead), so a reader never sees a half-written file where links work and a symlink put at the name is replaced, not written through. A number
   another writer took is tried again, up to five times; a
@@ -164,9 +167,24 @@ again, and settled differently, on the next (one weakness took six rounds). The 
   none is stored in the ledger. `scripts/review.sh accept` (or `accept-open`) turns the matching entry `accepted`; `accept-open --fix` leaves it as it is.
   A person may edit an entry; an entry whose status can't be read counts as `unknown` and suppresses nothing.
 - **No second file.** A finding for a weakness an entry holds writes none: the entry it names in `repeats`, else the one with the same fingerprint (a hash of the
-  path and the summary, case and spacing set aside). An `open` entry recorded `fixed` later is updated in place (the file is replaced whole by a rename, as is one `accept` turns
-  `accepted`, so no reader sees a truncated entry). The match is exact on purpose: a wrongly merged
-  entry would hide a real weakness, while a reworded repeat only gets a second file.
+  path and the summary, case and spacing set aside), else the entry it raises again (also when `repeats` names no entry). A finding raised again under a new id opens
+  its summary `R3 again` (or `.security/0012 again`), and its words change from review to review: it holds the entry R3 was recorded against in one of the branch's own
+  earlier reviews that HEAD still has (the `<key>.entries` file beside each ledger, the review the record replaces included), or the entry it names, when that entry is
+  `open` or `accepted` and for the finding's own path. The opening is read whatever its case and spacing, and with markup around the id (`**R3** again`, `(R3 again)`);
+  an id is `R` and a number with no leading zero, or `.security/` and four or more digits, and of a list (`R3, R5 again`) only the first is read. After an amend or a
+  rebase the earlier review isn't one of HEAD's, so `R3 again` is matched by its text. A re-raise of a `fixed` entry gets a file of its own, since the weakness is back;
+  it notes the entry it raises again (`- Raises again: NNNN`), and a later re-raise of the fixed one holds that new entry, so a chain gets one file, not one per review.
+  The chain is followed through fixed entries for the finding's own path only, and a note that names no such entry, or a cycle a hand edit made, ends it.
+  The summary is a reviewer's words, so an entry for another path is never held this way: the finding gets a file of its own, and `repeats` (which triage sets) is
+  the way to hold it in that entry. An opening that names no entry, an `R<n>` no earlier review recorded, an entry for another path, an opening with an id and
+  `again` (a word of its own, within the 40 characters after the id) in a form not read (`R3: again`, `R3 raised again`),
+  and an `.entries` file that is there but doesn't read or parse as a map, or holds a pair that isn't a
+  finding id (`R<n>`) and an entry number (four or more digits), are each a warning (`.security: ...`); a missing `.entries` file (an older record) is said nothing of.
+  Where two earlier reviews map one id to different entries, the nearer review's wins. Only the summary's opening counts, so one that mentions an entry or an id in
+  passing (`Beyond .security/0017`) is matched by its text alone.
+  An `open` entry recorded `fixed` later is updated in place (the file is replaced whole by a rename, as is one `accept` turns
+  `accepted`, so no reader sees a truncated entry). Otherwise the match is exact on purpose: a wrongly merged
+  entry would hide a real weakness, while a reworded repeat that names nothing only gets a second file.
 - **Where.** The main worktree's `.security/`, found with `git worktree list`, so a review in any worktree or branch reads and writes the same entries. A bare clone has none:
   nothing is written, with a warning. The directory is mode 0700, entries 0600, each written to a temp file with `wx` and then
   hard-linked (new) or renamed (updated) to its name; a symlinked directory is refused, a symlink at an entry's name is replaced. On a file system that can't hard-link, a new
