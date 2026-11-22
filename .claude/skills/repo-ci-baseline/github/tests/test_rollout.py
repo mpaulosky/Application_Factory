@@ -71,6 +71,80 @@ def test_the_rest_are_held_when_no_reapply_pr_of_ticketmanagers_is_found():
     assert step.reason == "no re-Apply PR of TicketManager's found to have merged"
 
 
+def test_the_rest_run_when_ticketmanager_pushed_nothing_and_has_no_reapply_pr():
+    step = rollout.next_step(rollout.rollout_order(LISTED), rollout.Lead(True, None, None, ahead=False))
+    assert step.run == REST
+    assert step.held == ()
+
+
+def test_the_rest_run_when_ticketmanager_pushed_nothing_and_its_last_pr_was_closed():
+    step = rollout.next_step(rollout.rollout_order(LISTED), rollout.Lead(True, 129, "CLOSED", ahead=False))
+    assert step.run == REST
+
+
+def test_the_rest_are_held_when_ticketmanager_pushed_commits_no_pr_shows():
+    step = rollout.next_step(rollout.rollout_order(LISTED), rollout.Lead(True, None, None, ahead=True))
+    assert step.run == ()
+    assert step.reason == "no re-Apply PR of TicketManager's found to have merged"
+    step = rollout.next_step(rollout.rollout_order(LISTED), rollout.Lead(True, 129, "CLOSED", ahead=True))
+    assert step.reason == "TicketManager#129 was closed without merging"
+
+
+def test_a_failed_reapply_holds_the_rest_even_with_nothing_pushed():
+    step = rollout.next_step(rollout.rollout_order(LISTED), rollout.Lead(False, None, None, ahead=False))
+    assert step.run == ()
+    assert step.reason == "reapply failed on TicketManager"
+
+
+def test_a_ticketmanager_already_current_lets_the_rest_go_on_in_one_run():
+    fake = Fake(latest={"mpaulosky/TicketManager": None})
+    code, out, _ = run(["--brings", "#82", "--root", "/r"], fake, ahead=False)
+    assert code == 0
+    assert ran_repos(fake) == [Path(repo).name for repo in rollout.rollout_order(LISTED)]
+    assert "TicketManager already matches the Template: nothing to land, so the rest go on" in out
+    assert run.asked == ["TicketManager"]
+
+
+def test_a_ticketmanager_with_commits_and_no_pr_still_holds_the_rest():
+    fake = Fake(latest={"mpaulosky/TicketManager": None})
+    code, out, _ = run(["--brings", "#82", "--root", "/r"], fake, ahead=True)
+    assert code == 1
+    assert ran_repos(fake) == ["TicketManager"]
+    assert "held:" in out
+
+
+def test_an_unreadable_branch_or_pr_holds_the_rest_and_says_why():
+    fake = Fake(latest={"mpaulosky/TicketManager": None})
+    code, out, err = run(["--brings", "#82", "--root", "/r"], fake, ahead=RuntimeError("not a git repository"))
+    assert code == 1
+    assert ran_repos(fake) == ["TicketManager"]
+    assert "can't read TicketManager's re-Apply branch: not a git repository" in err
+    fake = Fake(unreadable={"mpaulosky/TicketManager"})
+    code, _, _ = run(["--brings", "#82", "--root", "/r"], fake, ahead=False)
+    assert code == 1
+    assert ran_repos(fake) == ["TicketManager"]
+    assert run.asked == []  # the PR is unknown, so nothing pushed doesn't decide it
+
+
+def test_a_dry_run_reads_no_branch_and_holds_as_before():
+    # A dry run reapplies nothing, so the worktree says nothing of what the reapply would push.
+    fake = Fake(latest={"mpaulosky/TicketManager": None})
+    code, out, _ = run(["--brings", "#82", "--root", "/r", "--dry-run"], fake, ahead=False)
+    assert code == 1
+    assert run.asked == []
+    assert "already matches" not in out
+    assert "held:" in out
+
+
+def test_the_branch_is_read_only_when_no_pr_is_open_or_merged():
+    fake = Fake(opens={"mpaulosky/TicketManager": 130})
+    run(["--brings", "#82", "--root", "/r"], fake, ahead=False)
+    assert run.asked == []
+    fake = Fake()
+    run(["--brings", "#82", "--root", "/r"], fake, ahead=False)
+    assert run.asked == []
+
+
 def test_the_rest_run_in_order_once_ticketmanagers_reapply_pr_has_merged():
     step = rollout.next_step(rollout.rollout_order(LISTED), rollout.Lead(True, 129, "MERGED"))
     assert step.run == REST
@@ -110,10 +184,19 @@ class Fake:
         return self.latest.get(repo)
 
 
-def run(argv, fake, exists=lambda path: True):
+def run(argv, fake, exists=lambda path: True, ahead=None):
     out, err = io.StringIO(), io.StringIO()
+    asked = []
+
+    def ahead_of(path):
+        asked.append(Path(path).name)
+        if isinstance(ahead, Exception):
+            raise ahead
+        return ahead
+
     code = rollout.main(argv, listed=LISTED, reapply=fake.reapply, latest_pr=fake.latest_pr, exists=exists,
-                        out=out, err=err)
+                        out=out, err=err, ahead=ahead_of)
+    run.asked = asked
     return code, out.getvalue(), err.getvalue()
 
 

@@ -11,8 +11,11 @@ of the Template change. Each run:
 2. holds the rest until TicketManager's newest re-Apply PR has merged: while
    it is open, land it (land.sh prints how), fix any finding Template first,
    then run rollout.sh again. A failed reapply, a PR closed without merging, or
-   none found holds the round too; a reapply stopped at the gate's review (exit
-   3) or on findings that wait for a person (exit 4) says what to run first;
+   none found holds the round too, unless TicketManager already matches the
+   Template: its re-Apply worktree has no commit main lacks, so there is nothing
+   to land, and the rest go on in the same run, as under --auto. A reapply
+   stopped at the gate's review (exit 3) or on findings that wait for a person
+   (exit 4) says what to run first;
 3. once that PR has merged (and reapply.sh found nothing new to push), the
    rest get reapply.sh in order, one at a time, so one pre-push gate runs at a
    time. A repo that fails is reported and the round goes on.
@@ -68,11 +71,13 @@ def rollout_order(listed):
 class Lead:
     """How TicketManager stands after its reapply: whether reapply.sh went
     cleanly, and its newest re-Apply PR with its state (OPEN, MERGED or CLOSED),
-    or None for both when there is none or it couldn't be read."""
+    or None for both when there is none or it couldn't be read. ahead: whether its re-Apply worktree has commits
+    main lacks, read only when that PR was read and isn't open or merged; None when unread."""
 
     reapplied: bool
     pr: int | None
     state: str | None
+    ahead: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +94,9 @@ def next_step(order, lead):
         return Step((first,), rest, f"{short_name(first)} goes first")
     if not lead.reapplied:
         return Step((), rest, f"reapply failed on {short_name(first)}")
+    if lead.ahead is False and lead.state in (None, "CLOSED"):
+        # Nothing pushed: reapply.sh found it already matches the Template, so there is no PR to wait for.
+        return Step(rest, (), f"{short_name(first)} already matches the Template: nothing to land, so the rest go on")
     if lead.state == "OPEN":
         return Step((), rest, f"waiting for {short_name(first)}#{lead.pr} to merge")
     if lead.state == "CLOSED":
@@ -117,8 +125,9 @@ def gh_latest_pr(repo):
 
 
 def main(argv=None, listed=None, reapply=run_reapply, latest_pr=gh_latest_pr, exists=os.path.isdir,
-         out=sys.stdout, err=sys.stderr, auto=None):
-    """auto: keyword arguments for auto_rollout.run (its outside world), for the tests."""
+         out=sys.stdout, err=sys.stderr, auto=None, ahead=None):
+    """auto: keyword arguments for auto_rollout.run (its outside world), for the tests. ahead: whether the checkout
+    at a path has a re-Apply worktree with commits main lacks (raises when git can't say); the tests' seam."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--brings", required=True,
                         help="the Factory PRs this round brings in, as reapply.sh takes them: '#80,#81' (quoted) or mpaulosky/Application_Factory#80,#81")
@@ -161,13 +170,21 @@ def main(argv=None, listed=None, reapply=run_reapply, latest_pr=gh_latest_pr, ex
             return False
         return True
 
+    unread = set()
+
     def lookup(repo):
         """(number, state) of repo's newest re-Apply PR, or (None, None) when there is none or it can't be read."""
         try:
             return latest_pr(repo) or (None, None)
         except Exception as error:  # noqa: BLE001 - reported; the repo's PR is then unknown
             err.write(f"rollout.sh: can't read {repo}'s re-Apply PR: {error}\n")
+            unread.add(repo)
             return None, None
+
+    def ahead_of_main(path):
+        """Whether the re-Apply worktree reapply.sh made for the checkout at path has commits main lacks."""
+        import auto_rollout  # noqa: PLC0415 - its worktree rules are the ones reapply.sh follows
+        return auto_rollout.git_branch(auto_rollout.review_worktree(path))[1]
 
     if args.auto:
         import auto_rollout  # noqa: PLC0415 - only --auto needs it
@@ -178,7 +195,14 @@ def main(argv=None, listed=None, reapply=run_reapply, latest_pr=gh_latest_pr, ex
 
     first = order[0]
     lead = Lead(apply(first), *lookup(first))
+    if lead.reapplied and not args.dry_run and first not in unread and lead.state in (None, "CLOSED"):
+        try:
+            lead = Lead(lead.reapplied, lead.pr, lead.state, (ahead or ahead_of_main)(checkout(first)))
+        except Exception as error:  # noqa: BLE001 - reported; the round is then held, as before
+            err.write(f"rollout.sh: can't read {short_name(first)}'s re-Apply branch: {error}\n")
     step = next_step(order, lead)
+    if step.run and step.reason:
+        say(f"── rollout: {step.reason}")
     if not step.run:
         say(f"rollout: {step.reason}; held: {', '.join(short_name(repo) for repo in step.held)}")
         if lead.reapplied and lead.state == "OPEN":
