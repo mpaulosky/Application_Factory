@@ -166,6 +166,8 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
   Between the lints and the build it runs the Seed `.github/ci/gate-checks.sh <merge-base>` when the repo has one:
   checks only that repo needs, such as Blazor-Server's Sandcastle TypeScript check. The merge
   base is empty without an `origin/main`.
+  Right before the build it runs `python3 -I .github/scripts/check_central_pins.py`, which refuses a central NuGet pin no project references under transitive pinning,
+  as CI's `Build Solution` job does before restore ([central-pins.md](central-pins.md)).
 
 ## Tests
 

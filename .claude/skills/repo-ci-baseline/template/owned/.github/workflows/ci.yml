@@ -271,6 +271,11 @@ jobs:
           echo "SOLUTION_FILE=${matches[0]}" >> "$GITHUB_ENV"
           echo "Discovered solution: ${matches[0]}"
 
+      # A central pin no project references holds its package back under transitive pinning, and Dependabot's bumps
+      # don't raise it, so restore would fail with NU1109 (.github/scripts/check_central_pins.py says why and what to do).
+      - name: Check central package pins
+        run: python3 -I .github/scripts/check_central_pins.py --root .
+
       - name: Restore dependencies
         run: dotnet restore
 

@@ -2,11 +2,11 @@
 # Tests for .github/hooks/pre-push.
 # Each case runs the hook in a throwaway repo, holding copies of
 # scripts/gate.sh, scripts/check-branch-name.sh,
-# .github/scripts/discover_tests.py and .github/scripts/check_gh_repo.py, with the refs git would
+# .github/scripts/discover_tests.py, .github/scripts/check_gh_repo.py and .github/scripts/check_central_pins.py, with the refs git would
 # pass on stdin. Stub `dotnet`, `pnpm`, `markdownlint-cli2`, `yamllint`,
 # `actionlint`, `zizmor`, `shellcheck` and `ruff` binaries log each call, and fail when the call matches the FAIL glob, so no
 # real build or network access is needed (the ruff stub answers --version with a 0.17 release, the one the gate's Python lint step accepts:
-# the repo tracks two Python files, which the gate lints when there is no origin/main to diff against, and CI's hook-tests job has no ruff or uv). check_gh_repo.py and the Shell format step run the real shfmt (v3.14 or a later v3), which must be on PATH;
+# the repo tracks three Python files, which the gate lints when there is no origin/main to diff against, and CI's hook-tests job has no ruff or uv). check_gh_repo.py and the Shell format step run the real shfmt (v3.14 or a later v3), which must be on PATH;
 # the repo gets the Template's .editorconfig, so the scripts it is given are written in that style.
 # Usage: .github/hooks/tests/pre-push.test.sh
 set -uo pipefail
@@ -15,6 +15,7 @@ HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/pre-push"
 SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/scripts"
 DISCOVER="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/discover_tests.py"
 CHECK_GH_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/check_gh_repo.py"
+CHECK_CENTRAL_PINS="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/check_central_pins.py"
 ZERO="0000000000000000000000000000000000000000"
 SHA="1111111111111111111111111111111111111111"
 
@@ -61,7 +62,7 @@ echo '<Project><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup
 mkdir -p "$REPO/tests/Fake.Support"
 echo '<Project />' > "$REPO/tests/Fake.Support/Fake.Support.csproj"
 cp "$SCRIPTS/gate.sh" "$SCRIPTS/check-branch-name.sh" "$REPO/scripts/"
-cp "$DISCOVER" "$CHECK_GH_REPO" "$REPO/.github/scripts/"
+cp "$DISCOVER" "$CHECK_GH_REPO" "$CHECK_CENTRAL_PINS" "$REPO/.github/scripts/"
 # The Template's .editorconfig, as every repo it is Applied to has: the gate's Shell format step reads its shell style, so the fixture scripts below are written in it.
 cp "$SCRIPTS/../.editorconfig" "$REPO/.editorconfig"
 git -C "$REPO" add .
@@ -512,6 +513,14 @@ git -C "$REPO" switch -q feature/1-x
 commit_on feature/17-gh-skill-told .claude/skills/mine/SKILL.md $'Look at it with `gh pr list --repo o/r`.'
 run_hook feature/17-gh-skill-told "$(push_stdin feature/17-gh-skill-told)"
 expect "a skill whose gh command gives --repo lets the push through" allowed tests-ran
+git -C "$REPO" switch -q feature/1-x
+
+# Under transitive pinning a central pin no project references holds its package back, and a Dependabot bump then fails restore with
+# NU1109 (.github/scripts/check_central_pins.py): the gate refuses it, naming the pin, before the build.
+commit_on feature/18-unreferenced-pin Directory.Packages.props '<Project><PropertyGroup><CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled></PropertyGroup><ItemGroup><PackageVersion Include="Orphan.Package" Version="1.0.0" /></ItemGroup></Project>'
+run_hook feature/18-unreferenced-pin "$(push_stdin feature/18-unreferenced-pin)"
+expect "an unreferenced central pin refuses the push" refused any "Orphan.Package is pinned in Directory.Packages.props but no project references it"
+expect_log "an unreferenced central pin stops the gate before the build" not-ran 'dotnet build*'
 git -C "$REPO" switch -q feature/1-x
 
 # The old sandcastle.gatedHead marker no longer skips the gate: a Sandcastle

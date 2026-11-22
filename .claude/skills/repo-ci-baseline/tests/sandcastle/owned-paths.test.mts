@@ -288,6 +288,7 @@ const EXEMPT_GLOBS_AUDITED: Readonly<Record<string, GlobEntry>> = {
     ], why: "the bash hook tests and shellcheck run over them; they run on the host, so a new hook is a decision" },
   ".github/scripts/**": { files: [
       ".github/scripts/backfill_blog_posts.py",
+      ".github/scripts/check_central_pins.py",
       ".github/scripts/check_gh_repo.py",
       ".github/scripts/check_owned_files.py",
       ".github/scripts/detect_changes.py",
@@ -301,6 +302,7 @@ const EXEMPT_GLOBS_AUDITED: Readonly<Record<string, GlobEntry>> = {
       ".github/scripts/tests/conftest.py",
       ".github/scripts/tests/pr-automerge.test.mjs",
       ".github/scripts/tests/test_backfill_blog_posts.py",
+      ".github/scripts/tests/test_check_central_pins.py",
       ".github/scripts/tests/test_check_gh_repo.py",
       ".github/scripts/tests/test_check_owned_files.py",
       ".github/scripts/tests/test_ci_gh_repo_job.py",

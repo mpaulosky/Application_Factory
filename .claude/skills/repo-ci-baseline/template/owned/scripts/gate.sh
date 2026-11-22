@@ -7,7 +7,8 @@
 # branch's diff passed the local review (/pre-push-review), that its own
 # scripts and skills tell every gh command its repository, that
 # .github/copilot-instructions.md matches the repo's code-review skill (when
-# it has one), runs the repo's own checks in .github/ci/gate-checks.sh, builds
+# it has one), runs the repo's own checks in .github/ci/gate-checks.sh, checks
+# that every central NuGet pin is referenced (check_central_pins.py), builds
 # the solution, then runs each test project CI's discover_tests.py finds under
 # tests/. Exits non-zero on the first
 # failing gate. GATE_SKIP_REVIEW=1 skips the review check, for gate runs before
@@ -312,6 +313,11 @@ if [[ -f .github/ci/gate-checks.sh ]]; then
   step "Repo checks (.github/ci/gate-checks.sh)"
   bash .github/ci/gate-checks.sh "$BASE"
 fi
+
+# A central NuGet pin no project references holds the package back wherever it comes in through another one, under transitive
+# pinning, and Dependabot's bumps don't raise it, so restore fails with NU1109. Checked before the build, as CI checks it before restore.
+step "Central package pins (.github/scripts/check_central_pins.py)"
+python3 -I .github/scripts/check_central_pins.py --root "$ROOT"
 
 step "Build"
 mapfile -t SOLUTIONS < <(find . -maxdepth 1 -name '*.slnx')
