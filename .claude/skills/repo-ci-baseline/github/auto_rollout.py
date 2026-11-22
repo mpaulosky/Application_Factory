@@ -139,6 +139,8 @@ LOG_DIR = os.path.expanduser("~/.cache/repo-ci-baseline/logs")
 SESSION_DIR = os.path.expanduser("~/.cache/repo-ci-baseline-sessions")
 # What opens the log line saying why the session wasn't started (stop_line reads it back for the terminal).
 NOT_STARTED = "rollout.sh: not started: "
+# How the stop for a re-Apply worktree removed since reapply.sh made it begins, so drive doesn't send the person there.
+WORKTREE_GONE = "the re-Apply worktree is gone: "
 # The most the session's settings may take as JSON: they are one argument of claude's, which Linux caps at 128 KiB.
 SETTINGS_LIMIT = 100_000
 # How long a killed session's process group may take to be gone before the log says it didn't.
@@ -660,14 +662,20 @@ def denied_around(root, allowed, listdir=os.listdir):
     return walk(os.path.normpath(root))
 
 
+# How far down in home a tool's install prefix must be to be read whole: ~/.nvm/versions/node/v24 is four, and a
+# shallower one (~/tools of ~/tools/bin/git) may hold more than the tool.
+PREFIX_DEPTH = 3
+
+
 def tool_reads(home, which=shutil.which, run=None):
     """(what the session's Bash reads for SESSION_COMMANDS, the folders to put first on its PATH). Each command's own
     file as PATH finds it and as it really is (node's process.execPath, git's binary, and git's --exec-path helpers),
     so a shim (volta, asdf, mise) or a link isn't what runs in the sandbox; and the install prefix around a real binary
-    in a bin folder (nvm's version folder, a Homebrew Cellar's whole prefix), unless SYSTEM_READS has it already, it
-    is right under / (/opt, /srv), or it is home, a folder above it or ~/.local, which other tools share: then the
-    file alone. A command PATH finds by a relative path is left out, as is
-    anything shared."""
+    in a bin folder, read whole only in the two layouts known to be a tool's own: a version folder at least
+    PREFIX_DEPTH folders down in home (nvm's, asdf's, mise's, volta's), or a Homebrew Cellar's whole prefix, and
+    neither when SYSTEM_READS has it already or it is home, a folder above it or ~/.local, which other tools share.
+    Anywhere else (/opt/bin, /mnt/data/bin, another user's home) the files alone. A command PATH finds by a relative
+    path is left out, as is anything shared."""
     run = run or run_quiet
     homes = both_forms(os.path.normpath(home))
 
@@ -695,9 +703,10 @@ def tool_reads(home, which=shutil.which, run=None):
         prefix = (real.split("/Cellar/")[0] if "/Cellar/" in real
                   else os.path.dirname(folder) if os.path.basename(folder) == "bin" else None)
         system = prefix and any(prefix == read or prefix.startswith(read + "/") for read in SYSTEM_READS)
-        # A prefix right under / (/opt of /opt/bin/git, /srv) holds other programs' folders too: the files alone.
-        shallow = prefix and os.path.dirname(prefix.rstrip("/")) == "/"
-        if prefix and not system and not shallow and not shared(prefix):
+        # Only a layout known to be the tool's own: a prefix such as /opt or /mnt/data holds other programs' files too.
+        own = prefix and ("/Cellar/" in real or any(
+            prefix.startswith(h + "/") and len(os.path.relpath(prefix, h).split("/")) >= PREFIX_DEPTH for h in homes))
+        if own and not system and not shared(prefix):
             # A prefix of the command's own: its folder goes first on PATH, so the shim found before it doesn't run.
             reads.append(prefix)
             first.append(folder)
@@ -843,33 +852,59 @@ def redacted(text):
 
 
 # The last part of a git config key that holds a password or a token as its value (sendemail.smtpPass, imap.pass, a
-# tool's own api.token): no URL in it to find.
-SECRET_KEY = re.compile(r"\.[a-z0-9-]*(pass|passwd|password|passphrase|token|secret|apikey)$", re.I)
+# tool's own api-token or access-key): no URL in it to find. A bare pass is a word of its own (smtp-pass) and a key
+# an API's, a secret's or an access key, so core.askPass and user.signingKey, which name a program and a key, aren't.
+SECRET_KEY = re.compile(r"\.(?:[a-z0-9-]*(?:token|secret|password|passwd|passphrase|apikey)"
+                        r"|(?:[a-z0-9-]*-)?(?:smtp)?pass|[a-z0-9-]*(?:api|secret|access)-?key)$", re.I)
+# A token's own shape, wherever in a value it is (an alias's curl, an sshCommand): GitHub's, GitLab's, Slack's, an
+# API key's and AWS's, an Authorization or Bearer header, and sshpass's password. Only these known forms are found.
+TOKEN_SHAPE = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|glpat-[\w-]{20,}|xox[abprs]-[\w-]{10,}"
+                         r"|sk-[\w-]{20,}|AKIA[0-9A-Z]{16})|(?i:\bauthorization:\s*\S|\bbearer\s+\S{8,}|\bsshpass\s+-p)")
+# A credential helper that holds the password itself (echo password=..., --password ...) or names a file it is kept in.
+HELPER_SECRET = re.compile(r"password\s*=|--pass(?:word)?\b|--file\b", re.I)
 
 
 def config_files(common):
-    """Every git config file in the clone's git folder common, which the session's Bash reads whole: its config, and
-    the config.worktree of the main checkout and of each linked worktree, where one exists. Raises RuntimeError when
-    common or its worktrees folder can't be listed."""
-    files = [os.path.join(common, name) for name in ("config", "config.worktree")]
-    try:
-        names = sorted(os.listdir(os.path.join(common, "worktrees")))
-    except FileNotFoundError:
-        names = []
-    except OSError as error:
-        raise RuntimeError(f"can't list {common}/worktrees, so what of the clone's git config the session could read"
-                           f" can't be told ({error}): make it listable") from None
-    files += [os.path.join(common, "worktrees", name, "config.worktree") for name in names]
+    """Every git config file in the clone's git folder common, which the session's Bash reads whole: its config, the
+    config.worktree of the main checkout and of each linked worktree, and the same of each submodule's git folder
+    under modules (nested ones too), where one exists. Raises RuntimeError when common, its worktrees folder or a
+    folder under modules can't be listed."""
+    def unlistable(folder, error):
+        raise RuntimeError(f"can't list {folder}, so what of the clone's git config the session could read can't be"
+                           f" told ({error}): make it listable") from None
+
+    def git_folder(folder):
+        files = [os.path.join(folder, name) for name in ("config", "config.worktree")]
+        try:
+            names = sorted(os.listdir(os.path.join(folder, "worktrees")))
+        except FileNotFoundError:
+            names = []
+        except OSError as error:
+            unlistable(os.path.join(folder, "worktrees"), error)
+        return files + [os.path.join(folder, "worktrees", name, "config.worktree") for name in names]
+
+    files = git_folder(common)
+    modules = os.path.join(common, "modules")
+    if os.path.isdir(modules):
+        def failed(error):
+            unlistable(error.filename, error.strerror)
+
+        for folder, subfolders, names in os.walk(modules, onerror=failed):
+            if "HEAD" in names:  # a submodule's git folder: its config, and its own nested modules
+                files += git_folder(folder)
+                subfolders[:] = [name for name in subfolders if name == "modules"]
+            subfolders.sort()
     return [path for path in files if os.path.isfile(path)]
 
 
 def config_secrets(worktree, common, run=run_quiet):
     """Where the clone's git folder, which the session's Bash reads whole, holds a sign-in secret: every key of every
     config file in it (config_files: the clone's, and each worktree's config.worktree), include files followed, whose
-    key or value holds a URL with a sign-in (has_sign_in: remotes, insteadOf, proxies, submodules, LFS), whose name is
-    a password's or a token's (SECRET_KEY), an http extraheader, or a credential helper with a password in it or a
-    --file store; and a file in common named for credentials. Each named by its file and key (redacted), never its
-    value. Raises RuntimeError when common can't be listed or git can't read a config file."""
+    key or value holds a URL with a sign-in (has_sign_in: remotes, insteadOf, proxies, submodules, LFS), whose value
+    holds a token's own shape (TOKEN_SHAPE), whose name is a password's or a token's (SECRET_KEY), an http
+    extraheader, or a credential helper holding a password or naming a file (HELPER_SECRET); and a file in common
+    named for credentials. Each named by its key (redacted) and the file that holds it (an include file's own),
+    never its value. Raises RuntimeError when common can't be listed or git can't read a config file."""
     try:
         names = sorted(os.listdir(common))
     except OSError as error:
@@ -878,18 +913,22 @@ def config_secrets(worktree, common, run=run_quiet):
     found = [f"{os.path.join(common, name)} (a file named for credentials)" for name in names
              if "credential" in name.lower()]
     for path in config_files(common):
-        code, out, err = run(["git", "-C", worktree, "config", "--file", path, "--includes", "--null", "--list"])
+        code, out, err = run(["git", "-C", worktree, "config", "--file", path, "--includes", "--show-origin",
+                              "--null", "--list"])
         if code != 0:
             raise RuntimeError(f"git can't read {path} ({redacted(err.strip()) or f'exit {code}'}): repair it (git"
                                f" config --file {shlex.quote(path)} --list shows the error)")
-        for entry in filter(None, out.split("\0")):
+        # --show-origin --null: the file, then key\nvalue, each ended by a NUL, so the empty field after the last NUL
+        # pairs with nothing and is dropped.
+        fields = out.split("\0")
+        for origin, entry in zip(fields[0::2], fields[1::2], strict=False):
             key, _, value = entry.partition("\n")
-            name, lowered = key.lower(), value.lower()
+            name = key.lower()
             helper = name.startswith("credential") and name.endswith(".helper")
-            if (name.endswith(".extraheader") or has_sign_in(key) or has_sign_in(value)
-                    or SECRET_KEY.search(name) and value.strip()
-                    or helper and ("password" in lowered or "--file" in lowered)):
-                found.append(f"{redacted(key)} in {path}")
+            if (name.endswith(".extraheader") or has_sign_in(key) or has_sign_in(value) or TOKEN_SHAPE.search(value)
+                    or SECRET_KEY.search(name) and value.strip() or helper and HELPER_SECRET.search(value)):
+                held_in = origin.removeprefix("file:") if origin.startswith("file:") else path
+                found.append(f"{redacted(key)} in {held_in}")
     return list(dict.fromkeys(found))
 
 
@@ -1651,7 +1690,8 @@ def review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock
         return 127, log, []
 
     if not os.path.isdir(worktree):
-        return stop(f"the re-Apply worktree {worktree} doesn't exist")
+        return stop(f"{WORKTREE_GONE}{worktree} was removed since reapply.sh made it; resume, and reapply.sh makes it"
+                    " again")
     try:
         owned = changes(worktree)
         before = guard(worktree)
@@ -1660,10 +1700,10 @@ def review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock
         held = secrets(worktree, before.common)
         if held:
             return stop(f"the clone's git folder holds a sign-in secret ({'; '.join(held)}), which the session, reading"
-                        " that folder, could read. git config --file <that file> --includes --show-origin --list"
-                        " shows each key whole (a *** in one stands for its sign-in); remove the key (git config"
-                        " --file <that file> --unset-all <key>) or the credentials file, and keep the token in a"
-                        " credential helper, then resume")
+                        " that folder, could read. Each is named '<key> in <file>', the file that holds it: git config"
+                        " --file <file> --list shows its key whole (a *** in one stands for its sign-in); remove it"
+                        " with git config --file <file> --unset-all <key>, or remove the file named for credentials,"
+                        " and keep the token in a credential helper, then resume")
         home = os.path.expanduser("~")
         tools = tool_reads(home, which)
         settings = session_settings(worktree, before.common, before.gitdir, tmp, listdir=listdir, which=which,
@@ -1989,24 +2029,28 @@ def drive(repo, path, brings, reapply, review, say):
                            " record")
         if code != 0:
             why = {124: f"ran past {REVIEW_TIMEOUT_MINUTES} minutes and was stopped",
-                   127: stop_line(log) or "couldn't be started (the log's rollout.sh: line says why)",
+                   127: stop_line(log) or (f"exited 127 and the log has no {NOT_STARTED.strip()!r} line, so claude"
+                                           " started and exited 127 itself: the log says why" if os.path.isfile(log)
+                                           else "couldn't be started: no log could be made"),
                    NOTHING_STAGED: "exited 0 having staged no findings, not even [], so no review was recorded",
                    RECORD_FAILED: "staged findings the round couldn't record (scripts/review.sh prepare or record"
                                   " failed, or the round did; the log says why)"
                                   + (f": {broke[0]}" if broke else "")}.get(code, f"exited {code}")
+            if code == 127 and why.startswith(f"couldn't be started: {WORKTREE_GONE}"):
+                return Outcome("failed", f"the review session {why} (see {log}).{kept}")
             return Outcome("failed", f"the review session {why} (see {log}); run /pre-push-review in"
                            f" {here}, then resume.{kept}")
 
 
 def stop_line(log):
-    """'couldn't be started: <why>', from the NOT_STARTED line run_review wrote in log, or None: a claude that
-    started may exit 127 too, and then there is none."""
+    """'couldn't be started: <why>', from the first NOT_STARTED line in log, the one run_review wrote before any
+    session output, or None: a claude that started may exit 127 too, and then there is none."""
     try:
         with open(log, encoding="utf-8", errors="replace") as handle:
             said = [line[len(NOT_STARTED):].strip() for line in handle if line.startswith(NOT_STARTED)]
     except (OSError, TypeError):
         return None
-    return f"couldn't be started: {without_resume(said[-1])}" if said else None
+    return f"couldn't be started: {without_resume(said[0])}" if said else None
 
 
 class PrUnknown(Exception):

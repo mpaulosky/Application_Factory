@@ -51,10 +51,11 @@ enforces (bubblewrap, so Linux only) on every Bash command and everything it sta
   logs, and wherever a variable such as `KUBECONFIG` or `XDG_CONFIG_HOME` moves one), and of the rest of the disk only the worktree, the clone's git folder, `.security`,
   its own folder, the system's folders (`/usr`, `/etc`, `/proc` and the like, but not `/dev/shm`, and of `/run` only NixOS's system links, so not the runtime
   folder, decrypted secrets or a daemon's socket) and node's and git's own files: each as `PATH` finds it and as it really is (a shim is asked, and the real one put
-  first on the session's `PATH`), with its install prefix (nvm's version folder, a Homebrew prefix) unless the system's folders hold it or it is home, a folder above
-  it or `~/.local`, which other tools share. So a secret no list names (another project's `.env`, a tool's config, another user's or a clone outside home) is out of
-  reach too. `rollout.sh --auto` runs on Linux only: this policy is checked against bubblewrap alone, and macOS's Seatbelt and its firmlinked data volume
-  (`/System/Volumes/Data`) would need their own. That is an allow-list made of
+  first on the session's `PATH`), with its install prefix only in the two layouts known to be a tool's own: a version folder at least three folders down in home
+  (nvm's, asdf's, mise's, volta's) or a Homebrew prefix, and neither when the system's folders hold it or it is home, a folder above it or `~/.local`, which other
+  tools share. Anywhere else (`/opt/bin`, a data disk, another user's home) it is the files alone. So a secret no list names (another project's `.env`, a tool's
+  config, another user's or a clone outside home) is out of reach too. `rollout.sh --auto` runs on Linux only: this policy is checked against bubblewrap alone, and macOS's
+  Seatbelt and its firmlinked data volume (`/System/Volumes/Data`) would need their own. That is an allow-list made of
   denials: walking from `/`, every entry beside the way to those folders is denied, where a symlink leads as well, since denying home whole and re-allowing the worktree
   (`allowRead`) leaves bubblewrap unable to mask the files it protects there, and every command fails. The round lists them when it builds the session's settings, just
   before the session starts, so an entry made after that is readable: the session writes only its own folder, so only the person's other programs or Claude Code
@@ -63,9 +64,12 @@ enforces (bubblewrap, so Linux only) on every Bash command and everything it sta
   the sandbox may not match as written, stops the round before the session. Its own folder is in `~/.cache/repo-ci-baseline-sessions`, not `/tmp`, so `/tmp` is
   denied whole and the list stays short (what a killed run left there is removed by the next); settings over 100,000 bytes, one argument's room, stop the round too,
   naming the crowded folder. The clone's git folder is read whole, since git needs it: its other branches, stash and reflog with it, so the round refuses a clone whose
-  git folder holds a sign-in secret: any key of its own config, include files followed, whose key or value is a URL with a sign-in in it (a remote, `insteadOf`, a
-  proxy, a submodule), an `http` extra header, a credential helper holding a password or a `store --file`, or a credentials file. A key is named with its token
-  masked, and a secret added while the session ran is named once it ends. It writes only a temporary folder of its own, its run folder
+  git folder holds a sign-in secret. Every git config file there is read, include files followed: the clone's `config`, each worktree's `config.worktree`, and
+  the same of each submodule's git folder under `modules`. A secret is a key or value holding a URL with a sign-in (a remote, `insteadOf`, a proxy, a
+  submodule), a value holding a known token's shape (GitHub's, GitLab's, Slack's, an API key's, AWS's, an `Authorization` or `Bearer` header, `sshpass -p`), a
+  key named for a password, a token, a secret or an API or access key (not `core.askPass`, a program), an `http` extra header, a credential helper holding a
+  password or naming a `--file`, or a file named for credentials. The check finds these known forms only, not a token in a form no rule names. A key is named
+  with its token masked and by the file that holds it (an include file's own), and a secret added while the session ran is named once it ends. It writes only a temporary folder of its own, its run folder
   among it: not the
   worktree, which a sandbox otherwise lets its working folder be written, the clone's git folder, its review ledgers or the main checkout's `.security`. It reaches no
   host (it builds and installs nothing, and a `git fetch` has nowhere to write: `reapply.sh` has just fetched), can't leave the sandbox
@@ -96,9 +100,9 @@ enforces (bubblewrap, so Linux only) on every Bash command and everything it sta
   what `lstat` says of it. What the session wrote is printed escaped and cut short. A check that fails is a stop too, not a crash, and so is a session that exited 0
   having staged nothing, not even `[]`.
 - **Its processes.** It runs in a process group of its own, killed whole however it ends (it exits, or runs past three hours), while its exited leader is still unreaped, so
-  the group's id can't be another's (a Python with no `waitid` would reap the leader first; the code keeps that path, which `--auto`, Linux only, doesn't take); a group still there after the kill stops
-  the round, since it could still write. An interrupt, a SIGTERM or a SIGHUP while it runs is held until the group is gone, then passed on, and one the caller ignores
-  (`nohup`) stays ignored. `reapply.sh` and `land.sh` run in groups of their own too, which a SIGTERM or SIGHUP of the round kills; one still there after the kill stops
+  the group's id can't be another's (a Python with no `waitid` would reap the leader first; the code keeps that path, which `--auto`, Linux only, doesn't take);
+  a group still there after the kill stops the round, since it could still write. An interrupt, a SIGTERM or a SIGHUP while it runs is held until the group is gone, then passed on, and one
+  the caller ignores (`nohup`) stays ignored. `reapply.sh` and `land.sh` run in groups of their own too, which a SIGTERM or SIGHUP of the round kills; one still there after the kill stops
   that repo too, since it holds the lock and may still work in the worktree, and the stop names `pgrep -l -g` and `pkill -KILL -g` to see and end it. Its log is kept, `0600`,
   in a `0700` folder of the person's own, `~/.cache/repo-ci-baseline/logs`, since it can hold the session's report of security findings.
 
