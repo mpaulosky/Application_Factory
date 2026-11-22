@@ -13,6 +13,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -180,6 +181,35 @@ def test_preflight_refuses_a_sign_in_secret_the_session_would_inherit(environ, r
     # Not a sign-in the session needs in its environment: the messaging token is the caller's, dropped by session_env.
     problems, _ = fake_preflight(environ={"PATH": "/bin", **environ})
     assert problems == [f"{name} {SIGN_IN}" for name in refused]
+
+
+URL_SIGN_IN = ("holds a URL with a sign-in, which the review session is never given (its shell would see it), so its"
+               " claude would run without it: for the round, set it to a URL with no sign-in in it (one that takes it"
+               " from a file of its own), or unset it")
+
+
+@pytest.mark.parametrize("environ, refused", [
+    ({"ANTHROPIC_BASE_URL": "https://me:key@gateway.example/"}, ["ANTHROPIC_BASE_URL"]),
+    ({"ANTHROPIC_BEDROCK_BASE_URL": "https://key@bedrock.example/"}, ["ANTHROPIC_BEDROCK_BASE_URL"]),
+    ({"HTTPS_PROXY": "http://u:pw@proxy:3128", "http_proxy": "http://u:pw@proxy:3128", "ALL_PROXY": "socks5://u:p@s:1"},
+     ["ALL_PROXY", "HTTPS_PROXY", "http_proxy"]),
+    ({"CLAUDE_CODE_USE_VERTEX": "1", "GOOGLE_CLOUD_ENDPOINT": "https://u:p@vertex.example/"}, ["GOOGLE_CLOUD_ENDPOINT"]),
+    ({"GOOGLE_CLOUD_ENDPOINT": "https://u:p@vertex.example/"}, []),
+    ({"ANTHROPIC_BASE_URL": "https://gateway.example/", "HTTPS_PROXY": "http://proxy:3128",
+      "NO_PROXY": "https://u:p@x/", "MIRROR": "https://u:p@mirror.example/"}, []),
+])
+def test_preflight_refuses_an_endpoint_or_proxy_whose_url_holds_a_sign_in(environ, refused, tmp_path):
+    # session_env would leave each out, so the session's claude would run without its endpoint or proxy.
+    problems, _ = fake_preflight(environ={"PATH": "/bin", **environ})
+    assert problems == [f"{name} {URL_SIGN_IN}" for name in refused]
+    assert not any(value in "\n".join(problems) for value in environ.values() if "@" in value), "never the value"
+    assert not set(refused) & set(auto.session_env({"PATH": "/bin", **environ}, str(tmp_path)))
+
+
+def test_a_sign_in_secret_named_and_holding_a_url_is_refused_once():
+    problems, _ = fake_preflight(environ={"PATH": "/bin", "CLAUDE_CODE_USE_BEDROCK": "1",
+                                          "AWS_ENDPOINT_TOKEN": "https://u:p@x/"})
+    assert problems == [f"AWS_ENDPOINT_TOKEN {SIGN_IN}"]
 
 
 @pytest.mark.parametrize("name, secret", [
@@ -542,7 +572,9 @@ def review_once(tmp_path, monkeypatch, popen=None, changes=None, worktree=None, 
 
     def fake_popen(command, **kwargs):
         seen.update(command=command, **kwargs)
-        seen["settings"] = json.loads(command[command.index("--settings") + 1])
+        path = command[command.index("--settings") + 1]
+        seen["settings_file"] = (path, stat.S_IMODE(os.lstat(path).st_mode), stat.S_ISREG(os.lstat(path).st_mode))
+        seen["settings"] = json.loads(Path(path).read_text())
         seen["tmp"] = os.path.dirname(kwargs["env"]["TMPDIR"])
         seen["gh_config"] = sorted(os.listdir(kwargs["env"]["GH_CONFIG_DIR"]))
         seen["folders"] = {name: os.path.lexists(tmp_path / "clone" / name) for name in (".git/review", ".security")}
@@ -1239,33 +1271,17 @@ def test_a_review_runs_its_tools_from_where_they_really_are_and_asks_them_once(t
     assert len(calls) == 1, "the settings, the PATH and the check after the session share one answer"
 
 
-def test_settings_too_large_for_one_argument_are_refused(monkeypatch):
-    assert auto.SETTINGS_LIMIT == 100_000, "one argument of claude's is at most 128 KiB on Linux"
-    many = {"/": ["h"], "/h": [f"a-file-of-the-persons-own-{n:05}" for n in range(5000)] + ["wt"]}
-    with pytest.raises(ValueError, match=r"more than 100000 \(one argument of claude's\): /h, on the way.*holds 5000"
-                                         r" entries the sandbox must deny one by one"):
-        settings_of("/h/wt", "/c/.git", "/c/.git/worktrees/wt", "/t", home="/h", environ={}, listdir=many.get)
-    few = {"/": ["h"], "/h": ["notes", "wt"]}
-    monkeypatch.setattr(auto, "SETTINGS_LIMIT", 10 ** 9)
-    size = len(json.dumps(settings_of("/h/wt", "/c/.git", "/c/.git/worktrees/wt", "/t", home="/h", environ={},
-                                      listdir=few.get)))
-    monkeypatch.setattr(auto, "SETTINGS_LIMIT", size)
-    settings_of("/h/wt", "/c/.git", "/c/.git/worktrees/wt", "/t", home="/h", environ={}, listdir=few.get)
-    monkeypatch.setattr(auto, "SETTINGS_LIMIT", size - 1)
-    with pytest.raises(ValueError, match=f"take {size} bytes, more than {size - 1}"):
-        settings_of("/h/wt", "/c/.git", "/c/.git/worktrees/wt", "/t", home="/h", environ={}, listdir=few.get)
-
-
 def root_of(path):
     return os.path.realpath(path).split("/")[1]
 
 
-def test_settings_too_large_stop_the_round_before_the_session(tmp_path, monkeypatch):
+def test_settings_too_large_for_one_argument_still_reach_the_session(tmp_path, monkeypatch):
     names = [f"an-entry-of-the-persons-own-{n:05}" for n in range(5000)]
     code, log, seen, _ = review_once(tmp_path, monkeypatch, listing={
         "listdir": lambda folder: [*names, root_of(tmp_path)] if folder == "/" else []})
-    assert code == 127 and "command" not in seen, "no session"
-    assert "rollout.sh: not started: can't set the session up: the session's settings take" in Path(log).read_text()
+    assert code == 0, Path(log).read_text()
+    assert len(json.dumps(seen["settings"])) > 128 * 1024, "more than one argument of claude's could carry"
+    assert f"/{names[-1]}" in seen["settings"]["sandbox"]["filesystem"]["denyRead"]
 
 
 def test_the_session_folder_defaults_to_one_beside_the_cache_outside_tmp():
@@ -2127,6 +2143,38 @@ def test_an_existing_log_folder_is_set_to_0700_and_a_symlink_is_refused(tmp_path
     code, log, _ = auto.run_review(TM, str(tmp_path), log_dir=str(tmp_path / "logs"),
                                    session_dir=str(tmp_path / "sessions"))
     assert code == 127 and "isn't a folder of the user's own" in log, "another user's folder is refused too"
+
+
+def test_the_sessions_settings_are_a_private_file_beside_its_log_never_its_command_line(tmp_path, monkeypatch):
+    code, log, seen, _ = review_once(tmp_path, monkeypatch)
+    assert code == 0
+    path, mode, regular = seen["settings_file"]
+    assert path == log.removesuffix(".log") + ".settings.json" and os.path.dirname(path) == str(tmp_path / "logs")
+    assert (mode, regular) == (0o600, True), "a file of the person's own, in LOG_DIR, which the session can't read"
+    assert not any(arg.startswith("{\"permissions\"") for arg in seen["command"]), "no other user reads them in cmdline"
+    assert seen["settings"]["sandbox"]["enabled"] is True
+    assert not os.path.lexists(path), "removed once the session ends"
+
+
+@pytest.mark.parametrize("planted", ["file", "link"])
+def test_a_settings_file_already_there_stops_the_session_before_it_starts(tmp_path, monkeypatch, planted):
+    made = tempfile.mkstemp
+    target = tmp_path / "elsewhere.json"
+
+    def mkstemp(**kwargs):
+        handle, log = made(**kwargs)
+        settings = log.removesuffix(".log") + ".settings.json"
+        if planted == "file":
+            Path(settings).write_text("{}")
+        else:
+            os.symlink(target, settings)
+        return handle, log
+
+    monkeypatch.setattr(auto.tempfile, "mkstemp", mkstemp)
+    started = []
+    code, log, _, _ = review_once(tmp_path, monkeypatch, popen=lambda command, **kwargs: started.append(command))
+    assert code == 127 and started == [] and not target.exists()
+    assert "can't set the session up: [Errno 17] File exists" in Path(log).read_text()
 
 
 def test_the_prompt_says_none_when_no_owned_file_changes():

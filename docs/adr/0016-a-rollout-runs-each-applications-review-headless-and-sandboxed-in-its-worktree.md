@@ -79,14 +79,18 @@ enforces (bubblewrap, so Linux only) on every Bash command and everything it sta
 - **The file tools**, which run outside the sandbox, follow `dontAsk` permissions: anything not allowed is refused. They may read only the worktree, `.security` and the temporary
   folder, edit only the temporary folder (so never a ledger or a `.security` entry), start the reviewer agent, and run Bash, which is sandboxed.
   Only the built-in tools the review needs exist in the session (`--tools`).
-- **Nothing of the repository's own or the person's applies to it.** It loads no settings file at all (`--setting-sources ""`; its settings are passed on the command line, so the
-  session can't rewrite them) and no MCP server, and takes the skill's text and its reviewer agent from the Template, not the worktree: neither the repository's nor the person's
+- **Nothing of the repository's own or the person's applies to it.** It loads no settings file of the repository's or the person's (`--setting-sources ""`). Its settings are a
+  0600 file beside the round's log, in a folder of the person's own that the session can neither read nor write, so it can't rewrite them; they were on the command line until a
+  review found that any local user reads that in `/proc/<pid>/cmdline`, every path the sandbox denies with it. The file is removed once the session ends.
+  It loads no MCP server, and takes the skill's text and its reviewer agent from the Template, not the worktree: neither the repository's nor the person's
   hooks, permission rules, plugins or settings run or widen it.
 - **No secret in its environment.** It has no GitHub sign-in (`gh` points at an empty config), names that look like secrets are dropped, and so is any value holding a URL with a sign-in
   (a password, or any user over http(s) or ftp(s), which may be a token), whatever its name; of Claude Code's own names only a
   listed few that aren't secrets (its config folder, model, endpoint and cloud) are kept, so the calling session's id, messaging token and IDE port don't reach it either. Claude Code
   signs in from its credentials file or a cloud's profile files, which the sandbox keeps from the shell: the preflight refuses a round with a sign-in secret in the environment
-  (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, a cloud's key), since the session's shell would inherit it.
+  (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, a cloud's key), since the session's shell would inherit it. It refuses one too when a variable the session's own claude
+  needs (its endpoint, the cloud in use's, a proxy) holds a URL with a sign-in, naming it and never its value: the session would otherwise start without it and fail with
+  nothing saying why.
 - **Layers behind the sandbox.** git's push to GitHub is sent nowhere, and deny rules name the commands that must never run. The prompt names the Owned files the branch changes,
   says it runs unattended and review-only, and says a finding in an Owned file is fixed in the Template first.
 - **Checks after it.** A session after which the worktree's `.git` link changed, or the clone's git `config`, a `config.worktree`, `hooks` or `info` (in either case no git

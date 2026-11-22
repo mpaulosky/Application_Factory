@@ -49,14 +49,18 @@ sandbox (bubblewrap and socat, which the preflight checks for). Its file tools, 
 worktree, the .security record and that folder, and edit only that folder
 (dontAsk: anything not allowed is refused). It loads no settings file (neither
 the repository's nor the person's), no MCP server and only SESSION_BUILTINS,
-gets its settings as JSON on its command line, and the skill and its reviewer
+gets its settings from a 0600 file beside its log, which it can neither read
+nor write (never on its command line, which any local user can read in
+/proc/<pid>/cmdline), and the skill and its reviewer
 agent from the Template, so no hook, permission rule or plugin but these
 applies. Its environment has no sign-in secret (gh points at an empty config;
 names that look like secrets are dropped, and so is any value holding a URL
 with a sign-in (has_sign_in: a password, or any user over http(s) or ftp(s),
 which may be a token), and of Claude Code's own only
 CLAUDE_KEPT is kept, while the preflight refuses a round with a Claude Code or
-cloud sign-in secret set, since the session would inherit it) and git's push is
+cloud sign-in secret set, since the session would inherit it, or with its
+endpoint, cloud or proxy variable holding a URL with a sign-in, which it would
+run without) and git's push is
 sent nowhere: layers behind the sandbox. After the session the round checks what
 it still could do: a session after which the worktree's .git link changed, the
 remote branch moved (or can't be read), the clone's git config or hooks
@@ -111,7 +115,6 @@ the ones it left open (scripts/review.sh advisory) before the push, files no
 issue, and the person files the follow-up.
 """
 
-import collections
 import contextlib
 import fcntl
 import hashlib
@@ -153,8 +156,6 @@ SESSION_MARKER = "<!-- claude-session -->"
 SESSION_STARTS = "rollout.sh: the review session starts\n"
 # How the stop for a re-Apply worktree removed since reapply.sh made it begins, so drive doesn't send the person there.
 WORKTREE_GONE = "the re-Apply worktree is gone: "
-# The most the session's settings may take as JSON: they are one argument of claude's, which Linux caps at 128 KiB.
-SETTINGS_LIMIT = 100_000
 # How long a killed session's process group may take to be gone before the log says it didn't.
 GROUP_WAIT_SECONDS = 10
 BRANCH = "chore/reapply-baseline"
@@ -304,6 +305,8 @@ CLAUDE_SECRETS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUT
 # refused by the preflight, left out by session_env.
 SIGN_IN_SECRET = re.compile(
     r"TOKEN|SECRET|PASSW|API_?KEY|ACCESS_KEY|AUTH(?!OR)|CREDENTIAL|_KEY$|COOKIE|BEARER|CERT|PRIVATE|KEY_?FILE", re.I)
+# The proxy variables the session's own claude reaches its endpoint through (curl's and Node's names, either case).
+PROXY_NAME = re.compile(r"^(HTTPS?|ALL|FTP)_PROXY$", re.I)
 CLOUD_SIGN_IN = {"CLAUDE_CODE_USE_BEDROCK": "AWS_", "CLAUDE_CODE_USE_VERTEX": "GOOGLE_", "CLAUDE_CODE_USE_FOUNDRY": "AZURE_"}
 # The values of a CLAUDE_CODE_USE_* flag that turn its cloud on; any other (0, false, empty) leaves it off.
 FLAG_ON = ("1", "true", "yes", "on")
@@ -447,13 +450,21 @@ def kept_clouds(base):
 
 def sign_in_problems(environ):
     """A sign-in secret in the environment the session would inherit: one of CLAUDE_SECRETS, or a secret of the cloud
-    in use. Its shell would see it, so the round doesn't start."""
+    in use. Its shell would see it, so the round doesn't start. Nor does it when a variable the session's own claude
+    needs (CLAUDE_KEPT, the cloud in use's, a proxy's: PROXY_NAME) holds a URL with a sign-in (has_sign_in), which
+    session_env leaves out: the session would run without its endpoint or proxy, and fail with nothing naming why.
+    Each is named, never its value."""
     clouds = kept_clouds(environ)
     found = sorted(name for name, value in environ.items() if value and (
         name in CLAUDE_SECRETS or (clouds and name.startswith(clouds) and SIGN_IN_SECRET.search(name))))
-    return [f"{name} is set, and the review session's shell would see it: unset it for the round, and sign Claude Code in"
-            " with its own credentials file (claude /login) or the cloud's profile files, which the sandbox keeps from"
-            " the shell" for name in found]
+    needed = sorted(name for name, value in environ.items() if name not in found and has_sign_in(value) and (
+        name in CLAUDE_KEPT or PROXY_NAME.match(name) or (clouds and name.startswith(clouds))))
+    return [*(f"{name} is set, and the review session's shell would see it: unset it for the round, and sign Claude Code"
+              " in with its own credentials file (claude /login) or the cloud's profile files, which the sandbox keeps"
+              " from the shell" for name in found),
+            *(f"{name} holds a URL with a sign-in, which the review session is never given (its shell would see it),"
+              " so its claude would run without it: for the round, set it to a URL with no sign-in in it (one that"
+              " takes it from a file of its own), or unset it" for name in needed)]
 
 
 def claude_sign_in_problems(run, environ):
@@ -842,23 +853,16 @@ def session_settings(worktree, common, gitdir, tmp, home=None, config_dir=None, 
             "network": {"allowedDomains": list(SANDBOX_DOMAINS)},
         },
     }
-    size = len(json.dumps(settings))
-    if size > SETTINGS_LIMIT:
-        crowded, count = collections.Counter(os.path.dirname(path) for path in denials).most_common(1)[0]
-        raise ValueError(f"the session's settings take {size} bytes, more than {SETTINGS_LIMIT} (one argument of"
-                         f" claude's): {crowded}, on the way to the worktree, its git folder or the session's own"
-                         f" folder ({SESSION_DIR}), holds {count} entries the sandbox must deny one by one; move the"
-                         " clone, or clear that folder, then resume")
     return settings
 
 
 def review_command(repo, worktree, owned, settings, agents, skill, run):
     """The headless review's argv: its prompt carries the skill and names run, the folder it stages in; it loads no settings file (--setting-sources ""), no
-    MCP server and only SESSION_BUILTINS; and it gets the sandbox and permissions of settings, as JSON on the command
-    line, and the reviewer agent from agents."""
+    MCP server and only SESSION_BUILTINS; and it gets the sandbox and permissions from settings, the path of the file
+    write_settings wrote, and the reviewer agent from agents."""
     prompt = REVIEW_PROMPT.format(worktree=worktree, repo=repo, owned=", ".join(owned) or "none", skill=skill, run=run,
                                   skill_dir=os.path.join(worktree, ".claude", "skills", "pre-push-review"))
-    return ["claude", "-p", prompt, "--permission-mode", "dontAsk", "--settings", json.dumps(settings),
+    return ["claude", "-p", prompt, "--permission-mode", "dontAsk", "--settings", settings,
             "--setting-sources", "", "--strict-mcp-config", "--tools", ",".join(SESSION_BUILTINS),
             "--agents", json.dumps(agents), "--disallowedTools", *DENIED_TOOLS]
 
@@ -1678,6 +1682,21 @@ def end_group(session, wait_seconds=GROUP_WAIT_SECONDS, sleep=time.sleep, clock=
     return True
 
 
+def settings_path(log):
+    """Where the session's settings are written: beside its log, in the person's own 0700 folder (LOG_DIR), which the
+    session can't read (CREDENTIAL_PATHS) or write. Not its command line, which any local user reads in
+    /proc/<pid>/cmdline, with every path the sandbox denies."""
+    return f"{log.removesuffix('.log')}.settings.json"
+
+
+def write_settings(settings, log):
+    """settings written to settings_path(log), 0600 and made new (never through a link or over a file there); its path."""
+    path = settings_path(log)
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), "w") as out:
+        json.dump(settings, out)
+    return path
+
+
 def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, timeout=REVIEW_TIMEOUT_MINUTES * 60,
                log_dir=LOG_DIR, session_dir=SESSION_DIR, end=end_group, clock=time.monotonic, guard=session_guard,
                check=broken_rules, skill=read_skill, agents=agent_definition, record=record_review,
@@ -1687,7 +1706,8 @@ def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, ti
     too), RECORD_FAILED when what it staged couldn't be recorded (it is kept, staged_copy; a group prepare left is
     listed), RECORD_LEFT (with the group in the list) when the record left a process group the kill didn't end, so
     whether it recorded can't be told, NOTHING_STAGED when it exited 0 having staged nothing. The session runs in
-    Claude Code's sandbox (session_settings) with the skill and its agent from the Template, no settings file, no
+    Claude Code's sandbox (session_settings, in a file beside the log: write_settings) with the skill and its agent
+    from the Template, no settings file of its own or the repository's, no
     GitHub sign-in and a temporary folder of its own, with the run folder it stages its findings in; it leads a
     process group of its own, which is killed whole whenever it ends. A SIGINT, SIGTERM or SIGHUP is held from the
     start of the session until the group is gone and, when it exited 0, until what it staged is recorded or kept;
@@ -1713,8 +1733,12 @@ def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, ti
                       f" yours, not a symlink; remove or fix it, or run /pre-push-review in {worktree}), then resume\n")
             return 127, log, []
         with folder as tmp:
-            return review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock, guard, check, skill,
-                             agents, record, listdir, which, secrets)
+            try:
+                return review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock, guard, check,
+                                 skill, agents, record, listdir, which, secrets)
+            finally:
+                with contextlib.suppress(OSError):  # left in the person's own folder at worst, and the next run's is new
+                    os.remove(settings_path(log))
 
 
 def review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock, guard, check, skill, agents, record,
@@ -1743,7 +1767,7 @@ def review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock
         tools = tool_reads(home, which)
         settings = session_settings(worktree, before.common, before.gitdir, tmp, listdir=listdir, which=which,
                                     tools=tools)
-        command = review_command(repo, worktree, owned, settings, agents(), skill(), run)
+        command = review_command(repo, worktree, owned, write_settings(settings, log), agents(), skill(), run)
         env = session_env(os.environ, tmp, tools[1])
     except GuardUnreadable as error:
         return stop(str(error))
