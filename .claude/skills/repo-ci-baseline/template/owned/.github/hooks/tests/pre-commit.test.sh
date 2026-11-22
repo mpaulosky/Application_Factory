@@ -11,8 +11,11 @@
 # takes only literal paths (a leading ':'), as the real linter needs them:
 # without one it reads a name as a glob, an option or a negation. Run with no
 # arguments it prints a banner, as the real one does, naming STUB_LINT_VERSION
-# (0.24.0 by default), or STUB_LINT_BANNER as it is; it logs its arguments,
-# NUL-separated, to $ARGS too, so a case can match one exactly. A `git`
+# (0.24.0 by default), or STUB_LINT_BANNER as it is, unless the folder it runs
+# in has a config with "noBanner" (as the real one would read it there); with
+# STUB_LINT_NOISE set it prints a warning on stderr and a line on stdout before
+# the banner. It logs its arguments, NUL-separated, to $ARGS too, so a case can
+# match one exactly. A `git`
 # wrapper fails the git subcommand FAIL_GIT names (only its FAIL_GIT_CALL-th
 # call, when that is set), so a case can tell that the hook refuses a commit it
 # couldn't lint.
@@ -35,7 +38,13 @@ mkdir -p "$STUBS"
 cat > "$STUBS/markdownlint-cli2" << EOF
 #!/usr/bin/env bash
 if [[ \$# -eq 0 ]]; then
-  if [[ -n "\${STUB_LINT_BANNER+set}" ]]; then
+  if [[ -n "\${STUB_LINT_NOISE:-}" ]]; then
+    echo "(node:1) Warning: something (stub)" >&2
+    echo "Some notice before the banner (stub)"
+  fi
+  if grep -qs noBanner .markdownlint-cli2.jsonc; then
+    :
+  elif [[ -n "\${STUB_LINT_BANNER+set}" ]]; then
     echo "\$STUB_LINT_BANNER"
   else
     echo "markdownlint-cli2 v\${STUB_LINT_VERSION:-0.24.0} (markdownlint v0.38.0)"
@@ -89,6 +98,9 @@ EOF
 chmod +x "$GIT_STUBS/git"
 
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
+# No user or system config, so a setting there (diff.renames, a hooksPath)
+# can't change what git reports here.
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.com
 export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.com
 
@@ -279,12 +291,21 @@ reset_repo
 # markdownlint-cli2 reads a bare argument as a glob, an option or a negation.
 # a1.md is a decoy a[1].md or a*.md read as a glob would match. The names are
 # shown with printf %q, so a newline or a byte that isn't UTF-8 shows as such.
+# A filesystem that refuses a name (macOS's refuses a byte that isn't UTF-8)
+# skips that name, saying so; a git add that fails fails the case.
 for name in 'a[1].md' 'a*.md' '-dash.md' '!bang.md' ':colon.md' 'a b.md' $'new\nline.md' $'\xff.md'; do
   shown="$(printf '%q' "$name")"
-  echo 'BAD text.' > "$REPO/$name"
+  if ! { echo 'BAD text.' > "$REPO/$name"; } 2> /dev/null; then
+    echo "skip - this filesystem refuses the name $shown"
+    continue
+  fi
   echo 'Some text.' > "$REPO/a1.md"
   # --literal-pathspecs, or git reads :colon.md's ':' as pathspec magic.
-  git -C "$REPO" --literal-pathspecs add -- "$name" a1.md
+  if ! git -C "$REPO" --literal-pathspecs add -- "$name" a1.md; then
+    fail "a staged $shown is linted as that file" "setup: git add failed"
+    reset_repo
+    continue
+  fi
   run_hook
   expect "a staged $shown is linted as that file" refused linted
   if got_arg ":$name"; then
@@ -303,12 +324,18 @@ git -C "$REPO" -c core.hooksPath=/dev/null commit -q -m notes
 git -C "$REPO" mv -- 'a[1] notes.md' '-b[2] guide.md'
 echo 'BAD text.' >> "$REPO/-b[2] guide.md"
 git -C "$REPO" add -- '-b[2] guide.md'
-run_hook
-expect "a violation in a renamed hard-named file refuses the commit" refused linted
-if got_arg ':-b[2] guide.md' && ! got_arg ':a[1] notes.md'; then
-  pass "a renamed hard-named file is linted under its new name"
+# As above, the case only proves something if git reports a rename.
+OUTPUT="$(git -C "$REPO" diff --cached --name-status)"
+if [[ "$OUTPUT" == R* ]]; then
+  run_hook
+  expect "a violation in a renamed hard-named file refuses the commit" refused linted
+  if got_arg ':-b[2] guide.md' && ! got_arg ':a[1] notes.md'; then
+    pass "a renamed hard-named file is linted under its new name"
+  else
+    fail "a renamed hard-named file is linted under its new name" "its arguments: $(cat "$LOG")"
+  fi
 else
-  fail "a renamed hard-named file is linted under its new name" "its arguments: $(cat "$LOG")"
+  fail "a violation in a renamed hard-named file refuses the commit" "setup: git didn't report a staged rename"
 fi
 git -C "$REPO" reset -q --hard HEAD~1
 echo 'BAD text.' > "$REPO/!part [1].md"
@@ -361,6 +388,16 @@ STUB_LINT_VERSION=0.10.0 run_hook
 expect "markdownlint-cli2 0.10.0 lints (its version is read as a number)" allowed linted
 STUB_LINT_BANNER='Usage: something else' run_hook
 expect "a markdownlint-cli2 whose version can't be read refuses the commit" refused not-linted
+# Node's warnings on stderr, and a line on stdout before the banner, don't hide it.
+STUB_LINT_NOISE=1 run_hook
+expect "a warning before markdownlint-cli2's banner doesn't hide its version" allowed linted
+# The version is read in an empty folder: a config in the working copy that
+# isn't staged (here one that turns the banner off) isn't read, or run.
+cp "$REPO/.markdownlint-cli2.jsonc" "$WORK/config.saved"
+echo '{ "forbid": "BAD", "noBanner": true }' > "$REPO/.markdownlint-cli2.jsonc"
+run_hook
+expect "an unstaged config in the working copy doesn't change the version check" allowed linted
+cp "$WORK/config.saved" "$REPO/.markdownlint-cli2.jsonc"
 reset_repo
 
 # A git that fails refuses the commit, rather than linting nothing or a tree
@@ -481,6 +518,33 @@ if OUTPUT="$(PATH="$STUBS:$PATH" git -C "$REPO" -c core.hooksPath="$HOOKS_DIR" c
   pass "git commit in a linked worktree is allowed"
 else
   fail "git commit in a linked worktree is allowed" "the commit was refused"
+fi
+
+# ── The real markdownlint-cli2, when one is installed ──
+# The stub takes the ':' prefix on trust; the real linter must read ':!bang.md'
+# as that file, not a negation that lints nothing. (A name like a[1].md is no
+# case here: markdownlint-cli2 0.23 finds a file named as a glob as itself.)
+REAL_LINT="$(PATH="${PATH//$STUBS:/}" command -v markdownlint-cli2 || true)"
+if [[ -z "$REAL_LINT" ]]; then
+  echo "skip - no markdownlint-cli2 installed, so the real-linter cases don't run"
+else
+  REAL="$WORK/real"
+  git init -q -b main "$REAL"
+  git -C "$REAL" config baseline.allowPrimaryCommits true
+  echo '{ "config": { "default": true } }' > "$REAL/.markdownlint-cli2.jsonc"
+  printf '# Readme\n' > "$REAL/README.md"
+  git -C "$REAL" add .
+  git -C "$REAL" -c core.hooksPath=/dev/null commit -q -m init
+  # MD018: no space after the '#'.
+  printf '#Bad heading\n' > "$REAL/!bang.md"
+  git -C "$REAL" --literal-pathspecs add -- '!bang.md'
+  OUTPUT="$(cd "$REAL" && bash "$HOOK" 2>&1)"
+  STATUS=$?
+  if [[ $STATUS -ne 0 && "$OUTPUT" == *'!bang.md'*MD018* ]]; then
+    pass "the real linter lints a staged !bang.md as that file, not a negation"
+  else
+    fail "the real linter lints a staged !bang.md as that file, not a negation" "exit $STATUS, no MD018 for !bang.md"
+  fi
 fi
 
 echo

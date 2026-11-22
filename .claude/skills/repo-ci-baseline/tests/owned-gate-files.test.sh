@@ -49,12 +49,17 @@ names=("notes/café.md" "a b.md" "docs/blogs/post.md" "tab${tab}name.md" "line${
   ".github/hooks/pre-push" "tools/.github/hooks/pre-push" "tools/a.py" "-dash.py" "${latin1}.py" "UPPER.PY" "notpy.pyc"
   "a b.yml" "s p.sh" "p y.py" "n${newline}l.sh" "n${newline}l.py" "scripts/new${newline}line" "foo${newline}scripts/run" "${latin1}.yml" "${latin1}.sh"
   "!bang.md" "a*.md" "x.mdx" "a.md.bak" "a.ymlx" "a.shx")
+# A fixture that can't be written or staged fails here, by name, rather than
+# leaving the counts below off by one with no word why.
+unstaged=""
 for name in "${names[@]}"; do
-  mkdir -p "$repo/$(dirname -- "$name")"
-  printf 'x\n' > "$repo/$name"
   # Literal pathspecs: git would read a*.md as a glob, and a leading ':' as pathspec magic.
-  g "$repo" --literal-pathspecs add -- "$name"
+  if ! { mkdir -p "$repo/$(dirname -- "$name")" && printf 'x\n' > "$repo/$name" \
+    && g "$repo" --literal-pathspecs add -- "$name"; } 2> /dev/null; then
+    unstaged+=" $(printf '%q' "$name")"
+  fi
 done
+check "every fixture name is written and staged (not:${unstaged:- none})" "[[ -z \$unstaged ]]"
 g "$repo" commit -q -m names
 
 # lists [<git wrapper>]: run the block in the repo, then the gate's Markdown, YAML and shell steps with stubs of their linters

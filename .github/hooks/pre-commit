@@ -116,8 +116,13 @@ fi
 
 # The ':' literal-path prefix used below came in markdownlint-cli2 0.4.0: an
 # older one reads ':a.md' as a glob that matches nothing, and passes. Run with
-# no arguments, it prints its banner ("markdownlint-cli2 vX.Y.Z ...") first.
-LINT_BANNER="$("$MARKDOWNLINT_BIN" < /dev/null 2>&1 | head -n 1)"
+# no arguments, it prints its banner ("markdownlint-cli2 vX.Y.Z ...") on
+# stdout. It runs in an empty folder of its own: in the working copy it would
+# read (or run) a config there that isn't staged. Only the banner line counts,
+# so a warning Node prints first doesn't hide it.
+PROBE="$WORK_DIR/probe"
+mkdir "$PROBE" 2> /dev/null || refuse "Couldn't make a temporary folder to read markdownlint-cli2's version in"
+LINT_BANNER="$(cd "$PROBE" && "$MARKDOWNLINT_BIN" < /dev/null 2> /dev/null | sed -n '/^markdownlint-cli2 v/{p;q;}')"
 LINT_VERSION="$(sed -n 's/^markdownlint-cli2 v\([0-9][0-9]*\)\.\([0-9][0-9]*\)\.[0-9].*/\1 \2/p' <<< "$LINT_BANNER")"
 read -r LINT_MAJOR LINT_MINOR <<< "$LINT_VERSION"
 if [[ -z "$LINT_VERSION" ]] || ((10#$LINT_MAJOR == 0 && 10#$LINT_MINOR < 4)); then

@@ -182,8 +182,11 @@ build runs. It needs cases for:
 - a branch behind `origin/main` refused before the gate (pushed and by hand) with the `git merge origin/main` fix,
   the same branch running the gate once it has merged main, no `origin/main` skipping the check, and a stale local
   `origin/main` refreshed by the hook's fetch
-- the hook run by hand on a pseudo-terminal, gating the checked-out branch instead of waiting for stdin (a 30-second
-  timeout fails the case rather than hanging the suite)
+- the hook run by hand on a pseudo-terminal, gating the checked-out branch instead of waiting for stdin (python3 keeps a
+  30-second deadline of its own, which fails the case rather than hanging the suite; without python3 the case is skipped)
+- the Python lint step: a changed Python file ruff passes (allowed), one ruff finds a problem in (refused, saying to fix it),
+  and a ruff 0.16 with no uvx (refused, saying what to install)
+- the Shell format step with no shfmt on `PATH`: a changed shell file refused, saying what to install
 - the gate's bash check before its first `mapfile`, stopping on bash 3.2, 4.0 and 4.3 and going on with 4.4, 5.0, 5.3 and 10.0
   (`BASH_VERSINFO` is read-only, so the check's own lines run with each version written in)
 - **each accepted branch prefix** (including slugs with digits), and each retired or malformed name (`squad/`,
