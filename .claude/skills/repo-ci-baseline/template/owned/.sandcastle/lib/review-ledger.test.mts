@@ -3510,6 +3510,15 @@ describe("main", () => {
       ["abc1234", "feature/1-thing"],
       ["-x", "feature/1-thing"],
       ["HEAD", ""],
+      // R100: one digit either side of each full length, upper case, and a full id with a newline after it.
+      ["a".repeat(39), "feature/1-thing"],
+      ["a".repeat(41), "feature/1-thing"],
+      ["a".repeat(63), "feature/1-thing"],
+      ["a".repeat(65), "feature/1-thing"],
+      ["A".repeat(40), "feature/1-thing"],
+      ["A".repeat(64), "feature/1-thing"],
+      [`${"a".repeat(40)}\n`, "feature/1-thing"],
+      [`${"a".repeat(64)}\n`, ""],
     ] as [string, string][]) {
       it(`refuses a review ${branchOf === "" ? "naming no branch" : "of this branch"} whose head is ${JSON.stringify(badHead)}, which isn't a full object id`, () => {
         writeNamed("older.json", ledgerJson([]));
@@ -3592,7 +3601,7 @@ describe("main", () => {
   }
 
   // R33: the second argument is `last`, `recorded` or a commit, checked before the folder is touched.
-  for (const second of ["recordd", "", "-v", "HEAD:app.cs", "HEAD", "origin/main", "feature/1-thing", "a-tag", "SHORT", "UPPER", "ZERO", "TREE", "BLOB", "SHA256"]) {
+  for (const second of ["recordd", "", "-v", "HEAD:app.cs", "HEAD", "origin/main", "feature/1-thing", "a-tag", "SHORT", "UPPER", "ZERO", "TREE", "BLOB", "SHA256", "LEN39", "LEN41", "LEN63", "LEN65", "NEWLINE"]) {
     it(`prepare refuses ${JSON.stringify(second)} as its second argument, and leaves the run folder as it was`, () => {
       const dir = join(root, "run");
       const printed = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
@@ -3610,6 +3619,13 @@ describe("main", () => {
         TREE: run(repo, "rev-parse", "HEAD^{tree}"),
         BLOB: run(repo, "rev-parse", "HEAD:app.cs"),
         SHA256: "a".repeat(64),
+        // R100: one digit either side of each full length, and a full id with a newline after it. A 39-digit prefix of the commit
+        // is one git resolves, so only the pattern refuses it.
+        LEN39: printed.slice(0, 39),
+        LEN41: `${printed}0`,
+        LEN63: `${printed}${"0".repeat(23)}`,
+        LEN65: `${printed}${"0".repeat(25)}`,
+        NEWLINE: `${printed}\n`,
       };
       const given = ids[second] ?? second;
 
