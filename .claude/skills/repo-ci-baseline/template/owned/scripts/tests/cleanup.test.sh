@@ -470,6 +470,12 @@ check "an upstream remote, not origin, names the repository gh is asked about" "
 o=$(env -u GITHUB_REPOSITORY PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git.example.com/acme/r bash scripts/cleanup.sh --dry-run 2>&1)
 st=$?
 check "a non-GitHub origin with no GITHUB_REPOSITORY fails, saying why" "[[ $st != 0 ]] && grep -q \"can't tell which repository\" <<<\"\$o\""
+# GITHUB_REPOSITORY is held to the owner/name shape slug_of gives a remote ([A-Za-z0-9._-] only), before gh is asked anything or anything is removed
+for bad in "o/r;x" "o/r?x" $'\xc3\xabvil/r'; do
+  o=$(GITHUB_REPOSITORY="$bad" PATH="$work/shim:$PATH" bash scripts/cleanup.sh --dry-run 2>&1)
+  st=$?
+  check "a GITHUB_REPOSITORY of $(printf %q "$bad") fails, saying why, and removes nothing" "[[ $st != 0 ]] && grep -q 'set GITHUB_REPOSITORY to an owner/name' <<<\"\$o\" && ! grep -q 'remove ' <<<\"\$o\""
+done
 
 # origin's push URLs: a different repository than the fetch URL's is refused before anything is read or removed; the same repository in another URL form is fine
 git config remote.origin.pushurl https://github.com/evil/fork.git

@@ -64,9 +64,15 @@ resolve_path() {
   printf '%s' "${out:-/}"
 }
 url="$(git remote get-url upstream 2> /dev/null || git remote get-url origin 2> /dev/null || true)"
+# is_slug <text>: whether <text> is an owner/name as slug_of gives one ([A-Za-z0-9._-] only, in the C locale), so GITHUB_REPOSITORY is held to the
+# same shape as a remote's owner/name before gh is pointed at it.
+is_slug() {
+  local LC_ALL=C
+  [[ "$1" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]
+}
 repo_slug="${GITHUB_REPOSITORY:-}"
 if [[ -z "$repo_slug" ]]; then repo_slug="$(slug_of "$url")"; fi
-[[ "$repo_slug" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] || die "can't tell which repository: set GITHUB_REPOSITORY or add a github.com upstream or origin remote"
+is_slug "$repo_slug" || die "can't tell which repository: set GITHUB_REPOSITORY to an owner/name, or add a github.com upstream or origin remote"
 export GH_REPO="${repo_slug:?}"
 
 title="$(gh issue view "$n" --json title --jq .title)"

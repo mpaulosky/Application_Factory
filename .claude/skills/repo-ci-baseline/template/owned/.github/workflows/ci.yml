@@ -338,8 +338,8 @@ jobs:
 
   # Tests for .github/hooks/pre-commit, .github/hooks/pre-push and scripts/gate.sh,
   # with stubbed tools, and for scripts/check-branch-name.sh, check-pr-title.sh,
-  # sync-copilot-review.sh, watch-pr.sh, cleanup.sh, work-issue.sh and
-  # lint-edited-file.sh. Also not a required status check.
+  # sync-copilot-review.sh, watch-pr.sh, cleanup.sh, work-issue.sh,
+  # lint-edited-file.sh and check-git-hooks.sh. Also not a required status check.
   hook-tests:
     name: Hook tests
     runs-on: ubuntu-latest

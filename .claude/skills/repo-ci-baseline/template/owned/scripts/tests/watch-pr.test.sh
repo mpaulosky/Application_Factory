@@ -983,6 +983,12 @@ check "the upstream remote wins over origin" log_has "GH_REPO=upstream-org/widge
 new_repo
 run_env GITHUB_REPOSITORY=env-org/from-env -- --once 7
 check "GITHUB_REPOSITORY wins over the remotes" log_has "GH_REPO=env-org/from-env ::"
+# GITHUB_REPOSITORY is held to the owner/name shape slug_of gives a remote ([A-Za-z0-9._-] only): anything else exits 2 before any gh call
+for bad in "env-org/r;x" "env-org/r?x" "env-org/r x" $'\xc3\xabvil/r' "env-org/r/x" "/r" "env-org/"; do
+  new_repo
+  run_env GITHUB_REPOSITORY="$bad" -- --once 7
+  check "a GITHUB_REPOSITORY of $(printf %q "$bad"): exit 2, nothing polled, saying why" eval 'status_is 2 && polls_are 0 && err_has "set GITHUB_REPOSITORY to an owner/name"'
+done
 
 # The remote is read by slug_of, the same function as work-issue.sh's and cleanup.sh's (work-issue.test.sh tests its forms)
 new_repo "https://github.com/acme/widgets/"

@@ -56,6 +56,7 @@ and `scripts/lint-edited-file.sh`, which lints a Markdown, YAML, shell or Python
 The Owned `.claude/rules/markdown-and-yaml-edits.md` goes into every repo, with or without the hook: it tells every session to write those files with Write and Edit, which the hook sees.
 So does `.claude/rules/script-edits.md`, which loads when a session works on a script: the same for shell and Python scripts, and the checks reviewers keep raising on
 shell and Python scripts.
+Where `.claude/settings.json` has no `PostToolUse` entry for the hook, both rules tell the session to run the linters for each kind of file itself.
 A repo that got a `.claude/settings.json` from an earlier Apply deletes it by hand, since `apply.sh` never deletes.
 The Factory has a `.claude/settings.json` of its own for the edit-time lint hook
 ([the Factory's ADR 0011](../../../docs/adr/0011-markdown-and-yaml-are-linted-as-they-are-written.md)); an Application does not receive it.

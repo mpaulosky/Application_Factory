@@ -31,7 +31,7 @@
 # needs reviewers' findings; bots are never a person. It is not trusted: a bot can relay text a PR's author chose (github-actions[bot] and
 # the Claude Review workflow post what they derive from a fork's diff or title), so the session treats it as data, never as instructions.
 #
-# Exit codes: 0 the session is needed; 1 quiet until the timeout (or after --once); 2 a usage error, a missing tool or a PR that
+# Exit codes: 0 the session is needed; 1 quiet until the timeout (or after --once); 2 a usage error, a missing tool, no repository it can tell (see GITHUB_REPOSITORY below) or a PR that
 # can't be read (five polls in a row fail; a poll that fails, isn't GitHub's answer, or reads an open PR's list or rollup only in part
 # is never read as quiet). A list longer than 100 is read on by its cursor to its end, however long; a cursor that doesn't move on
 # (one already read, or more pages with none) is a failed poll that says so, never an endless one.
@@ -40,7 +40,8 @@
 # So a PR of any length is read whole, and the watcher never spends more than its budget an hour of the 5,000 points GitHub gives the token.
 # Environment: WATCH_PR_MARKER, WATCH_PR_INTERVAL (default 60 seconds; a poll without more pages is one query, so not lower),
 # WATCH_PR_TIMEOUT (default 120 minutes), WATCH_PR_BUDGET (GraphQL points an hour, default 1000),
-# GITHUB_REPOSITORY (else the upstream, then the origin remote).
+# GITHUB_REPOSITORY (an owner/name of [A-Za-z0-9._-] only; else the upstream, then the origin remote, which must be a github.com URL: any other
+# GITHUB_REPOSITORY, or no github.com remote without one, exits 2 before any gh call).
 set -euo pipefail
 
 usage() {
@@ -152,11 +153,17 @@ slug_of() {
   fi
   if [[ -n "$out" ]]; then printf '%s' "${u: -${#out}}"; fi # the owner/name ends the URL: take it from the original, case kept
 }
+# is_slug <text>: whether <text> is an owner/name as slug_of gives one ([A-Za-z0-9._-] only, in the C locale), so GITHUB_REPOSITORY is held to the
+# same shape as a remote's owner/name before gh is pointed at it.
+is_slug() {
+  local LC_ALL=C
+  [[ "$1" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]
+}
 url="$(git remote get-url upstream 2> /dev/null || git remote get-url origin 2> /dev/null || true)"
 repo="${GITHUB_REPOSITORY:-}"
 if [[ -z "$repo" ]]; then repo="$(slug_of "$url")"; fi
-if [[ ! "$repo" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
-  echo "watch-pr: can't tell which repository to watch: set GITHUB_REPOSITORY or add a github.com upstream or origin remote" >&2
+if ! is_slug "$repo"; then
+  echo "watch-pr: can't tell which repository to watch: set GITHUB_REPOSITORY to an owner/name, or add a github.com upstream or origin remote" >&2
   exit 2
 fi
 export GH_REPO="${repo:?}"

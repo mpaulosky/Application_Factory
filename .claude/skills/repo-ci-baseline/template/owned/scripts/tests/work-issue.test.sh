@@ -321,11 +321,12 @@ SHIM
 chmod +x "$work/shim/git"
 issue 84 "From url"
 # for-each-ref failing while the issue's branch is looked for is an error: it doesn't fall through to a new branch beside the one the issue has
-issue 136 "A title its branch doesn't have"
+issue 136 "A title it lacks"
 git branch feature/136-old-title origin/main
+refs_before="$(git for-each-ref --format='%(refname)' refs/heads)"
 o=$(PATH="$work/shim:$PATH" SHIM_REFS_FAIL=1 bash scripts/work-issue.sh 136 2>&1 > /dev/null)
 st=$?
-check "a failing for-each-ref stops the run, saying why, and makes no branch or worktree" "[[ $st != 0 ]] && grep -q \"can't list the branches for #136\" <<<\"\$o\" && ! git show-ref --verify --quiet refs/heads/feature/136-a-title-its-branch-doesn-t-have && [[ ! -e '$wt/feature-136-a-title-its-branch-doesn-t-have' && ! -e '$wt/feature-136-old-title' ]]"
+check "a failing for-each-ref stops the run, saying why, and makes no branch or worktree" "[[ $st != 0 ]] && grep -q \"can't list the branches for #136\" <<<\"\$o\" && ! git show-ref --verify --quiet refs/heads/feature/136-a-title-it-lacks && [[ ! -e '$wt/feature-136-a-title-it-lacks' && ! -e '$wt/feature-136-old-title' ]] && [[ \$(git for-each-ref --format='%(refname)' refs/heads) == \"\$refs_before\" ]]"
 check "with for-each-ref working, the issue's branch is found" "[[ \$(bash scripts/work-issue.sh 136 2>/dev/null) == '$wt/feature-136-old-title' ]]"
 issue 85 "From upstream"
 issue 86 "No repository"
@@ -377,7 +378,7 @@ mkdir "$work/trshim"
 # shellcheck disable=SC2016 # the shim's own text: ${LC_ALL-unset} is expanded when the shim runs
 printf '#!/usr/bin/env bash\necho "${LC_ALL-unset}" >> "$TR_LOG"\nexec %q "$@"\n' "$real_tr" > "$work/trshim/tr"
 chmod +x "$work/trshim/tr"
-for script in work-issue cleanup; do
+for script in work-issue cleanup watch-pr; do
   for loc in unset C.utf8; do
     : > "$work/tr.log"
     lc_env=(-u LC_ALL)
@@ -513,6 +514,12 @@ check "refuses a number over 9 digits" "[[ $st != 0 ]] && grep -q '^usage:' <<<\
 o=$(GITHUB_REPOSITORY=nope bash scripts/work-issue.sh 54 2>&1 > /dev/null)
 st=$?
 check "refuses when it can't tell the repository" "[[ $st != 0 ]] && grep -q \"can't tell which repository\" <<<\"\$o\""
+# GITHUB_REPOSITORY is held to the owner/name shape slug_of gives a remote ([A-Za-z0-9._-] only), before gh is asked anything
+for bad in "o/r;x" "o/r?x" $'\xc3\xabvil/r'; do
+  o=$(GITHUB_REPOSITORY="$bad" bash scripts/work-issue.sh 54 2>&1 > /dev/null)
+  st=$?
+  check "refuses a GITHUB_REPOSITORY of $(printf %q "$bad"), saying why" "[[ $st != 0 ]] && grep -q 'set GITHUB_REPOSITORY to an owner/name' <<<\"\$o\""
+done
 mv scripts/check-branch-name.sh "$work/cbn.sh"
 o=$(bash scripts/work-issue.sh 54 2>&1 > /dev/null)
 st=$?

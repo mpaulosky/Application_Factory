@@ -86,10 +86,16 @@ shown_url() {
   fi
   printf '%s' "${shown//[^ -~]/?}"
 }
+# is_slug <text>: whether <text> is an owner/name as slug_of gives one ([A-Za-z0-9._-] only, in the C locale), so GITHUB_REPOSITORY is held to the
+# same shape as a remote's owner/name before gh is pointed at it.
+is_slug() {
+  local LC_ALL=C
+  [[ "$1" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]
+}
 url="$(git remote get-url upstream 2> /dev/null || git remote get-url origin 2> /dev/null || true)"
 repo="${GITHUB_REPOSITORY:-}"
 if [[ -z "$repo" ]]; then repo="$(slug_of "$url")"; fi
-[[ "$repo" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] || die "can't tell which repository: set GITHUB_REPOSITORY or add a github.com upstream or origin remote"
+is_slug "$repo" || die "can't tell which repository: set GITHUB_REPOSITORY to an owner/name, or add a github.com upstream or origin remote"
 export GH_REPO="${repo:?}"
 # A PR counts only when its head repository is the one origin points at: origin's owner/name when it is a github.com URL, else GH_REPO's.
 lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }

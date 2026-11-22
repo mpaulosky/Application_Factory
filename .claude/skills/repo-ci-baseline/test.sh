@@ -100,14 +100,37 @@ if in_shard hooks; then
   bash "$owned/scripts/tests/lint-edited-file.test.sh" || fail "lint-edited-file.test.sh"
   # Every Owned script's and hook's test suite runs in the Owned ci.yml's hook-tests job, found by name, so a suite added later
   # can't be left out of it (check-git-hooks.test.sh once was) and every repo tests its copy.
-  hook_suites=0
-  for suite in "$owned"/.github/hooks/tests/*.test.sh "$owned"/scripts/tests/*.test.sh; do
-    [[ -f "$suite" ]] || continue
-    hook_suites=$((hook_suites + 1))
-    grep -qxF "        run: bash ${suite#"$owned"/}" "$owned/.github/workflows/ci.yml" \
-      || fail "the Owned ci.yml's hook-tests job must run ${suite#"$owned"/}, so every repo tests its copy"
+  # Only the hook-tests job's block is read (from its key to the next job's), so a run line in another job doesn't count.
+  hook_suites_run() { # hook_suites_run <ci.yml>: prints each Owned suite the hook-tests job doesn't run; exit 1 when one is missing or none is found
+    local suite block n=0 st=0
+    block="$(awk '/^  hook-tests:$/ { on = 1; print; next } on && /^  [A-Za-z0-9_-]+:$/ { exit } on' "$1")"
+    for suite in "$owned"/.github/hooks/tests/*.test.sh "$owned"/scripts/tests/*.test.sh; do
+      [[ -f "$suite" ]] || continue
+      n=$((n + 1))
+      grep -qxF "        run: bash ${suite#"$owned"/}" <<< "$block" || {
+        echo "${suite#"$owned"/}"
+        st=1
+      }
+    done
+    ((n > 0)) || {
+      echo "(no Owned test suite under .github/hooks/tests/ or scripts/tests/)"
+      st=1
+    }
+    return "$st"
+  }
+  missing="$(hook_suites_run "$owned/.github/workflows/ci.yml")" \
+    || fail "the Owned ci.yml's hook-tests job must run every Owned test suite, so every repo tests its copy; it doesn't run: $missing"
+  # Each way a suite can drop out of the job is refused, on a copy of ci.yml: its run line removed, or moved to another job.
+  hook_ci="$md_tmp/hook-tests-ci.yml"
+  # shellcheck disable=SC2016 # sed scripts, not shell
+  for drift in 'removed|/^        run: bash scripts\/tests\/cleanup\.test\.sh$/d' \
+    'moved to another job|/^        run: bash scripts\/tests\/cleanup\.test\.sh$/d; /^  automerge-tests:$/a\        run: bash scripts/tests/cleanup.test.sh'; do
+    cp "$owned/.github/workflows/ci.yml" "$hook_ci"
+    sed -i -e "${drift#*|}" "$hook_ci"
+    missing="$(hook_suites_run "$hook_ci")" && fail "the hook-tests check passes a ci.yml with cleanup.test.sh's run line ${drift%%|*}"
+    [[ "$missing" == "scripts/tests/cleanup.test.sh" ]] || fail "the hook-tests check names '$missing', not scripts/tests/cleanup.test.sh, for its run line ${drift%%|*}"
   done
-  [[ "$hook_suites" -gt 0 ]] || fail "found no Owned test suite under .github/hooks/tests/ or scripts/tests/: the hook-tests check reads nothing"
+  rm -f "$hook_ci"
   # The edit-time lint sees only Write, Edit and MultiEdit, so an Owned rules file tells every session to edit Markdown and YAML with them.
   # It loads in every session (no front matter, so no paths:), and it is written into every repo, so it names nothing of the Factory's.
   edit_rule="$owned/.claude/rules/markdown-and-yaml-edits.md"
@@ -122,7 +145,8 @@ if in_shard hooks; then
     # 'Where .claude/settings.json has no such entry': what a session does in a repository that hasn't turned the hook on (most Applications).
     # shellcheck disable=SC2016 # the backticks are Markdown, matched as text
     for needle in 'with the Write and Edit tools, never with a shell command' 'scripts/lint-edited-file.sh' 'PostToolUse' '.claude/settings.json' \
-      'Where `.claude/settings.json` has no such entry' 'markdownlint-cli2 <file>' 'yamllint -c .yamllint.yml <file>'; do
+      'Where `.claude/settings.json` has no such entry' 'markdownlint-cli2 <file>' 'yamllint -c .yamllint.yml <file>' \
+      'actionlint <file>' 'zizmor --offline <file>'; do
       grep -qF -- "$needle" "$edit_rule" || fail "the Owned .claude/rules/markdown-and-yaml-edits.md must say '$needle'"
     done
     if grep -niE 'dotfiles|repo-ci-baseline|factory|references/|docs/adr/' "$edit_rule"; then
@@ -244,8 +268,8 @@ elif python is not None and target != "py" + python.replace(".", ""):
     problems.append(f"gate.sh's ruff --target-version {target} is not ci.yml's python-version {python}")
 if version is not None and pin is not None and version != pin:
     problems.append(f"gate.sh's RUFF_VERSION {version} is not requirements-tests.txt's ruff=={pin}")
+# The image's ARG names the release; that its RUN pip install line installs ruff==${RUFF_VERSION} is the Seed Sandcastle files step's check.
 image = one("Dockerfile", r"^ARG RUFF_VERSION=(\S+)$")
-one("Dockerfile", r'^ +.*"ruff==\$\{RUFF_VERSION\}"')
 if version is not None and image is not None and version != image:
     problems.append(f"the Seed .sandcastle/Dockerfile's ARG RUFF_VERSION {image} is not gate.sh's RUFF_VERSION {version}")
 rule = rules.get("gate.sh")
@@ -287,10 +311,12 @@ PY
   ruff_drift "a target that isn't CI's Python" "gate.sh's ruff --target-version py312 is not ci.yml's python-version 3.11" \
     .github/workflows/ci.yml 's/python-version: "3.12"/python-version: "3.11"/'
   ruff_drift "a ci.yml with two python-version lines" "is not found once (2 found)" .github/workflows/ci.yml 's/^\( *\)python-version: "3.12"$/&\n\1python-version: "3.12"/'
-  ruff_drift "a Seed Dockerfile on another ruff" "the Seed .sandcastle/Dockerfile's ARG RUFF_VERSION 0.17.5 is not gate.sh's RUFF_VERSION 0.17.6" \
-    seed/.sandcastle/Dockerfile 's/^ARG RUFF_VERSION=0\.17\.6$/ARG RUFF_VERSION=0.17.5/'
-  # shellcheck disable=SC2016 # the Dockerfile's own ${RUFF_VERSION}, matched as text
-  ruff_drift "a Seed Dockerfile that doesn't install ruff" 'Dockerfile: ^ +.*"ruff==\$\{RUFF_VERSION\}"' seed/.sandcastle/Dockerfile 's/ "ruff==${RUFF_VERSION}"$//'
+  # The other release is the gate's with its patch number moved on by one, so the case holds when RUFF_VERSION moves.
+  gate_ruff="$(sed -n 's/^RUFF_VERSION="\([0-9]*\.[0-9]*\.[0-9]*\)"$/\1/p' "$owned/scripts/gate.sh")"
+  [[ "$gate_ruff" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "found no RUFF_VERSION=\"<x.y.z>\" line in the Owned gate.sh for the Dockerfile drift case"
+  other_ruff="${gate_ruff%.*}.$((${gate_ruff##*.} + 1))"
+  ruff_drift "a Seed Dockerfile on another ruff" "the Seed .sandcastle/Dockerfile's ARG RUFF_VERSION $other_ruff is not gate.sh's RUFF_VERSION $gate_ruff" \
+    seed/.sandcastle/Dockerfile "s/^ARG RUFF_VERSION=.*\$/ARG RUFF_VERSION=$other_ruff/"
   ruff_drift "a Seed Dockerfile with no ruff ARG" "Dockerfile: ^ARG RUFF_VERSION=" seed/.sandcastle/Dockerfile '/^ARG RUFF_VERSION=/d'
   rm -rf "$ruff_copy"
   # The docs that name ruff's target (ADR 0011's Update: Python, references/git-hooks.md) name the gate's, so a move of CI's Python

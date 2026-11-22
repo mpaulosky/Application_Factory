@@ -8,7 +8,8 @@ It lints the file the moment the tool writes it, so a violation is fixed in the 
 them, and the violation turns up later: at the commit for Markdown (the `pre-commit` hook lints no YAML), otherwise at the gate, in CI or in a review.
 
 Where `.claude/settings.json` has no such entry (a `PostToolUse` hook whose command is `scripts/lint-edited-file.sh`), nothing lints the file as you write it:
-lint each file you edit yourself, `markdownlint-cli2 <file>` for Markdown and `yamllint -c .yamllint.yml <file>` for YAML, before you commit it. The repository
+lint each file you edit yourself, `markdownlint-cli2 <file>` for Markdown and `yamllint -c .yamllint.yml <file>` for YAML,
+with `actionlint <file>` and `zizmor --offline <file>` too for a workflow and `zizmor --offline <file>` for `.github/dependabot.yml`, before you commit it. The repository
 turns the hook on by adding the entry the script's header gives to `.claude/settings.json`; that is the repository's choice, not an edit to make unasked.
 
 The rule is about the files you are editing. Running one of the repository's own scripts or tests that writes Markdown or YAML as its output (a report, a
