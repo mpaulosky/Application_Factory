@@ -603,8 +603,12 @@ def test_the_review_session_runs_sandboxed_in_the_worktree_with_the_templates_sk
     for rule in ("never ask one", "Review only: this session changes nothing in the repository",
                  "Don't edit, fix or commit anything, and don't run the gate", "the skill's last, review-only round",
                  "stage open every finding the skill's triage doesn't dismiss, with its suggested fix", "Never dismiss a security finding",
-                 "a repeat of a fixed .security entry too, with that entry's number in the summary. Leave out every finding's"
-                 " repeats field, whatever entry it would name (fixed, open or accepted): rollout.sh drops it",
+                 "a repeat of a fixed .security entry too, with that entry's number in the summary.",
+                 "Give every finding you stage its security mark, as the skill's triage says: true, or false only once you"
+                 " have read the code and it isn't a security weakness; rollout.sh takes a dismissed finding without"
+                 ' "security": false for a security one, and stops the round.',
+                 "Leave out every finding's repeats field, whatever entry it would name (fixed, open or accepted): rollout.sh"
+                 " drops it",
                  f"Your run folder is {run}, made for you", "write nothing anywhere else",
                  "its review ledgers and the .security record are read-only to you",
                  f"scripts/review.sh stage {run} <file>", "as an empty array [] when it keeps none",
@@ -1196,6 +1200,14 @@ def test_a_tool_in_a_shared_folder_is_read_as_its_file_alone(tmp_path):
     found = str(tmp_path / "home" / "bin" / "git")
     reads, first = auto.tool_reads(str(tmp_path / "home"), lambda name: found if name == "git" else None, no_answer)
     assert reads == [found, str(tmp_path / "real" / "bin" / "git")] and first == [], "a symlinked home is home too"
+
+
+def test_a_password_in_a_variables_value_or_a_pwd_name_is_left_out_of_the_sessions_environment(tmp_path):
+    env = auto.session_env({"MYSQL_PWD": "hunter2", "PWD": "/w", "CACHE_URL": "redis://:hunter2@cache:6379/0",
+                            "MIRROR": "https://me:hunter2@mirror.example/r", "REMOTE": "ssh://git@github.com/o/r",
+                            "PROXY": "http://proxy:3128", "LANG": "C.UTF-8"}, str(tmp_path))
+    assert not {"MYSQL_PWD", "CACHE_URL", "MIRROR"} & set(env), "a password, by its name or in a URL's sign-in"
+    assert {"PWD", "REMOTE", "PROXY", "LANG"} <= set(env), "the working folder, and a URL with no password in it"
 
 
 def test_the_sessions_path_starts_with_the_folders_its_tools_really_run_from(tmp_path):
@@ -3120,8 +3132,9 @@ def test_a_security_finding_staged_dismissed_breaks_a_rule_read_wider_than_the_l
                  "status": "dismissed", "reason": "r"}
     findings, broke = auto.staged_findings(stage(tmp_path, [dismissed]))
     assert auto.is_security(dismissed) is security
-    assert broke == (["'R1' was staged dismissed, and may be a security finding: only the person decides one, so the"
-                      " session records it open"] if security else [])
+    assert broke == (["'R1' was staged dismissed, and may be a security finding (graded warning, a lens naming"
+                      " security, or no \"security\": false): only the person decides one, so the session records it"
+                      " open"] if security else [])
     assert findings == (None if security else [dismissed])
 
 
@@ -3942,6 +3955,39 @@ class Fleet:
         return self.locks[-1]
 
 
+@pytest.fixture(autouse=True)
+def no_advisories(monkeypatch, request):
+    """The round's tests run on fake worktrees, which have no scripts/review.sh to list Advisory findings."""
+    if request.node.name != "test_open_advisory_findings_are_read_from_the_worktrees_ledger":
+        monkeypatch.setattr(auto, "open_advisories", lambda worktree: None)
+
+
+def test_open_advisory_findings_are_read_from_the_worktrees_ledger():
+    seen = []
+
+    def run(command, cwd=None):
+        seen.append((command, cwd))
+        return 0, "- R3 docs/x.md:4: stale.\n\n<!-- claude-session -->\n", ""
+
+    assert auto.open_advisories("/w t", run) == "- R3 docs/x.md:4: stale.", "the session marker isn't shown"
+    assert seen == [(["/w t/scripts/review.sh", "advisory"], "/w t")]
+    assert auto.open_advisories("/w", lambda command, cwd=None: (0, "No open Advisory findings.\n", "")) is None
+    assert auto.open_advisories("/w", lambda command, cwd=None: (1, "", "No review is recorded for this diff.\n")) == (
+        "(scripts/review.sh advisory failed: No review is recorded for this diff.; cd /w && scripts/review.sh advisory"
+        " lists them before the PR lands)")
+
+
+def test_a_recorded_reviews_open_advisory_findings_are_shown_before_the_push(monkeypatch):
+    monkeypatch.setattr(auto, "open_advisories", lambda worktree: f"- R3 in {worktree}")
+    fleet = Fleet(codes={TM: [auto.REVIEW_NEEDED]})
+    code, out, _ = run_auto(["--brings", "#82"], fleet)
+    assert code == 0, out
+    said = ("── rollout: TicketManager: the review left Advisory findings open, which don't block the push and are filed"
+            " nowhere: file them in a follow-up issue.\n- R3 in /r/TicketManager-worktrees/chore-reapply-baseline")
+    assert said in out
+    assert out.index(said) < out.rindex("── rollout: TicketManager\n"), "shown before reapply.sh pushes and the PR lands"
+
+
 def run_auto(argv, fleet, root="/r", default_root="/r"):
     out, err = io.StringIO(), io.StringIO()
     hooks = {"review": fleet.review, "land": fleet.land, "pr_of": fleet.pr_of, "pr_state": fleet.pr_state,
@@ -4356,6 +4402,15 @@ def test_a_rest_repo_whose_pr_was_closed_is_a_stop():
     assert ("  IssueTracker#77 is CLOSED, not merged: reopen it (gh pr reopen 77 -R mpaulosky/IssueTracker) and land it"
             " with land.sh mpaulosky/IssueTracker#77, or delete its branch and resume for a new PR\n") in out
     assert "4 of 5 other repo(s) done" in out
+
+
+def test_a_repo_with_two_stops_is_counted_once_in_the_summary():
+    fleet = Fleet(opens={REST[0]: 200, REST[1]: 201}, land_raises=auto.GroupLeft("what land.sh left was still there"))
+    code, out, _ = run_auto(["--brings", "#82"], fleet)
+    assert code == 1
+    assert "  land.sh: what land.sh left was still there\n" in out
+    assert "rollout: TicketManager and 3 of 5 other repo(s) done; waiting for you:" in out, \
+        "land.sh's stop and each PR's are two stops, but two repos wait, not three"
 
 
 def test_a_rest_pr_land_sh_closes_is_a_stop():

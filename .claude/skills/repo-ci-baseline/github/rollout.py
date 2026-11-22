@@ -43,6 +43,11 @@ LEAD = "mpaulosky/TicketManager"
 BRANCH = "chore/reapply-baseline"
 REAPPLY = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "reapply.sh")
 DEFAULT_ROOT = os.path.expanduser("~/github")
+# What reapply.sh's review refusals ask of the person (its exit 3 and 4), said after "reapply failed on <repo>".
+REAPPLY_STOPS = {3: ": the gate asks for a review: run /pre-push-review in its re-Apply worktree (or rollout.sh --auto), then"
+                    " run this again",
+                 4: ": review findings wait for you: scripts/review.sh accept-open in its re-Apply worktree lists them, then"
+                    " run this again"}
 
 
 def short_name(repo):
@@ -148,8 +153,9 @@ def main(argv=None, listed=None, reapply=run_reapply, latest_pr=gh_latest_pr, ex
             say(f"would run: reapply.sh --brings {shlex.quote(args.brings)} {path}")
             return True
         say(f"── rollout: {short_name(repo)}")
-        if reapply(args.brings, path) != 0:
-            err.write(f"rollout.sh: reapply failed on {short_name(repo)}\n")
+        code = reapply(args.brings, path)
+        if code != 0:
+            err.write(f"rollout.sh: reapply failed on {short_name(repo)}{REAPPLY_STOPS.get(code, '')}\n")
             return False
         return True
 

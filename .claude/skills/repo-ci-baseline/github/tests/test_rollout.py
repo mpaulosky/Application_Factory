@@ -87,10 +87,10 @@ def test_an_order_without_ticketmanager_is_refused():
 class Fake:
     """reapply.sh and the newest re-Apply PR lookup as the tests set them."""
 
-    def __init__(self, latest=None, fail=(), opens=None, unreadable=()):
+    def __init__(self, latest=None, fail=(), opens=None, unreadable=(), code=1):
         # {repo: (number, state)}; every repo's last round merged unless set
         self.latest = {repo: (100, "MERGED") for repo in LISTED} | dict(latest or {})
-        self.fail = set(fail)  # repos whose reapply exits 1
+        self.fail, self.code = set(fail), code  # repos whose reapply exits code
         self.opens = opens or {}  # {repo: PR number its reapply opens}
         self.unreadable = set(unreadable)  # repos whose lookup fails
         self.ran = []
@@ -99,7 +99,7 @@ class Fake:
         self.ran.append((brings, path))
         repo = "mpaulosky/" + Path(path).name
         if repo in self.fail:
-            return 1
+            return self.code
         if repo in self.opens:
             self.latest[repo] = (self.opens[repo], "OPEN")
         return 0
@@ -156,6 +156,17 @@ def test_a_failed_ticketmanager_holds_the_round_and_exits_1():
     assert code == 1
     assert ran_repos(fake) == ["TicketManager"]
     assert "reapply failed on TicketManager" in out
+
+
+@pytest.mark.parametrize("code, said", [
+    (3, "reapply failed on TicketManager: the gate asks for a review: run /pre-push-review in its re-Apply worktree"
+        " (or rollout.sh --auto), then run this again"),
+    (4, "reapply failed on TicketManager: review findings wait for you: scripts/review.sh accept-open in its re-Apply"
+        " worktree lists them, then run this again"),
+    (1, "reapply failed on TicketManager\n")])
+def test_a_review_refusal_says_what_reapply_asks_of_the_person(code, said):
+    code_, out, err = run(["--brings", "#82", "--root", "/r"], Fake(fail={"mpaulosky/TicketManager"}, code=code))
+    assert code_ == 1 and said in out + err
 
 
 def test_a_missing_checkout_stops_the_round_before_anything_runs():

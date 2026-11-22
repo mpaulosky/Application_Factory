@@ -131,7 +131,8 @@ The gate, the ledger and the review's rules are unchanged: the push still needs 
 - A Rollout runs without a person until a decision is needed. A review session costs Claude usage for each repo whose re-Apply writes an Owned file that carries behaviour; it has no
   `gh` sign-in, so it spends none of the owner's GitHub allowance (`references/tokens.md`).
 - Any Critical or Warning finding stops the round for a person (the gate refuses the push), in an Owned file or in the Application's own: a fix in an Owned file is a Factory
-  branch of its own, the Template-first rule. An Advisory one stays open in the recorded review, and the person files the follow-up issue. A session that fixes as it
+  branch of its own, the Template-first rule. An Advisory one stays open in the recorded review and doesn't block the push. The round files no issue, and its
+  PR lands, so it prints them on the terminal (`scripts/review.sh advisory` in the worktree) once the review is recorded, and the person files the follow-up issue. A session that fixes as it
   reviews would stop less often, but what it wrote would run as the person outside the sandbox, and its gate's installs can't run inside it; that is a follow-up, not this decision.
 - `reapply.sh` knows the gate stopped at its Local review step by the step's name, and how the check refuses by the ledger's own text on its stderr; a test holds them equal to
   `gate.sh`'s and `checkReview`'s, so rewording either fails `test.sh` until both change.

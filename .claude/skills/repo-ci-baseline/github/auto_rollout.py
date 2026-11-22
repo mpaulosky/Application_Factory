@@ -140,6 +140,8 @@ SESSION_DIR = os.path.expanduser("~/.cache/repo-ci-baseline-sessions")
 # What opens the log line saying why the session wasn't started (stop_line reads it back, from the log's first line
 # only, for the terminal).
 NOT_STARTED = "rollout.sh: not started: "
+# The marker scripts/review.sh advisory ends its list with, for a session's comment; not shown on the terminal.
+SESSION_MARKER = "<!-- claude-session -->"
 # The log's first line once a session is about to start, so whatever the session prints comes after it and can't
 # pass for the round's own NOT_STARTED line.
 SESSION_STARTS = "rollout.sh: the review session starts\n"
@@ -259,7 +261,7 @@ SANDBOX_TOOLS = ("bwrap", "socat") if sys.platform.startswith("linux") else ()
 # fixes belong in the Template, and pushing, posting and deciding stay with the round and the person.
 REVIEW_PROMPT = """You are running the pre-push-review skill, unattended, for rollout.sh --auto, in {worktree}, the re-Apply worktree of {repo}. The skill's instructions are below, from the Factory's Template; its base directory is {skill_dir}, the worktree's copy of the same files. Follow them, with these changes.
 Nobody will answer a question: never ask one or wait for a reply; where the skill says to ask the person or show them text first, don't, and say so in your last message.
-Review only: this session changes nothing in the repository. Don't edit, fix or commit anything, and don't run the gate (reapply.sh runs it on the push). Run one round over the whole branch, as the skill's last, review-only round: stage open every finding the skill's triage doesn't dismiss, with its suggested fix, and the person fixes or accepts them; a finding the triage dismisses, with the skill's reason, is staged dismissed only when it isn't a security one. Never dismiss a security finding (one the skill's triage marks security): stage it open, a repeat of a fixed .security entry too, with that entry's number in the summary. Leave out every finding's repeats field, whatever entry it would name (fixed, open or accepted): rollout.sh drops it, and the record matches a finding to an entry by its path and summary.
+Review only: this session changes nothing in the repository. Don't edit, fix or commit anything, and don't run the gate (reapply.sh runs it on the push). Run one round over the whole branch, as the skill's last, review-only round: stage open every finding the skill's triage doesn't dismiss, with its suggested fix, and the person fixes or accepts them; a finding the triage dismisses, with the skill's reason, is staged dismissed only when it isn't a security one. Never dismiss a security finding (one the skill's triage marks security): stage it open, a repeat of a fixed .security entry too, with that entry's number in the summary. Give every finding you stage its security mark, as the skill's triage says: true, or false only once you have read the code and it isn't a security weakness; rollout.sh takes a dismissed finding without "security": false for a security one, and stops the round. Leave out every finding's repeats field, whatever entry it would name (fixed, open or accepted): rollout.sh drops it, and the record matches a finding to an entry by its path and summary.
 Your run folder is {run}, made for you: use it where the skill says to make one with mktemp -d, and write nothing anywhere else. The worktree, the clone's git folder, its review ledgers and the .security record are read-only to you.
 Stage the round's findings with scripts/review.sh stage {run} <file> as the skill's step 5 says, as an empty array [] when it keeps none, and stop there: don't run scripts/review.sh record. rollout.sh records what you staged once the session ends, with the key and HEAD of this code.
 These files the branch changes are Owned Baseline files, which the next Apply overwrites: {owned}. A finding in one says, in its fix, what to change in the Factory's template/owned/.
@@ -274,7 +276,7 @@ End with a list of the findings you staged: each one's id, severity, path and li
 # and of the cloud in use (CLAUDE_CODE_USE_*) only the names SIGN_IN_SECRET doesn't match. A layer only: the sandbox,
 # which reads none of the credential files, is what holds.
 SECRET_NAME = re.compile(
-    r"TOKEN|SECRET|PASSW|PASSPHRASE|CREDENTIAL|API_?KEY|AUTH(?!OR)|COOKIE|BEARER|_PAT$|_KEY$|_DSN$|^DATABASE_URL$|ASKPASS"
+    r"TOKEN|SECRET|PASSW|PASSPHRASE|CREDENTIAL|API_?KEY|AUTH(?!OR)|COOKIE|BEARER|_PAT$|_KEY$|_DSN$|_PWD$|^DATABASE_URL$|ASKPASS"
     r"|^GIT_SSH|^SSH_|^DBUS_SESSION_BUS_ADDRESS$|^XAUTHORITY$|^GIT_CONFIG_(COUNT|PARAMETERS|KEY_[0-9]+|VALUE_[0-9]+)$"
     r"|^AWS_|^AZURE_|^GOOGLE_", re.I)
 CLAUDE_SIGN_IN = re.compile(r"^(ANTHROPIC_|CLAUDE_)")
@@ -983,8 +985,8 @@ def own_log_dir(log_dir):
 
 
 def session_env(base, tmp, first=()):
-    """The review session's environment: base without GATE_SKIP_REVIEW (the gate's review check must run in it) or the
-    names SECRET_NAME matches, Claude Code's own but CLAUDE_KEPT (CLAUDE_CONFIG_DIR made absolute, as the settings
+    """The review session's environment: base without GATE_SKIP_REVIEW (the gate's review check must run in it), the
+    names SECRET_NAME matches, a value holding a URL with a sign-in (has_sign_in: a *_URL with its password), Claude Code's own but CLAUDE_KEPT (CLAUDE_CONFIG_DIR made absolute, as the settings
     deny it), and the cloud in use's secrets; gh pointed at an empty config and git at an empty global one; and
     SESSION_GIT_CONFIG. The worktree and the clone's git folder are read-only to it, so GIT_OPTIONAL_LOCKS is off (git
     status writes no index back) and gc.auto is 0. The session builds and installs nothing, but the caches and
@@ -994,16 +996,16 @@ def session_env(base, tmp, first=()):
     no shim the sandbox can't read runs in it."""
     clouds = kept_clouds(base)
 
-    def kept(name):
-        if name == "GATE_SKIP_REVIEW":
-            return False
+    def kept(name, value):
+        if name == "GATE_SKIP_REVIEW" or has_sign_in(value):
+            return False  # a URL with a sign-in in it (a *_URL holding a password), whatever its name
         if CLAUDE_SIGN_IN.match(name):
             return name in CLAUDE_KEPT
         if clouds and name.startswith(clouds):
             return not SIGN_IN_SECRET.search(name)
         return not SECRET_NAME.search(name)
 
-    env = {name: value for name, value in base.items() if kept(name)}
+    env = {name: value for name, value in base.items() if kept(name, value)}
     if first:
         env["PATH"] = os.pathsep.join([*first, env.get("PATH") or os.defpath])
     folders = {"GH_CONFIG_DIR": "gh", "TMPDIR": "tmp", "NUGET_PACKAGES": "nuget-packages",
@@ -1388,8 +1390,9 @@ def staged_findings(run):
             broke.append(f"{shown(finding.get('id'))} was staged {shown(status)}: a review-only session stages a finding"
                          " open or dismissed, since it fixes nothing and only the person accepts")
         elif status == "dismissed" and is_security(finding):
-            broke.append(f"{shown(finding.get('id'))} was staged dismissed, and may be a security finding: only the"
-                         " person decides one, so the session records it open")
+            broke.append(f"{shown(finding.get('id'))} was staged dismissed, and may be a security finding (graded"
+                         " warning, a lens naming security, or no \"security\": false): only the person decides one, so"
+                         " the session records it open")
     return (None if broke else findings), broke
 
 
@@ -2071,6 +2074,22 @@ def drive(repo, path, brings, reapply, review, say):
                 return Outcome("failed", f"the review session {why} (see {log}).{kept}")
             return Outcome("failed", f"the review session {why} (see {log}); run /pre-push-review in"
                            f" {here}, then resume.{kept}")
+        advisories = open_advisories(worktree)
+        if advisories:
+            say(f"── rollout: {short_name(repo)}: the review left Advisory findings open, which don't block the push"
+                f" and are filed nowhere: file them in a follow-up issue.\n{advisories}")
+
+
+def open_advisories(worktree, run=run_quiet):
+    """What the review just recorded in worktree leaves open of Advisory findings, as scripts/review.sh advisory lists
+    them, or None when it leaves none: the round files no issue and the PR lands, so the terminal is where the person
+    sees them. When the list can't be read, the command to read it."""
+    code, out, err = run([os.path.join(worktree, "scripts", "review.sh"), "advisory"], cwd=worktree)
+    text = out.replace(SESSION_MARKER, "").strip()
+    if code == 0:
+        return None if not text or text == "No open Advisory findings." else text
+    return (f"(scripts/review.sh advisory failed: {err.strip() or f'exit {code}'}; cd {shlex.quote(worktree)} &&"
+            " scripts/review.sh advisory lists them before the PR lands)")
 
 
 def stop_line(log):
@@ -2197,22 +2216,28 @@ def auto_round(order, brings, resume, checkout, reapply, review, land, pr_of, pr
     except Exception as error:  # noqa: BLE001 - a crash still ends with the stop and the resume command
         return held(crashed(first, error))
 
-    stops, landing = [], []
+    stops, landing, waiting = [], [], set()
+
+    def hold(repo, text):
+        """A stop for repo: the summary counts the repos that wait, not the stops, since land.sh's own names none."""
+        stops.append(text)
+        waiting.add(repo)
+
     for repo in rest:
         try:
             outcome = drive(repo, checkout(repo), brings, reapply, review, say)
             if outcome.status != "ok":
-                stops.append(f"{short_name(repo)}: {outcome.detail}")
+                hold(repo, f"{short_name(repo)}: {outcome.detail}")
                 continue
             found = find(repo)
         except PrUnknown as error:
-            stops.append(f"{short_name(repo)}: can't tell its re-Apply PR ({error}): land it with land.sh {repo}")
+            hold(repo, f"{short_name(repo)}: can't tell its re-Apply PR ({error}): land it with land.sh {repo}")
             continue
         except GroupLeft as error:
-            stops.append(f"{short_name(repo)}: {error}")
+            hold(repo, f"{short_name(repo)}: {error}")
             continue
         except Exception as error:  # noqa: BLE001 - reported, and the round goes on
-            stops.append(crashed(repo, error))
+            hold(repo, crashed(repo, error))
             continue
         if found is None:
             continue  # nothing to push and never a re-Apply PR: nothing to land
@@ -2220,7 +2245,7 @@ def auto_round(order, brings, resume, checkout, reapply, review, land, pr_of, pr
         if state == "OPEN":
             landing.append((repo, number))
         elif state != "MERGED":
-            stops.append(not_merged(repo, number, state))
+            hold(repo, not_merged(repo, number, state))
     if landing:
         refs = [f"{repo}#{number}" for repo, number in landing]
         say(f"── rollout: landing {' '.join(refs)}")
@@ -2237,11 +2262,11 @@ def auto_round(order, brings, resume, checkout, reapply, review, land, pr_of, pr
             try:
                 state = settle(repo, number)
             except PrUnknown as error:
-                stops.append(f"{short_name(repo)}#{number} didn't land ({error}): land.sh {repo}#{number}")
+                hold(repo, f"{short_name(repo)}#{number} didn't land ({error}): land.sh {repo}#{number}")
                 continue
             if state != "MERGED":
-                stops.append(not_merged(repo, number, state))
-    say(f"rollout: {short_name(first)} and {len(rest) - len(stops)} of {len(rest)} other repo(s) done"
+                hold(repo, not_merged(repo, number, state))
+    say(f"rollout: {short_name(first)} and {len(rest) - len(waiting)} of {len(rest)} other repo(s) done"
         + ("" if not stops else "; waiting for you:"))
     for stop in stops:
         say(f"  {stop}")
