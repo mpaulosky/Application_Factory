@@ -254,16 +254,25 @@ sys.exit(1 if problems else 0)
 PY
   }
   ruff_agree "$owned" || fail "scripts/lint-edited-file.sh, scripts/gate.sh, ci.yml and requirements-tests.txt must agree on ruff (see above)"
-  # Each way the target can drift from CI's Python is refused, on a copy of the four files edited that way.
-  ruff_copy="$(mktemp -d)"
-  ruff_drift() { # ruff_drift <what> <expected problem> <file> <sed script>
-    rm -rf "${ruff_copy:?}"/* && mkdir -p "$ruff_copy/scripts" "$ruff_copy/.github/workflows" "$ruff_copy/.github/scripts"
+  # Each way the target can drift from CI's Python is refused, on a copy of the four files edited that way. The copy holds the folders
+  # CI's ruff step lints too, so as it is it passes, and only the edit makes it fail. Under md_tmp, which the EXIT trap removes.
+  ruff_copy="$md_tmp/ruff"
+  ruff_drift() { # ruff_drift <what> [<expected problem> <file> <sed script>]: with no edit, the copy must pass
+    local f found
+    rm -rf "${ruff_copy:?}" && mkdir -p "$ruff_copy/scripts" "$ruff_copy/.github/workflows" "$ruff_copy/.github/scripts"
     for f in scripts/lint-edited-file.sh scripts/gate.sh .github/workflows/ci.yml .github/scripts/requirements-tests.txt; do cp "$owned/$f" "$ruff_copy/$f"; done
+    local -a linted
+    read -ra linted <<< "$(sed -n 's/^ *run: python -m ruff .* -- //p' "$owned/.github/workflows/ci.yml")"
+    for f in ${linted[@]+"${linted[@]}"}; do mkdir -p "$ruff_copy/$f"; done
+    if (($# == 1)); then
+      found="$(ruff_agree "$ruff_copy" 2>&1)" || fail "the ruff agreement check refuses $1: $found"
+      return 0
+    fi
     sed -i -e "$4" "$ruff_copy/$3"
-    local found
     found="$(ruff_agree "$ruff_copy" 2>&1)" && fail "the ruff agreement check passes $1"
     grep -qF -- "$2" <<< "$found" || fail "the ruff agreement check doesn't say '$2' for $1: $found"
   }
+  ruff_drift "an unedited copy of the Template's files"
   ruff_drift "a gate RUFF_ARGS with no --target-version" "gate.sh's RUFF_ARGS must give --target-version" scripts/gate.sh 's/ --target-version py312)$/)/'
   ruff_drift "a target that isn't CI's Python" "gate.sh's ruff --target-version py312 is not ci.yml's python-version 3.11" \
     .github/workflows/ci.yml 's/python-version: "3.12"/python-version: "3.11"/'

@@ -423,7 +423,7 @@ check "python lint: the --fix hint quotes up to five files, so it pastes as it s
   "grep -qxF \"  ruff check --isolated --no-cache --select F,B --target-version py312 --fix -- -dash.py b\\\\ c.py it\\\\'s.py d.py e.py\" <<< \"\$perr\""
 # A name an agent chose may hold a terminal escape or a newline: %q prints each in bash's $'...' form, so none reaches the terminal raw and
 # the hint stays one line that names the same files when pasted.
-for loc in C.UTF-8 C; do
+for loc in ${utf8:+"$utf8"} C; do
   LC_ALL="$loc" STUB_RUFF_EXIT=1 PY_CTRL=1 py_run
   check "[$loc] python lint: the --fix hint prints a name's escape and newline quoted, on one line" \
     "grep -qxF \"  ruff check --isolated --no-cache --select F,B --target-version py312 --fix -- \\\$'a\\\\E[2Jb.py' \\\$'c\\\\nd.py'\" <<< \"\$perr\" && [[ \"\$perr\" != *\$'\\033'* ]]"
