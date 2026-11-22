@@ -81,8 +81,9 @@ the package that brings it in moves past the version.
 `Directory.Packages.props` belongs to the Application, so a Rollout can't clean it. Before the Rollout that brings the check, each Application with
 transitive pinning deletes its unreferenced pins, or marks the ones it keeps, in a PR of its own; run
 `python3 -I <Factory>/.claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_central_pins.py --root .` in its checkout to list them.
-An Application the Rollout reaches first gets a red `Build Solution` on its Rollout PR, and on every PR after it: the step's annotations name each pin to
-delete or mark. The same command lists any MSBuild file or folder the check can't read (a symlinked `.props` or folder, a malformed file that names
+An Application the Rollout reaches first gets a red `Build Solution` on its Rollout PR, and on every PR after it that runs the build: the step's
+annotations name each pin to delete or mark. A PR that skips the build (a docs-only PR, a Dependabot Actions bump; [docs-only-ci.md](docs-only-ci.md))
+skips the check too, but the gate still runs it on every push. The same command lists any MSBuild file or folder the check can't read (a symlinked `.props` or folder, a malformed file that names
 `PackageVersion`); there is no comment that exempts one, so the Application fixes, moves or deletes it in the same PR.
 
 The Seed `.sandcastle/lib/repo-config.mts` lists the script in `CHECK_PATHS`, so a Sandcastle branch that changes it says so in its PR body. A Seed file is
