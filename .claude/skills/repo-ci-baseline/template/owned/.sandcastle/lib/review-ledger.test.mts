@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
@@ -5587,6 +5587,55 @@ describe("staging findings between rounds", () => {
     const failed = cli(["stage", folder(), array("c.json", [finding({ id: "R3" })])]);
     assert.equal(failed.code, 1);
     assert.match(failed.err, /isn't JSON/);
+    assert.equal(existsSync(join(folder(), "findings.json.lock")), false);
+  });
+
+  it("takes over a lock a dead stage left, as the ledger's own lock does, and keeps a live holder's", () => {
+    cli(["stage", folder(), array("a.json", [finding()])]);
+    const lock = join(folder(), "findings.json.lock");
+    // A pid no process can have: the stage that wrote it is gone.
+    writeFileSync(lock, "4194305000 deadtoken\n");
+
+    const taken = cli(["stage", folder(), array("b.json", [finding({ id: "R2" })])]);
+
+    assert.equal(taken.code, 0, taken.err);
+    assert.deepEqual(ids(), ["R1", "R2"]);
+    assert.deepEqual(readdirSync(folder()), ["findings.json"]);
+
+    writeFileSync(lock, `${process.pid} livetoken\n`);
+    const live = cli(["stage", folder(), array("c.json", [finding({ id: "R3" })])]);
+
+    assert.equal(live.code, 1);
+    assert.match(live.err, /another stage is writing/);
+    assert.equal(readFileSync(lock, "utf8"), `${process.pid} livetoken\n`);
+    assert.deepEqual(ids(), ["R1", "R2"]);
+  });
+
+  it("takes over a lock that names no holder only once it is older than a minute", () => {
+    cli(["stage", folder(), array("a.json", [finding()])]);
+    const lock = join(folder(), "findings.json.lock");
+    writeFileSync(lock, "");
+    const old = (Date.now() - 61_000) / 1000;
+    utimesSync(lock, old, old);
+
+    const taken = cli(["stage", folder(), array("b.json", [finding({ id: "R2" })])]);
+
+    assert.equal(taken.code, 0, taken.err);
+    assert.deepEqual(ids(), ["R1", "R2"]);
+    assert.equal(existsSync(lock), false);
+  });
+
+  it("writes its own pid and token into the lock while it stages", () => {
+    let seen = "";
+    let mode = 0;
+    stageFindings(folder(), [finding()], (handle) => {
+      seen = readFileSync(join(folder(), "findings.json.lock"), "utf8");
+      mode = statSync(join(folder(), "findings.json.lock")).mode & 0o777;
+      closeSync(handle);
+    });
+
+    assert.match(seen, new RegExp(`^${process.pid} [0-9a-f]{16}\\n$`));
+    assert.equal(mode, 0o600);
     assert.equal(existsSync(join(folder(), "findings.json.lock")), false);
   });
 

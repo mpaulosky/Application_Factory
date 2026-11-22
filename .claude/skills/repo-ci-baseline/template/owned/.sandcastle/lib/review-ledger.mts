@@ -894,13 +894,19 @@ function withLock<T>(cwd: string, change: () => T): T {
   mkdirSync(ledgerDir(cwd), { recursive: true, mode: 0o700 });
   chmodSync(ledgerDir(cwd), 0o700);
   const lock = join(ledgerDir(cwd), ".lock");
+  return holdLock(lock, (cause) => new Error(`another review command is writing a review; try again, or delete ${lock} if none is running`, { cause }), change);
+}
+
+// Run `change` holding the lock file `lock`, as withLock describes: made owner-only with "wx", named "pid token", taken over when its
+// holder is gone (lockIsStale), and removed only while it still carries the token. `refuse` makes the error for a lock a running
+// command holds. `close` is the descriptor close, a seam for a test that makes it fail: the lock is released all the same.
+function holdLock<T>(lock: string, refuse: (cause?: unknown) => Error, change: () => T, close: (handle: number) => void = closeSync): T {
   const token = randomBytes(8).toString("hex");
   const mine = `${process.pid} ${token}\n`;
-  const refuse = (cause?: unknown) => new Error(`another review command is writing a review; try again, or delete ${lock} if none is running`, { cause });
   let handle: number | undefined;
   for (let attempt = 0; handle === undefined; attempt += 1) {
     try {
-      handle = openSync(lock, "wx");
+      handle = openSync(lock, "wx", 0o600);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       if (attempt > 0) throw refuse(error);
@@ -961,14 +967,18 @@ function withLock<T>(cwd: string, change: () => T): T {
   try {
     return change();
   } finally {
-    closeSync(held);
-    let current: string | undefined;
+    // The lock goes even when the close fails, and only while it is still ours.
     try {
-      current = textOf(lock);
-    } catch {
-      current = undefined;
+      close(held);
+    } finally {
+      let current: string | undefined;
+      try {
+        current = textOf(lock);
+      } catch {
+        current = undefined;
+      }
+      if (current === mine) rmSync(lock, { force: true });
     }
-    if (current === mine) rmSync(lock, { force: true });
   }
 }
 
@@ -1836,7 +1846,8 @@ function readStaged(directory: string): z.infer<typeof findingListSchema> {
 // replaces that one, since a later round may change what became of it. The file holds the run's unpublished findings: it is made
 // owner-only and whole (a temp file renamed over it, never written through a link), in a folder that is the current user's, not a symlink
 // (a trailing slash doesn't hide one: the path is resolved first) and not writable by the group or others, and a second `stage` that runs at the same
-// time is refused by a lock file, since two would each merge into the same old file and one would lose the other's findings.
+// time is refused by a lock file, since two would each merge into the same old file and one would lose the other's findings. The lock
+// is the ledger's own kind (holdLock), so one a killed stage left is taken over rather than refusing every later stage in the folder.
 // `close` is the descriptor close, a seam for the test that makes it fail.
 export function stageFindings(given: string, findings: unknown, close: (handle: number) => void = closeSync): { added: number; total: number } {
   const parsed = findingListSchema.parse(findings);
@@ -1848,27 +1859,19 @@ export function stageFindings(given: string, findings: unknown, close: (handle: 
   if (problem !== undefined) throw new Error(problem);
   const file = join(directory, STAGED_FILE);
   const lock = `${file}.lock`;
-  let handle: number;
-  try {
-    handle = openSync(lock, "wx", 0o600);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error(`another stage is writing ${file}; try again, or delete ${lock} if none is running.`, { cause: error });
-    throw error;
-  }
-  try {
-    const kept = lstatOrUndefined(file) === undefined ? [] : readStaged(directory);
-    const ids = new Set(parsed.map((finding) => finding.id));
-    const merged = [...kept.filter((finding) => !ids.has(finding.id)), ...parsed];
-    replaceFile(file, `${JSON.stringify(merged, null, 2)}\n`);
-    return { added: parsed.length, total: merged.length };
-  } finally {
-    // The lock goes even when the close fails.
-    try {
-      close(handle);
-    } finally {
-      rmSync(lock, { force: true });
-    }
-  }
+  const refuse = (cause?: unknown) => new Error(`another stage is writing ${file}; try again, or delete ${lock} if none is running.`, { cause });
+  return holdLock(
+    lock,
+    refuse,
+    () => {
+      const kept = lstatOrUndefined(file) === undefined ? [] : readStaged(directory);
+      const ids = new Set(parsed.map((finding) => finding.id));
+      const merged = [...kept.filter((finding) => !ids.has(finding.id)), ...parsed];
+      replaceFile(file, `${JSON.stringify(merged, null, 2)}\n`);
+      return { added: parsed.length, total: merged.length };
+    },
+    close,
+  );
 }
 
 // The command line. Returns the exit code: 0 only for a command that did
