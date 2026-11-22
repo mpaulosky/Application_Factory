@@ -13,8 +13,11 @@ RESET='\033[0m'
 
 echo -e "${CYAN}━━━ Pre-Push Gate ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
 
-# Read push refs from stdin (provided by git when run as a hook).
-PUSH_REFS="$(cat || true)"
+# Read push refs from stdin (provided by git when run as a hook). Run by hand
+# from a terminal, stdin is the terminal, which has no refs and would wait for
+# Ctrl-D, so it isn't read.
+PUSH_REFS=""
+[[ -t 0 ]] || PUSH_REFS="$(cat || true)"
 
 is_protected_branch() {
   [[ "$1" == "main" || "$1" == "preview" || "$1" == "dev" ]]
@@ -74,7 +77,7 @@ if [[ -n "$PUSH_REFS" ]]; then
     exit 0
   fi
 else
-  # Run by hand: there are no refs on stdin, so gate the checked-out branch.
+  # Run by hand (stdin a terminal, or empty): no refs, so gate the checked-out branch.
   check_branch_name "$(git symbolic-ref --short HEAD 2> /dev/null || echo "")"
 fi
 
