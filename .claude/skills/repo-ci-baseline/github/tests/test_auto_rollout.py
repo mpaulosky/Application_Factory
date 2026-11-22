@@ -1081,29 +1081,48 @@ def test_a_shim_is_asked_where_its_tool_really_is():
 
 
 def test_a_homebrew_install_reads_its_whole_prefix(tmp_path):
-    cellar = tmp_path / "linuxbrew" / "Cellar" / "git" / "2.50" / "bin"
+    home = tmp_path / "me"
+    cellar = home / ".linuxbrew" / "Cellar" / "git" / "2.50" / "bin"
     cellar.mkdir(parents=True)
     (cellar / "git").write_text("")
-    (tmp_path / "linuxbrew" / "bin").mkdir()
-    (tmp_path / "linuxbrew" / "bin" / "git").symlink_to(cellar / "git")
-    reads, first = auto.tool_reads("/h", lambda name: str(tmp_path / "linuxbrew" / "bin" / name) if name == "git" else None,
-                                   no_answer)
-    assert str(tmp_path / "linuxbrew") in reads, "the formulae's libraries are in its opt and Cellar"
+    (home / ".linuxbrew" / "bin").mkdir()
+    (home / ".linuxbrew" / "bin" / "git").symlink_to(cellar / "git")
+    reads, first = auto.tool_reads(str(home), lambda name: str(home / ".linuxbrew" / "bin" / name) if name == "git"
+                                   else None, no_answer)
+    assert str(home / ".linuxbrew") in reads, "the formulae's libraries are in its opt and Cellar"
     assert first == [str(cellar)]
+    assert auto.HOMEBREW_PREFIXES == ("/home/linuxbrew/.linuxbrew",)
+    brew = "/home/linuxbrew/.linuxbrew/Cellar/git/2.50/bin/git"
+    assert auto.tool_reads("/h", lambda name: brew if name == "git" else None, no_answer) == (
+        [brew, "/home/linuxbrew/.linuxbrew"], ["/home/linuxbrew/.linuxbrew/Cellar/git/2.50/bin"])
+    for found in ("/opt/Cellar/git/2.50/bin/git", "/mnt/data/projects/Cellar/x/1/bin/git",
+                  "/home/linuxbrew/.linuxbrew/Cellar/git", "/home/linuxbrew/.linuxbrew/other/Cellar/git/2/bin/git"):
+        assert auto.tool_reads("/h", lambda name, found=found: found if name == "git" else None, no_answer) == (
+            [found], []), f"{found}: no Homebrew prefix, or not a formula's version folder, so the file alone"
+
+
+@pytest.mark.parametrize("prefix", [".nvm/versions/node/v24", ".asdf/installs/nodejs/24.1.0",
+                                    ".local/share/mise/installs/node/24", ".volta/tools/image/node/24.1.0",
+                                    ".local/share/fnm/node-versions/v24/installation", ".fnm/node-versions/v24/installation",
+                                    ".local/share/pnpm/nodejs/24.1.0"])
+def test_a_version_managers_version_folder_is_read_whole(prefix):
+    found = f"/h/{prefix}/bin/node"
+    assert auto.tool_reads("/h", lambda name: found if name == "node" else None, no_answer) == (
+        [found, f"/h/{prefix}"], [f"/h/{prefix}/bin"])
+    assert auto.tool_reads("/home/u", lambda name: found if name == "node" else None, no_answer) == ([found], []), \
+        "another user's home: the file alone"
 
 
 def test_a_tool_in_a_shared_folder_is_read_as_its_file_alone(tmp_path):
     for found in ("/h/.local/bin/git", "/h/bin/git", "/h/git"):
         assert auto.tool_reads("/h", lambda name, found=found: found if name == "git" else None, no_answer) == ([found], []), found
     for found in ("/opt/zz-none/bin/git", "/mnt/data/bin/git", "/home/other/bin/git", "/home/other/a/b/c/bin/git",
-                  "/h/tools/bin/git", "/h/a/b/bin/git"):
+                  "/h/tools/bin/git", "/h/a/b/bin/git", "/h/work/clients/acme/bin/node", "/h/.nvm/versions/node/v24/git", "/h/.nvm/versions/node/v24/lib/git",
+                  "/h/.nvm/versions/node/v24/x/bin/git", "/h/x/.nvm/versions/node/v24/bin/git"):
         assert auto.tool_reads("/h", lambda name, found=found: found if name == "git" else None, no_answer) == (
             [found], []), f"{found}: no layout known to be the tool's own, so the file alone"
-    assert auto.tool_reads("/h", lambda name: "/h/a/b/c/bin/git" if name == "git" else None, no_answer) == (
-        ["/h/a/b/c/bin/git", "/h/a/b/c"], ["/h/a/b/c/bin"]), "a version folder PREFIX_DEPTH down in home is read whole"
-    assert auto.PREFIX_DEPTH == 3
     assert auto.tool_reads("/home/u", lambda name: "/home/bin/git" if name == "git" else None, no_answer) == (
-        ["/home/bin/git"], []), "never a folder above home"
+        ["/home/bin/git"], []), "a folder above home: no layout, and the shared filter keeps its file"
     for found in ("/opt/bin/git", "/srv/bin/git"):
         assert auto.tool_reads("/h", lambda name, found=found: found if name == "git" else None, no_answer) == (
             [found], []), "nor a folder right under /, which holds other programs' too"
@@ -1131,10 +1150,11 @@ def test_the_sessions_path_starts_with_the_folders_its_tools_really_run_from(tmp
 
 
 def test_a_review_runs_its_tools_from_where_they_really_are_and_asks_them_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "me"))
     calls = []
     real = auto.tool_reads
     monkeypatch.setattr(auto, "tool_reads", lambda *args, **kwargs: calls.append(args) or real(*args, **kwargs))
-    node = os.path.join(os.path.expanduser("~"), ".nvm", "versions", "node", "v24", "bin", "node")
+    node = str(tmp_path / "me" / ".nvm" / "versions" / "node" / "v24" / "bin" / "node")
     _, _, seen, _ = review_once(tmp_path, monkeypatch, listing={"which": lambda name: node if name == "node" else None})
     assert seen["env"]["PATH"].split(os.pathsep)[0] == os.path.dirname(node)
     assert seen["env"]["PATH"].endswith(os.environ["PATH"])
@@ -1284,6 +1304,14 @@ def git_config_repo(tmp_path, *settings):
     ("credential.helper", "!my-helper --password x", ["credential.helper"]),
     ("credential.helper", "!my-helper --pass x", ["credential.helper"]),
     ("credential.helper", "!pass-git-helper -m ~/.password-store", []),
+    ("credential.helper", '!f() { echo username=x; echo "password=$(pass show github)"; }; f', []),
+    ("credential.helper", "!f() { echo password=`pass show github`; }; f", []),
+    ("credential.helper", "!my-helper --pass-store x", []),
+    ("credential.helper", "!my-helper --password-store=gnome", []),
+    ("credential.helper", "!my-helper --password $PW", []),
+    ("credential.helper", "!my-helper --password=x", ["credential.helper"]),
+    ("credential.helper", "!my-helper --file-mode 600", []),
+    ("credential.helper", "store --file=.git/creds", ["credential.helper"]),
     ("credential.helper", "!my-helper --passthrough", []),
     ("credential.helper", "!my-helper --filesystem", []),
     ("sendemail.smtppass", "hunter2", ["sendemail.smtppass"]),
@@ -1314,10 +1342,40 @@ def git_config_repo(tmp_path, *settings):
     ("alias.pr", '!curl -H "Authorization: token abc" https://api.github.com', ["alias.pr"]),
     ("alias.pr", "!curl -H 'bearer abcdefgh1234' https://api.github.com", ["alias.pr"]),
     ("alias.pr", "!curl --oauth2-bearer abc https://api.github.com", []),
+    ("alias.pr", "!curl --oauth2-bearer abcdefghijkl https://api.github.com", ["alias.pr"]),
+    ("alias.pr", '!curl --oauth2-bearer "$GITHUB_TOKEN" https://api.github.com', []),
+    ("alias.pr", '!curl -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com', []),
+    ("alias.pr", '!curl -H "Authorization: token $TOKEN" https://api.github.com', []),
+    ("alias.pr", "!curl -H 'Authorization: `cat t`' https://api.github.com", []),
+    ("alias.pr", "!curl -H 'Authorization:' https://api.github.com", []),
+    ("alias.pr", "!echo bearer abcdefgh", ["alias.pr"]),
+    ("alias.pr", "!echo bearer abcdefg", []),
+    ("alias.pr", "!echo debearer abcdefghijkl", []),
+    ("core.sshcommand", "sshpass -p $PW ssh", []),
+    ("core.sshcommand", "sshpass -e ssh", []),
     ("core.sshcommand", "sshpass -p hunter2 ssh", ["core.sshcommand"]),
     ("alias.x", "!echo ghp_" + "a" * 36, ["alias.x"]),
     ("alias.x", "!echo gho_" + "a" * 36, ["alias.x"]),
     ("alias.x", "!echo ghp_short", []),
+    ("alias.x", "!echo ghp_" + "a" * 20, ["alias.x"]),
+    ("alias.x", "!echo ghp_" + "a" * 19, []),
+    ("alias.x", "!echo xghp_" + "a" * 36, []),
+    ("alias.x", "!echo ghu_" + "a" * 20, ["alias.x"]),
+    ("alias.x", "!echo ghs_" + "a" * 20, ["alias.x"]),
+    ("alias.x", "!echo ghr_" + "a" * 20, ["alias.x"]),
+    ("alias.x", "!echo github_pat_" + "a" * 20, ["alias.x"]),
+    ("alias.x", "!echo github_pat_" + "a" * 19, []),
+    ("alias.x", "!echo glpat-" + "a" * 19, []),
+    ("alias.x", "!echo xoxb-" + "1" * 10, ["alias.x"]),
+    ("alias.x", "!echo xoxb-" + "1" * 9, []),
+    ("alias.x", "!echo xoxa-" + "1" * 10, ["alias.x"]),
+    ("alias.x", "!echo xoxp-" + "1" * 10, ["alias.x"]),
+    ("alias.x", "!echo xoxr-" + "1" * 10, ["alias.x"]),
+    ("alias.x", "!echo xoxs-" + "1" * 10, ["alias.x"]),
+    ("alias.x", "!echo sk-" + "a" * 20, ["alias.x"]),
+    ("alias.x", "!echo sk-" + "a" * 19, []),
+    ("alias.x", "!echo AKIA" + "A" * 15, []),
+    ("alias.x", "!echo AKIA" + "A" * 15 + "!", []),
     ("alias.x", "!echo github_pat_" + "a" * 30, ["alias.x"]),
     ("alias.x", "!echo glpat-" + "a" * 20, ["alias.x"]),
     ("alias.x", "!echo xoxb-" + "1" * 12, ["alias.x"]),
@@ -1363,12 +1421,65 @@ def test_a_submodules_git_config_is_read_too(tmp_path):
         (folder / "HEAD").write_text("ref: refs/heads/main\n")
         (folder / "config").write_text(f"[remote \"origin\"]\n\turl = {url}\n")
     (lib / "worktrees" / "w").mkdir(parents=True)
+    (lib / "worktrees" / "w" / "HEAD").write_text("ref: refs/heads/w\n")
     (lib / "worktrees" / "w" / "config.worktree").write_text("[http]\n\tproxy = http://u:pw@p:3128\n")
+    (lib / "refs" / "remotes" / "origin").mkdir(parents=True)
+    (lib / "refs" / "remotes" / "origin" / "HEAD").write_text("ref: refs/remotes/origin/main\n")
+    (lib / "refs" / "remotes" / "origin" / "config").write_text("a branch named config, not a git config\n")
     (lib / "objects").mkdir()
     (lib / "objects" / "config").write_text("[remote \"x\"]\n\turl = https://ghp_obj@github.com/o/x\n")
     assert auto.config_secrets(str(tmp_path), str(common)) == [
         f"remote.origin.url in {lib / 'config'}", f"http.proxy in {lib / 'worktrees' / 'w' / 'config.worktree'}",
-        f"remote.origin.url in {inner / 'config'}"], "a submodule's, its worktrees', a nested one's; not its objects"
+        f"remote.origin.url in {inner / 'config'}"], "a submodule's, its worktrees', a nested one's; not its refs"
+
+
+def test_a_linked_worktrees_submodules_and_sibling_submodules_are_read_in_order(tmp_path, monkeypatch):
+    real = os.scandir
+
+    class Reversed:
+        """os.scandir listing in reverse, so the order the filesystem happens to list in can't pass for sorted."""
+
+        def __init__(self, path):
+            with real(path) as handle:
+                self.entries = iter(sorted(handle, key=lambda entry: entry.name, reverse=True))
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return next(self.entries)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(os, "scandir", Reversed)
+    git_config_repo(tmp_path, ("core.bare", "false"))
+    common = tmp_path / ".git"
+    wt = common / "worktrees" / "w"
+    wt.mkdir(parents=True)
+    (wt / "HEAD").write_text("ref: refs/heads/w\n")
+    made = []
+    for folder in (common / "modules" / "b", common / "modules" / "a", wt / "modules" / "sub"):
+        folder.mkdir(parents=True)
+        (folder / "HEAD").write_text("ref: refs/heads/main\n")
+        (folder / "config").write_text("[remote \"origin\"]\n\turl = https://ghp_x@github.com/o/r\n")
+        made.append(folder / "config")
+    assert auto.config_files(str(common)) == [
+        str(common / "config"), str(wt / "modules" / "sub" / "config"), str(common / "modules" / "a" / "config"),
+        str(common / "modules" / "b" / "config")], "a linked worktree's submodules (git keeps them there), sorted"
+
+
+def test_an_entry_whose_origin_isnt_a_file_is_named_by_the_file_read(tmp_path):
+    (tmp_path / "config").write_text("")
+    out = "command line:\0remote.a.url\nhttps://t@h/a\0file:/inc\0remote.b.url\nhttps://t@h/b\0"
+    assert auto.config_secrets("/w", str(tmp_path), run=lambda command: (0, out, "")) == [
+        f"remote.a.url in {tmp_path / 'config'}", "remote.b.url in /inc"]
 
 
 def test_a_modules_folder_that_cant_be_listed_stops_the_check(tmp_path, monkeypatch):
@@ -1390,16 +1501,13 @@ def test_a_git_folder_that_cant_be_listed_stops_the_round(tmp_path, monkeypatch)
                                            r" sign-in secret can't be told"):
         auto.config_secrets("/w", "/nowhere/.git", run=lambda command: (0, "", ""))
     (tmp_path / "worktrees").mkdir()
-    real = auto.os.listdir
-
-    def listdir(path):
-        if str(path).endswith("worktrees"):
-            raise PermissionError(13, "Permission denied", path)
-        return real(path)
-
-    monkeypatch.setattr(auto.os, "listdir", listdir)
-    with pytest.raises(RuntimeError, match=r"can't list .*/worktrees, so what of the clone's git config"):
-        auto.config_secrets("/w", str(tmp_path), run=lambda command: (0, "", ""))
+    (tmp_path / "worktrees").chmod(0)
+    try:
+        with pytest.raises(RuntimeError, match=r"can't list .*/worktrees, so what of the clone's git config the"
+                                               r" session could read can't be told \(Permission denied\)"):
+            auto.config_secrets("/w", str(tmp_path), run=lambda command: (0, "", ""))
+    finally:
+        (tmp_path / "worktrees").chmod(0o700)
 
 
 def test_redacted_hides_every_urls_sign_in():
@@ -1450,9 +1558,10 @@ def test_a_clone_with_a_sign_in_secret_isnt_reviewed(tmp_path, monkeypatch):
     assert len(asked) == 1 and asked[0][0] == worktree, "asked once, before the session"
     text = Path(log).read_text()
     assert "rollout.sh: not started: the clone's git folder holds a sign-in secret (remote.origin.url)" in text
-    assert ("Each is named '<key> in <file>', the file that holds it: git config --file <file> --list shows its key"
-            " whole (a *** in one stands for its sign-in); remove it with git config --file <file> --unset-all <key>,"
-            " or remove the file named for credentials, and keep the token in a credential helper, then resume") in text
+    assert ("A key is named '<key> in <file>', the file that holds it: git config --file <file> --list shows it whole"
+            " (a *** in one stands for its sign-in), and git config --file <file> --unset-all <key> removes it; a file"
+            " named for credentials is named by its path: remove it. Keep the token in a credential helper, then"
+            " resume") in text
 
 
 def test_a_secret_added_to_the_clones_git_folder_while_the_session_ran_is_named(tmp_path, monkeypatch, capsys):
@@ -3518,8 +3627,14 @@ def test_a_removed_worktree_isnt_where_the_stop_sends_the_person(tmp_path):
                    " reapply.sh makes it again\n")
     outcome = auto.drive(TM, "/r/TicketManager", "#82", lambda brings, path: auto.REVIEW_NEEDED,
                          lambda repo, worktree: (127, str(log), []), lambda line: None)
-    assert outcome.status == "failed" and "run /pre-push-review" not in outcome.detail
-    assert outcome.detail.startswith(f"the review session couldn't be started: {auto.WORKTREE_GONE}/r/w")
+    assert outcome == auto.Outcome("failed", f"the review session couldn't be started: {auto.WORKTREE_GONE}/r/w was"
+                                   " removed since reapply.sh made it; resume, and reapply.sh makes it again (see"
+                                   f" {log}).")
+    log.write_text(f"{auto.NOT_STARTED}can't set the session up: no room\n")
+    other = auto.drive(TM, "/r/TicketManager", "#82", lambda brings, path: auto.REVIEW_NEEDED,
+                       lambda repo, worktree: (127, str(log), []), lambda line: None)
+    assert other.detail == (f"the review session couldn't be started: can't set the session up: no room (see {log});"
+                            " run /pre-push-review in /r/TicketManager-worktrees/chore-reapply-baseline, then resume.")
 
 
 @pytest.mark.parametrize("where", ["changes", "guard"])
@@ -3833,8 +3948,7 @@ def test_auto_stops_when_a_review_session_fails_and_says_what_to_do(exit_code, w
 
 def test_a_session_that_couldnt_start_says_why_on_the_terminal(tmp_path):
     log = tmp_path / "review.log"
-    log.write_text("rollout.sh: an earlier line\nclaude's own output\nrollout.sh: not started: the clone's git folder"
-                   " holds a secret, then resume\nrollout.sh: a warning after\n")
+    log.write_text("rollout.sh: not started: the clone's git folder holds a secret, then resume\n")
     fleet = Fleet(codes={TM: [auto.REVIEW_NEEDED]})
     fleet.review = lambda repo, worktree: (127, str(log), [])
     code, out, _ = run_auto(["--brings", "#82"], fleet)
@@ -3848,6 +3962,8 @@ def test_a_session_that_couldnt_start_says_why_on_the_terminal(tmp_path):
     (tmp_path / "two.log").write_text(f"{auto.NOT_STARTED}the round's own\n{auto.NOT_STARTED}printed after\n")
     assert auto.stop_line(str(tmp_path / "two.log")) == "couldn't be started: the round's own", \
         "the first, written before anything else could print one"
+    (tmp_path / "forged.log").write_text(f"claude's own output\n{auto.NOT_STARTED}\x1b[2Ka forged reason\n")
+    assert auto.stop_line(str(tmp_path / "forged.log")) is None, "a session's line, however it looks, isn't the round's"
     fleet = Fleet(codes={TM: [auto.REVIEW_NEEDED]})
     fleet.review = lambda repo, worktree: (127, str(tmp_path / "quiet.log"), [])
     _, out, _ = run_auto(["--brings", "#82"], fleet)

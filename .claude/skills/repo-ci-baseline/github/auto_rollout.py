@@ -662,20 +662,38 @@ def denied_around(root, allowed, listdir=os.listdir):
     return walk(os.path.normpath(root))
 
 
-# How far down in home a tool's install prefix must be to be read whole: ~/.nvm/versions/node/v24 is four, and a
-# shallower one (~/tools of ~/tools/bin/git) may hold more than the tool.
-PREFIX_DEPTH = 3
+# The install prefixes read whole, each a layout known to hold one version of one tool and nothing else: a version
+# manager's version folder in home (nvm's, asdf's, mise's, volta's, fnm's, pnpm's node), as its path under home, and
+# Homebrew on Linux, whose prefix holds only its formulae.
+VERSION_FOLDERS = re.compile(r"\.nvm/versions/node/[^/]+|\.asdf/installs/[^/]+/[^/]+|\.local/share/mise/installs/[^/]+/[^/]+"
+                             r"|\.volta/tools/image/[^/]+/[^/]+|(?:\.local/share/fnm|\.fnm)/node-versions/[^/]+/installation"
+                             r"|\.local/share/pnpm/nodejs/[^/]+")
+HOMEBREW_PREFIXES = ("/home/linuxbrew/.linuxbrew",)
+
+
+def own_prefix(real, homes):
+    """The install prefix of the binary real to read whole, or None (tool_reads): a version folder of VERSION_FOLDERS
+    in one of homes with real in its bin, or a Homebrew prefix with real in <prefix>/Cellar/<formula>/<version>/."""
+    brews = [*HOMEBREW_PREFIXES, *(os.path.join(h, ".linuxbrew") for h in homes)]
+    for brew in brews:
+        if re.fullmatch(re.escape(brew) + r"/Cellar/[^/]+/[^/]+/.+", real):
+            return brew
+    prefix = os.path.dirname(os.path.dirname(real))
+    if os.path.basename(os.path.dirname(real)) != "bin":
+        return None
+    return next((prefix for h in homes if prefix.startswith(h.rstrip("/") + "/")
+                 and VERSION_FOLDERS.fullmatch(prefix[len(h.rstrip("/")) + 1:])), None)
 
 
 def tool_reads(home, which=shutil.which, run=None):
     """(what the session's Bash reads for SESSION_COMMANDS, the folders to put first on its PATH). Each command's own
     file as PATH finds it and as it really is (node's process.execPath, git's binary, and git's --exec-path helpers),
-    so a shim (volta, asdf, mise) or a link isn't what runs in the sandbox; and the install prefix around a real binary
-    in a bin folder, read whole only in the two layouts known to be a tool's own: a version folder at least
-    PREFIX_DEPTH folders down in home (nvm's, asdf's, mise's, volta's), or a Homebrew Cellar's whole prefix, and
-    neither when SYSTEM_READS has it already or it is home, a folder above it or ~/.local, which other tools share.
-    Anywhere else (/opt/bin, /mnt/data/bin, another user's home) the files alone. A command PATH finds by a relative
-    path is left out, as is anything shared."""
+    so a shim (volta, asdf, mise) or a link isn't what runs in the sandbox; and the install prefix around a real binary,
+    read whole only in a layout known to be the tool's own: a version manager's version folder in home with the binary
+    in its bin (VERSION_FOLDERS), or a Homebrew prefix (HOMEBREW_PREFIXES, ~/.linuxbrew) with the binary in a Cellar
+    formula's version folder. Anywhere else (/opt/bin, a project's bin, a data disk, another user's home) the files
+    alone. A command PATH finds by a relative path is left out, as is anything shared (home, a folder above it,
+    ~/.local)."""
     run = run or run_quiet
     homes = both_forms(os.path.normpath(home))
 
@@ -700,13 +718,8 @@ def tool_reads(home, which=shutil.which, run=None):
         if name == "git":
             reads.append(asked([real, "--exec-path"]))
         folder = os.path.dirname(real)
-        prefix = (real.split("/Cellar/")[0] if "/Cellar/" in real
-                  else os.path.dirname(folder) if os.path.basename(folder) == "bin" else None)
-        system = prefix and any(prefix == read or prefix.startswith(read + "/") for read in SYSTEM_READS)
-        # Only a layout known to be the tool's own: a prefix such as /opt or /mnt/data holds other programs' files too.
-        own = prefix and ("/Cellar/" in real or any(
-            prefix.startswith(h + "/") and len(os.path.relpath(prefix, h).split("/")) >= PREFIX_DEPTH for h in homes))
-        if own and not system and not shared(prefix):
+        prefix = own_prefix(real, homes)
+        if prefix:
             # A prefix of the command's own: its folder goes first on PATH, so the shim found before it doesn't run.
             reads.append(prefix)
             first.append(folder)
@@ -858,48 +871,40 @@ SECRET_KEY = re.compile(r"\.(?:[a-z0-9-]*(?:token|secret|password|passwd|passphr
                         r"|(?:[a-z0-9-]*-)?(?:smtp)?pass|[a-z0-9-]*(?:api|secret|access)-?key)$", re.I)
 # A token's own shape, wherever in a value it is (an alias's curl, an sshCommand): GitHub's, GitLab's, Slack's, an
 # API key's and AWS's, an Authorization or Bearer header, and sshpass's password. Only these known forms are found.
+# A header, bearer or password that names a variable ($GITHUB_TOKEN, "$(pass show x)") holds no token: it is read
+# when the command runs.
 TOKEN_SHAPE = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|glpat-[\w-]{20,}|xox[abprs]-[\w-]{10,}"
-                         r"|sk-[\w-]{20,}|AKIA[0-9A-Z]{16})|(?i:\bauthorization:\s*\S|\bbearer\s+\S{8,}|\bsshpass\s+-p)")
-# A credential helper that holds the password itself (echo password=..., --password ...) or names a file it is kept in.
-HELPER_SECRET = re.compile(r"password\s*=|--pass(?:word)?\b|--file\b", re.I)
+                         r"|sk-[\w-]{20,}|AKIA[0-9A-Z]{16})"
+                         r"|(?i:\bauthorization:\s*(?!(?:\w+\s+)?[\"']?[$`])[^\s\"']|\bbearer\s+(?![\"']?[$`])\S{8,}"
+                         r"|\bsshpass\s+-p\s*(?![\"']?[$`])\S)")
+# A credential helper that holds the password itself (echo password=x, --password x) or names a file it is kept in;
+# one that fetches it as it runs (password=$(pass show x)) or a flag such as --password-store holds none.
+HELPER_SECRET = re.compile(r"password\s*=\s*(?![\"']?[$`])[^\s\"';]|--pass(?:word)?(?:=|\s+)(?![\"']?[$`])\S"
+                           r"|--file(?![\w-])", re.I)
 
 
 def config_files(common):
-    """Every git config file in the clone's git folder common, which the session's Bash reads whole: its config, the
-    config.worktree of the main checkout and of each linked worktree, and the same of each submodule's git folder
-    under modules (nested ones too), where one exists. Raises RuntimeError when common, its worktrees folder or a
-    folder under modules can't be listed."""
-    def unlistable(folder, error):
-        raise RuntimeError(f"can't list {folder}, so what of the clone's git config the session could read can't be"
-                           f" told ({error}): make it listable") from None
+    """Every git config file in the clone's git folder common, which the session's Bash reads whole: the config and
+    config.worktree of every git folder in it, in order: common's own, each linked worktree's under worktrees, and
+    each submodule's under modules, the main checkout's, a linked worktree's (worktrees/<name>/modules) and nested
+    ones, where one exists. Raises RuntimeError when a folder on the way can't be listed."""
+    def failed(error):
+        raise RuntimeError(f"can't list {error.filename}, so what of the clone's git config the session could read"
+                           f" can't be told ({error.strerror}): make it listable")
 
-    def git_folder(folder):
-        files = [os.path.join(folder, name) for name in ("config", "config.worktree")]
-        try:
-            names = sorted(os.listdir(os.path.join(folder, "worktrees")))
-        except FileNotFoundError:
-            names = []
-        except OSError as error:
-            unlistable(os.path.join(folder, "worktrees"), error)
-        return files + [os.path.join(folder, "worktrees", name, "config.worktree") for name in names]
-
-    files = git_folder(common)
-    modules = os.path.join(common, "modules")
-    if os.path.isdir(modules):
-        def failed(error):
-            unlistable(error.filename, error.strerror)
-
-        for folder, subfolders, names in os.walk(modules, onerror=failed):
-            if "HEAD" in names:  # a submodule's git folder: its config, and its own nested modules
-                files += git_folder(folder)
-                subfolders[:] = [name for name in subfolders if name == "modules"]
+    files = []
+    for folder, subfolders, names in os.walk(common, onerror=failed):
+        if folder == common or "HEAD" in names:  # a git folder: its own config, then only its worktrees' and its submodules' git folders
+            files += [os.path.join(folder, name) for name in ("config", "config.worktree")]
+            subfolders[:] = [name for name in ("worktrees", "modules") if name in subfolders]
+        else:
             subfolders.sort()
     return [path for path in files if os.path.isfile(path)]
 
 
 def config_secrets(worktree, common, run=run_quiet):
     """Where the clone's git folder, which the session's Bash reads whole, holds a sign-in secret: every key of every
-    config file in it (config_files: the clone's, and each worktree's config.worktree), include files followed, whose
+    config file in it (config_files: every worktree's and submodule's git folder's), include files followed, whose
     key or value holds a URL with a sign-in (has_sign_in: remotes, insteadOf, proxies, submodules, LFS), whose value
     holds a token's own shape (TOKEN_SHAPE), whose name is a password's or a token's (SECRET_KEY), an http
     extraheader, or a credential helper holding a password or naming a file (HELPER_SECRET); and a file in common
@@ -1700,10 +1705,10 @@ def review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock
         held = secrets(worktree, before.common)
         if held:
             return stop(f"the clone's git folder holds a sign-in secret ({'; '.join(held)}), which the session, reading"
-                        " that folder, could read. Each is named '<key> in <file>', the file that holds it: git config"
-                        " --file <file> --list shows its key whole (a *** in one stands for its sign-in); remove it"
-                        " with git config --file <file> --unset-all <key>, or remove the file named for credentials,"
-                        " and keep the token in a credential helper, then resume")
+                        " that folder, could read. A key is named '<key> in <file>', the file that holds it: git"
+                        " config --file <file> --list shows it whole (a *** in one stands for its sign-in), and git"
+                        " config --file <file> --unset-all <key> removes it; a file named for credentials is named by"
+                        " its path: remove it. Keep the token in a credential helper, then resume")
         home = os.path.expanduser("~")
         tools = tool_reads(home, which)
         settings = session_settings(worktree, before.common, before.gitdir, tmp, listdir=listdir, which=which,
@@ -1811,7 +1816,7 @@ def appeared(settings, inputs, listdir=os.listdir, which=shutil.which, tools=Non
 
 
 def added_secrets(before, now):
-    """What to say of sign-in secrets added to the clone's git folder while the session ran (config_secrets' keys)."""
+    """What to say of sign-in secrets added to the clone's git folder while the session ran (config_secrets' entries)."""
     added = [key for key in now if key not in before]
     return [f"added to the clone's git folder while the session ran, so it could read them: {', '.join(added)}"] if added else []
 
@@ -2043,14 +2048,16 @@ def drive(repo, path, brings, reapply, review, say):
 
 
 def stop_line(log):
-    """'couldn't be started: <why>', from the first NOT_STARTED line in log, the one run_review wrote before any
-    session output, or None: a claude that started may exit 127 too, and then there is none."""
+    """'couldn't be started: <why>', from the log's first line when it is a NOT_STARTED line, or None. run_review
+    writes one first, to a new log, only when no session ran; a claude that started may exit 127 too, and then a
+    line of the session's own that looks like one is never read."""
     try:
         with open(log, encoding="utf-8", errors="replace") as handle:
-            said = [line[len(NOT_STARTED):].strip() for line in handle if line.startswith(NOT_STARTED)]
+            first = handle.readline()
     except (OSError, TypeError):
         return None
-    return f"couldn't be started: {without_resume(said[0])}" if said else None
+    return f"couldn't be started: {without_resume(first[len(NOT_STARTED):].strip())}" \
+        if first.startswith(NOT_STARTED) else None
 
 
 class PrUnknown(Exception):

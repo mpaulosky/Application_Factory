@@ -51,9 +51,9 @@ enforces (bubblewrap, so Linux only) on every Bash command and everything it sta
   logs, and wherever a variable such as `KUBECONFIG` or `XDG_CONFIG_HOME` moves one), and of the rest of the disk only the worktree, the clone's git folder, `.security`,
   its own folder, the system's folders (`/usr`, `/etc`, `/proc` and the like, but not `/dev/shm`, and of `/run` only NixOS's system links, so not the runtime
   folder, decrypted secrets or a daemon's socket) and node's and git's own files: each as `PATH` finds it and as it really is (a shim is asked, and the real one put
-  first on the session's `PATH`), with its install prefix only in the two layouts known to be a tool's own: a version folder at least three folders down in home
-  (nvm's, asdf's, mise's, volta's) or a Homebrew prefix, and neither when the system's folders hold it or it is home, a folder above it or `~/.local`, which other
-  tools share. Anywhere else (`/opt/bin`, a data disk, another user's home) it is the files alone. So a secret no list names (another project's `.env`, a tool's
+  first on the session's `PATH`), with its install prefix only in a layout known to be a tool's own: a version manager's version folder in home (nvm's,
+  asdf's, mise's, volta's, fnm's, pnpm's node) with the binary in its `bin`, or a Homebrew prefix (`/home/linuxbrew/.linuxbrew`, `~/.linuxbrew`) with the binary in
+  a formula's version folder. Anywhere else (`/opt/bin`, a project's `bin`, a data disk, another user's home) it is the files alone. So a secret no list names (another project's `.env`, a tool's
   config, another user's or a clone outside home) is out of reach too. `rollout.sh --auto` runs on Linux only: this policy is checked against bubblewrap alone, and macOS's
   Seatbelt and its firmlinked data volume (`/System/Volumes/Data`) would need their own. That is an allow-list made of
   denials: walking from `/`, every entry beside the way to those folders is denied, where a symlink leads as well, since denying home whole and re-allowing the worktree
@@ -65,15 +65,15 @@ enforces (bubblewrap, so Linux only) on every Bash command and everything it sta
   denied whole and the list stays short (what a killed run left there is removed by the next); settings over 100,000 bytes, one argument's room, stop the round too,
   naming the crowded folder. The clone's git folder is read whole, since git needs it: its other branches, stash and reflog with it, so the round refuses a clone whose
   git folder holds a sign-in secret. Every git config file there is read, include files followed: the clone's `config`, each worktree's `config.worktree`, and
-  the same of each submodule's git folder under `modules`. A secret is a key or value holding a URL with a sign-in (a remote, `insteadOf`, a proxy, a
-  submodule), a value holding a known token's shape (GitHub's, GitLab's, Slack's, an API key's, AWS's, an `Authorization` or `Bearer` header, `sshpass -p`), a
-  key named for a password, a token, a secret or an API or access key (not `core.askPass`, a program), an `http` extra header, a credential helper holding a
-  password or naming a `--file`, or a file named for credentials. The check finds these known forms only, not a token in a form no rule names. A key is named
-  with its token masked and by the file that holds it (an include file's own), and a secret added while the session ran is named once it ends. It writes only a temporary folder of its own, its run folder
-  among it: not the
-  worktree, which a sandbox otherwise lets its working folder be written, the clone's git folder, its review ledgers or the main checkout's `.security`. It reaches no
-  host (it builds and installs nothing, and a `git fetch` has nowhere to write: `reapply.sh` has just fetched), can't leave the sandbox
-  (`allowUnsandboxedCommands: false`), and the session refuses to start without it (`failIfUnavailable`).
+  the same of each submodule's git folder, the main checkout's under `modules` and a linked worktree's under `worktrees/<name>/modules`. A secret is a key
+  or value holding a URL with a sign-in (a remote, `insteadOf`, a proxy, a submodule), a value holding a known token's shape (GitHub's, GitLab's, Slack's, an
+  API key's, AWS's, an `Authorization` or `Bearer` header, `sshpass -p`), a key named for a password, a token, a secret or an API or access key (not
+  `core.askPass`, a program), an `http` extra header, a credential helper holding a password or naming a `--file`, or a file named for credentials; a header,
+  bearer or password that names a variable (`$GITHUB_TOKEN`, `$(pass show x)`) holds none. The check finds these known forms only, not a token in a form no rule
+  names. A key is named with its token masked and by the file that holds it (an include file's own), and a secret added while the session ran is named once it
+  ends. It writes only a temporary folder of its own, its run folder among it: not the worktree, which a sandbox otherwise lets its working folder be written,
+  the clone's git folder, its review ledgers or the main checkout's `.security`. It reaches no host (it builds and installs nothing, and a `git fetch` has
+  nowhere to write: `reapply.sh` has just fetched), can't leave the sandbox (`allowUnsandboxedCommands: false`), and the session refuses to start without it (`failIfUnavailable`).
 - **The file tools**, which run outside the sandbox, follow `dontAsk` permissions: anything not allowed is refused. They may read only the worktree, `.security` and the temporary
   folder, edit only the temporary folder (so never a ledger or a `.security` entry), start the reviewer agent, and run Bash, which is sandboxed.
   Only the built-in tools the review needs exist in the session (`--tools`).
