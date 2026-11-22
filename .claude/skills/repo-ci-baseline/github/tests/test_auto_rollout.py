@@ -1212,8 +1212,10 @@ def test_a_tool_in_a_shared_folder_is_read_as_its_file_alone(tmp_path):
 def test_a_password_in_a_variables_value_or_a_pwd_name_is_left_out_of_the_sessions_environment(tmp_path):
     env = auto.session_env({"MYSQL_PWD": "hunter2", "PWD": "/w", "CACHE_URL": "redis://:hunter2@cache:6379/0",
                             "MIRROR": "https://me:hunter2@mirror.example/r", "REMOTE": "ssh://git@github.com/o/r",
-                            "PROXY": "http://proxy:3128", "LANG": "C.UTF-8"}, str(tmp_path))
+                            "PROXY": "http://proxy:3128", "LANG": "C.UTF-8", "UPSTREAM": "https://ghp_abc@github.com/o/r",
+                            "FTP_MIRROR": "ftp://anon@mirror.example/"}, str(tmp_path))
     assert not {"MYSQL_PWD", "CACHE_URL", "MIRROR"} & set(env), "a password, by its name or in a URL's sign-in"
+    assert not {"UPSTREAM", "FTP_MIRROR"} & set(env), "a user alone over http(s) or ftp(s), which may be a token"
     assert {"PWD", "REMOTE", "PROXY", "LANG"} <= set(env), "the working folder, and a URL with no password in it"
 
 
