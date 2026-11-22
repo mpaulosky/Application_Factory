@@ -105,8 +105,8 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
      (`ANTHROPIC_API_KEY`, say): sign Claude Code in with `claude /login` instead.
      When the gate asks for a review it runs the pre-push review headless in the repo's re-Apply worktree, review-only: one round that stages each finding open, or dismissed when
      it isn't a security one, and edits, fixes and commits nothing. It runs in Claude Code's sandbox: its shell reads none of your credentials, and of the rest of the disk only the worktree, the
-     clone's git folder, `.security`, its own folder, the system's folders and node's and git's, as listed when it starts (what appears later is named once it ends;
-     a clone whose git config holds a token isn't reviewed), writes only a
+     clone's git folder, `.security`, its own folder, the system's folders and node's and git's own files, as listed when it starts (what appears later is named once
+     it ends; a clone whose git folder holds a token isn't reviewed; Linux only), writes only a
      folder of its own, and reaches no host; it has no GitHub sign-in, loads no settings file, and takes the skill and its agent from the Template. Once it ends, the round
      records what it staged with the worktree's `scripts/review.sh prepare` and `record`, so the ledgers and `.security` are written only by the record's own code. Each
      runs for at most ten minutes; an interrupt stops `prepare` and waits for `record`. Until it is recorded, what the session staged is kept beside the log, and a

@@ -49,16 +49,23 @@ enforces (bubblewrap on Linux) on every Bash command and everything it starts:
 - **The sandbox.** Its Bash reads none of the person's credentials (`~/.ssh`, `~/.config/gh`, `~/.git-credentials`, `~/.netrc`, `~/.gitconfig`, the shells' start-up
   files, .NET's user secrets, the keyrings, cloud and package-registry sign-ins, shell histories, all of `~/.claude` and Claude Code's `CLAUDE_CONFIG_DIR`, the other sessions'
   logs, and wherever a variable such as `KUBECONFIG` or `XDG_CONFIG_HOME` moves one), and of the rest of the disk only the worktree, the clone's git folder, `.security`,
-  its own folder, the system's folders (`/usr`, `/etc`, `/proc` and the like, but not `/run/user`, `/run/media` or `/dev/shm`) and the folders node and git run from,
-  so a secret no list names (another project's `.env`, a tool's config, another user's or a clone outside home) is out of reach too. That is an allow-list made of
+  its own folder, the system's folders (`/usr`, `/etc`, `/proc` and the like, but not `/dev/shm`, and of `/run` only NixOS's system links, so not the runtime
+  folder, decrypted secrets or a daemon's socket) and node's and git's own files: each as `PATH` finds it and as it really is (a shim is asked, and the real one put
+  first on the session's `PATH`), with its install prefix (nvm's version folder, a Homebrew prefix) unless the system's folders hold it or it is home, a folder above
+  it or `~/.local`, which other tools share. So a secret no list names (another project's `.env`, a tool's config, another user's or a clone outside home) is out of
+  reach too. `rollout.sh --auto` runs on Linux only: this policy is checked against bubblewrap alone, and macOS's Seatbelt and its firmlinked data volume
+  (`/System/Volumes/Data`) would need their own. That is an allow-list made of
   denials: walking from `/`, every entry beside the way to those folders is denied, where a symlink leads as well, since denying home whole and re-allowing the worktree
   (`allowRead`) leaves bubblewrap unable to mask the files it protects there, and every command fails. The round lists them when it builds the session's settings, just
-  before the session starts, so an entry made after that is readable: the session writes only its own folder, so only the person's other programs can make one, and
-  the round names what it finds made once the session ends. A folder on the way it can't list, or an entry to deny named with a glob character or not in UTF-8, which
+  before the session starts, so an entry made after that is readable: the session writes only its own folder, so only the person's other programs or Claude Code
+  itself (a `.claude` folder) can make one, and the round names what it finds made once the session ends, after what it staged is kept, as a warning that can't
+  stop the record. A folder on the way it can't list, or an entry to deny whose path holds a glob character or isn't UTF-8, which
   the sandbox may not match as written, stops the round before the session. Its own folder is in `~/.cache/repo-ci-baseline-sessions`, not `/tmp`, so `/tmp` is
   denied whole and the list stays short (what a killed run left there is removed by the next); settings over 100,000 bytes, one argument's room, stop the round too,
   naming the crowded folder. The clone's git folder is read whole, since git needs it: its other branches, stash and reflog with it, so the round refuses a clone whose
-  own git config holds a sign-in secret (a token in a remote or `insteadOf` URL, an `http` extra header). It writes only a temporary folder of its own, its run folder
+  git folder holds a sign-in secret: any key of its own config, include files followed, whose key or value is a URL with a sign-in in it (a remote, `insteadOf`, a
+  proxy, a submodule), an `http` extra header, a credential helper holding a password or a `store --file`, or a credentials file. A key is named with its token
+  masked, and a secret added while the session ran is named once it ends. It writes only a temporary folder of its own, its run folder
   among it: not the
   worktree, which a sandbox otherwise lets its working folder be written, the clone's git folder, its review ledgers or the main checkout's `.security`. It reaches no
   host (it builds and installs nothing, and a `git fetch` has nowhere to write: `reapply.sh` has just fetched), can't leave the sandbox
@@ -122,9 +129,10 @@ The gate, the ledger and the review's rules are unchanged: the push still needs 
   reviews would stop less often, but what it wrote would run as the person outside the sandbox, and its gate's installs can't run inside it; that is a follow-up, not this decision.
 - `reapply.sh` knows the gate stopped at its Local review step by the step's name, and how the check refuses by the ledger's own text on its stderr; a test holds them equal to
   `gate.sh`'s and `checkReview`'s, so rewording either fails `test.sh` until both change.
-- The sandbox holds only as far as Claude Code enforces it: what it shows of `/proc` and of Unix sockets is Claude Code's, and its reads are a list of what to hide, so a
-  secret in a file the list doesn't name (another checkout's `.env`, say) is readable; with no host to reach, what the session reads can leave only through what it writes
-  (its findings, its folder), which a person reads before publishing. `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` isn't used: in Claude Code 2.1.326 it forces the
+- The sandbox holds only as far as Claude Code enforces it: what it shows of `/proc` and of Unix sockets is Claude Code's, and its reads are denials listed as the session starts, so
+  what is made beside its folders while it runs (another checkout's `.env`, say) is readable until it ends, and is named then; with no host to reach,
+  what the session reads can leave only through what it writes (its findings, its folder), which a person reads before publishing.
+  `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` isn't used: in Claude Code 2.1.326 it forces the
   permission mode back to `default`, and the refused sign-in
   secrets make it unneeded. The session reads no PR threads or issue, which a re-Apply reviewed before its first push hasn't got; a session whose recorded review the
   gate still refuses (main moved meanwhile, say) is run once more, then the round stops. The record runs the worktree's own scripts (`scripts/review.sh` and its
