@@ -360,7 +360,8 @@ One PR per repo, each its own follow-up issue. The four older repos go first (Ar
    Its pointers (`docs/CODING_STANDARDS.md`, `CONTEXT.md`, `.claude/rules/`), its repo-specific bullets, its UI notes and its instructions for a sandbox gate (step 8)
    go into `roles/shared-rules.md`, and its `# SKILLS` block into `roles/skills.md`.
    Diff the repo's `Dockerfile` and `package.json` against the Template's Seed files, and bring over what the repo lacks (shfmt, for one, in a Dockerfile from before ADR 0011).
-   Do the same for `roles/shared-rules.md`, a Seed file a Rollout never rewrites: its shell rule names the shfmt format the gate's Shell format step checks (the Factory's ADR 0015).
+   Do the same for `roles/shared-rules.md`, a Seed file a Rollout never rewrites: its shell rule names the shfmt format the gate's Shell format step checks (the Factory's ADR 0015),
+   and its Python rule ruff's command, the gate's Python lint step's (the Factory's ADR 0011, Update: Python).
 4. Run `pnpm install`, then commit `pnpm-lock.yaml` with the change.
 5. Add `GATE_LIMIT_MINUTES` to `lib/repo-config.mts` (the Seed's is 10): the Owned `lib/step-limit.mts` imports it, so a repo without it fails to load.
    Size it for the repo's slowest gate under parallel builds. The host runs every sandbox command under `timeout` (GNU coreutils, in the Template's

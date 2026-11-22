@@ -497,6 +497,16 @@ for n in 79 80 81; do
   check "a $n-byte answer is shown as its first $(((n < 80) ? n : 80)) bytes" \
     "$([[ $status == 1 ]] && grep -qF "not '$shown': uv tool install" "$repoP/out" && echo 0 || echo 1)"
 done
+# A failing --version's output is shown the same way: cut to 80 bytes, every byte but printable ASCII as ?, a backslash kept as it is.
+stub_ruff $'ruff 0.1\033]0;x\a\\e\303\251' 0 1
+run_stub_ruff
+check "a failing --version's escape sequence and non-ASCII are shown as ?, and a backslash as it is" \
+  "$([[ $status == 1 ]] && grep -qF "exited 1 and printed 'ruff 0.1?]0;x?\\e??'" "$repoP/out" && ! grep -q $'\033]0' "$repoP/out" && echo 0 || echo 1)"
+answer="ruff 0.17.6 $(printf 'x%.0s' $(seq 1 69))"
+stub_ruff "$answer" 0 1
+run_stub_ruff
+check "a failing --version's 81-byte answer is shown as its first 80 bytes" \
+  "$([[ $status == 1 ]] && grep -qF "exited 1 and printed '${answer:0:80}', so" "$repoP/out" && echo 0 || echo 1)"
 stub_ruff "ruff 0.17.6" 0
 run_stub_ruff
 check "ruff gets exactly the flags, then --, then the names" \

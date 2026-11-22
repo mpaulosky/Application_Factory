@@ -363,6 +363,7 @@ py_run() {
     [[ -z "${PY_NONE:-}" ]] || PY_FILES=()
     [[ -z "${PY_MANY:-}" ]] || PY_FILES=(a.py "b c.py" d.py e.py f.py g.py)
     [[ -z "${PY_FIVE:-}" ]] || PY_FILES=(-dash.py "b c.py" "it's.py" d.py e.py)
+    [[ -z "${PY_CTRL:-}" ]] || PY_FILES=($'a\033[2Jb.py' $'c\nd.py')
     export MD_ARGS_FILE
     : > "$MD_ARGS_FILE"
     # shellcheck disable=SC2030,SC2031 # the step's own PATH, in this subshell only
@@ -413,11 +414,20 @@ STUB_RUFF_EXIT=1 py_run
 check "python lint: a problem ruff finds stops the gate, saying to fix it or mark a false alarm" \
   "[[ $pst != 0 ]] && [[ \"\$perr\" == *'ruff: fix each problem shown above'*'# noqa: <code>'* ]]"
 # The --fix hint is the command the gate ran, with --fix: the same ruff, --isolated and --select F,B, so no config in the repo changes it.
+check "python lint: a ruff finding's message leads into the --fix command, and the old 'add --fix to the command' is gone" \
+  "[[ \"\$perr\" == *'ruff fixes the ones marked [*] itself with:'* && \"\$perr\" != *'add --fix to the command'* ]]"
 check "python lint: the --fix hint is the gate's own command, with its flags and the file" \
   "grep -qxF '  ruff check --isolated --no-cache --select F,B --target-version py312 --fix -- -dash.py' <<< \"\$perr\""
 STUB_RUFF_EXIT=1 PY_FIVE=1 py_run
 check "python lint: the --fix hint quotes up to five files, so it pastes as it stands" \
   "grep -qxF \"  ruff check --isolated --no-cache --select F,B --target-version py312 --fix -- -dash.py b\\\\ c.py it\\\\'s.py d.py e.py\" <<< \"\$perr\""
+# A name an agent chose may hold a terminal escape or a newline: %q prints each in bash's $'...' form, so none reaches the terminal raw and
+# the hint stays one line that names the same files when pasted.
+for loc in C.UTF-8 C; do
+  LC_ALL="$loc" STUB_RUFF_EXIT=1 PY_CTRL=1 py_run
+  check "[$loc] python lint: the --fix hint prints a name's escape and newline quoted, on one line" \
+    "grep -qxF \"  ruff check --isolated --no-cache --select F,B --target-version py312 --fix -- \\\$'a\\\\E[2Jb.py' \\\$'c\\\\nd.py'\" <<< \"\$perr\" && [[ \"\$perr\" != *\$'\\033'* ]]"
+done
 STUB_RUFF_EXIT=1 PY_MANY=1 py_run
 check "python lint: with more than five files the --fix hint leaves <file>... to fill in" \
   "grep -qxF '  ruff check --isolated --no-cache --select F,B --target-version py312 --fix -- <file>...' <<< \"\$perr\""

@@ -172,10 +172,12 @@ for problem in problems:
     print(problem)
 sys.exit(1 if problems else 0)
 PY
-  # The edit-time lint and the Owned gate check Python with the same ruff release rule and flags, CI's python-tests job passes the same
-  # flags, with --target-version the python-version CI runs, and requirements-tests.txt pins the release the gate runs through uvx, one the rule takes: a bump of the pin to another
-  # release line fails here, so the rule is moved with it on purpose (Dependabot leaves ruff alone; see the dependabot.yml check).
-  python3 -I - "$owned" << 'PY' || fail "scripts/lint-edited-file.sh, scripts/gate.sh, ci.yml and requirements-tests.txt must agree on ruff (see above)"
+  # The edit-time lint and the Owned gate check Python with the same ruff release rule and flags, and CI's python-tests job passes the
+  # same flags. Their --target-version is the python-version CI runs. requirements-tests.txt pins the release the gate runs through uvx,
+  # one the rule takes: a bump of the pin to another release line fails here, so the rule is moved with it on purpose (Dependabot leaves
+  # ruff alone; see the dependabot.yml check). ruff_agree <folder> checks the Template's files in that folder.
+  ruff_agree() {
+    python3 -I - "$1" << 'PY'
 import re, shlex, sys
 owned = sys.argv[1]
 read = lambda path: open(path, encoding="utf-8").read()
@@ -250,6 +252,23 @@ for problem in problems:
     print(problem)
 sys.exit(1 if problems else 0)
 PY
+  }
+  ruff_agree "$owned" || fail "scripts/lint-edited-file.sh, scripts/gate.sh, ci.yml and requirements-tests.txt must agree on ruff (see above)"
+  # Each way the target can drift from CI's Python is refused, on a copy of the four files edited that way.
+  ruff_copy="$(mktemp -d)"
+  ruff_drift() { # ruff_drift <what> <expected problem> <file> <sed script>
+    rm -rf "${ruff_copy:?}"/* && mkdir -p "$ruff_copy/scripts" "$ruff_copy/.github/workflows" "$ruff_copy/.github/scripts"
+    for f in scripts/lint-edited-file.sh scripts/gate.sh .github/workflows/ci.yml .github/scripts/requirements-tests.txt; do cp "$owned/$f" "$ruff_copy/$f"; done
+    sed -i -e "$4" "$ruff_copy/$3"
+    local found
+    found="$(ruff_agree "$ruff_copy" 2>&1)" && fail "the ruff agreement check passes $1"
+    grep -qF -- "$2" <<< "$found" || fail "the ruff agreement check doesn't say '$2' for $1: $found"
+  }
+  ruff_drift "a gate RUFF_ARGS with no --target-version" "gate.sh's RUFF_ARGS must give --target-version" scripts/gate.sh 's/ --target-version py312)$/)/'
+  ruff_drift "a target that isn't CI's Python" "gate.sh's ruff --target-version py312 is not ci.yml's python-version 3.11" \
+    .github/workflows/ci.yml 's/python-version: "3.12"/python-version: "3.11"/'
+  ruff_drift "a ci.yml with two python-version lines" "is not found once (2 found)" .github/workflows/ci.yml 's/^\( *\)python-version: "3.12"$/&\n\1python-version: "3.12"/'
+  rm -rf "$ruff_copy"
   # The script edit rule: the checks reviewers keep raising on script changes, loaded when a session works on a script (its paths: front matter
   # names the shell and Python files and the folders the hook lints), and written into every repo, so it names nothing of the Factory's.
   script_rule="$owned/.claude/rules/script-edits.md"

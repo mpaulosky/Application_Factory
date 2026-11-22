@@ -268,8 +268,8 @@ may start with a dash, since shellcheck takes the argument after `-P` as its val
 
 A hook under a nested `.github/hooks` whose `.editorconfig` can't be read is not linted, with a note; a line of it longer than 4,096 characters is no section header. A violation
 wins over a note: the hook exits 2 with the report alone. `test.sh` checks that the hook's hook-name rule is the gate's and the Lint Actions shellcheck job's, that its shfmt
-release rule is the gate's and its own, and that its ruff release rule and flags are the gate's, its flags CI's `python-tests` job's, and the gate's `RUFF_VERSION`
-`requirements-tests.txt`'s pin and the Seed `Dockerfile`'s.
+release rule is the gate's and its own, and that its ruff release rule and flags are the gate's, its flags CI's `python-tests` job's, the gate's `--target-version` that
+job's `python-version`, and the gate's `RUFF_VERSION` `requirements-tests.txt`'s pin and the Seed `Dockerfile`'s.
 The hook sees only those tools' writes: a file an agent writes through Bash (a heredoc, `sed -i`, a script) is not linted until the pre-commit hook (Markdown only), the gate or CI,
 since a Bash command doesn't name the files it wrote. The Owned `.claude/rules/markdown-and-yaml-edits.md`, which Apply writes into every repo and which loads in every session (it has no `paths:`),
 tells agents to write Markdown and YAML with Write and Edit for that reason, in a repo that hasn't wired the hook yet as well. The Owned `.claude/rules/script-edits.md`, whose `paths:`
