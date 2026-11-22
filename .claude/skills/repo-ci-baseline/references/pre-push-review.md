@@ -69,7 +69,8 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
 - A run's findings are staged, not held in the session. Each round's triage goes to `scripts/review.sh stage <run> <file>`: each finding is checked as `record` checks it (an
   `accepted` one is refused), and one staged again under the same id replaces the earlier. The file is owner-only and replaced whole. A second `stage` while another holds
   `findings.json.lock` is refused; a lock a killed `stage` left is taken over, as the ledger's is (below), and a `stage` that finds the file changed since it read it (two
-  sharing the lock in the takeover's rare race) refuses and says to run it again, so neither's findings are lost. `stage` refuses a run folder that is a symlink (a
+  sharing the lock in the takeover's rare race) refuses and says to run it again. That narrows a lost round to a `stage` writing in the instant between the check and
+  the rename, which nothing closes. `stage` refuses a run folder that is a symlink (a
   trailing slash doesn't hide one), another user's or writable by the group or others. `stage` and `record --staged` refuse a `findings.json` that is a link, not a
   regular file (a FIFO included), another user's or writable by the group or others. `record - --staged <run>` records `<run>/findings.json` with any findings in
   the JSON after them, so a long session that was compacted still records every round exactly (ids, lines, tests). The folder is the run's own `mktemp -d`; `record` is still the only writer of the ledger.
@@ -173,9 +174,13 @@ again, and settled differently, on the next (one weakness took six rounds). The 
   an id is `R` and a number with no leading zero, or `.security/` and four or more digits, and of a list (`R3, R5 again`) only the first is read. After an amend or a
   rebase the earlier review isn't one of HEAD's, so `R3 again` is matched by its text. A re-raise of a `fixed` entry gets a file of its own, since the weakness is back;
   it notes the entry it raises again (`- Raises again: NNNN`), and a later re-raise of the fixed one holds that new entry, so a chain gets one file, not one per review.
-  The summary is a reviewer's words, so an entry for another path is never held this way: the finding gets a file of its own. An opening that names no entry, an `R<n>`
-  no earlier review recorded, an entry for another path, and an `.entries` file that doesn't read or holds a pair that isn't a finding id and an entry number are each a
-  warning (`.security: ...`). Only the summary's opening counts, so one that mentions an entry or an id in passing (`Beyond .security/0017`) is matched by its text alone.
+  The chain is followed through fixed entries for the finding's own path only, and a note that names no such entry, or a cycle a hand edit made, ends it.
+  The summary is a reviewer's words, so an entry for another path is never held this way: the finding gets a file of its own, and `repeats` (which triage sets) is
+  the way to hold it in that entry. An opening that names no entry, an `R<n>` no earlier review recorded, an entry for another path, an opening with an id and
+  `again` in a form not read (`R3: again`, `R3 raised again`), and an `.entries` file that is there but doesn't read or parse as a map, or holds a pair that isn't a
+  finding id (`R<n>`) and an entry number (four or more digits), are each a warning (`.security: ...`); a missing `.entries` file (an older record) is said nothing of.
+  Where two earlier reviews map one id to different entries, the nearer review's wins. Only the summary's opening counts, so one that mentions an entry or an id in
+  passing (`Beyond .security/0017`) is matched by its text alone.
   An `open` entry recorded `fixed` later is updated in place (the file is replaced whole by a rename, as is one `accept` turns
   `accepted`, so no reader sees a truncated entry). Otherwise the match is exact on purpose: a wrongly merged
   entry would hide a real weakness, while a reworded repeat that names nothing only gets a second file.

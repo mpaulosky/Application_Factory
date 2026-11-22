@@ -29,6 +29,8 @@ import {
   ledgerDir,
   main,
   reRaisedEntry,
+  nearReRaise,
+  mergeEntryMaps,
   stageFindings,
   stagedOwnerProblem,
   stageTestHooks,
@@ -3551,6 +3553,9 @@ describe("main", () => {
         const result = cli(["prepare", fresh("delta"), "recorded"]);
 
         assert.doesNotMatch(result.err, /isn't a full object id/);
+        // It names no commit, so it is the newest review and isn't one of HEAD's: refused for that, not for its form.
+        assert.equal(result.code, 1);
+        assert.match(result.err, /which isn't one of HEAD's commits \(an amend or a rebase since\)/);
       });
     }
 
@@ -4067,8 +4072,6 @@ describe("OWNED_PATHS", () => {
   });
 });
 
-// The local, git-ignored record of security findings (.security/ in the main checkout). `record` writes it; two reviews read it
-// through `security`. The unit-level cases are in security-record.test.mts; these go through scripts/review.sh's own command.
 // Application_Factory#92: the opening a re-raised finding's summary is read by, at each edge of its pattern.
 describe("reRaisedEntry", () => {
   const earlier = { R1: "0001", R3: "0003", R30: "0030" };
@@ -4088,6 +4091,8 @@ describe("reRaisedEntry", () => {
     ["R1 **again**: bold word", { named: "R1", entry: "0001" }],
     ["R3, R1 again: a list reads its first", { named: "R3", entry: "0003" }],
     ["R3 and R1 again: so does this one", { named: "R3", entry: "0003" }],
+    ["R3 & R1 again: and this one", { named: "R3", entry: "0003" }],
+    ["R3, (R1) again: a bracketed second id", { named: "R3", entry: "0003" }],
     ["R9 again: no earlier review recorded it", { named: "R9" }],
     [".security/0021 again: x", { named: ".security/0021", entry: "0021" }],
     [".security/00012 again: five digits", { named: ".security/00012", entry: "00012" }],
@@ -4112,6 +4117,54 @@ describe("reRaisedEntry", () => {
   });
 });
 
+// An opening that reads as a re-raise but isn't one reRaisedEntry reads: the id it opens with, so the person hears it.
+describe("nearReRaise", () => {
+  for (const [summary, expected] of [
+    ["R3: again, worded anew", "R3"],
+    ["R3 raised again", "R3"],
+    ["R3 - again", "R3"],
+    ["[R3](#r3) again", "R3"],
+    ["<b>R3</b> again", "R3"],
+    ["R3again: invisible characters dropped", "R3"],
+    ["r3: AGAIN", "R3"],
+    [".SECURITY/0012: again", ".security/0012"],
+    ["R3 again: read by reRaisedEntry", undefined],
+    ["Beyond R3 again: not the opening", undefined],
+    ["R3: a weakness of its own", undefined],
+    [`R3: ${"x".repeat(40)} again, too far on`, undefined],
+    ["R0: again", undefined],
+  ] as [string, string | undefined][]) {
+    it(`reads ${JSON.stringify(summary)} as ${JSON.stringify(expected)}`, () => {
+      assert.equal(nearReRaise(summary), expected);
+    });
+  }
+});
+
+// Whatever order the reviews come in, the nearest's pair wins, then the later recorded of two as near.
+describe("mergeEntryMaps", () => {
+  const near = { distance: 1, recordedAt: "2026-01-02T00:00:00.000Z", entries: { R1: "0002" } };
+  const far = { distance: 3, recordedAt: "2026-01-03T00:00:00.000Z", entries: { R1: "0001", R2: "0005" } };
+  const sameLater = { distance: 1, recordedAt: "2026-01-04T00:00:00.000Z", entries: { R1: "0007" } };
+  for (const order of [
+    [near, far],
+    [far, near],
+  ]) {
+    it(`takes the nearer review's pair with the reviews in the order ${order.map((review) => review.distance).join(", ")}`, () => {
+      assert.deepEqual(mergeEntryMaps(order), { R1: "0002", R2: "0005" });
+    });
+  }
+  for (const order of [
+    [near, sameLater],
+    [sameLater, near],
+  ]) {
+    it(`takes the later recorded of two as near, with the reviews in the order ${order.map((review) => review.recordedAt.slice(8, 10)).join(", ")}`, () => {
+      assert.deepEqual(mergeEntryMaps(order), { R1: "0007" });
+    });
+  }
+});
+
+// The local, git-ignored record of security findings (.security/ in the main checkout). `record` writes it; two reviews read it
+// through `security`. The unit-level cases are in security-record.test.mts; these go through scripts/review.sh's own command.
 describe("the security record", () => {
   // The Template's .gitignore (dotfiles' own, in its copy of this test) carries the record's two lines.
   const templateIgnore = readFileSync(new URL("../../.gitignore", import.meta.url), "utf8");
@@ -4585,10 +4638,16 @@ describe("the security record", () => {
       ["null", false, /isn't a map of finding ids to entries/],
       ['"x"', false, /isn't a map of finding ids to entries/],
       ["{", false, /couldn't read .*\.entries/],
-      ['{"R1":5}', false, /names an entry that isn't an entry number/],
-      ['{"R1":"12"}', false, /names an entry that isn't an entry number/],
-      ['{"R1":"../x"}', false, /names an entry that isn't an entry number/],
-      ['{"R1":"0001","R7":5}', true, /names an entry that isn't an entry number/],
+      ['{"R1":5}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R1":"12"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R1":"123"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R1":"../x"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R1":"0001x"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R1":"x0001"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R1":"0001/../x"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"foo":"0001"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R1":"0001","R7":5}', true, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R1":"0001","foo":"0001"}', true, /holds a pair that isn't a finding id and an entry number/],
     ] as [string, boolean, RegExp][]) {
       it(`reads an earlier review's entry map of ${text} as ${kept ? "its one good pair" : "nothing"}, and says so`, () => {
         recordHere([weakness({ status: "open", test: null })]);
@@ -4604,6 +4663,46 @@ describe("the security record", () => {
         assert.match(again.err, said);
       });
     }
+
+    it("says nothing of an earlier review whose entry map is missing, an older record", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      for (const name of readdirSync(ledgerDir(repo)).filter((file) => file.endsWith(".entries"))) rmSync(join(ledgerDir(repo), name));
+      commit(repo, "other.cs", "again\n", "another change");
+
+      const again = recordHere([weakness({ id: "R2", summary: "R1 again: worded anew.", status: "open", test: null })]);
+
+      assert.equal(again.code, 0, again.err);
+      assert.doesNotMatch(again.err, /couldn't read|isn't a map|holds a pair/);
+    });
+
+    // Two earlier reviews that map one id to different entries: the nearer review's is followed.
+    it("follows an \"R<n> again\" to the entry the nearer of two earlier reviews names", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      commit(repo, "other.cs", "again\n", "another change");
+      recordHere([weakness({ id: "R2", summary: "A second weakness in the upload handler.", status: "open", test: null })]);
+      assert.equal(entries().length, 2);
+      const nearer = readLedger(repo, diffKey(repo, mergeBase(repo)));
+      assert.ok(nearer !== undefined);
+      writeFileSync(join(ledgerDir(repo), `${nearer.key}.entries`), '{"R1":"0002","R2":"0002"}');
+      commit(repo, "other.cs", "and again\n", "a third change");
+
+      const third = recordHere([weakness({ id: "R3", summary: "R1 again: worded anew.", status: "open", test: null })]);
+
+      assert.equal(third.code, 0, third.err);
+      assert.equal(entries().length, 2);
+      assert.match(third.err, /R3 repeats 0002/);
+    });
+
+    it("says when a summary opens with an id and \"again\" in a form it doesn't read, and matches it by its text", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      const again = recordHere([weakness({ id: "R2", summary: "R1: again, worded anew.", status: "open", test: null })]);
+
+      assert.equal(again.code, 0, again.err);
+      assert.equal(entries().length, 2);
+      assert.match(again.err, /R2 opens with R1 and says "again", but not as "R1 again: \.\.\.", so it is matched by its text/);
+    });
 
     it("doesn't follow an \"R<n> again\" into another branch's review", () => {
       const other = otherWorktree();

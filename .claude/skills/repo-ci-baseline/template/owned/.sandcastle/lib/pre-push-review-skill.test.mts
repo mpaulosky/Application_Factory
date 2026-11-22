@@ -145,7 +145,12 @@ describe("the pre-push-review skill's follow-up issue", () => {
     assert.ok(flat.includes("a new open Warning whose summary opens with the old id (`R3 again: ...`, or `.security/0012 again: ...` for one only the record holds)"));
     assert.ok(flat.includes("`record` follows only that opening to the entry"));
     assert.ok(flat.includes("Raise it under a new id, its summary opening with the old one (`R3 again: ...`)."));
-    assert.ok(flat.includes("whose summary doesn't open `R3 again` or `.security/0012 again`: one that does finds its entry by itself"));
+    assert.ok(flat.includes("A summary that opens `R3 again` or `.security/0012 again` finds its entry by itself"));
+    assert.ok(
+      flat.includes(
+        "So give `repeats` only when that opening can't find it: the finding's path differs from the entry's (a moved file), the branch was amended or rebased since that review, or the summary opens neither way.",
+      ),
+    );
     assert.doesNotMatch(flat, /Warning naming the old id/);
     assert.doesNotMatch(flat, /under a new id naming the old one/);
   });

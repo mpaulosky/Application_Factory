@@ -838,8 +838,9 @@ function writeEntryMap(cwd: string, key: string, entries: Record<string, string>
 }
 
 // The entry ids the findings of the ledger at `key` were recorded against (finding id to entry id); empty when unknown (an
-// older record, or none written). An id that isn't an entry number is left out. `warn` hears of a file that is there but
-// doesn't read or parse as such a map, or holds a pair that isn't one: a re-raise is then matched by its text alone.
+// older record, or none written: a missing file is said nothing of). A pair that isn't a finding id (`R<n>`) and an entry number
+// (four or more digits) is left out. `warn` hears of a file that is there but doesn't read or parse as such a map, or holds a
+// pair that isn't one: a re-raise is then matched by its text alone.
 function readEntryMapAll(cwd: string, key: string, warn?: (message: string) => void): Record<string, string> {
   const path = entriesPath(cwd, key);
   let entries: unknown;
@@ -854,8 +855,8 @@ function readEntryMapAll(cwd: string, key: string, warn?: (message: string) => v
     return {};
   }
   const pairs = Object.entries(entries);
-  const kept = pairs.filter((pair): pair is [string, string] => typeof pair[1] === "string" && /^\d{4,}$/.test(pair[1]));
-  if (kept.length < pairs.length) warn?.(`${path} names an entry that isn't an entry number for some findings, so those, raised again, are matched by their text`);
+  const kept = pairs.filter((pair): pair is [string, string] => /^R[1-9]\d*$/.test(pair[0]) && typeof pair[1] === "string" && /^\d{4,}$/.test(pair[1]));
+  if (kept.length < pairs.length) warn?.(`${path} holds a pair that isn't a finding id and an entry number, so those findings, raised again, are matched by their text`);
   return Object.fromEntries(kept);
 }
 
@@ -875,7 +876,7 @@ const RE_RAISE = new RegExp(
   "i",
 );
 
-// What a summary's opening says it raises again: `named`, the id it names as written ("R3", ".security/0012"), and `entry`, the
+// What a summary's opening says it raises again: `named`, the id it names, normalised ("R3", ".security/0012"), and `entry`, the
 // entry that is: the one R<n> was recorded against (`earlier`, finding id to entry id, from the branch's own earlier reviews),
 // or the number it names. `entry` is undefined for an R<n> no earlier review recorded against an entry. The whole result is
 // undefined when the summary opens neither way: then it is matched by its text, as before. Only the opening counts, so a summary
@@ -888,6 +889,18 @@ export function reRaisedEntry(summary: string, earlier: Readonly<Record<string, 
   const named = id.toUpperCase();
   const entry = earlier[named];
   return entry === undefined ? { named } : { named, entry };
+}
+
+// A summary that opens with an id and says "again" near it, but not in a form reRaisedEntry reads ("R3: again", "R3 raised
+// again", "[R3](link) again", "<b>R3</b> again", or "R3again" once invisible characters are dropped): the id it opens with, so
+// the person is told it was matched by its text; undefined for any other summary, and for one reRaisedEntry reads.
+const NEAR_RE_RAISE = new RegExp(String.raw`^(?:[\s*_\x60(\[]|<[a-z]+>)*(${RE_RAISE_ID})(?![0-9])`, "i");
+export function nearReRaise(summary: string): string | undefined {
+  if (RE_RAISE.test(summary)) return undefined;
+  const found = NEAR_RE_RAISE.exec(summary);
+  if (found?.[1] === undefined || !/again/i.test(summary.slice(0, 40))) return undefined;
+  const number = /^\.security\/(\d+)$/i.exec(found[1])?.[1];
+  return number === undefined ? found[1].toUpperCase() : `.security/${number}`;
 }
 
 // How long a lock that names no process stands (empty, or not "pid token"): its holder may be about to write its id.
@@ -1325,6 +1338,10 @@ export function recordReview(
     const earlier = security.length === 0 ? {} : entriesOf(cwd, base, head, (message) => warnings.push(message));
     const inputs: SecurityInput[] = security.map(({ id, lens, path, summary, status, test, reason, fix, policy, repeats }) => {
       const raised = reRaisedEntry(summary, earlier);
+      const near = raised === undefined ? nearReRaise(summary) : undefined;
+      if (near !== undefined) {
+        warnings.push(`${id} opens with ${near} and says "again", but not as "${near} again: ...", so it is matched by its text`);
+      }
       if (raised !== undefined && raised.entry === undefined) {
         warnings.push(`${id} says it raises ${raised.named} again, but no earlier review of this branch recorded ${raised.named} against an entry; matched by its text instead`);
       }
@@ -1352,12 +1369,18 @@ export function recordReview(
 // Which entry each finding of the branch's earlier reviews went to (finding id to entry id), so one raised again ("R3 again")
 // holds its entry rather than getting a second file. Only this branch's own reviews: an id names one finding along the branch
 // alone. The review at the same key, which the record replaces, counts too: its ids stay taken (takenIds), so the new review's
-// R<n> again names one of them. Nearer reviews are read last, so their pairs win.
+// R<n> again names one of them. Nearer reviews are read last, so their pairs win (mergeEntryMaps).
 export function earlierEntries(cwd: string, base: string, head: string, warn: (message: string) => void): Record<string, string> {
-  const earlier: Record<string, string> = {};
-  const reviews = branchLedgers(cwd, base, head).sort((a, b) => b.distance - a.distance || a.ledger.recordedAt.localeCompare(b.ledger.recordedAt));
-  for (const { ledger } of reviews) Object.assign(earlier, readEntryMapAll(cwd, ledger.key, warn));
-  return earlier;
+  return mergeEntryMaps(branchLedgers(cwd, base, head).map(({ ledger, distance }) => ({ distance, recordedAt: ledger.recordedAt, entries: readEntryMapAll(cwd, ledger.key, warn) })));
+}
+
+// Reviews' entry maps merged into one, whatever order they come in (readdir's): the nearest review to HEAD (fewest commits back),
+// and of two as near the one recorded later, is merged last, so where two map one finding id to different entries its pair wins.
+export function mergeEntryMaps(reviews: readonly { distance: number; recordedAt: string; entries: Readonly<Record<string, string>> }[]): Record<string, string> {
+  const merged: Record<string, string> = {};
+  const ordered = [...reviews].sort((a, b) => b.distance - a.distance || a.recordedAt.localeCompare(b.recordedAt));
+  for (const { entries } of ordered) Object.assign(merged, entries);
+  return merged;
 }
 
 // Accept an open finding on the ledger for HEAD's diff, with the person's
@@ -1957,8 +1980,9 @@ export function stageFindings(given: string, findings: unknown, close: (handle: 
       const ids = new Set(parsed.map((finding) => finding.id));
       const merged = [...kept.filter((finding) => !ids.has(finding.id)), ...parsed];
       stageTestHooks.beforeReplace?.();
-      // The lock's takeover is best-effort (withLock), so a second stage may share it in a rare race: what this one merged into
-      // must still be the file, or the other's findings would be lost. Then it refuses, and running it again merges both.
+      // The lock's takeover is best-effort (withLock), so a second stage may share it in a rare race. A file that changed since
+      // this one read it is refused, and running it again merges both; that narrows a lost round to a stage that writes in the
+      // instant between this check and the rename, which nothing here can close.
       if (current() !== read) throw new Error(`another stage changed ${file} while this one was merging into it; run stage again.`);
       replaceFile(file, `${JSON.stringify(merged, null, 2)}\n`);
       return { added: parsed.length, total: merged.length };

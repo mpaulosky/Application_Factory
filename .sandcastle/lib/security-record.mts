@@ -328,20 +328,22 @@ function reRaiseHolder(
 ): { holder?: SecurityEntry; raisesAgain?: string } {
   // An entry's Path line is the finding's path through plainText.
   const path = plainText(finding.path).trim();
-  let named = known.find((entry) => holdsWeakness(entry) && Number(entry.id) === Number(finding.reRaised));
-  if (named === undefined) {
+  const first = known.find((entry) => holdsWeakness(entry) && Number(entry.id) === Number(finding.reRaised));
+  if (first === undefined) {
     warn(`${finding.id} says it raises .security/${finding.reRaised} again, but no entry has that number; recorded by its text instead`);
     return {};
   }
-  if (named.findingPath !== path) {
-    warn(`${finding.id} says it raises ${named.id} again, but ${named.id} is for another path; recorded as a new entry`);
+  if (first.findingPath !== path) {
+    warn(`${finding.id} says it raises ${first.id} again, but ${first.id} is for another path; recorded as a new entry`);
     return {};
   }
+  // Follow the fixed entries' re-raises: `seen` ends a cycle a hand edit made, and only an entry for the same path is followed.
+  let named: SecurityEntry = first;
   const seen = new Set<string>();
   while (named.status === "fixed") {
     seen.add(named.id);
-    const from = named;
-    const next = known.find(
+    const from: SecurityEntry = named;
+    const next: SecurityEntry | undefined = known.find(
       (entry) => holdsWeakness(entry) && entry.findingPath === path && entry.raisesAgain !== undefined && Number(entry.raisesAgain) === Number(from.id) && !seen.has(entry.id),
     );
     if (next === undefined) return { raisesAgain: named.id };
@@ -421,7 +423,8 @@ export function recordSecurity(
           path: made.path,
           status: finding.status,
           lens: finding.lens,
-          findingPath: finding.path,
+          // As entriesIn reads it back (the Path line is the path through plainText), so a later re-raise in this record matches it.
+          findingPath: plainText(finding.path).trim(),
           fingerprint: print,
           ...(raisesAgain === undefined ? {} : { raisesAgain }),
         });
