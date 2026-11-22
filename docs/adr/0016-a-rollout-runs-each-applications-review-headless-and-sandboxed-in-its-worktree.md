@@ -12,14 +12,16 @@ repo could stop at the review again. A missing tool, such as the .NET SDK the Te
 `rollout.sh --auto` (`github/auto_rollout.py`) drives a round to the end. Before anything runs it checks the tools the gates, `reapply.sh` and the review need (that it runs on Linux,
 bubblewrap and socat for the sandbox among them, and that bubblewrap can make one there), a `claude` that runs and is signed in with no settings file read, as the session runs (a
 cloud's sign-in, which `claude auth status` doesn't report, isn't asked), an shfmt the gate's gh check accepts, ruff 0.17 or uv for
-the gate's Python lint, `gh`'s sign-in and the SDK the Template's `global.json` names, and takes a lock so a second `--auto` run can't work the same worktrees (a person running
+the gate's Python lint, `gh`'s sign-in and the SDK the Template's `global.json` names, that no sign-in secret is in the environment the session would inherit and that no
+endpoint, cloud or proxy variable holds a URL with a sign-in (both below), and takes a lock so a second `--auto` run can't work the same worktrees (a person running
 `reapply.sh` or the review by hand there meanwhile isn't kept out). Every child the round starts holds the lock too, so a session or gate still running after `rollout.sh` is killed
 keeps the next run out; each child's process group is killed when it exits, and the gate's build is told to leave no build server running, so nothing a child leaves keeps the lock
 after the round.
 When the gate refuses the push for want of a review, `reapply.sh` exits 3 (and 4 when one is recorded but findings in it wait for a person).
 Only a push whose gate stopped at its Local review step is asked about, and then the worktree's own
 `scripts/review.sh check` says how it refuses: the refusal is never read from the push's log. Every other failure exits 1. On a 3 the Rollout runs the pre-push review headless
-(`claude -p` started in the repo's re-Apply worktree), then `reapply.sh` again to push and open the PR, and lands TicketManager's PR with `land.sh` before it starts the rest. It reads
+(`claude -p` started in the repo's re-Apply worktree), then `reapply.sh` again to push and open the PR, and lands TicketManager's PR with `land.sh` before it starts the rest;
+when `reapply.sh` finds TicketManager already matching the Template, with nothing to push and no PR to land, the rest start at once. It reads
 only the repo's own PRs (not a fork's of the same name), the one at the worktree's head when the branch has commits main lacks, since every round shares the branch's name; an OPEN PR
 at another head is never this round's, and with nothing ahead a CLOSED one there is the last round's, so there is nothing to land. After `land.sh` it reads the PR by its number. It
 stops only where a person must decide, and prints the command that decides it and the one that resumes.
@@ -63,8 +65,8 @@ enforces (bubblewrap, so Linux only) on every Bash command and everything it sta
   itself (a `.claude` folder) can make one, and the round names what it finds made once the session ends, before the record, as a warning guarded so that it
   can't stop the record. A folder on the way it can't list, or an entry to deny whose path holds a glob character or isn't UTF-8, which
   the sandbox may not match as written, stops the round before the session. Its own folder is in `~/.cache/repo-ci-baseline-sessions`, not `/tmp`, so `/tmp` is
-  denied whole and the list stays short (what a killed run left there is removed by the next); settings over 100,000 bytes, one argument's room, stop the round too,
-  naming the crowded folder. The clone's git folder is read whole, since git needs it: its other branches, stash and reflog with it, so the round refuses a clone whose
+  denied whole and the list stays short (what a killed run left there is removed by the next).
+  The clone's git folder is read whole, since git needs it: its other branches, stash and reflog with it, so the round refuses a clone whose
   git folder holds a sign-in secret. Every git config file there is read, include files followed: the clone's `config`, each worktree's `config.worktree`, and
   the same of each submodule's git folder, the main checkout's under `modules` and a linked worktree's under `worktrees/<name>/modules`. A secret is a key
   or value holding a URL with a sign-in (a remote, `insteadOf`, a proxy, a submodule), a value holding a known token's shape (GitHub's, GitLab's, Slack's, an
@@ -81,7 +83,8 @@ enforces (bubblewrap, so Linux only) on every Bash command and everything it sta
   Only the built-in tools the review needs exist in the session (`--tools`).
 - **Nothing of the repository's own or the person's applies to it.** It loads no settings file of the repository's or the person's (`--setting-sources ""`). Its settings are a
   0600 file beside the round's log, in a folder of the person's own that the session can neither read nor write, so it can't rewrite them; they were on the command line until a
-  review found that any local user reads that in `/proc/<pid>/cmdline`, every path the sandbox denies with it. The file is removed once the session ends.
+  review found that any local user reads that in `/proc/<pid>/cmdline`, every path the sandbox denies with it. The file is removed once the session ends, and one a killed
+  run left is removed by the next; a file already at its path stops the session and is left as it is.
   It loads no MCP server, and takes the skill's text and its reviewer agent from the Template, not the worktree: neither the repository's nor the person's
   hooks, permission rules, plugins or settings run or widen it.
 - **No secret in its environment.** It has no GitHub sign-in (`gh` points at an empty config), names that look like secrets are dropped, and so is any value holding a URL with a sign-in
@@ -90,7 +93,7 @@ enforces (bubblewrap, so Linux only) on every Bash command and everything it sta
   signs in from its credentials file or a cloud's profile files, which the sandbox keeps from the shell: the preflight refuses a round with a sign-in secret in the environment
   (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, a cloud's key), since the session's shell would inherit it. It refuses one too when a variable the session's own claude
   needs (its endpoint, the cloud in use's, a proxy) holds a URL with a sign-in, naming it and never its value: the session would otherwise start without it and fail with
-  nothing saying why.
+  nothing saying why. A proxy written with no scheme, as curl and git take one (`user:pass@proxy:3128`), counts as holding one too.
 - **Layers behind the sandbox.** git's push to GitHub is sent nowhere, and deny rules name the commands that must never run. The prompt names the Owned files the branch changes,
   says it runs unattended and review-only, and says a finding in an Owned file is fixed in the Template first.
 - **Checks after it.** A session after which the worktree's `.git` link changed, or the clone's git `config`, a `config.worktree`, `hooks` or `info` (in either case no git

@@ -206,6 +206,13 @@ def test_dry_run_runs_nothing_and_shows_the_plan_from_the_open_pr():
     assert "waiting for TicketManager#129 to merge" in out
 
 
+def test_a_dry_runs_commands_quote_the_checkout_so_they_run_as_printed():
+    code, out, _ = run(["--brings", "#82", "--root", "/my repos", "--dry-run"], Fake())
+    assert code == 0
+    assert "would run: reapply.sh --brings '#82' '/my repos/TicketManager'\n" in out
+    assert "/my repos/TicketManager\n" not in out.replace("'/my repos/TicketManager'\n", "")
+
+
 def test_dry_run_with_ticketmanager_landed_shows_every_repo():
     fake = Fake()
     code, out, _ = run(["--brings", "#82", "--root", "/r", "--dry-run"], fake)

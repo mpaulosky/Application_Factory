@@ -104,7 +104,7 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
      and the Template's `global.json` SDK first (`--dry-run` stops there and prints the plan). It refuses to start with `claude` signed out (as it is with no settings file
      read; a cloud's sign-in, which `claude auth status` doesn't report, isn't asked), or with a Claude Code or cloud sign-in secret in the environment
      (`ANTHROPIC_API_KEY`, say): sign Claude Code in with `claude /login` instead. It refuses too when its endpoint, cloud or proxy variable (`ANTHROPIC_BASE_URL`,
-     `HTTPS_PROXY`) holds a URL with a sign-in, which the session is never given: set one with no sign-in in it for the round.
+     `HTTPS_PROXY`, written with a scheme or without one) holds a URL with a sign-in, which the session is never given: set one with no sign-in in it for the round.
      When the gate asks for a review it runs the pre-push review headless in the repo's re-Apply worktree, review-only: one round that stages each finding open, or dismissed when
      it isn't a security one, and edits, fixes and commits nothing. It runs in Claude Code's sandbox: its shell reads none of your credentials, and of the rest of the disk only the worktree, the
      clone's git folder, `.security`, its own folder, the system's folders and node's and git's own files, as listed when it starts (what appears later is named once
@@ -118,7 +118,8 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
      (any file's bytes, mode or link, an ignored one such as `node_modules` included), a changed git config or hook in the clone, a ledger or `.security` file changed,
      or a finding staged fixed or accepted, and when it staged nothing at all.
      Then it reapplies: a Critical or Warning finding stops the round for you to fix or accept. An open Advisory finding doesn't: the round prints the ones the review left
-     open (`scripts/review.sh advisory`) before the push and files no issue, so file the follow-up yourself. It lands TicketManager's PR before the rest start, and the rest's PRs together.
+     open (`scripts/review.sh advisory`) before the push and files no issue, so file the follow-up yourself. It lands TicketManager's PR before the rest start
+     (at once when TicketManager already matches the Template, with nothing to push), and the rest's PRs together.
      Its lock keeps a second `--auto` run out, not a person: don't run `reapply.sh` or the review by hand in a re-Apply worktree while it runs. It stops only where a person decides
      (findings that wait for one, a PR that doesn't land or can't be read, a failed reapply or review session), printing the command that decides it and the one that resumes.
      Fix a finding in an Owned file Template first, then add that PR to `--brings` and resume. `github/auto_rollout.py`'s header has the details.

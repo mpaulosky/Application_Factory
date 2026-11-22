@@ -8,8 +8,9 @@
    with no settings file; a cloud's sign-in isn't asked), a system other than
    Linux, a sandbox bubblewrap can't make, gh signed out, and the .NET SDK the Template's global.json
    names (an Owned file, so Apply writes it into every re-Apply worktree and the
-   gate builds with it), and a sign-in secret in the environment the review
-   session would inherit. One problem stops the round before anything runs. A
+   gate builds with it), a sign-in secret in the environment the review
+   session would inherit, and an endpoint, cloud or proxy variable holding a
+   URL with a sign-in, which the session would run without. One problem stops the round before anything runs. A
    second --auto run while the lock is held stops too, since both would work
    the same worktrees and review ledgers; every child the round starts holds
    the lock as well, so one a SIGKILL of rollout.sh leaves running keeps it,
@@ -23,8 +24,10 @@
    pre-push-reviewer agent from the Template, so the skill runs that
    worktree's scripts/review.sh and ledger. Then reapply.sh again, with at most
    MAX_REVIEWS sessions per repo, each one at most REVIEW_TIMEOUT_MINUTES long.
-3. It lands TicketManager's re-Apply PR with land.sh before it starts the rest,
-   and the rest's PRs together once each has been reapplied.
+3. It lands TicketManager's re-Apply PR with land.sh before it starts the rest
+   (at once when reapply.sh finds TicketManager already matching the Template,
+   with nothing to push and no PR), and the rest's PRs together once each has
+   been reapplied.
 
 The session runs unattended, reading text people without write access may have
 written, so it reviews only, and runs in Claude Code's sandbox (session_settings;
@@ -50,7 +53,8 @@ worktree, the .security record and that folder, and edit only that folder
 (dontAsk: anything not allowed is refused). It loads no settings file (neither
 the repository's nor the person's), no MCP server and only SESSION_BUILTINS,
 gets its settings from a 0600 file beside its log, which it can neither read
-nor write (never on its command line, which any local user can read in
+nor write (removed after it, and one a killed run left by the next: sweep_settings;
+never on its command line, which any local user can read in
 /proc/<pid>/cmdline), and the skill and its reviewer
 agent from the Template, so no hook, permission rule or plugin but these
 applies. Its environment has no sign-in secret (gh points at an empty config;
@@ -59,8 +63,8 @@ with a sign-in (has_sign_in: a password, or any user over http(s) or ftp(s),
 which may be a token), and of Claude Code's own only
 CLAUDE_KEPT is kept, while the preflight refuses a round with a Claude Code or
 cloud sign-in secret set, since the session would inherit it, or with its
-endpoint, cloud or proxy variable holding a URL with a sign-in, which it would
-run without) and git's push is
+endpoint, cloud or proxy variable holding a URL with a sign-in (a proxy's
+with no scheme too: holds_sign_in), which it would run without) and git's push is
 sent nowhere: layers behind the sandbox. After the session the round checks what
 it still could do: a session after which the worktree's .git link changed, the
 remote branch moved (or can't be read), the clone's git config or hooks
@@ -133,13 +137,16 @@ import time
 import traceback
 from dataclasses import dataclass
 
+# The skill's folder, the Factory's checkout, and the scripts and Template files of the skill the round runs.
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 FACTORY = os.path.dirname(os.path.dirname(os.path.dirname(SKILL_DIR)))
 LAND = os.path.join(SKILL_DIR, "land.sh")
 REAPPLY = os.path.join(SKILL_DIR, "reapply.sh")
 OWNED = os.path.join(SKILL_DIR, "template", "owned")
 TEMPLATE_GLOBAL_JSON = os.path.join(OWNED, "global.json")
+# The lock that lets one round run at a time.
 LOCK = os.path.expanduser("~/.cache/repo-ci-baseline/rollout-auto.lock")
+# The 0700 folder of each review session's log, and of its settings file beside it (settings_path).
 LOG_DIR = os.path.expanduser("~/.cache/repo-ci-baseline/logs")
 # Where each review session's own temporary folder is made: in home, not /tmp, so the sandbox denies /tmp whole
 # (denied_around would otherwise list every entry of it), and beside the cache folder, not in it, since the session
@@ -158,6 +165,7 @@ SESSION_STARTS = "rollout.sh: the review session starts\n"
 WORKTREE_GONE = "the re-Apply worktree is gone: "
 # How long a killed session's process group may take to be gone before the log says it didn't.
 GROUP_WAIT_SECONDS = 10
+# reapply.sh's branch and its worktree's folder (a test holds them equal).
 BRANCH = "chore/reapply-baseline"
 WORKTREE = "chore-reapply-baseline"
 # reapply.sh's exit codes for a push its gate's local review check refused (a test holds them equal).
@@ -307,6 +315,9 @@ SIGN_IN_SECRET = re.compile(
     r"TOKEN|SECRET|PASSW|API_?KEY|ACCESS_KEY|AUTH(?!OR)|CREDENTIAL|_KEY$|COOKIE|BEARER|CERT|PRIVATE|KEY_?FILE", re.I)
 # The proxy variables the session's own claude reaches its endpoint through (curl's and Node's names, either case).
 PROXY_NAME = re.compile(r"^(HTTPS?|ALL|FTP)_PROXY$", re.I)
+# A proxy written with no scheme, as curl and git take one, whose host has a sign-in before it (user:pass@proxy:3128).
+BARE_USERINFO = re.compile(r"^\s*[^/@\s:]+(:[^/@\s]*)?@[^/@\s]")
+# Each cloud flag Claude Code reads, and the prefix of the variables that cloud signs in with.
 CLOUD_SIGN_IN = {"CLAUDE_CODE_USE_BEDROCK": "AWS_", "CLAUDE_CODE_USE_VERTEX": "GOOGLE_", "CLAUDE_CODE_USE_FOUNDRY": "AZURE_"}
 # The values of a CLAUDE_CODE_USE_* flag that turn its cloud on; any other (0, false, empty) leaves it off.
 FLAG_ON = ("1", "true", "yes", "on")
@@ -457,14 +468,22 @@ def sign_in_problems(environ):
     clouds = kept_clouds(environ)
     found = sorted(name for name, value in environ.items() if value and (
         name in CLAUDE_SECRETS or (clouds and name.startswith(clouds) and SIGN_IN_SECRET.search(name))))
-    needed = sorted(name for name, value in environ.items() if name not in found and has_sign_in(value) and (
+    needed = sorted(name for name, value in environ.items() if name not in found and holds_sign_in(name, value) and (
         name in CLAUDE_KEPT or PROXY_NAME.match(name) or (clouds and name.startswith(clouds))))
-    return [*(f"{name} is set, and the review session's shell would see it: unset it for the round, and sign Claude Code"
+    return [*(f"{name} is set, and the review session's shell would see it: unset it for the round (env -u {name}"
+              " before the command), and sign Claude Code"
               " in with its own credentials file (claude /login) or the cloud's profile files, which the sandbox keeps"
               " from the shell" for name in found),
             *(f"{name} holds a URL with a sign-in, which the review session is never given (its shell would see it),"
               " so its claude would run without it: for the round, set it to a URL with no sign-in in it (one that"
-              " takes it from a file of its own), or unset it" for name in needed)]
+              f" takes it from a file of its own), or unset it (env -u {name} before the command, for one round)"
+              for name in needed)]
+
+
+def holds_sign_in(name, value):
+    """Whether the variable name=value holds a URL with a sign-in (has_sign_in), or is a proxy (PROXY_NAME) written with
+    no scheme whose host has one before it (BARE_USERINFO), as curl and git read it."""
+    return has_sign_in(value) or bool(PROXY_NAME.match(name) and BARE_USERINFO.match(value))
 
 
 def claude_sign_in_problems(run, environ):
@@ -820,7 +839,8 @@ def read_inputs(worktree, common, tmp, home=None, config_dir=None, environ=None)
 
 def session_settings(worktree, common, gitdir, tmp, home=None, config_dir=None, environ=None, listdir=os.listdir,
                      which=shutil.which, tools=None):
-    """The session's settings (--settings, passed as JSON so no file of them exists for it to change): dontAsk
+    """The session's settings, which write_settings puts in a 0600 file beside its log that --settings names (never
+    its command line, which any local user can read): dontAsk
     permissions that allow only SESSION_TOOLS, reads of the worktree, the main checkout's .security and tmp, and edits
     in tmp alone, and deny the credentials, the Factory, ~/.claude and every edit in the worktree; and a sandbox for its
     Bash that can't be turned off, refuses to start without its sandbox (bubblewrap), reads nothing of / but
@@ -984,6 +1004,18 @@ def sweep_sessions(session_dir):
             shutil.rmtree(path, ignore_errors=True)
 
 
+def sweep_settings(log_dir):
+    """Remove the settings files killed runs left beside their logs in log_dir: review-*.settings.json entries of the
+    user's own (a symlink is removed, never where it leads). The lock lets one run at a time, so none is in use."""
+    for name in os.listdir(log_dir):
+        path = os.path.join(log_dir, name)
+        try:
+            if name.startswith("review-") and name.endswith(".settings.json") and os.lstat(path).st_uid == os.getuid():
+                os.remove(path)
+        except OSError:
+            continue
+
+
 def own_log_dir(log_dir):
     """Make the log folder, or check the one there: a real folder of the user's own, which is then set to 0700. Raises
     OSError naming what is wrong (a symlink, another owner's folder), since makedirs leaves an existing folder as it is."""
@@ -1007,7 +1039,7 @@ def session_env(base, tmp, first=()):
     clouds = kept_clouds(base)
 
     def kept(name, value):
-        if name == "GATE_SKIP_REVIEW" or has_sign_in(value):
+        if name == "GATE_SKIP_REVIEW" or holds_sign_in(name, value):
             return False  # a URL with a sign-in in it (a password, or a user that may be a token), whatever its name
         if CLAUDE_SIGN_IN.match(name):
             return name in CLAUDE_KEPT
@@ -1720,6 +1752,7 @@ def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, ti
     the clone's git folder meanwhile are named (after_session)."""
     try:
         own_log_dir(log_dir)
+        sweep_settings(log_dir)
         handle, log = tempfile.mkstemp(prefix=f"review-{short_name(repo)}.", suffix=".log", dir=log_dir)
     except OSError as error:
         return 127, f"(no log: {error})", []
@@ -1733,12 +1766,14 @@ def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, ti
                       f" yours, not a symlink; remove or fix it, or run /pre-push-review in {worktree}), then resume\n")
             return 127, log, []
         with folder as tmp:
+            there = os.path.lexists(settings_path(log))  # not the round's own: write_settings refuses it, and it stays
             try:
                 return review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock, guard, check,
                                  skill, agents, record, listdir, which, secrets)
             finally:
-                with contextlib.suppress(OSError):  # left in the person's own folder at worst, and the next run's is new
-                    os.remove(settings_path(log))
+                if not there:
+                    with contextlib.suppress(OSError):  # a killed run's is removed by the next (sweep_settings)
+                        os.remove(settings_path(log))
 
 
 def review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock, guard, check, skill, agents, record,
@@ -1767,7 +1802,13 @@ def review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock
         tools = tool_reads(home, which)
         settings = session_settings(worktree, before.common, before.gitdir, tmp, listdir=listdir, which=which,
                                     tools=tools)
-        command = review_command(repo, worktree, owned, write_settings(settings, log), agents(), skill(), run)
+        try:
+            written = write_settings(settings, log)
+        except OSError as error:
+            return stop(f"can't write the session's settings file: {error} (its folder, {os.path.dirname(log)}, must be"
+                        " writable with room in it, and a file or link left at that path removed), or run"
+                        f" /pre-push-review in {worktree}, then resume")
+        command = review_command(repo, worktree, owned, written, agents(), skill(), run)
         env = session_env(os.environ, tmp, tools[1])
     except GuardUnreadable as error:
         return stop(str(error))
@@ -1801,7 +1842,7 @@ def review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock
                     survived = True
                     out.write(f"\nrollout.sh: the session's process group was still there {GROUP_WAIT_SECONDS} s after"
                               " it was killed\n")
-        if got:
+        if got and code != 0:  # a session that exited 0 by itself goes on, so what it staged is kept below
             raise passed_on(got[0])
         if not started:
             return 127, log, []
@@ -2231,24 +2272,26 @@ def auto_round(order, brings, resume, checkout, reapply, review, land, pr_of, pr
             return held(f"{short_name(first)}: {lead.detail}")
         found = find(first)
         if found is None:
-            return held(f"{short_name(first)}: no merged re-Apply PR found, and nothing to push")
-        number, state = found
-        if state == "OPEN":
-            say(f"── rollout: landing {short_name(first)}#{number}")
-            try:
-                landed = land([f"{first}#{number}"])
-            except GroupLeft as error:
-                return held(f"{short_name(first)}#{number}: {error}; then land it with land.sh {first}#{number}")
-            except OSError as error:  # land.sh couldn't start: the stop names land.sh, not the reapply.sh a crash would
-                return held(f"{short_name(first)}#{number}: land.sh failed: {type(error).__name__}: {error}; land it with"
-                            f" land.sh {first}#{number}")
-            except Exception as error:  # noqa: BLE001 - a bug while landing: its traceback, and land.sh to run
-                return held(crashed(first, error, f"land.sh {first}#{number}"))
-            if landed != 0:
-                return held(f"{short_name(first)}#{number} didn't land (see land.sh's output above): land.sh {first}#{number}")
-            state = settle(first, number)
-        if state != "MERGED":
-            return held(not_merged(first, number, state))
+            # Nothing pushed and no PR to land: reapply.sh found it already matches the Template, so the rest go on.
+            say(f"── rollout: {short_name(first)} already matches the Template: nothing to land, so the rest go on")
+        else:
+            number, state = found
+            if state == "OPEN":
+                say(f"── rollout: landing {short_name(first)}#{number}")
+                try:
+                    landed = land([f"{first}#{number}"])
+                except GroupLeft as error:
+                    return held(f"{short_name(first)}#{number}: {error}; then land it with land.sh {first}#{number}")
+                except OSError as error:  # land.sh couldn't start: the stop names land.sh, not the reapply.sh a crash would
+                    return held(f"{short_name(first)}#{number}: land.sh failed: {type(error).__name__}: {error}; land it with"
+                                f" land.sh {first}#{number}")
+                except Exception as error:  # noqa: BLE001 - a bug while landing: its traceback, and land.sh to run
+                    return held(crashed(first, error, f"land.sh {first}#{number}"))
+                if landed != 0:
+                    return held(f"{short_name(first)}#{number} didn't land (see land.sh's output above): land.sh {first}#{number}")
+                state = settle(first, number)
+            if state != "MERGED":
+                return held(not_merged(first, number, state))
     except PrUnknown as error:
         return held(f"{short_name(first)}: can't tell its re-Apply PR ({error}): land it with land.sh {first}")
     except GroupLeft as error:
@@ -2325,7 +2368,7 @@ def run(order, brings, root, checkout, dry_run, reapply, say, err, default_root,
     for problem in problems:
         err.write(f"rollout.sh: {problem}\n")
     if problems:
-        err.write("rollout.sh: nothing run; fix those first\n")
+        err.write(f"rollout.sh: nothing run; fix those first, then run: {resume}\n")
         return 1
     if dry_run:
         say("tools: all there")
@@ -2337,12 +2380,12 @@ def run(order, brings, root, checkout, dry_run, reapply, say, err, default_root,
     try:
         handle = lock()
     except OSError as error:
-        err.write(f"rollout.sh: can't take the lock {LOCK}: {error}; nothing run\n")
+        err.write(f"rollout.sh: can't take the lock {LOCK}: {error}; nothing run. Once it can be taken, run: {resume}\n")
         return 1
     if handle is None:
         err.write(f"rollout.sh: another rollout.sh --auto holds {LOCK}, or a review session or gate an earlier one"
                   f" started is still running; nothing run. See what holds it with: fuser -v {shlex.quote(LOCK)} (or lsof"
-                  f" {shlex.quote(LOCK)}), and end it only when no round is running\n")
+                  f" {shlex.quote(LOCK)}), and end it only when no round is running; then run: {resume}\n")
         return 1
     try:
         LOCK_FDS[:] = [handle.fileno()]

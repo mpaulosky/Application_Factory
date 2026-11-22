@@ -160,8 +160,10 @@ def fake_preflight(on_path=ALL_TOOLS, answers=None, global_json='{"sdk": {"versi
     return problems, calls
 
 
-SIGN_IN = ("is set, and the review session's shell would see it: unset it for the round, and sign Claude Code in with its"
-           " own credentials file (claude /login) or the cloud's profile files, which the sandbox keeps from the shell")
+def signed_in(name):
+    return (f"{name} is set, and the review session's shell would see it: unset it for the round (env -u {name} before"
+            " the command), and sign Claude Code in with its own credentials file (claude /login) or the cloud's profile"
+            " files, which the sandbox keeps from the shell")
 
 
 @pytest.mark.parametrize("environ, refused", [
@@ -180,12 +182,13 @@ SIGN_IN = ("is set, and the review session's shell would see it: unset it for th
 def test_preflight_refuses_a_sign_in_secret_the_session_would_inherit(environ, refused):
     # Not a sign-in the session needs in its environment: the messaging token is the caller's, dropped by session_env.
     problems, _ = fake_preflight(environ={"PATH": "/bin", **environ})
-    assert problems == [f"{name} {SIGN_IN}" for name in refused]
+    assert problems == [signed_in(name) for name in refused]
 
 
-URL_SIGN_IN = ("holds a URL with a sign-in, which the review session is never given (its shell would see it), so its"
-               " claude would run without it: for the round, set it to a URL with no sign-in in it (one that takes it"
-               " from a file of its own), or unset it")
+def url_sign_in(name):
+    return (f"{name} holds a URL with a sign-in, which the review session is never given (its shell would see it), so"
+            " its claude would run without it: for the round, set it to a URL with no sign-in in it (one that takes it"
+            f" from a file of its own), or unset it (env -u {name} before the command, for one round)")
 
 
 @pytest.mark.parametrize("environ, refused", [
@@ -197,19 +200,26 @@ URL_SIGN_IN = ("holds a URL with a sign-in, which the review session is never gi
     ({"GOOGLE_CLOUD_ENDPOINT": "https://u:p@vertex.example/"}, []),
     ({"ANTHROPIC_BASE_URL": "https://gateway.example/", "HTTPS_PROXY": "http://proxy:3128",
       "NO_PROXY": "https://u:p@x/", "MIRROR": "https://u:p@mirror.example/"}, []),
+    # A proxy with no scheme, as curl and git take one: its sign-in is still found.
+    ({"HTTPS_PROXY": "u:pw@proxy:3128", "http_proxy": "tok@proxy:3128", "all_proxy": " u:p@s:1"},
+     ["HTTPS_PROXY", "all_proxy", "http_proxy"]),
+    ({"HTTPS_PROXY": "proxy:3128", "HTTP_PROXY": "proxy.corp/a@b", "NO_PROXY": "u:p@x", "MIRROR": "u:p@mirror:1"}, []),
 ])
 def test_preflight_refuses_an_endpoint_or_proxy_whose_url_holds_a_sign_in(environ, refused, tmp_path):
     # session_env would leave each out, so the session's claude would run without its endpoint or proxy.
     problems, _ = fake_preflight(environ={"PATH": "/bin", **environ})
-    assert problems == [f"{name} {URL_SIGN_IN}" for name in refused]
+    assert problems == [url_sign_in(name) for name in refused]
     assert not any(value in "\n".join(problems) for value in environ.values() if "@" in value), "never the value"
-    assert not set(refused) & set(auto.session_env({"PATH": "/bin", **environ}, str(tmp_path)))
+    env = auto.session_env({"PATH": "/bin", **environ}, str(tmp_path))
+    assert not set(refused) & set(env)
+    # A value with no scheme is a sign-in only in a proxy variable: MIRROR=u:p@mirror:1 is no URL, and is kept.
+    assert {name for name, value in environ.items() if name not in refused and "://" not in value} <= set(env)
 
 
 def test_a_sign_in_secret_named_and_holding_a_url_is_refused_once():
     problems, _ = fake_preflight(environ={"PATH": "/bin", "CLAUDE_CODE_USE_BEDROCK": "1",
                                           "AWS_ENDPOINT_TOKEN": "https://u:p@x/"})
-    assert problems == [f"AWS_ENDPOINT_TOKEN {SIGN_IN}"]
+    assert problems == [signed_in("AWS_ENDPOINT_TOKEN")]
 
 
 @pytest.mark.parametrize("name, secret", [
@@ -224,7 +234,7 @@ def test_a_sign_in_secret_named_and_holding_a_url_is_refused_once():
 def test_a_cloud_secret_is_refused_and_dropped_and_the_rest_kept(name, secret, tmp_path):
     environ = {"PATH": "/bin", "CLAUDE_CODE_USE_BEDROCK": "1", name: "v"}
     problems, _ = fake_preflight(environ=environ)
-    assert problems == ([f"{name} {SIGN_IN}"] if secret else [])
+    assert problems == ([signed_in(name)] if secret else [])
     assert (name in auto.session_env(environ, str(tmp_path))) is (not secret)
 
 
@@ -1275,12 +1285,12 @@ def root_of(path):
     return os.path.realpath(path).split("/")[1]
 
 
-def test_settings_too_large_for_one_argument_still_reach_the_session(tmp_path, monkeypatch):
+def test_large_settings_reach_the_session_whole_through_their_file(tmp_path, monkeypatch):
     names = [f"an-entry-of-the-persons-own-{n:05}" for n in range(5000)]
     code, log, seen, _ = review_once(tmp_path, monkeypatch, listing={
         "listdir": lambda folder: [*names, root_of(tmp_path)] if folder == "/" else []})
     assert code == 0, Path(log).read_text()
-    assert len(json.dumps(seen["settings"])) > 128 * 1024, "more than one argument of claude's could carry"
+    assert len(json.dumps(seen["settings"])) > 128 * 1024, "no command-line argument could carry them"
     assert f"/{names[-1]}" in seen["settings"]["sandbox"]["filesystem"]["denyRead"]
 
 
@@ -2151,7 +2161,7 @@ def test_the_sessions_settings_are_a_private_file_beside_its_log_never_its_comma
     path, mode, regular = seen["settings_file"]
     assert path == log.removesuffix(".log") + ".settings.json" and os.path.dirname(path) == str(tmp_path / "logs")
     assert (mode, regular) == (0o600, True), "a file of the person's own, in LOG_DIR, which the session can't read"
-    assert not any(arg.startswith("{\"permissions\"") for arg in seen["command"]), "no other user reads them in cmdline"
+    assert not any("denyRead" in arg or "allowedDomains" in arg for arg in seen["command"]), "no user reads them in cmdline"
     assert seen["settings"]["sandbox"]["enabled"] is True
     assert not os.path.lexists(path), "removed once the session ends"
 
@@ -2174,11 +2184,17 @@ def test_a_settings_file_already_there_stops_the_session_before_it_starts(tmp_pa
     started = []
     code, log, _, _ = review_once(tmp_path, monkeypatch, popen=lambda command, **kwargs: started.append(command))
     assert code == 127 and started == [] and not target.exists()
-    assert "can't set the session up: [Errno 17] File exists" in Path(log).read_text()
+    settings = log.removesuffix(".log") + ".settings.json"
+    assert os.path.lexists(settings) and (os.path.islink(settings) == (planted == "link")), "what was there is left"
+    assert (f"can't write the session's settings file: [Errno 17] File exists: '{settings}' (its folder,"
+            f" {tmp_path / 'logs'}, must be writable with room in it, and a file or link left at that path removed), or"
+            " run /pre-push-review in ") in Path(log).read_text()
 
 
 def test_the_prompt_says_none_when_no_owned_file_changes():
-    prompt = auto.review_command(TM, "/w", [], {}, AGENTS, SKILL_TEXT, "/t/run")[2]
+    command = auto.review_command(TM, "/w", [], "/l/review.settings.json", AGENTS, SKILL_TEXT, "/t/run")
+    assert command[command.index("--settings") + 1] == "/l/review.settings.json"
+    prompt = command[2]
     assert "These files the branch changes are Owned Baseline files, which the next Apply overwrites: none." in prompt
 
 
@@ -4139,7 +4155,10 @@ def test_auto_stops_on_a_preflight_problem_with_nothing_run_and_no_lock():
     code, out, err = run_auto(["--brings", "#82"], fleet)
     assert code == 1
     assert fleet.events == [("check",)] and fleet.locks == []
-    assert "rollout.sh: shfmt isn't on PATH\nrollout.sh: gh isn't signed in: gh auth login\nrollout.sh: nothing run" in err
+    assert ("rollout.sh: shfmt isn't on PATH\nrollout.sh: gh isn't signed in: gh auth login\nrollout.sh: nothing run;"
+            " fix those first, then run: rollout.sh --auto --brings '#82'\n") == err
+    _, _, err = run_auto(["--brings", "#82"], Fleet(problems=["x"]), root="/my repos")
+    assert err.endswith("then run: rollout.sh --auto --brings '#82' --root '/my repos'\n"), "as it runs"
 
 
 def test_auto_stops_when_another_run_holds_the_lock():
@@ -4149,14 +4168,15 @@ def test_auto_stops_when_another_run_holds_the_lock():
     assert reapplied(fleet) == []
     assert (f"rollout.sh: another rollout.sh --auto holds {auto.LOCK}, or a review session or gate an earlier one started"
             f" is still running; nothing run. See what holds it with: fuser -v {auto.LOCK} (or lsof {auto.LOCK}), and end"
-            " it only when no round is running\n") == err
+            " it only when no round is running; then run: rollout.sh --auto --brings '#82'\n") == err
 
 
 def test_auto_stops_when_the_lock_cannot_be_taken():
     fleet = Fleet(lock_raises=PermissionError(13, "Permission denied"))
     code, out, err = run_auto(["--brings", "#82"], fleet)
     assert code == 1 and reapplied(fleet) == []
-    assert f"rollout.sh: can't take the lock {auto.LOCK}: [Errno 13] Permission denied; nothing run" in err
+    assert (f"rollout.sh: can't take the lock {auto.LOCK}: [Errno 13] Permission denied; nothing run. Once it can be"
+            " taken, run: rollout.sh --auto --brings '#82'\n") in err
 
 
 def test_auto_a_missing_checkout_stops_before_the_preflight():
@@ -4415,10 +4435,11 @@ def test_auto_holds_the_rest_when_ticketmanagers_pr_was_closed():
     assert code == 1
     assert ("rollout: TicketManager#129 is CLOSED, not merged: reopen it (gh pr reopen 129 -R mpaulosky/TicketManager)"
             " and land it with land.sh mpaulosky/TicketManager#129, or delete its branch and resume for a new PR; held:") in out
-    # The last round's PR, closed at another head, with nothing pushed: no merged PR to go on from.
+    # The last round's PR, closed at another head, with nothing pushed: it already matches the Template, so the rest go.
     fleet = Fleet(prs={TM: (129, "CLOSED", "0" * 40)})
     code, out, _ = run_auto(["--brings", "#82"], fleet)
-    assert code == 1 and "TicketManager: no merged re-Apply PR found, and nothing to push" in out
+    assert "── rollout: TicketManager already matches the Template: nothing to land, so the rest go on" in out
+    assert reapplied(fleet)[0] == "TicketManager" and reapplied(fleet)[-1] == "SuggestionApp", out
 
 
 def test_auto_holds_with_the_gh_error_when_ticketmanagers_pr_cannot_be_read():
@@ -4429,11 +4450,14 @@ def test_auto_holds_with_the_gh_error_when_ticketmanagers_pr_cannot_be_read():
     assert "#None" not in out
 
 
-def test_auto_holds_when_ticketmanager_has_no_reapply_pr_and_nothing_to_push():
+def test_the_rest_go_on_when_ticketmanager_already_matches_the_template():
+    # reapply.sh pushed nothing and there is no PR: TicketManager is current, so a resume would stop in the same place.
     fleet = Fleet(prs={TM: None})
     code, out, _ = run_auto(["--brings", "#82"], fleet)
-    assert code == 1 and fleet.sleeps == []
-    assert "TicketManager: no merged re-Apply PR found, and nothing to push" in out
+    assert code == 0 and fleet.sleeps == [], out
+    assert "── rollout: TicketManager already matches the Template: nothing to land, so the rest go on" in out
+    assert reapplied(fleet)[0] == "TicketManager" and reapplied(fleet)[-1] == "SuggestionApp"
+    assert "held:" not in out
 
 
 def test_a_worktree_whose_branch_cannot_be_read_is_a_stop():
@@ -4920,3 +4944,99 @@ def test_the_adr_says_what_the_sandbox_doesnt_cover():
     assert "It reaches no host" in text and "reachable for anything" not in text, "no host is on the allowed list"
     assert "A SIGKILL of `rollout.sh` can't be caught" in text
     assert "however it is spelled" not in text and "this is not a sandbox" not in text, "the earlier overclaims are gone"
+
+
+def logs_left(tmp_path):
+    return sorted(path.name for path in (tmp_path / "logs").glob("*.settings.json"))
+
+
+def test_the_settings_file_is_removed_however_the_session_ends(tmp_path, monkeypatch):
+    with pytest.raises(KeyboardInterrupt):
+        review_once(tmp_path / "a", monkeypatch, session=FakeSession(raises=KeyboardInterrupt()))
+    assert logs_left(tmp_path / "a") == [], "an interrupt"
+
+    def no_claude(command, **kwargs):
+        raise OSError(2, "No such file or directory")
+
+    code, _, _, _ = review_once(tmp_path / "b", monkeypatch, popen=no_claude)
+    assert code == 127 and logs_left(tmp_path / "b") == [], "claude can't start"
+    code, _, _, _ = review_once(tmp_path / "c", monkeypatch, listing={"secrets": lambda worktree, common: ["k in f"]})
+    assert code == 127 and logs_left(tmp_path / "c") == [], "a stop before the session"
+
+    def broken_record(*args):
+        raise RuntimeError("a bug")
+
+    code, _, _, _ = review_once(tmp_path / "d", monkeypatch, record=broken_record)
+    assert code == auto.RECORD_FAILED and logs_left(tmp_path / "d") == [], "a record that raises"
+
+
+def test_settings_files_killed_runs_left_are_removed_by_the_next(tmp_path, monkeypatch):
+    logs = tmp_path / "logs"
+    logs.mkdir(mode=0o700)
+    target = tmp_path / "elsewhere.settings.json"
+    target.write_text("{}")
+    (logs / "review-TicketManager.old.settings.json").write_text("{}")
+    os.symlink(target, logs / "review-Articles.old.settings.json")
+    (logs / "review-TicketManager.old.log").write_text("kept")
+    (logs / "notes.settings.json").write_text("kept")
+    code, _, _, _ = review_once(tmp_path, monkeypatch)
+    assert code == 0
+    assert logs_left(tmp_path) == ["notes.settings.json"], "only the round's own kind, and the new one is gone too"
+    assert target.exists() and (logs / "review-TicketManager.old.log").exists(), "a link is removed, never where it leads"
+
+
+def test_the_settings_files_folder_is_hidden_from_the_session_and_not_writable():
+    home = os.path.expanduser("~")
+    folder = os.path.dirname(auto.settings_path(os.path.join(auto.LOG_DIR, "review-TicketManager.x.log")))
+    assert folder == auto.LOG_DIR
+    settings = settings_of("/w/wt", "/c/clone/.git", "/c/clone/.git/worktrees/wt", "/t/session", home=home,
+                           config_dir="", environ={})
+
+    def covers(path):
+        return folder == path or folder.startswith(path.rstrip("/") + "/")
+
+    filesystem = settings["sandbox"]["filesystem"]
+    denied = [path for path in filesystem["denyRead"] if covers(path)]
+    assert denied, "the sandbox's Bash can't read it"
+    assert any(f"Read(/{path}/**)" in settings["permissions"]["deny"] for path in denied), "nor can Read"
+    assert not any(covers(path) for path in filesystem["allowWrite"]), "nor write it"
+    edits = [rule[len("Edit(/"):].removesuffix("/**)").removesuffix(")") for rule in settings["permissions"]["allow"]
+             if rule.startswith("Edit(")]
+    assert edits and not any(covers(path) for path in edits), "nor Edit it"
+
+
+def test_a_signal_after_the_session_exits_by_itself_keeps_what_it_staged(tmp_path, monkeypatch, capsys):
+    # The signal lands while the group is reaped: the session finished, so its findings are kept, not lost.
+    head = "a" * 40
+
+    def guard(worktree):
+        return dataclasses.replace(fake_guard(tmp_path), worktree_state=(head, "branchname", ""))
+
+    def end(session):
+        os.kill(os.getpid(), signal.SIGINT)
+        return True
+
+    def record(worktree, run, out, head, keep, got, unseen):
+        Path(run, auto.STAGED_FILE).write_text("[]")
+        return auto.record_review(worktree, run, out, head, keep, got, unseen)
+
+    with pytest.raises(KeyboardInterrupt):
+        review_once(tmp_path, monkeypatch, guard=guard, end=end, record=record)
+    (log,) = (tmp_path / "logs").glob("*.log")
+    keep = f"{log}.staged"
+    assert json.loads(Path(keep, auto.STAGED_FILE).read_text()) == []
+    err = capsys.readouterr().err
+    assert f"what the session staged is kept in {keep}" in err and "record it with: sh -c " in err
+    assert logs_left(tmp_path) == []
+
+
+def test_a_signal_while_a_session_runs_still_ends_the_round_at_once(tmp_path, monkeypatch):
+    recorded = []
+
+    def end(session):
+        os.kill(os.getpid(), signal.SIGINT)
+        return True
+
+    with pytest.raises(KeyboardInterrupt):
+        review_once(tmp_path, monkeypatch, session=FakeSession(code=1), end=end, record=lambda *a: recorded.append(a))
+    assert recorded == [], "a session that didn't exit 0 has nothing to record"

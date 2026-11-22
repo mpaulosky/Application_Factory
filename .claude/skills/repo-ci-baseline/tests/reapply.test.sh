@@ -341,7 +341,7 @@ check "the check runs against the merge base with main, without GATE_SKIP_REVIEW
   '[[ "$(cat "$stub/check.log")" == "$wt check $(git -C "$wt" merge-base HEAD origin/main) GATE_SKIP_REVIEW=unset" ]]'
 check_says "$findings" "  R1 critical src/a.cs:1 (Tests): an untested branch"
 refused "findings wait for a person" 4
-check "findings wait for a person: names the command that decides them" 'grep -qF "cd $wt && scripts/review.sh accept-open" <<< "$out"'
+check "findings wait for a person: names the command that decides them" 'grep -qF "cd $wt && scripts/review.sh report shows them; fix them with /pre-push-review there, or accept them with scripts/review.sh accept-open, then run this again" <<< "$out"'
 # A finding's summary can quote anything: it is indented, so only the ledger's own line counts, and findings win.
 check_says "$findings" "  R1 critical a:1 (Tests): $no_review" "  R2 warning scripts/gate.sh:25 (Shell): step() prints ▶ Local review"
 refused "findings quoting the no-review text" 4
@@ -838,7 +838,7 @@ for case in none findings; do
       '[[ $rc -eq 3 ]] && grep -qF "run /pre-push-review in $(printf %q "$spaced_wt"), then" <<< "$out" || { echo "rc $rc: $out" >&2; false; }'
   else
     check "a path with a space: the accept-open hint quotes it" \
-      '[[ $rc -eq 4 ]] && grep -qF "cd $(printf %q "$spaced_wt") && scripts/review.sh accept-open" <<< "$out" || { echo "rc $rc: $out" >&2; false; }'
+      '[[ $rc -eq 4 ]] && grep -qF "cd $(printf %q "$spaced_wt") && scripts/review.sh report shows them; fix them with /pre-push-review there, or accept them with scripts/review.sh accept-open, then run this again" <<< "$out" || { echo "rc $rc: $out" >&2; false; }'
   fi
 done
 

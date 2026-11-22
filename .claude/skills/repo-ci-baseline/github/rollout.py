@@ -152,7 +152,7 @@ def main(argv=None, listed=None, reapply=run_reapply, latest_pr=gh_latest_pr, ex
         """reapply.sh on one repo (or what it would run); whether it went cleanly."""
         path = checkout(repo)
         if args.dry_run:
-            say(f"would run: reapply.sh --brings {shlex.quote(args.brings)} {path}")
+            say(f"would run: reapply.sh --brings {shlex.quote(args.brings)} {shlex.quote(path)}")
             return True
         say(f"── rollout: {short_name(repo)}")
         code = reapply(args.brings, path)
