@@ -1,7 +1,7 @@
 # Central package pins
 
 Template files (Owned): `.github/scripts/check_central_pins.py` and its tests, run by `scripts/gate.sh` right before the build and by `ci.yml`'s
-`Build Solution` job right before restore. mpaulosky/Application_Factory#105.
+`Build Solution` job right after the checkout, before Setup .NET. Its tests pin both places. mpaulosky/Application_Factory#105.
 
 ## Why
 
@@ -16,24 +16,46 @@ differently from one restore to the next. Deleting the pin lets NuGet resolve th
 
 ## What the check refuses
 
-With transitive pinning on (any MSBuild file in the repo sets the property to `true`), a `PackageVersion` whose id no project, `.props` or `.targets` file
-references in a `PackageReference` (`Include` or `Update`) or as an MSBuild SDK, and `global.json` doesn't name under `msbuild-sdks`. Ids are compared
-ignoring case; an id built from an MSBuild property (`$(...)`) is left alone; `bin/`, `obj/`, `node_modules/` and dot-folders are skipped. With transitive
-pinning off, an unreferenced pin pins nothing and the check passes.
+With transitive pinning on (any MSBuild file in the repo sets the property to `true`, in any case), a `PackageVersion` whose id nothing references.
+A reference is an id in a `PackageReference` (`Include` or `Update`), `GlobalPackageReference` or `PackageDownload`, or an MSBuild SDK (a `Project`'s
+`Sdk`, an `Sdk` element, an `Import`'s `Sdk`, or any `global.json`'s `msbuild-sdks`, which may hold comments and trailing commas as the .NET host allows),
+in any MSBuild file: one whose extension ends in `proj` (`.csproj`, `.sqlproj`, `.wixproj` and the rest), or a `.props` or `.targets` file. Ids are
+compared ignoring case, and a pin listed twice is reported once. With transitive pinning off, an unreferenced pin pins nothing and the check passes.
+
+An id holding `$(Name)` is resolved from every value the repo's MSBuild files give that property (up to 256 ids per reference). One that still holds
+`$(`, `@(` or `%(` can't be read without evaluating MSBuild: such a pin is left alone, and such a reference could name any package, so the pins found
+are printed as warnings and the check passes, naming the reference.
+
+Files are read as bytes, so a byte-order mark or an XML declaration's encoding (UTF-16, say) is honoured. A file that can't be read is skipped with a
+notice naming it: a symlink, anything but a regular file, one over 4 MiB, malformed XML (a `dotnet new` template, a test fixture), or a `DOCTYPE`, which
+no MSBuild file needs and which entity expansion would need. Skipping a file can only hide a reference, so it makes the check stricter, never more lenient;
+restore fails on a broken file the build does read anyway. `bin/`, `obj/`, `node_modules/` and dot-folders (`.git`, CI's `.nuget` package cache) aren't walked.
+
+Under GitHub Actions each problem is an `::error`, `::warning` or `::notice` annotation on its file, escaped as the runner reads workflow commands;
+elsewhere a plain line. A name or path from the repo is printed with its non-printable characters as `?`, so it can't start a workflow command or move
+the terminal.
 
 ## Keeping a pin on purpose
 
-A pin that forces a package up, past a security advisory say, is kept with a comment right before it that starts with `Transitive pin:` and gives the reason:
+A pin that forces a package up, past a security advisory say, or one for a package an SDK references itself (MSTest.Sdk's packages, say, which no
+project names), is kept with a comment right before it that starts with `Transitive pin:` (in any case) and gives the reason:
 
 ```xml
 <!-- Transitive pin: GHSA-7jgj-8wvc-jh57, fixed in 4.3.4; System.Net.Http comes in through Foo. -->
 <PackageVersion Include="System.Net.Http" Version="4.3.4" />
 ```
 
-The comment covers only the pin right after it. Delete the pin with its comment once the package that brings it in moves past the version.
+The comment covers only the pin right after it: another comment or element between them takes the reason away. Delete the pin with its comment once
+the package that brings it in moves past the version.
 
 ## Rolling it out
 
 `Directory.Packages.props` belongs to the Application, so a Rollout can't clean it. Before the Rollout that brings the check, each Application with
 transitive pinning deletes its unreferenced pins, or marks the ones it keeps, in a PR of its own; run
 `python3 -I <Factory>/.claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_central_pins.py --root .` in its checkout to list them.
+An Application the Rollout reaches first gets a red `Build Solution` on its Rollout PR, and on every PR after it: the step's annotations name each pin to
+delete or mark.
+
+The Seed `.sandcastle/lib/repo-config.mts` lists the script in `CHECK_PATHS`, so a Sandcastle branch that changes it says so in its PR body. A Seed file is
+written only when missing, so an Application with Sandcastle adds `".github/scripts/check_central_pins.py"` to its own `CHECK_PATHS` by hand
+([sandcastle.md](sandcastle.md), step 9).

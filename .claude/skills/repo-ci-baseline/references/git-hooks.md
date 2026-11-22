@@ -179,6 +179,7 @@ build runs. It needs cases for:
 - a push that isn't the checked-out commit
 - an untracked or unstaged file
 - `.github/ci/gate-checks.sh` running with the merge base, and failing the push before the build
+- an unreferenced central NuGet pin under transitive pinning refusing the push, naming the pin, before the build
 - a `sandcastle.gatedHead` marker for `HEAD` not skipping the gate (pushed and by hand)
 - a branch behind `origin/main` refused before the gate (pushed and by hand) with the `git merge origin/main` fix,
   the same branch running the gate once it has merged main, no `origin/main` skipping the check, and a stale local

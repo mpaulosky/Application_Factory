@@ -295,8 +295,9 @@ jobs:
 
   # Unit tests for the scripts in .github/scripts (the release blog generator,
   # Claude Review's script and the rest), among them the gh check
-  # (check_gh_repo.py), the Owned files check (check_owned_files.py) and the
-  # gh-repo job that runs them, and ruff over the Template's Python. Deliberately
+  # (check_gh_repo.py), the Owned files check (check_owned_files.py), the
+  # gh-repo job that runs them, the central pins check (check_central_pins.py)
+  # and the Build Solution step that runs it, and ruff over the Template's Python. Deliberately
   # not a required status check on main's ruleset.
   python-tests:
     name: Python tests

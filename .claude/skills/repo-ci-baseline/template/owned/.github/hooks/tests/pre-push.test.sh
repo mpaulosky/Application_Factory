@@ -565,7 +565,7 @@ git -C "$REPO" switch -q feature/1-x
 git -C "$REPO" update-ref -d refs/remotes/origin/main
 run_hook feature/1-x "$(push_stdin feature/1-x)"
 expect "without an origin/main the check is skipped and the gate runs" allowed tests-ran "No origin/main"
-# There every tracked file counts as changed, the two Python files among them, so the gate's Python lint step runs on them.
+# There every tracked file counts as changed, the tracked Python files among them, so the gate's Python lint step runs on them.
 if grep -q '^ruff check .* -- .*discover_tests\.py' "$LOG"; then
   pass "without an origin/main the gate lints the tracked Python files"
 else
