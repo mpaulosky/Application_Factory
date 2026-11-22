@@ -343,7 +343,8 @@ JSON
 repeats. A summary that opens `R3 again` or `.security/0012 again` finds its entry by itself, the open or accepted entry for the finding's own
 path either way: the one R3 was recorded against in an earlier review of this branch that HEAD still has, or the one `.security/0012` is. An entry
 for another path is never held this way. A fixed one isn't held either: the finding holds the open or accepted entry for the same path that
-already notes the fixed one, when one does, and otherwise gets a new entry that notes it. So give `repeats` only when
+notes it, directly or through other fixed entries' notes, when one does, and otherwise gets a new entry that notes the last fixed entry of that
+chain. So give `repeats` only when
 that opening can't find it: the finding's path differs from the entry's (a moved file), the branch was amended or rebased since that review,
 or the summary opens neither way. `record` writes the `.security/` entries itself, one for every security finding it records
 as `fixed` or `open` (an entry already holding the weakness gets no second file), so never write one by hand, and never edit one to change a

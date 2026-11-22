@@ -148,7 +148,7 @@ describe("the pre-push-review skill's follow-up issue", () => {
     assert.ok(flat.includes("A summary that opens `R3 again` or `.security/0012 again` finds its entry by itself"));
     assert.ok(
       flat.includes(
-        "the open or accepted entry for the finding's own path either way: the one R3 was recorded against in an earlier review of this branch that HEAD still has, or the one `.security/0012` is. An entry for another path is never held this way. A fixed one isn't held either: the finding holds the open or accepted entry for the same path that already notes the fixed one, when one does, and otherwise gets a new entry that notes it.",
+        "the open or accepted entry for the finding's own path either way: the one R3 was recorded against in an earlier review of this branch that HEAD still has, or the one `.security/0012` is. An entry for another path is never held this way. A fixed one isn't held either: the finding holds the open or accepted entry for the same path that notes it, directly or through other fixed entries' notes, when one does, and otherwise gets a new entry that notes the last fixed entry of that chain.",
       ),
     );
     assert.ok(

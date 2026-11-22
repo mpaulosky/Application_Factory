@@ -4149,6 +4149,9 @@ describe("nearReRaise", () => {
     [`R3: ${".".repeat(32)}again.`, "R3"],
     // a longer word crossing the window's edge is still not "again"
     [`R3: ${".".repeat(33)}against`, undefined],
+    // an id that ends the summary, and an "again" past the window after an "against" inside it
+    ["R3", undefined],
+    [`R3: against ${".".repeat(40)} again`, undefined],
   ] as [string, string | undefined][]) {
     it(`reads ${JSON.stringify(summary)} as ${JSON.stringify(expected)}`, () => {
       assert.equal(nearReRaise(summary), expected);
