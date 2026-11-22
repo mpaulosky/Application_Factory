@@ -278,6 +278,60 @@ PY
     .github/workflows/ci.yml 's/python-version: "3.12"/python-version: "3.11"/'
   ruff_drift "a ci.yml with two python-version lines" "is not found once (2 found)" .github/workflows/ci.yml 's/^\( *\)python-version: "3.12"$/&\n\1python-version: "3.12"/'
   rm -rf "$ruff_copy"
+  # The docs that name ruff's target (ADR 0011's Update: Python, references/git-hooks.md) name the gate's, so a move of CI's Python
+  # can't leave them stale (#91). Every py3NN in both is the target, and so is every 3.NN in the ADR's bullet on it.
+  # ruff_docs_agree <gate.sh> <ADR> <git-hooks.md>
+  ruff_docs_agree() {
+    python3 -I - "$@" << 'PY'
+import re, shlex, sys
+gate, adr, hooks = (open(path, encoding="utf-8").read() for path in sys.argv[1:4])
+found = re.findall(r"^RUFF_ARGS=\((.+)\)$", gate, re.M)
+flags = shlex.split(found[0]) if len(found) == 1 else []
+if "--target-version" not in flags[:-1]:
+    print("gate.sh's RUFF_ARGS must give --target-version once")
+    sys.exit(1)
+target = flags[flags.index("--target-version") + 1]
+python = f"{target[2]}.{target[3:]}"
+problems = []
+for where, text in (("ADR 0011", adr), ("references/git-hooks.md", hooks)):
+    named = re.findall(r"\bpy3[0-9]+\b", text)
+    if not named:
+        problems.append(f"{where} doesn't name the target {target}")
+    problems += [f"{where} names {other}, but the gate's ruff target is {target}" for other in sorted(set(named) - {target})]
+bullet = re.search(r"^- \*\*The target is the Python CI runs\.\*\*.*?(?=^- |^#|\Z)", adr, re.M | re.S)
+if bullet is None:
+    problems.append("ADR 0011 has no bullet 'The target is the Python CI runs.'")
+else:
+    versions = set(re.findall(r"(?<![0-9.])3\.[0-9]+(?![0-9.])", bullet.group(0)))
+    problems += [f"ADR 0011's target bullet names Python {other}, but the gate's ruff target is {target} (Python {python})" for other in sorted(versions - {python})]
+for problem in problems:
+    print(problem)
+sys.exit(1 if problems else 0)
+PY
+  }
+  factory_root="$(git -C "$skill_dir" rev-parse --show-toplevel 2> /dev/null)" || factory_root=""
+  ruff_adr="$factory_root/docs/adr/0011-markdown-and-yaml-are-linted-as-they-are-written.md"
+  if [[ -f "$ruff_adr" ]]; then
+    found="$(ruff_docs_agree "$owned/scripts/gate.sh" "$ruff_adr" "$skill_dir/references/git-hooks.md" 2>&1)" \
+      || fail "ADR 0011 and references/git-hooks.md must name the gate's ruff target: $found"
+    # Each way the docs can drift is refused, on copies edited that way.
+    ruff_docs_drift() { # ruff_docs_drift <what> <expected problem> <adr|hooks> <sed script>
+      local docs="$md_tmp/ruff-docs" found
+      rm -rf "${docs:?}" && mkdir -p "$docs"
+      cp "$ruff_adr" "$docs/adr" && cp "$skill_dir/references/git-hooks.md" "$docs/hooks"
+      sed -i -e "$4" "$docs/$3"
+      found="$(ruff_docs_agree "$owned/scripts/gate.sh" "$docs/adr" "$docs/hooks" 2>&1)" && fail "the ruff docs check passes $1"
+      grep -qF -- "$2" <<< "$found" || fail "the ruff docs check doesn't say '$2' for $1: $found"
+      rm -rf "$docs"
+    }
+    ruff_docs_drift "an ADR naming py313" "ADR 0011 names py313" adr '0,/py312/s//py313/'
+    ruff_docs_drift "a git-hooks.md naming py311" "references/git-hooks.md names py311" hooks '0,/py312/s//py311/'
+    ruff_docs_drift "a git-hooks.md naming no target" "references/git-hooks.md doesn't name the target py312" hooks 's/py312/pyNNN/g'
+    ruff_docs_drift "an ADR bullet naming Python 3.13" "ADR 0011's target bullet names Python 3.13" adr 's/syntax newer than 3\.12/syntax newer than 3.13/'
+    ruff_docs_drift "an ADR without the target bullet" "ADR 0011 has no bullet" adr 's/The target is the Python CI runs\./The target./'
+  else
+    fail "test.sh can't find ADR 0011 in the Factory's docs/adr/ (from $skill_dir), to check it names the gate's ruff target"
+  fi
   # The script edit rule: the checks reviewers keep raising on script changes, loaded when a session works on a script (its paths: front matter
   # names the shell and Python files and the folders the hook lints), and written into every repo, so it names nothing of the Factory's.
   script_rule="$owned/.claude/rules/script-edits.md"
