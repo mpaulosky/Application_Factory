@@ -240,7 +240,8 @@ code at each finding's line yourself, then give it one outcome:
   the earlier review or in the owner's own PR-thread reply (step 3), or one the earlier review left open: the person
   decides it again for this code (step 9). Name the earlier finding or thread and its reason in the summary, so they can.
   Reviewers see an accepted or open security finding only by id, so check each one in `latest` against the code
-  yourself, and record each one still there as a new open Warning naming the old id, whether or not a reviewer raised it.
+  yourself, and record each one still there as a new open Warning whose summary opens with the old id (`R3 again: ...`, or
+  `.security/0012 again: ...` for one only the record holds), whether or not a reviewer raised it: `record` follows only that opening to the entry.
   An earlier Advisory finding that's still there is fixed now, unless it waits for a person: then it's recorded open
   again as Advisory, its summary opening with the old id (`R3 again: ...`), and it never blocks.
   None of this bullet applies to a finding the earlier review shows `fixAsked`: the next bullet alone decides those, security and Advisory ones included.
@@ -249,7 +250,7 @@ code at each finding's line yourself, then give it one outcome:
   security finding (a security one is fixed behind a test). The Rules still hold: a fix that would weaken a test, a check, a validation or a permission, or
   that changes the gate, the ledger, the reviewer agent, `.claude/settings.json` or a workflow's permissions, stays open for the person with its suggested
   fix, since asking for a fix isn't asking for that change. In the last, review-only round (step 7) nothing is fixed: it stays open with its fix.
-  Raise it under a new id naming the old one.
+  Raise it under a new id, its summary opening with the old one (`R3 again: ...`).
 
 Stage the findings, so a long session that loses its memory of the earlier rounds still records them. Write the round's JSON array, every
 field of step 8's `findings` (ids as below), with the Write tool to `<run>/round-N.json` (the text quotes code, as in step 4), and run
@@ -339,7 +340,9 @@ JSON
 
 `policy` and `repeats` are for security findings only, and `pr` is the PR's number when step 3 found one; none of them is kept in the ledger.
 `policy` is one sentence: the rule that now holds. `repeats` is optional: the number of the `.security/` entry triage judged the finding
-repeats, for a repeat worded differently from the entry. `record` writes the `.security/` entries itself, one for every security finding it records
+repeats, for a repeat worded differently from the entry whose summary doesn't open `R3 again` or `.security/0012 again`: one that does
+finds its entry by itself (the open or accepted entry for the same path that R3 was recorded against in an earlier review of this branch, or
+the entry it names). `record` writes the `.security/` entries itself, one for every security finding it records
 as `fixed` or `open` (an entry already holding the weakness gets no second file), so never write one by hand, and never edit one to change a
 review. A `.security:` line on stderr from `record` says what it wrote or why it could not; tell the person about a warning.
 

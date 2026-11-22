@@ -838,15 +838,25 @@ function writeEntryMap(cwd: string, key: string, entries: Record<string, string>
 }
 
 // The entry ids the findings of the ledger at `key` were recorded against (finding id to entry id); empty when unknown (an
-// older record, or none written). An id that isn't an entry number is left out.
-function readEntryMapAll(cwd: string, key: string): Record<string, string> {
+// older record, or none written). An id that isn't an entry number is left out. `warn` hears of a file that is there but
+// doesn't read or parse as such a map, or holds a pair that isn't one: a re-raise is then matched by its text alone.
+function readEntryMapAll(cwd: string, key: string, warn?: (message: string) => void): Record<string, string> {
+  const path = entriesPath(cwd, key);
+  let entries: unknown;
   try {
-    const entries: unknown = JSON.parse(readFileSync(entriesPath(cwd, key), "utf8"));
-    if (typeof entries !== "object" || entries === null || Array.isArray(entries)) return {};
-    return Object.fromEntries(Object.entries(entries).filter((pair): pair is [string, string] => typeof pair[1] === "string" && /^\d{4,}$/.test(pair[1])));
-  } catch {
+    entries = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") warn?.(`couldn't read ${path}, which notes the entry each of a review's findings went to, so a finding of it raised again is matched by its text`);
     return {};
   }
+  if (typeof entries !== "object" || entries === null || Array.isArray(entries)) {
+    warn?.(`${path} isn't a map of finding ids to entries, so a finding of that review raised again is matched by its text`);
+    return {};
+  }
+  const pairs = Object.entries(entries);
+  const kept = pairs.filter((pair): pair is [string, string] => typeof pair[1] === "string" && /^\d{4,}$/.test(pair[1]));
+  if (kept.length < pairs.length) warn?.(`${path} names an entry that isn't an entry number for some findings, so those, raised again, are matched by their text`);
+  return Object.fromEntries(kept);
 }
 
 // The entry id `findingId` was recorded against, or undefined when unknown (an older record, or none written).
@@ -856,15 +866,28 @@ function readEntryMap(cwd: string, key: string, findingId: string): string | und
 
 // A finding the review raises again under a new id opens its summary with the old one, "R3 again", or, for a weakness only
 // the security record holds, ".security/0012 again"; its words change from review to review, so its fingerprint does too.
-// The entry such a finding repeats: the one the old finding was recorded against (`earlier`, finding id to entry id, from the
-// branch's own earlier reviews), or the entry it names. Undefined when its summary opens neither way, or names an id no earlier
-// review recorded against an entry: then it is matched by its text, as before. Only the opening counts, so a summary that
-// mentions an entry or an id in passing ("Beyond .security/0017") is not a repeat of it.
-export function reRaisedEntry(summary: string, earlier: Readonly<Record<string, string>>): string | undefined {
-  const raised = /^\s*(?:(R[1-9]\d*)|\.security\/(\d{4,})) again\b/.exec(summary);
-  if (raised === null) return undefined;
-  if (raised[2] !== undefined) return raised[2];
-  return earlier[raised[1] ?? ""];
+// Case and spacing are set aside, as the fingerprint sets them aside, and so is markup around the id ("**R3** again",
+// "(R3 again)", "`R3` again"); of a list ("R3, R5 again") the first id is the one read. An id is `R` and a number with no
+// leading zero, or `.security/` and four or more digits.
+const RE_RAISE_ID = String.raw`(?:r[1-9]\d*|\.security\/\d{4,})`;
+const RE_RAISE = new RegExp(
+  String.raw`^[\s*_\x60(\[]*(${RE_RAISE_ID})[*_\x60)\]]*(?:\s*(?:,|and|&)\s*[*_\x60(\[]*${RE_RAISE_ID}[*_\x60)\]]*)*\s+[*_\x60]*again\b`,
+  "i",
+);
+
+// What a summary's opening says it raises again: `named`, the id it names as written ("R3", ".security/0012"), and `entry`, the
+// entry that is: the one R<n> was recorded against (`earlier`, finding id to entry id, from the branch's own earlier reviews),
+// or the number it names. `entry` is undefined for an R<n> no earlier review recorded against an entry. The whole result is
+// undefined when the summary opens neither way: then it is matched by its text, as before. Only the opening counts, so a summary
+// that mentions an entry or an id in passing ("Beyond .security/0017") is not a repeat of it.
+export function reRaisedEntry(summary: string, earlier: Readonly<Record<string, string>>): { named: string; entry?: string } | undefined {
+  const id = RE_RAISE.exec(summary)?.[1];
+  if (id === undefined) return undefined;
+  const number = /^\.security\/(\d+)$/i.exec(id)?.[1];
+  if (number !== undefined) return { named: `.security/${number}`, entry: number };
+  const named = id.toUpperCase();
+  const entry = earlier[named];
+  return entry === undefined ? { named } : { named, entry };
 }
 
 // How long a lock that names no process stands (empty, or not "pid token"): its holder may be about to write its id.
@@ -978,9 +1001,15 @@ function holdLock<T>(lock: string, refuse: (cause?: unknown) => Error, change: (
     lockTestHooks.beforeWrite?.();
     writeSync(held, mine);
   } catch (error) {
-    // The lock is ours (just made with "wx") and empty: leaving it would refuse every command for a minute.
-    closeSync(held);
-    rmSync(lock, { force: true });
+    // The lock is ours (just made with "wx") and empty: leaving it would refuse every command for a minute. It goes even when
+    // the close fails too, and the write's error is the one thrown.
+    try {
+      close(held);
+    } catch {
+      // The write's error says what went wrong.
+    } finally {
+      rmSync(lock, { force: true });
+    }
     throw error;
   }
   try {
@@ -1245,7 +1274,12 @@ export function recordReview(
   input: ReviewInput,
   now: Date = new Date(),
   taken: typeof takenIds = takenIds,
-  { slug = REPO_SLUG, onSecurity, at }: { slug?: string; onSecurity?: (outcome: SecurityOutcome) => void; at?: { head: string; branch: string } } = {},
+  {
+    slug = REPO_SLUG,
+    onSecurity,
+    at,
+    entriesOf = earlierEntries,
+  }: { slug?: string; onSecurity?: (outcome: SecurityOutcome) => void; at?: { head: string; branch: string }; entriesOf?: typeof earlierEntries } = {},
 ): Ledger {
   const parsed = reviewInputSchema.parse(input);
   // The security record is local and not code (see security-record.mts): an untracked README, or a symlink put in its
@@ -1285,22 +1319,26 @@ export function recordReview(
       throw new Error(`ids up to R${floor} are taken by earlier reviews of this branch, so ${reused.join(", ")} can't be used: number this run's findings after R${floor}`);
     }
     ledger = { ...ledger, lastId: Math.max(floor, highestId(ledger)) };
-    writeLedger(cwd, ledger);
     const security = parsed.findings.filter((finding): finding is typeof finding & { status: "fixed" | "open" } => isSecurity(finding) && (finding.status === "fixed" || finding.status === "open"));
-    // Which entry each finding of the branch's earlier reviews went to, so one raised again ("R3 again") holds its entry
-    // rather than getting a second file. Only this branch's own reviews: an id names one finding along the branch alone.
-    const earlier: Record<string, string> = {};
-    for (const { ledger: before } of branchLedgers(cwd, base, head)) Object.assign(earlier, readEntryMapAll(cwd, before.key));
+    // Read before the ledger is written, so a failure here fails the record with nothing written, as a failed record must.
+    const warnings: string[] = [];
+    const earlier = security.length === 0 ? {} : entriesOf(cwd, base, head, (message) => warnings.push(message));
     const inputs: SecurityInput[] = security.map(({ id, lens, path, summary, status, test, reason, fix, policy, repeats }) => {
-      const reRaised = reRaisedEntry(summary, earlier);
+      const raised = reRaisedEntry(summary, earlier);
+      if (raised !== undefined && raised.entry === undefined) {
+        warnings.push(`${id} says it raises ${raised.named} again, but no earlier review of this branch recorded ${raised.named} against an entry; matched by its text instead`);
+      }
+      const reRaised = raised?.entry;
       return { id, lens, path, summary, status, test, reason, fix, policy, ...(repeats === undefined ? {} : { repeats }), ...(reRaised === undefined ? {} : { reRaised }) };
     });
+    writeLedger(cwd, ledger);
     let outcome: SecurityOutcome;
     try {
       outcome = recordSecurity(cwd, ledger, inputs, { ...(parsed.pr === undefined ? {} : { pr: parsed.pr }), slug });
     } catch (error) {
       outcome = { written: [], repeated: [], entries: {}, warnings: [`the security record couldn't be written: ${(error as Error).message ?? String(error)}`] };
     }
+    outcome.warnings.unshift(...warnings);
     try {
       writeEntryMap(cwd, key, outcome.entries);
     } catch (error) {
@@ -1309,6 +1347,17 @@ export function recordReview(
     onSecurity?.(outcome);
   });
   return ledger;
+}
+
+// Which entry each finding of the branch's earlier reviews went to (finding id to entry id), so one raised again ("R3 again")
+// holds its entry rather than getting a second file. Only this branch's own reviews: an id names one finding along the branch
+// alone. The review at the same key, which the record replaces, counts too: its ids stay taken (takenIds), so the new review's
+// R<n> again names one of them. Nearer reviews are read last, so their pairs win.
+export function earlierEntries(cwd: string, base: string, head: string, warn: (message: string) => void): Record<string, string> {
+  const earlier: Record<string, string> = {};
+  const reviews = branchLedgers(cwd, base, head).sort((a, b) => b.distance - a.distance || a.ledger.recordedAt.localeCompare(b.ledger.recordedAt));
+  for (const { ledger } of reviews) Object.assign(earlier, readEntryMapAll(cwd, ledger.key, warn));
+  return earlier;
 }
 
 // Accept an open finding on the ledger for HEAD's diff, with the person's
@@ -1835,6 +1884,12 @@ export function stagedOwnerProblem(info: { uid: number; mode: number }, uid: num
 // blocking (a FIFO opens at once and is refused below), and judged by that descriptor, so it can't be swapped between the check and the read.
 function readStaged(directory: string): z.infer<typeof findingListSchema> {
   const file = join(directory, STAGED_FILE);
+  return parseStaged(file, stagedText(file));
+}
+
+// The text of the staging file `file`, opened without following a link or blocking (a FIFO), and read only when it is a
+// regular file the current user owns that the group and others can't write.
+function stagedText(file: string): string {
   let handle: number;
   try {
     handle = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -1854,6 +1909,11 @@ function readStaged(directory: string): z.infer<typeof findingListSchema> {
   } finally {
     closeSync(handle);
   }
+  return text;
+}
+
+// The findings the staging file `file` holds, from its `text`, each checked as `record` will check it.
+function parseStaged(file: string, text: string): z.infer<typeof findingListSchema> {
   let staged: unknown;
   try {
     staged = JSON.parse(text);
@@ -1865,6 +1925,9 @@ function readStaged(directory: string): z.infer<typeof findingListSchema> {
   if (!checked.success) throw new Error(`${file} holds findings the review refuses:\n${z.prettifyError(checked.error)}`);
   return checked.data;
 }
+
+// A test seam: called after stage has merged its findings and before it checks the file and writes it.
+export const stageTestHooks: { beforeReplace?: () => void } = {};
 
 // Add `findings` (a JSON array, each checked as `record` will check it) to the folder's file; a finding whose id is staged already
 // replaces that one, since a later round may change what became of it. The file holds the run's unpublished findings: it is made
@@ -1888,9 +1951,15 @@ export function stageFindings(given: string, findings: unknown, close: (handle: 
     lock,
     refuse,
     () => {
-      const kept = lstatOrUndefined(file) === undefined ? [] : readStaged(directory);
+      const current = () => (lstatOrUndefined(file) === undefined ? undefined : stagedText(file));
+      const read = current();
+      const kept = read === undefined ? [] : parseStaged(file, read);
       const ids = new Set(parsed.map((finding) => finding.id));
       const merged = [...kept.filter((finding) => !ids.has(finding.id)), ...parsed];
+      stageTestHooks.beforeReplace?.();
+      // The lock's takeover is best-effort (withLock), so a second stage may share it in a rare race: what this one merged into
+      // must still be the file, or the other's findings would be lost. Then it refuses, and running it again merges both.
+      if (current() !== read) throw new Error(`another stage changed ${file} while this one was merging into it; run stage again.`);
       replaceFile(file, `${JSON.stringify(merged, null, 2)}\n`);
       return { added: parsed.length, total: merged.length };
     },
