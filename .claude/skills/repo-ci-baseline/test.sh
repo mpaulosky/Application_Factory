@@ -510,7 +510,7 @@ if in_shard scripts; then
   need node
   node --test "$owned/.github/scripts/tests/pr-automerge.test.mjs" || fail "pr-automerge.test.mjs"
 
-  step "Owned .github/scripts tests (release scripts, Claude Review, the gh check and the Owned files check)"
+  step "Owned .github/scripts tests (release scripts, Claude Review, the gh check, the Owned files check and the central pins check)"
   # The tests an Application's python-tests job runs, from the Owned tree as from a repo root: check_gh_repo.py's own tests
   # among them, which need shfmt (checked above). Their Factory-only tests (the Template's folders, gotchas.md, the trigger test's guard) are tests/gh_repo/.
   (cd "$owned" && "${pytest_cmd[@]}" -q -p no:cacheprovider .github/scripts/tests) || fail "pytest"

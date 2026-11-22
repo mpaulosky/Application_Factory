@@ -60,7 +60,9 @@ Move whatever the old `ci.yml` did for this repo alone into `.github/ci/prepare.
 Every test project must run on it, as atelier-store's and TicketManager's do: `xunit.v3.mtp-v2` plus `Microsoft.Testing.Extensions.CodeCoverage` (for `--coverage`),
 in place of the VSTest pieces `xunit.runner.visualstudio` and `coverlet.collector`.
 Done when `grep -rE 'xunit.runner.visualstudio|coverlet.collector' --include='*.csproj' --include='*.props' .` finds nothing and `dotnet test` passes under the new `global.json`.
-Under central package management with transitive pinning, raise any `Microsoft.Testing.*` pin below what `xunit.v3.mtp-v2` needs, or restore fails with NU1109 (IssueManager went from 2.3.3 to 2.4.0).
+Under central package management with transitive pinning, delete any `Microsoft.Testing.*` pin that no project references, rather than raising it to what `xunit.v3.mtp-v2` needs:
+a raised pin falls behind again at the next bump, and restore fails with NU1109, as it did twice in IssueManager. The gate and CI refuse such a pin ([central-pins.md](central-pins.md)).
+A pin a project does reference, below what `xunit.v3.mtp-v2` needs, is raised to it.
 
 ## Warnings as errors
 

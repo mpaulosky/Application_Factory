@@ -104,7 +104,9 @@ Import the root props (shared `Nullable`, `ImplicitUsings`, `LangVersion`) and o
 ```
 
 These are the versions TicketManager and IssueManager pin; if the solution already pins any of them, keep its version. Under CPM with
-transitive pinning, a `Microsoft.Testing.*` pin below what `xunit.v3.mtp-v2` needs fails restore with NU1109 (`adapt.md#test-runner`).
+transitive pinning, pin only packages a project references: a pin nothing references (a `Microsoft.Testing.*` one, say) holds the package back,
+fails restore with NU1109 once `xunit.v3.mtp-v2` needs a newer one, and is refused by the gate and CI. A referenced pin below what it needs is
+raised (`adapt.md#test-runner`, the repo-ci-baseline skill's `references/central-pins.md`).
 
 Only if the project needs them: `NSubstitute` `5.3.0` for test doubles, `FluentAssertions` `8.0.1` for assertions.
 

@@ -170,6 +170,8 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
   Between the lints and the build it runs the Seed `.github/ci/gate-checks.sh <merge-base>` when the repo has one:
   checks only that repo needs, such as Blazor-Server's Sandcastle TypeScript check. The merge
   base is empty without an `origin/main`.
+  Right before the build it runs `python3 -I .github/scripts/check_central_pins.py`, which refuses a central NuGet pin no project references under transitive pinning,
+  as CI's `Build Solution` job does first, right after the checkout ([central-pins.md](central-pins.md)).
 
 ## Tests
 
@@ -181,6 +183,7 @@ build runs. It needs cases for:
 - a push that isn't the checked-out commit
 - an untracked or unstaged file
 - `.github/ci/gate-checks.sh` running with the merge base, and failing the push before the build
+- an unreferenced central NuGet pin under transitive pinning refusing the push, naming the pin, before the build
 - a `sandcastle.gatedHead` marker for `HEAD` not skipping the gate (pushed and by hand)
 - a branch behind `origin/main` refused before the gate (pushed and by hand) with the `git merge origin/main` fix,
   the same branch running the gate once it has merged main, no `origin/main` skipping the check, and a stale local
