@@ -20,6 +20,11 @@ the paths are unchanged.
 - Nested configs count, because markdownlint-cli2 applies a directory's config to the files under it, in CI and the gate
   alike. Snapshotting only the root config made vendored skills and Blazor-Server's `.sandcastle` prompts fail at commit
   time while passing in CI.
+- Each name goes to markdownlint-cli2 as `:<name>`, its literal-path form, as `scripts/gate.sh` passes them: a bare
+  argument is read as a glob (`a[1].md` would match `a1.md`), an option (`-dash.md`) or a negation (`!bang.md`).
+- It fails closed. The staged list is written to a file and a `git diff --cached` that fails refuses the commit, and so does
+  a failed snapshot (`git ls-files` or either `git checkout-index`): an empty list or a tree missing a staged file would
+  otherwise let the commit through unlinted.
 
 ## Tests
 
@@ -37,6 +42,10 @@ can't tell which config the hook used. Cases that must exist:
 - a staged file under an ignored path → allowed
 - a staged nested config → its rules apply under its directory; a nested config that isn't staged → not used
 - a path with spaces, a deletion (skips the lint), and no staged Markdown (skips the lint)
+- `a[1].md`, `-dash.md` and `!bang.md` → each linted as that file and passed with its `:`; the stub refuses an argument without
+  one, as the real linter would misread it
+- a failing `git diff`, `git ls-files`, and each of the two `git checkout-index` calls on its own → refused, saying so (a `git`
+  wrapper on `PATH` fails the subcommand, or the nth call of it, that `FAIL_GIT` and `FAIL_GIT_CALL` name)
 
 Commit the test repo's setup with `git -c core.hooksPath=/dev/null`, so a global hooks path on the developer's machine
 doesn't run during setup. Mutation-check the suite: swap the hook to copy the working-copy config and confirm the config

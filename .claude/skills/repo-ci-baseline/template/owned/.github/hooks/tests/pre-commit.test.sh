@@ -7,7 +7,12 @@
 # word that fails a file, and "ignores" lists "prefix/**" paths it skips. A
 # nested config's "forbid" replaces the root's for the files under it. So a
 # case can tell whether the hook linted the staged content or the working
-# copy, and under which config, without needing the real linter.
+# copy, and under which config, without needing the real linter. The stub
+# takes only literal paths (a leading ':'), as the real linter needs them:
+# without one it reads a name as a glob, an option or a negation. A `git`
+# wrapper fails the git subcommand FAIL_GIT names (only its FAIL_GIT_CALL-th
+# call, when that is set), so a case can tell that the hook refuses a commit it
+# couldn't lint.
 # Usage: .github/hooks/tests/pre-commit.test.sh
 set -uo pipefail
 
@@ -31,19 +36,21 @@ word=\$(sed -n 's/.*"forbid": *"\\([^"]*\\)".*/\\1/p' .markdownlint-cli2.jsonc)
 ignored=\$(sed -n 's/.*"ignores": *\\[ *"\\([^"]*\\)\\*\\*".*/\\1/p' .markdownlint-cli2.jsonc)
 status=0
 for file in "\$@"; do
+  [[ "\$file" == :* ]] || { echo "\$file: not a literal path (no leading :)"; exit 3; }
+  file="\${file#:}"
   if [[ -n "\$ignored" && "\$file" == "\$ignored"* ]]; then
     continue
   fi
   # A nested config's "forbid" replaces the root's for the files under it.
-  file_word="\$word" dir=\$(dirname "\$file")
+  file_word="\$word" dir=\$(dirname -- "\$file")
   while [[ "\$dir" != "." ]]; do
     if [[ -f "\$dir/.markdownlint-cli2.jsonc" ]]; then
       file_word=\$(sed -n 's/.*"forbid": *"\\([^"]*\\)".*/\\1/p' "\$dir/.markdownlint-cli2.jsonc")
       break
     fi
-    dir=\$(dirname "\$dir")
+    dir=\$(dirname -- "\$dir")
   done
-  if grep -q "\$file_word" "\$file"; then
+  if grep -q -e "\$file_word" -- "\$file"; then
     echo "\$file: \$file_word found"
     status=1
   fi
@@ -51,6 +58,22 @@ done
 exit \$status
 EOF
 chmod +x "$STUBS/markdownlint-cli2"
+
+GIT_STUBS="$WORK/git-bin"
+mkdir -p "$GIT_STUBS"
+cat > "$GIT_STUBS/git" << EOF
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  [[ -n "\${FAIL_GIT:-}" && "\$arg" == "\$FAIL_GIT" ]] || continue
+  echo x >> "$WORK/git-calls"
+  if [[ -z "\${FAIL_GIT_CALL:-}" || "\$(wc -l < "$WORK/git-calls")" -eq "\$FAIL_GIT_CALL" ]]; then
+    echo "git \$FAIL_GIT: failed (stub)" >&2
+    exit 128
+  fi
+done
+exec "$(command -v git)" "\$@"
+EOF
+chmod +x "$GIT_STUBS/git"
 
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
 export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.com
@@ -73,6 +96,15 @@ STATUS=0
 run_hook() {
   : > "$LOG"
   OUTPUT="$(cd "${1:-$REPO}" && PATH="$STUBS:$PATH" bash "$HOOK" 2>&1)"
+  STATUS=$?
+}
+
+# run_hook_failing_git <subcommand> [<call>]: run the hook in the lint worktree
+# with that git subcommand failing (only its <call>-th call, when given).
+run_hook_failing_git() {
+  : > "$LOG"
+  : > "$WORK/git-calls"
+  OUTPUT="$(cd "$REPO" && PATH="$GIT_STUBS:$STUBS:$PATH" FAIL_GIT="$1" FAIL_GIT_CALL="${2:-}" bash "$HOOK" 2>&1)"
   STATUS=$?
 }
 
@@ -218,6 +250,40 @@ echo 'BAD text.' > "$REPO/vendor/notes.md"
 git -C "$REPO" add vendor/notes.md
 run_hook
 expect "a nested config that isn't staged isn't used" refused linted
+reset_repo
+
+# markdownlint-cli2 reads a bare argument as a glob, an option or a negation.
+for name in 'a[1].md' '-dash.md' '!bang.md'; do
+  echo 'BAD text.' > "$REPO/$name"
+  echo 'Some text.' > "$REPO/a1.md"
+  git -C "$REPO" add -- "$name" a1.md
+  run_hook
+  expect "a staged $name is linted as that file" refused linted
+  if grep -qF -- ":$name" "$LOG"; then
+    pass "the linter gets $name as a literal path (:$name)"
+  else
+    fail "the linter gets $name as a literal path (:$name)" "its arguments: $(cat "$LOG")"
+  fi
+  reset_repo
+done
+
+# A git that fails refuses the commit, rather than linting nothing or a tree
+# missing the staged files.
+echo 'Some text.' >> "$REPO/README.md"
+git -C "$REPO" add README.md
+# checkout-index runs twice: for the configs, then for the staged files.
+for failing in diff ls-files "checkout-index 1" "checkout-index 2"; do
+  # shellcheck disable=SC2086 # the subcommand and its call number, as two words
+  run_hook_failing_git $failing
+  expect "a failing git $failing refuses the commit" refused not-linted
+  if [[ "$OUTPUT" == *'the commit is refused'* ]]; then
+    pass "a failing git $failing says the commit is refused"
+  else
+    fail "a failing git $failing says the commit is refused" "no refusal in the output"
+  fi
+done
+run_hook_failing_git no-such-subcommand
+expect "with every git command working, the hook lints as before" allowed linted
 reset_repo
 
 # ── Commits only in a linked worktree ──

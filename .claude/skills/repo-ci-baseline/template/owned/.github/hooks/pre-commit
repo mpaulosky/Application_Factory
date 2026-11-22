@@ -54,11 +54,19 @@ fi
 
 # ── Collect staged .md files ───────────────────────────────────────────────
 # NUL-separated, so paths with spaces or other odd characters survive.
-# R counts too: a renamed file is listed under its new name.
+# R counts too: a renamed file is listed under its new name. Written to a file
+# first, so a git that fails refuses the commit instead of leaving the list
+# empty, which would let it through unlinted.
+WORK_DIR="$(mktemp -d)" || exit 1
+trap 'rm -rf "$WORK_DIR"' EXIT
+if ! git diff --cached --name-only -z --diff-filter=ACMR > "$WORK_DIR/staged"; then
+  echo -e "${RED}❌  git diff --cached failed, so the staged Markdown can't be linted: the commit is refused.${RESET}"
+  exit 1
+fi
 MD_FILES=()
 while IFS= read -r -d '' file; do
   [[ "$file" == *.md ]] && MD_FILES+=("$file")
-done < <(git diff --cached --name-only -z --diff-filter=ACMR)
+done < "$WORK_DIR/staged"
 
 if [[ ${#MD_FILES[@]} -eq 0 ]]; then
   exit 0
@@ -86,20 +94,28 @@ fi
 # Write each staged file, and the configs as they will be committed, into a
 # temporary tree with the same layout, then lint that tree. The working copy
 # can differ from what's staged, and only the staged version gets committed.
-SNAPSHOT="$(mktemp -d)"
-trap 'rm -rf "$SNAPSHOT"' EXIT
+SNAPSHOT="$WORK_DIR/snapshot"
+mkdir "$SNAPSHOT" || exit 1
 
 # Only staged configs are used; one that exists only in the working copy won't
 # be in the commit. Nested ones count too: markdownlint-cli2 applies a
 # directory's .markdownlint-cli2.jsonc to the files under it, as CI does.
-git ls-files -z --cached -- ':(glob)**/.markdownlint-cli2.jsonc' \
-  | git checkout-index --prefix="$SNAPSHOT/" -z --stdin
-printf '%s\0' "${MD_FILES[@]}" | git checkout-index --prefix="$SNAPSHOT/" -z --stdin
+# A failed write (git, a full disk) would lint a tree missing a staged file
+# or its config, so it refuses the commit (pipefail: either side failing).
+if ! git ls-files -z --cached -- ':(glob)**/.markdownlint-cli2.jsonc' \
+  | git checkout-index --prefix="$SNAPSHOT/" -z --stdin \
+  || ! printf '%s\0' "${MD_FILES[@]}" | git checkout-index --prefix="$SNAPSHOT/" -z --stdin; then
+  echo -e "${RED}❌  Couldn't write the staged files to a temporary tree to lint: the commit is refused.${RESET}"
+  exit 1
+fi
 
 # ── Run markdownlint on staged files ──────────────────────────────────────
 echo -e "  Linting staged .md files with: ${CYAN}$(basename "$MARKDOWNLINT_BIN")${RESET}"
 
-if (cd "$SNAPSHOT" && "$MARKDOWNLINT_BIN" "${MD_FILES[@]}") 2>&1; then
+# markdownlint-cli2 reads each argument as a glob, so a[1].md would match a1.md: a
+# leading ':' makes it a literal path, and keeps a name that starts with '-' or
+# '!' from being read as an option or a negation, as scripts/gate.sh does.
+if (cd "$SNAPSHOT" && "$MARKDOWNLINT_BIN" "${MD_FILES[@]/#/:}") 2>&1; then
   echo -e "${GREEN}✅  All staged .md files passed markdownlint.${RESET}"
   exit 0
 else
