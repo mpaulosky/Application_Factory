@@ -48,12 +48,18 @@ enforces (bubblewrap on Linux) on every Bash command and everything it starts:
   into the worktree it has just checked.
 - **The sandbox.** Its Bash reads none of the person's credentials (`~/.ssh`, `~/.config/gh`, `~/.git-credentials`, `~/.netrc`, `~/.gitconfig`, the shells' start-up
   files, .NET's user secrets, the keyrings, cloud and package-registry sign-ins, shell histories, all of `~/.claude` and Claude Code's `CLAUDE_CONFIG_DIR`, the other sessions'
-  logs, and wherever a variable such as `KUBECONFIG` or `XDG_CONFIG_HOME` moves one), and of the person's data (home, `/tmp`, `/var/tmp`, `/mnt`, `/media`, `/run/media`)
-  it reads only the worktree, the clone's git folder, `.security` and its own folder, so a secret no list names (another project's `.env`, a tool's config) is out of
-  reach too. That is an allow-list made of denials: every entry beside the way to those folders is denied, as the sandbox lists them when the session starts, since
-  denying home whole and re-allowing the worktree (`allowRead`) leaves bubblewrap unable to mask the files it protects there, and every command fails. Its own folder
-  is in `~/.cache/repo-ci-baseline-sessions`, not `/tmp`, so `/tmp` is denied whole and the list stays short; settings over 100,000 bytes, one argument's room, stop
-  the round before the session. It writes only a temporary folder of its own, its run folder among it: not the
+  logs, and wherever a variable such as `KUBECONFIG` or `XDG_CONFIG_HOME` moves one), and of the rest of the disk only the worktree, the clone's git folder, `.security`,
+  its own folder, the system's folders (`/usr`, `/etc`, `/proc` and the like, but not `/run/user`, `/run/media` or `/dev/shm`) and the folders node and git run from,
+  so a secret no list names (another project's `.env`, a tool's config, another user's or a clone outside home) is out of reach too. That is an allow-list made of
+  denials: walking from `/`, every entry beside the way to those folders is denied, where a symlink leads as well, since denying home whole and re-allowing the worktree
+  (`allowRead`) leaves bubblewrap unable to mask the files it protects there, and every command fails. The round lists them when it builds the session's settings, just
+  before the session starts, so an entry made after that is readable: the session writes only its own folder, so only the person's other programs can make one, and
+  the round names what it finds made once the session ends. A folder on the way it can't list, or an entry to deny named with a glob character or not in UTF-8, which
+  the sandbox may not match as written, stops the round before the session. Its own folder is in `~/.cache/repo-ci-baseline-sessions`, not `/tmp`, so `/tmp` is
+  denied whole and the list stays short (what a killed run left there is removed by the next); settings over 100,000 bytes, one argument's room, stop the round too,
+  naming the crowded folder. The clone's git folder is read whole, since git needs it: its other branches, stash and reflog with it, so the round refuses a clone whose
+  own git config holds a sign-in secret (a token in a remote or `insteadOf` URL, an `http` extra header). It writes only a temporary folder of its own, its run folder
+  among it: not the
   worktree, which a sandbox otherwise lets its working folder be written, the clone's git folder, its review ledgers or the main checkout's `.security`. It reaches no
   host (it builds and installs nothing, and a `git fetch` has nowhere to write: `reapply.sh` has just fetched), can't leave the sandbox
   (`allowUnsandboxedCommands: false`), and the session refuses to start without it (`failIfUnavailable`).

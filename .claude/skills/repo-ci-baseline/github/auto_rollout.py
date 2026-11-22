@@ -33,12 +33,15 @@ folder of its own, open, or dismissed when it isn't a security finding; once it
 ends, the round records that with the worktree's scripts/review.sh record
 (record_review), so the session writes no ledger or .security entry itself. It
 edits, fixes and commits nothing, and runs no gate, so nothing it wrote runs
-later as the person. Its Bash can't read the person's credentials
+later as the person. Its Bash reads none of the person's credentials
 (CREDENTIAL_PATHS, ~/.claude among them, and where CREDENTIAL_VARS move them),
-and of their data (READ_DENIED_ROOTS: home, /tmp) only the worktree, the
-clone's git folder, .security and its own folder (denied_around), which is in
-SESSION_DIR, not /tmp,
-writes only a temporary folder of its own (session_writes: never the worktree,
+and of their data only the worktree, the clone's git folder, .security and its
+own folder, which is in SESSION_DIR, not /tmp: every entry of / but those, the
+system's own folders (SYSTEM_READS) and the folders node and git run from is
+denied (read_denials), as listed when the session starts, so an entry made
+after that is readable, and the round names any it finds once the session ends
+(unlisted_since); a clone whose git config holds a sign-in secret isn't
+reviewed (config_secrets). It writes only a temporary folder of its own (session_writes: never the worktree,
 its git folder, the ledgers or .security), reaches no host (SANDBOX_DOMAINS is
 empty), and can't leave the sandbox; the session refuses to start without the
 sandbox (bubblewrap and socat on Linux, which the preflight checks for). Its file tools, which run outside the sandbox, may read only the
@@ -102,6 +105,7 @@ it: rollout.sh --auto again, which picks up where it stopped (a repo already
 reapplied finds nothing new to push, and its open PR is landed).
 """
 
+import collections
 import contextlib
 import fcntl
 import hashlib
@@ -129,7 +133,8 @@ TEMPLATE_GLOBAL_JSON = os.path.join(OWNED, "global.json")
 LOCK = os.path.expanduser("~/.cache/repo-ci-baseline/rollout-auto.lock")
 LOG_DIR = os.path.expanduser("~/.cache/repo-ci-baseline/logs")
 # Where each review session's own temporary folder is made: in home, not /tmp, so the sandbox denies /tmp whole
-# (denied_around would otherwise list every entry of it), and beside the cache folder, which the session can't read.
+# (denied_around would otherwise list every entry of it), and beside the cache folder, not in it, since the session
+# can't read that (CREDENTIAL_PATHS). A folder a killed run left there is removed by the next (sweep_sessions).
 SESSION_DIR = os.path.expanduser("~/.cache/repo-ci-baseline-sessions")
 # The most the session's settings may take as JSON: they are one argument of claude's, which Linux caps at 128 KiB.
 SETTINGS_LIMIT = 100_000
@@ -196,10 +201,7 @@ SESSION_TOOLS = ("Bash", "Agent", "Task", "TodoWrite", "SendMessage")
 # own sign-in and the other sessions' logs. A list of what to hide, not of what to show: a tool keeping a credential
 # elsewhere needs its path added. The sandbox masks each of these paths; the Read rules cover the file tools, which
 # run outside it and are also allowed to read only the worktree, the .security record and the session's own folder.
-# Where the person's own data lives: the session's Bash reads none of it but session_reads (denied_around), so a
-# secret no CREDENTIAL_PATHS entry names (another project's .env, a tool's config, another worktree) stays out of its
-# reach too. The system's own folders, which hold the tools it runs (/usr), stay readable.
-READ_DENIED_ROOTS = ("~", "/tmp", "/var/tmp", "/mnt", "/media", "/run/media")
+# This list is what to hide; what the sandbox's Bash may read at all is SYSTEM_READS and session_reads.
 CREDENTIAL_PATHS = (
     "~/.ssh", "~/.config/gh", "~/.config/glab-cli", "~/.config/hub", "~/.git-credentials", "~/.config/git/credentials",
     "~/.netrc", "~/.gnupg", "~/.docker", "~/.aws", "~/.azure", "~/.config/gcloud", "~/.kube", "~/.terraform.d",
@@ -221,6 +223,22 @@ CREDENTIAL_VARS = ("GH_CONFIG_DIR", "DOCKER_CONFIG", "KUBECONFIG", "AWS_SHARED_C
                    "PASSWORD_STORE_DIR", "GIT_CONFIG_GLOBAL")
 XDG_CONFIG_SUBFOLDERS = ("gh", "glab-cli", "hub", "git", "pnpm", "pip", "uv", "NuGet", "op", "gcloud", "rclone",
                          "doctl", "fish")
+# What the session's Bash may read besides session_reads and the folders SESSION_COMMANDS run from (tool_reads): the
+# system's own folders, which hold the tools and libraries it runs (macOS's among them). Every other entry of / is
+# denied (denied_around): home, /tmp, /var, /mnt, /media, /srv, /opt, /data and other users' homes among them, so a
+# secret no CREDENTIAL_PATHS entry names (another project's .env, a tool's config, another worktree) is out of its
+# reach too.
+SYSTEM_READS = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/proc", "/dev", "/sys", "/run",
+                "/nix", "/System", "/Library", "/private/etc")
+# What of SYSTEM_READS holds the person's own, so is denied all the same: their runtime folder (the SSH agent's and
+# the keyring's sockets), mounted drives and shared memory.
+SYSTEM_DENIED = ("/run/user", "/run/media", "/dev/shm")
+# The commands the session's Bash runs that may be installed outside SYSTEM_READS (nvm, volta, ~/.local/bin): git, and
+# node, which scripts/review.sh stage runs.
+SESSION_COMMANDS = ("node", "git")
+# Characters a sandbox path may read as a pattern: an entry named with one is refused rather than denied
+# (denied_around).
+GLOB_CHARACTERS = frozenset("*?[]{}")
 # The hosts the session's Bash may reach: none. It builds and installs nothing (it runs no gate), and git can't fetch
 # in it (the clone's git folder is read-only to it, so a fetch has nowhere to write); reapply.sh has just fetched.
 SANDBOX_DOMAINS = ()
@@ -573,7 +591,7 @@ def session_writes(tmp):
 
 
 def session_reads(worktree, common, security, tmp):
-    """All the session's Bash may read of READ_DENIED_ROOTS, each as given and where its symlinks lead: the worktree,
+    """All the session's Bash may read of the person's data, each as given and where its symlinks lead: the worktree,
     the clone's git folder (git there needs it), the main checkout's .security record and its own temporary folder."""
     return list(dict.fromkeys(form for path in (worktree, common, security, tmp) for form in both_forms(path)))
 
@@ -582,26 +600,77 @@ def denied_around(root, allowed, listdir=os.listdir):
     """What to deny of root so the sandbox reads only allowed (and the folders on the way to them) there: root itself
     when nothing allowed is in it, else every entry of each folder on the way that is neither allowed nor on the way to
     one. Not root whole with the allowed re-opened (allowRead): bubblewrap then mounts the worktree read-only before it
-    masks the files the sandbox protects there, which it can't create in it, and every command fails. An entry made
-    after this runs is readable; the session itself writes only its own folder. A folder that can't be listed is
-    denied whole."""
+    masks the files the sandbox protects there, which it can't create in it, and every command fails. Each entry is
+    named as listed; where a symlink leads is denied in its own place, as long as root holds it (from /, it does).
+    A listing, so an entry made after it is readable (unlisted_since says which). Raises OSError for a folder on the
+    way that can't be listed (denying it would hide the worktree too) and ValueError for an entry to deny whose name
+    holds a GLOB_CHARACTERS character or isn't UTF-8, which a sandbox path may not match as written."""
     allowed = {os.path.normpath(path) for path in allowed}
 
     def holds(folder):
         return any(path == folder or path.startswith(folder.rstrip("/") + "/") for path in allowed)
 
+    def deny(path):
+        name = os.path.basename(path)
+        try:
+            name.encode("utf-8")
+        except UnicodeEncodeError:
+            raise ValueError(f"{path!r} must be hidden from the session, but its name isn't UTF-8, so the sandbox can't"
+                             " name it: rename or move it, then resume") from None
+        if GLOB_CHARACTERS & set(name):
+            raise ValueError(f"{path} must be hidden from the session, but its name holds one of"
+                             f" {''.join(sorted(GLOB_CHARACTERS))}, which the sandbox may read as a pattern: rename or"
+                             " move it, then resume")
+        return [path]
+
     def walk(folder):
         if folder in allowed:
             return []
         if not holds(folder):
-            return [folder]
+            return deny(folder)
         try:
             names = sorted(listdir(folder))
-        except OSError:
-            return [folder]
+        except OSError as error:
+            raise OSError(f"can't list {folder}, which is on the way to the session's folders, so what beside them"
+                          f" to hide from it can't be told: {error}") from None
         return [path for name in names for path in walk(os.path.join(folder, name))]
 
     return walk(os.path.normpath(root))
+
+
+def tool_reads(home, which=shutil.which):
+    """The folders SESSION_COMMANDS run from, as PATH finds them and where their symlinks lead, with the lib and
+    libexec folders beside a bin folder (git's helpers, node's own modules), for one installed outside SYSTEM_READS.
+    Never home or a folder above it, which would open all of home: a command found there stays unreadable."""
+    found = []
+    for name in SESSION_COMMANDS:
+        path = which(name)
+        if not path:
+            continue
+        for folder in dict.fromkeys((os.path.dirname(os.path.abspath(path)), os.path.dirname(os.path.realpath(path)))):
+            found.append(folder)
+            if os.path.basename(folder) == "bin":
+                prefix = os.path.dirname(folder)
+                found += [os.path.join(prefix, "lib"), os.path.join(prefix, "libexec")]
+    home = os.path.normpath(home)
+    return [folder for folder in dict.fromkeys(found)
+            if folder != home and not home.startswith(folder.rstrip("/") + "/")]
+
+
+def read_denials(reads, credentials, home, listdir=os.listdir, which=shutil.which):
+    """What the session's Bash is denied of /, besides the credentials: every entry beside the way to reads, the
+    folders SESSION_COMMANDS run from (tool_reads) and SYSTEM_READS (denied_around), then SYSTEM_DENIED, each
+    where its symlinks lead too."""
+    system = [form for path in SYSTEM_READS for form in both_forms(path)]
+    walked = denied_around("/", [*reads, *system, *tool_reads(home, which)], listdir)
+    held = [form for path in SYSTEM_DENIED for form in both_forms(path)]
+    return [path for path in dict.fromkeys(walked + held) if path not in credentials]
+
+
+def unlisted_since(denials, reads, credentials, home, listdir=os.listdir, which=shutil.which):
+    """What read_denials gives now that denials, taken when the session started, lacks: entries made beside the way
+    to its folders while it ran, which it could read. Raises as read_denials does."""
+    return [path for path in read_denials(reads, credentials, home, listdir, which) if path not in set(denials)]
 
 
 def absolute(path, home):
@@ -635,27 +704,35 @@ def relocated_credentials(environ, home):
     return [path for path in found if path]
 
 
-def session_settings(worktree, common, gitdir, tmp, home=None, config_dir=None, environ=None, listdir=os.listdir):
+def read_inputs(worktree, common, tmp, home=None, config_dir=None, environ=None):
+    """(session_reads, the credentials, home) for session_settings and unlisted_since: the credentials are
+    CREDENTIAL_PATHS, Claude Code's CLAUDE_CONFIG_DIR and where environ's CREDENTIAL_VARS move one, each as an absolute
+    path and where its symlinks lead."""
+    home = home or os.path.expanduser("~")
+    environ = os.environ if environ is None else environ
+    config_dir = claude_config_dir(environ, home) if config_dir is None else absolute(config_dir, home)
+    moved = ([config_dir] if config_dir else []) + relocated_credentials(environ, home)
+    credentials = list(dict.fromkeys(form for path in [expand_home(path, home) for path in CREDENTIAL_PATHS] + moved
+                                     for form in both_forms(path)))
+    security = os.path.join(os.path.dirname(common), ".security")
+    return session_reads(worktree, common, security, tmp), credentials, home
+
+
+def session_settings(worktree, common, gitdir, tmp, home=None, config_dir=None, environ=None, listdir=os.listdir,
+                     which=shutil.which):
     """The session's settings (--settings, passed as JSON so no file of them exists for it to change): dontAsk
     permissions that allow only SESSION_TOOLS, reads of the worktree, the main checkout's .security and tmp, and edits
     in tmp alone, and deny the credentials, the Factory, ~/.claude and every edit in the worktree; and a sandbox for its
-    Bash that can't be turned off, refuses to start without its sandbox (bubblewrap on Linux), reads nothing of
-    READ_DENIED_ROOTS (home among them) but session_reads (denied_around), and none of
+    Bash that can't be turned off, refuses to start without its sandbox (bubblewrap on Linux), reads nothing of /
+    but session_reads, SYSTEM_READS and the folders its commands run from (read_denials), and none of
     CREDENTIAL_PATHS (nor Claude Code's CLAUDE_CONFIG_DIR, nor where environ's CREDENTIAL_VARS move a credential), each
     as an absolute path and where its symlinks lead (a dotfiles repo's links), writes only session_writes (never the
     worktree, which a sandbox otherwise lets its working folder be written, nor its git folder), and reaches only SANDBOX_DOMAINS (none). The
     main checkout is the git common folder's parent, as reapply.sh has it."""
-    home = home or os.path.expanduser("~")
-    environ = os.environ if environ is None else environ
-    config_dir = claude_config_dir(environ, home) if config_dir is None else absolute(config_dir, home)
+    reads, credentials, home = read_inputs(worktree, common, tmp, home, config_dir, environ)
     security = os.path.join(os.path.dirname(common), ".security")
     read_only = [worktree, gitdir]
-    moved = ([config_dir] if config_dir else []) + relocated_credentials(environ, home)
-    credentials = list(dict.fromkeys(form for path in [expand_home(path, home) for path in CREDENTIAL_PATHS] + moved
-                                     for form in both_forms(path)))
-    reads = session_reads(worktree, common, security, tmp)
-    roots = [denied for path in READ_DENIED_ROOTS for form in both_forms(expand_home(path, home))
-             for denied in denied_around(form, reads, listdir) if denied not in credentials]
+    denials = read_denials(reads, credentials, home, listdir, which)
     settings = {
         "permissions": {
             "allow": [*SESSION_TOOLS, f"Read(/{worktree}/**)", f"Read(/{security}/**)", f"Read(/{tmp}/**)", f"Edit(/{tmp}/**)"],
@@ -671,16 +748,18 @@ def session_settings(worktree, common, gitdir, tmp, home=None, config_dir=None, 
             "filesystem": {
                 "allowWrite": session_writes(tmp),
                 "denyWrite": read_only,
-                "denyRead": [*credentials, *dict.fromkeys(roots)],
+                "denyRead": [*credentials, *denials],
             },
             "network": {"allowedDomains": list(SANDBOX_DOMAINS)},
         },
     }
     size = len(json.dumps(settings))
     if size > SETTINGS_LIMIT:
-        raise ValueError(f"the session's settings take {size} bytes, more than {SETTINGS_LIMIT}: a folder on the way to"
-                         " the worktree, its git folder or the session's own holds too many entries for the sandbox to"
-                         " deny one by one (denied_around)")
+        crowded, count = collections.Counter(os.path.dirname(path) for path in denials).most_common(1)[0]
+        raise ValueError(f"the session's settings take {size} bytes, more than {SETTINGS_LIMIT} (one argument of"
+                         f" claude's): {crowded}, on the way to the worktree, its git folder or the session's own"
+                         f" folder ({SESSION_DIR}), holds {count} entries the sandbox must deny one by one; move the"
+                         " clone, or clear that folder, then resume")
     return settings
 
 
@@ -693,6 +772,46 @@ def review_command(repo, worktree, owned, settings, agents, skill, run):
     return ["claude", "-p", prompt, "--permission-mode", "dontAsk", "--settings", json.dumps(settings),
             "--setting-sources", "", "--strict-mcp-config", "--tools", ",".join(SESSION_BUILTINS),
             "--agents", json.dumps(agents), "--disallowedTools", *DENIED_TOOLS]
+
+
+GIT_SECRET_KEYS = r"^(remote\..*\.(push)?url|url\..*\.(push)?insteadof|http\..*extraheader)$"
+# A URL with a sign-in in it: userinfo after an http(s) or ftp(s) scheme (https://<token>@host); ssh's git@ is no
+# secret.
+URL_SIGN_IN = re.compile(r"\b(https?|ftps?)://[^/@\s]+@", re.I)
+
+
+def config_secrets(worktree, run=run_quiet):
+    """The keys of the clone's own git config (and the worktree's) that hold a sign-in secret the session could read
+    there, since its Bash reads the clone's git folder: a remote or insteadOf URL with a sign-in (URL_SIGN_IN) or an
+    http extraheader. Keys only, never their values. Raises RuntimeError when git can't read the config."""
+    found = []
+    code, out, _ = run(["git", "-C", worktree, "config", "--bool", "extensions.worktreeConfig"])
+    # --worktree reads config.worktree only with the extension on; without it, a linked worktree's git refuses it.
+    for scope in ("--local", "--worktree") if code == 0 and out.strip() == "true" else ("--local",):
+        code, out, err = run(["git", "-C", worktree, "config", scope, "--null", "--get-regexp", GIT_SECRET_KEYS])
+        if code == 1:
+            continue  # nothing set
+        if code != 0:
+            raise RuntimeError(f"git config {scope} can't be read in {worktree}: {err.strip() or f'exit {code}'}")
+        for entry in filter(None, out.split("\0")):
+            key, _, value = entry.partition("\n")
+            if key.endswith("extraheader") or URL_SIGN_IN.search(value) or URL_SIGN_IN.search(key):
+                found.append(key)
+    return list(dict.fromkeys(found))
+
+
+def sweep_sessions(session_dir):
+    """Remove the temporary folders killed runs left in session_dir: rollout-session.* entries of the user's own (rmtree
+    refuses a symlink, so where one leads is left). The lock lets one run at a time and a run makes one session at a
+    time, so none of them is live."""
+    for name in os.listdir(session_dir):
+        path = os.path.join(session_dir, name)
+        try:
+            found = os.lstat(path)
+        except OSError:
+            continue
+        if name.startswith("rollout-session.") and found.st_uid == os.getuid():
+            shutil.rmtree(path, ignore_errors=True)
 
 
 def own_log_dir(log_dir):
@@ -1391,8 +1510,8 @@ def end_group(session, wait_seconds=GROUP_WAIT_SECONDS, sleep=time.sleep, clock=
 
 def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, timeout=REVIEW_TIMEOUT_MINUTES * 60,
                log_dir=LOG_DIR, session_dir=SESSION_DIR, end=end_group, clock=time.monotonic, guard=session_guard,
-               check=broken_rules,
-               skill=read_skill, agents=agent_definition, record=record_review):
+               check=broken_rules, skill=read_skill, agents=agent_definition, record=record_review,
+               listdir=os.listdir, which=shutil.which, secrets=config_secrets):
     """/pre-push-review headless in worktree: (exit code, the session's log, the Rules it broke). 124 when it runs
     past its time, 127 when it can't start, SESSION_BROKE_A_RULE when it broke one (they are listed, and in the log
     too), RECORD_FAILED when what it staged couldn't be recorded (it is kept, staged_copy; a group prepare left is
@@ -1405,7 +1524,9 @@ def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, ti
     then it is passed on, after the kept folder and the command that records it are printed (after RECORD_LEFT,
     which may have recorded, with a word to check scripts/review.sh report first). Once it has exited 0 and broken
     no Rule, the round records what it staged (record_review). The log is 0600 (mkstemp) in a 0700 folder of the
-    user's own; the session's temporary folder is made in session_dir, another such folder."""
+    user's own; the session's temporary folder is made in session_dir, another such folder, once what killed runs left
+    there is removed (sweep_sessions). A clone whose git config holds a sign-in secret (config_secrets) isn't reviewed,
+    and entries made beside the session's folders while it ran, which it could read, are named (unlisted_since)."""
     try:
         own_log_dir(log_dir)
         handle, log = tempfile.mkstemp(prefix=f"review-{short_name(repo)}.", suffix=".log", dir=log_dir)
@@ -1414,15 +1535,19 @@ def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, ti
     with os.fdopen(handle, "w") as out:
         try:
             own_log_dir(session_dir)
+            sweep_sessions(session_dir)
+            folder = tempfile.TemporaryDirectory(prefix="rollout-session.", dir=session_dir, ignore_cleanup_errors=True)
         except OSError as error:
-            out.write(f"rollout.sh: can't set the session up: {error}\n")
+            out.write(f"rollout.sh: can't set the session up: {error} (the session's own folder: a real folder of"
+                      f" yours, not a symlink; remove or fix it, or run /pre-push-review in {worktree}), then resume\n")
             return 127, log, []
-        with tempfile.TemporaryDirectory(prefix="rollout-session.", dir=session_dir) as tmp:
+        with folder as tmp:
             return review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock, guard, check, skill,
-                             agents, record)
+                             agents, record, listdir, which, secrets)
 
 
-def review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock, guard, check, skill, agents, record):
+def review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock, guard, check, skill, agents, record,
+              listdir, which, secrets):
     """run_review's body, once its log is open and its temporary folder made."""
     def stop(text):
         out.write(f"rollout.sh: {text}\n")
@@ -1435,7 +1560,13 @@ def review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock
         before = guard(worktree)
         run = os.path.join(tmp, "run")
         os.mkdir(run, 0o700)
-        settings = session_settings(worktree, before.common, before.gitdir, tmp)
+        held = secrets(worktree)
+        if held:
+            return stop(f"the clone's git config holds a sign-in secret ({', '.join(held)}), which the session, reading"
+                        f" the clone's git folder, could read: move it to a credential helper (git -C"
+                        f" {shlex.quote(worktree)} config --get-regexp shows it), then resume; the session wasn't"
+                        " started")
+        settings = session_settings(worktree, before.common, before.gitdir, tmp, listdir=listdir, which=which)
         command = review_command(repo, worktree, owned, settings, agents(), skill(), run)
         env = session_env(os.environ, tmp)
     except GuardUnreadable as error:
@@ -1469,6 +1600,7 @@ def review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock
             raise passed_on(got[0])
         if not started:
             return 127, log, []
+        appeared(out, settings, read_inputs(worktree, before.common, tmp), listdir, which)
         keep, head = staged_copy(log), before.worktree_state[0]
         try:
             broke = check(before)
@@ -1515,6 +1647,25 @@ def review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock
     for rule in broke:
         out.write(f"rollout.sh: the session broke a rule: {rule}\n")
     return (SESSION_BROKE_A_RULE if broke else code), log, broke
+
+
+def appeared(out, settings, inputs, listdir=os.listdir, which=shutil.which):
+    """Name, in the log and on stderr, what was made beside the session's folders while it ran (unlisted_since, from
+    read_inputs' inputs): it could read those, since its sandbox was set before them. A warning, not a broken Rule:
+    the session writes only its own folder, so the person's other programs made them."""
+    try:
+        made = unlisted_since(settings["sandbox"]["filesystem"]["denyRead"], *inputs, listdir=listdir, which=which)
+    except (OSError, ValueError) as error:
+        made, why = None, error
+    if made is None:
+        text = f"what was made beside the session's folders while it ran can't be told ({why})"
+    elif not made:
+        return
+    else:
+        text = ("made while the session ran, after its sandbox was set, so it could read them: " + ", ".join(made[:20])
+                + (f" (and {len(made) - 20} more)" if len(made) > 20 else ""))
+    out.write(f"rollout.sh: {text}\n")
+    sys.stderr.write(f"rollout.sh: {text}\n")
 
 
 def wait_for(session, timeout, got, clock=time.monotonic):
@@ -1680,9 +1831,9 @@ def drive(repo, path, brings, reapply, review, say):
         if code != REVIEW_NEEDED:
             return Outcome("failed", f"reapply.sh exited {code}; retry it with: {retry}")
         if reviews == MAX_REVIEWS:
-            return Outcome("failed", f"the gate still asks for a review after {reviews} review session(s): main or the Template may have"
-                           f" moved since the last one, or the session stopped short in its sandbox (no GitHub sign-in, no network;"
-                           f" see {log}); run /pre-push-review in {shlex.quote(worktree)}, then resume")
+            return Outcome("failed", f"the gate still asks for a review after {reviews} review session(s): main or the"
+                           f" Template may have moved since the last one (see {log}); run /pre-push-review in"
+                           f" {shlex.quote(worktree)}, then resume")
         reviews += 1
         say(f"── rollout: {short_name(repo)}: the gate asks for a review; running /pre-push-review headless in {worktree}")
         code, log, broke = review(repo, worktree)
