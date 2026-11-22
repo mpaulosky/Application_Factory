@@ -298,6 +298,7 @@ def test_the_caps_are_the_documented_ones():
     assert (ccp.MAX_BYTES, ccp.MAX_EXPANSIONS, ccp.MAX_DEPTH, ccp.MAX_VALUE) == (4 * 1024 * 1024, 256, 256, 1024)
     assert (ccp.MAX_TOTAL_BYTES, ccp.MAX_NODES, ccp.MAX_TOTAL_EXPANSIONS, ccp.MAX_SHOWN) == (64 * 1024 * 1024, 250_000, 100_000, 100)
     assert (ccp.MAX_ID, ccp.MAX_IDS, ccp.MAX_FILES, ccp.MAX_PRINTED) == (256, 250_000, 50_000, 300)
+    assert (ccp.MAX_GLOBAL_JSON_BYTES, ccp.MAX_GLOBAL_JSON_FILES) == (64 * 1024, 100)
 
 
 def expansions(tmp_path, count):
@@ -497,18 +498,19 @@ def test_max_shown_lines_are_all_printed_without_a_more_line(tmp_path, capsys, m
 
 
 @pytest.mark.parametrize("cap,kind", [("MAX_FILES", "files"), ("MAX_NODES", "elements, attributes and comments"),
-                                      ("MAX_TOTAL_BYTES", "bytes"), ("MAX_IDS", "ids")])
+                                      ("MAX_TOTAL_BYTES", "bytes"), ("MAX_IDS", "ids"),
+                                      ("MAX_GLOBAL_JSON_FILES", "global.json files")])
 def test_a_repo_bigger_than_the_runs_budget_fails(tmp_path, capsys, monkeypatch, cap, kind):
     central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" /><!-- Transitive pin: kept --><PackageVersion Include="K" Version="1" />')
-    (tmp_path / "global.json").write_text("{}")
+    (tmp_path / "global.json").write_text('{"msbuild-sdks": {"G": "1"}}')
     (tmp_path / "src/App/bin").mkdir(parents=True)
     (tmp_path / "src/App/App.csproj").write_text('<Project Sdk="S"><!-- a --><!-- b --><ItemGroup><PackageReference Include="A" /></ItemGroup></Project>\n')
     # Neither an MSBuild file nor a global.json, or under bin/: not counted.
     for name in ("README.md", "src/App/Program.cs", "src/App/bin/Copy.csproj"):
         (tmp_path / name).write_text("x")
     # 3 files; 11 elements, attributes and comments in the central file, 7 in the project with its 2 comments; the three files'
-    # bytes; 4 ids (the two pins, the SDK and the reference).
-    used = {"MAX_FILES": 3, "MAX_NODES": 18, "MAX_IDS": 4,
+    # bytes; 5 ids (the two pins, the SDK, the reference and global.json's SDK); 1 global.json.
+    used = {"MAX_FILES": 3, "MAX_NODES": 18, "MAX_IDS": 5, "MAX_GLOBAL_JSON_FILES": 1,
             "MAX_TOTAL_BYTES": sum(path.stat().st_size for path in (tmp_path / "Directory.Packages.props", tmp_path / "src/App/App.csproj",
                                                                     tmp_path / "global.json"))}[cap]
     assert ccp.check(tmp_path)[1] == []
@@ -533,6 +535,15 @@ def test_every_list_entry_and_every_resolved_id_counts_against_the_ids_budget(tm
     monkeypatch.setattr(ccp, "MAX_IDS", used - 1)
 
     assert "needs more than the" in run(tmp_path, capsys)[1]
+
+
+@pytest.mark.parametrize("value,cost", [(None, 0), ("", 0), (";", 2), (" ; A", 2)])
+def test_an_absent_or_empty_value_counts_no_ids_and_every_entry_counts_one(value, cost):
+    budget = ccp.Budget()
+
+    list(ccp.ids(value, budget))
+
+    assert budget.left["ids"] == ccp.MAX_IDS - cost
 
 
 def test_a_global_jsons_sdks_count_as_ids_and_a_long_one_is_left_out():
@@ -575,7 +586,8 @@ def test_a_file_nested_far_deeper_is_skipped_not_a_crash(tmp_path, capsys):
     central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />')
     project(tmp_path, "src/App/App.csproj", '<PackageReference Include="A" />')
     (tmp_path / "Deep.props").write_text("<Project>" + "<a>" * 50000 + "</a>" * 50000 + "</Project>")
-    (tmp_path / "global.json").write_text("[" * 100000 + "]" * 100000)
+    # Far past the JSON parser's recursion limit, and under MAX_GLOBAL_JSON_BYTES.
+    (tmp_path / "global.json").write_text("[" * 30000 + "]" * 30000)
 
     status, out, _ = run(tmp_path, capsys)
 
@@ -767,6 +779,26 @@ def test_a_file_that_grew_past_max_bytes_since_lstat_is_not_read(tmp_path, capsy
 
     assert status == 1
     assert f"Grown.props can't be checked: it is over {ccp.MAX_BYTES} bytes." in out
+
+
+def test_a_global_json_that_grew_past_its_cap_since_lstat_is_skipped(tmp_path, capsys, monkeypatch):
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />')
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="A" />')
+    (tmp_path / "global.json").write_text("{}" + " " * ccp.MAX_GLOBAL_JSON_BYTES)
+    real = os.lstat
+
+    def small(path, *args, **kwargs):
+        info = real(path, *args, **kwargs)
+        if os.fspath(path) == str(tmp_path / "global.json"):
+            return os.stat_result((info.st_mode, *info[1:6], 10, *info[7:]))
+        return info
+
+    monkeypatch.setattr(ccp.os, "lstat", small)
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 0
+    assert f"ℹ️  global.json was skipped: it is over {ccp.MAX_GLOBAL_JSON_BYTES} bytes." in out
 
 
 def test_an_unreadable_file_cant_be_checked_and_says_why(tmp_path, capsys, monkeypatch):
@@ -982,6 +1014,17 @@ def test_a_skipped_file_fails_the_check_when_a_pin_is_built_from_a_property(tmp_
     assert "❌ Directory.Build.props can't be checked" in out
 
 
+def test_a_skipped_file_stays_a_notice_for_a_pin_built_from_an_item(tmp_path, capsys):
+    # No file can give @(Items) a value the check reads, so the broken file hides nothing about it.
+    central(tmp_path, '<PackageVersion Include="@(Items)" Version="1.0.0" />')
+    (tmp_path / "Directory.Build.props").write_text("<Project><PropertyGroup><P>A</P>")
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 0
+    assert "ℹ️  Directory.Build.props was skipped" in out
+
+
 @pytest.mark.parametrize("properties,items", [
     ("", '<PackageVersion Include="$(Unset)" Version="1.0.0" />'),
     (TRANSITIVE, '<!-- Transitive pin: kept --><PackageVersion Include="$(Unset)" Version="1.0.0" />'),
@@ -1188,11 +1231,54 @@ def test_printable_cuts_a_text_over_max_printed_characters(extra, cut):
     ('{"a": "x // y', '{"a": "x // y'),
     ('{"a": 1} /* x', '{"a": 1} '),
     ('[1, /* a\n */]', '[1 ]'),
+    ('{"a": "x\\', '{"a": "x\\'),
+    ('{"a": 1, // c\r\n}', '{"a": 1 \n}'),
+    ('', ''),
+    ('/', '/'),
+    ('/*/', ''),
+    ('{"a": "/* // */"}', '{"a": "/* // */"}'),
     ('["a\\\n", 1,]', '["a\\\n", 1]'),
 ])
 def test_global_json_comments_and_trailing_commas_go_as_the_host_reads_them(text, expected):
     # An unclosed string or comment runs to the end; a trailing comma goes, the space after it stays; an escape may take a line break.
     assert ccp.without_comments(text) == expected
+
+
+@pytest.mark.parametrize("body", ['"' + "x" * 70000, '"' + "\\n" * 35000 + '"', '"a",' * 17000, "/**/" * 17000, "1, " * 23000])
+def test_a_global_json_at_its_cap_is_read_in_bounded_time_and_memory(tmp_path, body):
+    import tracemalloc
+
+    text = ('{"msbuild-sdks": {"S": "1"}, "x": [' + body)[:ccp.MAX_GLOBAL_JSON_BYTES]
+    (tmp_path / "global.json").write_text(text)
+    tracemalloc.start()
+    started = time.monotonic()
+    ccp.check(tmp_path)
+    elapsed = time.monotonic() - started
+    peak = tracemalloc.get_traced_memory()[1]
+    tracemalloc.stop()
+
+    assert len(text) == ccp.MAX_GLOBAL_JSON_BYTES
+    # A string matched with backtracking state per character peaks near 9 MiB here, and one per escape near 5 MiB.
+    assert elapsed < 2 and peak < 4 * 1024 * 1024
+
+
+def test_a_global_json_over_its_cap_is_skipped_without_being_opened(tmp_path, capsys, monkeypatch):
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />')
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="A" />')
+    (tmp_path / "global.json").write_text("{}" + " " * (ccp.MAX_GLOBAL_JSON_BYTES - 1))
+    real = os.open
+
+    def refused(path, *args, **kwargs):
+        if os.fspath(path) == str(tmp_path / "global.json"):
+            raise AssertionError("opened")
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(ccp.os, "open", refused)
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 0
+    assert f"ℹ️  global.json was skipped: it is over {ccp.MAX_GLOBAL_JSON_BYTES} bytes." in out
 
 
 def test_the_escapes_are_the_runners():

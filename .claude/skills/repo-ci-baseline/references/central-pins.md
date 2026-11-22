@@ -24,9 +24,9 @@ compared ignoring case, and a pin listed twice is reported once. With transitive
 
 An id holding `$(Name)` is resolved from every value the repo's MSBuild files give that property, wherever they set it (a `Target`, a `Choose`). One
 that still holds `$(`, `@(` or `%(`, that is over 256 characters (NuGet's own limit is 100), or that would need more than 256 combinations of property
-values or grow past 1,024 characters with them substituted (as a property value that long makes it), can't be read without evaluating MSBuild: such a
-pin is left alone, and such a reference
-could name any package, so the pins found are printed as warnings and the check passes, naming the reference.
+values or grow past 1,024 characters with them substituted (any property value over 1,024 characters does), can't be read without evaluating
+MSBuild: such a pin is left alone, and such a reference could name any package, so the pins found are printed as warnings and the check passes,
+naming the reference.
 
 Files are read as bytes, so a byte-order mark or an XML declaration's encoding (UTF-16, say) is honoured. The check reads only a regular file, not a
 symlink, of at most 4 MiB, holding well-formed XML without a `DOCTYPE` (which no MSBuild file needs, and entity expansion would), nested at most 256
@@ -35,20 +35,22 @@ elements deep, in an encoding Python decodes. What happens to a file it can't re
 - An MSBuild file that may hold pins or turn transitive pinning on fails the check, naming the file and why: a `Directory.Packages.props`, one whose
   text names `PackageVersion` or `CentralPackageTransitivePinningEnabled`, or one whose bytes weren't read at all (a symlink, a FIFO, one over 4 MiB).
   Skipping it could hide a pin, or the setting that makes the check apply. So does a folder that can't be listed, or a symlinked folder, which isn't walked.
-  Under transitive pinning, so does any MSBuild file that couldn't be parsed when a pin without a reason is built from a property (`$(Name)`), since
-  the file may give that property a value, and so a pin, the check never sees.
+  Under transitive pinning, so does any MSBuild file that couldn't be parsed when a pin without a reason holds `$(`, built from a property, since
+  the file may give that property a value, and so a pin, the check never sees. A pin holding only `@(` or `%(` doesn't: no file changes what it reads.
 - Any other MSBuild file (a malformed `dotnet new` template or test fixture, say), and a `global.json` that can't be read (a symlink, a FIFO, one over
-  4 MiB, or not JSON the .NET host reads), is skipped with a notice. It can hide only references, which makes the check stricter, and the values of
-  properties a reference is built from, which can make it unreadable and so turn the report into warnings.
+  64 KiB, or not JSON the .NET host reads), is skipped with a notice, naming it. It can hide references, which makes the check stricter. It can also
+  hide the value of a property a reference is built from, which makes that reference unreadable: the pins found are then warnings and the check
+  passes, naming the reference, as for any reference the check can't read.
 
-A run with a file or folder it couldn't check never prints a line saying the pins are fine: it ends with `Not a pass: ...`, after any pins it
-found. Only the file itself is opened without following a symlink: a folder swapped for one between the walk and the read is followed, which needs
+A run with a file or folder it couldn't check never prints a line saying the pins are fine: its last line on stdout is `Not a pass: ...`, after any
+pins it found (the hints go to stderr). Only the file itself is opened without following a symlink: a folder swapped for one between the walk and the read is followed, which needs
 a process writing to the tree while the check runs, not a change in a pull request.
 
 `bin/`, `obj/`, `node_modules/` and dot-folders (`.git`, CI's `.nuget` package cache) aren't walked. The whole run reads at most 50,000 files, 64 MiB,
-250,000 elements, attributes and comments, 250,000 ids and 100,000 combinations of property values; past any of them it fails, since it can't vouch for
-what it didn't read. Every entry of an id list (`A;;B` is three) counts as an id, and so does every id a name resolves to and every SDK a
-`global.json` names. Each kind of line is printed at most 100 times, then a count of the rest.
+250,000 elements, attributes and comments, 250,000 ids, 100,000 combinations of property values and 100 `global.json` files; past any of them it
+fails, since it can't vouch for what it didn't read. Every entry of an id list counts as an id, blank or not (`A;;B` is three; an absent or empty
+attribute is none); so does every entry of a name with its properties substituted, once for each combination of values (`$(P)` with P `A;B;C` is
+four), and every SDK a `global.json` names. Each kind of line is printed at most 100 times, then a count of the rest.
 
 Under GitHub Actions each problem is an `::error`, `::warning` or `::notice` annotation on its file, escaped as the runner reads workflow commands;
 elsewhere a plain line. A name or path from the repo is printed with its non-printable characters as `?`, so it can't start a workflow command or move

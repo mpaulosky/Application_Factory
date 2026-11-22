@@ -21,9 +21,9 @@ SDK (a Project Sdk attribute, an Sdk element, an Import's Sdk, or a global.json'
 file whose extension ends in "proj" (.csproj, .sqlproj, .wixproj, ...), or a .props or .targets file. NuGet ids are compared ignoring
 case. An id holding $(Name) is resolved from the values the repo's MSBuild files give that property, wherever they set it. One that
 still holds $(, @( or %(, that is over MAX_ID characters, or that would need more than MAX_EXPANSIONS combinations of values or grow
-past MAX_VALUE characters with them substituted (as a property value that long makes it), can't be read without evaluating MSBuild. A pin like that is left alone, and a reference like
-that could be any package, so the pins found are then reported as warnings and the check passes. Transitive pinning is on when any
-of those files sets the property to true.
+past MAX_VALUE characters with them substituted (any property value over MAX_VALUE does), can't be read without evaluating
+MSBuild. A pin like that is left alone, and a reference like that could be any package, so the pins found are then reported as
+warnings and the check passes. Transitive pinning is on when any of those files sets the property to true.
 
 Every file is read as bytes, so expat honours its byte-order mark and XML declaration (MSBuild reads UTF-16 project files too). Only
 regular files are read, not symlinks, and none over MAX_BYTES. A DOCTYPE is refused: MSBuild files never need one, and entity
@@ -33,22 +33,24 @@ that can't be read or parsed can't be checked:
 - An MSBuild file that may hold pins or turn transitive pinning on (a Directory.Packages.props, one that names PackageVersion or
   CentralPackageTransitivePinningEnabled, or one whose bytes weren't read at all) fails the check, naming the file and why: skipping
   it could hide a pin or the setting. So does a folder that can't be listed, or a symlinked folder, which isn't walked. Under
-  transitive pinning, so does any MSBuild file that couldn't be parsed when a central pin without a reason is built from a property,
-  since the file may set a value of that property, and so a pin, the check never sees.
-- Any other MSBuild file, and a global.json that can't be read (a symlink, a FIFO, one over MAX_BYTES, or not JSON the .NET host
-  reads), is skipped with a notice. It can hide only references, which makes the check stricter, and property values a reference is
-  built from, which can make it unreadable and so turn the report into warnings.
+  transitive pinning, so does any MSBuild file that couldn't be parsed when a central pin without a reason holds $( (is built from
+  a property), since the file may give the property a value, and so a pin, the check never sees.
+- Any other MSBuild file, and a global.json that can't be read (a symlink, a FIFO, one over MAX_GLOBAL_JSON_BYTES, or not JSON the
+  .NET host reads), is skipped with a notice, naming it. It can hide references, which makes the check stricter. It can also hide
+  the value of a property a reference is built from, which makes that reference unreadable: the pins found are then warnings and
+  the check passes, naming the reference, as for any reference the check can't read.
 
 Only the file itself is opened without following a symlink: a folder swapped for one between the walk and the read is followed, which
 needs a process writing to the tree while the check runs, not a change in a pull request.
 
 bin/, obj/, node_modules/ and dot-folders (.git, CI's .nuget package cache) aren't walked. The whole run reads at most MAX_FILES files,
 MAX_TOTAL_BYTES, MAX_NODES elements, attributes and comments, MAX_IDS ids and MAX_TOTAL_EXPANSIONS combinations of property values;
-past any of them it fails, since it can't vouch for what it didn't read. Every entry of an id list counts as an id, blank or not, and
-so does every id a name resolves to and every SDK a global.json names. Each kind of line is printed at most MAX_SHOWN times, and
-each name or path in it is cut after MAX_PRINTED characters, with a count of the rest.
+past any of them, or more than MAX_GLOBAL_JSON_FILES global.json files, it fails, since it can't vouch for what it didn't read. Every
+entry of an id list counts as an id, blank or not (an absent or empty attribute counts none); so does every entry of a name with its
+properties substituted, once for each combination of values, and every SDK a global.json names. Each kind of line is printed at most
+MAX_SHOWN times, and each name or path in it is cut after MAX_PRINTED characters, with a count of the rest.
 
-A run with a file or folder it couldn't check always ends "Not a pass", after any pins it found.
+A run with a file or folder it couldn't check always prints "Not a pass" as its last line on stdout, after any pins it found.
 
 Under GitHub Actions each problem is an annotation, its text escaped as the runner reads workflow commands; elsewhere a plain line.
 Every text a repo controls is printed with its non-printable characters as '?'.
@@ -70,6 +72,9 @@ MSBUILD_FILE = re.compile(r"\.([a-z0-9]*proj|props|targets)$")
 SKIPPED_FOLDERS = {"bin", "obj", "node_modules"}
 MAX_BYTES = 4 * 1024 * 1024
 MAX_TOTAL_BYTES = 64 * 1024 * 1024
+# A global.json is a few hundred bytes; a larger one is skipped, and a repo with more than MAX_GLOBAL_JSON_FILES fails the run.
+MAX_GLOBAL_JSON_BYTES = 64 * 1024
+MAX_GLOBAL_JSON_FILES = 100
 MAX_DEPTH = 256
 MAX_NODES = 250_000
 # The most combinations of property values one reference may resolve through (each $(Name) with several values multiplies them).
@@ -121,6 +126,7 @@ class Budget:
     def __init__(self):
         self.totals = {
             "files": MAX_FILES,
+            "global.json files": MAX_GLOBAL_JSON_FILES,
             "bytes": MAX_TOTAL_BYTES,
             "elements, attributes and comments": MAX_NODES,
             "ids": MAX_IDS,
@@ -209,8 +215,8 @@ def report_all(kind, items, message):
         print(f"... and {len(items) - MAX_SHOWN} more like the {MAX_SHOWN} above.")
 
 
-def read(path, root, problems, budget):
-    """path's bytes, or None after adding (where, why, fails the check) to problems."""
+def read(path, root, problems, budget, cap=MAX_BYTES):
+    """path's bytes, at most cap of them, or None after adding (where, why, fails the check) to problems."""
     where = path.relative_to(root).as_posix()
     # An MSBuild file whose bytes weren't read may hold anything; a global.json only SDK references.
     blocks = path.name.lower() != "global.json"
@@ -222,8 +228,8 @@ def read(path, root, problems, budget):
         if not stat.S_ISREG(info.st_mode):
             problems.append((where, "it is not a regular file", blocks))
             return None
-        if info.st_size > MAX_BYTES:
-            problems.append((where, f"it is over {MAX_BYTES} bytes", blocks))
+        if info.st_size > cap:
+            problems.append((where, f"it is over {cap} bytes", blocks))
             return None
         # The path may have changed since lstat: opened without following a symlink or waiting on a FIFO, and checked again.
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
@@ -235,15 +241,15 @@ def read(path, root, problems, budget):
             with os.fdopen(descriptor, "rb") as handle:
                 descriptor = None
                 # One byte past the cap, so a file that grew since lstat is still caught.
-                data = handle.read(MAX_BYTES + 1)
+                data = handle.read(cap + 1)
         finally:
             if descriptor is not None:
                 os.close(descriptor)
     except OSError as error:
         problems.append((where, f"it can't be read ({error.strerror or error})", blocks))
         return None
-    if len(data) > MAX_BYTES:
-        problems.append((where, f"it is over {MAX_BYTES} bytes", blocks))
+    if len(data) > cap:
+        problems.append((where, f"it is over {cap} bytes", blocks))
         return None
     budget.spend("bytes", len(data))
     return data
@@ -283,14 +289,16 @@ def walk(root, problems, budget):
                 msbuild.append(Path(folder) / name)
             elif lowered == "global.json":
                 budget.spend("files", 1)
+                budget.spend("global.json files", 1)
                 global_json.append(Path(folder) / name)
     return sorted(msbuild), sorted(global_json)
 
 
 # A JSON string (group 1; to the end of the text when it isn't closed), a // comment, or a /* */ comment (to the end when it isn't
 # closed). Each pass replaces a match with its groups, so a string stays and a comment goes; the second also drops a trailing comma
-# (group 2 keeps the space after it). Matching in C keeps a large file's cost linear and small, not a Python loop per character.
-JSON_STRING_OR_COMMENT = r'("(?:[^"\\]|\\.)*"?)|//[^\n]*|/\*.*?(?:\*/|\Z)'
+# (group 2 keeps the space after it). The string's repeats are possessive (Python 3.11 or later, as the Baseline's 3.12 is), so the
+# engine keeps no backtracking state per character: time is linear and memory small, in a file of at most MAX_GLOBAL_JSON_BYTES.
+JSON_STRING_OR_COMMENT = r'("(?:[^"\\]++|\\.)*+"?)|//[^\n]*|/\*.*?(?:\*/|\Z)'
 WITHOUT_COMMENTS = re.compile(JSON_STRING_OR_COMMENT, re.S)
 WITHOUT_TRAILING_COMMAS = re.compile(JSON_STRING_OR_COMMENT + r"|,(\s*)(?=[}\]])", re.S)
 
@@ -428,7 +436,7 @@ def check(root):
             problems.append((path.relative_to(root).as_posix(), f"it isn't well-formed MSBuild XML ({error})", may_be_central(path, data)))
     referenced = set()
     for path in global_json:
-        data = read(path, root, problems, budget)
+        data = read(path, root, problems, budget, MAX_GLOBAL_JSON_BYTES)
         if data is None:
             continue
         sdks = global_json_sdks(data, budget)
@@ -462,7 +470,8 @@ def check(root):
         for name, reason in pins(document, budget):
             if reason:
                 continue
-            built_pin = built_pin or any(marker in name for marker in UNREADABLE)
+            # Only a property can take a value from a file the check couldn't read; @( and %( can't be read whatever the files say.
+            built_pin = built_pin or "$(" in name
             resolved = resolve(name, values, budget, cache)
             if resolved is None:
                 continue
@@ -470,7 +479,8 @@ def check(root):
                 unreferenced.setdefault((path, key), name if len(resolved) == 1 else key)
     if transitive and built_pin:
         # A skipped MSBuild file may set a value of the property such a pin is built from, so it could hide a pin. With transitive
-        # pinning off no pin is reported, and a skipped file can't turn it on: one that names the setting already fails.
+        # pinning off no pin is reported, and a skipped file whose bytes name the setting (in ASCII, or UTF-16 or UTF-32 with the
+        # NULs dropped) already fails; one in an encoding that spells it otherwise is the gap may_be_central() leaves.
         problems = [(where, why, blocks or not where.lower().endswith("global.json")) for where, why, blocks in problems]
     return transitive, [(path, name) for (path, _), name in unreferenced.items()], list(unreadable), problems
 
