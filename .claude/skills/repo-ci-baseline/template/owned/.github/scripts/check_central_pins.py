@@ -46,7 +46,7 @@ needs a process writing to the tree while the check runs, not a change in a pull
 bin/, obj/, node_modules/ and dot-folders (.git, CI's .nuget package cache) aren't walked. The whole run reads at most MAX_FILES files,
 MAX_TOTAL_BYTES, MAX_NODES elements, attributes and comments, MAX_IDS ids and MAX_TOTAL_EXPANSIONS combinations of property values;
 past any of them it fails, since it can't vouch for what it didn't read. Only the first MAX_GLOBAL_JSON_FILES global.json files are
-read; the rest are skipped with a notice. Every entry of an id list counts as an id, blank or not (an absent or empty attribute
+read, the shallowest first; the rest are skipped with a notice. Every entry of an id list counts as an id, blank or not (an absent or empty attribute
 counts none): a reference $(P) is one, and the first time a name is resolved, every entry of it with its properties substituted
 counts too, once for each combination of values ($(P) with P set to A;B;C is four in all). So does every SDK a global.json names. Each kind of line is printed at most
 MAX_SHOWN times, and each name or path in it is cut after MAX_PRINTED characters, with a count of the rest.
@@ -266,7 +266,10 @@ def may_be_central(path, data):
 
 
 def walk(root, problems, budget):
-    """(MSBuild files, global.json files) under root, sorted, outside the skipped folders. A folder it can't walk goes in problems."""
+    """(MSBuild files, global.json files) under root, outside the skipped folders. A folder it can't walk goes in problems.
+
+    MSBuild files are sorted by path; global.json files by depth, then path, so the root's, the one the .NET host reads for the
+    whole repo, comes first, and any cut at MAX_GLOBAL_JSON_FILES drops the deepest."""
     msbuild, global_json = [], []
 
     def where(folder):
@@ -294,7 +297,7 @@ def walk(root, problems, budget):
             elif lowered == "global.json":
                 budget.spend("files", 1)
                 global_json.append(Path(folder) / name)
-    return sorted(msbuild), sorted(global_json)
+    return sorted(msbuild), sorted(global_json, key=lambda path: (len(path.parts), path))
 
 
 # A JSON string (group 1; to the end of the text when it isn't closed), a // comment, or a /* */ comment (to the end when it isn't

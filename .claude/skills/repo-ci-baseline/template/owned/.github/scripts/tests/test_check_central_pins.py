@@ -1289,19 +1289,23 @@ def test_a_global_json_at_its_cap_is_read(tmp_path, capsys):
 
 
 def test_only_the_first_max_global_json_files_are_read(tmp_path, capsys, monkeypatch):
-    monkeypatch.setattr(ccp, "MAX_GLOBAL_JSON_FILES", 2)
-    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" /><PackageVersion Include="C" Version="1.0.0" />')
-    for folder, sdk in (("a", "A"), ("b", "B"), ("c", "C")):
-        (tmp_path / folder).mkdir()
+    monkeypatch.setattr(ccp, "MAX_GLOBAL_JSON_FILES", 3)
+    pins = "".join(f'<PackageVersion Include="{sdk}" Version="1.0.0" />' for sdk in "RABCD")
+    central(tmp_path, pins)
+    # The root's sorts after a/ by path, and a/z/'s before b/: by depth, the root and then a/ and b/ are read.
+    for folder, sdk in (("", "R"), ("a/z", "D"), ("a", "A"), ("b", "B"), ("c/y", "C")):
+        (tmp_path / folder).mkdir(parents=True, exist_ok=True)
         (tmp_path / folder / "global.json").write_text(f'{{"msbuild-sdks": {{"{sdk}": "1"}}}}')
 
     status, out, _ = run(tmp_path, capsys)
 
-    # c/global.json, the third in path order, isn't read, so C stays unreferenced.
     assert status == 1
+    skipped = "was skipped: it is past the first 3 global.json files, which are all this check reads. A reference or property in it wasn't seen."
     assert out.splitlines() == [
-        "ℹ️  c/global.json was skipped: it is past the first 2 global.json files, which are all this check reads. A reference or property in it wasn't seen.",
+        f"ℹ️  a/z/global.json {skipped}",
+        f"ℹ️  c/y/global.json {skipped}",
         "❌ C is pinned in Directory.Packages.props but no project references it",
+        "❌ D is pinned in Directory.Packages.props but no project references it",
     ]
 
 

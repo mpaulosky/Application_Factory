@@ -43,7 +43,8 @@ on what the file could hide:
   is readable once its properties are substituted, since the file may give that property a value, and so a pin, the check never sees. A pin that
   stays unreadable whatever the values (one holding `@(`, `%(` or a bare `$(`) doesn't: no file changes what it reads.
 - Any other MSBuild file (a malformed `dotnet new` template or test fixture, say), and a `global.json` that can't be read (a symlink, a FIFO, one over
-  64 KiB, or not JSON the .NET host reads) or comes after the first 100, is skipped with a notice, naming it. It can hide references, which makes the check stricter. It can also
+  64 KiB, or not JSON the .NET host reads) or comes after the first 100 (read shallowest first, so the root's is always among them), is skipped
+  with a notice, naming it. It can hide references, which makes the check stricter. It can also
   hide the value of a property a reference is built from, which makes that reference unreadable: the pins found are then warnings and the check
   passes, naming the reference, as for any reference the check can't read.
 
