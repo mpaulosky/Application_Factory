@@ -4342,7 +4342,7 @@ describe("the security record", () => {
       assert.equal(entries().length, 1);
     });
 
-    // #92: a finding the review raises again under a new id opens its summary "R<n> again", and its words change each time,
+    // Application_Factory#92: a finding the review raises again under a new id opens its summary "R<n> again", and its words change each time,
     // so its fingerprint does too: it follows R<n> to the entry R<n> was recorded against, along the branch's earlier reviews.
     it("a finding raised again as \"R<n> again\" holds the entry R<n> was recorded against, through each later review", () => {
       recordHere([weakness({ status: "open", test: null })]);
