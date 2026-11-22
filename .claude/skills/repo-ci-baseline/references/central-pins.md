@@ -24,7 +24,8 @@ compared ignoring case, and a pin listed twice is reported once. With transitive
 
 An id holding `$(Name)` is resolved from every value the repo's MSBuild files give that property, wherever they set it (a `Target`, a `Choose`). One
 that still holds `$(`, `@(` or `%(`, that is over 256 characters (NuGet's own limit is 100), or that would need more than 256 combinations of property
-values or grow past 1,024 characters with them substituted, can't be read without evaluating MSBuild: such a pin is left alone, and such a reference
+values or grow past 1,024 characters with them substituted (as a property value that long makes it), can't be read without evaluating MSBuild: such a
+pin is left alone, and such a reference
 could name any package, so the pins found are printed as warnings and the check passes, naming the reference.
 
 Files are read as bytes, so a byte-order mark or an XML declaration's encoding (UTF-16, say) is honoured. The check reads only a regular file, not a
@@ -34,22 +35,24 @@ elements deep, in an encoding Python decodes. What happens to a file it can't re
 - An MSBuild file that may hold pins or turn transitive pinning on fails the check, naming the file and why: a `Directory.Packages.props`, one whose
   text names `PackageVersion` or `CentralPackageTransitivePinningEnabled`, or one whose bytes weren't read at all (a symlink, a FIFO, one over 4 MiB).
   Skipping it could hide a pin, or the setting that makes the check apply. So does a folder that can't be listed, or a symlinked folder, which isn't walked.
-  So does any MSBuild file that couldn't be parsed when a pin can't be resolved, since the file may set the property the pin is built from.
+  Under transitive pinning, so does any MSBuild file that couldn't be parsed when a pin without a reason is built from a property (`$(Name)`), since
+  the file may give that property a value, and so a pin, the check never sees.
 - Any other MSBuild file (a malformed `dotnet new` template or test fixture, say), and a `global.json` that can't be read (a symlink, a FIFO, one over
-  4 MiB, or not JSON the .NET host reads), is skipped with a notice. It can hide only references, which makes the check stricter, and property values,
-  which can make a reference unreadable and so turn the report into warnings.
+  4 MiB, or not JSON the .NET host reads), is skipped with a notice. It can hide only references, which makes the check stricter, and the values of
+  properties a reference is built from, which can make it unreadable and so turn the report into warnings.
 
-A run with a file or folder it couldn't check ends with `Not a pass: ...`, never with a line saying the pins are fine. Only the file itself is opened
-without following a symlink: a folder swapped for one between the walk and the read is followed, which needs a process writing to the tree while the
-check runs, not a change in a pull request.
+A run with a file or folder it couldn't check never prints a line saying the pins are fine: it ends with `Not a pass: ...`, after any pins it
+found. Only the file itself is opened without following a symlink: a folder swapped for one between the walk and the read is followed, which needs
+a process writing to the tree while the check runs, not a change in a pull request.
 
 `bin/`, `obj/`, `node_modules/` and dot-folders (`.git`, CI's `.nuget` package cache) aren't walked. The whole run reads at most 50,000 files, 64 MiB,
 250,000 elements, attributes and comments, 250,000 ids and 100,000 combinations of property values; past any of them it fails, since it can't vouch for
-what it didn't read. Each kind of line is printed at most 100 times, then a count of the rest.
+what it didn't read. Every entry of an id list (`A;;B` is three) counts as an id, and so does every id a name resolves to and every SDK a
+`global.json` names. Each kind of line is printed at most 100 times, then a count of the rest.
 
 Under GitHub Actions each problem is an `::error`, `::warning` or `::notice` annotation on its file, escaped as the runner reads workflow commands;
 elsewhere a plain line. A name or path from the repo is printed with its non-printable characters as `?`, so it can't start a workflow command or move
-the terminal, and cut to 300 characters.
+the terminal, and each is cut after 300 characters, with a count of the rest.
 
 ## Keeping a pin on purpose
 

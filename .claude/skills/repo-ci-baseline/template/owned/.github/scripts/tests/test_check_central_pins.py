@@ -340,13 +340,25 @@ def test_a_property_value_over_max_value_characters_cant_be_read(tmp_path, extra
 
 @pytest.mark.parametrize("extra,readable", [(-1, True), (0, True), (1, False)])
 def test_a_name_that_would_grow_past_max_value_characters_isnt_built(tmp_path, extra, readable):
-    half = "A" + ";" * (ccp.MAX_VALUE // 2 - 1)
-    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />', properties=TRANSITIVE + f"<PropertyGroup><P>{half}</P></PropertyGroup>")
-    literal = {-1: "", 0: "", 1: "x"}[extra]
-    name = "$(P)$(P)" if extra >= 0 else "$(P)" + half[:-1]
-    project(tmp_path, "src/App/App.csproj", f'<PackageReference Include="{name}{literal}" />')
+    # $(P)$(Q) substituted is 512 + 511, 512 or 513 characters: one id each, padded with separators.
+    first = "A" + ";" * (ccp.MAX_VALUE // 2 - 1)
+    second = "B" + ";" * (ccp.MAX_VALUE // 2 - 1 + extra)
+    groups = f"<PropertyGroup><P>{first}</P><Q>{second}</Q></PropertyGroup>"
+    central(tmp_path, '<PackageVersion Include="AB" Version="1.0.0" />', properties=TRANSITIVE + groups)
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="$(P)$(Q)" />')
 
+    assert len(first) + len(second) == ccp.MAX_VALUE + extra
     assert (ccp.check(tmp_path)[2] == []) is readable
+
+
+def test_the_length_bound_takes_each_propertys_longest_value(tmp_path):
+    # P is "A" or 512 characters: $(P)$(P)x can be 1,025, though its shortest is 3.
+    long = "A" + ";" * (ccp.MAX_VALUE // 2 - 1)
+    groups = f'<PropertyGroup><P>A</P></PropertyGroup><PropertyGroup Condition="c"><P>{long}</P></PropertyGroup>'
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />', properties=TRANSITIVE + groups)
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="$(P)$(P)x" /><PackageReference Include="$(P)" />')
+
+    assert ccp.check(tmp_path)[2] == ["$(P)$(P)x"]
 
 
 @pytest.mark.parametrize("extra,readable", [(-1, True), (0, True), (1, False)])
@@ -489,8 +501,11 @@ def test_max_shown_lines_are_all_printed_without_a_more_line(tmp_path, capsys, m
 def test_a_repo_bigger_than_the_runs_budget_fails(tmp_path, capsys, monkeypatch, cap, kind):
     central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" /><!-- Transitive pin: kept --><PackageVersion Include="K" Version="1" />')
     (tmp_path / "global.json").write_text("{}")
-    (tmp_path / "src/App").mkdir(parents=True)
+    (tmp_path / "src/App/bin").mkdir(parents=True)
     (tmp_path / "src/App/App.csproj").write_text('<Project Sdk="S"><!-- a --><!-- b --><ItemGroup><PackageReference Include="A" /></ItemGroup></Project>\n')
+    # Neither an MSBuild file nor a global.json, or under bin/: not counted.
+    for name in ("README.md", "src/App/Program.cs", "src/App/bin/Copy.csproj"):
+        (tmp_path / name).write_text("x")
     # 3 files; 11 elements, attributes and comments in the central file, 7 in the project with its 2 comments; the three files'
     # bytes; 4 ids (the two pins, the SDK and the reference).
     used = {"MAX_FILES": 3, "MAX_NODES": 18, "MAX_IDS": 4,
@@ -505,6 +520,27 @@ def test_a_repo_bigger_than_the_runs_budget_fails(tmp_path, capsys, monkeypatch,
 
     assert status == 1
     assert out == f"❌ Not checked: the repo needs more than the {used - 1} {kind} this check reads.\n"
+
+
+@pytest.mark.parametrize("include,used", [("A;;;", 6), ("$(P)", 6)])
+def test_every_list_entry_and_every_resolved_id_counts_against_the_ids_budget(tmp_path, capsys, monkeypatch, include, used):
+    # The pin, the SDK and A;;; (four entries, three blank), or the pin, the SDK, $(P) and the three ids it resolves to.
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />', properties=TRANSITIVE + "<PropertyGroup><P>A;B;C</P></PropertyGroup>")
+    project(tmp_path, "src/App/App.csproj", f'<PackageReference Include="{include}" />')
+
+    monkeypatch.setattr(ccp, "MAX_IDS", used)
+    assert run(tmp_path, capsys)[0] == 0
+    monkeypatch.setattr(ccp, "MAX_IDS", used - 1)
+
+    assert "needs more than the" in run(tmp_path, capsys)[1]
+
+
+def test_a_global_jsons_sdks_count_as_ids_and_a_long_one_is_left_out():
+    budget = ccp.Budget()
+    data = ('{"msbuild-sdks": {"' + "a" * (ccp.MAX_ID + 1) + '": "1", "' + "b" * ccp.MAX_ID + '": "1"}}').encode()
+
+    assert ccp.global_json_sdks(data, budget) == {"b" * ccp.MAX_ID}
+    assert budget.left["ids"] == ccp.MAX_IDS - 2
 
 
 def test_combinations_count_against_the_runs_budget_once_per_name(tmp_path, capsys, monkeypatch):
@@ -892,7 +928,20 @@ def test_a_file_that_cant_be_checked_fails_even_with_warnings(tmp_path, capsys):
     assert status == 1
     assert "❌ Directory.Build.props can't be checked: it isn't well-formed MSBuild XML (" in out
     assert "⚠️  A is pinned in Directory.Packages.props but no project references it\n" in out
+    assert out.splitlines()[-1].startswith("Not a pass: ")
     assert err.count("must be readable for the check to pass") == 1
+
+
+def test_a_file_that_cant_be_checked_ends_the_report_after_the_pins(tmp_path, capsys):
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />')
+    (tmp_path / "Broken.props").write_text("<Project><PackageVersion")
+
+    status, out, err = run(tmp_path, capsys)
+
+    assert status == 1
+    assert out.splitlines()[-2:] == ["❌ A is pinned in Directory.Packages.props but no project references it",
+                                     "Not a pass: the files and folders above couldn't be checked, and may hold what the check looks for."]
+    assert "Delete each pin above" in err and "must be readable for the check to pass" in err
 
 
 @pytest.mark.parametrize("properties,items", [("", '<PackageVersion Include="A" Version="1.0.0" />'), (TRANSITIVE, "")])
@@ -904,6 +953,7 @@ def test_a_file_that_cant_be_checked_is_never_reported_as_a_pass(tmp_path, capsy
 
     assert status == 1
     assert out.splitlines()[-1] == "Not a pass: the files and folders above couldn't be checked, and may hold what the check looks for."
+    assert "Transitive pinning is off" not in out and "Every central pin is referenced" not in out
     assert f"nested at most {ccp.MAX_DEPTH} deep, in an encoding Python decodes" in err
 
 
@@ -918,6 +968,32 @@ def test_a_skipped_file_fails_the_check_when_a_pin_cant_be_resolved(tmp_path, ca
     assert status == 1
     assert "❌ Directory.Build.props can't be checked: it isn't well-formed MSBuild XML (" in out
     assert "ℹ️  global.json was skipped: it isn't JSON the .NET host reads." in out
+
+
+def test_a_skipped_file_fails_the_check_when_a_pin_is_built_from_a_property(tmp_path, capsys):
+    # $(P) resolves to A from a file read, but the broken file may give it another value, and so another pin.
+    central(tmp_path, '<PackageVersion Include="$(P)" Version="1.0.0" />', properties=TRANSITIVE + "<PropertyGroup><P>A</P></PropertyGroup>")
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="A" />')
+    (tmp_path / "Directory.Build.props").write_text('<Project><PropertyGroup Condition="x"><P>B</P>')
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 1
+    assert "❌ Directory.Build.props can't be checked" in out
+
+
+@pytest.mark.parametrize("properties,items", [
+    ("", '<PackageVersion Include="$(Unset)" Version="1.0.0" />'),
+    (TRANSITIVE, '<!-- Transitive pin: kept --><PackageVersion Include="$(Unset)" Version="1.0.0" />'),
+])
+def test_a_skipped_file_stays_a_notice_without_transitive_pinning_or_for_a_kept_pin(tmp_path, capsys, properties, items):
+    central(tmp_path, items, properties=properties)
+    (tmp_path / "Directory.Build.props").write_text("<Project><PropertyGroup><Unset>A</Unset>")
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 0
+    assert "ℹ️  Directory.Build.props was skipped" in out
 
 
 def test_a_skipped_file_stays_a_notice_when_every_pin_resolves(tmp_path, capsys):
@@ -953,6 +1029,16 @@ def test_notices_and_errors_are_printed_at_most_max_shown_times(tmp_path, capsys
     assert err.count("must be readable") == (1 if kind == "error" else 0)
 
 
+def test_a_long_path_is_cut_in_the_annotations_file_property(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(ccp, "MAX_PRINTED", 10)
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />', folder="F" * 20)
+
+    out = run_ci(tmp_path, capsys, monkeypatch)
+
+    # FFFF.../Directory.Packages.props is 45 characters: 10 kept, 35 cut.
+    assert out == "::error file=FFFFFFFFFF... (35 more)::A is pinned in FFFFFFFFFF... (35 more) but no project references it\n"
+
+
 def test_a_long_name_or_path_is_cut_where_it_is_printed(tmp_path, capsys, monkeypatch):
     # A pin's name can't be longer than MAX_ID, which is under MAX_PRINTED, so a short cap shows the cut on it too.
     name = "N" * (ccp.MAX_PRINTED + 50)
@@ -964,8 +1050,8 @@ def test_a_long_name_or_path_is_cut_where_it_is_printed(tmp_path, capsys, monkey
     short = run(tmp_path, capsys)[1]
 
     # "@(", the name and ")" are 353 characters: 300 kept, 53 cut.
-    assert f"(@({'N' * 298}... (53 more characters))" in out
-    assert short.startswith("⚠️  AAAAAAAAAA... (5 more characters) is pinned in Directory.... (14 more characters) but no project references it\n")
+    assert f"(@({'N' * 298}... (53 more))" in out
+    assert short.startswith("⚠️  AAAAAAAAAA... (5 more) is pinned in Directory.... (14 more) but no project references it\n")
 
 
 # The open file's descriptor.
@@ -1093,7 +1179,20 @@ def test_an_id_cant_move_the_terminal_in_a_plain_line(tmp_path, capsys):
 def test_printable_cuts_a_text_over_max_printed_characters(extra, cut):
     text = "x" * (ccp.MAX_PRINTED + extra)
 
-    assert ccp.printable(text) == (f"{'x' * ccp.MAX_PRINTED}... (1 more characters)" if cut else text)
+    assert ccp.printable(text) == (f"{'x' * ccp.MAX_PRINTED}... (1 more)" if cut else text)
+
+
+@pytest.mark.parametrize("text,expected", [
+    ('{"a": [1,]}', '{"a": [1]}'),
+    ('{"a": 1, \n}', '{"a": 1 \n}'),
+    ('{"a": "x // y', '{"a": "x // y'),
+    ('{"a": 1} /* x', '{"a": 1} '),
+    ('[1, /* a\n */]', '[1 ]'),
+    ('["a\\\n", 1,]', '["a\\\n", 1]'),
+])
+def test_global_json_comments_and_trailing_commas_go_as_the_host_reads_them(text, expected):
+    # An unclosed string or comment runs to the end; a trailing comma goes, the space after it stays; an escape may take a line break.
+    assert ccp.without_comments(text) == expected
 
 
 def test_the_escapes_are_the_runners():

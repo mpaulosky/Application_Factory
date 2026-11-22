@@ -21,7 +21,7 @@ SDK (a Project Sdk attribute, an Sdk element, an Import's Sdk, or a global.json'
 file whose extension ends in "proj" (.csproj, .sqlproj, .wixproj, ...), or a .props or .targets file. NuGet ids are compared ignoring
 case. An id holding $(Name) is resolved from the values the repo's MSBuild files give that property, wherever they set it. One that
 still holds $(, @( or %(, that is over MAX_ID characters, or that would need more than MAX_EXPANSIONS combinations of values or grow
-past MAX_VALUE characters, can't be read without evaluating MSBuild. A pin like that is left alone, and a reference like
+past MAX_VALUE characters with them substituted (as a property value that long makes it), can't be read without evaluating MSBuild. A pin like that is left alone, and a reference like
 that could be any package, so the pins found are then reported as warnings and the check passes. Transitive pinning is on when any
 of those files sets the property to true.
 
@@ -32,19 +32,23 @@ that can't be read or parsed can't be checked:
 
 - An MSBuild file that may hold pins or turn transitive pinning on (a Directory.Packages.props, one that names PackageVersion or
   CentralPackageTransitivePinningEnabled, or one whose bytes weren't read at all) fails the check, naming the file and why: skipping
-  it could hide a pin or the setting. So does a folder that can't be listed, or a symlinked folder, which isn't walked. So does any
-  MSBuild file that couldn't be parsed when a central pin can't be resolved, since the file may set the property the pin is built from.
+  it could hide a pin or the setting. So does a folder that can't be listed, or a symlinked folder, which isn't walked. Under
+  transitive pinning, so does any MSBuild file that couldn't be parsed when a central pin without a reason is built from a property,
+  since the file may set a value of that property, and so a pin, the check never sees.
 - Any other MSBuild file, and a global.json that can't be read (a symlink, a FIFO, one over MAX_BYTES, or not JSON the .NET host
-  reads), is skipped with a notice. It can hide only references, which makes the check stricter, and property values, which can make
-  a reference unreadable and so turn the report into warnings.
+  reads), is skipped with a notice. It can hide only references, which makes the check stricter, and property values a reference is
+  built from, which can make it unreadable and so turn the report into warnings.
 
 Only the file itself is opened without following a symlink: a folder swapped for one between the walk and the read is followed, which
 needs a process writing to the tree while the check runs, not a change in a pull request.
 
 bin/, obj/, node_modules/ and dot-folders (.git, CI's .nuget package cache) aren't walked. The whole run reads at most MAX_FILES files,
 MAX_TOTAL_BYTES, MAX_NODES elements, attributes and comments, MAX_IDS ids and MAX_TOTAL_EXPANSIONS combinations of property values;
-past any of them it fails, since it can't vouch for what it didn't read. Each kind of line is printed at most MAX_SHOWN times, and each
-name or path in it cut to MAX_PRINTED characters.
+past any of them it fails, since it can't vouch for what it didn't read. Every entry of an id list counts as an id, blank or not, and
+so does every id a name resolves to and every SDK a global.json names. Each kind of line is printed at most MAX_SHOWN times, and
+each name or path in it is cut after MAX_PRINTED characters, with a count of the rest.
+
+A run with a file or folder it couldn't check always ends "Not a pass", after any pins it found.
 
 Under GitHub Actions each problem is an annotation, its text escaped as the runner reads workflow commands; elsewhere a plain line.
 Every text a repo controls is printed with its non-printable characters as '?'.
@@ -71,8 +75,7 @@ MAX_NODES = 250_000
 # The most combinations of property values one reference may resolve through (each $(Name) with several values multiplies them).
 MAX_EXPANSIONS = 256
 MAX_TOTAL_EXPANSIONS = 100_000
-# A property value, and a name with its properties substituted, are read up to MAX_VALUE characters; an id up to MAX_ID (NuGet's
-# own limit is 100).
+# A name with its properties substituted is read up to MAX_VALUE characters; an id up to MAX_ID (NuGet's own limit is 100).
 MAX_VALUE = 1024
 MAX_ID = 256
 MAX_IDS = 250_000
@@ -173,9 +176,9 @@ def parse(data, budget):
 
 
 def printable(text):
-    """text with every non-printable character as '?', so a name can't move the terminal or start a line, cut to MAX_PRINTED."""
+    """text with every non-printable character as '?', so a name can't move the terminal or start a line, cut after MAX_PRINTED."""
     if len(text) > MAX_PRINTED:
-        text = f"{text[:MAX_PRINTED]}... ({len(text) - MAX_PRINTED} more characters)"
+        text = f"{text[:MAX_PRINTED]}... ({len(text) - MAX_PRINTED} more)"
     return "".join(character if character.isprintable() else "?" for character in text)
 
 
@@ -284,52 +287,43 @@ def walk(root, problems, budget):
     return sorted(msbuild), sorted(global_json)
 
 
-def tokens(text):
-    """JSON text as (is a string, piece) runs, with // and /* */ comments outside strings dropped."""
-    index, start = 0, 0
-    while index < len(text):
-        if text[index] == '"':
-            yield False, text[start:index]
-            end = index + 1
-            while end < len(text) and text[end] != '"':
-                end += 2 if text[end] == "\\" else 1
-            yield True, text[index:end + 1]
-            index = start = end + 1
-        elif text.startswith("//", index) or text.startswith("/*", index):
-            yield False, text[start:index]
-            if text[index + 1] == "/":
-                newline = text.find("\n", index)
-                index = len(text) if newline == -1 else newline
-            else:
-                close = text.find("*/", index + 2)
-                index = len(text) if close == -1 else close + 2
-            start = index
-        else:
-            index += 1
-    yield False, text[start:]
+# A JSON string (group 1; to the end of the text when it isn't closed), a // comment, or a /* */ comment (to the end when it isn't
+# closed). Each pass replaces a match with its groups, so a string stays and a comment goes; the second also drops a trailing comma
+# (group 2 keeps the space after it). Matching in C keeps a large file's cost linear and small, not a Python loop per character.
+JSON_STRING_OR_COMMENT = r'("(?:[^"\\]|\\.)*"?)|//[^\n]*|/\*.*?(?:\*/|\Z)'
+WITHOUT_COMMENTS = re.compile(JSON_STRING_OR_COMMENT, re.S)
+WITHOUT_TRAILING_COMMAS = re.compile(JSON_STRING_OR_COMMENT + r"|,(\s*)(?=[}\]])", re.S)
 
 
 def without_comments(text):
     """JSON text without // and /* */ comments or trailing commas, as the .NET host reads global.json."""
-    # Comments out first, then, between the strings of what is left, a comma before a closing bracket: a comment between the two
-    # would otherwise split them into two runs.
-    joined = "".join(piece for _, piece in tokens(text))
-    return "".join(piece if is_string else re.sub(r",(\s*)(?=[}\]])", r"\1", piece) for is_string, piece in tokens(joined))
+    # Comments out first, then, outside strings, a comma before a closing bracket: a comment between the two would otherwise keep it.
+    return WITHOUT_TRAILING_COMMAS.sub(r"\1\2", WITHOUT_COMMENTS.sub(r"\1", text))
 
 
-def global_json_sdks(data):
-    """The lowercased ids under a global.json's msbuild-sdks, or None when it isn't JSON the host would read."""
+def global_json_sdks(data, budget):
+    """The lowercased ids under a global.json's msbuild-sdks, or None when it isn't JSON the host would read.
+
+    Each counts as an id; one over MAX_ID characters can't be a pin this check reads, so it is left out."""
     try:
         document = json.loads(without_comments(data.decode("utf-8-sig")))
     except (UnicodeDecodeError, ValueError, RecursionError):
         return None
     sdks = document.get("msbuild-sdks") if isinstance(document, dict) else None
-    return {name.lower() for name in sdks} if isinstance(sdks, dict) else set()
+    if not isinstance(sdks, dict):
+        return set()
+    budget.spend("ids", len(sdks))
+    return {name.lower() for name in sdks if len(name) <= MAX_ID}
 
 
-def ids(value):
-    """The ids in an Include, Update or Sdk value: split on ';', any '/version' dropped, blanks left out."""
-    for part in (value or "").split(";"):
+def ids(value, budget):
+    """The ids in an Include, Update or Sdk value: split on ';', any '/version' dropped, blanks left out.
+
+    Every entry counts as an id, blank or not, before the value is split; an absent or empty value counts as none."""
+    if not value:
+        return
+    budget.spend("ids", value.count(";") + 1)
+    for part in value.split(";"):
         name = part.strip().split("/")[0].strip()
         if name:
             yield name
@@ -341,14 +335,13 @@ def properties(document, found):
         if node.tag == "propertygroup":
             for child in node.children:
                 if child.tag:
-                    value = child.text.strip()
-                    # A value too long to substitute is kept as one that can't be read.
-                    found.setdefault(child.tag, set()).add(value if len(value) <= MAX_VALUE else "$(")
+                    found.setdefault(child.tag, set()).add(child.text.strip())
 
 
 def resolve(name, values, budget, cache):
-    """The lowercased ids name can be, with each $(Name) replaced by every value the repo gives it, or None when it can't be read."""
-    budget.spend("ids", 1)
+    """The lowercased ids name can be, with each $(Name) replaced by every value the repo gives it, or None when it can't be read.
+
+    values is (lowercased name -> set of values, lowercased name -> its longest value's length)."""
     if len(name) > MAX_ID:
         return None
     if not any(marker in name for marker in UNREADABLE):
@@ -359,46 +352,47 @@ def resolve(name, values, budget, cache):
 
 
 def expand(name, values, budget):
+    found, widest = values
     # name is at most MAX_ID characters, so it holds at most MAX_ID / 4 placeholders.
     placeholders = PROPERTY.findall(name)
     keys = list(dict.fromkeys(key.lower() for key in placeholders))
     count = 1
     for key in keys:
-        count *= len(values.get(key, ()))
+        count *= len(found.get(key, ()))
     if count == 0 or count > MAX_EXPANSIONS:
         return None
     # The longest the substituted name can be, from the longest value of each placeholder: past MAX_VALUE it isn't built.
-    longest = len(PROPERTY.sub("", name)) + sum(max(map(len, values[key.lower()])) for key in placeholders)
+    longest = len(PROPERTY.sub("", name)) + sum(widest[key.lower()] for key in placeholders)
     if longest > MAX_VALUE:
         return None
     budget.spend("combinations of property values", count)
-    choices = [sorted(values[key]) for key in keys]
+    choices = [sorted(found[key]) for key in keys]
     resolved = set()
     for combination in itertools.product(*choices):
         mapping = dict(zip(keys, combination, strict=True))
         text = PROPERTY.sub(lambda match, mapping=mapping: mapping[match.group(1).lower()], name)
         if any(marker in text for marker in UNREADABLE):
             return None
-        for part in ids(text):
+        for part in ids(text, budget):
             if len(part) > MAX_ID:
                 return None
             resolved.add(part.lower())
     return resolved
 
 
-def references(document):
+def references(document, budget):
     """The ids document references, as written."""
     for node in document.iter():
         if node.tag in ("packagereference", "globalpackagereference", "packagedownload"):
             for attribute in ("Include", "Update"):
-                yield from ids(node.attributes.get(attribute))
+                yield from ids(node.attributes.get(attribute), budget)
         elif node.tag in ("project", "import"):
-            yield from ids(node.attributes.get("Sdk"))
+            yield from ids(node.attributes.get("Sdk"), budget)
         elif node.tag == "sdk":
-            yield from ids(node.attributes.get("Name"))
+            yield from ids(node.attributes.get("Name"), budget)
 
 
-def pins(document):
+def pins(document, budget):
     """(id as written, has a reason) for each PackageVersion in any ItemGroup of document."""
     for group in document.iter():
         if group.tag != "itemgroup":
@@ -411,7 +405,7 @@ def pins(document):
             if node.tag == "packageversion":
                 text = before.text.strip() if before is not None else ""
                 reason = text.lower().startswith(REASON_MARKER) and bool(text[len(REASON_MARKER):].strip())
-                for name in ids(node.attributes.get("Include")):
+                for name in ids(node.attributes.get("Include"), budget):
                     yield name, reason
             before = None
 
@@ -437,14 +431,15 @@ def check(root):
         data = read(path, root, problems, budget)
         if data is None:
             continue
-        sdks = global_json_sdks(data)
+        sdks = global_json_sdks(data, budget)
         if sdks is None:
             problems.append((path.relative_to(root).as_posix(), "it isn't JSON the .NET host reads", False))
         else:
             referenced |= sdks
-    values = {}
+    found = {}
     for _, document in documents:
-        properties(document, values)
+        properties(document, found)
+    values = (found, {key: max(map(len, choices)) for key, choices in found.items()})
     transitive = any(
         node.tag == "centralpackagetransitivepinningenabled" and node.text.strip().lower() == "true"
         for _, document in documents
@@ -453,29 +448,29 @@ def check(root):
     cache = {}
     unreadable = {}
     for _, document in documents:
-        for name in references(document):
+        for name in references(document, budget):
             resolved = resolve(name, values, budget, cache)
             if resolved is None:
                 unreadable.setdefault(name)
             else:
                 referenced |= resolved
     unreferenced = {}
-    unresolved_pin = False
+    built_pin = False
     for path, document in documents:
         if path.name.lower() != "directory.packages.props":
             continue
-        for name, reason in pins(document):
+        for name, reason in pins(document, budget):
             if reason:
-                budget.spend("ids", 1)
                 continue
+            built_pin = built_pin or any(marker in name for marker in UNREADABLE)
             resolved = resolve(name, values, budget, cache)
             if resolved is None:
-                unresolved_pin = True
                 continue
             for key in sorted(resolved - referenced):
                 unreferenced.setdefault((path, key), name if len(resolved) == 1 else key)
-    if unresolved_pin:
-        # A skipped MSBuild file may set the property such a pin is built from, so it could hide that pin.
+    if transitive and built_pin:
+        # A skipped MSBuild file may set a value of the property such a pin is built from, so it could hide a pin. With transitive
+        # pinning off no pin is reported, and a skipped file can't turn it on: one that names the setting already fails.
         problems = [(where, why, blocks or not where.lower().endswith("global.json")) for where, why, blocks in problems]
     return transitive, [(path, name) for (path, _), name in unreferenced.items()], list(unreadable), problems
 
@@ -498,12 +493,12 @@ def main(argv=None):
     report_all("notice", skipped, lambda where, why: f"{where} was skipped: {why}. A reference or property in it wasn't seen.")
     report_all("error", blocking, lambda where, why: f"{where} can't be checked: {why}. It may hold central pins, turn transitive pinning on or set a property a pin is built from.")
     status = 1 if blocking else 0
-    if blocking and not (transitive and unreferenced):
-        print("Not a pass: the files and folders above couldn't be checked, and may hold what the check looks for.")
-    elif not transitive:
-        print("Transitive pinning is off in every MSBuild file read (or there is no central package management): no pin found can hold a package back.")
+    if not transitive:
+        if not blocking:
+            print("Transitive pinning is off in every MSBuild file read (or there is no central package management): no pin found can hold a package back.")
     elif not unreferenced:
-        print("Every central pin is referenced by a project, or kept with a reason.")
+        if not blocking:
+            print("Every central pin is referenced by a project, or kept with a reason.")
     else:
         found = [(path.relative_to(root).as_posix(), name) for path, name in unreferenced]
         report_all("warning" if unreadable else "error", found, lambda where, name: f"{name} is pinned in {where} but no project references it")
@@ -521,6 +516,7 @@ def main(argv=None):
                 file=sys.stderr,
             )
     if blocking:
+        print("Not a pass: the files and folders above couldn't be checked, and may hold what the check looks for.")
         print(
             "Each file or folder that can't be checked must be readable for the check to pass: a regular file (not a symlink) "
             f"of at most {MAX_BYTES} bytes holding well-formed XML without a DOCTYPE, nested at most {MAX_DEPTH} deep, in an encoding "
