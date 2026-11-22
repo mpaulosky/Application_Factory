@@ -14,11 +14,13 @@
 # (0.24.0 by default), or STUB_LINT_BANNER as it is, unless the folder it runs
 # in has a config with "noBanner" (as the real one would read it there); with
 # STUB_LINT_NOISE set it prints a warning on stderr and a line on stdout before
-# the banner. It logs its arguments, NUL-separated, to $ARGS too, so a case can
+# the banner, and with STUB_LINT_BROKEN set it prints only an error on stderr
+# and exits 127, as a linter whose node is missing would. It logs its arguments, NUL-separated, to $ARGS too, so a case can
 # match one exactly. A `git`
 # wrapper fails the git subcommand FAIL_GIT names (only its FAIL_GIT_CALL-th
 # call, when that is set), so a case can tell that the hook refuses a commit it
-# couldn't lint.
+# couldn't lint. A `mkdir` wrapper fails for a folder whose name ends in the
+# FAIL_MKDIR it is given.
 # Usage: .github/hooks/tests/pre-commit.test.sh
 set -uo pipefail
 
@@ -38,6 +40,10 @@ mkdir -p "$STUBS"
 cat > "$STUBS/markdownlint-cli2" << EOF
 #!/usr/bin/env bash
 if [[ \$# -eq 0 ]]; then
+  if [[ -n "\${STUB_LINT_BROKEN:-}" ]]; then
+    echo "env: 'node': No such file or directory (stub)" >&2
+    exit 127
+  fi
   if [[ -n "\${STUB_LINT_NOISE:-}" ]]; then
     echo "(node:1) Warning: something (stub)" >&2
     echo "Some notice before the banner (stub)"
@@ -96,6 +102,18 @@ done
 exec "$(command -v git)" "\$@"
 EOF
 chmod +x "$GIT_STUBS/git"
+
+MKDIR_STUBS="$WORK/mkdir-bin"
+mkdir -p "$MKDIR_STUBS"
+cat > "$MKDIR_STUBS/mkdir" << EOF
+#!/usr/bin/env bash
+if [[ -n "\${FAIL_MKDIR:-}" && "\${*: -1}" == *"\$FAIL_MKDIR" ]]; then
+  echo "mkdir: cannot create directory (stub)" >&2
+  exit 1
+fi
+exec "$(command -v mkdir)" "\$@"
+EOF
+chmod +x "$MKDIR_STUBS/mkdir"
 
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
 # No user or system config, so a setting there (diff.renames, a hooksPath)
@@ -291,12 +309,19 @@ reset_repo
 # markdownlint-cli2 reads a bare argument as a glob, an option or a negation.
 # a1.md is a decoy a[1].md or a*.md read as a glob would match. The names are
 # shown with printf %q, so a newline or a byte that isn't UTF-8 shows as such.
-# A filesystem that refuses a name (macOS's refuses a byte that isn't UTF-8)
-# skips that name, saying so; a git add that fails fails the case.
+# Only the name that isn't UTF-8 may be skipped (macOS's filesystem refuses
+# it), and only when a plain name can still be written; any other name that
+# can't be written, or a git add that fails, fails the case.
 for name in 'a[1].md' 'a*.md' '-dash.md' '!bang.md' ':colon.md' 'a b.md' $'new\nline.md' $'\xff.md'; do
   shown="$(printf '%q' "$name")"
-  if ! { echo 'BAD text.' > "$REPO/$name"; } 2> /dev/null; then
-    echo "skip - this filesystem refuses the name $shown"
+  if ! written="$({ echo 'BAD text.' > "$REPO/$name"; } 2>&1)"; then
+    if [[ "$name" == $'\xff.md' ]] && { echo 'Some text.' > "$REPO/plain.md"; } 2> /dev/null; then
+      rm -f "$REPO/plain.md"
+      echo "skip - this filesystem refuses the name $shown: $written"
+    else
+      fail "a staged $shown is linted as that file" "setup: couldn't write it: $written"
+      reset_repo
+    fi
     continue
   fi
   echo 'Some text.' > "$REPO/a1.md"
@@ -361,6 +386,21 @@ if [[ "$OUTPUT" == *"Couldn't make a temporary folder to lint the staged Markdow
 else
   fail "without a temporary folder the hook says why it refuses the commit" "no reason in the output"
 fi
+# The two folders made inside it: the one the version is read in, and the
+# snapshot. Either one failing refuses the commit, saying which.
+for failing in "/probe:to read markdownlint-cli2's version in" "/snapshot:to lint the staged Markdown in"; do
+  said="${failing#*:}" failing="${failing%%:*}"
+  : > "$LOG"
+  : > "$ARGS"
+  OUTPUT="$(cd "$REPO" && PATH="$MKDIR_STUBS:$STUBS:$PATH" FAIL_MKDIR="$failing" bash "$HOOK" 2>&1)"
+  STATUS=$?
+  expect "a $failing folder that can't be made refuses the commit" refused not-linted
+  if [[ "$OUTPUT" == *"Couldn't make a temporary folder $said: the commit is refused."* ]]; then
+    pass "a $failing folder that can't be made says why the commit is refused"
+  else
+    fail "a $failing folder that can't be made says why the commit is refused" "expected 'Couldn't make a temporary folder $said'"
+  fi
+done
 reset_repo
 
 # A caller's GIT_LITERAL_PATHSPECS would make the hook's '*.md' match no file
@@ -388,6 +428,13 @@ STUB_LINT_VERSION=0.10.0 run_hook
 expect "markdownlint-cli2 0.10.0 lints (its version is read as a number)" allowed linted
 STUB_LINT_BANNER='Usage: something else' run_hook
 expect "a markdownlint-cli2 whose version can't be read refuses the commit" refused not-linted
+STUB_LINT_BROKEN=1 run_hook
+expect "a markdownlint-cli2 that can't start refuses the commit" refused not-linted
+if [[ "$OUTPUT" == *"It said:"*"'node': No such file or directory (stub)"* ]]; then
+  pass "a markdownlint-cli2 that can't start shows what it said"
+else
+  fail "a markdownlint-cli2 that can't start shows what it said" "its stderr isn't in the output"
+fi
 # Node's warnings on stderr, and a line on stdout before the banner, don't hide it.
 STUB_LINT_NOISE=1 run_hook
 expect "a warning before markdownlint-cli2's banner doesn't hide its version" allowed linted
@@ -523,10 +570,15 @@ fi
 # ── The real markdownlint-cli2, when one is installed ──
 # The stub takes the ':' prefix on trust; the real linter must read ':!bang.md'
 # as that file, not a negation that lints nothing. (A name like a[1].md is no
-# case here: markdownlint-cli2 0.23 finds a file named as a glob as itself.)
-REAL_LINT="$(PATH="${PATH//$STUBS:/}" command -v markdownlint-cli2 || true)"
+# case here: the hook lints only staged files, so a decoy it could match as a
+# glob would be staged, and linted, either way. owned-gate-files.test.sh, in
+# the Application Factory, covers it with a decoy beside the file.) The suite's
+# own PATH never holds the stub; a markdownlint-cli2 found under $STUBS fails.
+REAL_LINT="$(command -v markdownlint-cli2 || true)"
 if [[ -z "$REAL_LINT" ]]; then
   echo "skip - no markdownlint-cli2 installed, so the real-linter cases don't run"
+elif [[ "$REAL_LINT" == "$STUBS"/* ]]; then
+  fail "the real-linter case runs the real markdownlint-cli2" "found the stub, $REAL_LINT"
 else
   REAL="$WORK/real"
   git init -q -b main "$REAL"

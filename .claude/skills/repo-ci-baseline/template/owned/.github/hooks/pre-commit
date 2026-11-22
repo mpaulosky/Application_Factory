@@ -119,14 +119,19 @@ fi
 # no arguments, it prints its banner ("markdownlint-cli2 vX.Y.Z ...") on
 # stdout. It runs in an empty folder of its own: in the working copy it would
 # read (or run) a config there that isn't staged. Only the banner line counts,
-# so a warning Node prints first doesn't hide it.
+# so a warning Node prints first doesn't hide it; what it prints on stderr is
+# kept, and shown when no version can be read (a broken node, say).
 PROBE="$WORK_DIR/probe"
 mkdir "$PROBE" 2> /dev/null || refuse "Couldn't make a temporary folder to read markdownlint-cli2's version in"
-LINT_BANNER="$(cd "$PROBE" && "$MARKDOWNLINT_BIN" < /dev/null 2> /dev/null | sed -n '/^markdownlint-cli2 v/{p;q;}')"
+LINT_BANNER="$( (cd "$PROBE" && "$MARKDOWNLINT_BIN" < /dev/null) 2> "$WORK_DIR/probe.err" | sed -n '/^markdownlint-cli2 v/{p;q;}')"
 LINT_VERSION="$(sed -n 's/^markdownlint-cli2 v\([0-9][0-9]*\)\.\([0-9][0-9]*\)\.[0-9].*/\1 \2/p' <<< "$LINT_BANNER")"
 read -r LINT_MAJOR LINT_MINOR <<< "$LINT_VERSION"
 if [[ -z "$LINT_VERSION" ]] || ((10#$LINT_MAJOR == 0 && 10#$LINT_MINOR < 4)); then
   echo -e "${RED}❌  $MARKDOWNLINT_BIN is ${LINT_BANNER:-silent}, not markdownlint-cli2 0.4.0 or later, which lints a path as it is named: the commit is refused.${RESET}"
+  if [[ -z "$LINT_VERSION" && -s "$WORK_DIR/probe.err" ]]; then
+    echo "    It said:"
+    head -n 5 "$WORK_DIR/probe.err" | sed 's/^/      /'
+  fi
   echo -e "    Update it: ${CYAN}pnpm add -g markdownlint-cli2${RESET}"
   echo -e "    To skip in an emergency: ${YELLOW}git commit --no-verify${RESET}"
   exit 1
