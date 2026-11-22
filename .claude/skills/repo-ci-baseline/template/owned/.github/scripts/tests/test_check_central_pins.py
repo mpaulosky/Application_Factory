@@ -295,8 +295,9 @@ def test_a_pin_that_cant_be_read_is_left_alone(tmp_path):
 
 def test_the_caps_are_the_documented_ones():
     # The boundary tests below are written against the constants, so these pin their values.
-    assert (ccp.MAX_BYTES, ccp.MAX_EXPANSIONS, ccp.MAX_DEPTH, ccp.MAX_PLACEHOLDERS, ccp.MAX_VALUE) == (4 * 1024 * 1024, 256, 256, 64, 1024)
+    assert (ccp.MAX_BYTES, ccp.MAX_EXPANSIONS, ccp.MAX_DEPTH, ccp.MAX_VALUE) == (4 * 1024 * 1024, 256, 256, 1024)
     assert (ccp.MAX_TOTAL_BYTES, ccp.MAX_NODES, ccp.MAX_TOTAL_EXPANSIONS, ccp.MAX_SHOWN) == (64 * 1024 * 1024, 250_000, 100_000, 100)
+    assert (ccp.MAX_ID, ccp.MAX_IDS, ccp.MAX_FILES, ccp.MAX_PRINTED) == (256, 250_000, 50_000, 300)
 
 
 def expansions(tmp_path, count):
@@ -326,22 +327,53 @@ def test_combinations_of_several_properties_multiply(tmp_path):
 
 
 @pytest.mark.parametrize("extra,readable", [(-1, True), (0, True), (1, False)])
-def test_a_reference_with_more_than_max_placeholders_cant_be_read(tmp_path, extra, readable):
-    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />', properties=TRANSITIVE + "<PropertyGroup><P>a</P></PropertyGroup>")
-    project(tmp_path, "src/App/App.csproj", f'<PackageReference Include="{"$(P)" * (ccp.MAX_PLACEHOLDERS + extra)}" />')
+def test_a_property_value_over_max_value_characters_cant_be_read(tmp_path, extra, readable):
+    # A list of one id padded with separators, so only the value's own length is at the cap.
+    value = "A" + ";" * (ccp.MAX_VALUE + extra - 1)
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />', properties=TRANSITIVE + f"<PropertyGroup><P>{value}</P></PropertyGroup>")
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="$(P)" />')
+
+    _, found, unreadable, _ = ccp.check(tmp_path)
+
+    assert (unreadable == [] and found == []) is readable
+
+
+@pytest.mark.parametrize("extra,readable", [(-1, True), (0, True), (1, False)])
+def test_a_name_that_would_grow_past_max_value_characters_isnt_built(tmp_path, extra, readable):
+    half = "A" + ";" * (ccp.MAX_VALUE // 2 - 1)
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />', properties=TRANSITIVE + f"<PropertyGroup><P>{half}</P></PropertyGroup>")
+    literal = {-1: "", 0: "", 1: "x"}[extra]
+    name = "$(P)$(P)" if extra >= 0 else "$(P)" + half[:-1]
+    project(tmp_path, "src/App/App.csproj", f'<PackageReference Include="{name}{literal}" />')
 
     assert (ccp.check(tmp_path)[2] == []) is readable
 
 
 @pytest.mark.parametrize("extra,readable", [(-1, True), (0, True), (1, False)])
-def test_a_property_value_over_max_value_characters_cant_be_read(tmp_path, extra, readable):
-    value = "a" * (ccp.MAX_VALUE + extra)
-    central(tmp_path, f'<PackageVersion Include="{value}" Version="1.0.0" />', properties=TRANSITIVE + f"<PropertyGroup><P>{value}</P></PropertyGroup>")
-    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="$(P)" />')
+def test_an_id_over_max_id_characters_cant_be_read(tmp_path, extra, readable):
+    name = "A" * (ccp.MAX_ID + extra)
+    central(tmp_path, '<PackageVersion Include="B" Version="1.0.0" />', properties=TRANSITIVE + f"<PropertyGroup><P>{name}</P></PropertyGroup>")
+    project(tmp_path, "src/App/App.csproj", f'<PackageReference Include="{name}" /><PackageReference Include="$(P)" />')
 
-    transitive, found, unreadable, _ = ccp.check(tmp_path)
+    unreadable = ccp.check(tmp_path)[2]
 
-    assert (unreadable == [] and found == []) is readable
+    assert unreadable == ([] if readable else [name, "$(P)"])
+
+
+def test_values_are_counted_before_they_are_sorted(tmp_path, monkeypatch):
+    # A name past the cap is refused without sorting the values of each of its properties.
+    values = "".join(f'<PropertyGroup Condition="{i}"><P>v{i}</P><Q>w{i}</Q></PropertyGroup>' for i in range(20))
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />', properties=TRANSITIVE + values)
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="$(P).$(Q)" />')
+
+    def spy(items, *args, **kwargs):
+        items = list(items)
+        assert not any(str(item).startswith(("v", "w")) for item in items), "the values were sorted before they were counted"
+        return sorted(items, *args, **kwargs)
+
+    monkeypatch.setattr(ccp, "sorted", spy, raising=False)
+
+    assert ccp.check(tmp_path)[2] == ["$(P).$(Q)"]
 
 
 @pytest.mark.parametrize("group", [
@@ -417,9 +449,11 @@ def test_the_report_comes_in_order(tmp_path, capsys):
     status, out, _ = run(tmp_path, capsys)
 
     assert status == 1
-    assert out == ("ℹ️  y.props was skipped: it isn't well-formed MSBuild XML (no element found: line 1, column 9). A reference or property in it wasn't seen.\n"
-                   "ℹ️  z.props was skipped: it isn't well-formed MSBuild XML (no element found: line 1, column 9). A reference or property in it wasn't seen.\n"
-                   "❌ Q is pinned in a/Directory.Packages.props but no project references it\n"
+    lines = out.splitlines(keepends=True)
+    # expat's own wording of the error may change between releases, so only up to it.
+    assert [line[:len("ℹ️  y.props was skipped: it isn't well-formed MSBuild XML (")] for line in lines[:2]] == [
+        "ℹ️  y.props was skipped: it isn't well-formed MSBuild XML (", "ℹ️  z.props was skipped: it isn't well-formed MSBuild XML ("]
+    assert "".join(lines[2:]) == ("❌ Q is pinned in a/Directory.Packages.props but no project references it\n"
                    "❌ P is pinned in a/Directory.Packages.props but no project references it\n"
                    "❌ Q is pinned in b/Directory.Packages.props but no project references it\n"
                    "❌ P is pinned in b/Directory.Packages.props but no project references it\n")
@@ -450,15 +484,19 @@ def test_max_shown_lines_are_all_printed_without_a_more_line(tmp_path, capsys, m
 # The run's budget.
 
 
-@pytest.mark.parametrize("cap,kind", [("MAX_NODES", "elements and comments"), ("MAX_TOTAL_BYTES", "bytes")])
+@pytest.mark.parametrize("cap,kind", [("MAX_FILES", "files"), ("MAX_NODES", "elements, attributes and comments"),
+                                      ("MAX_TOTAL_BYTES", "bytes"), ("MAX_IDS", "ids")])
 def test_a_repo_bigger_than_the_runs_budget_fails(tmp_path, capsys, monkeypatch, cap, kind):
-    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />')
-    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="A" />')
-    _, found, _, _ = ccp.check(tmp_path)
-    assert found == []
-    # 5 elements in the central file and 3 in the project, plus 2 comments; or the two files' bytes.
-    (tmp_path / "src/App/App.csproj").write_text('<Project Sdk="Microsoft.NET.Sdk"><!-- a --><!-- b --><ItemGroup><PackageReference Include="A" /></ItemGroup></Project>\n')
-    used = 10 if cap == "MAX_NODES" else (tmp_path / "Directory.Packages.props").stat().st_size + (tmp_path / "src/App/App.csproj").stat().st_size
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" /><!-- Transitive pin: kept --><PackageVersion Include="K" Version="1" />')
+    (tmp_path / "global.json").write_text("{}")
+    (tmp_path / "src/App").mkdir(parents=True)
+    (tmp_path / "src/App/App.csproj").write_text('<Project Sdk="S"><!-- a --><!-- b --><ItemGroup><PackageReference Include="A" /></ItemGroup></Project>\n')
+    # 3 files; 11 elements, attributes and comments in the central file, 7 in the project with its 2 comments; the three files'
+    # bytes; 4 ids (the two pins, the SDK and the reference).
+    used = {"MAX_FILES": 3, "MAX_NODES": 18, "MAX_IDS": 4,
+            "MAX_TOTAL_BYTES": sum(path.stat().st_size for path in (tmp_path / "Directory.Packages.props", tmp_path / "src/App/App.csproj",
+                                                                    tmp_path / "global.json"))}[cap]
+    assert ccp.check(tmp_path)[1] == []
 
     monkeypatch.setattr(ccp, cap, used)
     assert run(tmp_path, capsys)[0] == 0
@@ -466,7 +504,7 @@ def test_a_repo_bigger_than_the_runs_budget_fails(tmp_path, capsys, monkeypatch,
     status, out, _ = run(tmp_path, capsys)
 
     assert status == 1
-    assert out == f"❌ Not checked: the repo's MSBuild files need more than {used - 1} {kind}, more than this check reads.\n"
+    assert out == f"❌ Not checked: the repo needs more than the {used - 1} {kind} this check reads.\n"
 
 
 def test_combinations_count_against_the_runs_budget_once_per_name(tmp_path, capsys, monkeypatch):
@@ -479,7 +517,7 @@ def test_combinations_count_against_the_runs_budget_once_per_name(tmp_path, caps
     status, out, _ = run(tmp_path, capsys)
 
     assert status == 1
-    assert "need more than 2 combinations of property values" in out
+    assert "needs more than the 2 combinations of property values" in out
 
 
 # Files this check won't parse.
@@ -526,10 +564,12 @@ def test_a_large_text_is_read_in_linear_time(tmp_path):
     central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />')
     (tmp_path / "Text.props").write_text("<Project><PropertyGroup><P>" + "a\n&amp;" * ((ccp.MAX_BYTES - 100) // 7) + "</P></PropertyGroup></Project>")
 
+    assert (tmp_path / "Text.props").stat().st_size < ccp.MAX_BYTES
     started = time.monotonic()
-    ccp.check(tmp_path)
+    problems = ccp.check(tmp_path)[3]
 
     assert time.monotonic() - started < 10
+    assert problems == []
 
 
 # global.json.
@@ -644,7 +684,7 @@ def test_a_symlinked_or_dangling_file_is_not_followed(tmp_path, capsys):
 
     assert status == 1
     for name in ("Linked.props", "Dangling.props"):
-        assert f"❌ {name} can't be checked: it is a symlink, and it may hold central pins or turn transitive pinning on.\n" in out
+        assert f"❌ {name} can't be checked: it is a symlink. It may hold central pins, turn transitive pinning on or set a property a pin is built from.\n" in out
     assert "ℹ️  global.json was skipped: it is a symlink." in out
 
 
@@ -656,7 +696,7 @@ def test_a_fifo_is_not_read(tmp_path, capsys):
     status, out, _ = run(tmp_path, capsys)
 
     assert status == 1
-    assert "Pipe.props can't be checked: it is not a regular file," in out
+    assert "Pipe.props can't be checked: it is not a regular file." in out
 
 
 @pytest.mark.parametrize("extra,read", [(-1, True), (0, True), (1, False)])
@@ -670,7 +710,7 @@ def test_a_file_over_max_bytes_is_not_read(tmp_path, capsys, extra, read):
     status, out, _ = run(tmp_path, capsys)
 
     assert status == (0 if read else 1)
-    assert (f"Big.props can't be checked: it is over {ccp.MAX_BYTES} bytes," in out) is not read
+    assert (f"Big.props can't be checked: it is over {ccp.MAX_BYTES} bytes." in out) is not read
 
 
 def test_a_file_that_grew_past_max_bytes_since_lstat_is_not_read(tmp_path, capsys, monkeypatch):
@@ -681,7 +721,7 @@ def test_a_file_that_grew_past_max_bytes_since_lstat_is_not_read(tmp_path, capsy
 
     def small(path, *args, **kwargs):
         info = real(path, *args, **kwargs)
-        if str(path).endswith("Grown.props"):
+        if os.fspath(path) == str(tmp_path / "Grown.props"):
             return os.stat_result((info.st_mode, *info[1:6], 10, *info[7:]))
         return info
 
@@ -690,7 +730,7 @@ def test_a_file_that_grew_past_max_bytes_since_lstat_is_not_read(tmp_path, capsy
     status, out, _ = run(tmp_path, capsys)
 
     assert status == 1
-    assert f"Grown.props can't be checked: it is over {ccp.MAX_BYTES} bytes," in out
+    assert f"Grown.props can't be checked: it is over {ccp.MAX_BYTES} bytes." in out
 
 
 def test_an_unreadable_file_cant_be_checked_and_says_why(tmp_path, capsys, monkeypatch):
@@ -700,7 +740,7 @@ def test_an_unreadable_file_cant_be_checked_and_says_why(tmp_path, capsys, monke
     real = os.open
 
     def locked(path, *args, **kwargs):
-        if str(path).endswith("Locked.csproj"):
+        if os.fspath(path) == str(tmp_path / "Locked.csproj"):
             raise PermissionError(errno.EACCES, "Permission denied", str(path))
         return real(path, *args, **kwargs)
 
@@ -709,7 +749,7 @@ def test_an_unreadable_file_cant_be_checked_and_says_why(tmp_path, capsys, monke
     status, out, err = run(tmp_path, capsys)
 
     assert status == 1
-    assert "❌ Locked.csproj can't be checked: it can't be read (Permission denied), and it may hold" in out
+    assert "❌ Locked.csproj can't be checked: it can't be read (Permission denied). It may hold" in out
     assert "must be readable for the check to pass" in err
 
 
@@ -720,12 +760,12 @@ def test_a_path_that_became_a_fifo_after_lstat_is_not_read(tmp_path, capsys, mon
     os.mkfifo(tmp_path / "Swapped.props")
     regular = os.lstat(tmp_path / "Directory.Packages.props")
     real = os.lstat
-    monkeypatch.setattr(ccp.os, "lstat", lambda path, *a, **k: regular if str(path).endswith("Swapped.props") else real(path, *a, **k))
+    monkeypatch.setattr(ccp.os, "lstat", lambda path, *a, **k: regular if os.fspath(path) == str(tmp_path / "Swapped.props") else real(path, *a, **k))
 
     status, out, _ = run(tmp_path, capsys)
 
     assert status == 1
-    assert "Swapped.props can't be checked: it is not a regular file," in out
+    assert "Swapped.props can't be checked: it is not a regular file." in out
 
 
 @pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW"), reason="needs O_NOFOLLOW")
@@ -736,7 +776,7 @@ def test_a_path_that_became_a_symlink_after_lstat_is_not_followed(tmp_path, caps
     (tmp_path / "Swapped.props").symlink_to(outside)
     regular = os.lstat(outside)
     real = os.lstat
-    monkeypatch.setattr(ccp.os, "lstat", lambda path, *a, **k: regular if str(path).endswith("Swapped.props") else real(path, *a, **k))
+    monkeypatch.setattr(ccp.os, "lstat", lambda path, *a, **k: regular if os.fspath(path) == str(tmp_path / "Swapped.props") else real(path, *a, **k))
 
     status, out, _ = run(tmp_path, capsys)
 
@@ -767,7 +807,7 @@ def test_a_symlinked_central_file_fails_the_check(tmp_path, capsys):
     status, out, _ = run(tmp_path, capsys)
 
     assert status == 1
-    assert "❌ src/Directory.Packages.props can't be checked: it is a symlink," in out
+    assert "❌ src/Directory.Packages.props can't be checked: it is a symlink." in out
 
 
 @pytest.mark.parametrize("encoding", ["utf-8", "utf-16"])
@@ -798,33 +838,33 @@ def test_a_folder_that_cant_be_listed_fails_the_check(tmp_path, capsys, monkeypa
     (tmp_path / "locked").mkdir()
     real = os.scandir
 
-    def scandir(path="."):
-        if str(path).endswith("locked"):
+    def scandir(path=".", *args, **kwargs):
+        if os.fspath(path) == str(tmp_path / "locked"):
             raise PermissionError(errno.EACCES, "Permission denied", str(path))
-        return real(path)
+        return real(path, *args, **kwargs)
 
     monkeypatch.setattr(ccp.os, "scandir", scandir)
 
     status, out, _ = run(tmp_path, capsys)
 
     assert status == 1
-    assert "❌ locked/ can't be checked: it can't be listed (Permission denied)," in out
+    assert "❌ locked/ can't be checked: it can't be listed (Permission denied)." in out
 
 
 def test_a_root_that_cant_be_listed_fails_the_check(tmp_path, capsys, monkeypatch):
     real = os.scandir
 
-    def scandir(path="."):
-        if Path(path) == tmp_path:
+    def scandir(path=".", *args, **kwargs):
+        if os.fspath(path) == str(tmp_path):
             raise PermissionError(errno.EACCES, "Permission denied", str(path))
-        return real(path)
+        return real(path, *args, **kwargs)
 
     monkeypatch.setattr(ccp.os, "scandir", scandir)
 
     status, out, _ = run(tmp_path, capsys)
 
     assert status == 1
-    assert out.startswith("❌ . can't be checked: it can't be listed (Permission denied),")
+    assert out.startswith("❌ . can't be checked: it can't be listed (Permission denied).")
 
 
 @pytest.mark.skipif(not hasattr(os, "symlink"), reason="needs symlinks")
@@ -836,7 +876,158 @@ def test_a_symlinked_folder_fails_the_check(tmp_path, capsys):
     status, out, _ = run(tmp_path, capsys)
 
     assert status == 1
-    assert "❌ linked/ can't be checked: it is a symlinked folder, which isn't walked," in out
+    assert "❌ linked/ can't be checked: it is a symlinked folder, which isn't walked." in out
+
+
+# What a file that can't be checked does to the rest of the report.
+
+
+def test_a_file_that_cant_be_checked_fails_even_with_warnings(tmp_path, capsys):
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />')
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="@(Z)" />')
+    (tmp_path / "Directory.Build.props").write_text('<Project><ItemGroup><PackageVersion Include="B"')
+
+    status, out, err = run(tmp_path, capsys)
+
+    assert status == 1
+    assert "❌ Directory.Build.props can't be checked: it isn't well-formed MSBuild XML (" in out
+    assert "⚠️  A is pinned in Directory.Packages.props but no project references it\n" in out
+    assert err.count("must be readable for the check to pass") == 1
+
+
+@pytest.mark.parametrize("properties,items", [("", '<PackageVersion Include="A" Version="1.0.0" />'), (TRANSITIVE, "")])
+def test_a_file_that_cant_be_checked_is_never_reported_as_a_pass(tmp_path, capsys, properties, items):
+    central(tmp_path, items, properties=properties)
+    (tmp_path / "Broken.props").write_text("<Project><PackageVersion")
+
+    status, out, err = run(tmp_path, capsys)
+
+    assert status == 1
+    assert out.splitlines()[-1] == "Not a pass: the files and folders above couldn't be checked, and may hold what the check looks for."
+    assert f"nested at most {ccp.MAX_DEPTH} deep, in an encoding Python decodes" in err
+
+
+def test_a_skipped_file_fails_the_check_when_a_pin_cant_be_resolved(tmp_path, capsys):
+    # The pin is built from $(P), which only the broken file may set.
+    central(tmp_path, '<PackageVersion Include="$(P)" Version="1.0.0" />')
+    (tmp_path / "Directory.Build.props").write_text("<Project><PropertyGroup><P>A</P>")
+    (tmp_path / "global.json").write_text("{")
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 1
+    assert "❌ Directory.Build.props can't be checked: it isn't well-formed MSBuild XML (" in out
+    assert "ℹ️  global.json was skipped: it isn't JSON the .NET host reads." in out
+
+
+def test_a_skipped_file_stays_a_notice_when_every_pin_resolves(tmp_path, capsys):
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />')
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="A" />')
+    (tmp_path / "Directory.Build.props").write_text("<Project><PropertyGroup><P>A</P>")
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 0
+    assert "ℹ️  Directory.Build.props was skipped" in out
+
+
+@pytest.mark.parametrize("kind,setup", [("notice", "malformed"), ("error", "fifo")])
+def test_notices_and_errors_are_printed_at_most_max_shown_times(tmp_path, capsys, monkeypatch, kind, setup):
+    if setup == "fifo" and not hasattr(os, "mkfifo"):
+        pytest.skip("needs FIFOs")
+    monkeypatch.setattr(ccp, "MAX_SHOWN", 2)
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />')
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="A" />')
+    for i in range(3):
+        if setup == "fifo":
+            os.mkfifo(tmp_path / f"P{i}.props")
+        else:
+            (tmp_path / f"P{i}.props").write_text("<Project>")
+
+    status, out, err = run(tmp_path, capsys)
+
+    marker = {"notice": "ℹ️  P", "error": "❌ P"}[kind]
+    assert [line[:len(marker) + 1] for line in out.splitlines()[:3]] == [marker + "0", marker + "1", "... and 1 m"[:len(marker) + 1]]
+    assert out.splitlines()[2] == "... and 1 more like the 2 above."
+    assert status == (1 if kind == "error" else 0)
+    assert err.count("must be readable") == (1 if kind == "error" else 0)
+
+
+def test_a_long_name_or_path_is_cut_where_it_is_printed(tmp_path, capsys, monkeypatch):
+    # A pin's name can't be longer than MAX_ID, which is under MAX_PRINTED, so a short cap shows the cut on it too.
+    name = "N" * (ccp.MAX_PRINTED + 50)
+    central(tmp_path, '<PackageVersion Include="AAAAAAAAAAAAAAA" Version="1.0.0" />')
+    project(tmp_path, "src/App/App.csproj", f'<PackageReference Include="@({name})" />')
+
+    out = run(tmp_path, capsys)[1]
+    monkeypatch.setattr(ccp, "MAX_PRINTED", 10)
+    short = run(tmp_path, capsys)[1]
+
+    # "@(", the name and ")" are 353 characters: 300 kept, 53 cut.
+    assert f"(@({'N' * 298}... (53 more characters))" in out
+    assert short.startswith("⚠️  AAAAAAAAAA... (5 more characters) is pinned in Directory.... (14 more characters) but no project references it\n")
+
+
+# The open file's descriptor.
+
+
+def descriptors(monkeypatch):
+    opened, closed = [], []
+    real_open, real_close = os.open, os.close
+
+    def spy_open(*args, **kwargs):
+        opened.append(real_open(*args, **kwargs))
+        return opened[-1]
+
+    def spy_close(descriptor):
+        closed.append(descriptor)
+        real_close(descriptor)
+
+    monkeypatch.setattr(ccp.os, "open", spy_open)
+    monkeypatch.setattr(ccp.os, "close", spy_close)
+    return opened, closed
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
+def test_a_descriptor_refused_after_fstat_is_closed(tmp_path, capsys, monkeypatch):
+    os.mkfifo(tmp_path / "Swapped.props")
+    regular = os.lstat(tmp_path)
+    real = os.lstat
+    swapped = str(tmp_path / "Swapped.props")
+    monkeypatch.setattr(ccp.os, "lstat", lambda path, *a, **k: (
+        os.stat_result((0o100644, *regular[1:])) if os.fspath(path) == swapped else real(path, *a, **k)))
+    opened, closed = descriptors(monkeypatch)
+
+    run(tmp_path, capsys)
+
+    assert opened and closed == opened
+
+
+def test_a_descriptor_whose_fstat_fails_is_closed(tmp_path, capsys, monkeypatch):
+    project(tmp_path, "App.csproj", '<PackageReference Include="A" />')
+    opened, closed = descriptors(monkeypatch)
+    real = os.fstat
+
+    def failing(descriptor, *args, **kwargs):
+        if descriptor in opened:
+            raise OSError(errno.EIO, "Input/output error")
+        return real(descriptor, *args, **kwargs)
+
+    monkeypatch.setattr(ccp.os, "fstat", failing)
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 1
+    assert "❌ App.csproj can't be checked: it can't be read (Input/output error)." in out
+    assert opened and closed == opened
+
+
+def test_a_descriptor_read_is_closed_once(tmp_path, capsys, monkeypatch):
+    project(tmp_path, "App.csproj", '<PackageReference Include="A" />')
+    opened, closed = descriptors(monkeypatch)
+
+    assert run(tmp_path, capsys)[0] == 0
+    assert len(opened) == 1 and closed == []
 
 
 # Output under GitHub Actions, and text a repo controls.
@@ -898,10 +1089,25 @@ def test_an_id_cant_move_the_terminal_in_a_plain_line(tmp_path, capsys):
     assert out == "❌ A?::add-mask::x?::stop-commands::t%0A?2J is pinned in Directory.Packages.props but no project references it\n"
 
 
+@pytest.mark.parametrize("extra,cut", [(-1, False), (0, False), (1, True)])
+def test_printable_cuts_a_text_over_max_printed_characters(extra, cut):
+    text = "x" * (ccp.MAX_PRINTED + extra)
+
+    assert ccp.printable(text) == (f"{'x' * ccp.MAX_PRINTED}... (1 more characters)" if cut else text)
+
+
 def test_the_escapes_are_the_runners():
     # printable() already turns line breaks into '?', so these are the second line of defence, tested on their own.
     assert ccp.escape_data("a%\r\nb:,") == "a%25%0D%0Ab:,"
     assert ccp.escape_property("a%\r\nb:,") == "a%25%0D%0Ab%3A%2C"
+
+
+def test_a_path_cant_start_a_line_in_the_file_property(tmp_path, capsys, monkeypatch):
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />', folder="a\n::error::b")
+
+    out = run_ci(tmp_path, capsys, monkeypatch)
+
+    assert out == "::error file=a?%3A%3Aerror%3A%3Ab/Directory.Packages.props::A is pinned in a?::error::b/Directory.Packages.props but no project references it\n"
 
 
 def test_a_path_cant_break_the_file_property(tmp_path, capsys, monkeypatch):

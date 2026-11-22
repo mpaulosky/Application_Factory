@@ -23,9 +23,9 @@ in any MSBuild file: one whose extension ends in `proj` (`.csproj`, `.sqlproj`, 
 compared ignoring case, and a pin listed twice is reported once. With transitive pinning off, an unreferenced pin pins nothing and the check passes.
 
 An id holding `$(Name)` is resolved from every value the repo's MSBuild files give that property, wherever they set it (a `Target`, a `Choose`). One
-that still holds `$(`, `@(` or `%(`, that would need more than 256 combinations of property values or more than 64 placeholders, or whose property has a
-value over 1,024 characters, can't be read without evaluating MSBuild: such a pin is left alone, and such a reference could name any package, so the pins
-found are printed as warnings and the check passes, naming the reference.
+that still holds `$(`, `@(` or `%(`, that is over 256 characters (NuGet's own limit is 100), or that would need more than 256 combinations of property
+values or grow past 1,024 characters with them substituted, can't be read without evaluating MSBuild: such a pin is left alone, and such a reference
+could name any package, so the pins found are printed as warnings and the check passes, naming the reference.
 
 Files are read as bytes, so a byte-order mark or an XML declaration's encoding (UTF-16, say) is honoured. The check reads only a regular file, not a
 symlink, of at most 4 MiB, holding well-formed XML without a `DOCTYPE` (which no MSBuild file needs, and entity expansion would), nested at most 256
@@ -34,17 +34,22 @@ elements deep, in an encoding Python decodes. What happens to a file it can't re
 - An MSBuild file that may hold pins or turn transitive pinning on fails the check, naming the file and why: a `Directory.Packages.props`, one whose
   text names `PackageVersion` or `CentralPackageTransitivePinningEnabled`, or one whose bytes weren't read at all (a symlink, a FIFO, one over 4 MiB).
   Skipping it could hide a pin, or the setting that makes the check apply. So does a folder that can't be listed, or a symlinked folder, which isn't walked.
-- Any other one (a malformed `dotnet new` template or test fixture, say), and a `global.json` the .NET host can't read as JSON, is skipped with a
-  notice. It can hide only references, which makes the check stricter, and property values, which can make a reference unreadable and so turn the
-  report into warnings.
+  So does any MSBuild file that couldn't be parsed when a pin can't be resolved, since the file may set the property the pin is built from.
+- Any other MSBuild file (a malformed `dotnet new` template or test fixture, say), and a `global.json` that can't be read (a symlink, a FIFO, one over
+  4 MiB, or not JSON the .NET host reads), is skipped with a notice. It can hide only references, which makes the check stricter, and property values,
+  which can make a reference unreadable and so turn the report into warnings.
 
-`bin/`, `obj/`, `node_modules/` and dot-folders (`.git`, CI's `.nuget` package cache) aren't walked. The whole run reads at most 64 MiB, 250,000 elements
-and comments, and 100,000 combinations of property values; past any of them it fails, since it can't vouch for what it didn't read. Each kind of line is
-printed at most 100 times, then a count of the rest.
+A run with a file or folder it couldn't check ends with `Not a pass: ...`, never with a line saying the pins are fine. Only the file itself is opened
+without following a symlink: a folder swapped for one between the walk and the read is followed, which needs a process writing to the tree while the
+check runs, not a change in a pull request.
+
+`bin/`, `obj/`, `node_modules/` and dot-folders (`.git`, CI's `.nuget` package cache) aren't walked. The whole run reads at most 50,000 files, 64 MiB,
+250,000 elements, attributes and comments, 250,000 ids and 100,000 combinations of property values; past any of them it fails, since it can't vouch for
+what it didn't read. Each kind of line is printed at most 100 times, then a count of the rest.
 
 Under GitHub Actions each problem is an `::error`, `::warning` or `::notice` annotation on its file, escaped as the runner reads workflow commands;
 elsewhere a plain line. A name or path from the repo is printed with its non-printable characters as `?`, so it can't start a workflow command or move
-the terminal.
+the terminal, and cut to 300 characters.
 
 ## Keeping a pin on purpose
 
@@ -65,7 +70,8 @@ the package that brings it in moves past the version.
 transitive pinning deletes its unreferenced pins, or marks the ones it keeps, in a PR of its own; run
 `python3 -I <Factory>/.claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_central_pins.py --root .` in its checkout to list them.
 An Application the Rollout reaches first gets a red `Build Solution` on its Rollout PR, and on every PR after it: the step's annotations name each pin to
-delete or mark.
+delete or mark. The same command lists any MSBuild file or folder the check can't read (a symlinked `.props` or folder, a malformed file that names
+`PackageVersion`); there is no comment that exempts one, so the Application fixes, moves or deletes it in the same PR.
 
 The Seed `.sandcastle/lib/repo-config.mts` lists the script in `CHECK_PATHS`, so a Sandcastle branch that changes it says so in its PR body. A Seed file is
 written only when missing, so an Application with Sandcastle adds `".github/scripts/check_central_pins.py"` to its own `CHECK_PATHS` by hand

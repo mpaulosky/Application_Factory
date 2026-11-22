@@ -20,8 +20,8 @@ What counts as a reference: an id in a PackageReference (Include or Update), Glo
 SDK (a Project Sdk attribute, an Sdk element, an Import's Sdk, or a global.json's msbuild-sdks), in any MSBuild file in the repo: a
 file whose extension ends in "proj" (.csproj, .sqlproj, .wixproj, ...), or a .props or .targets file. NuGet ids are compared ignoring
 case. An id holding $(Name) is resolved from the values the repo's MSBuild files give that property, wherever they set it. One that
-still holds $(, @( or %(, or that would need more than MAX_EXPANSIONS combinations of values, more than MAX_PLACEHOLDERS placeholders
-or a value over MAX_VALUE characters, can't be read without evaluating MSBuild. A pin like that is left alone, and a reference like
+still holds $(, @( or %(, that is over MAX_ID characters, or that would need more than MAX_EXPANSIONS combinations of values or grow
+past MAX_VALUE characters, can't be read without evaluating MSBuild. A pin like that is left alone, and a reference like
 that could be any package, so the pins found are then reported as warnings and the check passes. Transitive pinning is on when any
 of those files sets the property to true.
 
@@ -32,13 +32,19 @@ that can't be read or parsed can't be checked:
 
 - An MSBuild file that may hold pins or turn transitive pinning on (a Directory.Packages.props, one that names PackageVersion or
   CentralPackageTransitivePinningEnabled, or one whose bytes weren't read at all) fails the check, naming the file and why: skipping
-  it could hide a pin or the setting. So does a folder that can't be listed, or a symlinked folder, which isn't walked.
-- Any other one, and a global.json the .NET host can't read, is skipped with a notice. It can hide only references, which makes the
-  check stricter, and property values, which can make a reference unreadable and so turn the report into warnings.
+  it could hide a pin or the setting. So does a folder that can't be listed, or a symlinked folder, which isn't walked. So does any
+  MSBuild file that couldn't be parsed when a central pin can't be resolved, since the file may set the property the pin is built from.
+- Any other MSBuild file, and a global.json that can't be read (a symlink, a FIFO, one over MAX_BYTES, or not JSON the .NET host
+  reads), is skipped with a notice. It can hide only references, which makes the check stricter, and property values, which can make
+  a reference unreadable and so turn the report into warnings.
 
-bin/, obj/, node_modules/ and dot-folders (.git, CI's .nuget package cache) aren't walked. The whole run reads at most MAX_TOTAL_BYTES,
-MAX_NODES elements and comments, and MAX_TOTAL_EXPANSIONS combinations of property values; past any of them it fails, since it can't
-vouch for what it didn't read. Each kind of line is printed at most MAX_SHOWN times.
+Only the file itself is opened without following a symlink: a folder swapped for one between the walk and the read is followed, which
+needs a process writing to the tree while the check runs, not a change in a pull request.
+
+bin/, obj/, node_modules/ and dot-folders (.git, CI's .nuget package cache) aren't walked. The whole run reads at most MAX_FILES files,
+MAX_TOTAL_BYTES, MAX_NODES elements, attributes and comments, MAX_IDS ids and MAX_TOTAL_EXPANSIONS combinations of property values;
+past any of them it fails, since it can't vouch for what it didn't read. Each kind of line is printed at most MAX_SHOWN times, and each
+name or path in it cut to MAX_PRINTED characters.
 
 Under GitHub Actions each problem is an annotation, its text escaped as the runner reads workflow commands; elsewhere a plain line.
 Every text a repo controls is printed with its non-printable characters as '?'.
@@ -65,9 +71,14 @@ MAX_NODES = 250_000
 # The most combinations of property values one reference may resolve through (each $(Name) with several values multiplies them).
 MAX_EXPANSIONS = 256
 MAX_TOTAL_EXPANSIONS = 100_000
-MAX_PLACEHOLDERS = 64
+# A property value, and a name with its properties substituted, are read up to MAX_VALUE characters; an id up to MAX_ID (NuGet's
+# own limit is 100).
 MAX_VALUE = 1024
+MAX_ID = 256
+MAX_IDS = 250_000
+MAX_FILES = 50_000
 MAX_SHOWN = 100
+MAX_PRINTED = 300
 REASON_MARKER = "transitive pin:"
 PROPERTY = re.compile(r"\$\(([A-Za-z_][A-Za-z0-9_.-]*)\)")
 UNREADABLE = ("$(", "@(", "%(")
@@ -102,15 +113,21 @@ class Exhausted(Exception):
 
 
 class Budget:
-    """What the whole run may still read: bytes, elements and comments, and combinations of property values."""
+    """What the whole run may still read."""
 
     def __init__(self):
-        self.left = {"bytes": MAX_TOTAL_BYTES, "elements and comments": MAX_NODES, "combinations of property values": MAX_TOTAL_EXPANSIONS}
+        self.totals = {
+            "files": MAX_FILES,
+            "bytes": MAX_TOTAL_BYTES,
+            "elements, attributes and comments": MAX_NODES,
+            "ids": MAX_IDS,
+            "combinations of property values": MAX_TOTAL_EXPANSIONS,
+        }
+        self.left = dict(self.totals)
 
     def spend(self, kind, amount):
         if self.left[kind] < amount:
-            total = {"bytes": MAX_TOTAL_BYTES, "elements and comments": MAX_NODES}.get(kind, MAX_TOTAL_EXPANSIONS)
-            raise Exhausted(f"the repo's MSBuild files need more than {total} {kind}")
+            raise Exhausted(f"the repo needs more than the {self.totals[kind]} {kind} this check reads")
         self.left[kind] -= amount
 
 
@@ -130,7 +147,7 @@ def parse(data, budget):
     def start(name, attributes):
         if len(stack) > MAX_DEPTH:
             raise Refused(f"an element nested over {MAX_DEPTH} deep")
-        budget.spend("elements and comments", 1)
+        budget.spend("elements, attributes and comments", 1 + len(attributes))
         node = Node(name.rpartition(":")[2].lower(), attributes)
         stack[-1].children.append(node)
         stack.append(node)
@@ -143,7 +160,7 @@ def parse(data, budget):
         texts[-1].append(text)
 
     def comment(text):
-        budget.spend("elements and comments", 1)
+        budget.spend("elements, attributes and comments", 1)
         stack[-1].children.append(Node(None, text=text))
 
     parser.StartElementHandler = start
@@ -156,7 +173,9 @@ def parse(data, budget):
 
 
 def printable(text):
-    """text with every non-printable character as '?', so a name can't move the terminal or start a line."""
+    """text with every non-printable character as '?', so a name can't move the terminal or start a line, cut to MAX_PRINTED."""
+    if len(text) > MAX_PRINTED:
+        text = f"{text[:MAX_PRINTED]}... ({len(text) - MAX_PRINTED} more characters)"
     return "".join(character if character.isprintable() else "?" for character in text)
 
 
@@ -169,8 +188,10 @@ def escape_property(text):
 
 
 def report(kind, where, message):
-    """Print one problem: an annotation (kind error, warning or notice) under GitHub Actions, a plain line elsewhere."""
-    where, message = printable(where), printable(message)
+    """Print one problem: an annotation (kind error, warning or notice) under GitHub Actions, a plain line elsewhere.
+
+    message must be built from texts already through printable() (report_all does that), so each is cut on its own."""
+    where = printable(where)
     if os.environ.get("GITHUB_ACTIONS") == "true":
         print(f"::{kind} file={escape_property(where)}::{escape_data(message)}")
     else:
@@ -178,9 +199,9 @@ def report(kind, where, message):
 
 
 def report_all(kind, items, message):
-    """report() the first MAX_SHOWN (where, detail) items, then say how many more there were."""
+    """report() the first MAX_SHOWN (where, detail) items, each text through printable(), then say how many more there were."""
     for where, detail in items[:MAX_SHOWN]:
-        report(kind, where, message(where, detail))
+        report(kind, where, message(printable(where), printable(detail)))
     if len(items) > MAX_SHOWN:
         print(f"... and {len(items) - MAX_SHOWN} more like the {MAX_SHOWN} above.")
 
@@ -231,7 +252,7 @@ def may_be_central(path, data):
     return path.name.lower() == "directory.packages.props" or any(word in folded for word in CENTRAL_WORDS)
 
 
-def walk(root, problems):
+def walk(root, problems, budget):
     """(MSBuild files, global.json files) under root, sorted, outside the skipped folders. A folder it can't walk goes in problems."""
     msbuild, global_json = [], []
 
@@ -255,8 +276,10 @@ def walk(root, problems):
         for name in files:
             lowered = name.lower()
             if MSBUILD_FILE.search(lowered):
+                budget.spend("files", 1)
                 msbuild.append(Path(folder) / name)
             elif lowered == "global.json":
+                budget.spend("files", 1)
                 global_json.append(Path(folder) / name)
     return sorted(msbuild), sorted(global_json)
 
@@ -325,32 +348,41 @@ def properties(document, found):
 
 def resolve(name, values, budget, cache):
     """The lowercased ids name can be, with each $(Name) replaced by every value the repo gives it, or None when it can't be read."""
+    budget.spend("ids", 1)
+    if len(name) > MAX_ID:
+        return None
+    if not any(marker in name for marker in UNREADABLE):
+        return {name.lower()}
     if name not in cache:
         cache[name] = expand(name, values, budget)
     return cache[name]
 
 
 def expand(name, values, budget):
+    # name is at most MAX_ID characters, so it holds at most MAX_ID / 4 placeholders.
     placeholders = PROPERTY.findall(name)
-    if len(placeholders) > MAX_PLACEHOLDERS:
-        return None
     keys = list(dict.fromkeys(key.lower() for key in placeholders))
-    if not keys:
-        return None if any(marker in name for marker in UNREADABLE) else {name.lower()}
-    choices = [sorted(values.get(key, ())) for key in keys]
     count = 1
-    for choice in choices:
-        count *= len(choice)
+    for key in keys:
+        count *= len(values.get(key, ()))
     if count == 0 or count > MAX_EXPANSIONS:
         return None
+    # The longest the substituted name can be, from the longest value of each placeholder: past MAX_VALUE it isn't built.
+    longest = len(PROPERTY.sub("", name)) + sum(max(map(len, values[key.lower()])) for key in placeholders)
+    if longest > MAX_VALUE:
+        return None
     budget.spend("combinations of property values", count)
+    choices = [sorted(values[key]) for key in keys]
     resolved = set()
     for combination in itertools.product(*choices):
         mapping = dict(zip(keys, combination, strict=True))
         text = PROPERTY.sub(lambda match, mapping=mapping: mapping[match.group(1).lower()], name)
         if any(marker in text for marker in UNREADABLE):
             return None
-        resolved.update(part.lower() for part in ids(text))
+        for part in ids(text):
+            if len(part) > MAX_ID:
+                return None
+            resolved.add(part.lower())
     return resolved
 
 
@@ -390,7 +422,7 @@ def check(root):
     Raises Exhausted when the repo needs more than the run's budget."""
     budget = Budget()
     problems = []
-    msbuild, global_json = walk(root, problems)
+    msbuild, global_json = walk(root, problems, budget)
     documents = []
     for path in msbuild:
         data = read(path, root, problems, budget)
@@ -419,25 +451,33 @@ def check(root):
         for node in document.iter()
     )
     cache = {}
-    unreadable = []
+    unreadable = {}
     for _, document in documents:
         for name in references(document):
             resolved = resolve(name, values, budget, cache)
             if resolved is None:
-                unreadable.append(name)
+                unreadable.setdefault(name)
             else:
                 referenced |= resolved
     unreferenced = {}
+    unresolved_pin = False
     for path, document in documents:
         if path.name.lower() != "directory.packages.props":
             continue
         for name, reason in pins(document):
+            if reason:
+                budget.spend("ids", 1)
+                continue
             resolved = resolve(name, values, budget, cache)
-            if resolved is None or reason:
+            if resolved is None:
+                unresolved_pin = True
                 continue
             for key in sorted(resolved - referenced):
                 unreferenced.setdefault((path, key), name if len(resolved) == 1 else key)
-    return transitive, [(path, name) for (path, _), name in unreferenced.items()], unreadable, problems
+    if unresolved_pin:
+        # A skipped MSBuild file may set the property such a pin is built from, so it could hide that pin.
+        problems = [(where, why, blocks or not where.lower().endswith("global.json")) for where, why, blocks in problems]
+    return transitive, [(path, name) for (path, _), name in unreferenced.items()], list(unreadable), problems
 
 
 def main(argv=None):
@@ -451,14 +491,16 @@ def main(argv=None):
     try:
         transitive, unreferenced, unreadable, problems = check(root)
     except Exhausted as error:
-        report("error", ".", f"Not checked: {error}, more than this check reads.")
+        report("error", ".", f"Not checked: {error}.")
         return 1
     skipped = [(where, why) for where, why, blocks in problems if not blocks]
     blocking = [(where, why) for where, why, blocks in problems if blocks]
     report_all("notice", skipped, lambda where, why: f"{where} was skipped: {why}. A reference or property in it wasn't seen.")
-    report_all("error", blocking, lambda where, why: f"{where} can't be checked: {why}, and it may hold central pins or turn transitive pinning on.")
+    report_all("error", blocking, lambda where, why: f"{where} can't be checked: {why}. It may hold central pins, turn transitive pinning on or set a property a pin is built from.")
     status = 1 if blocking else 0
-    if not transitive:
+    if blocking and not (transitive and unreferenced):
+        print("Not a pass: the files and folders above couldn't be checked, and may hold what the check looks for.")
+    elif not transitive:
         print("Transitive pinning is off in every MSBuild file read (or there is no central package management): no pin found can hold a package back.")
     elif not unreferenced:
         print("Every central pin is referenced by a project, or kept with a reason.")
@@ -466,7 +508,7 @@ def main(argv=None):
         found = [(path.relative_to(root).as_posix(), name) for path, name in unreferenced]
         report_all("warning" if unreadable else "error", found, lambda where, name: f"{name} is pinned in {where} but no project references it")
         if unreadable:
-            names = sorted({printable(name) for name in unreadable})
+            names = sorted(printable(name) for name in unreadable)
             shown = ", ".join(names[:MAX_SHOWN]) + (f" and {len(names) - MAX_SHOWN} more" if len(names) > MAX_SHOWN else "")
             print(f"Reported as warnings: a reference this check can't read without evaluating MSBuild ({shown}) may name any of the pins above.")
         else:
@@ -481,7 +523,8 @@ def main(argv=None):
     if blocking:
         print(
             "Each file or folder that can't be checked must be readable for the check to pass: a regular file (not a symlink) "
-            f"of at most {MAX_BYTES} bytes holding well-formed XML without a DOCTYPE, or a folder that isn't a symlink and can be listed.",
+            f"of at most {MAX_BYTES} bytes holding well-formed XML without a DOCTYPE, nested at most {MAX_DEPTH} deep, in an encoding "
+            "Python decodes; or a folder that isn't a symlink and can be listed.",
             file=sys.stderr,
         )
     return status
