@@ -1084,7 +1084,7 @@ def brew_parts(prefix):
     return [f"{form}/{part}" for form in auto.both_forms(prefix) for part in auto.HOMEBREW_PARTS]
 
 
-def test_a_homebrew_install_reads_its_formulaes_folders_not_its_etc_or_var(tmp_path):
+def test_a_homebrew_install_reads_its_formulaes_folders_not_its_etc_or_var(tmp_path, monkeypatch):
     home = tmp_path / "me"
     cellar = home / ".linuxbrew" / "Cellar" / "git" / "2.50" / "bin"
     cellar.mkdir(parents=True)
@@ -1098,6 +1098,9 @@ def test_a_homebrew_install_reads_its_formulaes_folders_not_its_etc_or_var(tmp_p
     assert first == [str(cellar)]
     assert auto.HOMEBREW_PREFIXES == ("/home/linuxbrew/.linuxbrew",)
     assert auto.HOMEBREW_PARTS == ("bin", "sbin", "Cellar", "opt", "lib", "libexec", "share", "include", "etc/gitconfig")
+    # The literal paths below stand for a host whose /home is no link, whatever this one's is; a linked /home has
+    # test_a_tools_install_is_found_through_a_linked_home_or_prefix.
+    monkeypatch.setattr(auto.os.path, "realpath", lambda path, **kwargs: path)
     brew = "/home/linuxbrew/.linuxbrew/Cellar/git/2.50/bin/git"
     assert auto.tool_reads("/h", lambda name: brew if name == "git" else None, no_answer) == (
         [brew, *brew_parts("/home/linuxbrew/.linuxbrew")], ["/home/linuxbrew/.linuxbrew/Cellar/git/2.50/bin"])
@@ -1138,6 +1141,26 @@ def test_a_folder_beside_a_version_managers_layout_isnt_read_whole(prefix):
     found = f"/h/{prefix}/bin/node"
     assert auto.tool_reads("/h", lambda name: found if name == "node" else None, no_answer) == ([found], []), \
         "a level short, a level too deep, or not right under home: no version folder"
+
+
+@pytest.mark.parametrize("store", ["pass", "gopass", "op", "bw", "lpass", "gpg", "secret-tool", "security", "vault",
+                                   "keyring", "cat"])
+def test_a_secret_fetched_from_a_store_or_a_file_holds_none(store):
+    for value in (f"echo password=$({store} show x)", f"echo password=`{store} show x`",
+                  f"echo password=$( {store} show x)", f'echo password="$({store} show x)"',
+                  f"--password $({store} show x)"):
+        assert not auto.HELPER_SECRET.search(value), value
+    for value in (f'Authorization: Bearer "$({store} show x)"', f"bearer `{store} show x`",
+                  f"sshpass -p $({store} show x) ssh"):
+        assert not auto.TOKEN_SHAPE.search(value), value
+    for value in (f"echo password=$({store}x show y)", f"echo password=`{store}x y`"):
+        assert auto.HELPER_SECRET.search(value), f"{value}: another program than {store}, which may hold it itself"
+    assert auto.TOKEN_SHAPE.search(f"sshpass -p $({store}ed x) ssh")
+
+
+@pytest.mark.parametrize("value", ["echo password=$-x", "echo password=$ x", "echo password=$$"])
+def test_a_dollar_that_starts_no_name_is_read_as_a_password(value):
+    assert auto.HELPER_SECRET.search(value)
 
 
 def test_a_tools_install_is_found_through_a_linked_home_or_prefix(tmp_path, monkeypatch):

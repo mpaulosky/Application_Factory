@@ -138,9 +138,10 @@ LOG_DIR = os.path.expanduser("~/.cache/repo-ci-baseline/logs")
 # can't read that (CREDENTIAL_PATHS). A folder a killed run left there is removed by the next (sweep_sessions).
 SESSION_DIR = os.path.expanduser("~/.cache/repo-ci-baseline-sessions")
 # What opens the log line saying why the session wasn't started (stop_line reads it back, from the log's first line
-# only, for the terminal), and the log's first line once a session is about to start, so that whatever the session
-# prints comes after it and can't pass for the round's own.
+# only, for the terminal).
 NOT_STARTED = "rollout.sh: not started: "
+# The log's first line once a session is about to start, so whatever the session prints comes after it and can't
+# pass for the round's own NOT_STARTED line.
 SESSION_STARTS = "rollout.sh: the review session starts\n"
 # How the stop for a re-Apply worktree removed since reapply.sh made it begins, so drive doesn't send the person there.
 WORKTREE_GONE = "the re-Apply worktree is gone: "
@@ -665,8 +666,8 @@ def denied_around(root, allowed, listdir=os.listdir):
     return walk(os.path.normpath(root))
 
 
-# The install prefixes read whole, each a layout known to hold one version of one tool and nothing else: a version
-# manager's version folder in home (nvm's, asdf's, mise's, volta's, fnm's, pnpm's node), as its path under home. And
+# The installs known to be a tool's own. A version manager's version folder in home (nvm's, asdf's, mise's, volta's,
+# fnm's, pnpm's node), as its path under home, holds one version of one tool and nothing else, so it is read whole. And
 # Homebrew on Linux, of whose prefix only the formulae's own folders are read (HOMEBREW_PARTS, git's system config
 # among them): its etc and var hold the services' configs and data (a redis.conf's password, a database).
 VERSION_FOLDERS = re.compile(r"\.nvm/versions/node/[^/]+|\.asdf/installs/[^/]+/[^/]+|\.local/share/mise/installs/[^/]+/[^/]+"
@@ -695,11 +696,11 @@ def own_install(real, homes):
 def tool_reads(home, which=shutil.which, run=None):
     """(what the session's Bash reads for SESSION_COMMANDS, the folders to put first on its PATH). Each command's own
     file as PATH finds it and as it really is (node's process.execPath, git's binary, and git's --exec-path helpers),
-    so a shim (volta, asdf, mise) or a link isn't what runs in the sandbox; and the install prefix around a real binary,
-    read whole only in a layout known to be the tool's own (own_install): a version manager's version folder in home
-    with the binary in its bin (VERSION_FOLDERS), or a Homebrew prefix's formulae's folders (HOMEBREW_PREFIXES,
-    ~/.linuxbrew; HOMEBREW_PARTS) with the binary in a Cellar formula's version folder. Anywhere else (/opt/bin, a project's bin, a data disk, another user's home) the files
-    alone. A command PATH finds by a relative path is left out, as is anything shared (home, a folder above it,
+    so a shim (volta, asdf, mise) or a link isn't what runs in the sandbox; and, only in a layout known to be the tool's
+    own (own_install), its install around the real binary: a version manager's version folder in home, whole, with the
+    binary in its bin (VERSION_FOLDERS), or a Homebrew prefix's formulae's folders alone (HOMEBREW_PREFIXES,
+    ~/.linuxbrew; HOMEBREW_PARTS) with the binary in a Cellar formula's version folder. Anywhere else (/opt/bin, a
+    project's bin, a data disk, another user's home) the files alone. A command PATH finds by a relative path is left out, as is anything shared (home, a folder above it,
     ~/.local)."""
     run = run or run_quiet
     homes = both_forms(os.path.normpath(home))
@@ -876,15 +877,15 @@ def redacted(text):
 # an API's, a secret's or an access key, so core.askPass and user.signingKey, which name a program and a key, aren't.
 SECRET_KEY = re.compile(r"\.(?:[a-z0-9-]*(?:token|secret|password|passwd|passphrase|apikey)"
                         r"|(?:[a-z0-9-]*-)?(?:smtp)?pass|[a-z0-9-]*(?:api|secret|access)-?key)$", re.I)
-# A token's own shape, wherever in a value it is (an alias's curl, an sshCommand): GitHub's, GitLab's, Slack's, an
-# API key's and AWS's, an Authorization or Bearer header, and sshpass's password. Only these known forms are found.
-# A header, bearer or password that names a variable (NAMES_A_VARIABLE) holds no token: it is read when the command
-# runs.
 # What a value that names a variable starts with: $NAME, ${NAME} or $1, bare or in double quotes, or a command
-# substitution that fetches it from a secret store or a file ("$(pass show x)", `cat ~/.token`). A single-quoted $ is
-# kept as it is by the shell, and another substitution ("$(echo -n me:hunter2 | base64)") may hold the secret itself.
+# substitution that fetches it from a secret store or a file ("$(pass show x)", `cat ~/.token`). It holds no token: it
+# is read when the command runs. A single-quoted $ is kept as it is by the shell, and another substitution
+# ("$(echo -n me:hunter2 | base64)") may hold the secret itself.
 NAMES_A_VARIABLE = (r"\"?(?:\$\{?\w|(?:\$\(|`)\s*(?:pass|gopass|op|bw|lpass|gpg|secret-tool|security|vault|keyring"
                     r"|cat)\b)")
+# A token's own shape, wherever in a value it is (an alias's curl, an sshCommand): GitHub's, GitLab's, Slack's, an
+# API key's and AWS's, an Authorization or Bearer header, and sshpass's password, unless it names a variable
+# (NAMES_A_VARIABLE). Only these known forms are found.
 TOKEN_SHAPE = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|glpat-[\w-]{20,}|xox[abprs]-[\w-]{10,}"
                          r"|sk-[\w-]{20,}|AKIA[0-9A-Z]{16})"
                          r"|(?i:\bauthorization:\s*(?!(?:\w+\s+)?" + NAMES_A_VARIABLE + r")[^\s\"']"
