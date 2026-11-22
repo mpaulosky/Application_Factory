@@ -35,6 +35,9 @@ ends, the round records that with the worktree's scripts/review.sh record
 edits, fixes and commits nothing, and runs no gate, so nothing it wrote runs
 later as the person. Its Bash can't read the person's credentials
 (CREDENTIAL_PATHS, ~/.claude among them, and where CREDENTIAL_VARS move them),
+and of their data (READ_DENIED_ROOTS: home, /tmp) only the worktree, the
+clone's git folder, .security and its own folder (denied_around), which is in
+SESSION_DIR, not /tmp,
 writes only a temporary folder of its own (session_writes: never the worktree,
 its git folder, the ledgers or .security), reaches no host (SANDBOX_DOMAINS is
 empty), and can't leave the sandbox; the session refuses to start without the
@@ -125,6 +128,11 @@ OWNED = os.path.join(SKILL_DIR, "template", "owned")
 TEMPLATE_GLOBAL_JSON = os.path.join(OWNED, "global.json")
 LOCK = os.path.expanduser("~/.cache/repo-ci-baseline/rollout-auto.lock")
 LOG_DIR = os.path.expanduser("~/.cache/repo-ci-baseline/logs")
+# Where each review session's own temporary folder is made: in home, not /tmp, so the sandbox denies /tmp whole
+# (denied_around would otherwise list every entry of it), and beside the cache folder, which the session can't read.
+SESSION_DIR = os.path.expanduser("~/.cache/repo-ci-baseline-sessions")
+# The most the session's settings may take as JSON: they are one argument of claude's, which Linux caps at 128 KiB.
+SETTINGS_LIMIT = 100_000
 # How long a killed session's process group may take to be gone before the log says it didn't.
 GROUP_WAIT_SECONDS = 10
 BRANCH = "chore/reapply-baseline"
@@ -132,7 +140,8 @@ WORKTREE = "chore-reapply-baseline"
 # reapply.sh's exit codes for a push its gate's local review check refused (a test holds them equal).
 REVIEW_NEEDED = 3
 FINDINGS_WAIT = 4
-# Review sessions per repo per run: a second covers a session that ended before it recorded; more would loop.
+# Review sessions per repo per run: a second covers a gate that still asks for a review after the first one recorded
+# (main or the Template moved meanwhile); a session that fails stops the round at once, and more would loop.
 MAX_REVIEWS = 2
 # A review session's wall clock: one round of parallel reviewers over a large re-Apply, with room to spare.
 REVIEW_TIMEOUT_MINUTES = 180
@@ -187,6 +196,10 @@ SESSION_TOOLS = ("Bash", "Agent", "Task", "TodoWrite", "SendMessage")
 # own sign-in and the other sessions' logs. A list of what to hide, not of what to show: a tool keeping a credential
 # elsewhere needs its path added. The sandbox masks each of these paths; the Read rules cover the file tools, which
 # run outside it and are also allowed to read only the worktree, the .security record and the session's own folder.
+# Where the person's own data lives: the session's Bash reads none of it but session_reads (denied_around), so a
+# secret no CREDENTIAL_PATHS entry names (another project's .env, a tool's config, another worktree) stays out of its
+# reach too. The system's own folders, which hold the tools it runs (/usr), stay readable.
+READ_DENIED_ROOTS = ("~", "/tmp", "/var/tmp", "/mnt", "/media", "/run/media")
 CREDENTIAL_PATHS = (
     "~/.ssh", "~/.config/gh", "~/.config/glab-cli", "~/.config/hub", "~/.git-credentials", "~/.config/git/credentials",
     "~/.netrc", "~/.gnupg", "~/.docker", "~/.aws", "~/.azure", "~/.config/gcloud", "~/.kube", "~/.terraform.d",
@@ -559,6 +572,38 @@ def session_writes(tmp):
     return [tmp]
 
 
+def session_reads(worktree, common, security, tmp):
+    """All the session's Bash may read of READ_DENIED_ROOTS, each as given and where its symlinks lead: the worktree,
+    the clone's git folder (git there needs it), the main checkout's .security record and its own temporary folder."""
+    return list(dict.fromkeys(form for path in (worktree, common, security, tmp) for form in both_forms(path)))
+
+
+def denied_around(root, allowed, listdir=os.listdir):
+    """What to deny of root so the sandbox reads only allowed (and the folders on the way to them) there: root itself
+    when nothing allowed is in it, else every entry of each folder on the way that is neither allowed nor on the way to
+    one. Not root whole with the allowed re-opened (allowRead): bubblewrap then mounts the worktree read-only before it
+    masks the files the sandbox protects there, which it can't create in it, and every command fails. An entry made
+    after this runs is readable; the session itself writes only its own folder. A folder that can't be listed is
+    denied whole."""
+    allowed = {os.path.normpath(path) for path in allowed}
+
+    def holds(folder):
+        return any(path == folder or path.startswith(folder.rstrip("/") + "/") for path in allowed)
+
+    def walk(folder):
+        if folder in allowed:
+            return []
+        if not holds(folder):
+            return [folder]
+        try:
+            names = sorted(listdir(folder))
+        except OSError:
+            return [folder]
+        return [path for name in names for path in walk(os.path.join(folder, name))]
+
+    return walk(os.path.normpath(root))
+
+
 def absolute(path, home):
     """path as an absolute path with no trailing slash: a leading ~ or ~/ is home, and a relative one is taken from
     rollout.sh's folder (a program in the session, whose folder is the worktree, would take it from there, which the
@@ -590,11 +635,12 @@ def relocated_credentials(environ, home):
     return [path for path in found if path]
 
 
-def session_settings(worktree, common, gitdir, tmp, home=None, config_dir=None, environ=None):
+def session_settings(worktree, common, gitdir, tmp, home=None, config_dir=None, environ=None, listdir=os.listdir):
     """The session's settings (--settings, passed as JSON so no file of them exists for it to change): dontAsk
     permissions that allow only SESSION_TOOLS, reads of the worktree, the main checkout's .security and tmp, and edits
     in tmp alone, and deny the credentials, the Factory, ~/.claude and every edit in the worktree; and a sandbox for its
-    Bash that can't be turned off, refuses to start without its sandbox (bubblewrap on Linux), reads none of
+    Bash that can't be turned off, refuses to start without its sandbox (bubblewrap on Linux), reads nothing of
+    READ_DENIED_ROOTS (home among them) but session_reads (denied_around), and none of
     CREDENTIAL_PATHS (nor Claude Code's CLAUDE_CONFIG_DIR, nor where environ's CREDENTIAL_VARS move a credential), each
     as an absolute path and where its symlinks lead (a dotfiles repo's links), writes only session_writes (never the
     worktree, which a sandbox otherwise lets its working folder be written, nor its git folder), and reaches only SANDBOX_DOMAINS (none). The
@@ -607,7 +653,10 @@ def session_settings(worktree, common, gitdir, tmp, home=None, config_dir=None, 
     moved = ([config_dir] if config_dir else []) + relocated_credentials(environ, home)
     credentials = list(dict.fromkeys(form for path in [expand_home(path, home) for path in CREDENTIAL_PATHS] + moved
                                      for form in both_forms(path)))
-    return {
+    reads = session_reads(worktree, common, security, tmp)
+    roots = [denied for path in READ_DENIED_ROOTS for form in both_forms(expand_home(path, home))
+             for denied in denied_around(form, reads, listdir) if denied not in credentials]
+    settings = {
         "permissions": {
             "allow": [*SESSION_TOOLS, f"Read(/{worktree}/**)", f"Read(/{security}/**)", f"Read(/{tmp}/**)", f"Edit(/{tmp}/**)"],
             "deny": [*DENIED_TOOLS,
@@ -622,11 +671,17 @@ def session_settings(worktree, common, gitdir, tmp, home=None, config_dir=None, 
             "filesystem": {
                 "allowWrite": session_writes(tmp),
                 "denyWrite": read_only,
-                "denyRead": credentials,
+                "denyRead": [*credentials, *dict.fromkeys(roots)],
             },
             "network": {"allowedDomains": list(SANDBOX_DOMAINS)},
         },
     }
+    size = len(json.dumps(settings))
+    if size > SETTINGS_LIMIT:
+        raise ValueError(f"the session's settings take {size} bytes, more than {SETTINGS_LIMIT}: a folder on the way to"
+                         " the worktree, its git folder or the session's own holds too many entries for the sandbox to"
+                         " deny one by one (denied_around)")
+    return settings
 
 
 def review_command(repo, worktree, owned, settings, agents, skill, run):
@@ -1335,7 +1390,8 @@ def end_group(session, wait_seconds=GROUP_WAIT_SECONDS, sleep=time.sleep, clock=
 
 
 def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, timeout=REVIEW_TIMEOUT_MINUTES * 60,
-               log_dir=LOG_DIR, end=end_group, clock=time.monotonic, guard=session_guard, check=broken_rules,
+               log_dir=LOG_DIR, session_dir=SESSION_DIR, end=end_group, clock=time.monotonic, guard=session_guard,
+               check=broken_rules,
                skill=read_skill, agents=agent_definition, record=record_review):
     """/pre-push-review headless in worktree: (exit code, the session's log, the Rules it broke). 124 when it runs
     past its time, 127 when it can't start, SESSION_BROKE_A_RULE when it broke one (they are listed, and in the log
@@ -1349,104 +1405,116 @@ def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, ti
     then it is passed on, after the kept folder and the command that records it are printed (after RECORD_LEFT,
     which may have recorded, with a word to check scripts/review.sh report first). Once it has exited 0 and broken
     no Rule, the round records what it staged (record_review). The log is 0600 (mkstemp) in a 0700 folder of the
-    user's own."""
+    user's own; the session's temporary folder is made in session_dir, another such folder."""
     try:
         own_log_dir(log_dir)
         handle, log = tempfile.mkstemp(prefix=f"review-{short_name(repo)}.", suffix=".log", dir=log_dir)
     except OSError as error:
         return 127, f"(no log: {error})", []
-    with os.fdopen(handle, "w") as out, tempfile.TemporaryDirectory(prefix="rollout-session.") as tmp:
-        def stop(text):
-            out.write(f"rollout.sh: {text}\n")
-            return 127, log, []
-
-        if not os.path.isdir(worktree):
-            return stop(f"the re-Apply worktree {worktree} doesn't exist")
+    with os.fdopen(handle, "w") as out:
         try:
-            owned = changes(worktree)
-            before = guard(worktree)
-            run = os.path.join(tmp, "run")
-            os.mkdir(run, 0o700)
-            settings = session_settings(worktree, before.common, before.gitdir, tmp)
-            command = review_command(repo, worktree, owned, settings, agents(), skill(), run)
-            env = session_env(os.environ, tmp)
-        except GuardUnreadable as error:
-            return stop(f"{error}; the session wasn't started")
-        except (OSError, RuntimeError, ValueError) as error:
-            return stop(f"can't set the session up: {error}")
-        out.flush()
-        code, started, survived = None, True, False
-        # One hold from the start of the session until what it staged is recorded or kept: a signal anywhere in it,
-        # the checks included (they read every file of the worktree), would otherwise lose the run folder, and the
-        # session's findings with it.
-        with deferred_signals() as got:
+            own_log_dir(session_dir)
+        except OSError as error:
+            out.write(f"rollout.sh: can't set the session up: {error}\n")
+            return 127, log, []
+        with tempfile.TemporaryDirectory(prefix="rollout-session.", dir=session_dir) as tmp:
+            return review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock, guard, check, skill,
+                             agents, record)
+
+
+def review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock, guard, check, skill, agents, record):
+    """run_review's body, once its log is open and its temporary folder made."""
+    def stop(text):
+        out.write(f"rollout.sh: {text}\n")
+        return 127, log, []
+
+    if not os.path.isdir(worktree):
+        return stop(f"the re-Apply worktree {worktree} doesn't exist")
+    try:
+        owned = changes(worktree)
+        before = guard(worktree)
+        run = os.path.join(tmp, "run")
+        os.mkdir(run, 0o700)
+        settings = session_settings(worktree, before.common, before.gitdir, tmp)
+        command = review_command(repo, worktree, owned, settings, agents(), skill(), run)
+        env = session_env(os.environ, tmp)
+    except GuardUnreadable as error:
+        return stop(f"{error}; the session wasn't started")
+    except (OSError, RuntimeError, ValueError) as error:
+        return stop(f"can't set the session up: {error}")
+    out.flush()
+    code, started, survived = None, True, False
+    # One hold from the start of the session until what it staged is recorded or kept: a signal anywhere in it,
+    # the checks included (they read every file of the worktree), would otherwise lose the run folder, and the
+    # session's findings with it.
+    with deferred_signals() as got:
+        try:
+            session = popen(command, cwd=worktree, env=env, stdin=subprocess.DEVNULL, stdout=out,
+                            stderr=subprocess.STDOUT, start_new_session=True, pass_fds=held_lock_fds())
+        except OSError as error:
+            out.write(f"rollout.sh: can't start claude: {error}\n")
+            started = False
+        if started:
             try:
-                session = popen(command, cwd=worktree, env=env, stdin=subprocess.DEVNULL, stdout=out,
-                                stderr=subprocess.STDOUT, start_new_session=True, pass_fds=held_lock_fds())
-            except OSError as error:
-                out.write(f"rollout.sh: can't start claude: {error}\n")
-                started = False
-            if started:
-                try:
-                    code = wait_for(session, timeout, got, clock)
-                    if code is None and not got:
-                        out.write(f"\nrollout.sh: the review session ran past {timeout // 60} minutes and was stopped\n")
-                        code = 124
-                finally:
-                    if not end(session):
-                        survived = True
-                        out.write(f"\nrollout.sh: the session's process group was still there {GROUP_WAIT_SECONDS} s after"
-                                  " it was killed\n")
-            if got:
-                raise passed_on(got[0])
-            if not started:
-                return 127, log, []
-            keep, head = staged_copy(log), before.worktree_state[0]
-            try:
-                broke = check(before)
-            except Exception as error:  # noqa: BLE001 - a check that fails can't vouch for the session: a stop, not a crash
-                out.write(f"rollout.sh: the checks after the session failed:\n{traceback.format_exc()}")
-                broke = [f"the checks after the session failed ({type(error).__name__}: {error}; the traceback is in"
-                         " the log), so what it did can't be told"]
-            if survived:
-                # What is left of it can still write after the check read the ledgers.
-                broke.append(f"the session's process group was still there {GROUP_WAIT_SECONDS} s after it was killed,"
-                             f" and can still write: {group_hint(session.pid)}, before you resume")
-            if not broke and code == 0:
-                sys.stderr.write(f"rollout.sh: recording the review (scripts/review.sh prepare, then record, up to"
-                                 f" {RECORD_TIMEOUT_SECONDS // 60} minutes each: an interrupt stops prepare, and waits"
-                                 " for record to end)\n")
-                try:
-                    code, broke = record(worktree, run, out, head, keep, got, lambda: unseen_changes(before))
-                except GroupLeft as error:
-                    # record may have written the ledgers before it left the group, so whether it recorded is unknown.
-                    out.write(f"rollout.sh: {error}\n")
-                    code, broke = RECORD_LEFT, [str(error)]
-                    if got:
-                        sys.stderr.write(f"rollout.sh: {error}\n")  # the signal wins, but the group must be ended
-                except (OSError, subprocess.SubprocessError) as error:
-                    out.write(f"rollout.sh: can't record the review: {type(error).__name__}: {error}\n")
-                    code = RECORD_FAILED
-                except Exception:  # noqa: BLE001 - a bug while recording is a stop that keeps the signal, not a crash
-                    out.write(f"rollout.sh: recording the review failed:\n{traceback.format_exc()}")
-                    code = RECORD_FAILED
+                code = wait_for(session, timeout, got, clock)
+                if code is None and not got:
+                    out.write(f"\nrollout.sh: the review session ran past {timeout // 60} minutes and was stopped\n")
+                    code = 124
+            finally:
+                if not end(session):
+                    survived = True
+                    out.write(f"\nrollout.sh: the session's process group was still there {GROUP_WAIT_SECONDS} s after"
+                              " it was killed\n")
         if got:
-            if code == RECORD_FAILED:
-                for left in broke:  # a group prepare left: it holds the lock, so it must be ended before a record
-                    sys.stderr.write(f"rollout.sh: {left}\n")
-            if kept_head(keep) == head:
-                # The stop that would print it isn't reached: the signal ends the round here. After RECORD_LEFT the
-                # review may be recorded already, so the person checks that before recording it again.
-                maybe = (f"whether the review was recorded can't be told: cd {shlex.quote(worktree)} &&"
-                         " scripts/review.sh report shows it; if it wasn't, ") if code == RECORD_LEFT else ""
-                sys.stderr.write(f"rollout.sh: what the session staged is kept in {keep} (see {log}); {maybe}record it"
-                                 f" with: {record_command(worktree, keep, head)}\n")
             raise passed_on(got[0])
-        if code in (RECORD_LEFT, RECORD_FAILED):
-            return code, log, broke  # a group the record left behind, not a rule the session broke
-        for rule in broke:
-            out.write(f"rollout.sh: the session broke a rule: {rule}\n")
-        return (SESSION_BROKE_A_RULE if broke else code), log, broke
+        if not started:
+            return 127, log, []
+        keep, head = staged_copy(log), before.worktree_state[0]
+        try:
+            broke = check(before)
+        except Exception as error:  # noqa: BLE001 - a check that fails can't vouch for the session: a stop, not a crash
+            out.write(f"rollout.sh: the checks after the session failed:\n{traceback.format_exc()}")
+            broke = [f"the checks after the session failed ({type(error).__name__}: {error}; the traceback is in"
+                     " the log), so what it did can't be told"]
+        if survived:
+            # What is left of it can still write after the check read the ledgers.
+            broke.append(f"the session's process group was still there {GROUP_WAIT_SECONDS} s after it was killed,"
+                         f" and can still write: {group_hint(session.pid)}, before you resume")
+        if not broke and code == 0:
+            sys.stderr.write(f"rollout.sh: recording the review (scripts/review.sh prepare, then record, up to"
+                             f" {RECORD_TIMEOUT_SECONDS // 60} minutes each: an interrupt stops prepare, and waits"
+                             " for record to end)\n")
+            try:
+                code, broke = record(worktree, run, out, head, keep, got, lambda: unseen_changes(before))
+            except GroupLeft as error:
+                # record may have written the ledgers before it left the group, so whether it recorded is unknown.
+                out.write(f"rollout.sh: {error}\n")
+                code, broke = RECORD_LEFT, [str(error)]
+                if got:
+                    sys.stderr.write(f"rollout.sh: {error}\n")  # the signal wins, but the group must be ended
+            except (OSError, subprocess.SubprocessError) as error:
+                out.write(f"rollout.sh: can't record the review: {type(error).__name__}: {error}\n")
+                code = RECORD_FAILED
+            except Exception:  # noqa: BLE001 - a bug while recording is a stop that keeps the signal, not a crash
+                out.write(f"rollout.sh: recording the review failed:\n{traceback.format_exc()}")
+                code = RECORD_FAILED
+    if got:
+        if code == RECORD_FAILED:
+            for left in broke:  # a group prepare left: it holds the lock, so it must be ended before a record
+                sys.stderr.write(f"rollout.sh: {left}\n")
+        if kept_head(keep) == head:
+            # The stop that would print it isn't reached: the signal ends the round here. After RECORD_LEFT the
+            # review may be recorded already, so the person checks that before recording it again.
+            maybe = (f"whether the review was recorded can't be told: cd {shlex.quote(worktree)} &&"
+                     " scripts/review.sh report shows it; if it wasn't, ") if code == RECORD_LEFT else ""
+            sys.stderr.write(f"rollout.sh: what the session staged is kept in {keep} (see {log}); {maybe}record it"
+                             f" with: {record_command(worktree, keep, head)}\n")
+        raise passed_on(got[0])
+    if code in (RECORD_LEFT, RECORD_FAILED):
+        return code, log, broke  # a group the record left behind, not a rule the session broke
+    for rule in broke:
+        out.write(f"rollout.sh: the session broke a rule: {rule}\n")
+    return (SESSION_BROKE_A_RULE if broke else code), log, broke
 
 
 def wait_for(session, timeout, got, clock=time.monotonic):
