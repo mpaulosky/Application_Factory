@@ -578,6 +578,52 @@ git -C "$REPO" remote remove origin
 git -C "$REPO" update-ref refs/remotes/origin/main "$MAIN_BEFORE"
 git -C "$REPO" switch -q feature/1-x
 
+# Run by hand from a terminal, the hook reads no refs: stdin is the terminal, and reading it would wait for Ctrl-D. Run on a
+# pseudo-terminal, with a timeout so a hook that waits fails the case instead of hanging the suite.
+switch_to main
+OUTPUT="$(cd "$REPO" && timeout 30 python3 -I -c 'import os, pty, sys
+sys.exit(os.waitstatus_to_exitcode(pty.spawn(sys.argv[1:])))' env PATH="$STUBS:$PATH" bash "$HOOK" < /dev/null 2>&1)"
+STATUS=$?
+if [[ $STATUS -eq 124 ]]; then
+  fail "run by hand from a terminal, the hook doesn't wait for stdin" "it was still waiting after 30 seconds"
+else
+  expect "run by hand from a terminal, the hook gates the checked-out branch" refused tests-skipped "Direct pushes to 'main' are not allowed."
+fi
+switch_to feature/1-x
+
+# The gate's bash check runs before its first mapfile -d '', which bash 4.4 added. BASH_VERSINFO is read-only, so the check's own
+# lines are run with each version written in.
+GATE_SH="$SCRIPTS/gate.sh"
+BASH_CHECK="$(sed -n '/^bash_too_old() /,/^fi$/p' "$GATE_SH")"
+# shellcheck disable=SC2016 # the gate's own line, matched as it is written
+BASH_CHECK_LINE="$(grep -n '^if bash_too_old "${BASH_VERSINFO\[0\]}" "${BASH_VERSINFO\[1\]}"; then$' "$GATE_SH" | cut -d: -f1)"
+FIRST_MAPFILE_LINE="$(grep -n 'mapfile' "$GATE_SH" | grep -v '^[0-9]*: *#' | head -n 1 | cut -d: -f1)"
+if [[ -n "$BASH_CHECK_LINE" && -n "$FIRST_MAPFILE_LINE" ]] && ((BASH_CHECK_LINE < FIRST_MAPFILE_LINE)); then
+  pass "the gate checks the bash version before its first mapfile"
+else
+  fail "the gate checks the bash version before its first mapfile" "check at line '${BASH_CHECK_LINE}', first mapfile at line '${FIRST_MAPFILE_LINE}'"
+fi
+for version in "3 2" "4 0" "4 3"; do
+  # shellcheck disable=SC2016 # the version is written into the check's own code
+  OUTPUT="$(bash -c "${BASH_CHECK//'"${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"'/$version}"$'\necho ran-on' 2>&1)"
+  STATUS=$?
+  if [[ $STATUS -eq 1 && "$OUTPUT" == *'needs bash 4.4 or later, and this is bash '* && "$OUTPUT" != *ran-on* ]]; then
+    pass "the gate stops on bash ${version/ /.}, naming the bash it needs"
+  else
+    fail "the gate stops on bash ${version/ /.}, naming the bash it needs" "exit $STATUS"
+  fi
+done
+for version in "4 4" "5 0" "5 3" "10 0"; do
+  # shellcheck disable=SC2016 # the version is written into the check's own code
+  OUTPUT="$(bash -c "${BASH_CHECK//'"${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"'/$version}"$'\necho ran-on' 2>&1)"
+  STATUS=$?
+  if [[ $STATUS -eq 0 && "$OUTPUT" == ran-on ]]; then
+    pass "the gate goes on with bash ${version/ /.}"
+  else
+    fail "the gate goes on with bash ${version/ /.}" "exit $STATUS"
+  fi
+done
+
 echo
 echo "$PASSED passed, $FAILED failed"
 [[ $FAILED -eq 0 ]]
