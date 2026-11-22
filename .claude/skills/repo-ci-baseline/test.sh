@@ -175,14 +175,16 @@ PY
   # The edit-time lint and the Owned gate check Python with the same ruff release rule and flags, and CI's python-tests job passes the
   # same flags. Their --target-version is the python-version CI runs. requirements-tests.txt pins the release the gate runs through uvx,
   # one the rule takes: a bump of the pin to another release line fails here, so the rule is moved with it on purpose (Dependabot leaves
-  # ruff alone; see the dependabot.yml check). ruff_agree <folder> checks the Template's files in that folder.
+  # ruff alone; see the dependabot.yml check). The Seed Sandcastle Dockerfile installs the same release, since the sandbox has no uv for the
+  # gate to fall back on. ruff_agree <owned folder> <seed folder> checks the Template's files in those folders.
   ruff_agree() {
-    python3 -I - "$1" << 'PY'
+    python3 -I - "$1" "$2" << 'PY'
 import re, shlex, sys
-owned = sys.argv[1]
+owned, seed = sys.argv[1], sys.argv[2]
 read = lambda path: open(path, encoding="utf-8").read()
 texts = {"lint-edited-file.sh": read(f"{owned}/scripts/lint-edited-file.sh"), "gate.sh": read(f"{owned}/scripts/gate.sh"),
-         "ci.yml": read(f"{owned}/.github/workflows/ci.yml"), "requirements-tests.txt": read(f"{owned}/.github/scripts/requirements-tests.txt")}
+         "ci.yml": read(f"{owned}/.github/workflows/ci.yml"), "requirements-tests.txt": read(f"{owned}/.github/scripts/requirements-tests.txt"),
+         "Dockerfile": read(f"{seed}/.sandcastle/Dockerfile")}
 problems = []
 def one(where, pattern):
     found = re.findall(pattern, texts[where], re.M)
@@ -239,6 +241,10 @@ elif python is not None and target != "py" + python.replace(".", ""):
     problems.append(f"gate.sh's ruff --target-version {target} is not ci.yml's python-version {python}")
 if version is not None and pin is not None and version != pin:
     problems.append(f"gate.sh's RUFF_VERSION {version} is not requirements-tests.txt's ruff=={pin}")
+image = one("Dockerfile", r"^ARG RUFF_VERSION=(\S+)$")
+one("Dockerfile", r'^ +.*"ruff==\$\{RUFF_VERSION\}"')
+if version is not None and image is not None and version != image:
+    problems.append(f"the Seed .sandcastle/Dockerfile's ARG RUFF_VERSION {image} is not gate.sh's RUFF_VERSION {version}")
 rule = rules.get("gate.sh")
 if rule and version and not re.fullmatch(rule, f"ruff {version}"):
     problems.append(f"RUFF_VERSION {version} is not a release the rule {rule} takes")
@@ -253,23 +259,24 @@ for problem in problems:
 sys.exit(1 if problems else 0)
 PY
   }
-  ruff_agree "$owned" || fail "scripts/lint-edited-file.sh, scripts/gate.sh, ci.yml and requirements-tests.txt must agree on ruff (see above)"
-  # Each way the target can drift from CI's Python is refused, on a copy of the four files edited that way. The copy holds the folders
+  ruff_agree "$owned" "$seed" || fail "scripts/lint-edited-file.sh, scripts/gate.sh, ci.yml, requirements-tests.txt and the Seed .sandcastle/Dockerfile must agree on ruff (see above)"
+  # Each way the target can drift from CI's Python, or the Seed Dockerfile from the gate's release, is refused, on a copy of the five files edited that way. The copy holds the folders
   # CI's ruff step lints too, so as it is it passes, and only the edit makes it fail. Under md_tmp, which the EXIT trap removes.
   ruff_copy="$md_tmp/ruff"
   ruff_drift() { # ruff_drift <what> [<expected problem> <file> <sed script>]: with no edit, the copy must pass
     local f found
     rm -rf "${ruff_copy:?}" && mkdir -p "$ruff_copy/scripts" "$ruff_copy/.github/workflows" "$ruff_copy/.github/scripts"
     for f in scripts/lint-edited-file.sh scripts/gate.sh .github/workflows/ci.yml .github/scripts/requirements-tests.txt; do cp "$owned/$f" "$ruff_copy/$f"; done
+    mkdir -p "$ruff_copy/seed/.sandcastle" && cp "$seed/.sandcastle/Dockerfile" "$ruff_copy/seed/.sandcastle/Dockerfile"
     local -a linted
     read -ra linted <<< "$(sed -n 's/^ *run: python -m ruff .* -- //p' "$owned/.github/workflows/ci.yml")"
     for f in ${linted[@]+"${linted[@]}"}; do mkdir -p "$ruff_copy/$f"; done
     if (($# == 1)); then
-      found="$(ruff_agree "$ruff_copy" 2>&1)" || fail "the ruff agreement check refuses $1: $found"
+      found="$(ruff_agree "$ruff_copy" "$ruff_copy/seed" 2>&1)" || fail "the ruff agreement check refuses $1: $found"
       return 0
     fi
     sed -i -e "$4" "$ruff_copy/$3"
-    found="$(ruff_agree "$ruff_copy" 2>&1)" && fail "the ruff agreement check passes $1"
+    found="$(ruff_agree "$ruff_copy" "$ruff_copy/seed" 2>&1)" && fail "the ruff agreement check passes $1"
     grep -qF -- "$2" <<< "$found" || fail "the ruff agreement check doesn't say '$2' for $1: $found"
   }
   ruff_drift "an unedited copy of the Template's files"
@@ -277,6 +284,11 @@ PY
   ruff_drift "a target that isn't CI's Python" "gate.sh's ruff --target-version py312 is not ci.yml's python-version 3.11" \
     .github/workflows/ci.yml 's/python-version: "3.12"/python-version: "3.11"/'
   ruff_drift "a ci.yml with two python-version lines" "is not found once (2 found)" .github/workflows/ci.yml 's/^\( *\)python-version: "3.12"$/&\n\1python-version: "3.12"/'
+  ruff_drift "a Seed Dockerfile on another ruff" "the Seed .sandcastle/Dockerfile's ARG RUFF_VERSION 0.17.5 is not gate.sh's RUFF_VERSION 0.17.6" \
+    seed/.sandcastle/Dockerfile 's/^ARG RUFF_VERSION=0\.17\.6$/ARG RUFF_VERSION=0.17.5/'
+  # shellcheck disable=SC2016 # the Dockerfile's own ${RUFF_VERSION}, matched as text
+  ruff_drift "a Seed Dockerfile that doesn't install ruff" 'Dockerfile: ^ +.*"ruff==\$\{RUFF_VERSION\}"' seed/.sandcastle/Dockerfile 's/ "ruff==${RUFF_VERSION}"$//'
+  ruff_drift "a Seed Dockerfile with no ruff ARG" "Dockerfile: ^ARG RUFF_VERSION=" seed/.sandcastle/Dockerfile '/^ARG RUFF_VERSION=/d'
   rm -rf "$ruff_copy"
   # The script edit rule: the checks reviewers keep raising on script changes, loaded when a session works on a script (its paths: front matter
   # names the shell and Python files and the folders the hook lints), and written into every repo, so it names nothing of the Factory's.
