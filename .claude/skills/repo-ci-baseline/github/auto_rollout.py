@@ -53,7 +53,8 @@ gets its settings as JSON on its command line, and the skill and its reviewer
 agent from the Template, so no hook, permission rule or plugin but these
 applies. Its environment has no sign-in secret (gh points at an empty config;
 names that look like secrets are dropped, and so is any value holding a URL
-with a password (has_sign_in), and of Claude Code's own only
+with a sign-in (has_sign_in: a password, or any user over http(s) or ftp(s),
+which may be a token), and of Claude Code's own only
 CLAUDE_KEPT is kept, while the preflight refuses a round with a Claude Code or
 cloud sign-in secret set, since the session would inherit it) and git's push is
 sent nowhere: layers behind the sandbox. After the session the round checks what
@@ -991,7 +992,7 @@ def own_log_dir(log_dir):
 
 def session_env(base, tmp, first=()):
     """The review session's environment: base without GATE_SKIP_REVIEW (the gate's review check must run in it), the
-    names SECRET_NAME matches, a value holding a URL with a sign-in (has_sign_in: a *_URL with its password), Claude Code's own but CLAUDE_KEPT (CLAUDE_CONFIG_DIR made absolute, as the settings
+    names SECRET_NAME matches, a value holding a URL with a sign-in (has_sign_in: a password, or a user over http(s) or ftp(s)), Claude Code's own but CLAUDE_KEPT (CLAUDE_CONFIG_DIR made absolute, as the settings
     deny it), and the cloud in use's secrets; gh pointed at an empty config and git at an empty global one; and
     SESSION_GIT_CONFIG. The worktree and the clone's git folder are read-only to it, so GIT_OPTIONAL_LOCKS is off (git
     status writes no index back) and gc.auto is 0. The session builds and installs nothing, but the caches and
@@ -1003,7 +1004,7 @@ def session_env(base, tmp, first=()):
 
     def kept(name, value):
         if name == "GATE_SKIP_REVIEW" or has_sign_in(value):
-            return False  # a URL with a sign-in in it (a *_URL holding a password), whatever its name
+            return False  # a URL with a sign-in in it (a password, or a user that may be a token), whatever its name
         if CLAUDE_SIGN_IN.match(name):
             return name in CLAUDE_KEPT
         if clouds and name.startswith(clouds):
@@ -2082,8 +2083,7 @@ def drive(repo, path, brings, reapply, review, say):
         try:
             advisories = open_advisories(worktree)
         except Exception as error:  # noqa: BLE001 - only a list is shown; the recorded review still pushes
-            advisories = (f"(scripts/review.sh advisory failed: {shown(str(error))}; cd {shlex.quote(worktree)} &&"
-                          " scripts/review.sh advisory lists them before the PR lands)")
+            advisories = advisories_failed(worktree, shown(str(error)))
         if advisories:
             say(f"── rollout: {short_name(repo)}: the review left Advisory findings open, which don't block the push"
                 f" and are filed nowhere: file them in a follow-up issue.\n{advisories}")
@@ -2098,7 +2098,12 @@ def open_advisories(worktree, run=run_quiet):
     if code == 0:
         return None if not text or text == "No open Advisory findings." else text
     lines = err.strip().splitlines()
-    why = shown(lines[0]) if lines else f"exit {code}"
+    return advisories_failed(worktree, shown(lines[0]) if lines else f"exit {code}")
+
+
+def advisories_failed(worktree, why):
+    """What is shown for an Advisory list that can't be read (why is already shown()'s or the exit code), and the command
+    that reads it."""
     return (f"(scripts/review.sh advisory failed: {why}; cd {shlex.quote(worktree)} &&"
             " scripts/review.sh advisory lists them before the PR lands)")
 

@@ -54,8 +54,9 @@ def test_the_exit_codes_and_worktree_agree_with_reapply_sh():
 
 
 def test_the_session_marker_is_the_ledgers_own():
-    ledger = (SKILL.parent.parent.parent / ".sandcastle" / "lib" / "review-ledger.mts").read_text()
-    assert f'"{auto.SESSION_MARKER}"' in ledger
+    ledger = (SKILL / "template" / "owned" / ".sandcastle" / "lib" / "review-ledger.mts").read_text()
+    advisories = next(line for line in ledger.splitlines() if "left for a follow-up:" in line)
+    assert f'"{auto.SESSION_MARKER}", ""]' in advisories, "the marker that ends scripts/review.sh advisory's list"
 
 
 def test_reapply_sh_reads_the_refusals_in_the_ledgers_and_the_gates_own_words():
@@ -3986,16 +3987,24 @@ def test_open_advisory_findings_are_read_from_the_worktrees_ledger():
     assert REAL_OPEN_ADVISORIES("/w t", lambda command, cwd=None: (1, "", "No review is recorded for this diff.\n")) == (
         "(scripts/review.sh advisory failed: 'No review is recorded for this diff.'; cd '/w t' && scripts/review.sh"
         " advisory lists them before the PR lands)")
-    assert REAL_OPEN_ADVISORIES("/w", lambda command, cwd=None: (127, "", "")) == (
-        "(scripts/review.sh advisory failed: exit 127; cd /w && scripts/review.sh advisory lists them before the PR"
-        " lands)")
+    for err in ("", "\n  \n"):
+        assert REAL_OPEN_ADVISORIES("/w", lambda command, cwd=None, err=err: (127, "", err)) == (
+            "(scripts/review.sh advisory failed: exit 127; cd /w && scripts/review.sh advisory lists them before the PR"
+            " lands)"), "blank stderr is no reason: the exit code is"
+    assert REAL_OPEN_ADVISORIES("/w", lambda command, cwd=None: (1, "", "\nboom\nmore\n")) == (
+        "(scripts/review.sh advisory failed: 'boom'; cd /w && scripts/review.sh advisory lists them before the PR"
+        " lands)"), "the first line that says anything"
 
 
 def test_a_failed_advisory_lists_first_error_line_is_escaped_and_cut():
     err = "\x1b[2Jboom " + "x" * 400 + "\n── rollout: forged\n" + "trace\n" * 40
     said = REAL_OPEN_ADVISORIES("/w", lambda command, cwd=None: (1, "", err))
     assert "\x1b" not in said and "\n" not in said and "forged" not in said and "trace" not in said
-    assert "'\\x1b[2Jboom xxx" in said and "characters)" in said
+    assert "'\\x1b[2Jboom xxx" in said and "x" * 300 not in said
+    assert f"... ({len(ascii(err.splitlines()[0]))} characters);" in said, "cut to SHOWN_CHARS, saying how long it was"
+    said = REAL_OPEN_ADVISORIES("/w", lambda command, cwd=None: (1, "", "boom\n── rollout: forged\ntrace\n"))
+    assert said == ("(scripts/review.sh advisory failed: 'boom'; cd /w && scripts/review.sh advisory lists them before"
+                    " the PR lands)"), "the first line only"
 
 
 def test_an_advisory_list_that_raises_is_shown_and_the_review_still_pushes(monkeypatch):
@@ -4003,9 +4012,12 @@ def test_an_advisory_list_that_raises_is_shown_and_the_review_still_pushes(monke
         raise ValueError("embedded null byte")
 
     monkeypatch.setattr(auto, "open_advisories", broken)
-    code, out, _ = run_auto(["--brings", "#82"], Fleet(codes={TM: [auto.REVIEW_NEEDED]}))
+    code, out, _ = run_auto(["--brings", "#82"], Fleet(codes={TM: [auto.REVIEW_NEEDED]}), root="/my repos")
     assert code == 0, out
-    assert "(scripts/review.sh advisory failed: 'embedded null byte'; cd" in out
+    assert ("── rollout: TicketManager: the review left Advisory findings open, which don't block the push and are filed"
+            " nowhere: file them in a follow-up issue.\n(scripts/review.sh advisory failed: 'embedded null byte'; cd"
+            " '/my repos/TicketManager-worktrees/chore-reapply-baseline' && scripts/review.sh advisory lists them before"
+            " the PR lands)\n") in out
 
 
 def test_no_advisory_list_is_shown_when_none_is_open_or_after_a_failed_session(no_advisories):
