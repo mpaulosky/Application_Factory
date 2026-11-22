@@ -367,7 +367,7 @@ if ! w push -u origin HEAD > "$log" 2>&1; then
   if stopped_at_review "$log"; then refusal="$(review_refusal)"; fi
   case "$refusal" in
     findings)
-      printf 'reapply.sh: review findings on %s wait for a person. See them with: (cd %q && scripts/review.sh report). Fix them with /pre-push-review there, or accept them with: (cd %q && scripts/review.sh accept-open). Then run reapply.sh again\n' "$repo_name" "$worktree" "$worktree" >&2
+      printf 'reapply.sh: review findings on %s wait for a person. Fix them with /pre-push-review in %q, or see and accept them there. See them with:\n  cd %q && scripts/review.sh report\nAccept them with:\n  cd %q && scripts/review.sh accept-open\nThen run this again\n' "$repo_name" "$worktree" "$worktree" "$worktree" >&2
       exit "$findings_wait_exit"
       ;;
     none)

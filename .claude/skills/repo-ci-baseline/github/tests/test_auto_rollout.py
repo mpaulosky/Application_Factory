@@ -791,6 +791,9 @@ def test_a_signal_after_a_record_that_left_its_group_says_to_check_the_report_fi
         review_once(tmp_path, monkeypatch, record=record, guard=head_guard(tmp_path), worktree=worktree)
     err = capsys.readouterr().err
     assert err.count("rollout.sh: what review.sh record left ...\n") == 1, "said once, not again as a failed record's"
+    assert "broke a rule" not in err, "a group the record left isn't a rule the session broke"
+    (log,) = (tmp_path / "logs").glob("*.log")
+    assert "broke a rule" not in log.read_text()
     assert (f"whether the review was recorded can't be told: cd '{worktree}' && scripts/review.sh report shows it;"
             " if it wasn't, record it with: ") in err
 
@@ -806,10 +809,14 @@ def test_a_signal_after_a_prepare_that_left_its_group_names_the_group(tmp_path, 
     err = capsys.readouterr().err
     assert err.index("rollout.sh: what review.sh prepare left ...: see it with pgrep -l -g 7\n") \
         < err.index("what the session staged is kept in"), "the group, which holds the lock, comes first"
+    assert "broke a rule" not in err, "a group prepare left isn't a rule the session broke"
+    (log,) = (tmp_path / "logs").glob("*.log")
+    assert "broke a rule" not in log.read_text()
 
 
 def test_a_signal_with_a_broken_rule_says_the_rule_once_and_no_record_command(tmp_path, monkeypatch, capsys):
     def record(worktree, run, out, head, keep, got, unseen):
+        auto.write_staged(keep, "[]", head)  # kept, so only the broken rule keeps the command off the terminal
         interrupt()
         return auto.SESSION_BROKE_A_RULE, ["R2 was staged fixed"]
 
@@ -866,8 +873,9 @@ def test_a_group_the_record_left_is_its_own_stop_since_it_may_have_recorded(tmp_
     (tmp_path / "again").mkdir()
     with pytest.raises(KeyboardInterrupt):
         review_once(tmp_path / "again", monkeypatch, record=interrupted)
-    assert "rollout.sh: what review.sh record left ...\n" in capsys.readouterr().err, \
-        "the signal wins, and the person still hears of the group"
+    err = capsys.readouterr().err
+    assert "rollout.sh: what review.sh record left ...\n" in err, "the signal wins, and the person still hears of the group"
+    assert "broke a rule" not in err, "a group the record left isn't a rule the session broke"
 
 
 def test_a_bug_while_recording_is_record_failed_with_its_traceback_and_the_signal_still_passed_on(tmp_path, monkeypatch):
@@ -1265,6 +1273,17 @@ def test_a_password_in_a_variables_value_or_a_pwd_name_is_left_out_of_the_sessio
     assert not {"MYSQL_PWD", "CACHE_URL", "MIRROR"} & set(env), "a password, by its name or in a URL's sign-in"
     assert not {"UPSTREAM", "FTP_MIRROR"} & set(env), "a user alone over http(s) or ftp(s), which may be a token"
     assert {"PWD", "REMOTE", "PROXY", "LANG"} <= set(env), "the working folder, and a URL with no password in it"
+
+
+def test_any_tools_proxy_written_with_no_scheme_and_a_sign_in_is_left_out_and_doesnt_stop_the_round(tmp_path):
+    proxies = {"PIP_PROXY": "u:pw@proxy:3128", "npm_config_https_proxy": ":pw@proxy:3128", "SOCKS_PROXY": "tok@s:1080",
+               "yarn_proxy": "u:pw@proxy:3128", "httpsProxy": "u:pw@proxy:3128"}
+    plain = {"NPM_CONFIG_PROXY": "proxy:3128", "GLOBAL_AGENT_HTTP_PROXY": "@proxy:3128", "PROXYCHAINS": "u:pw@x",
+             "NOPROXY_LIST": "u:pw@x", "no_proxy": "u:pw@x"}
+    env = auto.session_env({**proxies, **plain}, str(tmp_path))
+    assert not set(proxies) & set(env), "a proxy's sign-in, whatever tool's variable holds it"
+    assert set(plain) <= set(env), "a proxy with no sign-in, and a name that doesn't end in proxy"
+    assert auto.sign_in_problems(proxies) == [], "only the proxies claude reads stop the round"
 
 
 def test_the_sessions_path_starts_with_the_folders_its_tools_really_run_from(tmp_path):

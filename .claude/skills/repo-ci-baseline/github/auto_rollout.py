@@ -318,6 +318,10 @@ PROXY_NAME = re.compile(r"^(HTTPS?|ALL|FTP)_PROXY$", re.I)
 # A proxy written with no scheme, as curl and git take one, whose host has a sign-in before it: a user, with or without
 # a password, or a password alone (user:pass@proxy:3128, token@proxy:3128, :pass@proxy:3128).
 BARE_USERINFO = re.compile(r"^\s*(?:[^/@\s:]+(?::[^/@\s]*)?|:[^/@\s]+)@[^/@\s]")
+# Any tool's proxy variable, any name ending in proxy (PIP_PROXY, npm_config_https_proxy, SOCKS_PROXY): one written with no scheme and a sign-in
+# is left out of the session's environment, though only PROXY_NAME's stop the round, since only those claude reads.
+# NO_PROXY is a list of hosts, not a proxy.
+ANY_PROXY_NAME = re.compile(r"^(?!no_proxy$).*proxy$", re.I)
 # Each cloud flag Claude Code reads, and the prefix of the variables that cloud signs in with.
 CLOUD_SIGN_IN = {"CLAUDE_CODE_USE_BEDROCK": "AWS_", "CLAUDE_CODE_USE_VERTEX": "GOOGLE_", "CLAUDE_CODE_USE_FOUNDRY": "AZURE_"}
 # The values of a CLAUDE_CODE_USE_* flag that turn its cloud on; any other (0, false, empty) leaves it off.
@@ -1032,7 +1036,7 @@ def own_log_dir(log_dir):
 def session_env(base, tmp, first=()):
     """The review session's environment: base without GATE_SKIP_REVIEW (the gate's review check must run in it), the
     names SECRET_NAME matches, a value holding a URL with a sign-in (holds_sign_in: a password, or a user over http(s) or
-    ftp(s), and a proxy variable's written with no scheme), Claude Code's own but CLAUDE_KEPT (CLAUDE_CONFIG_DIR made absolute, as the settings
+    ftp(s), and a proxy variable's written with no scheme, any tool's: ANY_PROXY_NAME), Claude Code's own but CLAUDE_KEPT (CLAUDE_CONFIG_DIR made absolute, as the settings
     deny it), and the cloud in use's secrets; gh pointed at an empty config and git at an empty global one; and
     SESSION_GIT_CONFIG. The worktree and the clone's git folder are read-only to it, so GIT_OPTIONAL_LOCKS is off (git
     status writes no index back) and gc.auto is 0. The session builds and installs nothing, but the caches and
@@ -1045,6 +1049,8 @@ def session_env(base, tmp, first=()):
     def kept(name, value):
         if name == "GATE_SKIP_REVIEW" or holds_sign_in(name, value):
             return False  # a URL with a sign-in (a password, or a user that may be a token), whatever its name, or a proxy's
+        if ANY_PROXY_NAME.search(name) and BARE_USERINFO.match(value):
+            return False  # another tool's proxy, written with no scheme and a sign-in
         if CLAUDE_SIGN_IN.match(name):
             return name in CLAUDE_KEPT
         if clouds and name.startswith(clouds):
@@ -1888,15 +1894,16 @@ def review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock
                 out.write(f"rollout.sh: recording the review failed:\n{traceback.format_exc()}")
                 code = RECORD_FAILED
     if got:
-        if code not in (RECORD_FAILED, RECORD_LEFT):
-            for rule in broke:  # what the checks found is said before the signal ends the round
+        rules = broke if code not in (RECORD_FAILED, RECORD_LEFT) else []  # else a group the record left, said below
+        if rules:
+            for rule in rules:  # what the checks found is said before the signal ends the round
                 out.write(f"rollout.sh: the session broke a rule: {rule}\n")
                 sys.stderr.write(f"rollout.sh: the session broke a rule: {rule}\n")
         if code == RECORD_FAILED:
             for left in broke:  # a group prepare left: it holds the lock, so it must be ended before a record
                 sys.stderr.write(f"rollout.sh: {left}\n")
-        if kept_head(keep) == head:
-            # The stop that would print it isn't reached: the signal ends the round here. After RECORD_LEFT the
+        if not rules and kept_head(keep) == head:
+            # A broken rule means nothing is to be recorded, so no command is printed then. The stop that would print it isn't reached: the signal ends the round here. After RECORD_LEFT the
             # review may be recorded already, so the person checks that before recording it again.
             maybe = (f"whether the review was recorded can't be told: cd {shlex.quote(worktree)} &&"
                      " scripts/review.sh report shows it; if it wasn't, ") if code == RECORD_LEFT else ""
