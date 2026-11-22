@@ -108,7 +108,8 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
   Then it lints the staged content of Markdown files; see [pre-commit.md](pre-commit.md).
 - **`pre-push`**, in order (step 3 runs `scripts/check-branch-name.sh`):
   1. Read the refs from stdin, and gate the refs being pushed, not the checked-out branch. Classify by the *remote* ref,
-     so a tag pushed onto a branch still counts as a branch push.
+     so a tag pushed onto a branch still counts as a branch push. Run by hand, with no refs (stdin empty, or a terminal,
+     which isn't read, so the hook doesn't wait for Ctrl-D), it gates the checked-out branch.
   2. Refuse pushes to, and deletions of, the protected branches (`main`, `preview`, `dev`).
   3. Refuse a branch name outside the standard.
   4. Refuse a pushed commit that isn't the checked-out `HEAD`, because the gate only tests the working tree.
@@ -128,7 +129,8 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
      makes each worktree's own `.github/hooks/*` the ones that fire; see step 7 of the Sandcastle setup in the
      README.
 - **`scripts/gate.sh`**, also safe to run by hand: lint the Markdown, YAML, workflow, shell and Python files changed since
-  `origin/main`, using CI's configs, and prefer installed tools with pinned fallbacks. The changed files are read NUL-separated
+  `origin/main`, using CI's configs, and prefer installed tools with pinned fallbacks. It needs bash 4.4 or later (its lists are read with
+  `mapfile -d ''`), and on an older bash, such as macOS's 3.2, it stops first, naming the bash it found. The changed files are read NUL-separated
   (`git diff -z`, or `git ls-files -z` without an `origin/main`; a git that fails stops the gate) and sorted into the lint lists in bash
   under `LC_ALL=C`, so each name is matched whole and byte for byte: a non-ASCII name, one that isn't valid UTF-8, or one with a tab or
   newline reaches its linter as it is on disk. Markdown names go to `markdownlint-cli2` as `:<name>`, its literal-path form, so `a[1].md`
@@ -184,6 +186,13 @@ build runs. It needs cases for:
 - a branch behind `origin/main` refused before the gate (pushed and by hand) with the `git merge origin/main` fix,
   the same branch running the gate once it has merged main, no `origin/main` skipping the check, and a stale local
   `origin/main` refreshed by the hook's fetch
+- the hook run by hand on a pseudo-terminal, gating the checked-out branch instead of waiting for stdin (python3 keeps a
+  30-second deadline of its own, which fails the case rather than hanging the suite; without python3 the case is skipped)
+- the Python lint step: a changed Python file ruff passes (allowed), one ruff finds a problem in (refused, saying to fix it),
+  and a ruff 0.16 with no uvx (refused, saying what to install)
+- the Shell format step with no shfmt on `PATH`: a changed shell file refused, saying what to install
+- the gate's bash check before its first `mapfile`, stopping on bash 3.2, 4.0 and 4.3 and going on with 4.4, 5.0, 5.3 and 10.0
+  (`BASH_VERSINFO` is read-only, so the check's own lines run with each version written in)
 - **each accepted branch prefix** (including slugs with digits), and each retired or malformed name (`squad/`,
   `sprint/`, a prefix missing its issue number, a `chore/` slug starting with a digit, and an uppercase letter in an
   otherwise valid name such as `chore/tidy-Up`). Each bad name must break exactly one rule, or it can't catch a

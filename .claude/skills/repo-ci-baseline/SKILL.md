@@ -21,6 +21,8 @@ Why it works this way is in [ADR 0001](docs/adr/0001-standardize-by-copying-a-te
   and git hooks a branch changes (its Shell format step), so its own scripts take the style as they are touched ([references/adapt.md](references/adapt.md)).
   Its Python lint step runs ruff 0.17's bug-finding rules (F and B, no config read) on the Python files a branch changes: an Application needs ruff 0.17 or uv
   installed for a push that changes one ([the Factory's ADR 0011](../../../docs/adr/0011-markdown-and-yaml-are-linted-as-they-are-written.md), Update: Python).
+  The gate needs bash 4.4 or later first on `PATH` (it reads its file lists with `mapfile -d ''`) and says so on an older one; macOS's `/bin/bash` is 3.2, so
+  `brew install bash` there.
 
 **Template first.**
 A fix to an Owned file is made in `template/`, then Applied to the repo that needed it.
@@ -95,10 +97,13 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
    Done when it passes.
 3. After the Factory PR merges, re-Apply to each repo in its own PR; the overwritten Owned files are the change.
    Open it ready, not as a draft: the repo's own auto-merge lands it ([automerge.md](references/automerge.md#landing)).
-   - **Roll out:** `rollout.sh --brings '#<n>,#<n>'` runs `reapply.sh` on TicketManager and holds the rest until its re-Apply PR has merged.
+   - **Roll out:** `rollout.sh --brings '#<n>,#<n>'` runs `reapply.sh` on TicketManager and holds the rest until its re-Apply PR has merged,
+     or goes on to them in the same run when TicketManager already matches the Template (its re-Apply worktree has no commit `main` lacks), as `--auto` does.
      Land that PR, fix any finding Template first, then run `rollout.sh` again: once it has merged,
      it re-Applies the other repos in order, one pre-push gate at a time, reports a repo that fails and goes on.
-     Start with `--dry-run`. It ends with the `land.sh` command for the PRs it left open. A reapply stopped at the gate's review (its exit 3) or on findings that
+     A merged PR while that worktree has commits `main` lacks is an earlier round's (GitHub's list can lag a push), so it holds; run it again.
+     Start with `--dry-run`, which reapplies nothing, so it can't tell that TicketManager already matches and holds the rest where the real run may go on.
+     It ends with the `land.sh` command for the PRs it left open. A reapply stopped at the gate's review (its exit 3) or on findings that
      wait for you (exit 4) says what to run before you run `rollout.sh` again.
    - **Roll out unattended:** `rollout.sh --auto --brings '#<n>,#<n>'` does all of that in one run (the Factory's [ADR 0016](../../../docs/adr/0016-a-rollout-runs-each-applications-review-headless-and-sandboxed-in-its-worktree.md)).
      It runs on Linux only, and checks the tools (bubblewrap and socat for the sandbox among them, and that bubblewrap can make one), ruff 0.17 or uv,
