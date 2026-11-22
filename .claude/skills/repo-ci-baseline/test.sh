@@ -96,18 +96,18 @@ if in_shard hooks; then
   grep -qxF '  bash scripts/sync-copilot-review.sh --check' "$owned/scripts/gate.sh" || fail "the Owned gate.sh must run: bash scripts/sync-copilot-review.sh --check"
   grep -qxF '        run: bash scripts/sync-copilot-review.sh --check' "$owned/.github/workflows/copilot-review-sync.yml" \
     || fail "the Owned copilot-review-sync.yml must run: bash scripts/sync-copilot-review.sh --check"
-  grep -qxF '        run: bash scripts/tests/sync-copilot-review.test.sh' "$owned/.github/workflows/ci.yml" \
-    || fail "the Owned ci.yml's hook-tests job must run scripts/tests/sync-copilot-review.test.sh, so every repo tests its copy"
-  grep -qxF '        run: bash scripts/tests/watch-pr.test.sh' "$owned/.github/workflows/ci.yml" \
-    || fail "the Owned ci.yml's hook-tests job must run scripts/tests/watch-pr.test.sh, so every repo tests its copy"
-  grep -qxF '        run: bash scripts/tests/cleanup.test.sh' "$owned/.github/workflows/ci.yml" \
-    || fail "the Owned ci.yml's hook-tests job must run scripts/tests/cleanup.test.sh, so every repo tests its copy"
-  grep -qxF '        run: bash scripts/tests/work-issue.test.sh' "$owned/.github/workflows/ci.yml" \
-    || fail "the Owned ci.yml's hook-tests job must run scripts/tests/work-issue.test.sh, so every repo tests its copy"
   bash "$owned/scripts/tests/check-git-hooks.test.sh" || fail "check-git-hooks.test.sh"
   bash "$owned/scripts/tests/lint-edited-file.test.sh" || fail "lint-edited-file.test.sh"
-  grep -qxF '        run: bash scripts/tests/lint-edited-file.test.sh' "$owned/.github/workflows/ci.yml" \
-    || fail "the Owned ci.yml's hook-tests job must run scripts/tests/lint-edited-file.test.sh, so every repo tests its copy"
+  # Every Owned script's and hook's test suite runs in the Owned ci.yml's hook-tests job, found by name, so a suite added later
+  # can't be left out of it (check-git-hooks.test.sh once was) and every repo tests its copy.
+  hook_suites=0
+  for suite in "$owned"/.github/hooks/tests/*.test.sh "$owned"/scripts/tests/*.test.sh; do
+    [[ -f "$suite" ]] || continue
+    hook_suites=$((hook_suites + 1))
+    grep -qxF "        run: bash ${suite#"$owned"/}" "$owned/.github/workflows/ci.yml" \
+      || fail "the Owned ci.yml's hook-tests job must run ${suite#"$owned"/}, so every repo tests its copy"
+  done
+  [[ "$hook_suites" -gt 0 ]] || fail "found no Owned test suite under .github/hooks/tests/ or scripts/tests/: the hook-tests check reads nothing"
   # The edit-time lint sees only Write, Edit and MultiEdit, so an Owned rules file tells every session to edit Markdown and YAML with them.
   # It loads in every session (no front matter, so no paths:), and it is written into every repo, so it names nothing of the Factory's.
   edit_rule="$owned/.claude/rules/markdown-and-yaml-edits.md"

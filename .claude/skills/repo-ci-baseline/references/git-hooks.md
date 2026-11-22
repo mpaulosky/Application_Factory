@@ -200,8 +200,9 @@ and a check that the script exports `LC_ALL=C` before its first regex match, whi
 `work-issue.sh` agree on a name whatever the caller's locale),
 a `claude/...` branch refused, and other `docs/` names refused.
 
-CI's hook-tests job runs this suite, `pre-commit.test.sh`, `check-branch-name.test.sh`, `check-pr-title.test.sh`, `sync-copilot-review.test.sh`, `watch-pr.test.sh`,
-`cleanup.test.sh`, `lint-edited-file.test.sh` and `work-issue.test.sh`.
+CI's hook-tests job runs every Owned test suite under `.github/hooks/tests/` and `scripts/tests/`: this suite, `pre-commit.test.sh`, `check-branch-name.test.sh`,
+`check-pr-title.test.sh`, `sync-copilot-review.test.sh`, `watch-pr.test.sh`, `cleanup.test.sh`, `work-issue.test.sh`, `check-git-hooks.test.sh` and
+`lint-edited-file.test.sh`. `test.sh` fails when one of them has no `run:` step there, so a new suite can't be left out.
 
 ## Session-start check
 
