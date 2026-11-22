@@ -92,8 +92,8 @@ describe("plannerPromptArgs", () => {
   // UI_ROLE and REPO_SKILLS (lib/agents.mts#withSharedRules) are passed empty when the repo has no UI role or no skills block. That is only safe
   // while Sandcastle refuses a prompt argument holding null or undefined and nothing else, which this reads from the pinned package. The Seed
   // package.json asks for ^0.12.0 and each Application moves on with Dependabot, so both shapes are accepted: 0.12's `value == null` on
-  // `sanitizedArgs[key]`, and 0.14's `value === null || value === void 0` on `args[key]`. The installed release exercises one of them, so the
-  // next test holds both, and the shapes that must fail, as text.
+  // `sanitizedArgs[key]`, and 0.14's `value === null || value === void 0` on `args[key]`. The installed release exercises one of them, so
+  // "reads both Sandcastle releases' check ..." below holds both, and the shapes that must fail, as text.
   const NULL_OR_UNDEFINED_ONLY = /const value = (?:sanitizedArgs|args)\[key\];\s*if \((?:value == null|value === null \|\| value === void 0)\) \{/g;
 
   it("passes UI_ROLE empty safely, since the pinned Sandcastle refuses only a null or undefined prompt argument", () => {
