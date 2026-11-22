@@ -60,7 +60,7 @@ Evaluated properties (`dotnet build <file> -getProperty:...`) and results, **[V]
 | IssueTracker | 11.0.100 | `Directory.Packages.props` | 15.0 | net11.0 | false, default | builds, runs on 11.0.0 |
 | SuggestionApp | 11.0.100 | none | 15.0 | net11.0 | false, default | builds, runs on 11.0.0 |
 | Blazor-Server | 11.0.100 | props, CPM | 14.0 | net10.0 | true, All | fails: CS9327 (C# 14), CA1304, CA1305, CA1311 as errors |
-| Articles | 11.0.100 | props, CPM | latest (15) | net10.0 | true, all, but `CodeAnalysisTreatWarningsAsErrors=false` | builds with 3 CA warnings, runs on **10.0.15**, writes `.github/scripts/bin/`, `obj/` |
+| Articles | 11.0.100 | props, CPM | latest (15) | net10.0 | true, all (`CodeAnalysisTreatWarningsAsErrors=false`) | builds with 3 CA warnings, runs on **10.0.15**, writes `bin/`, `obj/` there |
 | IssueManager, own pin 10.0.403 | 10.0.404 | props, CPM | latest (14) | net10.0 | true, none | fails: CS8652 (preview feature in C# 14) |
 | IssueManager, pinned to 11.0.100 | 11.0.100 | props, CPM | latest (15) | net10.0 | true, none | builds, runs on **10.0.15** |
 | auth0-management-app, own pin 10.0.403 | 10.0.404 | props, CPM | 14.0 | net10.0 | true, All | fails: CS8652, CA1304, CA1305, CA1311 |
