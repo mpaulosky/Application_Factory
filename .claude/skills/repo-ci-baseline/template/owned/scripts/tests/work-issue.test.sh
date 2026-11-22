@@ -315,10 +315,18 @@ cat > "$work/shim/git" << SHIM
 #!/usr/bin/env bash
 if [[ "\$1 \$2 \$3" == "remote get-url origin" && -n "\${SHIM_ORIGIN_URL:-}" ]]; then echo "\$SHIM_ORIGIN_URL"; exit 0; fi
 if [[ "\$1" == -C && "\$3" == fetch && -n "\${SHIM_FETCH_FAIL:-}" ]]; then echo "shim: fetch failed" >&2; exit 128; fi
+if [[ "\$1" == -C && "\$3" == for-each-ref && -n "\${SHIM_REFS_FAIL:-}" ]]; then echo "shim: for-each-ref failed" >&2; exit 128; fi
 exec "$(command -v git)" "\$@"
 SHIM
 chmod +x "$work/shim/git"
 issue 84 "From url"
+# for-each-ref failing while the issue's branch is looked for is an error: it doesn't fall through to a new branch beside the one the issue has
+issue 136 "A title its branch doesn't have"
+git branch feature/136-old-title origin/main
+o=$(PATH="$work/shim:$PATH" SHIM_REFS_FAIL=1 bash scripts/work-issue.sh 136 2>&1 > /dev/null)
+st=$?
+check "a failing for-each-ref stops the run, saying why, and makes no branch or worktree" "[[ $st != 0 ]] && grep -q \"can't list the branches for #136\" <<<\"\$o\" && ! git show-ref --verify --quiet refs/heads/feature/136-a-title-its-branch-doesn-t-have && [[ ! -e '$wt/feature-136-a-title-its-branch-doesn-t-have' && ! -e '$wt/feature-136-old-title' ]]"
+check "with for-each-ref working, the issue's branch is found" "[[ \$(bash scripts/work-issue.sh 136 2>/dev/null) == '$wt/feature-136-old-title' ]]"
 issue 85 "From upstream"
 issue 86 "No repository"
 check "with no GITHUB_REPOSITORY, the repository is read from origin's URL" "[[ \$(env -u GITHUB_REPOSITORY EXPECT_GH_REPO=acme/r PATH='$work/shim:'\"\$PATH\" SHIM_ORIGIN_URL=git@github.com:acme/r.git bash scripts/work-issue.sh 84 2>/dev/null) == '$wt/feature-84-from-url' ]]"

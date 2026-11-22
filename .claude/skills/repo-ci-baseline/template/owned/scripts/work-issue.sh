@@ -13,7 +13,7 @@
 # The branch starts from the local branch when there is one (checked out as it is), else from origin/<branch> when that branch is on origin, else from origin/main; origin is fetched
 # first, so a branch pushed from another machine is seen. A branch made from origin/main has no upstream (it would track main): the first push is git push -u origin HEAD; one made from origin/<branch> tracks that branch. A worktree the branch already has is reused,
 # wherever it is, if its folder still exists and is that worktree of this clone with the branch checked out; git's entry for one deleted by hand is forgotten, that one only, and the worktree made again.
-# These are errors: a folder recreated or replaced since, or one git can't read (a safe.directory refusal); a locked worktree whose folder is missing; one whose folder can't be reached (its parent folder is missing, empty, unreadable
+# These are errors: a branch list git can't read (for-each-ref failing, rather than a new branch made beside the issue's own); a folder recreated or replaced since, or one git can't read (a safe.directory refusal); a locked worktree whose folder is missing; one whose folder can't be reached (its parent folder is missing, empty, unreadable
 # or unsearchable: it may be on an unmounted drive; run git worktree prune if it was deleted for good); the primary checkout when it has the branch checked out; a directory in the way that is not that worktree is an error. It needs gh logged in, and for an origin
 # that is not on github.com, GITHUB_REPOSITORY. When origin can't be fetched (but gh works: the issue is read first) it still prints a worktree it already has, with a warning, and stops otherwise. An issue number has at most 9 digits. Run it from the primary checkout or any worktree.
 # Everything but the path goes to stderr.
@@ -83,6 +83,8 @@ git -C "$primary" fetch --prune --quiet origin || fetched=false
 # An issue renamed since the branch was made keeps its branch: when the branch this title would get doesn't exist, a local or origin branch already named for this number wins
 # (local first, then in name order; one outside the branch standard or under another prefix, or with leading zeros in its number, is not the issue's).
 if ! git -C "$primary" show-ref --verify --quiet "refs/heads/$branch" && ! git -C "$primary" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+  # Listed first, so a failing for-each-ref stops the run instead of falling through to a new branch beside the one the issue has.
+  refs="$(git -C "$primary" for-each-ref --format='%(refname)' "refs/heads/*/$n-*" "refs/remotes/origin/*/$n-*")" || die "can't list the branches for #$n: git for-each-ref failed"
   while read -r ref; do
     name="${ref#refs/heads/}"
     name="${name#refs/remotes/origin/}"
@@ -91,7 +93,7 @@ if ! git -C "$primary" show-ref --verify --quiet "refs/heads/$branch" && ! git -
       branch="$name"
       break
     fi
-  done < <(git -C "$primary" for-each-ref --format='%(refname)' "refs/heads/*/$n-*" "refs/remotes/origin/*/$n-*")
+  done <<< "$refs"
 fi
 bash "$primary/scripts/check-branch-name.sh" "$branch" >&2 || die "$branch is not an allowed branch name"
 

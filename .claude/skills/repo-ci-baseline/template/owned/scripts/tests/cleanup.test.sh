@@ -379,6 +379,7 @@ if [[ "\$1 \$2 \$3" == "update-ref --no-deref -d" && -n "\${SHIM_ADVANCE:-}" && 
   new=\$("$(command -v git)" commit-tree "\$4^{tree}" -p "\$4" -m late) && "$(command -v git)" update-ref "\$4" "\$new"
 fi
 if [[ "\$1 \$2 \$3" == "update-ref --no-deref -d" && -n "\${SHIM_VANISH:-}" && "\$4" == "refs/heads/\$SHIM_VANISH" ]]; then "$(command -v git)" update-ref -d "\$4"; [[ -z "\${SHIM_DANGLE:-}" ]] || "$(command -v git)" symbolic-ref "\$4" refs/heads/nowhere; fi # the branch is deleted by someone else first (SHIM_DANGLE: and an alias that points nowhere left in its place)
+if [[ "\$1" == for-each-ref && -n "\${SHIM_REFS_FAIL:-}" && "\$*" == *" \$SHIM_REFS_FAIL"* ]]; then echo "shim: for-each-ref failed" >&2; exit 128; fi
 if [[ "\$1" == ls-remote && -n "\${SHIM_LSREMOTE_FAIL:-}" && "\$*" == *"refs/heads/\$SHIM_LSREMOTE_FAIL"* ]]; then echo "shim: ls-remote failed" >&2; exit 128; fi
 exec "$(command -v git)" "\$@"
 SHIM
@@ -424,6 +425,15 @@ if [[ "$rel_ok" == true ]]; then
 elif [[ -n "${CI:-}" ]]; then bad "this git can't read a worktree stored with a relative path, and CI must test it"; else echo "skip - this git can't read a relative worktree path"; fi
 check "a dry run says it would forget both hand-deleted worktrees, whichever side of the clean ones they sort" "grep -q 'would: forget the missing worktree .*wt-ord/b' <<<\"\$out\" && grep -q 'would: forget the missing worktree .*wt-ord/d' <<<\"\$out\" && ! grep -q 'keep   chore/ord-' <<<\"\$out\""
 check "a dry run forgets no worktree entry, but says it would" "grep -q '^remove chore/stale\$' <<<\"\$out\" && grep -q 'would: forget the missing worktree .*chore-stale\$' <<<\"\$out\" && grep -q 'would: git update-ref --no-deref -d refs/heads/chore/stale ' <<<\"\$out\" && [[ -d $repo/.git/worktrees/chore-stale ]] && has_local chore/stale"
+
+# for-each-ref failing is an error, for the local branches and for origin's: neither loop is run as if there were no branches
+for refs in refs/heads refs/remotes/origin; do
+  o=$(EXPECT_GH_BASE_REPO=acme/r PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=git@github.com:acme/r.git SHIM_REFS_FAIL="$refs" bash scripts/cleanup.sh --dry-run 2>&1)
+  st=$?
+  check "a failing for-each-ref of $refs: exit 1, saying why, with no 'Done:' line" "[[ $st == 1 ]] && grep -q \"can't list $refs\" <<<\"\$o\" && ! grep -q '^Done:' <<<\"\$o\""
+done
+o=$(EXPECT_GH_BASE_REPO=acme/r PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=git@github.com:acme/r.git SHIM_REFS_FAIL=refs/remotes/origin bash scripts/cleanup.sh --dry-run 2>&1)
+check "a failing for-each-ref of origin's branches stops before any branch is judged" "! grep -q 'chore/owner-case' <<<\"\$o\""
 
 # The owner of origin: github.com URL forms (through the git shim), without regard to case; a PR from "Acme/R" counts for acme/r, not for o/r
 check "a PR from a repository of another name is not counted by default" "! grep -q 'remove chore/owner-case' <<<\"\$out\" && grep -q 'keep   chore/owner-case: no PR from origin' <<<\"\$out\""
