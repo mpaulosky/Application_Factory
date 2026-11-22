@@ -338,7 +338,7 @@ function reRaiseHolder(
     return {};
   }
   // Follow the fixed entries' re-raises: `seen` ends a cycle a hand edit made, and only an entry for the same path is followed.
-  // The walk also stops after one hop per known entry, which `seen` never needs, so no edit to the record can make it loop.
+  // The hop bound is a backstop: while `seen` works it is never reached; if `seen` broke, it would stop the walk, so the cycle test fails instead of hanging.
   let named: SecurityEntry = first;
   const seen = new Set<string>();
   for (let hops = 0; named.status === "fixed"; hops++) {

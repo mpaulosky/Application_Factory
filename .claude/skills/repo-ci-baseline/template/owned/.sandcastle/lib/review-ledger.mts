@@ -902,8 +902,9 @@ export function nearReRaise(summary: string): string | undefined {
   if (RE_RAISE.test(summary)) return undefined;
   const found = NEAR_RE_RAISE.exec(summary);
   if (found?.[1] === undefined) return undefined;
-  const after = summary.slice(found[0].length, found[0].length + NEAR_WINDOW);
-  if (!/(?<![a-z])again(?![a-z])/i.test(after)) return undefined;
+  // The word is matched on the uncut text, so a longer word reaching past the window's edge ("against") isn't cut down to "again".
+  const word = /(?<![a-z])again(?![a-z])/i.exec(summary.slice(found[0].length));
+  if (word === null || word.index + "again".length > NEAR_WINDOW) return undefined;
   const number = /^\.security\/(\d+)$/i.exec(found[1])?.[1];
   return number === undefined ? found[1].toUpperCase() : `.security/${number}`;
 }

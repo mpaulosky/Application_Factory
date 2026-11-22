@@ -4139,11 +4139,16 @@ describe("nearReRaise", () => {
     // "again" as a word of its own: not inside "against" or "againstuff"
     ["R3: a race against another run", undefined],
     ["R3 againstuff", undefined],
+    // nor with a letter just before it
+    ["R3: a reagain of the upload bug", undefined],
+    ["R3: xagain", undefined],
     ["R7: bypass against the allow-list, again", "R7"],
     // the window: "again" ending at the 40th character after the id is read, at the 41st it isn't
     [`R3: ${".".repeat(33)}again`, "R3"],
     [`R3: ${".".repeat(34)}again`, undefined],
     [`R3: ${".".repeat(32)}again.`, "R3"],
+    // a longer word crossing the window's edge is still not "again"
+    [`R3: ${".".repeat(33)}against`, undefined],
   ] as [string, string | undefined][]) {
     it(`reads ${JSON.stringify(summary)} as ${JSON.stringify(expected)}`, () => {
       assert.equal(nearReRaise(summary), expected);
