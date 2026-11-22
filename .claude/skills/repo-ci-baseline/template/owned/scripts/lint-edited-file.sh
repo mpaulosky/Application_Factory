@@ -273,8 +273,9 @@ name="${file##*/}"
 
 # Lower-case extension: a README.MD is Markdown too. A shell file's name is matched as the gate matches it, case and all (a .SH is
 # not one), and here only by its name and its folder's: whether it is one the gate checks is decided below, from its path in the
-# repository.
-lower="$(printf '%sx' "$name" | tr '[:upper:]' '[:lower:]')"
+# repository. tr runs in the C locale, as everywhere in this file: a BSD tr in a UTF-8 locale fails on a name that isn't valid UTF-8, and
+# the file would go unlinted; in C it folds only ASCII letters, which is all an extension here holds.
+lower="$(printf '%sx' "$name" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
 lower="${lower%x}"
 kind=
 case "$lower" in
