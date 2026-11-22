@@ -137,8 +137,11 @@ LOG_DIR = os.path.expanduser("~/.cache/repo-ci-baseline/logs")
 # (denied_around would otherwise list every entry of it), and beside the cache folder, not in it, since the session
 # can't read that (CREDENTIAL_PATHS). A folder a killed run left there is removed by the next (sweep_sessions).
 SESSION_DIR = os.path.expanduser("~/.cache/repo-ci-baseline-sessions")
-# What opens the log line saying why the session wasn't started (stop_line reads it back for the terminal).
+# What opens the log line saying why the session wasn't started (stop_line reads it back, from the log's first line
+# only, for the terminal), and the log's first line once a session is about to start, so that whatever the session
+# prints comes after it and can't pass for the round's own.
 NOT_STARTED = "rollout.sh: not started: "
+SESSION_STARTS = "rollout.sh: the review session starts\n"
 # How the stop for a re-Apply worktree removed since reapply.sh made it begins, so drive doesn't send the person there.
 WORKTREE_GONE = "the re-Apply worktree is gone: "
 # The most the session's settings may take as JSON: they are one argument of claude's, which Linux caps at 128 KiB.
@@ -663,35 +666,39 @@ def denied_around(root, allowed, listdir=os.listdir):
 
 
 # The install prefixes read whole, each a layout known to hold one version of one tool and nothing else: a version
-# manager's version folder in home (nvm's, asdf's, mise's, volta's, fnm's, pnpm's node), as its path under home, and
-# Homebrew on Linux, whose prefix holds only its formulae.
+# manager's version folder in home (nvm's, asdf's, mise's, volta's, fnm's, pnpm's node), as its path under home. And
+# Homebrew on Linux, of whose prefix only the formulae's own folders are read (HOMEBREW_PARTS, git's system config
+# among them): its etc and var hold the services' configs and data (a redis.conf's password, a database).
 VERSION_FOLDERS = re.compile(r"\.nvm/versions/node/[^/]+|\.asdf/installs/[^/]+/[^/]+|\.local/share/mise/installs/[^/]+/[^/]+"
                              r"|\.volta/tools/image/[^/]+/[^/]+|(?:\.local/share/fnm|\.fnm)/node-versions/[^/]+/installation"
                              r"|\.local/share/pnpm/nodejs/[^/]+")
 HOMEBREW_PREFIXES = ("/home/linuxbrew/.linuxbrew",)
+HOMEBREW_PARTS = ("bin", "sbin", "Cellar", "opt", "lib", "libexec", "share", "include", "etc/gitconfig")
 
 
-def own_prefix(real, homes):
-    """The install prefix of the binary real to read whole, or None (tool_reads): a version folder of VERSION_FOLDERS
-    in one of homes with real in its bin, or a Homebrew prefix with real in <prefix>/Cellar/<formula>/<version>/."""
-    brews = [*HOMEBREW_PREFIXES, *(os.path.join(h, ".linuxbrew") for h in homes)]
-    for brew in brews:
-        if re.fullmatch(re.escape(brew) + r"/Cellar/[^/]+/[^/]+/.+", real):
-            return brew
+def own_install(real, homes):
+    """What of the install around the binary real to read whole, or [] (tool_reads): a version folder of
+    VERSION_FOLDERS in one of homes with real in its bin, or a Homebrew prefix's HOMEBREW_PARTS, never its etc or var,
+    with real in <prefix>/Cellar/<formula>/<version>/. real is a real path, so each prefix is matched, and read, in
+    both its forms (a /home that is a link, a ~/.linuxbrew moved to another disk)."""
+    for brew in [*HOMEBREW_PREFIXES, *(os.path.join(h, ".linuxbrew") for h in homes)]:
+        forms = both_forms(brew)
+        if any(re.fullmatch(re.escape(form) + r"/Cellar/[^/]+/[^/]+/.+", real) for form in forms):
+            return [os.path.join(form, part) for form in forms for part in HOMEBREW_PARTS]
     prefix = os.path.dirname(os.path.dirname(real))
     if os.path.basename(os.path.dirname(real)) != "bin":
-        return None
-    return next((prefix for h in homes if prefix.startswith(h.rstrip("/") + "/")
-                 and VERSION_FOLDERS.fullmatch(prefix[len(h.rstrip("/")) + 1:])), None)
+        return []
+    return [prefix for h in homes if prefix.startswith(h.rstrip("/") + "/")
+            and VERSION_FOLDERS.fullmatch(prefix[len(h.rstrip("/")) + 1:])][:1]
 
 
 def tool_reads(home, which=shutil.which, run=None):
     """(what the session's Bash reads for SESSION_COMMANDS, the folders to put first on its PATH). Each command's own
     file as PATH finds it and as it really is (node's process.execPath, git's binary, and git's --exec-path helpers),
     so a shim (volta, asdf, mise) or a link isn't what runs in the sandbox; and the install prefix around a real binary,
-    read whole only in a layout known to be the tool's own: a version manager's version folder in home with the binary
-    in its bin (VERSION_FOLDERS), or a Homebrew prefix (HOMEBREW_PREFIXES, ~/.linuxbrew) with the binary in a Cellar
-    formula's version folder. Anywhere else (/opt/bin, a project's bin, a data disk, another user's home) the files
+    read whole only in a layout known to be the tool's own (own_install): a version manager's version folder in home
+    with the binary in its bin (VERSION_FOLDERS), or a Homebrew prefix's formulae's folders (HOMEBREW_PREFIXES,
+    ~/.linuxbrew; HOMEBREW_PARTS) with the binary in a Cellar formula's version folder. Anywhere else (/opt/bin, a project's bin, a data disk, another user's home) the files
     alone. A command PATH finds by a relative path is left out, as is anything shared (home, a folder above it,
     ~/.local)."""
     run = run or run_quiet
@@ -718,10 +725,10 @@ def tool_reads(home, which=shutil.which, run=None):
         if name == "git":
             reads.append(asked([real, "--exec-path"]))
         folder = os.path.dirname(real)
-        prefix = own_prefix(real, homes)
-        if prefix:
-            # A prefix of the command's own: its folder goes first on PATH, so the shim found before it doesn't run.
-            reads.append(prefix)
+        install = own_install(real, homes)
+        if install:
+            # An install of the command's own: its folder goes first on PATH, so the shim found before it doesn't run.
+            reads += install
             first.append(folder)
     return [path for path in dict.fromkeys(reads) if path and not shared(path)], list(dict.fromkeys(first))
 
@@ -871,24 +878,34 @@ SECRET_KEY = re.compile(r"\.(?:[a-z0-9-]*(?:token|secret|password|passwd|passphr
                         r"|(?:[a-z0-9-]*-)?(?:smtp)?pass|[a-z0-9-]*(?:api|secret|access)-?key)$", re.I)
 # A token's own shape, wherever in a value it is (an alias's curl, an sshCommand): GitHub's, GitLab's, Slack's, an
 # API key's and AWS's, an Authorization or Bearer header, and sshpass's password. Only these known forms are found.
-# A header, bearer or password that names a variable ($GITHUB_TOKEN, "$(pass show x)") holds no token: it is read
-# when the command runs.
+# A header, bearer or password that names a variable (NAMES_A_VARIABLE) holds no token: it is read when the command
+# runs.
+# What a value that names a variable starts with: $NAME, ${NAME} or $1, bare or in double quotes, or a command
+# substitution that fetches it from a secret store or a file ("$(pass show x)", `cat ~/.token`). A single-quoted $ is
+# kept as it is by the shell, and another substitution ("$(echo -n me:hunter2 | base64)") may hold the secret itself.
+NAMES_A_VARIABLE = (r"\"?(?:\$\{?\w|(?:\$\(|`)\s*(?:pass|gopass|op|bw|lpass|gpg|secret-tool|security|vault|keyring"
+                    r"|cat)\b)")
 TOKEN_SHAPE = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|glpat-[\w-]{20,}|xox[abprs]-[\w-]{10,}"
                          r"|sk-[\w-]{20,}|AKIA[0-9A-Z]{16})"
-                         r"|(?i:\bauthorization:\s*(?!(?:\w+\s+)?[\"']?[$`])[^\s\"']|\bbearer\s+(?![\"']?[$`])\S{8,}"
-                         r"|\bsshpass\s+-p\s*(?![\"']?[$`])\S)")
-# A credential helper that holds the password itself (echo password=x, --password x) or names a file it is kept in;
-# one that fetches it as it runs (password=$(pass show x)) or a flag such as --password-store holds none.
-HELPER_SECRET = re.compile(r"password\s*=\s*(?![\"']?[$`])[^\s\"';]|--pass(?:word)?(?:=|\s+)(?![\"']?[$`])\S"
-                           r"|--file(?![\w-])", re.I)
+                         r"|(?i:\bauthorization:\s*(?!(?:\w+\s+)?" + NAMES_A_VARIABLE + r")[^\s\"']"
+                         r"|\bbearer\s+(?!" + NAMES_A_VARIABLE + r")\S{8,}"
+                         r"|\bsshpass\s+-p\s*(?!" + NAMES_A_VARIABLE + r")\S)")
+# A credential helper that holds the password itself (echo password=x, echo password="x", --password x) or names a
+# file it is kept in; one that fetches it as it runs (NAMES_A_VARIABLE) or a flag such as --password-store holds none.
+HELPER_SECRET = re.compile(r"password\s*=\s*(?!" + NAMES_A_VARIABLE + r")[\"']?[^\s\"';]"
+                           r"|--pass(?:word)?(?:=|\s+)(?!" + NAMES_A_VARIABLE + r")\S|--file(?![\w-])", re.I)
 
 
 def config_files(common):
     """Every git config file in the clone's git folder common, which the session's Bash reads whole: the config and
-    config.worktree of every git folder in it, in order: common's own, each linked worktree's under worktrees, and
-    each submodule's under modules, the main checkout's, a linked worktree's (worktrees/<name>/modules) and nested
-    ones, where one exists. Raises RuntimeError when a folder on the way can't be listed."""
+    config.worktree of every git folder in it, where one exists, in the walk's order, each level sorted by name:
+    common's own, then each linked worktree's (worktrees/<name>) followed by its own submodules'
+    (worktrees/<name>/modules), then the main checkout's submodules' (modules) and nested ones. Raises RuntimeError
+    when a folder on the way can't be listed; one removed while it is walked (a worktree pruned, a submodule
+    deinitialized) is skipped, since it holds no config any more."""
     def failed(error):
+        if isinstance(error, (FileNotFoundError, NotADirectoryError)):
+            return
         raise RuntimeError(f"can't list {error.filename}, so what of the clone's git config the session could read"
                            f" can't be told ({error.strerror}): make it listable")
 
@@ -909,7 +926,8 @@ def config_secrets(worktree, common, run=run_quiet):
     holds a token's own shape (TOKEN_SHAPE), whose name is a password's or a token's (SECRET_KEY), an http
     extraheader, or a credential helper holding a password or naming a file (HELPER_SECRET); and a file in common
     named for credentials. Each named by its key (redacted) and the file that holds it (an include file's own),
-    never its value. Raises RuntimeError when common can't be listed or git can't read a config file."""
+    never its value. Raises RuntimeError when common or a folder under it on the way to a git folder can't be
+    listed (config_files), or git can't read a config file that is still there."""
     try:
         names = sorted(os.listdir(common))
     except OSError as error:
@@ -920,6 +938,8 @@ def config_secrets(worktree, common, run=run_quiet):
     for path in config_files(common):
         code, out, err = run(["git", "-C", worktree, "config", "--file", path, "--includes", "--show-origin",
                               "--null", "--list"])
+        if code != 0 and not os.path.isfile(path):
+            continue  # removed since config_files listed it (a worktree pruned): nothing in it to read
         if code != 0:
             raise RuntimeError(f"git can't read {path} ({redacted(err.strip()) or f'exit {code}'}): repair it (git"
                                f" config --file {shlex.quote(path)} --list shows the error)")
@@ -1720,6 +1740,9 @@ def review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock
     except (OSError, RuntimeError, ValueError) as error:
         return stop(f"can't set the session up: {error}")
     out.flush()
+    begun = out.tell()
+    out.write(SESSION_STARTS)
+    out.flush()
     code, started, survived = None, True, False
     # One hold from the start of the session until what it staged is recorded or kept: a signal anywhere in it,
     # the checks included (they read every file of the worktree), would otherwise lose the run folder, and the
@@ -1729,6 +1752,8 @@ def review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock
             session = popen(command, cwd=worktree, env=env, stdin=subprocess.DEVNULL, stdout=out,
                             stderr=subprocess.STDOUT, start_new_session=True, pass_fds=held_lock_fds())
         except OSError as error:
+            out.seek(begun)  # no session ran: the reason is the log's first line, as stop_line reads it
+            out.truncate()
             out.write(f"{NOT_STARTED}can't start claude: {error}\n")
             started = False
         if started:
@@ -2034,8 +2059,8 @@ def drive(repo, path, brings, reapply, review, say):
                            " record")
         if code != 0:
             why = {124: f"ran past {REVIEW_TIMEOUT_MINUTES} minutes and was stopped",
-                   127: stop_line(log) or (f"exited 127 and the log has no {NOT_STARTED.strip()!r} line, so claude"
-                                           " started and exited 127 itself: the log says why" if os.path.isfile(log)
+                   127: stop_line(log) or (f"exited 127 and the log doesn't begin with a {NOT_STARTED.strip()!r}"
+                                           " line, so claude started and exited 127 itself: the log says why" if os.path.isfile(log)
                                            else "couldn't be started: no log could be made"),
                    NOTHING_STAGED: "exited 0 having staged no findings, not even [], so no review was recorded",
                    RECORD_FAILED: "staged findings the round couldn't record (scripts/review.sh prepare or record"
@@ -2049,8 +2074,8 @@ def drive(repo, path, brings, reapply, review, say):
 
 def stop_line(log):
     """'couldn't be started: <why>', from the log's first line when it is a NOT_STARTED line, or None. run_review
-    writes one first, to a new log, only when no session ran; a claude that started may exit 127 too, and then a
-    line of the session's own that looks like one is never read."""
+    writes one first, to a new log, only when no session ran; before a session starts it writes SESSION_STARTS first,
+    so a claude that started and exited 127 has no line of its own read, the first included."""
     try:
         with open(log, encoding="utf-8", errors="replace") as handle:
             first = handle.readline()

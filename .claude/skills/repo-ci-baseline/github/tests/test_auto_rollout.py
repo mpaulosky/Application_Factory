@@ -1077,10 +1077,14 @@ def test_a_shim_is_asked_where_its_tool_really_is():
                      "/usr/bin/git", "/usr/lib/git-core"], "the shim, the real binary and its prefix, git's helpers"
     assert first == ["/h/.volta/tools/image/node/24.1.0/bin"], "the real node runs, not the shim the sandbox can't read"
     assert auto.tool_reads("/h", {"node": "/h/.volta/bin/node"}.get, lambda command: (0, "relative/node\n", ""))[0] == [
-        "/h/.volta/bin/node"], "an answer that isn't a path is no read, and the shim's own ~/.volta is too shallow"
+        "/h/.volta/bin/node"], "an answer that isn't a path is no read, and the shim's own ~/.volta is no version folder"
 
 
-def test_a_homebrew_install_reads_its_whole_prefix(tmp_path):
+def brew_parts(prefix):
+    return [f"{form}/{part}" for form in auto.both_forms(prefix) for part in auto.HOMEBREW_PARTS]
+
+
+def test_a_homebrew_install_reads_its_formulaes_folders_not_its_etc_or_var(tmp_path):
     home = tmp_path / "me"
     cellar = home / ".linuxbrew" / "Cellar" / "git" / "2.50" / "bin"
     cellar.mkdir(parents=True)
@@ -1089,12 +1093,22 @@ def test_a_homebrew_install_reads_its_whole_prefix(tmp_path):
     (home / ".linuxbrew" / "bin" / "git").symlink_to(cellar / "git")
     reads, first = auto.tool_reads(str(home), lambda name: str(home / ".linuxbrew" / "bin" / name) if name == "git"
                                    else None, no_answer)
-    assert str(home / ".linuxbrew") in reads, "the formulae's libraries are in its opt and Cellar"
+    assert reads == [str(home / ".linuxbrew" / "bin" / "git"), str(cellar / "git"), *brew_parts(str(home / ".linuxbrew"))], \
+        "the formulae's libraries are in its opt and Cellar, git's system config in etc/gitconfig"
     assert first == [str(cellar)]
     assert auto.HOMEBREW_PREFIXES == ("/home/linuxbrew/.linuxbrew",)
+    assert auto.HOMEBREW_PARTS == ("bin", "sbin", "Cellar", "opt", "lib", "libexec", "share", "include", "etc/gitconfig")
     brew = "/home/linuxbrew/.linuxbrew/Cellar/git/2.50/bin/git"
     assert auto.tool_reads("/h", lambda name: brew if name == "git" else None, no_answer) == (
-        [brew, "/home/linuxbrew/.linuxbrew"], ["/home/linuxbrew/.linuxbrew/Cellar/git/2.50/bin"])
+        [brew, *brew_parts("/home/linuxbrew/.linuxbrew")], ["/home/linuxbrew/.linuxbrew/Cellar/git/2.50/bin"])
+    tree = {"/": ["h", "home"], "/h": ["wt"], "/home": ["linuxbrew"], "/home/linuxbrew": [".linuxbrew"],
+            "/home/linuxbrew/.linuxbrew": ["Cellar", "etc", "opt", "var"],
+            "/home/linuxbrew/.linuxbrew/etc": ["gitconfig", "redis.conf"]}
+    denied = settings_of("/h/wt", "/h/wt/.git", "/h/wt/.git", "/h/s", home="/h", environ={}, listdir=tree.get,
+                         which=lambda name: brew if name == "git" else None)["sandbox"]["filesystem"]["denyRead"]
+    assert "/home/linuxbrew/.linuxbrew/etc/redis.conf" in denied and "/home/linuxbrew/.linuxbrew/var" in denied, \
+        "a service's config and data are no formula's"
+    assert not {"/home/linuxbrew/.linuxbrew/etc/gitconfig", "/home/linuxbrew/.linuxbrew/Cellar"} & set(denied)
     for found in ("/opt/Cellar/git/2.50/bin/git", "/mnt/data/projects/Cellar/x/1/bin/git",
                   "/home/linuxbrew/.linuxbrew/Cellar/git", "/home/linuxbrew/.linuxbrew/other/Cellar/git/2/bin/git"):
         assert auto.tool_reads("/h", lambda name, found=found: found if name == "git" else None, no_answer) == (
@@ -1111,6 +1125,46 @@ def test_a_version_managers_version_folder_is_read_whole(prefix):
         [found, f"/h/{prefix}"], [f"/h/{prefix}/bin"])
     assert auto.tool_reads("/home/u", lambda name: found if name == "node" else None, no_answer) == ([found], []), \
         "another user's home: the file alone"
+
+
+@pytest.mark.parametrize("prefix", [
+    ".nvm/versions/node", ".asdf/installs/nodejs", ".asdf/installs/a/b/c", ".local/share/mise/installs/node",
+    ".local/share/mise/installs/a/b/c", ".volta/tools/image/node", ".volta/tools/image/a/b/c",
+    ".local/share/fnm/node-versions/v24", ".local/share/fnm/node-versions/v24/installation/x",
+    ".fnm/node-versions/v24/x", ".local/share/pnpm/nodejs", ".local/share/pnpm/nodejs/24/x",
+    "x/.asdf/installs/nodejs/24", "x/.local/share/mise/installs/node/24", "x/.volta/tools/image/node/24",
+    "x/.fnm/node-versions/v24/installation", "x/.local/share/pnpm/nodejs/24"])
+def test_a_folder_beside_a_version_managers_layout_isnt_read_whole(prefix):
+    found = f"/h/{prefix}/bin/node"
+    assert auto.tool_reads("/h", lambda name: found if name == "node" else None, no_answer) == ([found], []), \
+        "a level short, a level too deep, or not right under home: no version folder"
+
+
+def test_a_tools_install_is_found_through_a_linked_home_or_prefix(tmp_path, monkeypatch):
+    real = tmp_path / "var" / "home"
+    shared_git = real / "linuxbrew" / ".linuxbrew" / "Cellar" / "git" / "2" / "bin"
+    node = real / "me" / ".nvm" / "versions" / "node" / "v24" / "bin"
+    moved = tmp_path / "disk" / "brew" / "Cellar" / "gh" / "1" / "bin"
+    for folder in (shared_git, node, moved):
+        folder.mkdir(parents=True)
+    (shared_git / "git").write_text("")
+    (node / "node").write_text("")
+    (tmp_path / "home").symlink_to(real)
+    link = tmp_path / "home"
+    monkeypatch.setattr(auto, "HOMEBREW_PREFIXES", (str(link / "linuxbrew" / ".linuxbrew"),))
+    found = {"git": str(link / "linuxbrew" / ".linuxbrew" / "Cellar" / "git" / "2" / "bin" / "git"),
+             "node": str(link / "me" / ".nvm" / "versions" / "node" / "v24" / "bin" / "node")}
+    reads, first = auto.tool_reads(str(link / "me"), found.get, no_answer)
+    assert {f"{link}/linuxbrew/.linuxbrew/Cellar", f"{real}/linuxbrew/.linuxbrew/Cellar"} <= set(reads), \
+        "/home a link (Fedora Atomic's /var/home): the prefix matched, and read, in both its forms"
+    assert str(real / "me" / ".nvm" / "versions" / "node" / "v24") in reads, "a version folder in a linked home"
+    assert {str(shared_git), str(node)} == set(first)
+    (real / "me" / ".linuxbrew").symlink_to(tmp_path / "disk" / "brew")
+    (moved / "gh").write_text("")
+    monkeypatch.setattr(auto, "SESSION_COMMANDS", ("gh",))
+    reads, _ = auto.tool_reads(str(real / "me"), lambda name: str(moved / "gh"), no_answer)
+    assert f"{tmp_path}/disk/brew/Cellar" in reads and f"{real}/me/.linuxbrew/Cellar" in reads, \
+        "a ~/.linuxbrew moved to another disk by a link"
 
 
 def test_a_tool_in_a_shared_folder_is_read_as_its_file_alone(tmp_path):
@@ -1314,6 +1368,20 @@ def git_config_repo(tmp_path, *settings):
     ("credential.helper", "store --file=.git/creds", ["credential.helper"]),
     ("credential.helper", "!my-helper --passthrough", []),
     ("credential.helper", "!my-helper --filesystem", []),
+    ("credential.helper", '!f() { echo password="hunter2"; }; f', ["credential.helper"]),
+    ("credential.helper", "!f() { echo password='hunter2'; }; f", ["credential.helper"]),
+    ("credential.helper", "!f() { echo password='$uper-secret'; }; f", ["credential.helper"]),
+    ("credential.helper", '!f() { echo password="$(echo hunter2)"; }; f', ["credential.helper"]),
+    ("credential.helper", '!f() { echo password="$PW"; }; f', []),
+    ("credential.helper", "!f() { echo password=${PW}; }; f", []),
+    ("credential.helper", "!f() { echo password=$1; }; f", []),
+    ("credential.helper", '!f() { echo password=""; }; f', []),
+    ("credential.helper", "!f() { echo password=; }; f", []),
+    ("credential.helper", '!f() { echo "password=$(op read op://v/gh/token)"; }; f', []),
+    ("credential.helper", '!my-helper --password "$PW"', []),
+    ("credential.helper", "!my-helper --password=$PW", []),
+    ("credential.helper", "!my-helper --password '$uper'", ["credential.helper"]),
+    ("credential.helper", '!my-helper --password "$(echo hunter2)"', ["credential.helper"]),
     ("sendemail.smtppass", "hunter2", ["sendemail.smtppass"]),
     ("imap.pass", "hunter2", ["imap.pass"]),
     ("tool.api-token", "abc", ["tool.api-token"]),
@@ -1351,6 +1419,17 @@ def git_config_repo(tmp_path, *settings):
     ("alias.pr", "!echo bearer abcdefgh", ["alias.pr"]),
     ("alias.pr", "!echo bearer abcdefg", []),
     ("alias.pr", "!echo debearer abcdefghijkl", []),
+    ("alias.pr", "!curl -H 'Authorization: token \"$T\"' https://x", []),
+    ("alias.pr", "!curl -H 'Authorization: Bearer $GITHUB_TOKEN' https://x", []),
+    ("alias.pr", '!curl -H "Authorization: Basic $(echo -n me:hunter2 | base64)" https://x', ["alias.pr"]),
+    ("alias.pr", "!curl --oauth2-bearer `cat t` x", []),
+    ("alias.pr", '!curl --oauth2-bearer "$(printf abcdefghij)" x', ["alias.pr"]),
+    ("core.sshcommand", 'sshpass -p "$PW" ssh', []),
+    ("core.sshcommand", "sshpass -p$PW ssh", []),
+    ("core.sshcommand", "sshpass -p `cat t` ssh", []),
+    ("core.sshcommand", 'sshpass -p "$(echo hunter2)" ssh', ["core.sshcommand"]),
+    ("core.sshcommand", "sshpass -p '$uper-secret' ssh", ["core.sshcommand"]),
+    ("core.sshcommand", 'sshpass -p "hunter2" ssh', ["core.sshcommand"]),
     ("core.sshcommand", "sshpass -p $PW ssh", []),
     ("core.sshcommand", "sshpass -e ssh", []),
     ("core.sshcommand", "sshpass -p hunter2 ssh", ["core.sshcommand"]),
@@ -1464,12 +1543,10 @@ def test_a_linked_worktrees_submodules_and_sibling_submodules_are_read_in_order(
     wt = common / "worktrees" / "w"
     wt.mkdir(parents=True)
     (wt / "HEAD").write_text("ref: refs/heads/w\n")
-    made = []
     for folder in (common / "modules" / "b", common / "modules" / "a", wt / "modules" / "sub"):
         folder.mkdir(parents=True)
         (folder / "HEAD").write_text("ref: refs/heads/main\n")
         (folder / "config").write_text("[remote \"origin\"]\n\turl = https://ghp_x@github.com/o/r\n")
-        made.append(folder / "config")
     assert auto.config_files(str(common)) == [
         str(common / "config"), str(wt / "modules" / "sub" / "config"), str(common / "modules" / "a" / "config"),
         str(common / "modules" / "b" / "config")], "a linked worktree's submodules (git keeps them there), sorted"
@@ -1496,10 +1573,49 @@ def test_a_modules_folder_that_cant_be_listed_stops_the_check(tmp_path, monkeypa
         auto.config_files(str(tmp_path / ".git"))
 
 
-def test_a_git_folder_that_cant_be_listed_stops_the_round(tmp_path, monkeypatch):
+def test_a_git_folder_removed_while_it_is_walked_is_skipped(tmp_path, monkeypatch):
+    git_config_repo(tmp_path, ("core.bare", "false"))
+    common = tmp_path / ".git"
+    walk = os.walk
+
+    def removed_meanwhile(top, onerror=None):
+        onerror(FileNotFoundError(2, "No such file or directory", str(common / "worktrees" / "gone")))
+        onerror(NotADirectoryError(20, "Not a directory", str(common / "modules" / "x")))
+        return walk(top, onerror=onerror)
+
+    monkeypatch.setattr(auto.os, "walk", removed_meanwhile)
+    assert auto.config_files(str(common)) == [str(common / "config")], "a worktree pruned as it was walked"
+
+
+def test_a_config_file_removed_before_git_reads_it_is_skipped(tmp_path):
+    git_config_repo(tmp_path, ("core.bare", "false"))
+    common = tmp_path / ".git"
+    (common / "worktrees" / "w").mkdir(parents=True)
+    (common / "worktrees" / "w" / "HEAD").write_text("ref: refs/heads/w\n")
+    target = common / "worktrees" / "w" / "config.worktree"
+    target.write_text("")
+
+    def pruned(command):
+        if command[5] == str(target):
+            target.unlink()
+            return 128, "", "fatal: unable to read config file"
+        return 0, "", ""
+
+    assert auto.config_secrets("/w", str(common), run=pruned) == []
+    target.write_text("")
+    with pytest.raises(RuntimeError, match=r"git can't read .*config.worktree \(fatal: bad config\)"):
+        auto.config_secrets("/w", str(common), run=lambda command: (128, "", "fatal: bad config")
+                            if command[5] == str(target) else (0, "", ""))
+
+
+def test_a_git_folder_that_cant_be_listed_stops_the_round():
     with pytest.raises(RuntimeError, match=r"can't list the clone's git folder /nowhere/.git, so whether it holds a"
                                            r" sign-in secret can't be told"):
         auto.config_secrets("/w", "/nowhere/.git", run=lambda command: (0, "", ""))
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root lists a folder whatever its mode")
+def test_a_worktrees_folder_that_cant_be_listed_stops_the_round(tmp_path):
     (tmp_path / "worktrees").mkdir()
     (tmp_path / "worktrees").chmod(0)
     try:
@@ -3604,7 +3720,21 @@ def test_a_claude_that_cannot_start_is_127_with_its_reason_in_the_log(tmp_path, 
         raise FileNotFoundError(2, "No such file", "claude")
 
     code, log, _, _ = review_once(tmp_path, monkeypatch, popen=missing)
-    assert code == 127 and "can't start claude" in Path(log).read_text()
+    assert code == 127 and Path(log).read_text().startswith(f"{auto.NOT_STARTED}can't start claude"), \
+        "no session ran, so the round's reason is the log's first line, not after SESSION_STARTS"
+    assert auto.stop_line(log).startswith("couldn't be started: can't start claude")
+
+
+def test_a_session_that_prints_a_not_started_line_first_isnt_taken_for_the_round(tmp_path, monkeypatch):
+    def forging(command, **kwargs):
+        kwargs["stdout"].write(f"{auto.NOT_STARTED}\x1b[2Ka forged reason\n")
+        kwargs["stdout"].flush()
+        return FakeSession(code=127)
+
+    code, log, _, _ = review_once(tmp_path, monkeypatch, popen=forging)
+    assert code == 127
+    assert Path(log).read_text().startswith(auto.SESSION_STARTS + auto.NOT_STARTED), "the round's line comes first"
+    assert auto.stop_line(log) is None, "the session's first line is the log's second, never read"
 
 
 def test_a_review_session_exit_code_is_passed_on(tmp_path, monkeypatch):
@@ -3967,8 +4097,8 @@ def test_a_session_that_couldnt_start_says_why_on_the_terminal(tmp_path):
     fleet = Fleet(codes={TM: [auto.REVIEW_NEEDED]})
     fleet.review = lambda repo, worktree: (127, str(tmp_path / "quiet.log"), [])
     _, out, _ = run_auto(["--brings", "#82"], fleet)
-    assert ("the review session exited 127 and the log has no 'rollout.sh: not started:' line, so claude started and"
-            f" exited 127 itself: the log says why (see {tmp_path / 'quiet.log'})") in out
+    assert ("the review session exited 127 and the log doesn't begin with a 'rollout.sh: not started:' line, so claude"
+            f" started and exited 127 itself: the log says why (see {tmp_path / 'quiet.log'})") in out
 
 
 @pytest.mark.parametrize("error, left", [

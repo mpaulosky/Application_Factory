@@ -52,7 +52,8 @@ enforces (bubblewrap, so Linux only) on every Bash command and everything it sta
   its own folder, the system's folders (`/usr`, `/etc`, `/proc` and the like, but not `/dev/shm`, and of `/run` only NixOS's system links, so not the runtime
   folder, decrypted secrets or a daemon's socket) and node's and git's own files: each as `PATH` finds it and as it really is (a shim is asked, and the real one put
   first on the session's `PATH`), with its install prefix only in a layout known to be a tool's own: a version manager's version folder in home (nvm's,
-  asdf's, mise's, volta's, fnm's, pnpm's node) with the binary in its `bin`, or a Homebrew prefix (`/home/linuxbrew/.linuxbrew`, `~/.linuxbrew`) with the binary in
+  asdf's, mise's, volta's, fnm's, pnpm's node) with the binary in its `bin`, or a Homebrew prefix's formulae's folders (`/home/linuxbrew/.linuxbrew`, `~/.linuxbrew`, in
+  both forms when a link is on the way; `Cellar`, `opt`, `lib`, `etc/gitconfig` and the like, never the services' configs and data in `etc` and `var`) with the binary in
   a formula's version folder. Anywhere else (`/opt/bin`, a project's `bin`, a data disk, another user's home) it is the files alone. So a secret no list names (another project's `.env`, a tool's
   config, another user's or a clone outside home) is out of reach too. `rollout.sh --auto` runs on Linux only: this policy is checked against bubblewrap alone, and macOS's
   Seatbelt and its firmlinked data volume (`/System/Volumes/Data`) would need their own. That is an allow-list made of
@@ -69,7 +70,8 @@ enforces (bubblewrap, so Linux only) on every Bash command and everything it sta
   or value holding a URL with a sign-in (a remote, `insteadOf`, a proxy, a submodule), a value holding a known token's shape (GitHub's, GitLab's, Slack's, an
   API key's, AWS's, an `Authorization` or `Bearer` header, `sshpass -p`), a key named for a password, a token, a secret or an API or access key (not
   `core.askPass`, a program), an `http` extra header, a credential helper holding a password or naming a `--file`, or a file named for credentials; a header,
-  bearer or password that names a variable (`$GITHUB_TOKEN`, `$(pass show x)`) holds none. The check finds these known forms only, not a token in a form no rule
+  bearer or password that names a variable (`$GITHUB_TOKEN`, `${PW}`) or fetches it from a secret store or a file (`$(pass show x)`, `` `cat ~/.token` ``) holds none,
+  while a single-quoted `$` and any other command substitution (`$(echo -n me:pw | base64)`) are read as holding one. The check finds these known forms only, not a token in a form no rule
   names. A key is named with its token masked and by the file that holds it (an include file's own), and a secret added while the session ran is named once it
   ends. It writes only a temporary folder of its own, its run folder among it: not the worktree, which a sandbox otherwise lets its working folder be written,
   the clone's git folder, its review ledgers or the main checkout's `.security`. It reaches no host (it builds and installs nothing, and a `git fetch` has
