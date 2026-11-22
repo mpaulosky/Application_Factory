@@ -67,9 +67,10 @@ no upstream (it would track `main`, and a plain `git push` would refuse): the fi
 worktree if there is one and its folder is still a worktree of this clone with the branch checked out (a folder recreated or replaced since, or one git can't read, such as a `safe.directory`
 refusal, is refused: fix that, or move the folder away and run `git worktree prune`); git's entry for one whose folder was deleted by hand is forgotten (that one only, and only a real directory
 entry) and the worktree made again. It refuses, with a hint, a locked worktree whose folder is missing, one whose folder can't be reached (its parent folder is missing, empty, unreadable or
-unsearchable, which an unmounted drive also looks like: run `git worktree prune` if it was deleted for good), the primary checkout holding the branch, and a directory of that name that is not a
-worktree of the branch. When `origin` can't be fetched (but `gh` works: the issue is read first) it still prints a worktree the branch already has, with a warning, and stops otherwise. It needs `gh`
-logged in, and for an origin that is not on github.com, `GITHUB_REPOSITORY`. Work without an issue is made by hand:
+unsearchable, which an unmounted drive also looks like: run `git worktree prune` if it was deleted for good), the primary checkout holding the branch, a directory of that name that is not a
+worktree of the branch, and a branch list git can't read (`git for-each-ref` failing), before it makes anything. When `origin` can't be fetched (but `gh` works: the
+issue is read first) it still prints a worktree the branch already has, with a warning, and stops otherwise. It needs `gh` logged in, and for an origin that is not on github.com,
+`GITHUB_REPOSITORY`, an owner/name of `[A-Za-z0-9._-]` only, as a remote's is read; any other value is refused before `gh` is asked anything. Work without an issue is made by hand:
 `git worktree add --no-track -b chore/upgrade-net10 ../<Repo>-worktrees/chore-upgrade-net10 origin/main`.
 
 Once the PR merges, `scripts/cleanup.sh` (run in the primary checkout, on a clean `main`) fast-forwards `main`, then removes each merged branch with its worktree and its `origin` branch. It decides
@@ -84,7 +85,8 @@ hint to run `git worktree prune`). It needs `gh` logged in, and for an `origin` 
 is not shown to be the fetch URL's repository (the same text, or both github.com URLs for the same owner/name; `CLEANUP_PUSH_URL_OK=1` accepts push URLs you have checked,
 and warns about each; both messages print a scheme URL's text up to the last `@` before the first `/`, its userinfo, which can hold a token, as `***`, add a note when that text holds a
 `?`, `#`, `\` or second `@` (another URL reader may take another host), and print every byte that is not printable ASCII, a control character or a bidi override among them, as `?`), not
-the primary checkout, a dirty `main`, no `gh` or repository, a bad argument), can't fetch `origin`, `main` can't fast-forward or a `gh` lookup fails, and, after doing the rest, when a removal git
+the primary checkout, a dirty `main`, no `gh` or repository (a `GITHUB_REPOSITORY` that isn't an owner/name of `[A-Za-z0-9._-]` among them), a bad argument), can't fetch
+`origin`, `main` can't fast-forward, a `gh` lookup fails or git can't read a branch list (checked before anything is removed), and, after doing the rest, when a removal git
 refused, a branch a worktree is rebasing or bisecting (a real run only), a check of `origin` or the closing fetch failed, or a commit was made, or the branch deleted, after a branch was judged.
 `--dry-run` shows the steps. `git worktree remove` alone leaves the local and `origin` branches behind.
 
@@ -210,8 +212,9 @@ and a check that the script exports `LC_ALL=C` before its first regex match, whi
 `work-issue.sh` agree on a name whatever the caller's locale),
 a `claude/...` branch refused, and other `docs/` names refused.
 
-CI's hook-tests job runs this suite, `pre-commit.test.sh`, `check-branch-name.test.sh`, `check-pr-title.test.sh`, `sync-copilot-review.test.sh`, `watch-pr.test.sh`,
-`cleanup.test.sh`, `lint-edited-file.test.sh` and `work-issue.test.sh`.
+CI's hook-tests job runs every Owned test suite under `.github/hooks/tests/` and `scripts/tests/`: this suite, `pre-commit.test.sh`, `check-branch-name.test.sh`,
+`check-pr-title.test.sh`, `sync-copilot-review.test.sh`, `watch-pr.test.sh`, `cleanup.test.sh`, `work-issue.test.sh`, `check-git-hooks.test.sh` and
+`lint-edited-file.test.sh`. `test.sh` fails when one of them has no `run:` step there, so a new suite can't be left out.
 
 ## Session-start check
 
@@ -237,7 +240,8 @@ The Template doesn't carry `.claude/settings.json`, so each repo that wants the 
 `scripts/lint-edited-file.sh` (with `scripts/tests/lint-edited-file.test.sh`) is a Claude Code `PostToolUse` hook. After each Edit, Write or MultiEdit
 it lints the file the tool wrote, so an agent fixes a violation in the same turn and the pre-commit hook, the gate, CI and a reviewer never see it
 ([the Factory's ADR 0011](../../../../docs/adr/0011-markdown-and-yaml-are-linted-as-they-are-written.md)). A Markdown file goes through `markdownlint-cli2` with the repo's
-`.markdownlint-cli2.jsonc`. A YAML file goes through `yamllint` with `.yamllint.yml`; a workflow also goes through `actionlint` and `zizmor --offline`, and `.github/dependabot.yml` through `zizmor`,
+`.markdownlint-cli2.jsonc`. A YAML file goes through `yamllint` with `.yamllint.yml`; a workflow also goes through `actionlint` and `zizmor --offline --min-severity medium`, and `.github/dependabot.yml`
+through `zizmor --offline --min-severity medium`,
 at the repo root or under any folder (the Factory edits the Template's originals under `.claude/skills/`).
 These are the checks the CI lint workflows run; a gate runs `actionlint` and `zizmor` only where it lints workflows (an Application's gate does when a workflow changed; the Factory's does not).
 A shell file goes through `shellcheck` and `shfmt -d`, the gate's Shell lint and Shell format steps, on the files the gate takes for shell files: a `*.sh`, an extensionless file in the
@@ -286,6 +290,7 @@ tells agents to write Markdown and YAML with Write and Edit for that reason, in 
 load it when a session works on a shell or Python script, says the same for shell and Python scripts and lists the checks reviewers keep raising on them:
 a test that fails without each new branch, the header or docstring updated in the same edit, the edge cases that keep coming back (a missing tool, an empty,
 relative or odd path, CRLF or a byte-order mark, a symlink, a variable a caller left set), and the script's error contract.
+Where `.claude/settings.json` has no `PostToolUse` entry for the hook, both rules tell the session to run the linters for each kind of file itself on each file it edits.
 In a repo that runs Sandcastle, which is where the review ledger is, a re-Apply that rewrites either, or the hook itself (which lints each Markdown, YAML, shell or Python file an agent
 writes, with no Bash prompt, and vets the configs its linters read), needs a local review (`REVIEWED_ON_REAPPLY`), as the hand-off rules do;
 in a repo without the ledger the re-Apply PR's own review is the check.

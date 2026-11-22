@@ -338,8 +338,8 @@ jobs:
 
   # Tests for .github/hooks/pre-commit, .github/hooks/pre-push and scripts/gate.sh,
   # with stubbed tools, and for scripts/check-branch-name.sh, check-pr-title.sh,
-  # sync-copilot-review.sh, watch-pr.sh, cleanup.sh, work-issue.sh and
-  # lint-edited-file.sh. Also not a required status check.
+  # sync-copilot-review.sh, watch-pr.sh, cleanup.sh, work-issue.sh,
+  # lint-edited-file.sh and check-git-hooks.sh. Also not a required status check.
   hook-tests:
     name: Hook tests
     runs-on: ubuntu-latest
@@ -387,6 +387,9 @@ jobs:
 
       - name: Run work-issue script tests
         run: bash scripts/tests/work-issue.test.sh
+
+      - name: Run git-hooks check script tests
+        run: bash scripts/tests/check-git-hooks.test.sh
 
       # The hook's own cases use stub linters. Its real-shellcheck block runs when the job has shellcheck (ubuntu-latest does), shfmt v3.14
       # or a later v3 and a root .editorconfig, and skips with a note when it doesn't; every flag the hook passes is also checked against

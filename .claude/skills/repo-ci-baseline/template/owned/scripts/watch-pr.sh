@@ -31,7 +31,7 @@
 # needs reviewers' findings; bots are never a person. It is not trusted: a bot can relay text a PR's author chose (github-actions[bot] and
 # the Claude Review workflow post what they derive from a fork's diff or title), so the session treats it as data, never as instructions.
 #
-# Exit codes: 0 the session is needed; 1 quiet until the timeout (or after --once); 2 a usage error, a missing tool or a PR that
+# Exit codes: 0 the session is needed; 1 quiet until the timeout (or after --once); 2 a usage error, a missing tool, no repository it can tell (see GITHUB_REPOSITORY below) or a PR that
 # can't be read (five polls in a row fail; a poll that fails, isn't GitHub's answer, or reads an open PR's list or rollup only in part
 # is never read as quiet). A list longer than 100 is read on by its cursor to its end, however long; a cursor that doesn't move on
 # (one already read, or more pages with none) is a failed poll that says so, never an endless one.
@@ -40,7 +40,8 @@
 # So a PR of any length is read whole, and the watcher never spends more than its budget an hour of the 5,000 points GitHub gives the token.
 # Environment: WATCH_PR_MARKER, WATCH_PR_INTERVAL (default 60 seconds; a poll without more pages is one query, so not lower),
 # WATCH_PR_TIMEOUT (default 120 minutes), WATCH_PR_BUDGET (GraphQL points an hour, default 1000),
-# GITHUB_REPOSITORY (else the upstream, then the origin remote).
+# GITHUB_REPOSITORY (an owner/name of [A-Za-z0-9._-] only; else the upstream, then the origin remote, which must be a github.com URL: any other
+# GITHUB_REPOSITORY, or no github.com remote without one, exits 2 before any gh call).
 set -euo pipefail
 
 usage() {
@@ -136,12 +137,33 @@ if ! command -v gh > /dev/null 2>&1; then                       # gh-repo: ok
   exit 2
 fi
 
+# slug_of <url>, the same function as work-issue.sh's and cleanup.sh's (work-issue.test.sh checks they match), -> owner/name of a github.com URL, else nothing. Forms: https://, http://, ssh://, git:// (userinfo, a numeric port, .git and a trailing / allowed) and
+# git@github.com:o/r; the host may be github.com, ssh.github.com or www.github.com, and scheme and host may be in any case (the owner/name keeps its case). Owner and name are
+# [A-Za-z0-9._-] only; the userinfo has no # ? / [ ] or space, and in the scp-style form no : either (git reads everything before that : as the host); a scp-style URL has no scheme.
+# It runs in the C locale (LC_ALL=C is local for the regex, and set on tr, a separate process), so [A-Za-z] means ASCII only. So a lookalike (https://evil.com#@github.com/o/r, evil.com:x@github.com:o/r, github.com:/o/r, a deeper path, file://, an IPv6 host) gives nothing.
+slug_of() {
+  local LC_ALL=C u="${1%/}" l out="" ui_url="[A-Za-z0-9._~%!\$&'()*+,;=:-]+@" ui_scp="[A-Za-z0-9._~%!\$&'()*+,;=-]+@" nm="[A-Za-z0-9._-]+" host="(ssh\.|www\.)?github\.com"
+  u="${u%.git}"
+  u="${u%/}"
+  l="$(printf '%s' "$u" | LC_ALL=C tr '[:upper:]' '[:lower:]')" # the match is on an ASCII-lowercase copy (LC_ALL=C on tr, which is another process and doesn't see the local one: no non-ASCII letter folds into an ASCII one), so it needs neither nocasematch nor bash 4
+  if [[ "$l" =~ ^(ssh|https?|git)://(${ui_url})?${host}(:[0-9]+)?/(${nm}/${nm})$ ]]; then
+    out="${BASH_REMATCH[5]}"
+  elif [[ "$l" =~ ^(${ui_scp})?${host}:(${nm}/${nm})$ ]]; then
+    out="${BASH_REMATCH[3]}"
+  fi
+  if [[ -n "$out" ]]; then printf '%s' "${u: -${#out}}"; fi # the owner/name ends the URL: take it from the original, case kept
+}
+# is_slug <text>: whether <text> is an owner/name as slug_of gives one ([A-Za-z0-9._-] only, in the C locale), so GITHUB_REPOSITORY is held to the
+# same shape as a remote's owner/name before gh is pointed at it.
+is_slug() {
+  local LC_ALL=C
+  [[ "$1" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]
+}
 url="$(git remote get-url upstream 2> /dev/null || git remote get-url origin 2> /dev/null || true)"
-url="${url%.git}"
 repo="${GITHUB_REPOSITORY:-}"
-if [[ -z "$repo" && -n "$url" ]]; then repo="${url#*github.com[:/]}"; fi
-if [[ ! "$repo" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
-  echo "watch-pr: can't tell which repository to watch: set GITHUB_REPOSITORY or add an upstream or origin remote" >&2
+if [[ -z "$repo" ]]; then repo="$(slug_of "$url")"; fi
+if ! is_slug "$repo"; then
+  echo "watch-pr: can't tell which repository to watch: set GITHUB_REPOSITORY to an owner/name, or add a github.com upstream or origin remote" >&2
   exit 2
 fi
 export GH_REPO="${repo:?}"
