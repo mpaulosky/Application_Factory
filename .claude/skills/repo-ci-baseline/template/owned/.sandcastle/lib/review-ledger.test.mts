@@ -3546,16 +3546,19 @@ describe("main", () => {
     // R100's other side: a full id of either length is not refused as malformed, whatever commit it names.
     for (const goodHead of ["a".repeat(40), "a".repeat(64)]) {
       it(`doesn't refuse a review of this branch whose head is ${goodHead.length} lower-case hex digits as not a full object id`, () => {
-        writeNamed("older.json", ledgerJson([]));
-        writeNamed("odd.json", { ...ledgerJson([]), head: goodHead });
+        // Explicit dates, so the odd review is the later recorded whatever the clock does.
+        writeNamed("older.json", { ...ledgerJson([]), recordedAt: at("2026-01-01T00:00:00Z") });
+        writeNamed("odd.json", { ...ledgerJson([]), head: goodHead, recordedAt: at("2026-01-02T00:00:00Z") });
         commit(repo, "fix.cs", "the fix\n", "fix");
 
         const result = cli(["prepare", fresh("delta"), "recorded"]);
 
-        assert.doesNotMatch(result.err, /isn't a full object id/);
         // It names no commit, so it is the newest review and isn't one of HEAD's: refused for that, not for its form.
         assert.equal(result.code, 1);
-        assert.match(result.err, /which isn't one of HEAD's commits \(an amend or a rebase since\)/);
+        assert.equal(
+          result.err,
+          `the last review of feature/1-thing was recorded at ${goodHead}, which isn't one of HEAD's commits (an amend or a rebase since): start again at round 1 with prepare <dir>.\n`,
+        );
       });
     }
 
@@ -4133,6 +4136,14 @@ describe("nearReRaise", () => {
     ["R3: a weakness of its own", undefined],
     [`R3: ${"x".repeat(40)} again, too far on`, undefined],
     ["R0: again", undefined],
+    // "again" as a word of its own: not inside "against" or "againstuff"
+    ["R3: a race against another run", undefined],
+    ["R3 againstuff", undefined],
+    ["R7: bypass against the allow-list, again", "R7"],
+    // the window: "again" ending at the 40th character after the id is read, at the 41st it isn't
+    [`R3: ${".".repeat(33)}again`, "R3"],
+    [`R3: ${".".repeat(34)}again`, undefined],
+    [`R3: ${".".repeat(32)}again.`, "R3"],
   ] as [string, string | undefined][]) {
     it(`reads ${JSON.stringify(summary)} as ${JSON.stringify(expected)}`, () => {
       assert.equal(nearReRaise(summary), expected);
@@ -4646,6 +4657,12 @@ describe("the security record", () => {
       ['{"R1":"x0001"}', false, /holds a pair that isn't a finding id and an entry number/],
       ['{"R1":"0001/../x"}', false, /holds a pair that isn't a finding id and an entry number/],
       ['{"foo":"0001"}', false, /holds a pair that isn't a finding id and an entry number/],
+      // the key's anchors and its no-leading-zero rule
+      ['{"R1x":"0001"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"xR1":"0001"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R0":"0001"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R01":"0001"}', false, /holds a pair that isn't a finding id and an entry number/],
+      ['{"R":"0001"}', false, /holds a pair that isn't a finding id and an entry number/],
       ['{"R1":"0001","R7":5}', true, /holds a pair that isn't a finding id and an entry number/],
       ['{"R1":"0001","foo":"0001"}', true, /holds a pair that isn't a finding id and an entry number/],
     ] as [string, boolean, RegExp][]) {
@@ -4661,6 +4678,23 @@ describe("the security record", () => {
         assert.equal(again.code, 0, again.err);
         assert.equal(entries().length, kept ? 1 : 2);
         assert.match(again.err, said);
+      });
+    }
+
+    // The other side of those bounds: a two-digit id and a five-digit entry number are a finding id and an entry number.
+    for (const text of ['{"R1":"0001","R10":"0001"}', '{"R1":"00001"}']) {
+      it(`reads an earlier review's entry map of ${text} whole, and says nothing of it`, () => {
+        recordHere([weakness({ status: "open", test: null })]);
+        const maps = readdirSync(ledgerDir(repo)).filter((name) => name.endsWith(".entries"));
+        assert.equal(maps.length, 1);
+        writeFileSync(join(ledgerDir(repo), maps[0] ?? ""), text);
+        commit(repo, "other.cs", "again\n", "another change");
+
+        const again = recordHere([weakness({ id: "R2", summary: "R1 again: worded anew.", status: "open", test: null })]);
+
+        assert.equal(again.code, 0, again.err);
+        assert.equal(entries().length, 1);
+        assert.doesNotMatch(again.err, /couldn't read|isn't a map|holds a pair/);
       });
     }
 

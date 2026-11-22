@@ -338,9 +338,11 @@ function reRaiseHolder(
     return {};
   }
   // Follow the fixed entries' re-raises: `seen` ends a cycle a hand edit made, and only an entry for the same path is followed.
+  // The walk also stops after one hop per known entry, which `seen` never needs, so no edit to the record can make it loop.
   let named: SecurityEntry = first;
   const seen = new Set<string>();
-  while (named.status === "fixed") {
+  for (let hops = 0; named.status === "fixed"; hops++) {
+    if (hops >= known.length) return { raisesAgain: named.id };
     seen.add(named.id);
     const from: SecurityEntry = named;
     const next: SecurityEntry | undefined = known.find(

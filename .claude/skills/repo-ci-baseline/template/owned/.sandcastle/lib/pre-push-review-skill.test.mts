@@ -148,6 +148,11 @@ describe("the pre-push-review skill's follow-up issue", () => {
     assert.ok(flat.includes("A summary that opens `R3 again` or `.security/0012 again` finds its entry by itself"));
     assert.ok(
       flat.includes(
+        "the open or accepted entry for the finding's own path either way: the one R3 was recorded against in an earlier review of this branch that HEAD still has, or the one `.security/0012` is. An entry for another path is never held this way, and a fixed one gets a new entry that notes it.",
+      ),
+    );
+    assert.ok(
+      flat.includes(
         "So give `repeats` only when that opening can't find it: the finding's path differs from the entry's (a moved file), the branch was amended or rebased since that review, or the summary opens neither way.",
       ),
     );

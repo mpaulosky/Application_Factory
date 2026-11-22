@@ -177,7 +177,8 @@ again, and settled differently, on the next (one weakness took six rounds). The 
   The chain is followed through fixed entries for the finding's own path only, and a note that names no such entry, or a cycle a hand edit made, ends it.
   The summary is a reviewer's words, so an entry for another path is never held this way: the finding gets a file of its own, and `repeats` (which triage sets) is
   the way to hold it in that entry. An opening that names no entry, an `R<n>` no earlier review recorded, an entry for another path, an opening with an id and
-  `again` in a form not read (`R3: again`, `R3 raised again`), and an `.entries` file that is there but doesn't read or parse as a map, or holds a pair that isn't a
+  `again` (a word of its own, within the 40 characters after the id) in a form not read (`R3: again`, `R3 raised again`),
+  and an `.entries` file that is there but doesn't read or parse as a map, or holds a pair that isn't a
   finding id (`R<n>`) and an entry number (four or more digits), are each a warning (`.security: ...`); a missing `.entries` file (an older record) is said nothing of.
   Where two earlier reviews map one id to different entries, the nearer review's wins. Only the summary's opening counts, so one that mentions an entry or an id in
   passing (`Beyond .security/0017`) is matched by its text alone.

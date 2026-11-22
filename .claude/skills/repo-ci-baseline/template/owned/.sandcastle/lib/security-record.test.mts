@@ -396,7 +396,9 @@ describe("a re-raise of a fixed entry", () => {
     assert.match(entryText(fileOf("0003")), /^- Raises again: 0002$/m);
   });
 
-  it("ends a cycle two fixed entries' notes make, with a new entry", () => {
+  // The walk is bounded as well as guarded, so this case fails (the new entry notes 0001, where the bound stopped) rather than
+  // hangs when the cycle guard is gone.
+  it("ends a cycle two fixed entries' notes make, with a new entry that notes where the cycle closed", () => {
     record([input()]);
     record([reRaise("R2", "0001", { status: "fixed", test: "tests/upload.test.sh::again" })]);
     note("0001", "0002");
@@ -405,6 +407,7 @@ describe("a re-raise of a fixed entry", () => {
 
     assert.equal(entryFiles().length, 3);
     assert.equal(outcome.entries.R3, "0003");
+    assert.match(entryText(fileOf("0003")), /^- Raises again: 0002$/m);
   });
 
   it("doesn't follow a note on an entry for another path", () => {

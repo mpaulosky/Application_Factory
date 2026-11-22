@@ -893,12 +893,17 @@ export function reRaisedEntry(summary: string, earlier: Readonly<Record<string, 
 
 // A summary that opens with an id and says "again" near it, but not in a form reRaisedEntry reads ("R3: again", "R3 raised
 // again", "[R3](link) again", "<b>R3</b> again", or "R3again" once invisible characters are dropped): the id it opens with, so
-// the person is told it was matched by its text; undefined for any other summary, and for one reRaisedEntry reads.
+// the person is told it was matched by its text; undefined for any other summary, and for one reRaisedEntry reads. "again" counts
+// as a word of its own (not "against" or "againstuff"; a digit before it, as in "R3again", is allowed) within NEAR_WINDOW
+// characters after the id.
 const NEAR_RE_RAISE = new RegExp(String.raw`^(?:[\s*_\x60(\[]|<[a-z]+>)*(${RE_RAISE_ID})(?![0-9])`, "i");
+const NEAR_WINDOW = 40;
 export function nearReRaise(summary: string): string | undefined {
   if (RE_RAISE.test(summary)) return undefined;
   const found = NEAR_RE_RAISE.exec(summary);
-  if (found?.[1] === undefined || !/again/i.test(summary.slice(0, 40))) return undefined;
+  if (found?.[1] === undefined) return undefined;
+  const after = summary.slice(found[0].length, found[0].length + NEAR_WINDOW);
+  if (!/(?<![a-z])again(?![a-z])/i.test(after)) return undefined;
   const number = /^\.security\/(\d+)$/i.exec(found[1])?.[1];
   return number === undefined ? found[1].toUpperCase() : `.security/${number}`;
 }
