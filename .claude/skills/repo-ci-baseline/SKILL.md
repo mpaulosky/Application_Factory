@@ -97,7 +97,33 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
    - **Roll out:** `rollout.sh --brings '#<n>,#<n>'` runs `reapply.sh` on TicketManager and holds the rest until its re-Apply PR has merged.
      Land that PR, fix any finding Template first, then run `rollout.sh` again: once it has merged,
      it re-Applies the other repos in order, one pre-push gate at a time, reports a repo that fails and goes on.
-     Start with `--dry-run`. It ends with the `land.sh` command for the PRs it left open.
+     Start with `--dry-run`. It ends with the `land.sh` command for the PRs it left open. A reapply stopped at the gate's review (its exit 3) or on findings that
+     wait for you (exit 4) says what to run before you run `rollout.sh` again.
+   - **Roll out unattended:** `rollout.sh --auto --brings '#<n>,#<n>'` does all of that in one run (the Factory's [ADR 0016](../../../docs/adr/0016-a-rollout-runs-each-applications-review-headless-and-sandboxed-in-its-worktree.md)).
+     It runs on Linux only, and checks the tools (bubblewrap and socat for the sandbox among them, and that bubblewrap can make one), ruff 0.17 or uv,
+     and the Template's `global.json` SDK first (`--dry-run` stops there and prints the plan). It refuses to start with `claude` signed out (as it is with no settings file
+     read; a cloud's sign-in, which `claude auth status` doesn't report, isn't asked), or with a Claude Code or cloud sign-in secret in the environment
+     (`ANTHROPIC_API_KEY`, say): sign Claude Code in with `claude /login` instead. It refuses too when its endpoint, cloud or proxy variable (`ANTHROPIC_BASE_URL`,
+     `HTTPS_PROXY`) holds a URL with a sign-in, which the session is never given (a proxy variable counts with no scheme too, as `user:pass@proxy:3128`):
+     set one with no sign-in in it for the round.
+     When the gate asks for a review it runs the pre-push review headless in the repo's re-Apply worktree, review-only: one round that stages each finding open, or dismissed when
+     it isn't a security one, and edits, fixes and commits nothing. It runs in Claude Code's sandbox: its shell reads none of your credentials, and of the rest of the disk only the worktree, the
+     clone's git folder, `.security`, its own folder, the system's folders and node's and git's own files, as listed when it starts (what appears later is named once
+     it ends; a clone whose git folder holds a token isn't reviewed; Linux only), writes only a
+     folder of its own, and reaches no host; it has no GitHub sign-in, loads no settings file but its own
+     (a 0600 file beside the log it can't read), and takes the skill and its agent from the Template. Once it ends, the round
+     records what it staged with the worktree's `scripts/review.sh prepare` and `record`, so the ledgers and `.security` are written only by the record's own code. Each
+     runs for at most ten minutes; an interrupt stops `prepare` and waits for `record`. Until it is recorded, what the session staged is kept beside the log, and a
+     failed record, a group left behind or an interrupt prints the command that records it. The round stops, recording and keeping nothing, when a session broke a rule
+     it checks after, such as a changed worktree
+     (any file's bytes, mode or link, an ignored one such as `node_modules` included), a changed git config or hook in the clone, a ledger or `.security` file changed,
+     or a finding staged fixed or accepted, and when it staged nothing at all.
+     Then it reapplies: a Critical or Warning finding stops the round for you to fix or accept. An open Advisory finding doesn't: the round prints the ones the review left
+     open (`scripts/review.sh advisory`) before the push and files no issue, so file the follow-up yourself. It lands TicketManager's PR before the rest start
+     (at once when TicketManager already matches the Template, with nothing to push), and the rest's PRs together.
+     Its lock keeps a second `--auto` run out, not a person: don't run `reapply.sh` or the review by hand in a re-Apply worktree while it runs. It stops only where a person decides
+     (findings that wait for one, a PR that doesn't land or can't be read, a failed reapply or review session), printing the command that decides it and the one that resumes.
+     Fix a finding in an Owned file Template first, then add that PR to `--brings` and resume. `github/auto_rollout.py`'s header has the details.
    - **One repo:** `reapply.sh --brings '#<n>,#<n>' <repo>` (what `rollout.sh` runs, and the way to retry a repo that failed)
      prepares the `chore/reapply-baseline` worktree, merges the remote branch and `main`, commits `apply.sh`'s output alone,
      pushes through the gate (which asks for a review when Apply writes the coverage threshold,

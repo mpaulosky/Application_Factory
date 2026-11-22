@@ -11,7 +11,11 @@ A personal access token acts as its owner's account, and every token of one acco
 5,000 REST requests an hour, and separately 5,000 GraphQL points an hour.
 For the owner, that one allowance is shared by:
 
-- local `gh`: `land.sh`, `status.sh`, `rollout.sh`, `reapply.sh`, `scripts/cleanup.sh` (one `gh pr list` per branch it judges and a second for each it would remove, a few points a run), `scripts/work-issue.sh`
+- local `gh`: `land.sh`, `status.sh`, `rollout.sh` (with `--auto` it runs `land.sh` itself, TicketManager's PR first and the rest's together, so a round's
+  polling is `land.sh`'s; its review sessions are Claude usage on the owner's login (from Claude Code's credentials file: a
+  sign-in secret in the environment stops the round before it starts), and get no `gh` sign-in or token at all; each session's log is
+  kept, `0600`, under `~/.cache/repo-ci-baseline/logs`, and may hold its report of security findings), `reapply.sh`,
+  `scripts/cleanup.sh` (one `gh pr list` per branch it judges and a second for each it would remove, a few points a run), `scripts/work-issue.sh`
   (two `gh issue view` a run), `scripts/watch-pr.sh` (one GraphQL point a query: one a poll for a PR without more pages, so about 60 an hour at
   its default 60 s interval, and never more than `WATCH_PR_BUDGET`, default 1,000, an hour however long the PR; [watch-pr.md](watch-pr.md)) and local Sandcastle runs;
 - `RELEASE_PR_PAT` in every repo's PR Auto-Merge, release, backfill and code-metrics workflows;

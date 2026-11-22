@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Roll a re-Apply round out across the Baseline repos, TicketManager first.
 
-    rollout.sh --brings <prs> [--root dir] [--dry-run]
+    rollout.sh --brings <prs> [--root dir] [--dry-run] [--auto]
 
 The Baseline repos are github/repos.txt's, in its order, without the
 ones of another scope (the Factory, "factory"); TicketManager goes first as the live check
@@ -11,7 +11,8 @@ of the Template change. Each run:
 2. holds the rest until TicketManager's newest re-Apply PR has merged: while
    it is open, land it (land.sh prints how), fix any finding Template first,
    then run rollout.sh again. A failed reapply, a PR closed without merging, or
-   none found holds the round too;
+   none found holds the round too; a reapply stopped at the gate's review (exit
+   3) or on findings that wait for a person (exit 4) says what to run first;
 3. once that PR has merged (and reapply.sh found nothing new to push), the
    rest get reapply.sh in order, one at a time, so one pre-push gate runs at a
    time. A repo that fails is reported and the round goes on.
@@ -24,6 +25,10 @@ any reapply failed or the round is held for anything but an open PR.
 --dry-run prints the reapply.sh calls it would make from the PRs as they are
 now, and makes none: the rest's calls only follow when TicketManager's reapply
 opens no new PR.
+
+--auto runs the whole round in one run, with no person between the steps:
+github/auto_rollout.py, whose docstring says how (ADR 0016). With --dry-run it
+checks the tools and prints its plan, and runs nothing.
 """
 
 import argparse
@@ -37,7 +42,14 @@ from settings import read_repo_list
 
 LEAD = "mpaulosky/TicketManager"
 BRANCH = "chore/reapply-baseline"
-REAPPLY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "reapply.sh")
+REAPPLY = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "reapply.sh")
+DEFAULT_ROOT = os.path.expanduser("~/github")
+# What reapply.sh's review refusals ask of the person (its exit 3 and 4, auto_rollout's REVIEW_NEEDED and
+# FINDINGS_WAIT: a test holds them equal), said after "reapply failed on <repo>".
+REAPPLY_STOPS = {3: ": the gate asks for a review: run /pre-push-review in its re-Apply worktree (or rollout.sh --auto), then"
+                    " run this again",
+                 4: ": review findings wait for you: fix them with /pre-push-review in its re-Apply worktree, or accept"
+                    " them with scripts/review.sh accept-open there, then run this again"}
 
 
 def short_name(repo):
@@ -105,13 +117,17 @@ def gh_latest_pr(repo):
 
 
 def main(argv=None, listed=None, reapply=run_reapply, latest_pr=gh_latest_pr, exists=os.path.isdir,
-         out=sys.stdout, err=sys.stderr):
+         out=sys.stdout, err=sys.stderr, auto=None):
+    """auto: keyword arguments for auto_rollout.run (its outside world), for the tests."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--brings", required=True,
                         help="the Factory PRs this round brings in, as reapply.sh takes them: '#80,#81' (quoted) or mpaulosky/Application_Factory#80,#81")
-    parser.add_argument("--root", default=os.path.expanduser("~/github"),
+    parser.add_argument("--root", default=DEFAULT_ROOT,
                         help="the directory holding each repo's checkout (default ~/github)")
-    parser.add_argument("--dry-run", action="store_true", help="print the reapply.sh calls instead of making them")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="print the reapply.sh calls instead of making them (with --auto: check the tools, print the plan)")
+    parser.add_argument("--auto", action="store_true",
+                        help="check the tools, then reapply, review and land each repo with no person between the steps (ADR 0016)")
     args = parser.parse_args(argv)
     try:
         order = rollout_order(read_repo_list() if listed is None else listed)
@@ -136,11 +152,12 @@ def main(argv=None, listed=None, reapply=run_reapply, latest_pr=gh_latest_pr, ex
         """reapply.sh on one repo (or what it would run); whether it went cleanly."""
         path = checkout(repo)
         if args.dry_run:
-            say(f"would run: reapply.sh --brings {shlex.quote(args.brings)} {path}")
+            say(f"would run: reapply.sh --brings {shlex.quote(args.brings)} {shlex.quote(path)}")
             return True
         say(f"── rollout: {short_name(repo)}")
-        if reapply(args.brings, path) != 0:
-            err.write(f"rollout.sh: reapply failed on {short_name(repo)}\n")
+        code = reapply(args.brings, path)
+        if code != 0:
+            err.write(f"rollout.sh: reapply failed on {short_name(repo)}{REAPPLY_STOPS.get(code, '')}\n")
             return False
         return True
 
@@ -151,6 +168,13 @@ def main(argv=None, listed=None, reapply=run_reapply, latest_pr=gh_latest_pr, ex
         except Exception as error:  # noqa: BLE001 - reported; the repo's PR is then unknown
             err.write(f"rollout.sh: can't read {repo}'s re-Apply PR: {error}\n")
             return None, None
+
+    if args.auto:
+        import auto_rollout  # noqa: PLC0415 - only --auto needs it
+        # Under --auto, reapply.sh runs in a process group of its own, which a SIGTERM or SIGHUP kills whole.
+        reapply = auto_rollout.run_reapply if reapply is run_reapply else reapply
+        return auto_rollout.run(order, args.brings, args.root, checkout, args.dry_run, reapply=reapply, say=say,
+                                err=err, **({"default_root": DEFAULT_ROOT} | (auto or {})))
 
     first = order[0]
     lead = Lead(apply(first), *lookup(first))

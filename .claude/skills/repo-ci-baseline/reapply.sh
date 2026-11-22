@@ -30,7 +30,7 @@
 #      label the open PR (an earlier run may have pushed and then failed), then
 #      stop there and say so.
 #   4. git push -u origin HEAD, through the repo's pre-push gate. A failed push
-#      prints its log's path and exits 1. The gate lets a re-Apply through without
+#      prints its log's path. The gate lets a re-Apply through without
 #      a review only when every file is an Owned file that carries no behaviour; when Apply writes the coverage
 #      threshold, a rules file that loads in every session (the hand-off or the Markdown
 #      and YAML edit rules) or the script edit rules, an issue template, the reviewer agent, a
@@ -39,7 +39,16 @@
 #      pre-push review skill's files, docs/PROCESS.md, cleanup.sh, work-issue.sh
 #      or the gate chain; references/pre-push-review.md has the full list), the
 #      gate asks for one (its message names them): run /pre-push-review in the
-#      worktree, then run this again.
+#      worktree, then run this again. A push the gate's local review check refused exits 3 when no
+#      review is recorded for the diff, and 4 when one is but findings in it wait
+#      for a person, so rollout.sh --auto can run the review or stop for the
+#      person. Only a push whose gate stopped at its Local review step (the
+#      log's last step header) is asked about, and then the worktree's own
+#      scripts/review.sh check says whether it refuses this head, and how: the
+#      refusal's text is never read from the push's log, which holds output the
+#      repository controls (a test's, a finding's summary). Any other failed
+#      push, and any other failure (a gh exiting 4 on lost sign-in included),
+#      exits 1: only those two exits give 3 or 4.
 #   5. Open the re-Apply PR (ready, not a draft), or add a line for this Apply
 #      commit to the open one's description, with the baseline:apply label either
 #      way (owned-files.yml's Owned files check exempts an Apply PR only with it;
@@ -67,6 +76,10 @@
 # branch after the push, never from the API, which lags behind a push: name
 # that head in any thread reply.
 set -euo pipefail
+# A command that fails under set -e exits with its own status, and gh exits 4 when it needs a sign-in: map every such
+# failure to 1, so 3 and 4 mean only the two review refusals below. die, usage and the explicit exits are unaffected.
+set -E
+trap 'exit 1' ERR
 
 branch="chore/reapply-baseline"
 worktree_name="chore-reapply-baseline"
@@ -74,6 +87,14 @@ commit_subject="chore: Apply repo-ci-baseline Template"
 co_author="Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 pr_title="chore: Re-apply the repo-ci-baseline Template"
 footer="🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+# The gate's step the local review check runs under (gate.sh's step name), the texts scripts/review.sh check prints when
+# it refuses a head (review-ledger.mts's checkReview, word for word), and the exit codes they map to, which
+# github/auto_rollout.py's REVIEW_NEEDED and FINDINGS_WAIT equal: github/tests/test_auto_rollout.py holds all of them equal.
+review_step="Local review (scripts/review.sh check)"
+no_review_text="No review is recorded for this diff."
+findings_wait_text="review finding(s) wait for a person."
+review_needed_exit=3
+findings_wait_exit=4
 # The label owned-files.yml's Owned files check exempts an Apply PR by, with github/labels.json's color and
 # description (a test holds them equal), so this and github-settings.sh --fix never fight over it.
 apply_label="baseline:apply"
@@ -312,11 +333,48 @@ else
 fi
 
 # ── 4. Push through the pre-push gate ───────────────────────────────────────
+# Whether the gate stopped at its Local review step: the last step header in the push's log (gate.sh's step(), "▶
+# <name>" at a line's start, in colour) is that step's. The gate stops at its first failing step, so a push it refused
+# earlier (lint, the gh check), one the hook refused before the gate, and one that failed after it (the network) are
+# not refusals of the review, and the check isn't asked about them. A later step only runs once the check passed, so a
+# header it printed can at most send the question to a check that then passes.
+stopped_at_review() {
+  awk -v header="$review_step" '
+    { line = $0; gsub(/\033\[[0-9;]*m/, "", line) }
+    index(line, "\342\226\266 ") == 1 { last = substr(line, length("\342\226\266 ") + 1) }
+    END { exit !(last == header) }' "$1"
+}
+# How the local review check refuses the worktree's head: "findings" (a review is recorded, and findings in it wait
+# for a person), "none" (no review is recorded) or nothing (it passes, or can't run: a repo without the ledger). It asks
+# the worktree's own scripts/review.sh check against the merge base, as the gate does, rather than read the push's
+# log: only the ledger writes what it prints on stderr, and a finding's summary in it is indented, so a line that
+# starts with one of the texts is the ledger's own. GATE_SKIP_REVIEW is dropped, as the push's gate ran the check.
+review_refusal() {
+  local base answer
+  base="$(w merge-base HEAD origin/main 2> /dev/null)" || return 0
+  answer="$(cd "$worktree" && env -u GATE_SKIP_REVIEW scripts/review.sh check "$base" 2>&1 > /dev/null)" && return 0
+  awk -v none="$no_review_text" -v wait="$findings_wait_text" '
+    match($0, /^[0-9]+ /) && substr($0, RLENGTH + 1, length(wait)) == wait { findings = 1 }
+    substr($0, 1, length(none)) == none { missing = 1 }
+    END { if (findings) print "findings"; else if (missing) print "none" }' <<< "$answer"
+}
 log="$(mktemp "${TMPDIR:-/tmp}/reapply-$repo_name.XXXXXX.log")"
 echo "── $repo_name: pushing through the pre-push gate (log: $log)"
 if ! w push -u origin HEAD > "$log" 2>&1; then
   echo "reapply.sh: push failed for $repo_name; log: $log" >&2
   tail -n 20 "$log" >&2
+  refusal=""
+  if stopped_at_review "$log"; then refusal="$(review_refusal)"; fi
+  case "$refusal" in
+    findings)
+      printf 'reapply.sh: review findings on %s wait for a person. Fix them with /pre-push-review in %q, or see and accept them there. See them with:\n  cd %q && scripts/review.sh report\nAccept them with:\n  cd %q && scripts/review.sh accept-open\nThen run this again\n' "$repo_name" "$worktree" "$worktree" "$worktree" >&2
+      exit "$findings_wait_exit"
+      ;;
+    none)
+      printf 'reapply.sh: %s needs a review: run /pre-push-review in %q, then run this again\n' "$repo_name" "$worktree" >&2
+      exit "$review_needed_exit"
+      ;;
+  esac
   exit 1
 fi
 # The pushed head, from the local branch: the API lags behind the push.
