@@ -26,7 +26,7 @@ MSBuild. A pin like that is left alone, and a reference like that could be any p
 warnings and the check passes. Transitive pinning is on when any of those files sets the property to true.
 
 Every file is read as bytes, so expat honours its byte-order mark and XML declaration (MSBuild reads UTF-16 project files too). Only
-regular files are read, not symlinks, and none over MAX_BYTES. A DOCTYPE is refused: MSBuild files never need one, and entity
+regular files are read, not symlinks: an MSBuild file of at most MAX_BYTES, a global.json of at most MAX_GLOBAL_JSON_BYTES. A DOCTYPE is refused: MSBuild files never need one, and entity
 expansion is how a small file grows huge. So are an element nested over MAX_DEPTH deep and an encoding Python can't decode. A file
 that can't be read or parsed can't be checked:
 
@@ -45,17 +45,19 @@ needs a process writing to the tree while the check runs, not a change in a pull
 
 bin/, obj/, node_modules/ and dot-folders (.git, CI's .nuget package cache) aren't walked. The whole run reads at most MAX_FILES files,
 MAX_TOTAL_BYTES, MAX_NODES elements, attributes and comments, MAX_IDS ids and MAX_TOTAL_EXPANSIONS combinations of property values;
-past any of them, or more than MAX_GLOBAL_JSON_FILES global.json files, it fails, since it can't vouch for what it didn't read. Every
-entry of an id list counts as an id, blank or not (an absent or empty attribute counts none); so does every entry of a name with its
-properties substituted, once for each combination of values, and every SDK a global.json names. Each kind of line is printed at most
+past any of them it fails, since it can't vouch for what it didn't read. Only the first MAX_GLOBAL_JSON_FILES global.json files are
+read; the rest are skipped with a notice. Every entry of an id list counts as an id, blank or not (an absent or empty attribute
+counts none): a reference $(P) is one, and the first time a name is resolved, every entry of it with its properties substituted
+counts too, once for each combination of values ($(P) with P set to A;B;C is four in all). So does every SDK a global.json names. Each kind of line is printed at most
 MAX_SHOWN times, and each name or path in it is cut after MAX_PRINTED characters, with a count of the rest.
 
-A run with a file or folder it couldn't check always prints "Not a pass" as its last line on stdout, after any pins it found.
+A run with a file or folder that fails the check always prints "Not a pass" as its last line on stdout, after any pins it found; one
+that only skipped files with a notice ends as it would without them.
 
 Under GitHub Actions each problem is an annotation, its text escaped as the runner reads workflow commands; elsewhere a plain line.
 Every text a repo controls is printed with its non-printable characters as '?'.
 
-Standard library only.
+Standard library only, Python 3.11 or later (for possessive repeats): CI's Build Solution step and the gate run the host's python3.
 """
 
 import argparse
@@ -68,11 +70,14 @@ import sys
 from pathlib import Path
 from xml.parsers import expat
 
+if sys.version_info < (3, 11):
+    sys.exit(f"check_central_pins.py needs Python 3.11 or later; this is {sys.version.split()[0]}.")
+
 MSBUILD_FILE = re.compile(r"\.([a-z0-9]*proj|props|targets)$")
 SKIPPED_FOLDERS = {"bin", "obj", "node_modules"}
 MAX_BYTES = 4 * 1024 * 1024
 MAX_TOTAL_BYTES = 64 * 1024 * 1024
-# A global.json is a few hundred bytes; a larger one is skipped, and a repo with more than MAX_GLOBAL_JSON_FILES fails the run.
+# A global.json is a few hundred bytes; a larger one is skipped, and so is any past the first MAX_GLOBAL_JSON_FILES.
 MAX_GLOBAL_JSON_BYTES = 64 * 1024
 MAX_GLOBAL_JSON_FILES = 100
 MAX_DEPTH = 256
@@ -126,7 +131,6 @@ class Budget:
     def __init__(self):
         self.totals = {
             "files": MAX_FILES,
-            "global.json files": MAX_GLOBAL_JSON_FILES,
             "bytes": MAX_TOTAL_BYTES,
             "elements, attributes and comments": MAX_NODES,
             "ids": MAX_IDS,
@@ -289,14 +293,13 @@ def walk(root, problems, budget):
                 msbuild.append(Path(folder) / name)
             elif lowered == "global.json":
                 budget.spend("files", 1)
-                budget.spend("global.json files", 1)
                 global_json.append(Path(folder) / name)
     return sorted(msbuild), sorted(global_json)
 
 
 # A JSON string (group 1; to the end of the text when it isn't closed), a // comment, or a /* */ comment (to the end when it isn't
 # closed). Each pass replaces a match with its groups, so a string stays and a comment goes; the second also drops a trailing comma
-# (group 2 keeps the space after it). The string's repeats are possessive (Python 3.11 or later, as the Baseline's 3.12 is), so the
+# (group 2 keeps the space after it). The string's repeats are possessive (Python 3.11 or later, checked above), so the
 # engine keeps no backtracking state per character: time is linear and memory small, in a file of at most MAX_GLOBAL_JSON_BYTES.
 JSON_STRING_OR_COMMENT = r'("(?:[^"\\]++|\\.)*+"?)|//[^\n]*|/\*.*?(?:\*/|\Z)'
 WITHOUT_COMMENTS = re.compile(JSON_STRING_OR_COMMENT, re.S)
@@ -435,7 +438,10 @@ def check(root):
         except (expat.ExpatError, Refused, LookupError, ValueError) as error:
             problems.append((path.relative_to(root).as_posix(), f"it isn't well-formed MSBuild XML ({error})", may_be_central(path, data)))
     referenced = set()
-    for path in global_json:
+    for path in global_json[MAX_GLOBAL_JSON_FILES:]:
+        # It can hide only SDK references, which makes the check stricter.
+        problems.append((path.relative_to(root).as_posix(), f"it is past the first {MAX_GLOBAL_JSON_FILES} global.json files, which are all this check reads", False))
+    for path in global_json[:MAX_GLOBAL_JSON_FILES]:
         data = read(path, root, problems, budget, MAX_GLOBAL_JSON_BYTES)
         if data is None:
             continue
@@ -470,8 +476,9 @@ def check(root):
         for name, reason in pins(document, budget):
             if reason:
                 continue
-            # Only a property can take a value from a file the check couldn't read; @( and %( can't be read whatever the files say.
-            built_pin = built_pin or "$(" in name
+            # Only a $(Name) can take a value from a file the check couldn't read, and only a name that is readable once its
+            # properties are substituted can become a pin: a bare $(, @( or %( can't be read whatever the files say.
+            built_pin = built_pin or (PROPERTY.search(name) is not None and not any(marker in PROPERTY.sub("", name) for marker in UNREADABLE))
             resolved = resolve(name, values, budget, cache)
             if resolved is None:
                 continue

@@ -1,5 +1,6 @@
 import errno
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -301,6 +302,17 @@ def test_the_caps_are_the_documented_ones():
     assert (ccp.MAX_GLOBAL_JSON_BYTES, ccp.MAX_GLOBAL_JSON_FILES) == (64 * 1024, 100)
 
 
+def test_an_older_python_is_refused_with_a_message():
+    import subprocess
+
+    path = str(Path(ccp.__file__))
+    code = f"import sys; sys.version_info = (3, 10, 0); sys.version = '3.10.0 (fake)'; exec(compile(open({path!r}).read(), {path!r}, 'exec'))"
+    result = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True)
+
+    assert result.returncode == 1
+    assert result.stderr == "check_central_pins.py needs Python 3.11 or later; this is 3.10.0.\n"
+
+
 def expansions(tmp_path, count):
     """A reference through one property the repo gives count values."""
     values = "".join(f'<PropertyGroup Condition="{i}"><First>p{i}</First></PropertyGroup>' for i in range(count))
@@ -498,8 +510,7 @@ def test_max_shown_lines_are_all_printed_without_a_more_line(tmp_path, capsys, m
 
 
 @pytest.mark.parametrize("cap,kind", [("MAX_FILES", "files"), ("MAX_NODES", "elements, attributes and comments"),
-                                      ("MAX_TOTAL_BYTES", "bytes"), ("MAX_IDS", "ids"),
-                                      ("MAX_GLOBAL_JSON_FILES", "global.json files")])
+                                      ("MAX_TOTAL_BYTES", "bytes"), ("MAX_IDS", "ids")])
 def test_a_repo_bigger_than_the_runs_budget_fails(tmp_path, capsys, monkeypatch, cap, kind):
     central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" /><!-- Transitive pin: kept --><PackageVersion Include="K" Version="1" />')
     (tmp_path / "global.json").write_text('{"msbuild-sdks": {"G": "1"}}')
@@ -509,8 +520,8 @@ def test_a_repo_bigger_than_the_runs_budget_fails(tmp_path, capsys, monkeypatch,
     for name in ("README.md", "src/App/Program.cs", "src/App/bin/Copy.csproj"):
         (tmp_path / name).write_text("x")
     # 3 files; 11 elements, attributes and comments in the central file, 7 in the project with its 2 comments; the three files'
-    # bytes; 5 ids (the two pins, the SDK, the reference and global.json's SDK); 1 global.json.
-    used = {"MAX_FILES": 3, "MAX_NODES": 18, "MAX_IDS": 5, "MAX_GLOBAL_JSON_FILES": 1,
+    # bytes; 5 ids (the two pins, the SDK, the reference and global.json's SDK).
+    used = {"MAX_FILES": 3, "MAX_NODES": 18, "MAX_IDS": 5,
             "MAX_TOTAL_BYTES": sum(path.stat().st_size for path in (tmp_path / "Directory.Packages.props", tmp_path / "src/App/App.csproj",
                                                                     tmp_path / "global.json"))}[cap]
     assert ccp.check(tmp_path)[1] == []
@@ -1014,9 +1025,10 @@ def test_a_skipped_file_fails_the_check_when_a_pin_is_built_from_a_property(tmp_
     assert "❌ Directory.Build.props can't be checked" in out
 
 
-def test_a_skipped_file_stays_a_notice_for_a_pin_built_from_an_item(tmp_path, capsys):
-    # No file can give @(Items) a value the check reads, so the broken file hides nothing about it.
-    central(tmp_path, '<PackageVersion Include="@(Items)" Version="1.0.0" />')
+@pytest.mark.parametrize("pin", ["@(Items)", "%(Meta)", "$(", "$(P)@(Items)", "$(P)$(1)"])
+def test_a_skipped_file_stays_a_notice_for_a_pin_no_file_can_make_readable(tmp_path, capsys, pin):
+    # No value of P makes these readable ($(1) isn't a property name), so the broken file hides nothing about them.
+    central(tmp_path, f'<PackageVersion Include="{pin}" Version="1.0.0" />')
     (tmp_path / "Directory.Build.props").write_text("<Project><PropertyGroup><P>A</P>")
 
     status, out, _ = run(tmp_path, capsys)
@@ -1245,11 +1257,14 @@ def test_global_json_comments_and_trailing_commas_go_as_the_host_reads_them(text
 
 
 @pytest.mark.parametrize("body", ['"' + "x" * 70000, '"' + "\\n" * 35000 + '"', '"a",' * 17000, "/**/" * 17000, "1, " * 23000])
-def test_a_global_json_at_its_cap_is_read_in_bounded_time_and_memory(tmp_path, body):
+def test_a_global_json_at_its_cap_is_read_in_bounded_time_and_memory(tmp_path, monkeypatch, body):
     import tracemalloc
 
     text = ('{"msbuild-sdks": {"S": "1"}, "x": [' + body)[:ccp.MAX_GLOBAL_JSON_BYTES]
     (tmp_path / "global.json").write_text(text)
+    read = []
+    real = ccp.without_comments
+    monkeypatch.setattr(ccp, "without_comments", lambda text: read.append(len(text)) or real(text))
     tracemalloc.start()
     started = time.monotonic()
     ccp.check(tmp_path)
@@ -1257,9 +1272,37 @@ def test_a_global_json_at_its_cap_is_read_in_bounded_time_and_memory(tmp_path, b
     peak = tracemalloc.get_traced_memory()[1]
     tracemalloc.stop()
 
-    assert len(text) == ccp.MAX_GLOBAL_JSON_BYTES
+    assert len(text) == ccp.MAX_GLOBAL_JSON_BYTES and read == [len(text)]
     # A string matched with backtracking state per character peaks near 9 MiB here, and one per escape near 5 MiB.
     assert elapsed < 2 and peak < 4 * 1024 * 1024
+
+
+def test_a_global_json_at_its_cap_is_read(tmp_path, capsys):
+    central(tmp_path, '<PackageVersion Include="S" Version="1.0.0" />')
+    text = '{"msbuild-sdks": {"S": "1"}}'
+    (tmp_path / "global.json").write_text(text + " " * (ccp.MAX_GLOBAL_JSON_BYTES - len(text)))
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert (tmp_path / "global.json").stat().st_size == ccp.MAX_GLOBAL_JSON_BYTES
+    assert (status, out) == (0, "Every central pin is referenced by a project, or kept with a reason.\n")
+
+
+def test_only_the_first_max_global_json_files_are_read(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(ccp, "MAX_GLOBAL_JSON_FILES", 2)
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" /><PackageVersion Include="C" Version="1.0.0" />')
+    for folder, sdk in (("a", "A"), ("b", "B"), ("c", "C")):
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / "global.json").write_text(f'{{"msbuild-sdks": {{"{sdk}": "1"}}}}')
+
+    status, out, _ = run(tmp_path, capsys)
+
+    # c/global.json, the third in path order, isn't read, so C stays unreferenced.
+    assert status == 1
+    assert out.splitlines() == [
+        "ℹ️  c/global.json was skipped: it is past the first 2 global.json files, which are all this check reads. A reference or property in it wasn't seen.",
+        "❌ C is pinned in Directory.Packages.props but no project references it",
+    ]
 
 
 def test_a_global_json_over_its_cap_is_skipped_without_being_opened(tmp_path, capsys, monkeypatch):
