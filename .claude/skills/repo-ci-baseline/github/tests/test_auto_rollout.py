@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -161,7 +162,7 @@ def fake_preflight(on_path=ALL_TOOLS, answers=None, global_json='{"sdk": {"versi
 
 
 def signed_in(name):
-    return (f"{name} is set, and the review session's shell would see it: unset it for the round (env -u {name} before"
+    return (f"{name} is set, and the review session's shell would see it: unset it for the round (env -u {shlex.quote(name)} before"
             " the command), and sign Claude Code in with its own credentials file (claude /login) or the cloud's profile"
             " files, which the sandbox keeps from the shell")
 
@@ -188,7 +189,7 @@ def test_preflight_refuses_a_sign_in_secret_the_session_would_inherit(environ, r
 def url_sign_in(name):
     return (f"{name} holds a URL with a sign-in, which the review session is never given (its shell would see it), so"
             " its claude would run without it: for the round, set it to a URL with no sign-in in it (one that takes it"
-            f" from a file of its own), or unset it (env -u {name} before the command, for one round)")
+            f" from a file of its own), or unset it (env -u {shlex.quote(name)} before the command, for one round)")
 
 
 @pytest.mark.parametrize("environ, refused", [
@@ -203,7 +204,10 @@ def url_sign_in(name):
     # A proxy with no scheme, as curl and git take one: its sign-in is still found.
     ({"HTTPS_PROXY": "u:pw@proxy:3128", "http_proxy": "tok@proxy:3128", "all_proxy": " u:p@s:1"},
      ["HTTPS_PROXY", "all_proxy", "http_proxy"]),
-    ({"HTTPS_PROXY": "proxy:3128", "HTTP_PROXY": "proxy.corp/a@b", "NO_PROXY": "u:p@x", "MIRROR": "u:p@mirror:1"}, []),
+    ({"HTTPS_PROXY": ":pw@proxy:3128", "http_proxy": " :pw@proxy", "ALL_PROXY": "u:p@[::1]:3128"},
+     ["ALL_PROXY", "HTTPS_PROXY", "http_proxy"]),
+    ({"HTTPS_PROXY": "proxy:3128", "HTTP_PROXY": "proxy.corp/a@b", "NO_PROXY": "u:p@x", "MIRROR": "u:p@mirror:1",
+      "ALL_PROXY": "@proxy:3128", "ftp_proxy": "[::1]:3128"}, []),
 ])
 def test_preflight_refuses_an_endpoint_or_proxy_whose_url_holds_a_sign_in(environ, refused, tmp_path):
     # session_env would leave each out, so the session's claude would run without its endpoint or proxy.
@@ -804,14 +808,16 @@ def test_a_signal_after_a_prepare_that_left_its_group_names_the_group(tmp_path, 
         < err.index("what the session staged is kept in"), "the group, which holds the lock, comes first"
 
 
-def test_a_signal_with_a_broken_rule_prints_no_rule_on_the_terminal(tmp_path, monkeypatch, capsys):
+def test_a_signal_with_a_broken_rule_says_the_rule_once_and_no_record_command(tmp_path, monkeypatch, capsys):
     def record(worktree, run, out, head, keep, got, unseen):
         interrupt()
         return auto.SESSION_BROKE_A_RULE, ["R2 was staged fixed"]
 
     with pytest.raises(KeyboardInterrupt):
         review_once(tmp_path, monkeypatch, record=record, guard=head_guard(tmp_path))
-    assert "R2 was staged fixed" not in capsys.readouterr().err, "only a group a failed record names is written there"
+    err = capsys.readouterr().err
+    assert err.count("R2 was staged fixed") == 1 and "rollout.sh: the session broke a rule: R2 was staged fixed\n" in err
+    assert "record it with" not in err
 
 
 def test_a_signal_with_another_reviews_findings_kept_prints_no_command(tmp_path, monkeypatch, capsys):
@@ -1398,6 +1404,9 @@ def git_config_repo(tmp_path, *settings):
     ("http.https://github.com/.extraheader", "AUTHORIZATION: basic eHg=", ["http.https://github.com/.extraheader"]),
     ("http.proxy", "http://u:pw@proxy:3128", ["http.proxy"]),
     ("remote.origin.proxy", "http://u:pw@proxy:3128", ["remote.origin.proxy"]),
+    ("http.proxy", "u:pw@proxy:3128", ["http.proxy"]),
+    ("remote.origin.proxy", ":pw@proxy:3128", ["remote.origin.proxy"]),
+    ("http.proxy", "proxy:3128", []),
     ("submodule.lib.url", "https://ghp_abc@github.com/o/lib.git", ["submodule.lib.url"]),
     ("lfs.url", "https://ghp_abc@lfs.example/o/r", ["lfs.url"]),
     ("credential.helper", "!f() { echo password=hunter2; }; f", ["credential.helper"]),
@@ -2182,13 +2191,15 @@ def test_a_settings_file_already_there_stops_the_session_before_it_starts(tmp_pa
 
     monkeypatch.setattr(auto.tempfile, "mkstemp", mkstemp)
     started = []
-    code, log, _, _ = review_once(tmp_path, monkeypatch, popen=lambda command, **kwargs: started.append(command))
+    code, log, _, worktree = review_once(tmp_path, monkeypatch, popen=lambda command, **kwargs: started.append(command))
     assert code == 127 and started == [] and not target.exists()
     settings = log.removesuffix(".log") + ".settings.json"
     assert os.path.lexists(settings) and (os.path.islink(settings) == (planted == "link")), "what was there is left"
-    assert (f"can't write the session's settings file: [Errno 17] File exists: '{settings}' (its folder,"
-            f" {tmp_path / 'logs'}, must be writable with room in it, and a file or link left at that path removed), or"
-            " run /pre-push-review in ") in Path(log).read_text()
+    # As drive shows it: the resume it adds itself is cut, and what is left reads whole.
+    assert auto.stop_line(log) == (
+        f"couldn't be started: can't write the session's settings file: [Errno 17] File exists: '{settings}' (its"
+        f" folder, {tmp_path / 'logs'}, must be writable with room in it, and a file or link left at that path removed;"
+        f" or run /pre-push-review in {worktree})")
 
 
 def test_the_prompt_says_none_when_no_owned_file_changes():
@@ -4659,7 +4670,8 @@ def test_auto_dry_run_checks_the_tools_prints_every_step_and_runs_nothing():
         name = short(repo)
         assert line == (f"would run: reapply.sh --brings '#82,#83' /r/{name}, with /pre-push-review headless in"
                         f" /r/{name}-worktrees/chore-reapply-baseline when its gate asks for one")
-    assert lines[7] == "then land TicketManager's re-Apply PR with land.sh before the rest start, and the rest's together"
+    assert lines[7] == ("then land TicketManager's re-Apply PR with land.sh before the rest start (at once when it already"
+                        " matches the Template), and the rest's together")
     assert len(lines) == 8
 
 
@@ -4960,8 +4972,14 @@ def test_the_settings_file_is_removed_however_the_session_ends(tmp_path, monkeyp
 
     code, _, _, _ = review_once(tmp_path / "b", monkeypatch, popen=no_claude)
     assert code == 127 and logs_left(tmp_path / "b") == [], "claude can't start"
-    code, _, _, _ = review_once(tmp_path / "c", monkeypatch, listing={"secrets": lambda worktree, common: ["k in f"]})
-    assert code == 127 and logs_left(tmp_path / "c") == [], "a stop before the session"
+    def no_env(*args):
+        raise ValueError("a bug")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(auto, "session_env", no_env)  # after the settings file is written
+        code, log, _, _ = review_once(tmp_path / "c", patched)
+    assert code == 127 and "can't set the session up: a bug" in Path(log).read_text()
+    assert logs_left(tmp_path / "c") == [], "a stop after the file is written, before the session"
 
     def broken_record(*args):
         raise RuntimeError("a bug")
@@ -5027,6 +5045,7 @@ def test_a_signal_after_the_session_exits_by_itself_keeps_what_it_staged(tmp_pat
     assert json.loads(Path(keep, auto.STAGED_FILE).read_text()) == []
     err = capsys.readouterr().err
     assert f"what the session staged is kept in {keep}" in err and "record it with: sh -c " in err
+    assert "recording the review" not in err, "nothing is recorded with a signal held"
     assert logs_left(tmp_path) == []
 
 
@@ -5037,6 +5056,74 @@ def test_a_signal_while_a_session_runs_still_ends_the_round_at_once(tmp_path, mo
         os.kill(os.getpid(), signal.SIGINT)
         return True
 
+    checked = []
     with pytest.raises(KeyboardInterrupt):
-        review_once(tmp_path, monkeypatch, session=FakeSession(code=1), end=end, record=lambda *a: recorded.append(a))
-    assert recorded == [], "a session that didn't exit 0 has nothing to record"
+        review_once(tmp_path / "a", monkeypatch, session=FakeSession(code=1), end=end,
+                    check=lambda guard: checked.append(guard) or [], record=lambda *a: recorded.append(a))
+    assert recorded == [] and checked == [], "a session that didn't exit 0: no check runs, nothing to record"
+
+    class Running(FakeSession):
+        def wait(self, timeout=None):
+            if timeout is not None:
+                os.kill(os.getpid(), signal.SIGINT)  # while it still runs
+                raise subprocess.TimeoutExpired("claude", timeout)
+            return 0
+
+    with pytest.raises(KeyboardInterrupt):
+        review_once(tmp_path / "b", monkeypatch, session=Running(), check=lambda guard: checked.append(guard) or [],
+                    record=lambda *a: recorded.append(a))
+    assert recorded == [] and checked == [], "stopped mid-review: no check runs, nothing to record"
+
+
+def test_the_settings_sweep_leaves_another_users_files_and_goes_past_what_it_cant_remove(tmp_path, monkeypatch):
+    (tmp_path / "review-0.settings.json").mkdir()  # listed first: os.remove can't remove it
+    (tmp_path / "review-a.settings.json").write_text("{}")
+    listdir = os.listdir
+    monkeypatch.setattr(auto.os, "listdir", lambda path: sorted(listdir(path)))
+    with monkeypatch.context() as patched:
+        patched.setattr(auto.os, "getuid", lambda: os.stat(tmp_path).st_uid + 1)
+        auto.sweep_settings(str(tmp_path))
+    assert (tmp_path / "review-a.settings.json").exists(), "another user's file is left"
+    auto.sweep_settings(str(tmp_path))
+    assert not (tmp_path / "review-a.settings.json").exists() and (tmp_path / "review-0.settings.json").is_dir()
+
+
+def test_the_lock_stops_resume_with_the_rounds_own_root():
+    _, _, err = run_auto(["--brings", "#82"], Fleet(locked=True), root="/my repos")
+    assert err.endswith("then run: rollout.sh --auto --brings '#82' --root '/my repos'\n")
+    _, _, err = run_auto(["--brings", "#82"], Fleet(lock_raises=PermissionError(13, "Permission denied")), root="/my repos")
+    assert err.endswith("Once it can be taken, run: rollout.sh --auto --brings '#82' --root '/my repos'\n")
+
+
+def test_the_unset_hints_quote_the_variables_name():
+    problems = auto.sign_in_problems({"CLAUDE_CODE_USE_BEDROCK": "1", "AWS_X;Y_TOKEN": "t",
+                                      "AWS_ODD NAME": "https://u:p@x/"})
+    assert len(problems) == 2
+    assert "(env -u 'AWS_X;Y_TOKEN' before the command)" in problems[0]
+    assert "(env -u 'AWS_ODD NAME' before the command, for one round)" in problems[1]
+
+
+def test_a_rule_broken_before_a_signal_is_said_on_the_terminal(tmp_path, monkeypatch, capsys):
+    recorded = []
+
+    def end(session):
+        os.kill(os.getpid(), signal.SIGINT)
+        return True
+
+    with pytest.raises(KeyboardInterrupt):
+        review_once(tmp_path / "a", monkeypatch, end=end, broke=["the worktree changed"],
+                    record=lambda *a: recorded.append(a))
+    err = capsys.readouterr().err
+    assert "rollout.sh: the session broke a rule: the worktree changed\n" in err and recorded == []
+    assert "record it with" not in err and "recording the review" not in err
+    (log,) = (tmp_path / "a" / "logs").glob("*.log")
+    assert "rollout.sh: the session broke a rule: the worktree changed\n" in log.read_text()
+
+    def stuck(session):
+        os.kill(os.getpid(), signal.SIGINT)
+        return False
+
+    with pytest.raises(KeyboardInterrupt):
+        review_once(tmp_path / "b", monkeypatch, end=stuck)
+    assert (f"rollout.sh: the session broke a rule: the session's process group was still there"
+            f" {auto.GROUP_WAIT_SECONDS} s after it was killed") in capsys.readouterr().err

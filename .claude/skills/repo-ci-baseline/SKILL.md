@@ -104,7 +104,8 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
      and the Template's `global.json` SDK first (`--dry-run` stops there and prints the plan). It refuses to start with `claude` signed out (as it is with no settings file
      read; a cloud's sign-in, which `claude auth status` doesn't report, isn't asked), or with a Claude Code or cloud sign-in secret in the environment
      (`ANTHROPIC_API_KEY`, say): sign Claude Code in with `claude /login` instead. It refuses too when its endpoint, cloud or proxy variable (`ANTHROPIC_BASE_URL`,
-     `HTTPS_PROXY`, written with a scheme or without one) holds a URL with a sign-in, which the session is never given: set one with no sign-in in it for the round.
+     `HTTPS_PROXY`) holds a URL with a sign-in, which the session is never given (a proxy variable counts with no scheme too, as `user:pass@proxy:3128`):
+     set one with no sign-in in it for the round.
      When the gate asks for a review it runs the pre-push review headless in the repo's re-Apply worktree, review-only: one round that stages each finding open, or dismissed when
      it isn't a security one, and edits, fixes and commits nothing. It runs in Claude Code's sandbox: its shell reads none of your credentials, and of the rest of the disk only the worktree, the
      clone's git folder, `.security`, its own folder, the system's folders and node's and git's own files, as listed when it starts (what appears later is named once

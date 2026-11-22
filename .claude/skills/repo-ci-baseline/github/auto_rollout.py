@@ -59,8 +59,8 @@ never on its command line, which any local user can read in
 agent from the Template, so no hook, permission rule or plugin but these
 applies. Its environment has no sign-in secret (gh points at an empty config;
 names that look like secrets are dropped, and so is any value holding a URL
-with a sign-in (has_sign_in: a password, or any user over http(s) or ftp(s),
-which may be a token), and of Claude Code's own only
+with a sign-in (holds_sign_in: a password, or any user over http(s) or ftp(s),
+which may be a token, and a proxy's written with no scheme), and of Claude Code's own only
 CLAUDE_KEPT is kept, while the preflight refuses a round with a Claude Code or
 cloud sign-in secret set, since the session would inherit it, or with its
 endpoint, cloud or proxy variable holding a URL with a sign-in (a proxy's
@@ -315,8 +315,9 @@ SIGN_IN_SECRET = re.compile(
     r"TOKEN|SECRET|PASSW|API_?KEY|ACCESS_KEY|AUTH(?!OR)|CREDENTIAL|_KEY$|COOKIE|BEARER|CERT|PRIVATE|KEY_?FILE", re.I)
 # The proxy variables the session's own claude reaches its endpoint through (curl's and Node's names, either case).
 PROXY_NAME = re.compile(r"^(HTTPS?|ALL|FTP)_PROXY$", re.I)
-# A proxy written with no scheme, as curl and git take one, whose host has a sign-in before it (user:pass@proxy:3128).
-BARE_USERINFO = re.compile(r"^\s*[^/@\s:]+(:[^/@\s]*)?@[^/@\s]")
+# A proxy written with no scheme, as curl and git take one, whose host has a sign-in before it: a user, with or without
+# a password, or a password alone (user:pass@proxy:3128, token@proxy:3128, :pass@proxy:3128).
+BARE_USERINFO = re.compile(r"^\s*(?:[^/@\s:]+(?::[^/@\s]*)?|:[^/@\s]+)@[^/@\s]")
 # Each cloud flag Claude Code reads, and the prefix of the variables that cloud signs in with.
 CLOUD_SIGN_IN = {"CLAUDE_CODE_USE_BEDROCK": "AWS_", "CLAUDE_CODE_USE_VERTEX": "GOOGLE_", "CLAUDE_CODE_USE_FOUNDRY": "AZURE_"}
 # The values of a CLAUDE_CODE_USE_* flag that turn its cloud on; any other (0, false, empty) leaves it off.
@@ -462,7 +463,8 @@ def kept_clouds(base):
 def sign_in_problems(environ):
     """A sign-in secret in the environment the session would inherit: one of CLAUDE_SECRETS, or a secret of the cloud
     in use. Its shell would see it, so the round doesn't start. Nor does it when a variable the session's own claude
-    needs (CLAUDE_KEPT, the cloud in use's, a proxy's: PROXY_NAME) holds a URL with a sign-in (has_sign_in), which
+    needs (CLAUDE_KEPT, the cloud in use's, a proxy's: PROXY_NAME) holds a URL with a sign-in (holds_sign_in: a proxy's
+    with no scheme too), which
     session_env leaves out: the session would run without its endpoint or proxy, and fail with nothing naming why.
     Each is named, never its value."""
     clouds = kept_clouds(environ)
@@ -470,13 +472,13 @@ def sign_in_problems(environ):
         name in CLAUDE_SECRETS or (clouds and name.startswith(clouds) and SIGN_IN_SECRET.search(name))))
     needed = sorted(name for name, value in environ.items() if name not in found and holds_sign_in(name, value) and (
         name in CLAUDE_KEPT or PROXY_NAME.match(name) or (clouds and name.startswith(clouds))))
-    return [*(f"{name} is set, and the review session's shell would see it: unset it for the round (env -u {name}"
+    return [*(f"{name} is set, and the review session's shell would see it: unset it for the round (env -u {shlex.quote(name)}"
               " before the command), and sign Claude Code"
               " in with its own credentials file (claude /login) or the cloud's profile files, which the sandbox keeps"
               " from the shell" for name in found),
             *(f"{name} holds a URL with a sign-in, which the review session is never given (its shell would see it),"
               " so its claude would run without it: for the round, set it to a URL with no sign-in in it (one that"
-              f" takes it from a file of its own), or unset it (env -u {name} before the command, for one round)"
+              f" takes it from a file of its own), or unset it (env -u {shlex.quote(name)} before the command, for one round)"
               for name in needed)]
 
 
@@ -983,7 +985,8 @@ def config_secrets(worktree, common, run=run_quiet):
             key, _, value = entry.partition("\n")
             name = key.lower()
             helper = name.startswith("credential") and name.endswith(".helper")
-            if (name.endswith(".extraheader") or has_sign_in(key) or has_sign_in(value) or TOKEN_SHAPE.search(value)
+            proxy = name.endswith(".proxy") and BARE_USERINFO.match(value)  # http.proxy, remote.<name>.proxy
+            if (name.endswith(".extraheader") or has_sign_in(key) or has_sign_in(value) or proxy or TOKEN_SHAPE.search(value)
                     or SECRET_KEY.search(name) and value.strip() or helper and HELPER_SECRET.search(value)):
                 held_in = origin.removeprefix("file:") if origin.startswith("file:") else path
                 found.append(f"{redacted(key)} in {held_in}")
@@ -1028,7 +1031,8 @@ def own_log_dir(log_dir):
 
 def session_env(base, tmp, first=()):
     """The review session's environment: base without GATE_SKIP_REVIEW (the gate's review check must run in it), the
-    names SECRET_NAME matches, a value holding a URL with a sign-in (has_sign_in: a password, or a user over http(s) or ftp(s)), Claude Code's own but CLAUDE_KEPT (CLAUDE_CONFIG_DIR made absolute, as the settings
+    names SECRET_NAME matches, a value holding a URL with a sign-in (holds_sign_in: a password, or a user over http(s) or
+    ftp(s), and a proxy variable's written with no scheme), Claude Code's own but CLAUDE_KEPT (CLAUDE_CONFIG_DIR made absolute, as the settings
     deny it), and the cloud in use's secrets; gh pointed at an empty config and git at an empty global one; and
     SESSION_GIT_CONFIG. The worktree and the clone's git folder are read-only to it, so GIT_OPTIONAL_LOCKS is off (git
     status writes no index back) and gc.auto is 0. The session builds and installs nothing, but the caches and
@@ -1040,7 +1044,7 @@ def session_env(base, tmp, first=()):
 
     def kept(name, value):
         if name == "GATE_SKIP_REVIEW" or holds_sign_in(name, value):
-            return False  # a URL with a sign-in in it (a password, or a user that may be a token), whatever its name
+            return False  # a URL with a sign-in (a password, or a user that may be a token), whatever its name, or a proxy's
         if CLAUDE_SIGN_IN.match(name):
             return name in CLAUDE_KEPT
         if clouds and name.startswith(clouds):
@@ -1734,7 +1738,7 @@ def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, ti
                check=broken_rules, skill=read_skill, agents=agent_definition, record=record_review,
                listdir=os.listdir, which=shutil.which, secrets=config_secrets):
     """/pre-push-review headless in worktree: (exit code, the session's log, the Rules it broke). 124 when it runs
-    past its time, 127 when it can't start, SESSION_BROKE_A_RULE when it broke one (they are listed, and in the log
+    past its time, 127 when it can't start (its settings file can't be written among it), SESSION_BROKE_A_RULE when it broke one (they are listed, and in the log
     too), RECORD_FAILED when what it staged couldn't be recorded (it is kept, staged_copy; a group prepare left is
     listed), RECORD_LEFT (with the group in the list) when the record left a process group the kill didn't end, so
     whether it recorded can't be told, NOTHING_STAGED when it exited 0 having staged nothing. The session runs in
@@ -1747,7 +1751,9 @@ def run_review(repo, worktree, popen=subprocess.Popen, changes=owned_changes, ti
     which may have recorded, with a word to check scripts/review.sh report first). Once it has exited 0 and broken
     no Rule, the round records what it staged (record_review). The log is 0600 (mkstemp) in a 0700 folder of the
     user's own; the session's temporary folder is made in session_dir, another such folder, once what killed runs left
-    there is removed (sweep_sessions). A clone whose git folder holds a sign-in secret (config_secrets) isn't
+    there is removed (sweep_sessions). The settings file is removed whenever the session ends, never one that was at its
+    path before (write_settings refuses it), and one a killed run left beside its log is removed first (sweep_settings).
+    A clone whose git folder holds a sign-in secret (config_secrets) isn't
     reviewed, and entries made beside the session's folders while it ran, which it could read, and secrets added to
     the clone's git folder meanwhile are named (after_session)."""
     try:
@@ -1806,8 +1812,8 @@ def review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock
             written = write_settings(settings, log)
         except OSError as error:
             return stop(f"can't write the session's settings file: {error} (its folder, {os.path.dirname(log)}, must be"
-                        " writable with room in it, and a file or link left at that path removed), or run"
-                        f" /pre-push-review in {worktree}, then resume")
+                        " writable with room in it, and a file or link left at that path removed; or run"
+                        f" /pre-push-review in {worktree}), then resume")
         command = review_command(repo, worktree, owned, written, agents(), skill(), run)
         env = session_env(os.environ, tmp, tools[1])
     except GuardUnreadable as error:
@@ -1818,7 +1824,7 @@ def review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock
     begun = out.tell()
     out.write(SESSION_STARTS)
     out.flush()
-    code, started, survived = None, True, False
+    code, started, survived, broke = None, True, False, []
     # One hold from the start of the session until what it staged is recorded or kept: a signal anywhere in it,
     # the checks included (they read every file of the worktree), would otherwise lose the run folder, and the
     # session's findings with it.
@@ -1863,9 +1869,10 @@ def review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock
             broke.append(f"the session's process group was still there {GROUP_WAIT_SECONDS} s after it was killed,"
                          f" and can still write: {group_hint(session.pid)}, before you resume")
         if not broke and code == 0:
-            sys.stderr.write(f"rollout.sh: recording the review (scripts/review.sh prepare, then record, up to"
-                             f" {RECORD_TIMEOUT_SECONDS // 60} minutes each: an interrupt stops prepare, and waits"
-                             " for record to end)\n")
+            if not got:  # with one held, record_review keeps the findings and records nothing
+                sys.stderr.write(f"rollout.sh: recording the review (scripts/review.sh prepare, then record, up to"
+                                 f" {RECORD_TIMEOUT_SECONDS // 60} minutes each: an interrupt stops prepare, and"
+                                 " waits for record to end)\n")
             try:
                 code, broke = record(worktree, run, out, head, keep, got, lambda: unseen_changes(before))
             except GroupLeft as error:
@@ -1881,6 +1888,10 @@ def review_in(repo, worktree, out, log, tmp, popen, changes, timeout, end, clock
                 out.write(f"rollout.sh: recording the review failed:\n{traceback.format_exc()}")
                 code = RECORD_FAILED
     if got:
+        if code not in (RECORD_FAILED, RECORD_LEFT):
+            for rule in broke:  # what the checks found is said before the signal ends the round
+                out.write(f"rollout.sh: the session broke a rule: {rule}\n")
+                sys.stderr.write(f"rollout.sh: the session broke a rule: {rule}\n")
         if code == RECORD_FAILED:
             for left in broke:  # a group prepare left: it holds the lock, so it must be ended before a record
                 sys.stderr.write(f"rollout.sh: {left}\n")
@@ -2375,7 +2386,8 @@ def run(order, brings, root, checkout, dry_run, reapply, say, err, default_root,
         for repo in order:
             say(f"would run: reapply.sh --brings {shlex.quote(brings)} {shlex.quote(checkout(repo))}, with /pre-push-review"
                 f" headless in {review_worktree(checkout(repo))} when its gate asks for one")
-        say(f"then land {short_name(order[0])}'s re-Apply PR with land.sh before the rest start, and the rest's together")
+        say(f"then land {short_name(order[0])}'s re-Apply PR with land.sh before the rest start (at once when it already"
+            " matches the Template), and the rest's together")
         return 0
     try:
         handle = lock()
