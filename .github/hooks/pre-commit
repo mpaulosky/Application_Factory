@@ -4,9 +4,15 @@
 # Then it runs markdownlint-cli2 on staged .md files, with the same
 # .markdownlint-cli2.jsonc config as CI. It lints the staged content, not the
 # working copy, so a partly staged file is checked as it will be committed.
-# Blocks the commit if any markdownlint violations are found.
-# Degrades gracefully if markdownlint-cli2 is not available.
+# Blocks the commit if any markdownlint violations are found. It fails closed:
+# a git command, the temporary folder or the snapshot of the staged files that
+# fails, or a markdownlint-cli2 too old to take a literal path, refuses the
+# commit rather than letting it through unlinted. Only a missing
+# markdownlint-cli2 is skipped, with a warning.
 set -uo pipefail
+
+# Pathspecs below mean what they say, whatever the caller's environment asks.
+unset GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PATHSPECS
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT" || exit 1
@@ -52,16 +58,34 @@ if [[ "$GIT_DIR_ABS" == "$COMMON_DIR_ABS" ]] \
   exit 1
 fi
 
+# refuse <what failed>: say the commit is refused, and what to do about it.
+refuse() {
+  echo -e "${RED}❌  $1: the commit is refused.${RESET}"
+  echo -e "    See git's message above (or check TMPDIR and free disk space), fix it, then commit again."
+  echo -e "    To skip in an emergency: ${YELLOW}git commit --no-verify${RESET}"
+  exit 1
+}
+
 # ── Collect staged .md files ───────────────────────────────────────────────
+# First whether any staged .md file is added, changed or renamed (exit 1), none
+# is (0), or git failed (anything else), so a commit with no Markdown needs no
+# temporary folder, and a git that fails refuses the commit instead of letting
+# it through unlinted. ('*.md' matches at any depth: a pathspec's * matches /.)
+git diff --cached --quiet --diff-filter=ACMR -- '*.md'
+case $? in
+  0) exit 0 ;;
+  1) ;;
+  *) refuse "git diff --cached failed, so the staged Markdown can't be listed" ;;
+esac
+
 # NUL-separated, so paths with spaces or other odd characters survive.
 # R counts too: a renamed file is listed under its new name. Written to a file
 # first, so a git that fails refuses the commit instead of leaving the list
-# empty, which would let it through unlinted.
-WORK_DIR="$(mktemp -d)" || exit 1
+# empty.
+WORK_DIR="$(mktemp -d 2> /dev/null)" || refuse "Couldn't make a temporary folder to lint the staged Markdown in"
 trap 'rm -rf "$WORK_DIR"' EXIT
 if ! git diff --cached --name-only -z --diff-filter=ACMR > "$WORK_DIR/staged"; then
-  echo -e "${RED}❌  git diff --cached failed, so the staged Markdown can't be linted: the commit is refused.${RESET}"
-  exit 1
+  refuse "git diff --cached failed, so the staged Markdown can't be listed"
 fi
 MD_FILES=()
 while IFS= read -r -d '' file; do
@@ -90,12 +114,25 @@ if [[ -z "$MARKDOWNLINT_BIN" ]]; then
   exit 0
 fi
 
+# The ':' literal-path prefix used below came in markdownlint-cli2 0.4.0: an
+# older one reads ':a.md' as a glob that matches nothing, and passes. Run with
+# no arguments, it prints its banner ("markdownlint-cli2 vX.Y.Z ...") first.
+LINT_BANNER="$("$MARKDOWNLINT_BIN" < /dev/null 2>&1 | head -n 1)"
+LINT_VERSION="$(sed -n 's/^markdownlint-cli2 v\([0-9][0-9]*\)\.\([0-9][0-9]*\)\.[0-9].*/\1 \2/p' <<< "$LINT_BANNER")"
+read -r LINT_MAJOR LINT_MINOR <<< "$LINT_VERSION"
+if [[ -z "$LINT_VERSION" ]] || ((10#$LINT_MAJOR == 0 && 10#$LINT_MINOR < 4)); then
+  echo -e "${RED}❌  $MARKDOWNLINT_BIN is ${LINT_BANNER:-silent}, not markdownlint-cli2 0.4.0 or later, which lints a path as it is named: the commit is refused.${RESET}"
+  echo -e "    Update it: ${CYAN}pnpm add -g markdownlint-cli2${RESET}"
+  echo -e "    To skip in an emergency: ${YELLOW}git commit --no-verify${RESET}"
+  exit 1
+fi
+
 # ── Snapshot the staged content ───────────────────────────────────────────
 # Write each staged file, and the configs as they will be committed, into a
 # temporary tree with the same layout, then lint that tree. The working copy
 # can differ from what's staged, and only the staged version gets committed.
 SNAPSHOT="$WORK_DIR/snapshot"
-mkdir "$SNAPSHOT" || exit 1
+mkdir "$SNAPSHOT" 2> /dev/null || refuse "Couldn't make a temporary folder to lint the staged Markdown in"
 
 # Only staged configs are used; one that exists only in the working copy won't
 # be in the commit. Nested ones count too: markdownlint-cli2 applies a
@@ -103,10 +140,11 @@ mkdir "$SNAPSHOT" || exit 1
 # A failed write (git, a full disk) would lint a tree missing a staged file
 # or its config, so it refuses the commit (pipefail: either side failing).
 if ! git ls-files -z --cached -- ':(glob)**/.markdownlint-cli2.jsonc' \
-  | git checkout-index --prefix="$SNAPSHOT/" -z --stdin \
-  || ! printf '%s\0' "${MD_FILES[@]}" | git checkout-index --prefix="$SNAPSHOT/" -z --stdin; then
-  echo -e "${RED}❌  Couldn't write the staged files to a temporary tree to lint: the commit is refused.${RESET}"
-  exit 1
+  | git checkout-index --prefix="$SNAPSHOT/" -z --stdin; then
+  refuse "Couldn't write the staged markdownlint configs to a temporary tree to lint with"
+fi
+if ! printf '%s\0' "${MD_FILES[@]}" | git checkout-index --prefix="$SNAPSHOT/" -z --stdin; then
+  refuse "Couldn't write the staged Markdown files to a temporary tree to lint"
 fi
 
 # ── Run markdownlint on staged files ──────────────────────────────────────

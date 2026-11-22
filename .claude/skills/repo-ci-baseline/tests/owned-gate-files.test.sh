@@ -46,11 +46,14 @@ latin1="$(printf 'caf\xe9')"
 names=("notes/café.md" "a b.md" "docs/blogs/post.md" "tab${tab}name.md" "line${newline}break.md" "conf/settings.yml" "pnpm-lock.yaml"
   ".github/workflows/build.yml" "scripts/tool" "scripts/run.sh" "src/app.cs" "${latin1}.md" "scripts/${latin1}"
   "x.md${newline}docs/blogs/y.md" "a.yaml${newline}pnpm-lock.yaml" "foo${newline}.github/workflows/a.yml" "a[1].md" "-dash.md" "-dash.yml" "-dash.sh"
-  ".github/hooks/pre-push" "tools/.github/hooks/pre-push" "tools/a.py" "-dash.py" "${latin1}.py" "UPPER.PY" "notpy.pyc")
+  ".github/hooks/pre-push" "tools/.github/hooks/pre-push" "tools/a.py" "-dash.py" "${latin1}.py" "UPPER.PY" "notpy.pyc"
+  "a b.yml" "s p.sh" "p y.py" "n${newline}l.sh" "n${newline}l.py" "scripts/new${newline}line" "foo${newline}scripts/run" "${latin1}.yml" "${latin1}.sh"
+  "!bang.md" "a*.md" "x.mdx" "a.md.bak" "a.ymlx" "a.shx")
 for name in "${names[@]}"; do
   mkdir -p "$repo/$(dirname -- "$name")"
   printf 'x\n' > "$repo/$name"
-  g "$repo" add -- "$name"
+  # Literal pathspecs: git would read a*.md as a glob, and a leading ':' as pathspec magic.
+  g "$repo" --literal-pathspecs add -- "$name"
 done
 g "$repo" commit -q -m names
 
@@ -195,25 +198,35 @@ for loc in ${utf8:+"$utf8"} C; do
   check "[$loc] an inclusion matches a whole name, not a line of one" \
     "! has WORKFLOW_FILES \"foo\${newline}.github/workflows/a.yml\" && has YAML_FILES \"foo\${newline}.github/workflows/a.yml\""
   check "[$loc] docs/blogs/ stays out of the Markdown list" "! has MD_FILES docs/blogs/post.md"
-  check "[$loc] the Markdown list holds exactly the eight others" "[[ \$(count MD_FILES) == 8 ]]"
-  check "[$loc] YAML: not pnpm-lock.yaml" "has YAML_FILES conf/settings.yml && ! has YAML_FILES pnpm-lock.yaml && [[ \$(count YAML_FILES) == 5 ]]"
+  check "[$loc] a Markdown name with a leading ! or a * is listed as it is" "has MD_FILES '!bang.md' && has MD_FILES 'a*.md'"
+  check "[$loc] a near-miss extension (x.mdx, a.md.bak, a.ymlx, a.shx) is in no list" \
+    "! has MD_FILES x.mdx && ! has MD_FILES a.md.bak && ! has YAML_FILES a.ymlx && ! has SHELL_FILES a.shx && ! has SHFMT_FILES a.shx"
+  check "[$loc] the Markdown list holds exactly the ten others" "[[ \$(count MD_FILES) == 10 ]]"
+  check "[$loc] YAML: a spaced name and one that isn't valid UTF-8 are listed" "has YAML_FILES 'a b.yml' && has YAML_FILES \"\${latin1}.yml\""
+  check "[$loc] YAML: not pnpm-lock.yaml" "has YAML_FILES conf/settings.yml && ! has YAML_FILES pnpm-lock.yaml && [[ \$(count YAML_FILES) == 7 ]]"
+  check "[$loc] shell: a spaced, a newline and a not-valid-UTF-8 .sh name, and a newline extensionless scripts/ name, are listed whole" \
+    "has SHELL_FILES 's p.sh' && has SHELL_FILES \"n\${newline}l.sh\" && has SHELL_FILES \"\${latin1}.sh\" && has SHELL_FILES \"scripts/new\${newline}line\""
+  check "[$loc] shell: a name whose second line starts scripts/ is not an extensionless script" "! has SHELL_FILES \"foo\${newline}scripts/run\""
+  check "[$loc] shfmt: the spaced, newline and not-valid-UTF-8 .sh names, not the extensionless one" \
+    "has SHFMT_FILES 's p.sh' && has SHFMT_FILES \"n\${newline}l.sh\" && has SHFMT_FILES \"\${latin1}.sh\" && ! has SHFMT_FILES \"scripts/new\${newline}line\""
+  check "[$loc] Python: a spaced and a newline name are listed whole" "has PY_FILES 'p y.py' && has PY_FILES \"n\${newline}l.py\""
   check "[$loc] the workflow list holds the workflow alone" "has WORKFLOW_FILES .github/workflows/build.yml && [[ \$(count WORKFLOW_FILES) == 1 ]]"
   check "[$loc] shell: the extensionless scripts, a .sh and the root hook, not a hook in another folder" \
-    "has SHELL_FILES scripts/tool && has SHELL_FILES scripts/run.sh && has SHELL_FILES .github/hooks/pre-push && ! has SHELL_FILES tools/.github/hooks/pre-push && [[ \$(count SHELL_FILES) == 5 ]]"
+    "has SHELL_FILES scripts/tool && has SHELL_FILES scripts/run.sh && has SHELL_FILES .github/hooks/pre-push && ! has SHELL_FILES tools/.github/hooks/pre-push && [[ \$(count SHELL_FILES) == 9 ]]"
   check "[$loc] shfmt: the .sh files and the root hook, not an extensionless scripts/ file, which no .editorconfig section styles" \
-    "has SHFMT_FILES scripts/run.sh && has SHFMT_FILES -dash.sh && has SHFMT_FILES .github/hooks/pre-push && ! has SHFMT_FILES scripts/tool && [[ \$(count SHFMT_FILES) == 3 ]]"
+    "has SHFMT_FILES scripts/run.sh && has SHFMT_FILES -dash.sh && has SHFMT_FILES .github/hooks/pre-push && ! has SHFMT_FILES scripts/tool && [[ \$(count SHFMT_FILES) == 6 ]]"
   check "[$loc] markdownlint-cli2 gets each name as a literal path (a leading :), never a glob or an option" \
-    "has MD_ARG ':a[1].md' && has MD_ARG ':-dash.md' && has MD_ARG \":line\${newline}break.md\" && has MD_ARG \":\${latin1}.md\" && [[ \$(count MD_ARG) == 8 ]] && ! has MD_ARG a[1].md"
+    "has MD_ARG ':a[1].md' && has MD_ARG ':-dash.md' && has MD_ARG \":line\${newline}break.md\" && has MD_ARG \":\${latin1}.md\" && has MD_ARG ':!bang.md' && has MD_ARG ':a*.md' && [[ \$(count MD_ARG) == 10 ]] && ! has MD_ARG a[1].md"
   check "[$loc] yamllint gets '--' before the names, so -dash.yml is a file, not an option" \
-    "[[ \$(first YL_ARG) == -- ]] && has YL_ARG -dash.yml && [[ \$(count YL_ARG) == 6 ]]"
+    "[[ \$(first YL_ARG) == -- ]] && has YL_ARG -dash.yml && has YL_ARG 'a b.yml' && [[ \$(count YL_ARG) == 8 ]]"
   check "[$loc] shellcheck gets '--' before the names, so -dash.sh is a file, not an option" \
-    "[[ \$(first SC_ARG) == -- ]] && has SC_ARG -dash.sh && [[ \$(count SC_ARG) == 6 ]]"
+    "[[ \$(first SC_ARG) == -- ]] && has SC_ARG -dash.sh && has SC_ARG \"n\${newline}l.sh\" && [[ \$(count SC_ARG) == 10 ]]"
   check "[$loc] shfmt gets -d, then '--' before the names, so -dash.sh is a file, not an option" \
-    "[[ \$(first SF_ARG) == -d ]] && has SF_ARG -- && has SF_ARG -dash.sh && [[ \$(count SF_ARG) == 5 ]]"
+    "[[ \$(first SF_ARG) == -d ]] && has SF_ARG -- && has SF_ARG -dash.sh && has SF_ARG 's p.sh' && [[ \$(count SF_ARG) == 8 ]]"
   check "[$loc] Python: every *.py, byte for byte, not a .PY or a .pyc" \
-    "has PY_FILES tools/a.py && has PY_FILES -dash.py && has PY_FILES \"\${latin1}.py\" && ! has PY_FILES UPPER.PY && [[ \$(count PY_FILES) == 3 ]]"
+    "has PY_FILES tools/a.py && has PY_FILES -dash.py && has PY_FILES \"\${latin1}.py\" && ! has PY_FILES UPPER.PY && [[ \$(count PY_FILES) == 5 ]]"
   check "[$loc] ruff gets the gate's flags, then '--' before the names, so -dash.py is a file, not an option" \
-    "[[ \$(first RF_ARG) == check ]] && has RF_ARG --isolated && has RF_ARG -- && has RF_ARG -dash.py && [[ \$(count RF_ARG) == 11 ]]"
+    "[[ \$(first RF_ARG) == check ]] && has RF_ARG --isolated && has RF_ARG -- && has RF_ARG -dash.py && has RF_ARG 'p y.py' && [[ \$(count RF_ARG) == 13 ]]"
 done
 unset LC_ALL
 
@@ -223,7 +236,7 @@ run_lists
 yl=()
 for entry in ${OUT[@]+"${OUT[@]}"}; do [[ "$entry" != YL_ARG$'\t'* ]] || yl+=("${entry#*$'\t'}"); done
 check "with a .yamllint.yml, yamllint gets -c .yamllint.yml, then '--', then the names" \
-  "[[ $st == 0 && \"\${yl[0]:-}\" == -c && \"\${yl[1]:-}\" == .yamllint.yml && \"\${yl[2]:-}\" == -- && \${#yl[@]} == 8 ]]"
+  "[[ $st == 0 && \"\${yl[0]:-}\" == -c && \"\${yl[1]:-}\" == .yamllint.yml && \"\${yl[2]:-}\" == -- && \${#yl[@]} == 10 ]]"
 rm "$repo/.yamllint.yml"
 
 # A branch with no change, and one whose only change no list takes: the block and the steps run, and every list is empty.
@@ -501,6 +514,21 @@ if command -v markdownlint-cli2 > /dev/null 2>&1; then
   printf "$bad" > "$real/line${newline}break.md"
   real_md "line${newline}break.md"
   check "markdownlint-cli2 itself: a name with a newline is linted as that file" "[[ $rst != 0 ]] && [[ \"\$rout\" == *'break.md'*MD012* ]]"
+  # !bang.md is a file, not a negation (which would lint nothing and pass), and a*.md is that file, not a glob over the bad ab.md beside it.
+  # shellcheck disable=SC2059
+  printf "$bad" > "$real/!bang.md"
+  real_md '!bang.md'
+  check "markdownlint-cli2 itself: !bang.md is linted as a file, not read as a negation" "[[ $rst != 0 ]] && [[ \"\$rout\" == *'!bang.md'*MD012* ]]"
+  printf '# T\n' > "$real/a*.md"
+  # shellcheck disable=SC2059
+  printf "$bad" > "$real/ab.md"
+  real_md 'a*.md'
+  check "markdownlint-cli2 itself: a*.md is linted, not the ab.md a glob would match" "[[ $rst == 0 ]]"
+  # shellcheck disable=SC2059
+  printf "$bad" > "$real/a*.md"
+  printf '# T\n' > "$real/ab.md"
+  real_md 'a*.md'
+  check "markdownlint-cli2 itself: a violation in a*.md is reported" "[[ $rst != 0 ]] && [[ \"\$rout\" == *'a*.md'*MD012* ]]"
 else
   echo "skip - markdownlint-cli2 isn't installed, so the gate's ':<name>' form isn't tried with the real tool"
 fi

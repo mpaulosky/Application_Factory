@@ -9,7 +9,10 @@
 # case can tell whether the hook linted the staged content or the working
 # copy, and under which config, without needing the real linter. The stub
 # takes only literal paths (a leading ':'), as the real linter needs them:
-# without one it reads a name as a glob, an option or a negation. A `git`
+# without one it reads a name as a glob, an option or a negation. Run with no
+# arguments it prints a banner, as the real one does, naming STUB_LINT_VERSION
+# (0.24.0 by default), or STUB_LINT_BANNER as it is; it logs its arguments,
+# NUL-separated, to $ARGS too, so a case can match one exactly. A `git`
 # wrapper fails the git subcommand FAIL_GIT names (only its FAIL_GIT_CALL-th
 # call, when that is set), so a case can tell that the hook refuses a commit it
 # couldn't lint.
@@ -26,11 +29,21 @@ PRIMARY="$WORK/repo"
 REPO="$WORK/repo-worktrees/fix-1-lint"
 STUBS="$WORK/bin"
 LOG="$WORK/lint.log"
+ARGS="$WORK/lint.args"
 
 mkdir -p "$STUBS"
 cat > "$STUBS/markdownlint-cli2" << EOF
 #!/usr/bin/env bash
+if [[ \$# -eq 0 ]]; then
+  if [[ -n "\${STUB_LINT_BANNER+set}" ]]; then
+    echo "\$STUB_LINT_BANNER"
+  else
+    echo "markdownlint-cli2 v\${STUB_LINT_VERSION:-0.24.0} (markdownlint v0.38.0)"
+  fi
+  exit 2
+fi
 echo "markdownlint-cli2 \$*" >> "$LOG"
+printf '%s\0' "\$@" >> "$ARGS"
 [[ -f .markdownlint-cli2.jsonc ]] || { echo "no config in \$PWD"; exit 2; }
 word=\$(sed -n 's/.*"forbid": *"\\([^"]*\\)".*/\\1/p' .markdownlint-cli2.jsonc)
 ignored=\$(sed -n 's/.*"ignores": *\\[ *"\\([^"]*\\)\\*\\*".*/\\1/p' .markdownlint-cli2.jsonc)
@@ -95,6 +108,7 @@ STATUS=0
 # run_hook [dir]: run the hook in dir, the lint worktree by default.
 run_hook() {
   : > "$LOG"
+  : > "$ARGS"
   OUTPUT="$(cd "${1:-$REPO}" && PATH="$STUBS:$PATH" bash "$HOOK" 2>&1)"
   STATUS=$?
 }
@@ -103,6 +117,7 @@ run_hook() {
 # with that git subcommand failing (only its <call>-th call, when given).
 run_hook_failing_git() {
   : > "$LOG"
+  : > "$ARGS"
   : > "$WORK/git-calls"
   OUTPUT="$(cd "$REPO" && PATH="$GIT_STUBS:$STUBS:$PATH" FAIL_GIT="$1" FAIL_GIT_CALL="${2:-}" bash "$HOOK" 2>&1)"
   STATUS=$?
@@ -133,6 +148,15 @@ expect() {
   else
     pass "$name"
   fi
+}
+
+# got_arg <arg>: whether the linter was given exactly <arg>.
+got_arg() {
+  local arg
+  while IFS= read -r -d '' arg; do
+    [[ "$arg" == "$1" ]] && return 0
+  done < "$ARGS"
+  return 1
 }
 
 # reset_repo: drop staged and unstaged changes so each case starts clean.
@@ -253,33 +277,109 @@ expect "a nested config that isn't staged isn't used" refused linted
 reset_repo
 
 # markdownlint-cli2 reads a bare argument as a glob, an option or a negation.
-for name in 'a[1].md' '-dash.md' '!bang.md'; do
+# a1.md is a decoy a[1].md or a*.md read as a glob would match. The names are
+# shown with printf %q, so a newline or a byte that isn't UTF-8 shows as such.
+for name in 'a[1].md' 'a*.md' '-dash.md' '!bang.md' ':colon.md' 'a b.md' $'new\nline.md' $'\xff.md'; do
+  shown="$(printf '%q' "$name")"
   echo 'BAD text.' > "$REPO/$name"
   echo 'Some text.' > "$REPO/a1.md"
-  git -C "$REPO" add -- "$name" a1.md
+  # --literal-pathspecs, or git reads :colon.md's ':' as pathspec magic.
+  git -C "$REPO" --literal-pathspecs add -- "$name" a1.md
   run_hook
-  expect "a staged $name is linted as that file" refused linted
-  if grep -qF -- ":$name" "$LOG"; then
-    pass "the linter gets $name as a literal path (:$name)"
+  expect "a staged $shown is linted as that file" refused linted
+  if got_arg ":$name"; then
+    pass "the linter gets $shown as a literal path, one ':' before the name"
   else
-    fail "the linter gets $name as a literal path (:$name)" "its arguments: $(cat "$LOG")"
+    fail "the linter gets $shown as a literal path, one ':' before the name" "its arguments: $(cat "$LOG")"
   fi
   reset_repo
 done
+
+# A hard name renamed is linted under its new name, and a hard name partly
+# staged is linted as staged.
+printf '# Notes\n\n%s\n' line1 line2 line3 line4 line5 line6 line7 line8 > "$REPO/a[1] notes.md"
+git -C "$REPO" add -- 'a[1] notes.md'
+git -C "$REPO" -c core.hooksPath=/dev/null commit -q -m notes
+git -C "$REPO" mv -- 'a[1] notes.md' '-b[2] guide.md'
+echo 'BAD text.' >> "$REPO/-b[2] guide.md"
+git -C "$REPO" add -- '-b[2] guide.md'
+run_hook
+expect "a violation in a renamed hard-named file refuses the commit" refused linted
+if got_arg ':-b[2] guide.md' && ! got_arg ':a[1] notes.md'; then
+  pass "a renamed hard-named file is linted under its new name"
+else
+  fail "a renamed hard-named file is linted under its new name" "its arguments: $(cat "$LOG")"
+fi
+git -C "$REPO" reset -q --hard HEAD~1
+echo 'BAD text.' > "$REPO/!part [1].md"
+git -C "$REPO" add -- '!part [1].md'
+echo 'Some text.' > "$REPO/!part [1].md"
+run_hook
+expect "a hard-named file staged bad and fixed only in the working copy refuses the commit" refused linted
+reset_repo
+
+# A commit with no Markdown needs no temporary folder; one with Markdown is
+# refused, saying why, when it can't have one.
+echo 'text' > "$REPO/notes.txt"
+git -C "$REPO" add notes.txt
+TMPDIR="$WORK/no-such-dir" run_hook
+expect "with no staged Markdown and no temporary folder, the hook lets the commit through" allowed not-linted
+reset_repo
+echo 'Some text.' >> "$REPO/README.md"
+git -C "$REPO" add README.md
+TMPDIR="$WORK/no-such-dir" run_hook
+expect "with staged Markdown and no temporary folder, the hook refuses the commit" refused not-linted
+if [[ "$OUTPUT" == *"Couldn't make a temporary folder to lint the staged Markdown in: the commit is refused."* ]]; then
+  pass "without a temporary folder the hook says why it refuses the commit"
+else
+  fail "without a temporary folder the hook says why it refuses the commit" "no reason in the output"
+fi
+reset_repo
+
+# A caller's GIT_LITERAL_PATHSPECS would make the hook's '*.md' match no file
+# and let the commit through unlinted: the hook drops it.
+echo 'BAD text.' >> "$REPO/README.md"
+git -C "$REPO" add README.md
+GIT_LITERAL_PATHSPECS=1 run_hook
+expect "with GIT_LITERAL_PATHSPECS set, staged Markdown is still linted" refused linted
+reset_repo
+
+# The ':' prefix came in markdownlint-cli2 0.4.0: an older one, or one whose
+# version can't be read, refuses the commit before it lints.
+echo 'Some text.' >> "$REPO/README.md"
+git -C "$REPO" add README.md
+STUB_LINT_VERSION=0.3.2 run_hook
+expect "a markdownlint-cli2 older than 0.4.0 refuses the commit" refused not-linted
+if [[ "$OUTPUT" == *'markdownlint-cli2 v0.3.2 (markdownlint v0.38.0), not markdownlint-cli2 0.4.0 or later'* ]]; then
+  pass "an old markdownlint-cli2's refusal names its version"
+else
+  fail "an old markdownlint-cli2's refusal names its version" "no version in the output"
+fi
+STUB_LINT_VERSION=0.4.0 run_hook
+expect "markdownlint-cli2 0.4.0 lints" allowed linted
+STUB_LINT_VERSION=0.10.0 run_hook
+expect "markdownlint-cli2 0.10.0 lints (its version is read as a number)" allowed linted
+STUB_LINT_BANNER='Usage: something else' run_hook
+expect "a markdownlint-cli2 whose version can't be read refuses the commit" refused not-linted
+reset_repo
 
 # A git that fails refuses the commit, rather than linting nothing or a tree
 # missing the staged files.
 echo 'Some text.' >> "$REPO/README.md"
 git -C "$REPO" add README.md
-# checkout-index runs twice: for the configs, then for the staged files.
-for failing in diff ls-files "checkout-index 1" "checkout-index 2"; do
+# diff runs twice: whether any Markdown is staged, then the list of it.
+# checkout-index runs twice too: for the configs, then for the staged files.
+# Each refusal names what failed, and says what to do.
+for failing in "diff 1:Markdown can't be listed" "diff 2:Markdown can't be listed" "ls-files:markdownlint configs" \
+  "checkout-index 1:markdownlint configs" "checkout-index 2:Markdown files"; do
+  said="${failing#*:}" failing="${failing%%:*}"
   # shellcheck disable=SC2086 # the subcommand and its call number, as two words
   run_hook_failing_git $failing
   expect "a failing git $failing refuses the commit" refused not-linted
-  if [[ "$OUTPUT" == *'the commit is refused'* ]]; then
-    pass "a failing git $failing says the commit is refused"
+  if [[ "$OUTPUT" == *"$said"*'the commit is refused'* && "$OUTPUT" == *"See git's message above"* ]]; then
+    pass "a failing git $failing says what failed, that the commit is refused, and what to do"
   else
-    fail "a failing git $failing says the commit is refused" "no refusal in the output"
+    fail "a failing git $failing says what failed, that the commit is refused, and what to do" "expected '$said', the refusal and what to do"
   fi
 done
 run_hook_failing_git no-such-subcommand

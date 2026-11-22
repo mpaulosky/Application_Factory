@@ -22,6 +22,9 @@ the paths are unchanged.
   time while passing in CI.
 - Each name goes to markdownlint-cli2 as `:<name>`, its literal-path form, as `scripts/gate.sh` passes them: a bare
   argument is read as a glob (`a[1].md` would match `a1.md`), an option (`-dash.md`) or a negation (`!bang.md`).
+- The `:` form came in markdownlint-cli2 0.4.0, so the hook needs 0.4.0 or later. It reads the version from the banner the linter
+  prints when run with no arguments, and refuses the commit, naming what it found, when that is an older release or a banner it
+  can't read: an older linter would read `:a.md` as a glob that matches nothing, and pass every commit.
 - It fails closed. The staged list is written to a file and a `git diff --cached` that fails refuses the commit, and so does
   a failed snapshot (`git ls-files` or either `git checkout-index`): an empty list or a tree missing a staged file would
   otherwise let the commit through unlinted.

@@ -7,7 +7,8 @@
 # `actionlint`, `zizmor`, `shellcheck` and `ruff` binaries log each call, and fail when the call matches the FAIL glob, so no
 # real build or network access is needed (the ruff stub answers --version with a 0.17 release, the one the gate's Python lint step accepts:
 # the repo tracks two Python files, which the gate lints when there is no origin/main to diff against, and CI's hook-tests job has no ruff or uv). check_gh_repo.py and the Shell format step run the real shfmt (v3.14 or a later v3), which must be on PATH;
-# the repo gets the Template's .editorconfig, so the scripts it is given are written in that style.
+# the repo gets the Template's .editorconfig, so the scripts it is given are written in that style. The case run by hand from a terminal
+# needs python3 (its pty module), and is skipped, saying so, without it.
 # Usage: .github/hooks/tests/pre-push.test.sh
 set -uo pipefail
 
@@ -119,6 +120,11 @@ fail() {
   FAILED=$((FAILED + 1))
   echo "FAIL - $1: $2"
   while IFS= read -r line; do echo "       | $line"; done <<< "$OUTPUT"
+}
+
+# skip <name> <why>: a case this machine can't run, said as such (it counts as neither).
+skip() {
+  echo "skip - $1: $2"
 }
 
 # expect <name> <allowed|refused> <tests-ran|tests-skipped|any> [message]
@@ -374,6 +380,45 @@ run_hook feature/6-extensionless "$(push_stdin feature/6-extensionless)"
 expect "a changed extensionless script is not formatted, only shellchecked" allowed tests-ran
 expect_log "a changed extensionless script is shellchecked" ran 'shellcheck*scripts/tool*'
 
+# The Python lint and Shell format steps stop the push when their tool fails or can't be had. BARE_BIN is the system's commands without
+# ruff, uv, uvx or shfmt, so no real one is found.
+BARE_BIN="$WORK/bare-bin"
+mkdir -p "$BARE_BIN"
+for cmd in "$SYSTEM_BIN"/*; do
+  case "${cmd##*/}" in ruff | uv | uvx | shfmt) continue ;; esac
+  ln -s "$(readlink "$cmd")" "$BARE_BIN/${cmd##*/}"
+done
+RUFF16_STUBS="$WORK/bin-ruff16"
+mkdir -p "$RUFF16_STUBS"
+for tool in dotnet pnpm markdownlint-cli2 yamllint actionlint zizmor shellcheck; do
+  make_stub "$RUFF16_STUBS" "$tool"
+done
+printf '%s\n' '#!/usr/bin/env bash' '[[ "$*" != --version ]] || { echo "ruff 0.16.0"; exit 0; }' "echo \"ruff \$*\" >> '$LOG'" > "$RUFF16_STUBS/ruff"
+chmod +x "$RUFF16_STUBS/ruff"
+
+# run_hook_on_path <PATH> <checked-out branch>: the hook, pushing the branch, with exactly that PATH.
+run_hook_on_path() {
+  switch_to "$2"
+  : > "$LOG"
+  local stdin
+  stdin="$(push_stdin "$2")"
+  stdin="${stdin//@HEAD@/$(git -C "$REPO" rev-parse HEAD)}"
+  OUTPUT="$(cd "$REPO" && PATH="$1" bash "$HOOK" <<< "$stdin" 2>&1)"
+  STATUS=$?
+}
+
+commit_on feature/8-python scripts/tool.py 'print("tool")'
+run_hook feature/8-python "$(push_stdin feature/8-python)"
+expect "a changed Python file ruff passes is allowed" allowed tests-ran
+FAIL='ruff check*' run_hook feature/8-python "$(push_stdin feature/8-python)"
+expect "a ruff that finds a problem in a changed Python file refuses the push" refused any "❌ ruff: fix each problem shown above"
+run_hook_on_path "$RUFF16_STUBS:$BARE_BIN" feature/8-python
+expect "a ruff 0.16 with no uvx refuses the push, saying what to install" refused any \
+  "❌ Python lint needs ruff 0.17: the installed ruff is 'ruff 0.16.0', not a 0.17 release"
+run_hook_on_path "$STUBS:$BARE_BIN" feature/6-formatted
+expect "with no shfmt on PATH a changed shell file refuses the push, saying what to install" refused any \
+  "❌ Shell format needs shfmt v3.14 or a later v3 release (check_gh_repo.py needs it too): install it on PATH."
+
 commit_on feature/7-hook-readme .github/hooks/README.md '# Hooks'
 run_hook feature/7-hook-readme "$(push_stdin feature/7-hook-readme)"
 expect_log "a non-hook file under .github/hooks skips shellcheck" not-ran 'shellcheck*'
@@ -579,15 +624,39 @@ git -C "$REPO" update-ref refs/remotes/origin/main "$MAIN_BEFORE"
 git -C "$REPO" switch -q feature/1-x
 
 # Run by hand from a terminal, the hook reads no refs: stdin is the terminal, and reading it would wait for Ctrl-D. Run on a
-# pseudo-terminal, with a timeout so a hook that waits fails the case instead of hanging the suite.
+# pseudo-terminal, with a 30-second deadline (kept by python3 itself: macOS has no timeout(1)) after which the hook is killed and the
+# run exits 124, so a hook that waits fails the case instead of hanging the suite.
 switch_to main
-OUTPUT="$(cd "$REPO" && timeout 30 python3 -I -c 'import os, pty, sys
-sys.exit(os.waitstatus_to_exitcode(pty.spawn(sys.argv[1:])))' env PATH="$STUBS:$PATH" bash "$HOOK" < /dev/null 2>&1)"
-STATUS=$?
-if [[ $STATUS -eq 124 ]]; then
-  fail "run by hand from a terminal, the hook doesn't wait for stdin" "it was still waiting after 30 seconds"
+if ! command -v python3 &> /dev/null; then
+  skip "run by hand from a terminal, the hook doesn't wait for stdin" "python3 isn't installed"
 else
-  expect "run by hand from a terminal, the hook gates the checked-out branch" refused tests-skipped "Direct pushes to 'main' are not allowed."
+  : > "$LOG"
+  OUTPUT="$(cd "$REPO" && python3 -I -c 'import os, pty, signal, sys
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+def expired(*_):
+    os.kill(pid, signal.SIGKILL)
+    sys.exit(124)
+signal.signal(signal.SIGALRM, expired)
+signal.alarm(30)
+while True:
+    try:
+        data = os.read(fd, 4096)
+    except OSError:  # the pty is closed once the hook exits (EIO on Linux)
+        break
+    if not data:
+        break
+    os.write(1, data)
+signal.alarm(0)
+_, status = os.waitpid(pid, 0)
+sys.exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1)' env PATH="$STUBS:$PATH" bash "$HOOK" < /dev/null 2>&1)"
+  STATUS=$?
+  if [[ $STATUS -eq 124 ]]; then
+    fail "run by hand from a terminal, the hook doesn't wait for stdin" "it was still waiting after 30 seconds"
+  else
+    expect "run by hand from a terminal, the hook gates the checked-out branch" refused tests-skipped "Direct pushes to 'main' are not allowed."
+  fi
 fi
 switch_to feature/1-x
 

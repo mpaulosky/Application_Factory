@@ -12,9 +12,10 @@
 # tests/. Exits non-zero on the first
 # failing gate. GATE_SKIP_REVIEW=1 skips the review check, for gate runs before
 # the push (the review's own, and while iterating), never for a push.
-# The Application Factory owns this file and tests it: its tests/owned-gate-files.test.sh runs the changed-file lists and the
-# lint steps on hard names (a space, a newline, a leading '-', a[1].md, bytes that aren't UTF-8) and through every ruff and
-# shfmt failure, and .github/hooks/tests/pre-push.test.sh runs the whole gate behind the hook.
+# The Application Factory owns this file and tests it: the Factory's own .claude/skills/repo-ci-baseline/tests/owned-gate-files.test.sh
+# (in Application_Factory, not in this repo) runs the changed-file lists and the lint steps on hard names (a space, a newline, a
+# leading '-', a[1].md, bytes that aren't UTF-8) and through every ruff and shfmt failure, and this repo's
+# .github/hooks/tests/pre-push.test.sh runs the whole gate behind the hook.
 set -euo pipefail
 
 # bash_too_old <major> <minor>: true for a bash before 4.4. The changed-file lists below are read with mapfile -d '', which 4.4
