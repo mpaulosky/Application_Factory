@@ -4706,7 +4706,7 @@ def test_the_round_without_auto_is_unchanged():
     out, err = io.StringIO(), io.StringIO()
     code = rollout.main(["--brings", "#82", "--root", "/r"], listed=LISTED, reapply=fleet.reapply,
                         latest_pr=lambda repo: (100, "MERGED"), exists=lambda path: True, out=out, err=err,
-                        auto={"check": fleet.check})
+                        auto={"check": fleet.check}, ahead=lambda path: False)
     assert code == 0 and ("check",) not in fleet.events
 
 
