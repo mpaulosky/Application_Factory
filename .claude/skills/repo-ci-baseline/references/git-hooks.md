@@ -240,7 +240,8 @@ The Template doesn't carry `.claude/settings.json`, so each repo that wants the 
 `scripts/lint-edited-file.sh` (with `scripts/tests/lint-edited-file.test.sh`) is a Claude Code `PostToolUse` hook. After each Edit, Write or MultiEdit
 it lints the file the tool wrote, so an agent fixes a violation in the same turn and the pre-commit hook, the gate, CI and a reviewer never see it
 ([the Factory's ADR 0011](../../../../docs/adr/0011-markdown-and-yaml-are-linted-as-they-are-written.md)). A Markdown file goes through `markdownlint-cli2` with the repo's
-`.markdownlint-cli2.jsonc`. A YAML file goes through `yamllint` with `.yamllint.yml`; a workflow also goes through `actionlint` and `zizmor --offline`, and `.github/dependabot.yml` through `zizmor`,
+`.markdownlint-cli2.jsonc`. A YAML file goes through `yamllint` with `.yamllint.yml`; a workflow also goes through `actionlint` and `zizmor --offline --min-severity medium`, and `.github/dependabot.yml`
+through `zizmor --offline --min-severity medium`,
 at the repo root or under any folder (the Factory edits the Template's originals under `.claude/skills/`).
 These are the checks the CI lint workflows run; a gate runs `actionlint` and `zizmor` only where it lints workflows (an Application's gate does when a workflow changed; the Factory's does not).
 A shell file goes through `shellcheck` and `shfmt -d`, the gate's Shell lint and Shell format steps, on the files the gate takes for shell files: a `*.sh`, an extensionless file in the

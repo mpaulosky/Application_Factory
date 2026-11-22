@@ -343,14 +343,18 @@ slug_fn() { awk '/^slug_of\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$1"; }
 for script in cleanup watch-pr; do
   check "slug_of is the same function in work-issue.sh and $script.sh" "[[ -n \"\$(slug_fn $SCRIPTS/work-issue.sh)\" && \"\$(slug_fn $SCRIPTS/work-issue.sh)\" == \"\$(slug_fn $SCRIPTS/$script.sh)\" ]]"
 done
+# One decision for every locale loop below: C always runs; a UTF-8 locale that isn't installed is skipped, except C.utf8 under CI, which fails
+locale_usable() {
+  [[ "$1" == C ]] && return 0
+  [[ "$(LC_ALL=$1 locale charmap 2> /dev/null)" == UTF-8 ]] && return 0
+  if [[ -n "${CI:-}" && "$1" == C.utf8 ]]; then
+    FAILED=$((FAILED + 1))
+    echo "FAIL - locale C.utf8 is missing, and CI must test $2 in a UTF-8 locale"
+  else echo "skip - locale $1 is not installed ($2)"; fi
+  return 1
+}
 for loc in C C.utf8 en_US.utf8; do
-  if [[ "$loc" != C ]] && [[ "$(LC_ALL=$loc locale charmap 2> /dev/null)" != UTF-8 ]]; then
-    if [[ -n "${CI:-}" && "$loc" == C.utf8 ]]; then
-      FAILED=$((FAILED + 1))
-      echo "FAIL - locale C.utf8 is missing, and CI must test slug_of in a UTF-8 locale"
-    else echo "skip - locale $loc is not installed"; fi
-    continue
-  fi
+  locale_usable "$loc" slug_of || continue
   SLUG_LOCALE=$loc
   for script in work-issue cleanup watch-pr; do
     # shellcheck disable=SC2016 # the bash -c text is expanded by the inner bash, on purpose
@@ -381,10 +385,7 @@ for script in work-issue cleanup watch-pr; do
   check "$script: is_slug declares local LC_ALL=C (the regex ranges are ASCII only)" "is_fn $SCRIPTS/$script.sh | grep -q 'local LC_ALL=C$'"
 done
 for loc in C C.utf8 en_US.utf8; do
-  if [[ "$loc" != C ]] && [[ "$(LC_ALL=$loc locale charmap 2> /dev/null)" != UTF-8 ]]; then
-    echo "skip - locale $loc is not installed"
-    continue
-  fi
+  locale_usable "$loc" is_slug || continue
   SLUG_LOCALE=$loc
   for script in work-issue cleanup watch-pr; do
     # shellcheck disable=SC2016 # the bash -c text is expanded by the inner bash, on purpose
