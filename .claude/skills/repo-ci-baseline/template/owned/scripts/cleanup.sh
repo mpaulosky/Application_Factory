@@ -18,8 +18,9 @@
 # parent folder is still there, searchable and not empty. A parent that is missing, empty, unreadable or unsearchable may be an unmounted drive (its mount point is left empty), so the branch is
 # kept, with the hint to run git worktree prune if the folder was deleted for good. --dry-run prints what would happen and changes no branch, worktree or commit (it still
 # fetches and prunes the remote-tracking refs).
-# Exits 1 when it can't run (not main, not the primary checkout, dirty main, main can't fast-forward, origin can't be fetched, no gh, no repository,
-# a gh lookup failed, a bad argument, an origin push URL that is not shown to be the fetch URL's repository (the same text, or both github.com URLs for the same owner/name; CLEANUP_PUSH_URL_OK=1 accepts the push URLs as they are), no scripts/check-branch-name.sh) and, after finishing the rest, when a removal git refused, a branch a worktree is rebasing or bisecting (a real run only: a dry run exits 0), a check of origin
+# Exits 1 when it can't run (not main, not the primary checkout, dirty main, main can't fast-forward, origin can't be fetched, no gh, no repository, a GITHUB_REPOSITORY
+# that isn't an owner/name of [A-Za-z0-9._-] only (refused before gh is asked anything),
+# a gh lookup failed, a branch list git can't read (checked before anything is removed), a bad argument, an origin push URL that is not shown to be the fetch URL's repository (the same text, or both github.com URLs for the same owner/name; CLEANUP_PUSH_URL_OK=1 accepts the push URLs as they are), no scripts/check-branch-name.sh) and, after finishing the rest, when a removal git refused, a branch a worktree is rebasing or bisecting (a real run only: a dry run exits 0), a check of origin
 # failed, the closing fetch failed or a commit was made, or the branch deleted, after a branch was judged. CLEANUP_PUSH_URL_OK=1 prints a warning for each push URL it lets through unchecked. Both that
 # warning and the refusal mask a scheme URL's userinfo, which can hold a token, as *** (shown_url). A branch is judged by its PR, and at most 100 PRs are read per branch name: 100 or more keeps the branch.
 # A local branch is deleted by update-ref --no-deref -d, which compares and deletes in one step: the tip is also rechecked before its worktree or the worktree's entry is removed, and a branch a worktree is rebasing or bisecting is kept.
@@ -86,10 +87,16 @@ shown_url() {
   fi
   printf '%s' "${shown//[^ -~]/?}"
 }
+# is_slug <text>: whether <text> is an owner/name as slug_of gives one ([A-Za-z0-9._-] only, in the C locale), so GITHUB_REPOSITORY is held to the
+# same shape as a remote's owner/name before gh is pointed at it.
+is_slug() {
+  local LC_ALL=C
+  [[ "$1" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]
+}
 url="$(git remote get-url upstream 2> /dev/null || git remote get-url origin 2> /dev/null || true)"
 repo="${GITHUB_REPOSITORY:-}"
 if [[ -z "$repo" ]]; then repo="$(slug_of "$url")"; fi
-[[ "$repo" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] || die "can't tell which repository: set GITHUB_REPOSITORY or add a github.com upstream or origin remote"
+is_slug "$repo" || die "can't tell which repository: set GITHUB_REPOSITORY to an owner/name, or add a github.com upstream or origin remote"
 export GH_REPO="${repo:?}"
 # A PR counts only when its head repository is the one origin points at: origin's owner/name when it is a github.com URL, else GH_REPO's.
 lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
@@ -233,6 +240,10 @@ keep() {
   kept=$((kept + 1))
 }
 
+# Both lists are read before anything is removed: a failing for-each-ref stops the run, rather than running a loop over no branches and reporting success.
+local_refs="$(git for-each-ref --format='%(refname)' refs/heads)" || die "can't list refs/heads: git for-each-ref failed"
+origin_refs="$(git for-each-ref --format='%(refname)' refs/remotes/origin)" || die "can't list refs/remotes/origin: git for-each-ref failed"
+
 # Local branches
 while read -r ref; do
   b="${ref#refs/heads/}"
@@ -342,7 +353,7 @@ while read -r ref; do
     git config --remove-section "branch.$b" 2> /dev/null || true
   fi
   removed=$((removed + 1))
-done < <(git for-each-ref --format='%(refname)' refs/heads)
+done <<< "$local_refs"
 
 # Branches left on origin
 while read -r ref; do
@@ -380,7 +391,7 @@ while read -r ref; do
     fi
   fi
   removed=$((removed + 1))
-done < <(git for-each-ref --format='%(refname)' refs/remotes/origin)
+done <<< "$origin_refs"
 
 if [[ "$dry" != true ]] && ! git fetch --prune --quiet origin; then
   echo "❌ the closing fetch of origin failed" >&2

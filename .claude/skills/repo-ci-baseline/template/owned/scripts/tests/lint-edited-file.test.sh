@@ -228,6 +228,25 @@ p=()
 [[ $STATUS -eq 2 ]] || p+=("exit $STATUS, want 2")
 check "an upper-case .MD extension is linted" ${p[@]+"${p[@]}"}
 
+# Every tr the hook starts runs in the C locale, whatever the caller's: a BSD tr in a UTF-8 locale fails with 'Illegal byte sequence' on a name
+# that isn't valid UTF-8, and the extension would then go unread and the file unlinted. GNU tr is byte-wise, so a tr shim logs the LC_ALL it got.
+TR_TOOLS="$WORK/tr-tools"
+link_tools "$TR_TOOLS"
+command rm "$TR_TOOLS/tr"
+# shellcheck disable=SC2016 # the shim's own $LC_ALL, $STUB_LOG and $@ are expanded when it runs
+printf '#!%s\nprintf "tr LC_ALL=%%s\\n" "${LC_ALL-<unset>}" >> "$STUB_LOG"\nexec %q "$@"\n' "$BASH_BIN" "$(command -v tr)" > "$TR_TOOLS/tr"
+chmod +x "$TR_TOOLS/tr"
+printf '# T\n\nBAD\n' > "$repo/docs/Ünïcode.MD"
+saved_env=("${RUN_ENV[@]}")
+RUN_ENV=(LANG=C.UTF-8 LC_ALL=C.UTF-8)
+run_hook "$(edit_json "$repo/docs/Ünïcode.MD")" "$STUBS:$TR_TOOLS"
+RUN_ENV=("${saved_env[@]}")
+p=()
+[[ $STATUS -eq 2 ]] || p+=("exit $STATUS, want 2: the file was not linted")
+grep -q '^tr LC_ALL=' "$LOG" || p+=("no tr ran, so the shim saw nothing")
+! grep '^tr LC_ALL=' "$LOG" | grep -qvx 'tr LC_ALL=C' || p+=("a tr ran outside the C locale: $(grep '^tr LC_ALL=' "$LOG" | sort -u | tr '\n' ' ')")
+check "in a UTF-8 locale, every tr the hook starts runs with LC_ALL=C" ${p[@]+"${p[@]}"}
+
 printf '# T\n\nBAD\n' > "$repo/docs/we ird[1]*.md"
 run_hook "$(edit_json "$repo/docs/we ird[1]*.md")"
 p=()
