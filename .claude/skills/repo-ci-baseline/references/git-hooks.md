@@ -144,7 +144,9 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
   later one adds rules. Without one, or with another release or a `--version` that fails, it runs `uvx --no-config ruff@0.17.6` (`--no-config`: it reads no uv config at
   all, so none in the checkout can send the fetch elsewhere, nor can the user's own name a mirror), first saying why it passed the installed one over, naming what it printed
   with every byte but printable ASCII as `?`; without uv it stops, saying the same and naming both. A uvx run that fails other than with a finding is named as a possible
-  failed fetch, with the way round it: ruff 0.17 first on PATH. ruff exiting 1 is a finding, and any other status stops the gate as a failed ruff. Unlike shell format it runs
+  failed fetch, with the way round it: ruff 0.17 first on PATH. ruff exiting 1 is a finding, and the gate then prints the command it ran with `--fix` added, its own
+  ruff and flags and up to five files shell-quoted (`<file>...` for more), so the fix reads no config either; any other status stops the gate as a failed ruff.
+  `py312` is the Python CI's `python-tests` job runs, so newer syntax is refused by design; `test.sh` keeps the two equal. Unlike shell format it runs
   without an `origin/main` too, on every tracked Python file, as the shell lint does. `tests/owned-gate-files.test.sh` (the Factory's) runs those lines in a throwaway
   repo, in a UTF-8 locale and in C, the YAML, shell lint, shell format and Python lint steps with stubs, and the Markdown step with a stub and, when installed, the real tool;
   `.github/hooks/tests/pre-push.test.sh` runs the whole gate with the real shfmt, and shows it reads the repo's `.editorconfig`. Then build and run each test

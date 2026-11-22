@@ -292,16 +292,22 @@ run_static() {
     echo -e "${RED}❌ ruff not found: the gate needs ruff 0.17 (uv tool install ruff@${RUFF_VERSION}).${RESET}" >&2
     exit 1
   fi
-  ruff_found="$(ruff --version 2>&1)" || ruff_found=""
-  if ! [[ "$ruff_found" =~ $RUFF_RELEASE ]]; then
+  ruff_version_rc=0
+  ruff_found="$(ruff --version 2>&1)" || ruff_version_rc=$?
+  if ((ruff_version_rc != 0)) || [[ -z "$ruff_found" ]] || ! [[ "$ruff_found" =~ $RUFF_RELEASE ]]; then
     # Its first 80 bytes, every byte but printable ASCII as ?, in C so the cut and the match go byte by byte.
     ruff_shown="$(
       export LC_ALL=C
       cut="${ruff_found:0:80}"
       printf '%s' "${cut//[!\ -~]/?}"
     )"
-    # printf %s, not echo -e: a backslash in the answer must not become an escape.
-    printf '%b❌ the gate needs ruff 0.17, not '\''%s'\'': uv tool install ruff@%s.%b\n' "$RED" "$ruff_shown" "$RUFF_VERSION" "$RESET" >&2
+    # printf %s, not echo -e: a backslash in the answer must not become an escape. A --version that fails or prints nothing says
+    # nothing of the release, so the install is what to check (the Template gate's wording); another release is named.
+    if ((ruff_version_rc != 0)) || [[ -z "$ruff_found" ]]; then
+      printf '%b❌ ruff --version exited %d and printed '\''%s'\'', so its release is unknown: check the ruff install.%b\n' "$RED" "$ruff_version_rc" "$ruff_shown" "$RESET" >&2
+    else
+      printf '%b❌ the gate needs ruff 0.17, not '\''%s'\'': uv tool install ruff@%s.%b\n' "$RED" "$ruff_shown" "$RUFF_VERSION" "$RESET" >&2
+    fi
     exit 1
   fi
   py_all=()

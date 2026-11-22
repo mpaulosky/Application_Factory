@@ -173,7 +173,7 @@ for problem in problems:
 sys.exit(1 if problems else 0)
 PY
   # The edit-time lint and the Owned gate check Python with the same ruff release rule and flags, CI's python-tests job passes the same
-  # flags, and requirements-tests.txt pins the release the gate runs through uvx, one the rule takes: a bump of the pin to another
+  # flags, with --target-version the python-version CI runs, and requirements-tests.txt pins the release the gate runs through uvx, one the rule takes: a bump of the pin to another
   # release line fails here, so the rule is moved with it on purpose (Dependabot leaves ruff alone; see the dependabot.yml check).
   python3 -I - "$owned" << 'PY' || fail "scripts/lint-edited-file.sh, scripts/gate.sh, ci.yml and requirements-tests.txt must agree on ruff (see above)"
 import re, shlex, sys
@@ -226,6 +226,15 @@ if len({tuple(found) for found in flags.values()}) != 1:
     problems.append(f"the ruff flags differ: {flags}")
 if "--isolated" not in flags.get("gate.sh", []):
     problems.append("gate.sh's RUFF_ARGS must hold --isolated, so no config an agent could write is read")
+# ruff's target is the Python CI runs (ADR 0011, Update: Python): syntax newer than it is refused by design, and a move of CI's Python
+# moves the target in the same change.
+python = one("ci.yml", r'^ *python-version: "(3\.[0-9]+)"$')
+gate_flags = flags.get("gate.sh", [])
+target = gate_flags[gate_flags.index("--target-version") + 1] if "--target-version" in gate_flags[:-1] else None
+if target is None:
+    problems.append("gate.sh's RUFF_ARGS must give --target-version, the Python CI runs")
+elif python is not None and target != "py" + python.replace(".", ""):
+    problems.append(f"gate.sh's ruff --target-version {target} is not ci.yml's python-version {python}")
 if version is not None and pin is not None and version != pin:
     problems.append(f"gate.sh's RUFF_VERSION {version} is not requirements-tests.txt's ruff=={pin}")
 rule = rules.get("gate.sh")

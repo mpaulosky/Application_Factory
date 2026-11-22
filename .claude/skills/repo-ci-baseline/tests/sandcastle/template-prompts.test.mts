@@ -92,6 +92,17 @@ describe("the Template's Seed prompts", () => {
     assert.match(rules, /`yamllint -c \.yamllint\.yml <file>`/);
   });
 
+  it("gives the tester and the shared rules ruff's command for a Python file with the gate's own flags, so the two can't drift", () => {
+    const gate = readFileSync(new URL("template/owned/scripts/gate.sh", skill), "utf8");
+    const args = /^RUFF_ARGS=\((.*)\)$/m.exec(gate)?.[1]?.replaceAll('"', "");
+    assert.ok(args, "the Owned scripts/gate.sh has no RUFF_ARGS line");
+    const command = `\`ruff ${args} -- <file>\``;
+    const rules = readFileSync(new URL("roles/shared-rules.md", seedSandcastle), "utf8");
+
+    assert.ok(read("roles/tester.md").replace(/\n\s+/g, " ").includes(command), `roles/tester.md doesn't give ${command}`);
+    assert.ok(rules.replace(/\n\s+/g, " ").includes(command), `the Seed roles/shared-rules.md doesn't give ${command}`);
+  });
+
   it("points every role at what a repo adds, in roles/shared-rules.md: CONTEXT.md and .claude/rules/ where present, and the UI developer's files", () => {
     const rules = readFileSync(new URL("roles/shared-rules.md", seedSandcastle), "utf8");
 

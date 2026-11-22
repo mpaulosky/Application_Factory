@@ -361,6 +361,8 @@ py_run() {
     # shellcheck disable=SC2034 # read by the sourced step
     PY_FILES=(-dash.py) MD_ARGS_FILE="$work/md-args"
     [[ -z "${PY_NONE:-}" ]] || PY_FILES=()
+    [[ -z "${PY_MANY:-}" ]] || PY_FILES=(a.py "b c.py" d.py e.py f.py g.py)
+    [[ -z "${PY_FIVE:-}" ]] || PY_FILES=(-dash.py "b c.py" "it's.py" d.py e.py)
     export MD_ARGS_FILE
     : > "$MD_ARGS_FILE"
     # shellcheck disable=SC2030,SC2031 # the step's own PATH, in this subshell only
@@ -410,6 +412,15 @@ done
 STUB_RUFF_EXIT=1 py_run
 check "python lint: a problem ruff finds stops the gate, saying to fix it or mark a false alarm" \
   "[[ $pst != 0 ]] && [[ \"\$perr\" == *'ruff: fix each problem shown above'*'# noqa: <code>'* ]]"
+# The --fix hint is the command the gate ran, with --fix: the same ruff, --isolated and --select F,B, so no config in the repo changes it.
+check "python lint: the --fix hint is the gate's own command, with its flags and the file" \
+  "grep -qxF '  ruff check --isolated --no-cache --select F,B --target-version py312 --fix -- -dash.py' <<< \"\$perr\""
+STUB_RUFF_EXIT=1 PY_FIVE=1 py_run
+check "python lint: the --fix hint quotes up to five files, so it pastes as it stands" \
+  "grep -qxF \"  ruff check --isolated --no-cache --select F,B --target-version py312 --fix -- -dash.py b\\\\ c.py it\\\\'s.py d.py e.py\" <<< \"\$perr\""
+STUB_RUFF_EXIT=1 PY_MANY=1 py_run
+check "python lint: with more than five files the --fix hint leaves <file>... to fill in" \
+  "grep -qxF '  ruff check --isolated --no-cache --select F,B --target-version py312 --fix -- <file>...' <<< \"\$perr\""
 for code in 2 3 126; do
   STUB_RUFF_EXIT=$code py_run
   check "python lint: a ruff that exits $code stops the gate as a failed ruff, not a problem in the files" \
@@ -421,6 +432,8 @@ check "python lint: without ruff, uvx runs ruff@0.17.6 with the gate's flags, wi
   "[[ $pst == 0 && \"\${PARGS[*]}\" == 'UV --no-config UV ruff@0.17.6 UV check UV --isolated UV --no-cache UV --select UV F,B UV --target-version UV py312 UV -- UV -dash.py' ]] && ! grep -q 'instead' '$work/py-out'"
 STUB_RUFF_EXIT=1 py_run "$noruff:$uvx_stubs"
 check "python lint: a problem ruff finds through uvx stops the gate too" "[[ $pst != 0 ]] && [[ \"\$perr\" == *'ruff: fix each problem shown above'* ]]"
+check "python lint: through uvx, the --fix hint runs the same pinned ruff with --no-config" \
+  "grep -qxF '  uvx --no-config ruff@0.17.6 check --isolated --no-cache --select F,B --target-version py312 --fix -- -dash.py' <<< \"\$perr\""
 STUB_RUFF_EXIT=2 py_run "$noruff:$uvx_stubs"
 check "python lint: a uvx run that fails names a failed fetch and the installed-ruff way round it" \
   "[[ $pst != 0 ]] && [[ \"\$perr\" == *'uvx ruff@0.17.6 failed (exit 2) without checking the files: if uvx could not fetch it'*'install ruff 0.17 first on PATH (uv tool install ruff@0.17.6)'* && \"\$perr\" != *'check the ruff install'* ]]"

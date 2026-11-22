@@ -478,10 +478,16 @@ stub_ruff $'ruff 0.1\033]0;x\a\\e\303\251' 0
 run_stub_ruff
 check "a release's control bytes and bytes outside ASCII are shown as ?, and a backslash stays a backslash" \
   "$([[ $status == 1 ]] && grep -qF "not 'ruff 0.1?]0;x?\\e??'" "$repoP/out" && ! grep -q $'\033]0' "$repoP/out" && echo 0 || echo 1)"
-# A ruff whose --version fails, even printing a 0.17 release, is refused before it runs.
+# A ruff whose --version fails, even printing a 0.17 release, or prints nothing, is refused before it runs as a broken install, not a
+# wrong release: its exit status and what it printed are named (the Template gate's wording).
 stub_ruff "ruff 0.17.6" 0 1
 run_stub_ruff
-check "a ruff whose --version fails is refused before it runs" "$([[ $status == 1 && ! -e $work/ruff-args ]] && grep -q 'needs ruff 0.17, not' "$repoP/out" && echo 0 || echo 1)"
+check "a ruff whose --version fails is refused before it runs, naming its exit and output" \
+  "$([[ $status == 1 && ! -e $work/ruff-args ]] && grep -qF "ruff --version exited 1 and printed 'ruff 0.17.6', so its release is unknown: check the ruff install." "$repoP/out" && ! grep -q 'needs ruff 0.17, not' "$repoP/out" && echo 0 || echo 1)"
+stub_ruff "" 0 0
+run_stub_ruff
+check "a ruff whose --version prints nothing is refused before it runs as a broken install" \
+  "$([[ $status == 1 && ! -e $work/ruff-args ]] && grep -qF "ruff --version exited 0 and printed '', so its release is unknown: check the ruff install." "$repoP/out" && ! grep -q 'needs ruff 0.17, not' "$repoP/out" && echo 0 || echo 1)"
 # The answer is shown cut to its first 80 bytes: 79 and 80 whole, 81 cut to 80.
 for n in 79 80 81; do
   answer="ruff 0.18.0 $(printf 'x%.0s' $(seq 1 $((n - 12))))"

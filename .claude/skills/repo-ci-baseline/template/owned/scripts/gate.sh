@@ -250,7 +250,11 @@ if [[ ${#PY_FILES[@]} -gt 0 ]]; then
   RUFF_RC=0
   "${RUFF[@]}" "${RUFF_ARGS[@]}" -- "${PY_FILES[@]}" || RUFF_RC=$?
   if ((RUFF_RC == 1)); then
-    echo "❌ ruff: fix each problem shown above (the ones marked [*] ruff can fix: add --fix to the command), or, for a false alarm, add # noqa: <code> to the line with the reason." >&2
+    # The command to paste, with --fix: the gate's own ruff and flags (fixed words, printed as they are), so no pyproject.toml or
+    # ruff.toml changes what it fixes, and the files shell-quoted; more than five are left as <file>... for the person to fill in.
+    if ((${#PY_FILES[@]} <= 5)); then RUFF_FIX_FILES="$(printf ' %q' "${PY_FILES[@]}")"; else RUFF_FIX_FILES=" <file>..."; fi
+    echo "❌ ruff: fix each problem shown above, or, for a false alarm, add # noqa: <code> to the line with the reason. ruff fixes the ones marked [*] itself with:" >&2
+    printf '  %s --fix --%s\n' "${RUFF[*]} ${RUFF_ARGS[*]}" "$RUFF_FIX_FILES" >&2
     exit 1
   elif ((RUFF_RC != 0)) && [[ "${RUFF[0]}" == uvx ]]; then
     echo "❌ uvx ruff@${RUFF_VERSION} failed (exit $RUFF_RC) without checking the files: if uvx could not fetch it (offline, or an index only a uv config names, which --no-config skips), install ruff 0.17 first on PATH (uv tool install ruff@${RUFF_VERSION}); otherwise check the file it names." >&2

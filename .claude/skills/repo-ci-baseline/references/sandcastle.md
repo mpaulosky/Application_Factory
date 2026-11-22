@@ -73,6 +73,8 @@ a `*.sh` file or hook changed, otherwise exit 2 from the gh check).
 So does ruff, which the gate's Python lint step runs on the changed `*.py` files: a Dockerfile written before it adds the Seed's `RUFF_VERSION` `ARG` (the release
 `scripts/gate.sh` pins) and `"ruff==${RUFF_VERSION}"` to its `pip3 install` line, or the sandbox's gate fails on a branch that changes a Python file, naming ruff (the image
 has no uv for the gate to fall back on).
+The Seed's `roles/shared-rules.md` gives the roles ruff's command for a Python file, as the Owned `roles/tester.md` does; a `shared-rules.md` written before it adds
+that line by hand, or a role that changes only a Python file learns of the lint at the gate.
 A repo that already has a Dockerfile adds `tini` to its `apt-get install` list and replaces its `ENTRYPOINT ["sleep", "infinity"]`
 with `ENTRYPOINT ["tini", "--", "sleep", "infinity"]`: with `sleep` as PID 1,
 nothing reaps the processes the gate orphans, they stay zombies holding their PIDs, and a long build ends unable to fork (the gate fails with `Resource temporarily unavailable`,
