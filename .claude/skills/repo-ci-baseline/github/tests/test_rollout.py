@@ -1,12 +1,15 @@
 """Tests for github/rollout.py: the rollout order, and the round it drives with reapply and gh faked. No GitHub."""
 
 import io
+import os
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import auto_rollout  # noqa: E402
 import rollout  # noqa: E402
 
 LISTED = {
@@ -96,13 +99,42 @@ def test_a_failed_reapply_holds_the_rest_even_with_nothing_pushed():
     assert step.reason == "reapply failed on TicketManager"
 
 
+def test_nothing_pushed_doesnt_let_the_rest_past_an_open_pr():
+    step = rollout.next_step(rollout.rollout_order(LISTED), rollout.Lead(True, 129, "OPEN", ahead=False))
+    assert step.run == ()
+    assert step.reason == "waiting for TicketManager#129 to merge"
+
+
+def test_a_merged_pr_with_nothing_pushed_lets_the_rest_run_as_before():
+    step = rollout.next_step(rollout.rollout_order(LISTED), rollout.Lead(True, 129, "MERGED", ahead=False))
+    assert step.run == REST
+    assert step.reason == ""
+
+
+def test_a_merged_pr_while_the_worktree_has_new_commits_is_an_earlier_rounds_and_holds():
+    # reapply.sh pushed and opened a new PR, but GitHub's list still shows the last round's merged one.
+    step = rollout.next_step(rollout.rollout_order(LISTED), rollout.Lead(True, 129, "MERGED", ahead=True))
+    assert step.run == ()
+    assert step.held == REST
+    assert step.reason == ("TicketManager's re-Apply worktree has commits main lacks, but its newest PR shown, #129, has"
+                           " merged: GitHub's list may not show the new one yet; run rollout.sh again")
+
+
+@pytest.mark.parametrize("state", [None, "CLOSED", "MERGED"])
+def test_an_unreadable_branch_holds_the_rest_whatever_the_pr(state):
+    step = rollout.next_step(rollout.rollout_order(LISTED), rollout.Lead(True, 129, state, unreadable=True))
+    assert step.run == ()
+    assert step.reason == "can't tell whether TicketManager has anything to land: its re-Apply branch can't be read"
+
+
 def test_a_ticketmanager_already_current_lets_the_rest_go_on_in_one_run():
     fake = Fake(latest={"mpaulosky/TicketManager": None})
-    code, out, _ = run(["--brings", "#82", "--root", "/r"], fake, ahead=False)
+    asked = []
+    code, out, _ = run(["--brings", "#82", "--root", "/r"], fake, ahead=False, asked=asked)
     assert code == 0
     assert ran_repos(fake) == [Path(repo).name for repo in rollout.rollout_order(LISTED)]
     assert "TicketManager already matches the Template: nothing to land, so the rest go on" in out
-    assert run.asked == ["TicketManager"]
+    assert asked == ["TicketManager"]
 
 
 def test_a_ticketmanager_with_commits_and_no_pr_still_holds_the_rest():
@@ -119,30 +151,48 @@ def test_an_unreadable_branch_or_pr_holds_the_rest_and_says_why():
     assert code == 1
     assert ran_repos(fake) == ["TicketManager"]
     assert "can't read TicketManager's re-Apply branch: not a git repository" in err
-    fake = Fake(unreadable={"mpaulosky/TicketManager"})
-    code, _, _ = run(["--brings", "#82", "--root", "/r"], fake, ahead=False)
+    assert ("rollout: can't tell whether TicketManager has anything to land: its re-Apply branch can't be read; held:"
+            in out)
+    fake, asked = Fake(unreadable={"mpaulosky/TicketManager"}), []
+    code, _, _ = run(["--brings", "#82", "--root", "/r"], fake, ahead=False, asked=asked)
     assert code == 1
     assert ran_repos(fake) == ["TicketManager"]
-    assert run.asked == []  # the PR is unknown, so nothing pushed doesn't decide it
+    assert asked == []  # the PR is unknown, so nothing pushed doesn't decide it
+
+
+def test_a_failed_reapply_reads_no_branch():
+    fake, asked = Fake(latest={"mpaulosky/TicketManager": None}, fail={"mpaulosky/TicketManager"}), []
+    code, out, err = run(["--brings", "#82", "--root", "/r"], fake, ahead=RuntimeError("no worktree"), asked=asked)
+    assert code == 1
+    assert asked == []
+    assert "can't read" not in out + err
+    assert "reapply failed on TicketManager" in out
 
 
 def test_a_dry_run_reads_no_branch_and_holds_as_before():
     # A dry run reapplies nothing, so the worktree says nothing of what the reapply would push.
-    fake = Fake(latest={"mpaulosky/TicketManager": None})
-    code, out, _ = run(["--brings", "#82", "--root", "/r", "--dry-run"], fake, ahead=False)
+    fake, asked = Fake(latest={"mpaulosky/TicketManager": None}), []
+    code, out, _ = run(["--brings", "#82", "--root", "/r", "--dry-run"], fake, ahead=False, asked=asked)
     assert code == 1
-    assert run.asked == []
+    assert asked == []
     assert "already matches" not in out
     assert "held:" in out
 
 
-def test_the_branch_is_read_only_when_no_pr_is_open_or_merged():
-    fake = Fake(opens={"mpaulosky/TicketManager": 130})
-    run(["--brings", "#82", "--root", "/r"], fake, ahead=False)
-    assert run.asked == []
-    fake = Fake()
-    run(["--brings", "#82", "--root", "/r"], fake, ahead=False)
-    assert run.asked == []
+def test_the_branch_is_read_unless_the_pr_is_open():
+    asked = []
+    run(["--brings", "#82", "--root", "/r"], Fake(opens={"mpaulosky/TicketManager": 130}), ahead=False, asked=asked)
+    assert asked == []
+    run(["--brings", "#82", "--root", "/r"], Fake(), ahead=False, asked=asked)
+    assert asked == ["TicketManager"]
+
+
+def test_a_merged_pr_shown_while_the_worktree_has_new_commits_holds_the_round():
+    fake = Fake()  # the list still shows TicketManager's last round, merged
+    code, out, _ = run(["--brings", "#82", "--root", "/r"], fake, ahead=True)
+    assert code == 1
+    assert ran_repos(fake) == ["TicketManager"]
+    assert "GitHub's list may not show the new one yet; run rollout.sh again; held: IssueTracker" in out
 
 
 def test_the_rest_run_in_order_once_ticketmanagers_reapply_pr_has_merged():
@@ -184,19 +234,20 @@ class Fake:
         return self.latest.get(repo)
 
 
-def run(argv, fake, exists=lambda path: True, ahead=None):
+def run(argv, fake, exists=lambda path: True, ahead=None, asked=None, real_branch=False):
+    """rollout.main with fake's reapply and PR lookup. ahead: what the branch read answers (or raises); the checkout
+    paths it is asked for go into asked. real_branch: the real read, git on the re-Apply worktree, instead."""
     out, err = io.StringIO(), io.StringIO()
-    asked = []
 
     def ahead_of(path):
-        asked.append(Path(path).name)
+        if asked is not None:
+            asked.append(Path(path).name)
         if isinstance(ahead, Exception):
             raise ahead
         return ahead
 
     code = rollout.main(argv, listed=LISTED, reapply=fake.reapply, latest_pr=fake.latest_pr, exists=exists,
-                        out=out, err=err, ahead=ahead_of)
-    run.asked = asked
+                        out=out, err=err, ahead=None if real_branch else ahead_of)
     return code, out.getvalue(), err.getvalue()
 
 
@@ -339,3 +390,75 @@ def test_every_copy_of_the_reapply_branch_name_agrees():
     skill = Path(__file__).resolve().parents[2]
     script = (skill / "reapply.sh").read_text()
     assert f'branch="{rollout.BRANCH}"' in script
+
+
+# ── The real branch read and PR lookup ──────────────────────────────────────
+
+GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "t",
+           "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+
+
+@pytest.fixture
+def ticketmanager(tmp_path, monkeypatch):
+    """A real TicketManager checkout under tmp_path with the re-Apply worktree reapply.sh makes beside it, level with
+    origin/main; a git that runs in it."""
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in GIT_ENV.items():
+        monkeypatch.setenv(name, value)
+    primary = tmp_path / "TicketManager"
+    worktree = tmp_path / "TicketManager-worktrees" / "chore-reapply-baseline"
+
+    def git(where, *args):
+        return subprocess.run(["git", "-C", str(where), *args], check=True, capture_output=True, text=True).stdout
+
+    primary.mkdir()
+    git(primary, "init", "-q", "-b", "main")
+    git(primary, "commit", "-q", "--allow-empty", "-m", "one")
+    git(primary, "update-ref", "refs/remotes/origin/main", "HEAD")
+    git(primary, "worktree", "add", "-q", "--no-track", "-b", rollout.BRANCH, str(worktree), "origin/main")
+    return tmp_path, worktree, git
+
+
+def test_the_real_branch_read_lets_the_rest_go_on_when_the_worktree_is_level_with_main(ticketmanager):
+    root, _, _ = ticketmanager
+    fake = Fake(latest={"mpaulosky/TicketManager": None})
+    code, out, err = run(["--brings", "#82", "--root", str(root)], fake, real_branch=True)
+    assert (code, err) == (0, "")
+    assert "TicketManager already matches the Template: nothing to land, so the rest go on" in out
+    assert ran_repos(fake) == [Path(repo).name for repo in rollout.rollout_order(LISTED)]
+
+
+def test_the_real_branch_read_holds_the_rest_when_the_worktree_has_commits_main_lacks(ticketmanager):
+    root, worktree, git = ticketmanager
+    git(worktree, "commit", "-q", "--allow-empty", "-m", "re-Apply")
+    fake = Fake(latest={"mpaulosky/TicketManager": None})
+    code, out, _ = run(["--brings", "#82", "--root", str(root)], fake, real_branch=True)
+    assert code == 1
+    assert ran_repos(fake) == ["TicketManager"]
+    assert "no re-Apply PR of TicketManager's found to have merged; held:" in out
+    fake = Fake()  # the last round's merged PR, shown while the list lags this push
+    code, out, _ = run(["--brings", "#82", "--root", str(root)], fake, real_branch=True)
+    assert code == 1
+    assert ran_repos(fake) == ["TicketManager"]
+    assert "GitHub's list may not show the new one yet" in out
+
+
+def test_the_real_branch_read_holds_the_rest_and_says_why_when_git_cant_answer(ticketmanager):
+    root, _, git = ticketmanager
+    git(root / "TicketManager", "update-ref", "-d", "refs/remotes/origin/main")
+    fake = Fake(latest={"mpaulosky/TicketManager": None})
+    code, out, err = run(["--brings", "#82", "--root", str(root)], fake, real_branch=True)
+    assert code == 1
+    assert ran_repos(fake) == ["TicketManager"]
+    assert "can't read TicketManager's re-Apply branch: git merge-base in" in err
+    assert "can't tell whether TicketManager has anything to land" in out
+
+
+def test_the_plain_modes_lookup_is_autos_without_the_head(monkeypatch):
+    answers = iter([(130, "OPEN", "abc123"), None])
+    seen = []
+    monkeypatch.setattr(auto_rollout, "gh_pr", lambda repo: seen.append(repo) or next(answers))
+    assert rollout.gh_latest_pr("mpaulosky/TicketManager") == (130, "OPEN")
+    assert rollout.gh_latest_pr("mpaulosky/TicketManager") is None
+    assert seen == ["mpaulosky/TicketManager"] * 2

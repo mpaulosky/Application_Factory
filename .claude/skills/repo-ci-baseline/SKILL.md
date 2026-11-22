@@ -98,7 +98,9 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
      or goes on to them in the same run when TicketManager already matches the Template (its re-Apply worktree has no commit `main` lacks), as `--auto` does.
      Land that PR, fix any finding Template first, then run `rollout.sh` again: once it has merged,
      it re-Applies the other repos in order, one pre-push gate at a time, reports a repo that fails and goes on.
-     Start with `--dry-run`. It ends with the `land.sh` command for the PRs it left open. A reapply stopped at the gate's review (its exit 3) or on findings that
+     A merged PR while that worktree has commits `main` lacks is an earlier round's (GitHub's list can lag a push), so it holds; run it again.
+     Start with `--dry-run`, which reapplies nothing, so it can't tell that TicketManager already matches and holds the rest where the real run may go on.
+     It ends with the `land.sh` command for the PRs it left open. A reapply stopped at the gate's review (its exit 3) or on findings that
      wait for you (exit 4) says what to run before you run `rollout.sh` again.
    - **Roll out unattended:** `rollout.sh --auto --brings '#<n>,#<n>'` does all of that in one run (the Factory's [ADR 0016](../../../docs/adr/0016-a-rollout-runs-each-applications-review-headless-and-sandboxed-in-its-worktree.md)).
      It runs on Linux only, and checks the tools (bubblewrap and socat for the sandbox among them, and that bubblewrap can make one), ruff 0.17 or uv,

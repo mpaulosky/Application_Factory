@@ -10,15 +10,19 @@ of the Template change. Each run:
 1. runs reapply.sh on TicketManager;
 2. holds the rest until TicketManager's newest re-Apply PR has merged: while
    it is open, land it (land.sh prints how), fix any finding Template first,
-   then run rollout.sh again. A failed reapply, a PR closed without merging, or
-   none found holds the round too, unless TicketManager already matches the
-   Template: its re-Apply worktree has no commit main lacks, so there is nothing
-   to land, and the rest go on in the same run, as under --auto. A reapply
-   stopped at the gate's review (exit 3) or on findings that wait for a person
-   (exit 4) says what to run first;
-3. once that PR has merged (and reapply.sh found nothing new to push), the
-   rest get reapply.sh in order, one at a time, so one pre-push gate runs at a
-   time. A repo that fails is reported and the round goes on.
+   then run rollout.sh again. A failed reapply, or a PR or re-Apply branch that
+   can't be read, holds the round too. So does a PR closed without merging, or
+   none found, unless TicketManager already matches the Template: its re-Apply
+   worktree has no commit main lacks, so there is nothing to land, and the rest
+   go on in the same run, as under --auto. A reapply stopped at the gate's
+   review (exit 3) or on findings that wait for a person (exit 4) says what to
+   run first;
+3. once that PR has merged and reapply.sh found nothing new to push, the rest
+   get reapply.sh in order, one at a time, so one pre-push gate runs at a time.
+   A merged PR while the re-Apply worktree has commits main lacks is an earlier
+   round's (GitHub's list can lag the push that opened the new one), so that
+   holds the round too, as under --auto. A repo that fails is reported and the
+   round goes on.
 
 Each repo's checkout is <root>/<Repo> (default ~/github). A repo in repos.txt
 with no checkout stops the round before anything runs: clone it, or retire it
@@ -27,7 +31,9 @@ land.sh command that watches the re-Apply PRs it left open, and exits 1 when
 any reapply failed or the round is held for anything but an open PR.
 --dry-run prints the reapply.sh calls it would make from the PRs as they are
 now, and makes none: the rest's calls only follow when TicketManager's reapply
-opens no new PR.
+opens no new PR. A dry run reapplies nothing, so it can't tell whether
+TicketManager already matches the Template: with no merged PR it holds the rest
+(and exits 1) where the real run may go on.
 
 --auto runs the whole round in one run, with no person between the steps:
 github/auto_rollout.py, whose docstring says how (ADR 0016). With --dry-run it
@@ -72,12 +78,14 @@ class Lead:
     """How TicketManager stands after its reapply: whether reapply.sh went
     cleanly, and its newest re-Apply PR with its state (OPEN, MERGED or CLOSED),
     or None for both when there is none or it couldn't be read. ahead: whether its re-Apply worktree has commits
-    main lacks, read only when that PR was read and isn't open or merged; None when unread."""
+    main lacks, read only when the reapply went cleanly and that PR was read and isn't open; None when unread.
+    unreadable: the read was tried and failed, so whether there is anything to land is unknown."""
 
     reapplied: bool
     pr: int | None
     state: str | None
     ahead: bool | None = None
+    unreadable: bool = False
 
 
 @dataclass(frozen=True)
@@ -94,6 +102,8 @@ def next_step(order, lead):
         return Step((first,), rest, f"{short_name(first)} goes first")
     if not lead.reapplied:
         return Step((), rest, f"reapply failed on {short_name(first)}")
+    if lead.unreadable:
+        return Step((), rest, f"can't tell whether {short_name(first)} has anything to land: its re-Apply branch can't be read")
     if lead.ahead is False and lead.state in (None, "CLOSED"):
         # Nothing pushed: reapply.sh found it already matches the Template, so there is no PR to wait for.
         return Step(rest, (), f"{short_name(first)} already matches the Template: nothing to land, so the rest go on")
@@ -103,6 +113,10 @@ def next_step(order, lead):
         return Step((), rest, f"{short_name(first)}#{lead.pr} was closed without merging")
     if lead.state != "MERGED":
         return Step((), rest, f"no re-Apply PR of {short_name(first)}'s found to have merged")
+    if lead.ahead is True:
+        # reapply.sh starts a merged round's worktree again from main, so commits main lacks are this run's push.
+        return Step((), rest, f"{short_name(first)}'s re-Apply worktree has commits main lacks, but its newest PR shown,"
+                              f" #{lead.pr}, has merged: GitHub's list may not show the new one yet; run rollout.sh again")
     return Step(rest, ())
 
 
@@ -112,16 +126,11 @@ def run_reapply(brings, path):
 
 
 def gh_latest_pr(repo):
-    """(number, state) of repo's newest re-Apply PR, or None."""
-    run = subprocess.run(["gh", "pr", "list", "-R", repo, "--head", BRANCH, "--state", "all", "--limit", "1",
-                          "--json", "number,state", "--jq", '.[0] // empty | "\\(.number) \\(.state)"'],
-                         capture_output=True, text=True)
-    if run.returncode != 0:
-        raise RuntimeError(run.stderr.strip() or f"gh pr list exited {run.returncode}")
-    if not run.stdout.strip():
-        return None
-    number, state = run.stdout.split()
-    return int(number), state
+    """(number, state) of repo's newest re-Apply PR from repo itself (not a fork's of the same branch name), or None;
+    --auto's lookup, so both modes read the same PR."""
+    import auto_rollout  # noqa: PLC0415 - loaded where it's used, as the plain mode's other reads are
+    found = auto_rollout.gh_pr(repo)
+    return found[:2] if found else None
 
 
 def main(argv=None, listed=None, reapply=run_reapply, latest_pr=gh_latest_pr, exists=os.path.isdir,
@@ -187,7 +196,7 @@ def main(argv=None, listed=None, reapply=run_reapply, latest_pr=gh_latest_pr, ex
         return auto_rollout.git_branch(auto_rollout.review_worktree(path))[1]
 
     if args.auto:
-        import auto_rollout  # noqa: PLC0415 - only --auto needs it
+        import auto_rollout  # noqa: PLC0415 - loaded where it's used, as the plain mode's reads are
         # Under --auto, reapply.sh runs in a process group of its own, which a SIGTERM or SIGHUP kills whole.
         reapply = auto_rollout.run_reapply if reapply is run_reapply else reapply
         return auto_rollout.run(order, args.brings, args.root, checkout, args.dry_run, reapply=reapply, say=say,
@@ -195,11 +204,12 @@ def main(argv=None, listed=None, reapply=run_reapply, latest_pr=gh_latest_pr, ex
 
     first = order[0]
     lead = Lead(apply(first), *lookup(first))
-    if lead.reapplied and not args.dry_run and first not in unread and lead.state in (None, "CLOSED"):
+    if lead.reapplied and not args.dry_run and first not in unread and lead.state != "OPEN":
         try:
             lead = Lead(lead.reapplied, lead.pr, lead.state, (ahead or ahead_of_main)(checkout(first)))
-        except Exception as error:  # noqa: BLE001 - reported; the round is then held, as before
+        except Exception as error:  # noqa: BLE001 - reported; the round is then held
             err.write(f"rollout.sh: can't read {short_name(first)}'s re-Apply branch: {error}\n")
+            lead = Lead(lead.reapplied, lead.pr, lead.state, unreadable=True)
     step = next_step(order, lead)
     if step.run and step.reason:
         say(f"── rollout: {step.reason}")
