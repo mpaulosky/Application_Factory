@@ -12,7 +12,20 @@
 # tests/. Exits non-zero on the first
 # failing gate. GATE_SKIP_REVIEW=1 skips the review check, for gate runs before
 # the push (the review's own, and while iterating), never for a push.
+# The Application Factory owns this file and tests it: the Factory's own .claude/skills/repo-ci-baseline/tests/owned-gate-files.test.sh
+# (in Application_Factory, not in this repo) runs the changed-file lists and the lint steps on hard names (a space, a newline, a
+# leading '-', a[1].md, bytes that aren't UTF-8) and through every ruff and shfmt failure, and this repo's
+# .github/hooks/tests/pre-push.test.sh runs the whole gate behind the hook.
 set -euo pipefail
+
+# bash_too_old <major> <minor>: true for a bash before 4.4. The changed-file lists below are read with mapfile -d '', which 4.4
+# added: an older bash (macOS's /bin/bash is 3.2) would stop there with "invalid option" or "command not found", saying nothing
+# of its version. Checked first, in syntax bash 3.2 runs.
+bash_too_old() { (($1 < 4 || ($1 == 4 && $2 < 4))); }
+if bash_too_old "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"; then
+  echo "❌ scripts/gate.sh needs bash 4.4 or later, and this is bash ${BASH_VERSION}: install a newer bash first on PATH (on macOS, brew install bash), since the gate runs the first bash #!/usr/bin/env finds." >&2
+  exit 1
+fi
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
