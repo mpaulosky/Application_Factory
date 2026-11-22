@@ -153,6 +153,11 @@ def test_an_unreadable_branch_or_pr_holds_the_rest_and_says_why():
     assert "can't read TicketManager's re-Apply branch: not a git repository" in err
     assert ("rollout: can't tell whether TicketManager has anything to land: its re-Apply branch can't be read; held:"
             in out)
+    fake = Fake()  # the last round's PR, merged: an unreadable branch holds that too, where it used to go on
+    code, out, _ = run(["--brings", "#82", "--root", "/r"], fake, ahead=RuntimeError("no worktree"))
+    assert code == 1
+    assert ran_repos(fake) == ["TicketManager"]
+    assert "can't tell whether TicketManager has anything to land" in out
     fake, asked = Fake(unreadable={"mpaulosky/TicketManager"}), []
     code, _, _ = run(["--brings", "#82", "--root", "/r"], fake, ahead=False, asked=asked)
     assert code == 1
