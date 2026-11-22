@@ -700,8 +700,8 @@ def tool_reads(home, which=shutil.which, run=None):
     own (own_install), its install around the real binary: a version manager's version folder in home, whole, with the
     binary in its bin (VERSION_FOLDERS), or a Homebrew prefix's formulae's folders alone (HOMEBREW_PREFIXES,
     ~/.linuxbrew; HOMEBREW_PARTS) with the binary in a Cellar formula's version folder. Anywhere else (/opt/bin, a
-    project's bin, a data disk, another user's home) the files alone. A command PATH finds by a relative path is left out, as is anything shared (home, a folder above it,
-    ~/.local)."""
+    project's bin, a data disk, another user's home) the files alone. A command PATH finds by a relative path is left
+    out, as is anything shared (home, a folder above it, ~/.local)."""
     run = run or run_quiet
     homes = both_forms(os.path.normpath(home))
 

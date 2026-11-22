@@ -1143,26 +1143,6 @@ def test_a_folder_beside_a_version_managers_layout_isnt_read_whole(prefix):
         "a level short, a level too deep, or not right under home: no version folder"
 
 
-@pytest.mark.parametrize("store", ["pass", "gopass", "op", "bw", "lpass", "gpg", "secret-tool", "security", "vault",
-                                   "keyring", "cat"])
-def test_a_secret_fetched_from_a_store_or_a_file_holds_none(store):
-    for value in (f"echo password=$({store} show x)", f"echo password=`{store} show x`",
-                  f"echo password=$( {store} show x)", f'echo password="$({store} show x)"',
-                  f"--password $({store} show x)"):
-        assert not auto.HELPER_SECRET.search(value), value
-    for value in (f'Authorization: Bearer "$({store} show x)"', f"bearer `{store} show x`",
-                  f"sshpass -p $({store} show x) ssh"):
-        assert not auto.TOKEN_SHAPE.search(value), value
-    for value in (f"echo password=$({store}x show y)", f"echo password=`{store}x y`"):
-        assert auto.HELPER_SECRET.search(value), f"{value}: another program than {store}, which may hold it itself"
-    assert auto.TOKEN_SHAPE.search(f"sshpass -p $({store}ed x) ssh")
-
-
-@pytest.mark.parametrize("value", ["echo password=$-x", "echo password=$ x", "echo password=$$"])
-def test_a_dollar_that_starts_no_name_is_read_as_a_password(value):
-    assert auto.HELPER_SECRET.search(value)
-
-
 def test_a_tools_install_is_found_through_a_linked_home_or_prefix(tmp_path, monkeypatch):
     real = tmp_path / "var" / "home"
     shared_git = real / "linuxbrew" / ".linuxbrew" / "Cellar" / "git" / "2" / "bin"
@@ -1496,6 +1476,26 @@ def test_a_sign_in_secret_in_the_clones_git_config_is_found_by_its_key(tmp_path,
     assert secrets == [f"{key} in {tmp_path / '.git' / 'config'}" for key in found]
     assert not [name for name in secrets if "t0k" in name or "ghp_" in name or "hunter2" in name], \
         "a key is named, never its token"
+
+
+@pytest.mark.parametrize("store", ["pass", "gopass", "op", "bw", "lpass", "gpg", "secret-tool", "security", "vault",
+                                   "keyring", "cat"])
+def test_a_secret_fetched_from_a_store_or_a_file_holds_none(store):
+    for value in (f"echo password=$({store} show x)", f"echo password=`{store} show x`",
+                  f"echo password=$( {store} show x)", f'echo password="$({store} show x)"',
+                  f"--password $({store} show x)"):
+        assert not auto.HELPER_SECRET.search(value), value
+    for value in (f'Authorization: Bearer "$({store} show x)"', f"bearer `{store} show x`",
+                  f"sshpass -p $({store} show x) ssh"):
+        assert not auto.TOKEN_SHAPE.search(value), value
+    for value in (f"echo password=$({store}x show y)", f"echo password=`{store}x y`"):
+        assert auto.HELPER_SECRET.search(value), f"{value}: another program than {store}, which may hold it itself"
+    assert auto.TOKEN_SHAPE.search(f"sshpass -p $({store}ed x) ssh")
+
+
+@pytest.mark.parametrize("value", ["echo password=$-x", "echo password=$ x", "echo password=$$"])
+def test_a_dollar_that_starts_no_name_is_read_as_a_password(value):
+    assert auto.HELPER_SECRET.search(value)
 
 
 def test_a_secret_in_a_file_the_config_includes_or_a_credential_store_is_found(tmp_path):
