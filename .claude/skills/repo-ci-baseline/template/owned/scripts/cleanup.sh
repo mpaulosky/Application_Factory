@@ -18,7 +18,8 @@
 # parent folder is still there, searchable and not empty. A parent that is missing, empty, unreadable or unsearchable may be an unmounted drive (its mount point is left empty), so the branch is
 # kept, with the hint to run git worktree prune if the folder was deleted for good. --dry-run prints what would happen and changes no branch, worktree or commit (it still
 # fetches and prunes the remote-tracking refs).
-# Exits 1 when it can't run (not main, not the primary checkout, dirty main, main can't fast-forward, origin can't be fetched, no gh, no repository,
+# Exits 1 when it can't run (not main, not the primary checkout, dirty main, main can't fast-forward, origin can't be fetched, no gh, no repository, a GITHUB_REPOSITORY
+# that isn't an owner/name of [A-Za-z0-9._-] only (refused before gh is asked anything),
 # a gh lookup failed, a branch list git can't read (checked before anything is removed), a bad argument, an origin push URL that is not shown to be the fetch URL's repository (the same text, or both github.com URLs for the same owner/name; CLEANUP_PUSH_URL_OK=1 accepts the push URLs as they are), no scripts/check-branch-name.sh) and, after finishing the rest, when a removal git refused, a branch a worktree is rebasing or bisecting (a real run only: a dry run exits 0), a check of origin
 # failed, the closing fetch failed or a commit was made, or the branch deleted, after a branch was judged. CLEANUP_PUSH_URL_OK=1 prints a warning for each push URL it lets through unchecked. Both that
 # warning and the refusal mask a scheme URL's userinfo, which can hold a token, as *** (shown_url). A branch is judged by its PR, and at most 100 PRs are read per branch name: 100 or more keeps the branch.

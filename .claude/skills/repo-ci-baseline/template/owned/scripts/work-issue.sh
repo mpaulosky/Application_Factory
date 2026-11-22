@@ -15,7 +15,7 @@
 # wherever it is, if its folder still exists and is that worktree of this clone with the branch checked out; git's entry for one deleted by hand is forgotten, that one only, and the worktree made again.
 # These are errors: a branch list git can't read (for-each-ref failing, rather than a new branch made beside the issue's own); a folder recreated or replaced since, or one git can't read (a safe.directory refusal); a locked worktree whose folder is missing; one whose folder can't be reached (its parent folder is missing, empty, unreadable
 # or unsearchable: it may be on an unmounted drive; run git worktree prune if it was deleted for good); the primary checkout when it has the branch checked out; a directory in the way that is not that worktree is an error. It needs gh logged in, and for an origin
-# that is not on github.com, GITHUB_REPOSITORY. When origin can't be fetched (but gh works: the issue is read first) it still prints a worktree it already has, with a warning, and stops otherwise. An issue number has at most 9 digits. Run it from the primary checkout or any worktree.
+# that is not on github.com, GITHUB_REPOSITORY, an owner/name of [A-Za-z0-9._-] only: any other value is an error before gh is asked anything. When origin can't be fetched (but gh works: the issue is read first) it still prints a worktree it already has, with a warning, and stops otherwise. An issue number has at most 9 digits. Run it from the primary checkout or any worktree.
 # Everything but the path goes to stderr.
 set -euo pipefail
 

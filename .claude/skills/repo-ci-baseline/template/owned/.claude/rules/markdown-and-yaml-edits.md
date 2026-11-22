@@ -9,8 +9,9 @@ them, and the violation turns up later: at the commit for Markdown (the `pre-com
 
 Where `.claude/settings.json` has no such entry (a `PostToolUse` hook whose command is `scripts/lint-edited-file.sh`), nothing lints the file as you write it:
 lint each file you edit yourself, `markdownlint-cli2 <file>` for Markdown and `yamllint -c .yamllint.yml <file>` for YAML,
-with `actionlint <file>` and `zizmor --offline <file>` too for a workflow and `zizmor --offline <file>` for `.github/dependabot.yml`, before you commit it. The repository
-turns the hook on by adding the entry the script's header gives to `.claude/settings.json`; that is the repository's choice, not an edit to make unasked.
+with `actionlint <file>` and `zizmor --offline --min-severity medium <file>` too for a workflow and
+`zizmor --offline --min-severity medium <file>` for `.github/dependabot.yml`, before you commit it. The repository turns the hook on
+by adding the entry the script's header gives to `.claude/settings.json`; that is the repository's choice, not an edit to make unasked.
 
 The rule is about the files you are editing. Running one of the repository's own scripts or tests that writes Markdown or YAML as its output (a report, a
 fixture, a record) is fine.

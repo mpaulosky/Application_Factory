@@ -372,6 +372,31 @@ for script in work-issue cleanup watch-pr; do
   check "$script: slug_of declares local LC_ALL=C (the regex ranges are ASCII only)" "slug_fn $SCRIPTS/$script.sh | grep -q 'local LC_ALL=C '"
   check "$script: slug_of's tr is started as LC_ALL=C tr" "slug_fn $SCRIPTS/$script.sh | grep -q 'LC_ALL=C tr '"
 done
+# is_slug, the check GITHUB_REPOSITORY passes in each script: the same function in all three, with its C-locale line pinned in the text, and run on its own in each locale
+is_fn() { awk '/^is_slug\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$1"; }
+for script in cleanup watch-pr; do
+  check "is_slug is the same function in work-issue.sh and $script.sh" "[[ -n \"\$(is_fn $SCRIPTS/work-issue.sh)\" && \"\$(is_fn $SCRIPTS/work-issue.sh)\" == \"\$(is_fn $SCRIPTS/$script.sh)\" ]]"
+done
+for script in work-issue cleanup watch-pr; do
+  check "$script: is_slug declares local LC_ALL=C (the regex ranges are ASCII only)" "is_fn $SCRIPTS/$script.sh | grep -q 'local LC_ALL=C$'"
+done
+for loc in C C.utf8 en_US.utf8; do
+  if [[ "$loc" != C ]] && [[ "$(LC_ALL=$loc locale charmap 2> /dev/null)" != UTF-8 ]]; then
+    echo "skip - locale $loc is not installed"
+    continue
+  fi
+  SLUG_LOCALE=$loc
+  for script in work-issue cleanup watch-pr; do
+    # shellcheck disable=SC2016 # the bash -c text is expanded by the inner bash, on purpose
+    is_slug_run() { env -u LC_ALL -u LC_CTYPE -u LC_COLLATE -u LC_NUMERIC -u LC_MESSAGES LANG="$SLUG_LOCALE" bash -c 'set -euo pipefail; eval "$1"; is_slug "$2"' _ "$(is_fn "$SCRIPTS/$script.sh")" "$1"; }
+    for good in a.b/c_d-e .github/x acme/r.git Acme/R; do
+      check "$script [$loc]: is_slug keeps $good" "is_slug_run '$good'"
+    done
+    for bad in $'acm\xc3\xa9/r' $'\xef\xbd\x81cme/r' $'ac\xcc\x81me/r' $'\xc3\xabvil/r' "acme/r/x" "acme" "/r" "acme/" "a b/r" "acme/r;x" $'acme/r\n'; do
+      check "$script [$loc]: is_slug refuses $(printf %q "$bad")" "! is_slug_run $(printf %q "$bad")"
+    done
+  done
+done
 # slug_of's tr runs with LC_ALL=C whatever locale the caller has: a tr shim logs the LC_ALL it is started with (GNU tr is byte-wise, so only the environment can be pinned)
 real_tr="$(command -v tr)"
 mkdir "$work/trshim"

@@ -127,6 +127,9 @@ if in_shard hooks; then
     'moved to another job|/^        run: bash scripts\/tests\/cleanup\.test\.sh$/d; /^  automerge-tests:$/a\        run: bash scripts/tests/cleanup.test.sh'; do
     cp "$owned/.github/workflows/ci.yml" "$hook_ci"
     sed -i -e "${drift#*|}" "$hook_ci"
+    # The moved case must hold the run line in another job, or it would only repeat the removed case.
+    [[ "${drift%%|*}" != moved* ]] || grep -qxF '        run: bash scripts/tests/cleanup.test.sh' "$hook_ci" \
+      || fail "the drift copy for 'moved to another job' lost its moved run line: is automerge-tests still the job after hook-tests?"
     missing="$(hook_suites_run "$hook_ci")" && fail "the hook-tests check passes a ci.yml with cleanup.test.sh's run line ${drift%%|*}"
     [[ "$missing" == "scripts/tests/cleanup.test.sh" ]] || fail "the hook-tests check names '$missing', not scripts/tests/cleanup.test.sh, for its run line ${drift%%|*}"
   done
@@ -146,7 +149,7 @@ if in_shard hooks; then
     # shellcheck disable=SC2016 # the backticks are Markdown, matched as text
     for needle in 'with the Write and Edit tools, never with a shell command' 'scripts/lint-edited-file.sh' 'PostToolUse' '.claude/settings.json' \
       'Where `.claude/settings.json` has no such entry' 'markdownlint-cli2 <file>' 'yamllint -c .yamllint.yml <file>' \
-      'actionlint <file>' 'zizmor --offline <file>'; do
+      'actionlint <file>' 'zizmor --offline --min-severity medium <file>'; do
       grep -qF -- "$needle" "$edit_rule" || fail "the Owned .claude/rules/markdown-and-yaml-edits.md must say '$needle'"
     done
     if grep -niE 'dotfiles|repo-ci-baseline|factory|references/|docs/adr/' "$edit_rule"; then
