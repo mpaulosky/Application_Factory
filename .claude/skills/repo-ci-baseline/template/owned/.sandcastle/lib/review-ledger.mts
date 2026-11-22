@@ -837,15 +837,34 @@ function writeEntryMap(cwd: string, key: string, entries: Record<string, string>
   replaceFile(path, `${JSON.stringify(entries)}\n`);
 }
 
-// The entry id `findingId` was recorded against, or undefined when unknown (an older record, or none written).
-function readEntryMap(cwd: string, key: string, findingId: string): string | undefined {
+// The entry ids the findings of the ledger at `key` were recorded against (finding id to entry id); empty when unknown (an
+// older record, or none written). An id that isn't an entry number is left out.
+function readEntryMapAll(cwd: string, key: string): Record<string, string> {
   try {
     const entries: unknown = JSON.parse(readFileSync(entriesPath(cwd, key), "utf8"));
-    const found = (entries as Record<string, unknown>)[findingId];
-    return typeof found === "string" && /^\d{4,}$/.test(found) ? found : undefined;
+    if (typeof entries !== "object" || entries === null || Array.isArray(entries)) return {};
+    return Object.fromEntries(Object.entries(entries).filter((pair): pair is [string, string] => typeof pair[1] === "string" && /^\d{4,}$/.test(pair[1])));
   } catch {
-    return undefined;
+    return {};
   }
+}
+
+// The entry id `findingId` was recorded against, or undefined when unknown (an older record, or none written).
+function readEntryMap(cwd: string, key: string, findingId: string): string | undefined {
+  return readEntryMapAll(cwd, key)[findingId];
+}
+
+// A finding the review raises again under a new id opens its summary with the old one, "R3 again", or, for a weakness only
+// the security record holds, ".security/0012 again"; its words change from review to review, so its fingerprint does too.
+// The entry such a finding repeats: the one the old finding was recorded against (`earlier`, finding id to entry id, from the
+// branch's own earlier reviews), or the entry it names. Undefined when its summary opens neither way, or names an id no earlier
+// review recorded against an entry: then it is matched by its text, as before. Only the opening counts, so a summary that
+// mentions an entry or an id in passing ("Beyond .security/0017") is not a repeat of it.
+export function reRaisedEntry(summary: string, earlier: Readonly<Record<string, string>>): string | undefined {
+  const raised = /^\s*(?:(R[1-9]\d*)|\.security\/(\d{4,})) again\b/.exec(summary);
+  if (raised === null) return undefined;
+  if (raised[2] !== undefined) return raised[2];
+  return earlier[raised[1] ?? ""];
 }
 
 // How long a lock that names no process stands (empty, or not "pid token"): its holder may be about to write its id.
@@ -1268,9 +1287,14 @@ export function recordReview(
     ledger = { ...ledger, lastId: Math.max(floor, highestId(ledger)) };
     writeLedger(cwd, ledger);
     const security = parsed.findings.filter((finding): finding is typeof finding & { status: "fixed" | "open" } => isSecurity(finding) && (finding.status === "fixed" || finding.status === "open"));
-    const inputs: SecurityInput[] = security.map(({ id, lens, path, summary, status, test, reason, fix, policy, repeats }) => ({
-      id, lens, path, summary, status, test, reason, fix, policy, ...(repeats === undefined ? {} : { repeats }),
-    }));
+    // Which entry each finding of the branch's earlier reviews went to, so one raised again ("R3 again") holds its entry
+    // rather than getting a second file. Only this branch's own reviews: an id names one finding along the branch alone.
+    const earlier: Record<string, string> = {};
+    for (const { ledger: before } of branchLedgers(cwd, base, head)) Object.assign(earlier, readEntryMapAll(cwd, before.key));
+    const inputs: SecurityInput[] = security.map(({ id, lens, path, summary, status, test, reason, fix, policy, repeats }) => {
+      const reRaised = reRaisedEntry(summary, earlier);
+      return { id, lens, path, summary, status, test, reason, fix, policy, ...(repeats === undefined ? {} : { repeats }), ...(reRaised === undefined ? {} : { reRaised }) };
+    });
     let outcome: SecurityOutcome;
     try {
       outcome = recordSecurity(cwd, ledger, inputs, { ...(parsed.pr === undefined ? {} : { pr: parsed.pr }), slug });

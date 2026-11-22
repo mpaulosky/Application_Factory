@@ -164,9 +164,13 @@ again, and settled differently, on the next (one weakness took six rounds). The 
   none is stored in the ledger. `scripts/review.sh accept` (or `accept-open`) turns the matching entry `accepted`; `accept-open --fix` leaves it as it is.
   A person may edit an entry; an entry whose status can't be read counts as `unknown` and suppresses nothing.
 - **No second file.** A finding for a weakness an entry holds writes none: the entry it names in `repeats`, else the one with the same fingerprint (a hash of the
-  path and the summary, case and spacing set aside). An `open` entry recorded `fixed` later is updated in place (the file is replaced whole by a rename, as is one `accept` turns
-  `accepted`, so no reader sees a truncated entry). The match is exact on purpose: a wrongly merged
-  entry would hide a real weakness, while a reworded repeat only gets a second file.
+  path and the summary, case and spacing set aside), else the entry it raises again. A finding raised again under a new id opens its summary `R3 again` (or
+  `.security/0012 again`), and its words change from review to review: it holds the entry R3 was recorded against in one of the branch's own earlier reviews (the
+  `<key>.entries` file beside each ledger), or the entry it names, when that entry is `open` or `accepted`. A re-raise of a `fixed` entry gets a file of its own, since
+  the weakness is back; only the summary's opening counts, so one that mentions an entry or an id in passing (`Beyond .security/0017`) is matched by its text alone.
+  An `open` entry recorded `fixed` later is updated in place (the file is replaced whole by a rename, as is one `accept` turns
+  `accepted`, so no reader sees a truncated entry). Otherwise the match is exact on purpose: a wrongly merged
+  entry would hide a real weakness, while a reworded repeat that names nothing only gets a second file.
 - **Where.** The main worktree's `.security/`, found with `git worktree list`, so a review in any worktree or branch reads and writes the same entries. A bare clone has none:
   nothing is written, with a warning. The directory is mode 0700, entries 0600, each written to a temp file with `wx` and then
   hard-linked (new) or renamed (updated) to its name; a symlinked directory is refused, a symlink at an entry's name is replaced. On a file system that can't hard-link, a new

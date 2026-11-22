@@ -4190,6 +4190,19 @@ describe("the security record", () => {
       assert.match(entry(entries()[1] ?? ""), /^- Status: accepted$/m);
     });
 
+    it("accept turns the open entry accepted that a finding raised again as \"R<n> again\" was folded into", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      commit(repo, "later.cs", "a later change\n", "later change");
+
+      recordHere([weakness({ id: "R2", summary: "R1 again (left open): files can be written above the upload folder.", status: "open", test: null })]);
+      const result = cli(["accept", "R2", "The folder is a sandbox."]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.match(result.err, /^\.security: marked 0001 accepted$/m);
+      assert.deepEqual(entries().length, 1);
+      assert.match(firstEntry(), /^- Status: accepted$/m);
+    });
+
     it("accept turns the open entry accepted that a finding was matched to through `repeats` in other words", () => {
       recordHere([weakness({ status: "open", test: null })]);
       commit(repo, "later.cs", "a later change\n", "later change");
@@ -4327,6 +4340,95 @@ describe("the security record", () => {
       recordHere([weakness({ id: "R2", summary: "Uploads can leave their folder.", repeats: "0001" })]);
 
       assert.equal(entries().length, 1);
+    });
+
+    // #92: a finding the review raises again under a new id opens its summary "R<n> again", and its words change each time,
+    // so its fingerprint does too: it follows R<n> to the entry R<n> was recorded against, along the branch's earlier reviews.
+    it("a finding raised again as \"R<n> again\" holds the entry R<n> was recorded against, through each later review", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      const second = recordHere([weakness({ id: "R2", summary: "R1 again (left open): uploads can still leave their folder.", status: "open", test: null })]);
+      commit(repo, "other.cs", "and again\n", "a third change");
+      const third = recordHere([weakness({ id: "R3", summary: "R2 again (.security/0001; left open): the upload path is still not resolved.", status: "open", test: null })]);
+
+      assert.equal(second.code, 0, second.err);
+      assert.equal(third.code, 0, third.err);
+      assert.equal(entries().length, 1);
+      assert.match(second.err, /R2 repeats 0001/);
+      assert.match(third.err, /R3 repeats 0001/);
+    });
+
+    it("a finding raised again as \".security/NNNN again\" holds that entry", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      const again = recordHere([weakness({ id: "R2", summary: ".security/0001 again (left open): uploads can still leave their folder.", status: "open", test: null })]);
+
+      assert.equal(again.code, 0, again.err);
+      assert.equal(entries().length, 1);
+      assert.match(again.err, /R2 repeats 0001/);
+    });
+
+    it("an \"R<n> again\" re-raise recorded fixed updates the entry R<n> left open", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      recordHere([weakness({ id: "R2", summary: "R1 again: fixed now, the path is resolved first." })]);
+
+      assert.equal(entries().length, 1);
+      assert.match(firstEntry(), /^- Status: fixed$/m);
+    });
+
+    it("a re-raise of a weakness recorded fixed gets an entry of its own, so a fix that came undone shows", () => {
+      recordHere([weakness()]);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      const back = recordHere([
+        weakness({ id: "R2", summary: "R1 again: the upload path is no longer resolved.", status: "open", test: null }),
+        weakness({ id: "R3", path: "scripts/b.sh", summary: ".security/0001 again: the same, by its entry.", status: "open", test: null }),
+      ]);
+
+      assert.equal(back.code, 0, back.err);
+      assert.equal(entries().length, 3);
+      assert.match(firstEntry(), /^- Status: fixed$/m);
+    });
+
+    it("an explicit `repeats` wins over the R<n> the summary names", () => {
+      recordHere([weakness({ status: "open", test: null }), weakness({ id: "R2", path: "scripts/other.sh", summary: "Another weakness.", status: "open", test: null })]);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      const again = recordHere([weakness({ id: "R3", summary: "R1 again: but triage named the other entry.", status: "open", test: null, repeats: "0002" })]);
+
+      assert.equal(again.code, 0, again.err);
+      assert.equal(entries().length, 2);
+      assert.match(again.err, /R3 repeats 0002/);
+    });
+
+    it("writes a new entry for a finding that only mentions an entry or an id, or names one no earlier review recorded", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      const beyond = recordHere([
+        weakness({ id: "R2", summary: "Beyond .security/0001 (fixed): a second way out of the folder.", status: "open", test: null }),
+        weakness({ id: "R3", path: "scripts/b.sh", summary: "Unlike R1 again, a symlink is followed.", status: "open", test: null }),
+        weakness({ id: "R4", path: "scripts/c.sh", summary: "R9 again: an id no review of this branch took.", status: "open", test: null }),
+        weakness({ id: "R5", path: "scripts/d.sh", summary: "R1 against the odds, a new weakness.", status: "open", test: null }),
+        weakness({ id: "R6", path: "scripts/e.sh", summary: "R1again: no word break.", status: "open", test: null }),
+      ]);
+
+      assert.equal(beyond.code, 0, beyond.err);
+      assert.equal(entries().length, 6);
+    });
+
+    it("doesn't follow an \"R<n> again\" into another branch's review", () => {
+      const other = otherWorktree();
+      recordIn(other, [weakness({ path: "scripts/elsewhere.sh", summary: "Another branch's weakness.", status: "open", test: null })]);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      recordHere([weakness({ id: "R5", summary: "R1 again: this branch never had an R1.", status: "open", test: null })]);
+
+      assert.equal(entries().length, 2);
     });
 
     it("an open entry recorded fixed later is updated in place, not written twice", () => {

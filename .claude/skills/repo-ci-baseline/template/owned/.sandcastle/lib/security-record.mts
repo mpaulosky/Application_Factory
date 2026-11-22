@@ -52,6 +52,8 @@ export type SecurityInput = {
   fix: string | null;
   policy?: string | null;
   repeats?: string;
+  // The entry the finding's summary says it raises again ("R3 again", ".security/0012 again"; reRaisedEntry in review-ledger.mts).
+  reRaised?: string;
 };
 
 // What a call did: the entry files it wrote, the findings that repeated a weakness an entry held (and which entry),
@@ -310,7 +312,8 @@ function directoryProblem(main: string, directory: string): string | undefined {
 
 // Write the record's entries for `findings`: the security findings of a review, each recorded fixed or open. A finding
 // that repeats a weakness an entry holds writes no second file: the entry a finding names in `repeats`, else the one with
-// the same fingerprint. An open entry the weakness is now recorded fixed for is updated in place (status, policy and
+// the same fingerprint, else the open or accepted entry it raises again (`reRaised`), whose words change from review to review. A
+// re-raise of a fixed entry is not folded into it: the weakness is back, so it gets an entry of its own. An open entry the weakness is now recorded fixed for is updated in place (status, policy and
 // pin; its branch and PR stay where it was first raised); any other repeat leaves the entry as it is. Call it holding
 // the ledger lock, so the numbering is safe across worktrees. Never throws.
 export function recordSecurity(
@@ -348,6 +351,9 @@ export function recordSecurity(
           const named = known.find((entry) => holdsWeakness(entry) && Number(entry.id) === Number(finding.repeats));
           if (named === undefined) outcome.warnings.push(`${finding.id} says it repeats ${finding.repeats}, but no entry has that number; recorded by its text instead`);
           else holder = named;
+        } else if (holder === undefined && finding.reRaised !== undefined) {
+          // An exact fingerprint match above already names the weakness; only a reworded re-raise reaches here.
+          holder = known.find((entry) => holdsWeakness(entry) && entry.status !== "fixed" && Number(entry.id) === Number(finding.reRaised));
         }
         if (holder !== undefined) {
           if (holder.status === "open" && finding.status === "fixed") {
