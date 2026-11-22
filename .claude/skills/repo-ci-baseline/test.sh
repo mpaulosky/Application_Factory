@@ -119,7 +119,10 @@ if in_shard hooks; then
     edit_rule_first="${edit_rule_first#$'\xEF\xBB\xBF'}"
     [[ ! "$edit_rule_first" =~ ^---[[:space:]]*$ ]] \
       || fail "the Owned .claude/rules/markdown-and-yaml-edits.md must load in every session: it takes no front matter"
-    for needle in 'with the Write and Edit tools, never with a shell command' 'scripts/lint-edited-file.sh' 'PostToolUse' '.claude/settings.json'; do
+    # 'Where .claude/settings.json has no such entry': what a session does in a repository that hasn't turned the hook on (most Applications).
+    # shellcheck disable=SC2016 # the backticks are Markdown, matched as text
+    for needle in 'with the Write and Edit tools, never with a shell command' 'scripts/lint-edited-file.sh' 'PostToolUse' '.claude/settings.json' \
+      'Where `.claude/settings.json` has no such entry' 'markdownlint-cli2 <file>' 'yamllint -c .yamllint.yml <file>'; do
       grep -qF -- "$needle" "$edit_rule" || fail "the Owned .claude/rules/markdown-and-yaml-edits.md must say '$needle'"
     done
     if grep -niE 'dotfiles|repo-ci-baseline|factory|references/|docs/adr/' "$edit_rule"; then
@@ -303,8 +306,10 @@ PY
         || fail "the Owned .claude/rules/script-edits.md's paths: front matter must name \"$glob\", so it loads where the hook lints"
     done
     grep -qx 'paths:' <<< "$script_rule_paths" || fail "the Owned .claude/rules/script-edits.md must open with paths: front matter"
+    # shellcheck disable=SC2016 # the backticks are Markdown, matched as text
     for needle in 'with the Write and Edit tools' 'scripts/lint-edited-file.sh' 'PostToolUse' 'shfmt -w <file>' '.editorconfig' \
-      'A test for every new branch' 'The header or docstring in the same edit' 'CRLF' 'byte-order mark' 'symlink' 'The error contract'; do
+      'A test for every new branch' 'The header or docstring in the same edit' 'CRLF' 'byte-order mark' 'symlink' 'The error contract' \
+      'Where `.claude/settings.json` has no such entry' 'shellcheck <file>' 'shfmt -d <file>' 'ruff check --isolated --no-cache --select F,B'; do
       grep -qF -- "$needle" "$script_rule" || fail "the Owned .claude/rules/script-edits.md must say '$needle'"
     done
     # It names the tools the hook runs after, as the Markdown and YAML rule does: the plain names of the matcher read above.

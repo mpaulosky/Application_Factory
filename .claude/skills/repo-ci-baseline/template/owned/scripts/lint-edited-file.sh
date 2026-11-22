@@ -14,6 +14,9 @@
 #     }
 #   ]
 #
+# Wiring it is the Application's choice. Until it does, nothing runs this script, and the Owned .claude/rules/markdown-and-yaml-edits.md
+# and script-edits.md tell a session to run the same linters on each file it edits.
+#
 # Markdown: markdownlint-cli2 with the repo's .markdownlint-cli2.jsonc, which the pre-commit hook, the gate and CI use too.
 # YAML: yamllint with the repo's .yamllint.yml. A workflow (.github/workflows/*.yml, at the repo root or under any folder, such as the Factory's Template
 # copies) also goes through actionlint and zizmor (offline), and .github/dependabot.yml (same) through zizmor: the checks the Lint Actions workflow runs, which a gate runs only

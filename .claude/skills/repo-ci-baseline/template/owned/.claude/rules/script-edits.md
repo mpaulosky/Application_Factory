@@ -15,6 +15,11 @@ the moment the tool writes it, so a finding is fixed in the same turn. A Bash co
 To write the format shfmt asks for, run `shfmt -w <file>` with no style flags, so it reads `.editorconfig`, on a `*.sh` or a git hook;
 an extensionless file in `scripts/` is in no `.editorconfig` section, so shfmt would format it in its own style, not the repository's.
 
+Where `.claude/settings.json` has no such entry (a `PostToolUse` hook whose command is `scripts/lint-edited-file.sh`), nothing lints the script as you write it:
+after each edit, run `shellcheck <file>` and `shfmt -d <file>` on a shell file, and on a `*.py` `ruff check --isolated --no-cache --select F,B` with the rest of
+the `RUFF_ARGS` in `scripts/gate.sh` (its `--target-version`). The repository turns the hook on by adding the entry the script's header gives to
+`.claude/settings.json`; that is its choice, not an edit to make unasked.
+
 Reviewers keep finding the same gaps in script changes. Close them in the edit that opens them:
 
 - **A test for every new branch.** Each new branch, guard, fallback or error path gets a test that fails without it. Remove or invert the line and see the test

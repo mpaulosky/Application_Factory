@@ -64,6 +64,8 @@ writes, or to check the git hooks when a session starts, you can add their entri
 for `scripts/lint-edited-file.sh` (the edit-time lint) and `SessionStart` for `scripts/check-git-hooks.sh`. The skill's `references/git-hooks.md`
 shows both entries ([Edit-time lint](../.claude/skills/repo-ci-baseline/references/git-hooks.md#edit-time-lint),
 [Session-start check](../.claude/skills/repo-ci-baseline/references/git-hooks.md#session-start-check)).
+In an Application without the `PostToolUse` entry, nothing lints a file as Claude writes it: the Owned `.claude/rules/markdown-and-yaml-edits.md` and
+`.claude/rules/script-edits.md` tell a session to run the same linters on each file it edits, and the pre-commit hook, the gate and CI still catch the rest.
 
 `core.hooksPath` is what turns the hooks on, in each clone. Don't set a global `init.templateDir` to install them:
 the hooks it copies into `.git/hooks/` are symlinks or copies that go stale when the Template moves (#12 left them

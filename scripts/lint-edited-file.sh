@@ -14,6 +14,9 @@
 #     }
 #   ]
 #
+# Wiring it is the Application's choice. Until it does, nothing runs this script, and the Owned .claude/rules/markdown-and-yaml-edits.md
+# and script-edits.md tell a session to run the same linters on each file it edits.
+#
 # Markdown: markdownlint-cli2 with the repo's .markdownlint-cli2.jsonc, which the pre-commit hook, the gate and CI use too.
 # YAML: yamllint with the repo's .yamllint.yml. A workflow (.github/workflows/*.yml, at the repo root or under any folder, such as the Factory's Template
 # copies) also goes through actionlint and zizmor (offline), and .github/dependabot.yml (same) through zizmor: the checks the Lint Actions workflow runs, which a gate runs only
@@ -273,8 +276,9 @@ name="${file##*/}"
 
 # Lower-case extension: a README.MD is Markdown too. A shell file's name is matched as the gate matches it, case and all (a .SH is
 # not one), and here only by its name and its folder's: whether it is one the gate checks is decided below, from its path in the
-# repository.
-lower="$(printf '%sx' "$name" | tr '[:upper:]' '[:lower:]')"
+# repository. tr runs in the C locale, as everywhere in this file: a BSD tr in a UTF-8 locale fails on a name that isn't valid UTF-8, and
+# the file would go unlinted; in C it folds only ASCII letters, which is all an extension here holds.
+lower="$(printf '%sx' "$name" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
 lower="${lower%x}"
 kind=
 case "$lower" in
