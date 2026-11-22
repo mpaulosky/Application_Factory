@@ -279,7 +279,10 @@ PY
   ruff_drift "a ci.yml with two python-version lines" "is not found once (2 found)" .github/workflows/ci.yml 's/^\( *\)python-version: "3.12"$/&\n\1python-version: "3.12"/'
   rm -rf "$ruff_copy"
   # The docs that name ruff's target (ADR 0011's Update: Python, references/git-hooks.md) name the gate's, so a move of CI's Python
-  # can't leave them stale (#91). Every py3NN in both is the target, and so is every 3.NN in the ADR's bullet on it.
+  # can't leave them stale (#91). Every py3NN in both is the target, each names one, and every 3.NN in the ADR's bullet on it is the
+  # target's Python. (The role prompts give the gate's whole RUFF_ARGS, which tests/sandcastle/template-prompts.test.mts checks.)
+  # The ADR is the Factory's, outside the skill: this is the one check that needs the Factory's checkout around the skill, so
+  # test.sh run from a copy of the skill alone fails here, naming the ADR.
   # ruff_docs_agree <gate.sh> <ADR> <git-hooks.md>
   ruff_docs_agree() {
     python3 -I - "$@" << 'PY'
@@ -287,7 +290,7 @@ import re, shlex, sys
 gate, adr, hooks = (open(path, encoding="utf-8").read() for path in sys.argv[1:4])
 found = re.findall(r"^RUFF_ARGS=\((.+)\)$", gate, re.M)
 flags = shlex.split(found[0]) if len(found) == 1 else []
-if "--target-version" not in flags[:-1]:
+if flags[:-1].count("--target-version") != 1:
     print("gate.sh's RUFF_ARGS must give --target-version once")
     sys.exit(1)
 target = flags[flags.index("--target-version") + 1]
@@ -298,37 +301,60 @@ for where, text in (("ADR 0011", adr), ("references/git-hooks.md", hooks)):
     if not named:
         problems.append(f"{where} doesn't name the target {target}")
     problems += [f"{where} names {other}, but the gate's ruff target is {target}" for other in sorted(set(named) - {target})]
-bullet = re.search(r"^- \*\*The target is the Python CI runs\.\*\*.*?(?=^- |^#|\Z)", adr, re.M | re.S)
+# The bullet ends at the next bullet, heading or blank line, so a paragraph after it is not read as part of it.
+bullet = re.search(r"^- \*\*The target is the Python CI runs\.\*\*.*?(?=^- |^#|^[ \t]*$|\Z)", adr, re.M | re.S)
 if bullet is None:
     problems.append("ADR 0011 has no bullet 'The target is the Python CI runs.'")
 else:
-    versions = set(re.findall(r"(?<![0-9.])3\.[0-9]+(?![0-9.])", bullet.group(0)))
+    # A 3.NN not inside a longer number: a full stop after it (a sentence's end) still counts, a patch number does not.
+    versions = set(re.findall(r"(?<![0-9.])3\.[0-9]+(?![0-9]|\.[0-9])", bullet.group(0)))
     problems += [f"ADR 0011's target bullet names Python {other}, but the gate's ruff target is {target} (Python {python})" for other in sorted(versions - {python})]
 for problem in problems:
     print(problem)
 sys.exit(1 if problems else 0)
 PY
   }
-  factory_root="$(git -C "$skill_dir" rev-parse --show-toplevel 2> /dev/null)" || factory_root=""
+  # Without the GIT_* variables a hook sets, which would point git at another repository.
+  factory_root="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX git -C "$skill_dir" rev-parse --show-toplevel 2>&1)" \
+    || fail "test.sh can't find the Factory's checkout around $skill_dir: $factory_root"
   ruff_adr="$factory_root/docs/adr/0011-markdown-and-yaml-are-linted-as-they-are-written.md"
   if [[ -f "$ruff_adr" ]]; then
     found="$(ruff_docs_agree "$owned/scripts/gate.sh" "$ruff_adr" "$skill_dir/references/git-hooks.md" 2>&1)" \
       || fail "ADR 0011 and references/git-hooks.md must name the gate's ruff target: $found"
-    # Each way the docs can drift is refused, on copies edited that way.
-    ruff_docs_drift() { # ruff_docs_drift <what> <expected problem> <adr|hooks> <sed script>
+    # Each way the docs and the gate can drift apart is refused, on copies edited that way; with an empty expected problem the
+    # edited copies must pass. The gate's copy moves too, so the docs are shown to be read against its target, not a fixed one.
+    ruff_docs_drift() { # ruff_docs_drift <what> <expected problem, or ''> <adr|hooks|gate> <sed script>
       local docs="$md_tmp/ruff-docs" found
       rm -rf "${docs:?}" && mkdir -p "$docs"
-      cp "$ruff_adr" "$docs/adr" && cp "$skill_dir/references/git-hooks.md" "$docs/hooks"
+      cp "$ruff_adr" "$docs/adr" && cp "$skill_dir/references/git-hooks.md" "$docs/hooks" && cp "$owned/scripts/gate.sh" "$docs/gate"
+      cp "$docs/$3" "$docs/before"
       sed -i -e "$4" "$docs/$3"
-      found="$(ruff_docs_agree "$owned/scripts/gate.sh" "$docs/adr" "$docs/hooks" 2>&1)" && fail "the ruff docs check passes $1"
-      grep -qF -- "$2" <<< "$found" || fail "the ruff docs check doesn't say '$2' for $1: $found"
+      [[ "$1" == "an unedited copy" ]] || ! cmp -s "$docs/before" "$docs/$3" || fail "the ruff docs check's edit for $1 changed nothing: fix its sed script"
+      if [[ -z "$2" ]]; then
+        found="$(ruff_docs_agree "$docs/gate" "$docs/adr" "$docs/hooks" 2>&1)" || fail "the ruff docs check refuses $1: $found"
+      else
+        found="$(ruff_docs_agree "$docs/gate" "$docs/adr" "$docs/hooks" 2>&1)" && fail "the ruff docs check passes $1"
+        grep -qF -- "$2" <<< "$found" || fail "the ruff docs check doesn't say '$2' for $1: $found"
+      fi
       rm -rf "$docs"
     }
-    ruff_docs_drift "an ADR naming py313" "ADR 0011 names py313" adr '0,/py312/s//py313/'
-    ruff_docs_drift "a git-hooks.md naming py311" "references/git-hooks.md names py311" hooks '0,/py312/s//py311/'
+    ruff_docs_drift "an unedited copy" "" adr 's/^$//'
+    ruff_docs_drift "an ADR naming py313" "ADR 0011 names py313" adr 's/py312/py313/'
+    ruff_docs_drift "a git-hooks.md naming py311" "references/git-hooks.md names py311" hooks 's/py312/py311/'
     ruff_docs_drift "a git-hooks.md naming no target" "references/git-hooks.md doesn't name the target py312" hooks 's/py312/pyNNN/g'
+    ruff_docs_drift "an ADR naming no target" "ADR 0011 doesn't name the target py312" adr 's/py312/pyNNN/g'
     ruff_docs_drift "an ADR bullet naming Python 3.13" "ADR 0011's target bullet names Python 3.13" adr 's/syntax newer than 3\.12/syntax newer than 3.13/'
+    ruff_docs_drift "an ADR bullet naming Python 3.13 at a sentence's end" "ADR 0011's target bullet names Python 3.13" adr \
+      's/is refused by the hook,/is refused, as in Python 3.13. The hook,/'
     ruff_docs_drift "an ADR without the target bullet" "ADR 0011 has no bullet" adr 's/The target is the Python CI runs\./The target./'
+    ruff_docs_drift "a paragraph after the bullet naming another Python" "" adr \
+      's/^- \*\*One release line\.\*\*/\nA later paragraph that names Python 3.9 and more.\n\n&/'
+    ruff_docs_drift "a gate target moved with the docs left" "ADR 0011 names py312, but the gate's ruff target is py313" gate 's/--target-version py312/--target-version py313/'
+    ruff_docs_drift "a gate target moved with git-hooks.md left" "references/git-hooks.md names py312, but the gate's ruff target is py313" gate \
+      's/--target-version py312/--target-version py313/'
+    ruff_docs_drift "a gate RUFF_ARGS with no --target-version" "gate.sh's RUFF_ARGS must give --target-version once" gate 's/ --target-version py312)$/)/'
+    ruff_docs_drift "a gate RUFF_ARGS with --target-version twice" "gate.sh's RUFF_ARGS must give --target-version once" gate \
+      's/ --target-version py312)$/ --target-version py312 --target-version py313)/'
   else
     fail "test.sh can't find ADR 0011 in the Factory's docs/adr/ (from $skill_dir), to check it names the gate's ruff target"
   fi
