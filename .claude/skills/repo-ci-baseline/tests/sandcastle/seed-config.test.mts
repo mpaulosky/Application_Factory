@@ -37,6 +37,7 @@ describe("the places the gate's checks are read from (mpaulosky/dotfiles#339)", 
 
     assert.notEqual(declaration, "", "the Seed has no CHECK_PATHS list");
     assert.ok(listed.includes(".github/scripts/check_gh_repo.py"), `the Seed CHECK_PATHS ${JSON.stringify(listed)} lacks the checker`);
+    assert.ok(listed.includes(".github/scripts/check_central_pins.py"), `the Seed CHECK_PATHS ${JSON.stringify(listed)} lacks the central pins check`);
     assert.ok(listed.includes(".claude/skills/"), `the Seed CHECK_PATHS ${JSON.stringify(listed)} lacks .claude/skills/`);
   });
 
@@ -44,6 +45,7 @@ describe("the places the gate's checks are read from (mpaulosky/dotfiles#339)", 
     const step = stepNine();
 
     assert.match(step, /check_gh_repo\.py/);
+    assert.match(step, /check_central_pins\.py/);
     assert.match(step, /\.claude\/skills\//);
   });
 });

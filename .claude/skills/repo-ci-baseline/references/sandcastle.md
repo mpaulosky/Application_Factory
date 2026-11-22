@@ -376,8 +376,8 @@ One PR per repo, each its own follow-up issue. The four older repos go first (Ar
    the instruction there). Name it `.sandcastle/sandbox-gate.sh`, not `.sandcastle/check.sh`, which is Owned:
    IssueManager, IssueTracker and TicketManager rename theirs, in a PR that merges before the Apply that brings in the Owned one.
 9. Set `GATE_SCRIPT` in `lib/repo-config.mts` to the committed file `GATE_COMMAND` runs (`.sandcastle/sandbox-gate.sh`, the script of step 8), and list in `CHECK_PATHS` every place
-   the gate reads its checks from: its scripts and tests, `.github/workflows/`, `.github/scripts/check_gh_repo.py`, `.claude/skills/` (the gate's `gh` check reads them)
-   and `package.json`. A gate whose branch changes `GATE_SCRIPT`, or a `GATE_SCRIPT` that isn't a file at the
+   the gate reads its checks from: its scripts and tests, `.github/workflows/`, `.github/scripts/check_gh_repo.py`, `.github/scripts/check_central_pins.py`,
+   `.claude/skills/` (the gate's `gh` check reads them) and `package.json`. A gate whose branch changes `GATE_SCRIPT`, or a `GATE_SCRIPT` that isn't a file at the
    branch's base, fails without running.
 
 10. Add `REPO_SLUG` and `NOT_OWNED_BASELINE_PATHS` to `lib/repo-config.mts` as one-line `export const` lines, and the settings deny rules, as [pre-push-review.md](pre-push-review.md#adapting) says.

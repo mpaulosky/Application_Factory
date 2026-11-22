@@ -315,10 +315,19 @@ cat > "$work/shim/git" << SHIM
 #!/usr/bin/env bash
 if [[ "\$1 \$2 \$3" == "remote get-url origin" && -n "\${SHIM_ORIGIN_URL:-}" ]]; then echo "\$SHIM_ORIGIN_URL"; exit 0; fi
 if [[ "\$1" == -C && "\$3" == fetch && -n "\${SHIM_FETCH_FAIL:-}" ]]; then echo "shim: fetch failed" >&2; exit 128; fi
+if [[ "\$1" == -C && "\$3" == for-each-ref && -n "\${SHIM_REFS_FAIL:-}" ]]; then echo "shim: for-each-ref failed" >&2; exit 128; fi
 exec "$(command -v git)" "\$@"
 SHIM
 chmod +x "$work/shim/git"
 issue 84 "From url"
+# for-each-ref failing while the issue's branch is looked for is an error: it doesn't fall through to a new branch beside the one the issue has
+issue 136 "A title it lacks"
+git branch feature/136-old-title origin/main
+refs_before="$(git for-each-ref --format='%(refname)' refs/heads)"
+o=$(PATH="$work/shim:$PATH" SHIM_REFS_FAIL=1 bash scripts/work-issue.sh 136 2>&1 > /dev/null)
+st=$?
+check "a failing for-each-ref stops the run, saying why, and makes no branch or worktree" "[[ $st != 0 ]] && grep -q \"can't list the branches for #136\" <<<\"\$o\" && ! git show-ref --verify --quiet refs/heads/feature/136-a-title-it-lacks && [[ ! -e '$wt/feature-136-a-title-it-lacks' && ! -e '$wt/feature-136-old-title' ]] && [[ \$(git for-each-ref --format='%(refname)' refs/heads) == \"\$refs_before\" ]]"
+check "with for-each-ref working, the issue's branch is found" "[[ \$(bash scripts/work-issue.sh 136 2>/dev/null) == '$wt/feature-136-old-title' ]]"
 issue 85 "From upstream"
 issue 86 "No repository"
 check "with no GITHUB_REPOSITORY, the repository is read from origin's URL" "[[ \$(env -u GITHUB_REPOSITORY EXPECT_GH_REPO=acme/r PATH='$work/shim:'\"\$PATH\" SHIM_ORIGIN_URL=git@github.com:acme/r.git bash scripts/work-issue.sh 84 2>/dev/null) == '$wt/feature-84-from-url' ]]"
@@ -329,19 +338,25 @@ o=$(env -u GITHUB_REPOSITORY PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git
 st=$?
 check "a non-GitHub origin with no GITHUB_REPOSITORY fails, saying why" "[[ $st != 0 ]] && grep -q \"can't tell which repository\" <<<\"\$o\" && [[ ! -e '$wt/feature-86-no-repository' ]]"
 
-# slug_of, the same function in work-issue.sh and cleanup.sh: read from each script and run on its own, so a wrong group index, a loosened regex or a lost case-insensitivity in either copy fails here
+# slug_of, the same function in work-issue.sh, cleanup.sh and watch-pr.sh: read from each script and run on its own, so a wrong group index, a loosened regex or a lost case-insensitivity in either copy fails here
 slug_fn() { awk '/^slug_of\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$1"; }
-check "slug_of is the same function in work-issue.sh and cleanup.sh" "[[ -n \"\$(slug_fn $SCRIPTS/work-issue.sh)\" && \"\$(slug_fn $SCRIPTS/work-issue.sh)\" == \"\$(slug_fn $SCRIPTS/cleanup.sh)\" ]]"
+for script in cleanup watch-pr; do
+  check "slug_of is the same function in work-issue.sh and $script.sh" "[[ -n \"\$(slug_fn $SCRIPTS/work-issue.sh)\" && \"\$(slug_fn $SCRIPTS/work-issue.sh)\" == \"\$(slug_fn $SCRIPTS/$script.sh)\" ]]"
+done
+# One decision for every locale loop below: C always runs; a UTF-8 locale that isn't installed is skipped, except C.utf8 under CI, which fails
+locale_usable() {
+  [[ "$1" == C ]] && return 0
+  [[ "$(LC_ALL=$1 locale charmap 2> /dev/null)" == UTF-8 ]] && return 0
+  if [[ -n "${CI:-}" && "$1" == C.utf8 ]]; then
+    FAILED=$((FAILED + 1))
+    echo "FAIL - locale C.utf8 is missing, and CI must test $2 in a UTF-8 locale"
+  else echo "skip - locale $1 is not installed ($2)"; fi
+  return 1
+}
 for loc in C C.utf8 en_US.utf8; do
-  if [[ "$loc" != C ]] && [[ "$(LC_ALL=$loc locale charmap 2> /dev/null)" != UTF-8 ]]; then
-    if [[ -n "${CI:-}" && "$loc" == C.utf8 ]]; then
-      FAILED=$((FAILED + 1))
-      echo "FAIL - locale C.utf8 is missing, and CI must test slug_of in a UTF-8 locale"
-    else echo "skip - locale $loc is not installed"; fi
-    continue
-  fi
+  locale_usable "$loc" slug_of || continue
   SLUG_LOCALE=$loc
-  for script in work-issue cleanup; do
+  for script in work-issue cleanup watch-pr; do
     # shellcheck disable=SC2016 # the bash -c text is expanded by the inner bash, on purpose
     slug_of_run() { env -u LC_ALL -u LC_CTYPE -u LC_COLLATE -u LC_NUMERIC -u LC_MESSAGES LANG="$SLUG_LOCALE" bash -c 'set -euo pipefail; eval "$1"; slug_of "$2"' _ "$(slug_fn "$SCRIPTS/$script.sh")" "$1"; }
     for pair in "https://GitHub.com/Acme/r|Acme/r" "HTTPS://github.com/acme/r.git/|acme/r" "ssh://git@SSH.GitHub.com:443/acme/r|acme/r" "https://www.github.com/acme/r/|acme/r" "https://x:y@github.com/acme/r.git/|acme/r" \
@@ -357,9 +372,31 @@ for loc in C C.utf8 en_US.utf8; do
 done
 
 # The C-locale lines are pinned in the text too, so a runner without a UTF-8 locale still fails when one is dropped
-for script in work-issue cleanup; do
+for script in work-issue cleanup watch-pr; do
   check "$script: slug_of declares local LC_ALL=C (the regex ranges are ASCII only)" "slug_fn $SCRIPTS/$script.sh | grep -q 'local LC_ALL=C '"
   check "$script: slug_of's tr is started as LC_ALL=C tr" "slug_fn $SCRIPTS/$script.sh | grep -q 'LC_ALL=C tr '"
+done
+# is_slug, the check GITHUB_REPOSITORY passes in each script: the same function in all three, with its C-locale line pinned in the text, and run on its own in each locale
+is_fn() { awk '/^is_slug\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$1"; }
+for script in cleanup watch-pr; do
+  check "is_slug is the same function in work-issue.sh and $script.sh" "[[ -n \"\$(is_fn $SCRIPTS/work-issue.sh)\" && \"\$(is_fn $SCRIPTS/work-issue.sh)\" == \"\$(is_fn $SCRIPTS/$script.sh)\" ]]"
+done
+for script in work-issue cleanup watch-pr; do
+  check "$script: is_slug declares local LC_ALL=C (the regex ranges are ASCII only)" "is_fn $SCRIPTS/$script.sh | grep -q 'local LC_ALL=C$'"
+done
+for loc in C C.utf8 en_US.utf8; do
+  locale_usable "$loc" is_slug || continue
+  SLUG_LOCALE=$loc
+  for script in work-issue cleanup watch-pr; do
+    # shellcheck disable=SC2016 # the bash -c text is expanded by the inner bash, on purpose
+    is_slug_run() { env -u LC_ALL -u LC_CTYPE -u LC_COLLATE -u LC_NUMERIC -u LC_MESSAGES LANG="$SLUG_LOCALE" bash -c 'set -euo pipefail; eval "$1"; is_slug "$2"' _ "$(is_fn "$SCRIPTS/$script.sh")" "$1"; }
+    for good in a.b/c_d-e .github/x acme/r.git Acme/R; do
+      check "$script [$loc]: is_slug keeps $good" "is_slug_run '$good'"
+    done
+    for bad in $'acm\xc3\xa9/r' $'\xef\xbd\x81cme/r' $'ac\xcc\x81me/r' $'\xc3\xabvil/r' "acme/r/x" "acme" "/r" "acme/" "a b/r" "acme/r;x" $'acme/r\n'; do
+      check "$script [$loc]: is_slug refuses $(printf %q "$bad")" "! is_slug_run $(printf %q "$bad")"
+    done
+  done
 done
 # slug_of's tr runs with LC_ALL=C whatever locale the caller has: a tr shim logs the LC_ALL it is started with (GNU tr is byte-wise, so only the environment can be pinned)
 real_tr="$(command -v tr)"
@@ -367,7 +404,7 @@ mkdir "$work/trshim"
 # shellcheck disable=SC2016 # the shim's own text: ${LC_ALL-unset} is expanded when the shim runs
 printf '#!/usr/bin/env bash\necho "${LC_ALL-unset}" >> "$TR_LOG"\nexec %q "$@"\n' "$real_tr" > "$work/trshim/tr"
 chmod +x "$work/trshim/tr"
-for script in work-issue cleanup; do
+for script in work-issue cleanup watch-pr; do
   for loc in unset C.utf8; do
     : > "$work/tr.log"
     lc_env=(-u LC_ALL)
@@ -503,6 +540,12 @@ check "refuses a number over 9 digits" "[[ $st != 0 ]] && grep -q '^usage:' <<<\
 o=$(GITHUB_REPOSITORY=nope bash scripts/work-issue.sh 54 2>&1 > /dev/null)
 st=$?
 check "refuses when it can't tell the repository" "[[ $st != 0 ]] && grep -q \"can't tell which repository\" <<<\"\$o\""
+# GITHUB_REPOSITORY is held to the owner/name shape slug_of gives a remote ([A-Za-z0-9._-] only), before gh is asked anything
+for bad in "o/r;x" "o/r?x" $'\xc3\xabvil/r'; do
+  o=$(GITHUB_REPOSITORY="$bad" bash scripts/work-issue.sh 54 2>&1 > /dev/null)
+  st=$?
+  check "refuses a GITHUB_REPOSITORY of $(printf %q "$bad"), saying why" "[[ $st != 0 ]] && grep -q 'set GITHUB_REPOSITORY to an owner/name' <<<\"\$o\""
+done
 mv scripts/check-branch-name.sh "$work/cbn.sh"
 o=$(bash scripts/work-issue.sh 54 2>&1 > /dev/null)
 st=$?

@@ -12,7 +12,8 @@ Copilot review is not decided here: retiring it is the proposed [ADR 0014](0014-
 ## Decision: lint the file when the tool writes it
 
 The Template gains `scripts/lint-edited-file.sh`, a Claude Code `PostToolUse` hook for Edit, Write and MultiEdit. It lints the one file the tool wrote: `markdownlint-cli2` for `*.md`; `yamllint` for
-`*.yml` and `*.yaml`; `actionlint` and `zizmor --offline` as well for a workflow, and `zizmor` for `dependabot.yml`. These are the checks `lint-markdown`, `lint-yaml` and `lint-actions` run in CI; the
+`*.yml` and `*.yaml`; `actionlint` and `zizmor --offline --min-severity medium` as well for a workflow, and the same `zizmor` for `dependabot.yml`.
+These are the checks `lint-markdown`, `lint-yaml` and `lint-actions` run in CI; the
 Factory's gate runs only the first two kinds over the whole repo, and an Application's gate runs `actionlint` and `zizmor` when a workflow changed. A problem exits 2 with the linters' output on
 stderr (cut at 6,000 characters per linter), which Claude Code returns to the agent, so it fixes the file in the same turn. The script and its test are Owned; the reference
 ([`git-hooks.md`](../../.claude/skills/repo-ci-baseline/references/git-hooks.md#edit-time-lint)) is the skill's own.

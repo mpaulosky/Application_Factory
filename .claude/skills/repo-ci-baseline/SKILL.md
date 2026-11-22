@@ -39,6 +39,7 @@ A fix made only in a repo is reverted by its next Apply.
 | PR process | One written process (`docs/PROCESS.md`), a PR template, and PR titles in the commit format, checked by **PR title** | [pr-process.md](references/pr-process.md) |
 | Docs-only CI skip | Docs PRs skip the build and tests while required checks still pass | [docs-only-ci.md](references/docs-only-ci.md) |
 | Per-project test matrix | Each test project runs in its own job on Microsoft Testing Platform | [test-matrix.md](references/test-matrix.md) |
+| Central package pins | Under transitive pinning, every central NuGet pin is referenced by a project or kept with a `Transitive pin:` reason, so a Dependabot bump can't fail restore with NU1109; checked by the gate and `Build Solution` | [central-pins.md](references/central-pins.md) |
 | Release labels | `semver:minor` and `semver:major` exist, because `release.yml` reads them | [release-pipeline.md](references/release-pipeline.md) |
 | Review before the push | In a repo with Sandcastle, `/pre-push-review` reviews the branch's whole diff locally, grades each finding, fixes the real ones and records a ledger; `scripts/gate.sh` refuses a push without a clean one, so GitHub's reviewers are a backstop; `/hardening-review` repeats it as full passes, with each reviewer's example input run, a mutation check on every batch of fixes and a stop when a pass finds nothing new, for a large or risky branch | [pre-push-review.md](references/pre-push-review.md) |
 | Copilot review instructions | A repo with a code-review skill generates `.github/copilot-instructions.md` from it, and the gate and CI fail when it drifts; a repo without the skill passes | [copilot-review-sync.md](references/copilot-review-sync.md) |
@@ -56,6 +57,7 @@ and `scripts/lint-edited-file.sh`, which lints a Markdown, YAML, shell or Python
 The Owned `.claude/rules/markdown-and-yaml-edits.md` goes into every repo, with or without the hook: it tells every session to write those files with Write and Edit, which the hook sees.
 So does `.claude/rules/script-edits.md`, which loads when a session works on a script: the same for shell and Python scripts, and the checks reviewers keep raising on
 shell and Python scripts.
+Where `.claude/settings.json` has no `PostToolUse` entry for the hook, both rules tell the session to run the linters for each kind of file itself.
 A repo that got a `.claude/settings.json` from an earlier Apply deletes it by hand, since `apply.sh` never deletes.
 The Factory has a `.claude/settings.json` of its own for the edit-time lint hook
 ([the Factory's ADR 0011](../../../docs/adr/0011-markdown-and-yaml-are-linted-as-they-are-written.md)); an Application does not receive it.

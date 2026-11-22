@@ -100,6 +100,7 @@ export const CHECK_PATHS: readonly string[] = [
   "scripts/",
   ".github/ci/",
   ".github/workflows/",
+  ".github/scripts/check_central_pins.py",
   ".github/scripts/check_gh_repo.py",
   ".claude/skills/",
   "package.json",

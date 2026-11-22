@@ -241,6 +241,12 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
+      # A central pin no project references holds its package back under transitive pinning, and Dependabot's bumps
+      # don't raise it, so restore would fail with NU1109 (.github/scripts/check_central_pins.py says why and what to do).
+      # It needs only the checkout and the runner's python3, so it runs first and a bad pin fails fast.
+      - name: Check central package pins
+        run: python3 -I .github/scripts/check_central_pins.py --root .
+
       - name: Setup .NET
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
@@ -289,8 +295,9 @@ jobs:
 
   # Unit tests for the scripts in .github/scripts (the release blog generator,
   # Claude Review's script and the rest), among them the gh check
-  # (check_gh_repo.py), the Owned files check (check_owned_files.py) and the
-  # gh-repo job that runs them, and ruff over the Template's Python. Deliberately
+  # (check_gh_repo.py), the Owned files check (check_owned_files.py), the
+  # gh-repo job that runs them, the central pins check (check_central_pins.py)
+  # and the Build Solution step that runs it, and ruff over the Template's Python. Deliberately
   # not a required status check on main's ruleset.
   python-tests:
     name: Python tests
@@ -338,8 +345,8 @@ jobs:
 
   # Tests for .github/hooks/pre-commit, .github/hooks/pre-push and scripts/gate.sh,
   # with stubbed tools, and for scripts/check-branch-name.sh, check-pr-title.sh,
-  # sync-copilot-review.sh, watch-pr.sh, cleanup.sh, work-issue.sh and
-  # lint-edited-file.sh. Also not a required status check.
+  # sync-copilot-review.sh, watch-pr.sh, cleanup.sh, work-issue.sh,
+  # lint-edited-file.sh and check-git-hooks.sh. Also not a required status check.
   hook-tests:
     name: Hook tests
     runs-on: ubuntu-latest
@@ -387,6 +394,9 @@ jobs:
 
       - name: Run work-issue script tests
         run: bash scripts/tests/work-issue.test.sh
+
+      - name: Run git-hooks check script tests
+        run: bash scripts/tests/check-git-hooks.test.sh
 
       # The hook's own cases use stub linters. Its real-shellcheck block runs when the job has shellcheck (ubuntu-latest does), shfmt v3.14
       # or a later v3 and a root .editorconfig, and skips with a note when it doesn't; every flag the hook passes is also checked against
