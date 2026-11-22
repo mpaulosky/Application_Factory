@@ -99,7 +99,7 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
      it re-Applies the other repos in order, one pre-push gate at a time, reports a repo that fails and goes on.
      Start with `--dry-run`. It ends with the `land.sh` command for the PRs it left open.
    - **Roll out unattended:** `rollout.sh --auto --brings '#<n>,#<n>'` does all of that in one run (the Factory's [ADR 0016](../../../docs/adr/0016-a-rollout-runs-each-applications-review-headless-and-sandboxed-in-its-worktree.md)).
-     It checks the tools (on Linux, bubblewrap and socat for the sandbox among them, and that bubblewrap can make one), ruff 0.17 or uv,
+     It runs on Linux only, and checks the tools (bubblewrap and socat for the sandbox among them, and that bubblewrap can make one), ruff 0.17 or uv,
      and the Template's `global.json` SDK first (`--dry-run` stops there and prints the plan). It refuses to start with `claude` signed out (as it is with no settings file
      read; a cloud's sign-in, which `claude auth status` doesn't report, isn't asked), or with a Claude Code or cloud sign-in secret in the environment
      (`ANTHROPIC_API_KEY`, say): sign Claude Code in with `claude /login` instead.

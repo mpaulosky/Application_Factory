@@ -131,7 +131,7 @@ ALL_TOOLS = auto.TOOLS + auto.SANDBOX_TOOLS + ("dotnet", "uvx")
 
 
 def fake_preflight(on_path=ALL_TOOLS, answers=None, global_json='{"sdk": {"version": "10.0.403"}}', tmp_path=None,
-                   environ=None):
+                   environ=None, platform="linux"):
     answers = {"shfmt": (0, "v3.14.1\n", ""), "gh": (0, "", ""), "dotnet": (0, "10.0.404\n", ""), "bwrap": (0, "", ""),
                "claude": (0, "2.1.326 (Claude Code)\n", ""), "ruff": (0, "ruff 0.17.6\n", ""),
                "claude auth": (0, '{"loggedIn": true, "email": "someone@example.com"}\n', "")} | dict(answers or {})
@@ -148,7 +148,7 @@ def fake_preflight(on_path=ALL_TOOLS, answers=None, global_json='{"sdk": {"versi
     if global_json is not None and tmp_path:
         Path(path).write_text(global_json)
     problems = auto.preflight(which=lambda tool: f"/bin/{tool}" if tool in on_path else None, run=run,
-                              template_global_json=path, environ=environ or {"PATH": "/bin"})
+                              template_global_json=path, environ=environ or {"PATH": "/bin"}, platform=platform)
     return problems, calls
 
 
@@ -192,12 +192,13 @@ def test_a_cloud_secret_is_refused_and_dropped_and_the_rest_kept(name, secret, t
 
 
 def test_preflight_runs_on_linux_only(monkeypatch):
-    monkeypatch.setattr(auto.sys, "platform", "darwin")
-    problems, _ = fake_preflight()
+    problems, _ = fake_preflight(platform="darwin")
     assert problems[0] == ("rollout.sh --auto runs on Linux only (darwin here): what its review session may read is"
                            " checked with bubblewrap's sandbox alone; run rollout.sh without --auto, and the review by hand")
-    monkeypatch.setattr(auto.sys, "platform", "linux")
-    assert fake_preflight()[0] == []
+    assert fake_preflight(platform="linux")[0] == []
+    monkeypatch.setattr(auto.sys, "platform", "darwin")
+    assert fake_preflight(platform=None)[0][0].startswith("rollout.sh --auto runs on Linux only (darwin here)"), \
+        "the host's own platform by default"
 
 
 def test_preflight_passes_with_every_tool_and_the_templates_sdk(tmp_path):
@@ -934,7 +935,9 @@ def test_denied_around_refuses_an_entry_named_as_a_pattern(name):
     tree = {"/h": ["my[app]"], "/h/my[app]": ["wt"]}
     assert auto.denied_around("/h", ["/h/my[app]/wt"], tree.get) == [], "nothing beside the way: nothing to name"
     tree = {"/h": ["my[app]"], "/h/my[app]": ["wt", "other"]}
-    with pytest.raises(ValueError, match=r"/h/my\[app\]/other must be hidden .* its path holds one of"):
+    with pytest.raises(ValueError, match=r"'/h/my\[app\]/other' must be hidden from the session, but the folder it is"
+                                         r" in, '/h/my\[app\]', holds one of .*: rename that folder, or move the clone"
+                                         r" out of it, then resume"):
         auto.denied_around("/h", ["/h/my[app]/wt"], tree.get)
 
 
@@ -949,7 +952,7 @@ def test_denied_around_refuses_a_name_that_isnt_utf_8():
     name = b"caf\xe9".decode("utf-8", "surrogateescape")
     with pytest.raises(ValueError, match="isn't UTF-8, so the sandbox can't name it"):
         auto.denied_around("/h", ["/h/wt"], {"/h": [name, "wt"]}.get)
-    with pytest.raises(ValueError, match="its path isn't UTF-8"):
+    with pytest.raises(ValueError, match="but the folder it is in, '/h/caf.udce9', isn't UTF-8"):
         auto.denied_around("/h", [f"/h/{name}/wt"], {"/h": [name], f"/h/{name}": ["wt", "other"]}.get)
 
 
@@ -1096,6 +1099,13 @@ def test_a_tool_in_a_shared_folder_is_read_as_its_file_alone(tmp_path):
         ["/opt/zz-none/bin/git", "/opt/zz-none"], ["/opt/zz-none/bin"]), "a prefix of its own"
     assert auto.tool_reads("/home/u", lambda name: "/home/bin/git" if name == "git" else None, no_answer) == (
         ["/home/bin/git"], []), "never a folder above home"
+    for found in ("/opt/bin/git", "/srv/bin/git"):
+        assert auto.tool_reads("/h", lambda name, found=found: found if name == "git" else None, no_answer) == (
+            [found], []), "nor a folder right under /, which holds other programs' too"
+    tree = {"/": ["h", "opt"], "/h": ["wt"], "/opt": ["bin", "other-app"], "/opt/bin": ["git", "secret-tool"]}
+    denied = settings_of("/h/wt", "/h/wt/.git", "/h/wt/.git", "/h/s", home="/h", environ={}, listdir=tree.get,
+                         which=lambda name: "/opt/bin/git" if name == "git" else None)["sandbox"]["filesystem"]["denyRead"]
+    assert "/opt/other-app" in denied and "/opt/bin/secret-tool" in denied and "/opt/bin/git" not in denied
     assert auto.tool_reads("/h", lambda name: "node_modules/.bin/node", no_answer) == ([], []), \
         "a relative PATH entry is rollout.sh's folder, not the session's"
     (tmp_path / "real").mkdir()
@@ -1111,6 +1121,19 @@ def test_the_sessions_path_starts_with_the_folders_its_tools_really_run_from(tmp
     env = auto.session_env({"PATH": "/usr/bin:/bin"}, str(tmp_path), ["/h/.nvm/versions/node/v24/bin"])
     assert env["PATH"] == "/h/.nvm/versions/node/v24/bin:/usr/bin:/bin"
     assert auto.session_env({"PATH": "/usr/bin"}, str(tmp_path))["PATH"] == "/usr/bin"
+    assert auto.session_env({}, str(tmp_path), ["/n/bin"])["PATH"] == "/n/bin" + os.pathsep + os.defpath, \
+        "no PATH: the system's default after the tools' folders"
+
+
+def test_a_review_runs_its_tools_from_where_they_really_are_and_asks_them_once(tmp_path, monkeypatch):
+    calls = []
+    real = auto.tool_reads
+    monkeypatch.setattr(auto, "tool_reads", lambda *args, **kwargs: calls.append(args) or real(*args, **kwargs))
+    node = "/h/.nvm/versions/node/v24/bin/node"
+    _, _, seen, _ = review_once(tmp_path, monkeypatch, listing={"which": lambda name: node if name == "node" else None})
+    assert seen["env"]["PATH"].split(os.pathsep)[0] == "/h/.nvm/versions/node/v24/bin"
+    assert seen["env"]["PATH"].endswith(os.environ["PATH"])
+    assert len(calls) == 1, "the settings, the PATH and the check after the session share one answer"
 
 
 def test_settings_too_large_for_one_argument_are_refused(monkeypatch):
@@ -1139,7 +1162,7 @@ def test_settings_too_large_stop_the_round_before_the_session(tmp_path, monkeypa
     code, log, seen, _ = review_once(tmp_path, monkeypatch, listing={
         "listdir": lambda folder: [*names, root_of(tmp_path)] if folder == "/" else []})
     assert code == 127 and "command" not in seen, "no session"
-    assert "rollout.sh: can't set the session up: the session's settings take" in Path(log).read_text()
+    assert "rollout.sh: not started: can't set the session up: the session's settings take" in Path(log).read_text()
 
 
 def test_the_session_folder_defaults_to_one_beside_the_cache_outside_tmp():
@@ -1157,7 +1180,7 @@ def test_a_session_folder_not_of_the_users_own_stops_before_the_session(tmp_path
     code, log, seen, _ = review_once(tmp_path, monkeypatch)
     assert code == 127 and "command" not in seen
     text = Path(log).read_text()
-    assert "rollout.sh: can't set the session up:" in text and "isn't a folder of the user's own" in text
+    assert "rollout.sh: not started: can't set the session up:" in text and "isn't a folder of the user's own" in text
     assert "a real folder of yours, not a symlink; remove or fix it, or run /pre-push-review in" in text
 
 
@@ -1168,7 +1191,7 @@ def test_a_session_folder_that_cant_be_made_stops_before_the_session(tmp_path, m
     monkeypatch.setattr(auto.tempfile, "TemporaryDirectory", full)
     code, log, seen, _ = review_once(tmp_path, monkeypatch)
     assert code == 127 and "command" not in seen
-    assert "rollout.sh: can't set the session up: [Errno 28] No space left on device" in Path(log).read_text()
+    assert "rollout.sh: not started: can't set the session up: [Errno 28] No space left on device" in Path(log).read_text()
 
 
 def test_what_killed_runs_left_in_the_session_folder_is_removed(tmp_path, monkeypatch):
@@ -1250,22 +1273,48 @@ def git_config_repo(tmp_path, *settings):
     ("lfs.url", "https://ghp_abc@lfs.example/o/r", ["lfs.url"]),
     ("credential.helper", "!f() { echo password=hunter2; }; f", ["credential.helper"]),
     ("credential.https://github.com.helper", "store --file .git/creds", ["credential.https://github.com.helper"]),
+    ("credential.helper", "!git credential-store --file .git/creds", ["credential.helper"]),
+    ("credential.helper", "!f() { echo PASSWORD=x; }; f", ["credential.helper"]),
+    ("sendemail.smtppass", "hunter2", ["sendemail.smtppass"]),
+    ("imap.pass", "hunter2", ["imap.pass"]),
+    ("tool.api-token", "abc", ["tool.api-token"]),
+    ("tool.api-token", "", []),
+    ("core.sshcommand", "ssh -i key", []),
+    ("credential.usehttppath", "true", []),
     ("credential.helper", "store", []),
     ("credential.helper", "cache --timeout 300", []),
 ])
 def test_a_sign_in_secret_in_the_clones_git_config_is_found_by_its_key(tmp_path, key, value, found):
     git_config_repo(tmp_path, (key, value))
     secrets = auto.config_secrets(str(tmp_path), str(tmp_path / ".git"))
-    assert secrets == found
+    assert secrets == [f"{key} in {tmp_path / '.git' / 'config'}" for key in found]
     assert not [name for name in secrets if "t0k" in name or "ghp_" in name], "a key is named, never its token"
 
 
 def test_a_secret_in_a_file_the_config_includes_or_a_credential_store_is_found(tmp_path):
     git_config_repo(tmp_path, ("include.path", "secrets.inc"))
     (tmp_path / ".git" / "secrets.inc").write_text("[remote \"origin\"]\n\turl = https://ghp_abc@github.com/o/r\n")
-    assert auto.config_secrets(str(tmp_path), str(tmp_path / ".git")) == ["remote.origin.url"]
-    (tmp_path / ".git" / "credentials").write_text("https://u:ghp_abc@github.com\n")
-    assert auto.config_secrets(str(tmp_path), str(tmp_path / ".git"))[-1] == "credentials in the clone's git folder"
+    common = tmp_path / ".git"
+    assert auto.config_secrets(str(tmp_path), str(common)) == [f"remote.origin.url in {common / 'config'}"]
+    (common / "credentials").write_text("https://u:ghp_abc@github.com\n")
+    assert auto.config_secrets(str(tmp_path), str(common))[0] == f"{common / 'credentials'} (a file named for credentials)"
+
+
+def test_a_git_folder_that_cant_be_listed_stops_the_round(tmp_path, monkeypatch):
+    with pytest.raises(RuntimeError, match=r"can't list the clone's git folder /nowhere/.git, so whether it holds a"
+                                           r" sign-in secret can't be told"):
+        auto.config_secrets("/w", "/nowhere/.git", run=lambda command: (0, "", ""))
+    (tmp_path / "worktrees").mkdir()
+    real = auto.os.listdir
+
+    def listdir(path):
+        if str(path).endswith("worktrees"):
+            raise PermissionError(13, "Permission denied", path)
+        return real(path)
+
+    monkeypatch.setattr(auto.os, "listdir", listdir)
+    with pytest.raises(RuntimeError, match=r"can't list .*/worktrees, so what of the clone's git config"):
+        auto.config_secrets("/w", str(tmp_path), run=lambda command: (0, "", ""))
 
 
 def test_redacted_hides_every_urls_sign_in():
@@ -1274,11 +1323,13 @@ def test_redacted_hides_every_urls_sign_in():
 
 @pytest.mark.parametrize("error, why", [("fatal: bad config https://t0k@host\n", "fatal: bad config https://***@host"),
                                         ("", "exit 128")])
-def test_a_git_config_that_cant_be_read_is_an_error(error, why):
+def test_a_git_config_that_cant_be_read_is_an_error(tmp_path, error, why):
+    (tmp_path / "config").write_text("")
     with pytest.raises(RuntimeError) as raised:
-        auto.config_secrets("/w", "/c/.git", run=lambda command: (1 if "--bool" in command else 128, "", error))
-    assert str(raised.value) == (f"git config --local can't be read in /w ({why}): repair it (git -C /w config --local"
-                                 " --list shows the error), then resume")
+        auto.config_secrets("/w", str(tmp_path), run=lambda command: (128, "", error))
+    config = tmp_path / "config"
+    assert str(raised.value) == (f"git can't read {config} ({why}): repair it (git config --file {config} --list shows"
+                                 " the error)")
 
 
 def test_a_linked_worktrees_own_config_is_read_only_with_the_extension(tmp_path):
@@ -1291,13 +1342,19 @@ def test_a_linked_worktrees_own_config_is_read_only_with_the_extension(tmp_path)
     git("init", "-q", str(clone))
     git("-C", str(clone), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one")
     git("-C", str(clone), "worktree", "add", "-q", str(worktree))
-    common = str(clone / ".git")
-    assert auto.config_secrets(str(worktree), common) == [], "no extension: --local only, which a linked worktree allows"
-    git("-C", str(clone), "config", "extensions.worktreeConfig", "false")
-    assert auto.config_secrets(str(worktree), common) == [], "the extension set false is off"
+    common = clone / ".git"
     git("-C", str(clone), "config", "extensions.worktreeConfig", "true")
+    assert auto.config_secrets(str(worktree), str(common)) == [], "the extension on and no config.worktree yet"
     git("-C", str(worktree), "config", "--worktree", "remote.origin.url", "https://tok@github.com/o/r")
-    assert auto.config_secrets(str(worktree), common) == ["remote.origin.url"], "the worktree's own config.worktree"
+    own = next((common / "worktrees").iterdir()) / "config.worktree"
+    assert auto.config_secrets(str(worktree), str(common)) == [f"remote.origin.url in {own}"], "its own config.worktree"
+    other = tmp_path / "other"
+    git("-C", str(clone), "worktree", "add", "-q", str(other))
+    git("-C", str(other), "config", "--worktree", "http.proxy", "http://u:p@proxy")
+    git("-C", str(clone), "config", "--worktree", "lfs.url", "https://tok@lfs.example")
+    found = auto.config_secrets(str(worktree), str(common))
+    assert f"lfs.url in {common / 'config.worktree'}" in found, "the main checkout's, which the session reads too"
+    assert [line for line in found if line.startswith("http.proxy in ") and "/worktrees/" in line], "another worktree's"
 
 
 def test_a_clone_with_a_sign_in_secret_isnt_reviewed(tmp_path, monkeypatch):
@@ -1307,10 +1364,10 @@ def test_a_clone_with_a_sign_in_secret_isnt_reviewed(tmp_path, monkeypatch):
     assert code == 127 and "command" not in seen
     assert len(asked) == 1 and asked[0][0] == worktree, "asked once, before the session"
     text = Path(log).read_text()
-    assert "the clone's git folder holds a sign-in secret (remote.origin.url)" in text
-    assert (f"git -C {worktree} config --local --includes --show-origin --list shows where; remove it (git config"
-            " --unset-all <key>, or the file) and keep the token in a credential helper, then resume; the session"
-            " wasn't started") in text
+    assert "rollout.sh: not started: the clone's git folder holds a sign-in secret (remote.origin.url)" in text
+    assert ("git config --file <that file> --includes --show-origin --list shows each key whole (a *** in one stands"
+            " for its sign-in); remove the key (git config --file <that file> --unset-all <key>) or the credentials"
+            " file, and keep the token in a credential helper, then resume") in text
 
 
 def test_a_secret_added_to_the_clones_git_folder_while_the_session_ran_is_named(tmp_path, monkeypatch, capsys):
@@ -1358,7 +1415,8 @@ def test_what_appeared_is_named_twenty_at_most(count, shown):
 def test_a_name_that_cant_be_denied_makes_what_appeared_untold():
     settings = {"sandbox": {"filesystem": {"denyRead": HELD}}}
     said = auto.appeared(settings, (["/h/wt"], [], "/h"), listdir={"/": ["a*b"]}.get, which=lambda name: None)
-    assert said[0].startswith("what was made beside the session's folders while it ran can't be told (/a*b must be")
+    assert said[0].startswith("what was made beside the session's folders while it ran can't be told ('/a*b' must be")
+    assert said[0].endswith("rename or move it)"), "no 'then resume': nothing stopped"
 
 
 def test_unlisted_since_names_only_whats_new():
@@ -1372,8 +1430,9 @@ def test_a_failing_warning_or_a_closed_stderr_loses_no_review(tmp_path, monkeypa
     def broken():
         raise KeyError("x")
 
-    auto.after_session(out, broken)
-    assert out.getvalue() == "rollout.sh: the checks of what changed beside the session failed (KeyError: 'x')\n"
+    auto.after_session(out, "the thing", broken)
+    assert out.getvalue().startswith("Traceback (most recent call last):"), "the traceback in the log"
+    assert out.getvalue().endswith("rollout.sh: checking the thing failed (KeyError: 'x'); check it yourself\n")
 
     class Closed:
         def write(self, text):
@@ -1381,17 +1440,51 @@ def test_a_failing_warning_or_a_closed_stderr_loses_no_review(tmp_path, monkeypa
 
     monkeypatch.setattr(auto.sys, "stderr", Closed())
     out = io.StringIO()
-    auto.after_session(out, lambda: ["one", "two"])
+    auto.after_session(out, "the thing", lambda: ["one", "two"])
     assert out.getvalue() == "rollout.sh: one\nrollout.sh: two\n"
 
+    class Full:
+        def write(self, text):
+            raise OSError(28, "No space left on device")
 
-def test_the_warnings_are_said_after_the_staged_findings_are_kept(tmp_path, monkeypatch):
-    order = []
-    real = auto.after_session
-    monkeypatch.setattr(auto, "staged_copy", lambda log, real_copy=auto.staged_copy: order.append("kept") or real_copy(log))
-    monkeypatch.setattr(auto, "after_session", lambda out, lines: order.append("warned") or real(out, lines))
-    code, _, _, _ = review_once(tmp_path, monkeypatch)
-    assert code == 0 and order[:2] == ["kept", "warned"]
+    monkeypatch.setattr(auto.sys, "stderr", io.StringIO())
+    auto.after_session(Full(), "the thing", broken)
+    auto.after_session(Full(), "the thing", lambda: ["one"])
+    assert auto.sys.stderr.getvalue().endswith("rollout.sh: one\n"), "a log that can't be written loses no review"
+    assert auto.without_resume(ValueError("rename it, then resume; more")) == "rename it"
+
+
+def test_a_failing_check_after_the_session_neither_stops_the_record_nor_hides_the_other(tmp_path, monkeypatch, capsys):
+    calls = []
+
+    def listdir(folder):
+        if folder != "/":
+            return []
+        calls.append(folder)
+        return [root_of(tmp_path), *(["new-project"] if len(calls) > 1 else [])]
+
+    asked = []
+
+    def secrets(worktree, common):
+        asked.append(worktree)
+        if len(asked) > 1:
+            raise RuntimeError("git can't read /c/config (bad), then resume")
+        return []
+
+    code, log, seen, _ = review_once(tmp_path, monkeypatch, listing={"listdir": listdir, "secrets": secrets})
+    assert code == 0 and "recorded" in seen, "recorded all the same"
+    text = Path(log).read_text()
+    assert "rollout.sh: made while the session ran, after its sandbox was set, so it could read them (check them):" \
+           " /new-project" in text, "the other check's warning is kept"
+    assert ("rollout.sh: checking the clone's git folder for sign-in secrets added failed (RuntimeError: git can't"
+            " read /c/config (bad)); check it yourself") in text
+
+
+def test_a_warning_that_raises_past_its_guard_still_lets_the_review_be_recorded(tmp_path, monkeypatch):
+    monkeypatch.setattr(auto, "appeared", lambda *args, **kwargs: (_ for _ in ()).throw(KeyError("x")))
+    code, log, seen, _ = review_once(tmp_path, monkeypatch)
+    assert code == 0 and "recorded" in seen
+    assert "rollout.sh: checking what was made beside the session's folders failed (KeyError: 'x')" in Path(log).read_text()
 
 
 def test_what_appeared_during_the_session_that_cant_be_told_is_said(tmp_path, monkeypatch, capsys):
@@ -3309,7 +3402,7 @@ def test_a_skill_or_agent_that_doesnt_read_starts_no_session(tmp_path, monkeypat
                                        guard=lambda w: fake_guard(tmp_path), check=lambda g: [],
                                        **{"skill": lambda: SKILL_TEXT, "agents": lambda: AGENTS, which: broken})
     assert (code, broke, started) == (127, [], [])
-    assert f"rollout.sh: can't set the session up: {error}" in Path(log).read_text()
+    assert f"rollout.sh: not started: can't set the session up: {error}" in Path(log).read_text()
 
 
 def test_a_claude_that_cannot_start_is_127_with_its_reason_in_the_log(tmp_path, monkeypatch):
@@ -3343,7 +3436,7 @@ def test_a_session_that_cant_be_set_up_never_starts(tmp_path, monkeypatch, where
     code, log, _, _ = review_once(tmp_path, monkeypatch, popen=lambda *a, **k: started.append(a),
                                   **{where: broken})
     assert code == 127 and started == []
-    assert ("can't read the remote; the session wasn't started" if where == "guard" else "git diff failed") in Path(log).read_text()
+    assert ("rollout.sh: not started: can't read the remote" if where == "guard" else "git diff failed") in Path(log).read_text()
 
 
 def test_a_log_that_cannot_be_made_is_127(tmp_path, monkeypatch):
@@ -3644,7 +3737,8 @@ def test_auto_stops_when_a_review_session_fails_and_says_what_to_do(exit_code, w
 
 def test_a_session_that_couldnt_start_says_why_on_the_terminal(tmp_path):
     log = tmp_path / "review.log"
-    log.write_text("rollout.sh: an earlier line\nclaude's own output\nrollout.sh: the clone's git folder holds a secret\n")
+    log.write_text("rollout.sh: an earlier line\nclaude's own output\nrollout.sh: not started: the clone's git folder"
+                   " holds a secret, then resume\nrollout.sh: a warning after\n")
     fleet = Fleet(codes={TM: [auto.REVIEW_NEEDED]})
     fleet.review = lambda repo, worktree: (127, str(log), [])
     code, out, _ = run_auto(["--brings", "#82"], fleet)
@@ -3653,6 +3747,8 @@ def test_a_session_that_couldnt_start_says_why_on_the_terminal(tmp_path):
     assert auto.stop_line(str(tmp_path / "missing.log")) is None
     (tmp_path / "quiet.log").write_text("nothing of rollout.sh's\n")
     assert auto.stop_line(str(tmp_path / "quiet.log")) is None
+    (tmp_path / "started.log").write_text("rollout.sh: made while the session ran, ... (check them): /x\n")
+    assert auto.stop_line(str(tmp_path / "started.log")) is None, "a claude that started and exited 127 wasn't stopped"
 
 
 def drive_once(tmp_path, code, broke=(), head=HEAD):
@@ -4021,7 +4117,7 @@ def test_the_header_says_what_holds_and_what_only_backs_it_up():
     assert "so it reviews only, and runs in Claude Code's sandbox (session_settings; ADR 0016)" in doc
     assert "It edits, fixes and commits nothing, and runs no gate, so nothing it wrote runs later as the person" in doc
     assert "the worktree's HEAD, branch or status changed" in doc
-    assert "can't leave the sandbox; the session refuses to start without the sandbox (bubblewrap and socat on Linux" in doc
+    assert "can't leave the sandbox; the session refuses to start without the sandbox (bubblewrap and socat, which the preflight checks for)" in doc
     assert "writes only a temporary folder of its own (session_writes: never the worktree, its git folder, the ledgers or .security)" in doc
     assert "the round records that with the worktree's scripts/review.sh record (record_review)" in doc
     assert "the worktree's .git link changed" in doc
