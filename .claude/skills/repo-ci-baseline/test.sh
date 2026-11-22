@@ -306,8 +306,9 @@ bullet = re.search(r"^- \*\*The target is the Python CI runs\.\*\*.*?(?=^- |^#|^
 if bullet is None:
     problems.append("ADR 0011 has no bullet 'The target is the Python CI runs.'")
 else:
-    # A 3.NN not inside a longer number: a full stop after it (a sentence's end) still counts, a patch number does not.
-    versions = set(re.findall(r"(?<![0-9.])3\.[0-9]+(?![0-9]|\.[0-9])", bullet.group(0)))
+    # A 3.NN that doesn't start inside a longer number ([0-9]+ takes every digit): one before a full stop (a sentence's end) or a
+    # patch number counts as its 3.NN.
+    versions = set(re.findall(r"(?<![0-9.])3\.[0-9]+", bullet.group(0)))
     problems += [f"ADR 0011's target bullet names Python {other}, but the gate's ruff target is {target} (Python {python})" for other in sorted(versions - {python})]
 for problem in problems:
     print(problem)
@@ -346,6 +347,8 @@ PY
     ruff_docs_drift "an ADR bullet naming Python 3.13" "ADR 0011's target bullet names Python 3.13" adr 's/syntax newer than 3\.12/syntax newer than 3.13/'
     ruff_docs_drift "an ADR bullet naming Python 3.13 at a sentence's end" "ADR 0011's target bullet names Python 3.13" adr \
       's/is refused by the hook,/is refused, as in Python 3.13. The hook,/'
+    ruff_docs_drift "an ADR bullet naming Python 3.13.1" "ADR 0011's target bullet names Python 3.13" adr 's/syntax newer than 3\.12/syntax newer than 3.13.1/'
+    ruff_docs_drift "an ADR bullet naming the target's Python with a patch number" "" adr 's/syntax newer than 3\.12/syntax newer than 3.12.4/'
     ruff_docs_drift "an ADR without the target bullet" "ADR 0011 has no bullet" adr 's/The target is the Python CI runs\./The target./'
     ruff_docs_drift "a paragraph after the bullet naming another Python" "" adr \
       's/^- \*\*One release line\.\*\*/\nA later paragraph that names Python 3.9 and more.\n\n&/'
