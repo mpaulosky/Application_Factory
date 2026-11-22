@@ -108,6 +108,9 @@ linted at all three places, with the same command: `ruff check --isolated --no-c
   shellcheck: a config an agent writes can't turn a rule off for the hook, and every repo checks the same rules, so the hook, the gate and CI can't disagree. ruff runs no
   code from the repository. The hook also clears every `RUFF_` variable, since `RUFF_OUTPUT_FILE` would send the report to a file and the agent would see a clean edit.
   Style rules and `ruff format` are not chosen: like shfmt before ADR 0015, they would be a new standard, not a check on bugs.
+- **The target is the Python CI runs.** `--target-version py312` is CI's `python-tests` job's `python-version: "3.12"`, so syntax newer than 3.12 is refused by the hook,
+  both gates and CI by design, even where a newer Python runs it (the Seed Sandcastle image's, say), and `# noqa` can't silence a syntax error. `test.sh` fails when the gate's
+  target and CI's `python-version` differ, so the Template moving to a newer Python moves the target in the same change (#87).
 - **One release line.** A later ruff adds rules to F and B, so the same file could pass on one machine and fail on another. The hook and both gates take only a 0.17 release
   (`RUFF_RELEASE`). The Template gate runs `uvx --no-config ruff@0.17.6` (`RUFF_VERSION`) when none is installed, or when the installed one is another release, saying so,
   so a newer ruff from a distro's packages doesn't stop the push; `--no-config` keeps the checkout's uv config from changing where it is fetched from (it skips the user's own uv config too, so a

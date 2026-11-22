@@ -35,6 +35,8 @@ Use the commands for each stack the issue touches:
 - Lint YAML with `yamllint -c .yamllint.yml <file>`: the Template ships that config at the repo root, and it allows the long lines yamllint's default rejects.
 - Shell scripts pass `shellcheck`, and a `*.sh` file or git hook is formatted as `shfmt -w <file>` writes it, with no style flags (it reads `.editorconfig`): the gate
   checks the ones the branch changed. The code standards are in `.sandcastle/CODING_STANDARDS.md`.
+- Python files pass `ruff check --isolated --no-cache --select F,B --target-version py312 -- <file>`, the gate's command for the ones the branch changed; mark a false
+  alarm with `# noqa: <code>` and the reason on its line.
 
 ## The gate
 

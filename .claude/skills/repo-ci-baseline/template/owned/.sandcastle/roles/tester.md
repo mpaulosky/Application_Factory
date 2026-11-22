@@ -58,7 +58,9 @@ Pay extra attention to existing test files near the code the issue touches, and 
 5. Run the tests you wrote with the stack's test command, and confirm each one fails for the reason you expect: an assertion failing or the stub throwing, not a syntax error, a
    missing fixture or a broken setup.
 6. Lint the files you changed: `markdownlint-cli2 <file>` for Markdown, `shellcheck <file>` for shell, plus `shfmt -d <file>` for a `*.sh` file or
-   git hook (`shfmt -w <file>` writes the format, from `.editorconfig`; an extensionless `scripts/` file gets shellcheck alone), and `yamllint` for YAML (the command is in the rules below).
+   git hook (`shfmt -w <file>` writes the format, from `.editorconfig`; an extensionless `scripts/` file gets shellcheck alone), `yamllint` for YAML (the command is in the rules below),
+   and `ruff check --isolated --no-cache --select F,B --target-version py312 -- <file>` for a `*.py` file, the gate's own flags (mark a false alarm with
+   `# noqa: <code>` and the reason on its line).
 7. Commit the tests and stubs red, with `test(<scope>): <Summary>`. Say in the body which test covers which criterion.
 
 When a criterion can't be tested automatically (for example, it's about docs or a manual step), don't write a test that doesn't check it. Name the criterion and why it can't be

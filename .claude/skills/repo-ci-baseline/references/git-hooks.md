@@ -144,7 +144,9 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
   later one adds rules. Without one, or with another release or a `--version` that fails, it runs `uvx --no-config ruff@0.17.6` (`--no-config`: it reads no uv config at
   all, so none in the checkout can send the fetch elsewhere, nor can the user's own name a mirror), first saying why it passed the installed one over, naming what it printed
   with every byte but printable ASCII as `?`; without uv it stops, saying the same and naming both. A uvx run that fails other than with a finding is named as a possible
-  failed fetch, with the way round it: ruff 0.17 first on PATH. ruff exiting 1 is a finding, and any other status stops the gate as a failed ruff. Unlike shell format it runs
+  failed fetch, with the way round it: ruff 0.17 first on PATH. ruff exiting 1 is a finding, and the gate then prints the command it ran with `--fix` added, its own
+  ruff and flags and up to five files shell-quoted (`<file>...` for more), so the fix reads no config either; any other status stops the gate as a failed ruff.
+  `py312` is the Python CI's `python-tests` job runs, so newer syntax is refused by design; `test.sh` keeps the two equal. Unlike shell format it runs
   without an `origin/main` too, on every tracked Python file, as the shell lint does. `tests/owned-gate-files.test.sh` (the Factory's) runs those lines in a throwaway
   repo, in a UTF-8 locale and in C, the YAML, shell lint, shell format and Python lint steps with stubs, and the Markdown step with a stub and, when installed, the real tool;
   `.github/hooks/tests/pre-push.test.sh` runs the whole gate with the real shfmt, and shows it reads the repo's `.editorconfig`. Then build and run each test
@@ -266,8 +268,8 @@ may start with a dash, since shellcheck takes the argument after `-P` as its val
 
 A hook under a nested `.github/hooks` whose `.editorconfig` can't be read is not linted, with a note; a line of it longer than 4,096 characters is no section header. A violation
 wins over a note: the hook exits 2 with the report alone. `test.sh` checks that the hook's hook-name rule is the gate's and the Lint Actions shellcheck job's, that its shfmt
-release rule is the gate's and its own, and that its ruff release rule and flags are the gate's, its flags CI's `python-tests` job's, and the gate's `RUFF_VERSION`
-`requirements-tests.txt`'s pin and the Seed `Dockerfile`'s.
+release rule is the gate's and its own, and that its ruff release rule and flags are the gate's, its flags CI's `python-tests` job's, the gate's `--target-version` that
+job's `python-version`, and the gate's `RUFF_VERSION` `requirements-tests.txt`'s pin and the Seed `Dockerfile`'s.
 The hook sees only those tools' writes: a file an agent writes through Bash (a heredoc, `sed -i`, a script) is not linted until the pre-commit hook (Markdown only), the gate or CI,
 since a Bash command doesn't name the files it wrote. The Owned `.claude/rules/markdown-and-yaml-edits.md`, which Apply writes into every repo and which loads in every session (it has no `paths:`),
 tells agents to write Markdown and YAML with Write and Edit for that reason, in a repo that hasn't wired the hook yet as well. The Owned `.claude/rules/script-edits.md`, whose `paths:`

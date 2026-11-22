@@ -73,6 +73,8 @@ a `*.sh` file or hook changed, otherwise exit 2 from the gh check).
 So does ruff, which the gate's Python lint step runs on the changed `*.py` files: a Dockerfile written before it adds the Seed's `RUFF_VERSION` `ARG` (the release
 `scripts/gate.sh` pins) and `"ruff==${RUFF_VERSION}"` to its `pip3 install` line, or the sandbox's gate fails on a branch that changes a Python file, naming ruff (the image
 has no uv for the gate to fall back on).
+The Seed's `roles/shared-rules.md` gives the roles ruff's command for a Python file, as the Owned `roles/tester.md` does; a `shared-rules.md` written before it adds
+that line by hand, or a role that changes only a Python file learns of the lint at the gate.
 A repo that already has a Dockerfile adds `tini` to its `apt-get install` list and replaces its `ENTRYPOINT ["sleep", "infinity"]`
 with `ENTRYPOINT ["tini", "--", "sleep", "infinity"]`: with `sleep` as PID 1,
 nothing reaps the processes the gate orphans, they stay zombies holding their PIDs, and a long build ends unable to fork (the gate fails with `Resource temporarily unavailable`,
@@ -358,7 +360,8 @@ One PR per repo, each its own follow-up issue. The four older repos go first (Ar
    Its pointers (`docs/CODING_STANDARDS.md`, `CONTEXT.md`, `.claude/rules/`), its repo-specific bullets, its UI notes and its instructions for a sandbox gate (step 8)
    go into `roles/shared-rules.md`, and its `# SKILLS` block into `roles/skills.md`.
    Diff the repo's `Dockerfile` and `package.json` against the Template's Seed files, and bring over what the repo lacks (shfmt, for one, in a Dockerfile from before ADR 0011).
-   Do the same for `roles/shared-rules.md`, a Seed file a Rollout never rewrites: its shell rule names the shfmt format the gate's Shell format step checks (the Factory's ADR 0015).
+   Do the same for `roles/shared-rules.md`, a Seed file a Rollout never rewrites: its shell rule names the shfmt format the gate's Shell format step checks (the Factory's ADR 0015),
+   and its Python rule ruff's command, the gate's Python lint step's (the Factory's ADR 0011, Update: Python).
 4. Run `pnpm install`, then commit `pnpm-lock.yaml` with the change.
 5. Add `GATE_LIMIT_MINUTES` to `lib/repo-config.mts` (the Seed's is 10): the Owned `lib/step-limit.mts` imports it, so a repo without it fails to load.
    Size it for the repo's slowest gate under parallel builds. The host runs every sandbox command under `timeout` (GNU coreutils, in the Template's
