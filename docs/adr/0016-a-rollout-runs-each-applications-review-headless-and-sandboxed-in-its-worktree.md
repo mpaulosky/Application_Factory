@@ -82,7 +82,8 @@ enforces (bubblewrap, so Linux only) on every Bash command and everything it sta
 - **Nothing of the repository's own or the person's applies to it.** It loads no settings file at all (`--setting-sources ""`; its settings are passed on the command line, so the
   session can't rewrite them) and no MCP server, and takes the skill's text and its reviewer agent from the Template, not the worktree: neither the repository's nor the person's
   hooks, permission rules, plugins or settings run or widen it.
-- **No secret in its environment.** It has no GitHub sign-in (`gh` points at an empty config), names that look like secrets are dropped, and of Claude Code's own names only a
+- **No secret in its environment.** It has no GitHub sign-in (`gh` points at an empty config), names that look like secrets are dropped, and so is any value holding a URL with a password
+  (a `*_URL` with its sign-in), whatever its name; of Claude Code's own names only a
   listed few that aren't secrets (its config folder, model, endpoint and cloud) are kept, so the calling session's id, messaging token and IDE port don't reach it either. Claude Code
   signs in from its credentials file or a cloud's profile files, which the sandbox keeps from the shell: the preflight refuses a round with a sign-in secret in the environment
   (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, a cloud's key), since the session's shell would inherit it.

@@ -161,8 +161,8 @@ def test_a_failed_ticketmanager_holds_the_round_and_exits_1():
 @pytest.mark.parametrize("code, said", [
     (3, "reapply failed on TicketManager: the gate asks for a review: run /pre-push-review in its re-Apply worktree"
         " (or rollout.sh --auto), then run this again"),
-    (4, "reapply failed on TicketManager: review findings wait for you: scripts/review.sh accept-open in its re-Apply"
-        " worktree lists them, then run this again"),
+    (4, "reapply failed on TicketManager: review findings wait for you: fix them with /pre-push-review in its re-Apply"
+        " worktree, or accept them with scripts/review.sh accept-open there, then run this again"),
     (1, "reapply failed on TicketManager\n")])
 def test_a_review_refusal_says_what_reapply_asks_of_the_person(code, said):
     code_, out, err = run(["--brings", "#82", "--root", "/r"], Fake(fail={"mpaulosky/TicketManager"}, code=code))

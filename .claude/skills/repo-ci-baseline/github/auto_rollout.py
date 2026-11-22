@@ -52,7 +52,8 @@ the repository's nor the person's), no MCP server and only SESSION_BUILTINS,
 gets its settings as JSON on its command line, and the skill and its reviewer
 agent from the Template, so no hook, permission rule or plugin but these
 applies. Its environment has no sign-in secret (gh points at an empty config;
-names that look like secrets are dropped, and of Claude Code's own only
+names that look like secrets are dropped, and so is any value holding a URL
+with a password (has_sign_in), and of Claude Code's own only
 CLAUDE_KEPT is kept, while the preflight refuses a round with a Claude Code or
 cloud sign-in secret set, since the session would inherit it) and git's push is
 sent nowhere: layers behind the sandbox. After the session the round checks what
@@ -103,7 +104,10 @@ session that fails, a PR it can't read. TicketManager stopping holds the rest;
 one of the rest stopping is reported and the round goes on. Each stop prints
 the command that decides it, and the round ends with the command that resumes
 it: rollout.sh --auto again, which picks up where it stopped (a repo already
-reapplied finds nothing new to push, and its open PR is landed).
+reapplied finds nothing new to push, and its open PR is landed). An open
+Advisory finding doesn't stop it: once a review is recorded, the round prints
+the ones it left open (scripts/review.sh advisory) before the push, files no
+issue, and the person files the follow-up.
 """
 
 import collections
@@ -140,7 +144,8 @@ SESSION_DIR = os.path.expanduser("~/.cache/repo-ci-baseline-sessions")
 # What opens the log line saying why the session wasn't started (stop_line reads it back, from the log's first line
 # only, for the terminal).
 NOT_STARTED = "rollout.sh: not started: "
-# The marker scripts/review.sh advisory ends its list with, for a session's comment; not shown on the terminal.
+# The marker scripts/review.sh advisory ends its list with, for a session's comment; not shown on the terminal. A copy
+# of review-ledger.mts's own: a test holds them equal.
 SESSION_MARKER = "<!-- claude-session -->"
 # The log's first line once a session is about to start, so whatever the session prints comes after it and can't
 # pass for the round's own NOT_STARTED line.
@@ -2074,7 +2079,11 @@ def drive(repo, path, brings, reapply, review, say):
                 return Outcome("failed", f"the review session {why} (see {log}).{kept}")
             return Outcome("failed", f"the review session {why} (see {log}); run /pre-push-review in"
                            f" {here}, then resume.{kept}")
-        advisories = open_advisories(worktree)
+        try:
+            advisories = open_advisories(worktree)
+        except Exception as error:  # noqa: BLE001 - only a list is shown; the recorded review still pushes
+            advisories = (f"(scripts/review.sh advisory failed: {shown(str(error))}; cd {shlex.quote(worktree)} &&"
+                          " scripts/review.sh advisory lists them before the PR lands)")
         if advisories:
             say(f"── rollout: {short_name(repo)}: the review left Advisory findings open, which don't block the push"
                 f" and are filed nowhere: file them in a follow-up issue.\n{advisories}")
@@ -2083,12 +2092,14 @@ def drive(repo, path, brings, reapply, review, say):
 def open_advisories(worktree, run=run_quiet):
     """What the review just recorded in worktree leaves open of Advisory findings, as scripts/review.sh advisory lists
     them, or None when it leaves none: the round files no issue and the PR lands, so the terminal is where the person
-    sees them. When the list can't be read, the command to read it."""
+    sees them. When the list can't be read, its error's first line (shown: escaped and cut) and the command to read it."""
     code, out, err = run([os.path.join(worktree, "scripts", "review.sh"), "advisory"], cwd=worktree)
     text = out.replace(SESSION_MARKER, "").strip()
     if code == 0:
         return None if not text or text == "No open Advisory findings." else text
-    return (f"(scripts/review.sh advisory failed: {err.strip() or f'exit {code}'}; cd {shlex.quote(worktree)} &&"
+    lines = err.strip().splitlines()
+    why = shown(lines[0]) if lines else f"exit {code}"
+    return (f"(scripts/review.sh advisory failed: {why}; cd {shlex.quote(worktree)} &&"
             " scripts/review.sh advisory lists them before the PR lands)")
 
 

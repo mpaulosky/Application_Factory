@@ -50,6 +50,12 @@ def test_the_exit_codes_and_worktree_agree_with_reapply_sh():
     assert reapply_constant("findings_wait_exit") == str(auto.FINDINGS_WAIT)
     assert reapply_constant("worktree_name") == auto.WORKTREE
     assert reapply_constant("branch") == auto.BRANCH == rollout.BRANCH
+    assert set(rollout.REAPPLY_STOPS) == {auto.REVIEW_NEEDED, auto.FINDINGS_WAIT}, "rollout.sh's hints, by the same codes"
+
+
+def test_the_session_marker_is_the_ledgers_own():
+    ledger = (SKILL.parent.parent.parent / ".sandcastle" / "lib" / "review-ledger.mts").read_text()
+    assert f'"{auto.SESSION_MARKER}"' in ledger
 
 
 def test_reapply_sh_reads_the_refusals_in_the_ledgers_and_the_gates_own_words():
@@ -3955,11 +3961,16 @@ class Fleet:
         return self.locks[-1]
 
 
+REAL_OPEN_ADVISORIES = auto.open_advisories
+
+
 @pytest.fixture(autouse=True)
-def no_advisories(monkeypatch, request):
-    """The round's tests run on fake worktrees, which have no scripts/review.sh to list Advisory findings."""
-    if request.node.name != "test_open_advisory_findings_are_read_from_the_worktrees_ledger":
-        monkeypatch.setattr(auto, "open_advisories", lambda worktree: None)
+def no_advisories(monkeypatch):
+    """The round's tests run on fake worktrees, which have no scripts/review.sh to list Advisory findings; a test
+    that reads them calls REAL_OPEN_ADVISORIES."""
+    asked = []
+    monkeypatch.setattr(auto, "open_advisories", lambda worktree: asked.append(worktree))
+    return asked
 
 
 def test_open_advisory_findings_are_read_from_the_worktrees_ledger():
@@ -3969,12 +3980,41 @@ def test_open_advisory_findings_are_read_from_the_worktrees_ledger():
         seen.append((command, cwd))
         return 0, "- R3 docs/x.md:4: stale.\n\n<!-- claude-session -->\n", ""
 
-    assert auto.open_advisories("/w t", run) == "- R3 docs/x.md:4: stale.", "the session marker isn't shown"
+    assert REAL_OPEN_ADVISORIES("/w t", run) == "- R3 docs/x.md:4: stale.", "the session marker isn't shown"
     assert seen == [(["/w t/scripts/review.sh", "advisory"], "/w t")]
-    assert auto.open_advisories("/w", lambda command, cwd=None: (0, "No open Advisory findings.\n", "")) is None
-    assert auto.open_advisories("/w", lambda command, cwd=None: (1, "", "No review is recorded for this diff.\n")) == (
-        "(scripts/review.sh advisory failed: No review is recorded for this diff.; cd /w && scripts/review.sh advisory"
-        " lists them before the PR lands)")
+    assert REAL_OPEN_ADVISORIES("/w", lambda command, cwd=None: (0, "No open Advisory findings.\n", "")) is None
+    assert REAL_OPEN_ADVISORIES("/w t", lambda command, cwd=None: (1, "", "No review is recorded for this diff.\n")) == (
+        "(scripts/review.sh advisory failed: 'No review is recorded for this diff.'; cd '/w t' && scripts/review.sh"
+        " advisory lists them before the PR lands)")
+    assert REAL_OPEN_ADVISORIES("/w", lambda command, cwd=None: (127, "", "")) == (
+        "(scripts/review.sh advisory failed: exit 127; cd /w && scripts/review.sh advisory lists them before the PR"
+        " lands)")
+
+
+def test_a_failed_advisory_lists_first_error_line_is_escaped_and_cut():
+    err = "\x1b[2Jboom " + "x" * 400 + "\n── rollout: forged\n" + "trace\n" * 40
+    said = REAL_OPEN_ADVISORIES("/w", lambda command, cwd=None: (1, "", err))
+    assert "\x1b" not in said and "\n" not in said and "forged" not in said and "trace" not in said
+    assert "'\\x1b[2Jboom xxx" in said and "characters)" in said
+
+
+def test_an_advisory_list_that_raises_is_shown_and_the_review_still_pushes(monkeypatch):
+    def broken(worktree):
+        raise ValueError("embedded null byte")
+
+    monkeypatch.setattr(auto, "open_advisories", broken)
+    code, out, _ = run_auto(["--brings", "#82"], Fleet(codes={TM: [auto.REVIEW_NEEDED]}))
+    assert code == 0, out
+    assert "(scripts/review.sh advisory failed: 'embedded null byte'; cd" in out
+
+
+def test_no_advisory_list_is_shown_when_none_is_open_or_after_a_failed_session(no_advisories):
+    code, out, _ = run_auto(["--brings", "#82"], Fleet(codes={TM: [auto.REVIEW_NEEDED]}))
+    assert code == 0 and "Advisory" not in out
+    assert no_advisories == ["/r/TicketManager-worktrees/chore-reapply-baseline"], "read once the review is recorded"
+    no_advisories.clear()
+    code, out, _ = run_auto(["--brings", "#82"], Fleet(codes={TM: [auto.REVIEW_NEEDED]}, reviews={TM: 1}))
+    assert code == 1 and no_advisories == [], "a session that recorded nothing has no list to read"
 
 
 def test_a_recorded_reviews_open_advisory_findings_are_shown_before_the_push(monkeypatch):

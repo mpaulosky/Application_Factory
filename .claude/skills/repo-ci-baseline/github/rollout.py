@@ -11,7 +11,8 @@ of the Template change. Each run:
 2. holds the rest until TicketManager's newest re-Apply PR has merged: while
    it is open, land it (land.sh prints how), fix any finding Template first,
    then run rollout.sh again. A failed reapply, a PR closed without merging, or
-   none found holds the round too;
+   none found holds the round too; a reapply stopped at the gate's review (exit
+   3) or on findings that wait for a person (exit 4) says what to run first;
 3. once that PR has merged (and reapply.sh found nothing new to push), the
    rest get reapply.sh in order, one at a time, so one pre-push gate runs at a
    time. A repo that fails is reported and the round goes on.
@@ -43,11 +44,12 @@ LEAD = "mpaulosky/TicketManager"
 BRANCH = "chore/reapply-baseline"
 REAPPLY = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "reapply.sh")
 DEFAULT_ROOT = os.path.expanduser("~/github")
-# What reapply.sh's review refusals ask of the person (its exit 3 and 4), said after "reapply failed on <repo>".
+# What reapply.sh's review refusals ask of the person (its exit 3 and 4, auto_rollout's REVIEW_NEEDED and
+# FINDINGS_WAIT: a test holds them equal), said after "reapply failed on <repo>".
 REAPPLY_STOPS = {3: ": the gate asks for a review: run /pre-push-review in its re-Apply worktree (or rollout.sh --auto), then"
                     " run this again",
-                 4: ": review findings wait for you: scripts/review.sh accept-open in its re-Apply worktree lists them, then"
-                    " run this again"}
+                 4: ": review findings wait for you: fix them with /pre-push-review in its re-Apply worktree, or accept"
+                    " them with scripts/review.sh accept-open there, then run this again"}
 
 
 def short_name(repo):
