@@ -984,6 +984,21 @@ new_repo
 run_env GITHUB_REPOSITORY=env-org/from-env -- --once 7
 check "GITHUB_REPOSITORY wins over the remotes" log_has "GH_REPO=env-org/from-env ::"
 
+# The remote is read by slug_of, the same function as work-issue.sh's and cleanup.sh's (work-issue.test.sh tests its forms)
+new_repo "https://github.com/acme/widgets/"
+run --once 7
+check "GH_REPO is taken from a remote with a trailing slash" log_has "GH_REPO=acme/widgets ::"
+
+new_repo "ssh://git@github.com:22/acme/widgets.git"
+run --once 7
+check "GH_REPO is taken from an ssh:// remote with a port" log_has "GH_REPO=acme/widgets ::"
+
+new_repo "https://example.com/github.com/acme/widgets"
+run --once 7
+check "a non-GitHub remote that holds github.com/o/r: exit 2" status_is 2
+check "a non-GitHub remote that holds github.com/o/r: nothing is polled" polls_are 0
+check "a non-GitHub remote: the message says why" err_has "can't tell which repository"
+
 new_repo "<none>"
 run --once 7
 check "no remote and no GITHUB_REPOSITORY: exit 2" status_is 2

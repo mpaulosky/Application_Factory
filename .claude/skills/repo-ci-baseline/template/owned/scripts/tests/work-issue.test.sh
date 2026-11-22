@@ -329,9 +329,11 @@ o=$(env -u GITHUB_REPOSITORY PATH="$work/shim:$PATH" SHIM_ORIGIN_URL=https://git
 st=$?
 check "a non-GitHub origin with no GITHUB_REPOSITORY fails, saying why" "[[ $st != 0 ]] && grep -q \"can't tell which repository\" <<<\"\$o\" && [[ ! -e '$wt/feature-86-no-repository' ]]"
 
-# slug_of, the same function in work-issue.sh and cleanup.sh: read from each script and run on its own, so a wrong group index, a loosened regex or a lost case-insensitivity in either copy fails here
+# slug_of, the same function in work-issue.sh, cleanup.sh and watch-pr.sh: read from each script and run on its own, so a wrong group index, a loosened regex or a lost case-insensitivity in either copy fails here
 slug_fn() { awk '/^slug_of\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$1"; }
-check "slug_of is the same function in work-issue.sh and cleanup.sh" "[[ -n \"\$(slug_fn $SCRIPTS/work-issue.sh)\" && \"\$(slug_fn $SCRIPTS/work-issue.sh)\" == \"\$(slug_fn $SCRIPTS/cleanup.sh)\" ]]"
+for script in cleanup watch-pr; do
+  check "slug_of is the same function in work-issue.sh and $script.sh" "[[ -n \"\$(slug_fn $SCRIPTS/work-issue.sh)\" && \"\$(slug_fn $SCRIPTS/work-issue.sh)\" == \"\$(slug_fn $SCRIPTS/$script.sh)\" ]]"
+done
 for loc in C C.utf8 en_US.utf8; do
   if [[ "$loc" != C ]] && [[ "$(LC_ALL=$loc locale charmap 2> /dev/null)" != UTF-8 ]]; then
     if [[ -n "${CI:-}" && "$loc" == C.utf8 ]]; then
@@ -341,7 +343,7 @@ for loc in C C.utf8 en_US.utf8; do
     continue
   fi
   SLUG_LOCALE=$loc
-  for script in work-issue cleanup; do
+  for script in work-issue cleanup watch-pr; do
     # shellcheck disable=SC2016 # the bash -c text is expanded by the inner bash, on purpose
     slug_of_run() { env -u LC_ALL -u LC_CTYPE -u LC_COLLATE -u LC_NUMERIC -u LC_MESSAGES LANG="$SLUG_LOCALE" bash -c 'set -euo pipefail; eval "$1"; slug_of "$2"' _ "$(slug_fn "$SCRIPTS/$script.sh")" "$1"; }
     for pair in "https://GitHub.com/Acme/r|Acme/r" "HTTPS://github.com/acme/r.git/|acme/r" "ssh://git@SSH.GitHub.com:443/acme/r|acme/r" "https://www.github.com/acme/r/|acme/r" "https://x:y@github.com/acme/r.git/|acme/r" \
@@ -357,7 +359,7 @@ for loc in C C.utf8 en_US.utf8; do
 done
 
 # The C-locale lines are pinned in the text too, so a runner without a UTF-8 locale still fails when one is dropped
-for script in work-issue cleanup; do
+for script in work-issue cleanup watch-pr; do
   check "$script: slug_of declares local LC_ALL=C (the regex ranges are ASCII only)" "slug_fn $SCRIPTS/$script.sh | grep -q 'local LC_ALL=C '"
   check "$script: slug_of's tr is started as LC_ALL=C tr" "slug_fn $SCRIPTS/$script.sh | grep -q 'LC_ALL=C tr '"
 done

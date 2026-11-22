@@ -136,12 +136,27 @@ if ! command -v gh > /dev/null 2>&1; then                       # gh-repo: ok
   exit 2
 fi
 
+# slug_of <url>, the same function as work-issue.sh's and cleanup.sh's (work-issue.test.sh checks they match), -> owner/name of a github.com URL, else nothing. Forms: https://, http://, ssh://, git:// (userinfo, a numeric port, .git and a trailing / allowed) and
+# git@github.com:o/r; the host may be github.com, ssh.github.com or www.github.com, and scheme and host may be in any case (the owner/name keeps its case). Owner and name are
+# [A-Za-z0-9._-] only; the userinfo has no # ? / [ ] or space, and in the scp-style form no : either (git reads everything before that : as the host); a scp-style URL has no scheme.
+# It runs in the C locale (LC_ALL=C is local for the regex, and set on tr, a separate process), so [A-Za-z] means ASCII only. So a lookalike (https://evil.com#@github.com/o/r, evil.com:x@github.com:o/r, github.com:/o/r, a deeper path, file://, an IPv6 host) gives nothing.
+slug_of() {
+  local LC_ALL=C u="${1%/}" l out="" ui_url="[A-Za-z0-9._~%!\$&'()*+,;=:-]+@" ui_scp="[A-Za-z0-9._~%!\$&'()*+,;=-]+@" nm="[A-Za-z0-9._-]+" host="(ssh\.|www\.)?github\.com"
+  u="${u%.git}"
+  u="${u%/}"
+  l="$(printf '%s' "$u" | LC_ALL=C tr '[:upper:]' '[:lower:]')" # the match is on an ASCII-lowercase copy (LC_ALL=C on tr, which is another process and doesn't see the local one: no non-ASCII letter folds into an ASCII one), so it needs neither nocasematch nor bash 4
+  if [[ "$l" =~ ^(ssh|https?|git)://(${ui_url})?${host}(:[0-9]+)?/(${nm}/${nm})$ ]]; then
+    out="${BASH_REMATCH[5]}"
+  elif [[ "$l" =~ ^(${ui_scp})?${host}:(${nm}/${nm})$ ]]; then
+    out="${BASH_REMATCH[3]}"
+  fi
+  if [[ -n "$out" ]]; then printf '%s' "${u: -${#out}}"; fi # the owner/name ends the URL: take it from the original, case kept
+}
 url="$(git remote get-url upstream 2> /dev/null || git remote get-url origin 2> /dev/null || true)"
-url="${url%.git}"
 repo="${GITHUB_REPOSITORY:-}"
-if [[ -z "$repo" && -n "$url" ]]; then repo="${url#*github.com[:/]}"; fi
+if [[ -z "$repo" ]]; then repo="$(slug_of "$url")"; fi
 if [[ ! "$repo" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
-  echo "watch-pr: can't tell which repository to watch: set GITHUB_REPOSITORY or add an upstream or origin remote" >&2
+  echo "watch-pr: can't tell which repository to watch: set GITHUB_REPOSITORY or add a github.com upstream or origin remote" >&2
   exit 2
 fi
 export GH_REPO="${repo:?}"
