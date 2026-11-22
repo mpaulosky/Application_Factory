@@ -16,20 +16,31 @@ differently from one restore to the next. Deleting the pin lets NuGet resolve th
 
 ## What the check refuses
 
-With transitive pinning on (any MSBuild file in the repo sets the property to `true`, in any case), a `PackageVersion` whose id nothing references.
-A reference is an id in a `PackageReference` (`Include` or `Update`), `GlobalPackageReference` or `PackageDownload`, or an MSBuild SDK (a `Project`'s
+With transitive pinning on (any MSBuild file in the repo sets the property to `true`, in any case), the check refuses a `PackageVersion` whose id
+nothing references. A reference is an id in a `PackageReference` (`Include` or `Update`), `GlobalPackageReference` or `PackageDownload`, or an MSBuild SDK (a `Project`'s
 `Sdk`, an `Sdk` element, an `Import`'s `Sdk`, or any `global.json`'s `msbuild-sdks`, which may hold comments and trailing commas as the .NET host allows),
 in any MSBuild file: one whose extension ends in `proj` (`.csproj`, `.sqlproj`, `.wixproj` and the rest), or a `.props` or `.targets` file. Ids are
 compared ignoring case, and a pin listed twice is reported once. With transitive pinning off, an unreferenced pin pins nothing and the check passes.
 
-An id holding `$(Name)` is resolved from every value the repo's MSBuild files give that property (up to 256 ids per reference). One that still holds
-`$(`, `@(` or `%(` can't be read without evaluating MSBuild: such a pin is left alone, and such a reference could name any package, so the pins found
-are printed as warnings and the check passes, naming the reference.
+An id holding `$(Name)` is resolved from every value the repo's MSBuild files give that property, wherever they set it (a `Target`, a `Choose`). One
+that still holds `$(`, `@(` or `%(`, that would need more than 256 combinations of property values or more than 64 placeholders, or whose property has a
+value over 1,024 characters, can't be read without evaluating MSBuild: such a pin is left alone, and such a reference could name any package, so the pins
+found are printed as warnings and the check passes, naming the reference.
 
-Files are read as bytes, so a byte-order mark or an XML declaration's encoding (UTF-16, say) is honoured. A file that can't be read is skipped with a
-notice naming it: a symlink, anything but a regular file, one over 4 MiB, malformed XML (a `dotnet new` template, a test fixture), or a `DOCTYPE`, which
-no MSBuild file needs and which entity expansion would need. Skipping a file can only hide a reference, so it makes the check stricter, never more lenient;
-restore fails on a broken file the build does read anyway. `bin/`, `obj/`, `node_modules/` and dot-folders (`.git`, CI's `.nuget` package cache) aren't walked.
+Files are read as bytes, so a byte-order mark or an XML declaration's encoding (UTF-16, say) is honoured. The check reads only a regular file, not a
+symlink, of at most 4 MiB, holding well-formed XML without a `DOCTYPE` (which no MSBuild file needs, and entity expansion would), nested at most 256
+elements deep, in an encoding Python decodes. What happens to a file it can't read depends on what the file could hide:
+
+- An MSBuild file that may hold pins or turn transitive pinning on fails the check, naming the file and why: a `Directory.Packages.props`, one whose
+  text names `PackageVersion` or `CentralPackageTransitivePinningEnabled`, or one whose bytes weren't read at all (a symlink, a FIFO, one over 4 MiB).
+  Skipping it could hide a pin, or the setting that makes the check apply. So does a folder that can't be listed, or a symlinked folder, which isn't walked.
+- Any other one (a malformed `dotnet new` template or test fixture, say), and a `global.json` the .NET host can't read as JSON, is skipped with a
+  notice. It can hide only references, which makes the check stricter, and property values, which can make a reference unreadable and so turn the
+  report into warnings.
+
+`bin/`, `obj/`, `node_modules/` and dot-folders (`.git`, CI's `.nuget` package cache) aren't walked. The whole run reads at most 64 MiB, 250,000 elements
+and comments, and 100,000 combinations of property values; past any of them it fails, since it can't vouch for what it didn't read. Each kind of line is
+printed at most 100 times, then a count of the rest.
 
 Under GitHub Actions each problem is an `::error`, `::warning` or `::notice` annotation on its file, escaped as the runner reads workflow commands;
 elsewhere a plain line. A name or path from the repo is printed with its non-printable characters as `?`, so it can't start a workflow command or move

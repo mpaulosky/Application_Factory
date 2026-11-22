@@ -315,7 +315,8 @@ if [[ -f .github/ci/gate-checks.sh ]]; then
 fi
 
 # A central NuGet pin no project references holds the package back wherever it comes in through another one, under transitive
-# pinning, and Dependabot's bumps don't raise it, so restore fails with NU1109. Checked before the build, as CI checks it before restore.
+# pinning, and Dependabot's bumps don't raise it, so restore fails with NU1109. Checked before the build; CI checks it first, right
+# after the checkout.
 step "Central package pins (.github/scripts/check_central_pins.py)"
 python3 -I .github/scripts/check_central_pins.py --root "$ROOT"
 

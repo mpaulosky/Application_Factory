@@ -1,10 +1,11 @@
+import errno
 import os
+import time
 from pathlib import Path
 
 import pytest
 
 import check_central_pins as ccp
-from test_ci_gh_repo_job import load_workflow
 
 OWNED = Path(__file__).resolve().parents[3]
 COMMAND = "python3 -I .github/scripts/check_central_pins.py"
@@ -283,7 +284,7 @@ def test_a_reference_that_cant_be_read_turns_the_report_into_warnings(tmp_path, 
 
     assert status == 0
     assert out.startswith("⚠️  A is pinned in Directory.Packages.props but no project references it\n")
-    assert f"Not failing: a reference this check can't read without evaluating MSBuild ({reference})" in out
+    assert f"Reported as warnings: a reference this check can't read without evaluating MSBuild ({reference})" in out
 
 
 def test_a_pin_that_cant_be_read_is_left_alone(tmp_path):
@@ -294,24 +295,241 @@ def test_a_pin_that_cant_be_read_is_left_alone(tmp_path):
 
 def test_the_caps_are_the_documented_ones():
     # The boundary tests below are written against the constants, so these pin their values.
-    assert (ccp.MAX_BYTES, ccp.MAX_EXPANSIONS) == (4 * 1024 * 1024, 256)
+    assert (ccp.MAX_BYTES, ccp.MAX_EXPANSIONS, ccp.MAX_DEPTH, ccp.MAX_PLACEHOLDERS, ccp.MAX_VALUE) == (4 * 1024 * 1024, 256, 256, 64, 1024)
+    assert (ccp.MAX_TOTAL_BYTES, ccp.MAX_NODES, ccp.MAX_TOTAL_EXPANSIONS, ccp.MAX_SHOWN) == (64 * 1024 * 1024, 250_000, 100_000, 100)
 
 
 def expansions(tmp_path, count):
-    """A reference with two properties giving count ids in all (count = width * 2)."""
-    width = count // 2
-    values = "".join(f'<PropertyGroup Condition="{i}"><First>p{i}</First></PropertyGroup>' for i in range(width))
-    (tmp_path / "Directory.Build.props").write_text(
-        f'<Project>{values}<PropertyGroup><Second>x</Second></PropertyGroup><PropertyGroup Condition="z"><Second>y</Second></PropertyGroup></Project>\n')
+    """A reference through one property the repo gives count values."""
+    values = "".join(f'<PropertyGroup Condition="{i}"><First>p{i}</First></PropertyGroup>' for i in range(count))
+    (tmp_path / "Directory.Build.props").write_text(f"<Project>{values}</Project>\n")
     central(tmp_path, '<PackageVersion Include="Orphan" Version="1.0.0" />')
-    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="$(First).$(Second)" />')
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="$(First)" />')
 
 
-@pytest.mark.parametrize("count,readable", [(ccp.MAX_EXPANSIONS - 2, True), (ccp.MAX_EXPANSIONS, True), (ccp.MAX_EXPANSIONS + 2, False)])
-def test_a_reference_resolving_to_more_than_max_expansions_ids_cant_be_read(tmp_path, count, readable):
+@pytest.mark.parametrize("count,readable", [(ccp.MAX_EXPANSIONS - 1, True), (ccp.MAX_EXPANSIONS, True), (ccp.MAX_EXPANSIONS + 1, False)])
+def test_a_reference_through_more_than_max_expansions_combinations_cant_be_read(tmp_path, count, readable):
     expansions(tmp_path, count)
 
     assert (ccp.check(tmp_path)[2] == []) is readable
+
+
+def test_combinations_of_several_properties_multiply(tmp_path):
+    # 129 * 2 = 258 combinations, past the cap, though neither property has more than 129 values.
+    values = "".join(f'<PropertyGroup Condition="{i}"><First>p{i}</First></PropertyGroup>' for i in range(129))
+    (tmp_path / "Directory.Build.props").write_text(f'<Project>{values}<PropertyGroup><Second>x</Second></PropertyGroup>'
+                                                    '<PropertyGroup Condition="z"><Second>y</Second></PropertyGroup></Project>\n')
+    central(tmp_path, '<PackageVersion Include="Orphan" Version="1.0.0" />')
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="$(First).$(Second)" />')
+
+    assert ccp.check(tmp_path)[2] == ["$(First).$(Second)"]
+
+
+@pytest.mark.parametrize("extra,readable", [(-1, True), (0, True), (1, False)])
+def test_a_reference_with_more_than_max_placeholders_cant_be_read(tmp_path, extra, readable):
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />', properties=TRANSITIVE + "<PropertyGroup><P>a</P></PropertyGroup>")
+    project(tmp_path, "src/App/App.csproj", f'<PackageReference Include="{"$(P)" * (ccp.MAX_PLACEHOLDERS + extra)}" />')
+
+    assert (ccp.check(tmp_path)[2] == []) is readable
+
+
+@pytest.mark.parametrize("extra,readable", [(-1, True), (0, True), (1, False)])
+def test_a_property_value_over_max_value_characters_cant_be_read(tmp_path, extra, readable):
+    value = "a" * (ccp.MAX_VALUE + extra)
+    central(tmp_path, f'<PackageVersion Include="{value}" Version="1.0.0" />', properties=TRANSITIVE + f"<PropertyGroup><P>{value}</P></PropertyGroup>")
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="$(P)" />')
+
+    transitive, found, unreadable, _ = ccp.check(tmp_path)
+
+    assert (unreadable == [] and found == []) is readable
+
+
+@pytest.mark.parametrize("group", [
+    "<PropertyGroup><P>\n  Acme  \n</P></PropertyGroup>",
+    "<PropertyGroup><P>Ac&#109;e</P></PropertyGroup>",
+    "<PropertyGroup><P>Ac<!-- why -->me</P></PropertyGroup>",
+    '<Target Name="T"><PropertyGroup><P>Acme</P></PropertyGroup></Target>',
+    '<Choose><When Condition="x"><PropertyGroup><P>Acme</P></PropertyGroup></When></Choose>',
+])
+def test_a_property_is_read_wherever_and_however_it_is_set(tmp_path, group):
+    central(tmp_path, '<PackageVersion Include="Acme.Core" Version="1.0.0" />', properties=TRANSITIVE + group)
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="$(P).Core" />')
+
+    assert ccp.check(tmp_path)[1:3] == ([], [])
+
+
+def test_a_property_holding_a_list_resolves_to_each_id(tmp_path):
+    central(tmp_path, '<PackageVersion Include="A" Version="1" /><PackageVersion Include="B" Version="1" /><PackageVersion Include="C" Version="1" />',
+            properties=TRANSITIVE + "<PropertyGroup><Pkgs>A; B</Pkgs></PropertyGroup>")
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="$(Pkgs)" />')
+
+    assert unreferenced(tmp_path) == ["C"]
+
+
+def test_a_value_split_across_many_chunks_is_read_whole(tmp_path):
+    # Longer than expat's text buffer, so it arrives in more than one piece.
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />',
+            properties=f"<PropertyGroup><CentralPackageTransitivePinningEnabled>{' ' * 20000}true{chr(10) * 20000}</CentralPackageTransitivePinningEnabled></PropertyGroup>")
+
+    assert ccp.check(tmp_path)[0] is True
+
+
+def test_a_pin_resolving_to_several_ids_reports_each_it_finds_unreferenced_in_order(tmp_path, capsys):
+    central(tmp_path, '<PackageVersion Include="$(Prefix).Core" Version="1.0.0" />',
+            properties=TRANSITIVE + "".join(f'<PropertyGroup Condition="{v}"><Prefix>{v}</Prefix></PropertyGroup>' for v in ("Z", "X", "Y")))
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="X.Core" />')
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 1
+    assert out == ("❌ y.core is pinned in Directory.Packages.props but no project references it\n"
+                   "❌ z.core is pinned in Directory.Packages.props but no project references it\n")
+
+
+def test_the_warning_line_lists_each_unreadable_reference_once_in_order(tmp_path, capsys):
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />')
+    project(tmp_path, "src/B/B.csproj", '<PackageReference Include="@(Z)" /><PackageReference Include="$(Unset)" />')
+    project(tmp_path, "src/A/A.csproj", '<PackageReference Include="@(Z)" />')
+
+    out = run(tmp_path, capsys)[1]
+
+    assert out.splitlines()[-1] == ("Reported as warnings: a reference this check can't read without evaluating MSBuild ($(Unset), @(Z)) "
+                                    "may name any of the pins above.")
+
+
+def test_an_unreadable_reference_cant_start_a_workflow_command(tmp_path, capsys, monkeypatch):
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />')
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="$(X&#10;::add-mask::y&#13;::stop-commands::t)" />')
+
+    out = run_ci(tmp_path, capsys, monkeypatch)
+
+    assert [line for line in out.splitlines() if line.startswith("::")] == [
+        "::warning file=Directory.Packages.props::A is pinned in Directory.Packages.props but no project references it"]
+    assert "($(X?::add-mask::y?::stop-commands::t))" in out
+
+
+def test_the_report_comes_in_order(tmp_path, capsys):
+    for folder in ("b", "a"):
+        central(tmp_path, '<PackageVersion Include="Q" Version="1" /><PackageVersion Include="P" Version="1" />', folder=folder)
+    (tmp_path / "z.props").write_text("<Project>")
+    (tmp_path / "y.props").write_text("<Project>")
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 1
+    assert out == ("ℹ️  y.props was skipped: it isn't well-formed MSBuild XML (no element found: line 1, column 9). A reference or property in it wasn't seen.\n"
+                   "ℹ️  z.props was skipped: it isn't well-formed MSBuild XML (no element found: line 1, column 9). A reference or property in it wasn't seen.\n"
+                   "❌ Q is pinned in a/Directory.Packages.props but no project references it\n"
+                   "❌ P is pinned in a/Directory.Packages.props but no project references it\n"
+                   "❌ Q is pinned in b/Directory.Packages.props but no project references it\n"
+                   "❌ P is pinned in b/Directory.Packages.props but no project references it\n")
+
+
+def test_each_kind_of_line_is_printed_at_most_max_shown_times(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(ccp, "MAX_SHOWN", 2)
+    central(tmp_path, "".join(f'<PackageVersion Include="P{i}" Version="1" />' for i in range(3)))
+    project(tmp_path, "src/App/App.csproj", "".join(f'<PackageReference Include="@(R{i})" />' for i in range(3)))
+
+    out = run(tmp_path, capsys)[1].splitlines()
+
+    assert out[:3] == ["⚠️  P0 is pinned in Directory.Packages.props but no project references it",
+                       "⚠️  P1 is pinned in Directory.Packages.props but no project references it",
+                       "... and 1 more like the 2 above."]
+    assert "(@(R0), @(R1) and 1 more)" in out[3]
+
+
+def test_max_shown_lines_are_all_printed_without_a_more_line(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(ccp, "MAX_SHOWN", 2)
+    central(tmp_path, "".join(f'<PackageVersion Include="P{i}" Version="1" />' for i in range(2)))
+
+    out = run(tmp_path, capsys)[1]
+
+    assert out.count("is pinned") == 2 and "more like" not in out
+
+
+# The run's budget.
+
+
+@pytest.mark.parametrize("cap,kind", [("MAX_NODES", "elements and comments"), ("MAX_TOTAL_BYTES", "bytes")])
+def test_a_repo_bigger_than_the_runs_budget_fails(tmp_path, capsys, monkeypatch, cap, kind):
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />')
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="A" />')
+    _, found, _, _ = ccp.check(tmp_path)
+    assert found == []
+    # 5 elements in the central file and 3 in the project, plus 2 comments; or the two files' bytes.
+    (tmp_path / "src/App/App.csproj").write_text('<Project Sdk="Microsoft.NET.Sdk"><!-- a --><!-- b --><ItemGroup><PackageReference Include="A" /></ItemGroup></Project>\n')
+    used = 10 if cap == "MAX_NODES" else (tmp_path / "Directory.Packages.props").stat().st_size + (tmp_path / "src/App/App.csproj").stat().st_size
+
+    monkeypatch.setattr(ccp, cap, used)
+    assert run(tmp_path, capsys)[0] == 0
+    monkeypatch.setattr(ccp, cap, used - 1)
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 1
+    assert out == f"❌ Not checked: the repo's MSBuild files need more than {used - 1} {kind}, more than this check reads.\n"
+
+
+def test_combinations_count_against_the_runs_budget_once_per_name(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(ccp, "MAX_TOTAL_EXPANSIONS", 2)
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />', properties=TRANSITIVE + "<PropertyGroup><P>A</P></PropertyGroup>")
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="$(P)" />' * 5 + '<PackageReference Include="$(P).x" />')
+    assert run(tmp_path, capsys)[0] == 0
+
+    project(tmp_path, "src/Other/Other.csproj", '<PackageReference Include="$(P).y" />')
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 1
+    assert "need more than 2 combinations of property values" in out
+
+
+# Files this check won't parse.
+
+
+@pytest.mark.parametrize("depth,read", [(ccp.MAX_DEPTH - 1, True), (ccp.MAX_DEPTH, True), (ccp.MAX_DEPTH + 1, False)])
+def test_a_file_nested_over_max_depth_is_skipped(tmp_path, capsys, depth, read):
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />')
+    inner = '<ItemGroup><PackageReference Include="A" /></ItemGroup>'
+    (tmp_path / "Deep.props").write_text("<Project>" + "<a>" * (depth - 3) + inner + "</a>" * (depth - 3) + "</Project>")
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == (0 if read else 1)
+    assert (f"Deep.props was skipped: it isn't well-formed MSBuild XML (an element nested over {ccp.MAX_DEPTH} deep)" in out) is not read
+
+
+def test_a_file_nested_far_deeper_is_skipped_not_a_crash(tmp_path, capsys):
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />')
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="A" />')
+    (tmp_path / "Deep.props").write_text("<Project>" + "<a>" * 50000 + "</a>" * 50000 + "</Project>")
+    (tmp_path / "global.json").write_text("[" * 100000 + "]" * 100000)
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 0
+    assert "Deep.props was skipped" in out and "global.json was skipped: it isn't JSON the .NET host reads" in out
+
+
+@pytest.mark.parametrize("encoding", ["gb2312", "hex", "no-such-encoding"])
+def test_a_file_in_an_encoding_python_cant_decode_is_skipped(tmp_path, capsys, encoding):
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />')
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="A" />')
+    (tmp_path / "Odd.props").write_text(f'<?xml version="1.0" encoding="{encoding}"?><Project />')
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 0
+    assert "ℹ️  Odd.props was skipped: it isn't well-formed MSBuild XML (" in out
+
+
+def test_a_large_text_is_read_in_linear_time(tmp_path):
+    # Adding each chunk of text to a string took minutes on a file this size.
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />')
+    (tmp_path / "Text.props").write_text("<Project><PropertyGroup><P>" + "a\n&amp;" * ((ccp.MAX_BYTES - 100) // 7) + "</P></PropertyGroup></Project>")
+
+    started = time.monotonic()
+    ccp.check(tmp_path)
+
+    assert time.monotonic() - started < 10
 
 
 # global.json.
@@ -360,7 +578,7 @@ def test_a_global_json_the_host_cant_read_is_skipped_with_a_notice(tmp_path, cap
     status, out, _ = run(tmp_path, capsys)
 
     assert status == 1
-    assert "ℹ️  global.json was skipped: it isn't JSON the .NET host reads. A reference in it wasn't seen.\n" in out
+    assert "ℹ️  global.json was skipped: it isn't JSON the .NET host reads. A reference or property in it wasn't seen.\n" in out
 
 
 # Files that aren't read.
@@ -425,8 +643,9 @@ def test_a_symlinked_or_dangling_file_is_not_followed(tmp_path, capsys):
     status, out, _ = run(tmp_path, capsys)
 
     assert status == 1
-    for name in ("Linked.props", "Dangling.props", "global.json"):
-        assert f"{name} was skipped: it is a symlink." in out
+    for name in ("Linked.props", "Dangling.props"):
+        assert f"❌ {name} can't be checked: it is a symlink, and it may hold central pins or turn transitive pinning on.\n" in out
+    assert "ℹ️  global.json was skipped: it is a symlink." in out
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
@@ -437,7 +656,7 @@ def test_a_fifo_is_not_read(tmp_path, capsys):
     status, out, _ = run(tmp_path, capsys)
 
     assert status == 1
-    assert "Pipe.props was skipped: it is not a regular file." in out
+    assert "Pipe.props can't be checked: it is not a regular file," in out
 
 
 @pytest.mark.parametrize("extra,read", [(-1, True), (0, True), (1, False)])
@@ -451,7 +670,7 @@ def test_a_file_over_max_bytes_is_not_read(tmp_path, capsys, extra, read):
     status, out, _ = run(tmp_path, capsys)
 
     assert status == (0 if read else 1)
-    assert (f"Big.props was skipped: it is over {ccp.MAX_BYTES} bytes." in out) is not read
+    assert (f"Big.props can't be checked: it is over {ccp.MAX_BYTES} bytes," in out) is not read
 
 
 def test_a_file_that_grew_past_max_bytes_since_lstat_is_not_read(tmp_path, capsys, monkeypatch):
@@ -471,21 +690,153 @@ def test_a_file_that_grew_past_max_bytes_since_lstat_is_not_read(tmp_path, capsy
     status, out, _ = run(tmp_path, capsys)
 
     assert status == 1
-    assert f"Grown.props was skipped: it is over {ccp.MAX_BYTES} bytes." in out
+    assert f"Grown.props can't be checked: it is over {ccp.MAX_BYTES} bytes," in out
 
 
-@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root reads any file")
-def test_an_unreadable_file_is_skipped_with_its_reason(tmp_path, capsys):
+def test_an_unreadable_file_cant_be_checked_and_says_why(tmp_path, capsys, monkeypatch):
+    # Patched rather than chmod 0, which root (a container, a sandbox) reads anyway.
     central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />')
-    locked = project(tmp_path, "Locked.csproj", '<PackageReference Include="A" />')
-    locked.chmod(0)
-    try:
-        status, out, _ = run(tmp_path, capsys)
-    finally:
-        locked.chmod(0o644)
+    project(tmp_path, "Locked.csproj", '<PackageReference Include="A" />')
+    real = os.open
+
+    def locked(path, *args, **kwargs):
+        if str(path).endswith("Locked.csproj"):
+            raise PermissionError(errno.EACCES, "Permission denied", str(path))
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(ccp.os, "open", locked)
+
+    status, out, err = run(tmp_path, capsys)
 
     assert status == 1
-    assert "Locked.csproj was skipped: it can't be read (Permission denied)." in out
+    assert "❌ Locked.csproj can't be checked: it can't be read (Permission denied), and it may hold" in out
+    assert "must be readable for the check to pass" in err
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
+def test_a_path_that_became_a_fifo_after_lstat_is_not_read(tmp_path, capsys, monkeypatch):
+    # Opened without waiting for a writer, then refused on what the open file is.
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />')
+    os.mkfifo(tmp_path / "Swapped.props")
+    regular = os.lstat(tmp_path / "Directory.Packages.props")
+    real = os.lstat
+    monkeypatch.setattr(ccp.os, "lstat", lambda path, *a, **k: regular if str(path).endswith("Swapped.props") else real(path, *a, **k))
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 1
+    assert "Swapped.props can't be checked: it is not a regular file," in out
+
+
+@pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW"), reason="needs O_NOFOLLOW")
+def test_a_path_that_became_a_symlink_after_lstat_is_not_followed(tmp_path, capsys, monkeypatch):
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />')
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.props"
+    outside.write_text('<Project><ItemGroup><PackageReference Include="A" /></ItemGroup></Project>\n')
+    (tmp_path / "Swapped.props").symlink_to(outside)
+    regular = os.lstat(outside)
+    real = os.lstat
+    monkeypatch.setattr(ccp.os, "lstat", lambda path, *a, **k: regular if str(path).endswith("Swapped.props") else real(path, *a, **k))
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 1
+    assert "Swapped.props can't be checked: it can't be read (" in out
+
+
+# What a file that can't be read may hide.
+
+
+def test_a_central_file_that_cant_be_read_fails_the_check(tmp_path, capsys):
+    # Even one cut off before its first pin: by its name, it is the file that holds them.
+    (tmp_path / "Directory.Packages.props").write_text("<Project><ItemGroup>")
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 1
+    assert "❌ Directory.Packages.props can't be checked: it isn't well-formed MSBuild XML (" in out
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="needs symlinks")
+def test_a_symlinked_central_file_fails_the_check(tmp_path, capsys):
+    real = central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />', folder="shared")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/Directory.Packages.props").symlink_to(real)
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="A" />')
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 1
+    assert "❌ src/Directory.Packages.props can't be checked: it is a symlink," in out
+
+
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16"])
+@pytest.mark.parametrize("body", ["<CentralPackageTransitivePinningEnabled>true", '<ItemGroup><PackageVersion Include="A" Version="1" />'])
+def test_a_malformed_file_that_names_pins_or_the_setting_fails_the_check(tmp_path, capsys, body, encoding):
+    # Skipping it could hide the setting, so the check would say pinning is off; or a pin, which it would never check.
+    central(tmp_path, '<PackageVersion Include="B" Version="1.0.0" />', properties="")
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="B" />')
+    (tmp_path / "Directory.Build.props").write_bytes(f"<Project><PropertyGroup>{body}".encode(encoding))
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 1
+    assert "❌ Directory.Build.props can't be checked: it isn't well-formed MSBuild XML (" in out
+
+
+def test_the_check_needs_a_root_folder(tmp_path, capsys):
+    with pytest.raises(SystemExit) as raised:
+        ccp.main(["--root", str(tmp_path / "typo")])
+
+    assert raised.value.code == 2
+    assert "is not a folder" in capsys.readouterr().err
+
+
+def test_a_folder_that_cant_be_listed_fails_the_check(tmp_path, capsys, monkeypatch):
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />')
+    project(tmp_path, "src/App/App.csproj", '<PackageReference Include="A" />')
+    (tmp_path / "locked").mkdir()
+    real = os.scandir
+
+    def scandir(path="."):
+        if str(path).endswith("locked"):
+            raise PermissionError(errno.EACCES, "Permission denied", str(path))
+        return real(path)
+
+    monkeypatch.setattr(ccp.os, "scandir", scandir)
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 1
+    assert "❌ locked/ can't be checked: it can't be listed (Permission denied)," in out
+
+
+def test_a_root_that_cant_be_listed_fails_the_check(tmp_path, capsys, monkeypatch):
+    real = os.scandir
+
+    def scandir(path="."):
+        if Path(path) == tmp_path:
+            raise PermissionError(errno.EACCES, "Permission denied", str(path))
+        return real(path)
+
+    monkeypatch.setattr(ccp.os, "scandir", scandir)
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 1
+    assert out.startswith("❌ . can't be checked: it can't be listed (Permission denied),")
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="needs symlinks")
+def test_a_symlinked_folder_fails_the_check(tmp_path, capsys):
+    central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />')
+    project(tmp_path, "real/App/App.csproj", '<PackageReference Include="A" />')
+    (tmp_path / "linked").symlink_to(tmp_path / "real")
+
+    status, out, _ = run(tmp_path, capsys)
+
+    assert status == 1
+    assert "❌ linked/ can't be checked: it is a symlinked folder, which isn't walked," in out
 
 
 # Output under GitHub Actions, and text a repo controls.
@@ -566,6 +917,9 @@ def test_a_path_cant_break_the_file_property(tmp_path, capsys, monkeypatch):
 
 def test_build_solution_runs_the_check_first_after_the_checkout():
     # Before Setup .NET, so a bad pin fails fast, and before restore, which would fail with NU1109 on it.
+    # Imported here, so the rest of this file doesn't depend on that module loading (it reads two workflows when imported).
+    from test_ci_gh_repo_job import load_workflow
+
     job = load_workflow(OWNED / ".github/workflows/ci.yml")["jobs"]["build"]
     names = [step.get("name") for step in job["steps"]]
     step = next(step for step in job["steps"] if step.get("name") == "Check central package pins")
