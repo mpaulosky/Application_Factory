@@ -10,7 +10,8 @@ Template file; it doesn't reach the Fleet.
 
 ## Decision
 
-- The `claude` label is the queue. The owner adds it, or comments `@claude` on the issue, which adds it. A comment from anyone else, or on a pull request, starts nothing.
+- The `claude` label is the queue. The owner adds it, or comments `@claude` on the issue, which adds it. A comment from anyone else, or on a pull request, starts nothing, and a `claude` label
+  someone else added is taken off with a comment.
 - One issue is worked at a time: the job has the concurrency group `claude-issues`. Each run takes the oldest queued issue that isn't blocked and starts the next run when it ends, so a batch of
   labels is worked in turn rather than all at once on branches that conflict. An hourly schedule picks up an issue whose blocker closed since.
 - An issue is blocked while GitHub's issue dependencies list an open issue it is blocked by (the way the Factory's issues record their order), or while it carries the `blocked` label. A blocked
