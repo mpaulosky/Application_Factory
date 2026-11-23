@@ -69,8 +69,8 @@ So the scripts move, on these rules:
   - The property is in the file, not the shield, so a checker copied alone into a temp folder keeps it.
   - Under the Template's `.editorconfig`, `dotnet format whitespace` rewrites `#!` as `# !`, which no longer builds (CS9378). Callers run `dotnet run --file`, so nothing needs
     the shebang.
-  - Without one, an entry file that uses `#:include` gets analyzer warning CA2266 ("File-based program entry point should start with '#!'"). Such a file also carries
-    `#:property NoWarn=CA2266`, so its build stays free of warnings and a later `TreatWarningsAsErrors` can't fail it.
+  - Without one, an entry file that uses `#:include` gets analyzer warning CA2266 ("File-based program entry point should start with '#!'"). This ADR doesn't suppress it,
+    so a build that treats warnings as errors fails on such a file.
 - **How a script runs** (mpaulosky/Application_Factory#94, mpaulosky/Application_Factory#98).
   - A wrapper or a workflow step runs `dotnet run --file <path> -- <args>`.
   - A wrapper first changes to the script's own folder, so the `global.json` read is the one beside the scripts and not one in the caller's folder, and it passes paths as absolute
