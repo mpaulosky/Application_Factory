@@ -33,6 +33,8 @@ Template file; it doesn't reach the Fleet.
 ## Consequences
 
 - Issues are worked one after another, so a long queue takes hours. Raising the limit would need branches that don't touch the same files, which the Factory's issues can't promise.
-- The repository is public. The run follows only the issue body and the owner's comments; it treats anyone else's comment as data, and its pull request is a draft for the owner to read.
+- The repository is public, and an issue's author can edit it after it is queued, so only issues the owner opened are worked. Claude reads the issue from a file the run writes with its
+  title, body and the owner's comments only, and its pull request is a draft for the owner to read. Its shell isn't sandboxed: an instruction planted somewhere it reads anyway could still
+  reach it.
 - Each pull request still gets the Factory's review: Copilot's where the ruleset asks for it and its budget lasts, Claude Review where it doesn't (ADR 0008, ADR 0014).
 - A run's Claude usage counts against the owner's subscription, or the API key's account.
