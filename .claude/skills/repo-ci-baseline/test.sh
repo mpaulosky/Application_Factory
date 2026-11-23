@@ -537,12 +537,14 @@ if in_shard scripts; then
   bash "$skill_dir/tests/status-parity.test.sh" || fail "status-parity.test.sh"
   bash "$skill_dir/tests/status-parity-runner.test.sh" || fail "status-parity-runner.test.sh"
   # Run again as a hook would, with GIT_DIR and the rest naming another repo: its throwaway repo must not touch that one.
-  decoy="$(mktemp -d)"
-  git init -q "$decoy"
+  # The decoy sits under md_tmp, which the EXIT trap removes, and its own git calls run without test.sh's caller's GIT_*.
+  decoy="$md_tmp/parity-decoy"
+  decoy_git=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR git)
+  "${decoy_git[@]}" init -q "$decoy"
+  [[ -d "$decoy/.git" ]] || fail "test.sh's decoy repo for the status parity runner test wasn't made at $decoy (a caller's GIT_DIR reached git init?)"
   GIT_DIR="$decoy/.git" GIT_WORK_TREE="$decoy" GIT_INDEX_FILE="$decoy/.git/index" \
     bash "$skill_dir/tests/status-parity-runner.test.sh" > /dev/null || fail "status-parity-runner.test.sh with a hook's GIT_DIR set"
-  [[ -z "$(git -C "$decoy" ls-files)" && ! -e "$decoy/cases" ]] || fail "status-parity-runner.test.sh staged files in the caller's repository"
-  rm -rf "$decoy"
+  [[ -z "$("${decoy_git[@]}" -C "$decoy" ls-files)" && ! -e "$decoy/cases" ]] || fail "status-parity-runner.test.sh staged files in the caller's repository"
 
   step "Claude Review benchmark tests (scoring, arguments, config swap, the workflow it reads)"
   # PyYAML lets the test that reads the Template's claude-review.yml run instead of skipping.
