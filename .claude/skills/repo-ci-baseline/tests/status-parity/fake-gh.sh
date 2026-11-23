@@ -5,66 +5,92 @@
 #   FAKE_GH_DIR   the case's gh/ folder (required)
 #   FAKE_GH_LOG   a file each call's fixture key is appended to, one per line (required)
 #
-# A call is told apart by its GraphQL query (the -f query= argument) or its REST path, and answered from
-# $FAKE_GH_DIR/<key>.json (printed, exit 0) or $FAKE_GH_DIR/<key>.fail (printed on stderr, exit 1):
+# What an implementation must send, so the fake can tell its calls apart:
 #
-#   repo.<owner>.<name>           the repo query (pullRequests(states: OPEN ...), -F owner= -F name=
-#   comments.<id>[.<cursor>]      a PR's comments (comments(last: 100 ...), -f id= [-f cursor=]
-#   threads.<id>                  a PR's review threads with their comments (isResolved path line ...), -f id=
-#   events.<id>[.<cursor>]        a PR's label and review-request events (timelineItems(...), -f id= [-f cursor=]
-#   rest.<path, / as _>           a REST call: gh api <path>
+#   gh api graphql -f query=<query> [-f|-F <variable>=<value>]...   variables: owner, name, id, cursor
+#   gh api <path>                                                   a REST GET
 #
-# A call no fixture answers is logged as "UNMATCHED <argv>" and exits 97, which fails the case: a fixture set is
-# complete, so a call nobody planned for is a difference between implementations, not a GitHub failure.
+# A GraphQL call is told apart by its query with all whitespace removed, so spacing and line breaks don't matter:
+#
+#   repo.<owner>.<name>           a query holding pullRequests( ... states:OPEN (the repo query)
+#   events.<id>[.<cursor>]        a query holding timelineItems( (a PR's label and review-request events)
+#   comments.<id>[.<cursor>]      a query holding comments(last: (a PR's comments, paged backwards)
+#   threads.<id>                  a query holding reviewThreads( and comments(first: (a PR's threads with their comments)
+#   rest.<path>                   gh api <path>
+#
+# A cursor given but empty is part of the key too (comments.<id>.), so it never passes for a first page. Every key part has
+# each / replaced by _, so a value can't name a file outside FAKE_GH_DIR. The call is answered from FAKE_GH_DIR/<key>.json
+# (printed on stdout, exit 0) or FAKE_GH_DIR/<key>.fail (printed on stderr, exit 1: a GitHub failure), and the key is logged.
+#
+# Exit 97 is the fake's own: a call no fixture answers (logged as one line, "UNMATCHED <what was asked>"), an argument it
+# doesn't know, an unreadable fixture, or FAKE_GH_DIR or FAKE_GH_LOG unset. A fixture set is complete, so a call nobody
+# planned for is a difference between implementations, not a GitHub failure.
 set -euo pipefail
 
-: "${FAKE_GH_DIR:?fake gh: FAKE_GH_DIR is not set}"
-: "${FAKE_GH_LOG:?fake gh: FAKE_GH_LOG is not set}"
+if [[ -z "${FAKE_GH_DIR:-}" || -z "${FAKE_GH_LOG:-}" ]]; then
+  echo "fake gh: FAKE_GH_DIR and FAKE_GH_LOG must both be set." >&2
+  exit 97
+fi
 
+# One line naming what was asked: the key when there is one, else the arguments with line breaks collapsed and cut short.
 unmatched() {
-  printf 'UNMATCHED %s\n' "$*" >> "$FAKE_GH_LOG"
-  echo "fake gh: no fixture answers: gh $*" >&2
+  local what="$1"
+  what="${what//$'\n'/ }"
+  what="${what//$'\r'/ }"
+  ((${#what} <= 200)) || what="${what:0:200}..."
+  printf 'UNMATCHED %s\n' "$what" >> "$FAKE_GH_LOG"
+  echo "fake gh: no fixture answers: $what" >&2
   exit 97
 }
 
-[[ "${1:-}" == api ]] || unmatched "$@"
-argv=("$@")
+part() { printf '%s' "${1//\//_}"; }
+
+all="$*"
+[[ "${1:-}" == api ]] || unmatched "gh $all"
 shift
 
 if [[ "${1:-}" != graphql ]]; then
-  [[ $# -eq 1 ]] || unmatched "${argv[@]}"
-  key="rest.${1//\//_}"
+  [[ $# -eq 1 && -n "$1" && "$1" != -* ]] || unmatched "gh api $*"
+  key="rest.$(part "$1")"
 else
   shift
-  query="" owner="" name="" id="" cursor=""
+  query="" owner="" name="" id="" cursor="" has_cursor=""
   while [[ $# -gt 0 ]]; do
-    [[ $# -ge 2 ]] || unmatched "${argv[@]}"
-    case "$1:$2" in
-      -f:query=*) query="${2#query=}" ;;
-      -F:owner=*) owner="${2#owner=}" ;;
-      -F:name=*) name="${2#name=}" ;;
-      -f:id=*) id="${2#id=}" ;;
-      -f:cursor=*) cursor="${2#cursor=}" ;;
-      *) unmatched "${argv[@]}" ;;
+    [[ $# -ge 2 && ("$1" == -f || "$1" == -F) ]] || unmatched "gh $all"
+    case "$2" in
+      query=*) query="${2#query=}" ;;
+      owner=*) owner="${2#owner=}" ;;
+      name=*) name="${2#name=}" ;;
+      id=*) id="${2#id=}" ;;
+      cursor=*) cursor="${2#cursor=}" has_cursor=1 ;;
+      *) unmatched "gh $all" ;;
     esac
     shift 2
   done
-  case "$query" in
-    *"pullRequests(states: OPEN"*) key="repo.$owner.$name" ;;
-    *"timelineItems("*) key="events.$id${cursor:+.$cursor}" ;;
-    *"comments(last: 100"*) key="comments.$id${cursor:+.$cursor}" ;;
-    *"isResolved path line"*) key="threads.$id" ;;
-    *) unmatched "${argv[@]}" ;;
+  q="${query//[[:space:]]/}"
+  page="${has_cursor:+.$(part "$cursor")}"
+  case "$q" in
+    *"pullRequests("*"states:OPEN"*) key="repo.$(part "$owner").$(part "$name")" ;;
+    *"timelineItems("*) key="events.$(part "$id")$page" ;;
+    *"comments(last:"*) key="comments.$(part "$id")$page" ;;
+    *"reviewThreads("*"comments(first:"*) key="threads.$(part "$id")" ;;
+    *) unmatched "gh api graphql with a query the fake doesn't know: ${q:0:80}" ;;
   esac
 fi
 
-if [[ -f "$FAKE_GH_DIR/$key.json" ]]; then
+for answer in json fail; do
+  file="$FAKE_GH_DIR/$key.$answer"
+  [[ -e "$file" ]] || continue
+  if [[ ! -f "$file" || ! -r "$file" ]]; then
+    echo "fake gh: fixture $file is not a readable file." >&2
+    exit 97
+  fi
   printf '%s\n' "$key" >> "$FAKE_GH_LOG"
-  cat "$FAKE_GH_DIR/$key.json"
-elif [[ -f "$FAKE_GH_DIR/$key.fail" ]]; then
-  printf '%s\n' "$key" >> "$FAKE_GH_LOG"
-  cat "$FAKE_GH_DIR/$key.fail" >&2
+  if [[ "$answer" == json ]]; then
+    cat -- "$file"
+    exit 0
+  fi
+  cat -- "$file" >&2
   exit 1
-else
-  unmatched "${argv[@]}"
-fi
+done
+unmatched "$key"

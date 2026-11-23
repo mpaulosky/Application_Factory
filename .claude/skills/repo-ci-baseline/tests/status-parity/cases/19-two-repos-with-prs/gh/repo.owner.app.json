@@ -1,0 +1,35 @@
+{
+ "data": {
+  "repository": {
+   "pullRequests": {
+    "nodes": [
+     {
+      "id": "PR_3",
+      "number": 3,
+      "title": "feat: Something",
+      "state": "OPEN",
+      "isDraft": true,
+      "headRefOid": "1234567000000000000000000000000000000000",
+      "mergeStateStatus": "CLEAN",
+      "autoMergeRequest": null,
+      "reviews": {
+       "nodes": []
+      },
+      "reviewThreads": {
+       "nodes": []
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "statusCheckRollup": null
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ }
+}

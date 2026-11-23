@@ -16,7 +16,7 @@
 # change. A repo's copies of Owned files are checked by status.sh and apply.sh --dry-run, not here.
 #
 # TEST_SH_SHARD runs one of its three shards, which is how the Factory's CI runs it in parallel jobs (ADR 0013): hooks is the hook and Owned script
-# tests, scripts the auto-merge, Owned .github/scripts, hardening-review, renderer, GitHub script and benchmark tests, checks everything from actionlint on. With
+# tests, scripts the auto-merge, Owned .github/scripts, hardening-review, renderer, GitHub script, status parity and benchmark tests, checks everything from actionlint on. With
 # no TEST_SH_SHARD every shard runs, in that order. Every step sits in exactly one shard; scripts/tests/gate.test.sh checks that.
 set -euo pipefail
 # The step headers carry SECONDS: count from here, whatever SECONDS a caller exported (mpaulosky/dotfiles#417).
@@ -533,8 +533,9 @@ if in_shard scripts; then
   step "GitHub scripts tests (settings, landing decision, status, land, rollout)"
   (cd "$skill_dir" && "${pytest_cmd[@]}" -q -p no:cacheprovider github/tests) || fail "github scripts pytest"
 
-  step "status parity suite (status.py through its command line, against a fake gh)"
+  step "status parity suite (status.py through its command line, against a fake gh) and its runner's tests"
   bash "$skill_dir/tests/status-parity.test.sh" || fail "status-parity.test.sh"
+  bash "$skill_dir/tests/status-parity-runner.test.sh" || fail "status-parity-runner.test.sh"
 
   step "Claude Review benchmark tests (scoring, arguments, config swap, the workflow it reads)"
   # PyYAML lets the test that reads the Template's claude-review.yml run instead of skipping.
@@ -568,7 +569,7 @@ if in_shard checks; then
     "$skill_dir/tests/seed-dockerfile.test.sh" "$skill_dir/tests/doc-single-source.test.sh" "$skill_dir/tests/no-dotfiles-dependency.test.sh"
     "$skill_dir/tests/owned-gate-files.test.sh"
     "$skill_dir/tests/sandcastle-check.test.sh" "$skill_dir/tests/repos-scope.test.sh"
-    "$skill_dir/tests/status-parity.test.sh" "$skill_dir/tests/status-parity/fake-gh.sh"
+    "$skill_dir/tests/status-parity.test.sh" "$skill_dir/tests/status-parity/fake-gh.sh" "$skill_dir/tests/status-parity-runner.test.sh"
     "$skill_dir/tests/check-git-status.sh" "$skill_dir/tests/check-git-status.test.sh" "$skill_dir/tests/mutations/check-spec.test.sh"
     "$owned/scripts/gate.sh" "$owned/scripts/check-branch-name.sh" "$owned/scripts/tests/check-branch-name.test.sh"
     "$owned/scripts/check-pr-title.sh" "$owned/scripts/tests/check-pr-title.test.sh"
