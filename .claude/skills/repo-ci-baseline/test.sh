@@ -52,6 +52,33 @@ need() {
     exit 2
   }
 }
+# The dotnet-install.sh channel of a global.json SDK version: its feature band (11.0.100 and 11.0.105 are 11.0.1xx), whose
+# newest patch rollForward latestPatch accepts. Fails, printing nothing, for anything but a stable A.B.Cnn version
+# (a prerelease, a four-digit patch, an empty value): global.json's allowPrerelease is false, and no band is A.B.0xx.
+sdk_band() {
+  [[ "$1" =~ ^([0-9]+)\.([0-9]+)\.([1-9])[0-9]{2}$ ]] || return 1
+  printf '%s.%s.%sxx\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+}
+# Whether a dependabot.yml (argument 1) has a dotnet-sdk entry whose directory, or one of whose directories, is argument 2.
+# Each entry under updates: (from one "  - " line to the next "  - " line or top-level key) is judged as a whole, whatever its keys'
+# order: its keys at four spaces, a directories item at six. A path is compared as a string, written in double quotes with no comment
+# after it, as the Factory's file writes it (trailing blanks and a CR dropped): a path's "." is only a dot, a comment line is no key or
+# item, and another spelling of the path fails closed.
+dotnet_sdk_entry_for() {
+  awk -v want="\"$2\"" '
+    function end_entry() { if (eco == "dotnet-sdk" && hit) found = 1; eco = ""; hit = 0; key = "" }
+    { sub(/[ \t\r]+$/, "") }
+    /^[a-z]/ { end_entry(); next }
+    /^  - / { end_entry(); $0 = "    " substr($0, 5) }
+    match($0, /^    [a-z-]+:/) {
+      key = substr($0, 5, RLENGTH - 5); value = substr($0, RLENGTH + 1); sub(/^[ \t]+/, "", value)
+      if (key == "package-ecosystem") { eco = value; gsub(/"/, "", eco) }
+      if (key == "directory" && value == want) hit = 1
+      next
+    }
+    /^      - / && key == "directories" && substr($0, 9) == want { hit = 1 }
+    END { end_entry(); exit !found }' "$1"
+}
 # The shard is checked first, before the tools, and must be exactly one of the declared names: a value such as "hooks scripts" would match no block and run nothing.
 shards=(hooks scripts checks)
 shard="${TEST_SH_SHARD:-}"
@@ -489,6 +516,35 @@ PY
     awk '/package-ecosystem: "pip"/ { pip = 1; next } /package-ecosystem:/ { pip = 0 } pip && /^ *ignore:/ { ign = 1; next } pip && /^    [a-z]/ { ign = 0 }
       pip && ign && /^ *- dependency-name: "ruff" *$/ { found = 1 } END { exit !found }' "$file" \
       || fail "$file's pip entry must ignore ruff, whose pin moves only with gate.sh's RUFF_VERSION and release rule"
+  done
+  # The Factory moves the SDK: its own dotnet-sdk entry bumps the Template's Owned global.json (mpaulosky/Application_Factory#103).
+  template_dir="/.claude/skills/repo-ci-baseline/template/owned"
+  dotnet_sdk_entry_for "$skill_dir/../../../.github/dependabot.yml" "$template_dir" \
+    || fail "the Factory's .github/dependabot.yml must have a dotnet-sdk entry for \"$template_dir\" (double-quoted), the Owned global.json"
+  # The check itself, on fixtures: each "right" file has the entry, no "wrong" one does.
+  sdk_entry() { printf 'version: 2\nupdates:\n%s\n' "$1" > "$md_tmp/dependabot-sdk.yml"; }
+  t="$template_dir"
+  for right in \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "%s"' "$t")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directories:\n      - "/"\n      - "%s"\n    schedule:\n      interval: "weekly"' "$t")" \
+    "$(printf '  - directory: "%s"\n    package-ecosystem: "dotnet-sdk"' "$t")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"  \r\n    directory: "%s"\r' "$t")"; do
+    sdk_entry "$right"
+    dotnet_sdk_entry_for "$md_tmp/dependabot-sdk.yml" "$t" || fail "the dotnet-sdk entry check misses an entry naming the Template: $right"
+  done
+  for wrong in \
+    "$(printf '  # - package-ecosystem: "dotnet-sdk"\n  #   directory: "%s"' "$t")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "/"\n    # directory: "%s"' "$t")" \
+    "$(printf '  - package-ecosystem: "pip"\n    directory: "%s"\n  - package-ecosystem: "dotnet-sdk"\n    directory: "/"' "$t")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "/"\n  - package-ecosystem: "pip"\n    directory: "%s"' "$t")" \
+    "$(printf '  - package-ecosystem: "github-actions"\n    directories:\n      - "/"\n      - "%s"\n  - package-ecosystem: "dotnet-sdk"\n    directory: "/"' "$t")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directories:\n      - "/"\n    ignore:\n      - "%s"' "$t")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "/"\n  - directory: "%s"\n    package-ecosystem: "pip"' "$t")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "%s"' "${t/./X}")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "/"\nregistries:\n  r:\n    directory: "%s"' "$t")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "%s/sub"' "$t")"; do
+    sdk_entry "$wrong"
+    ! dotnet_sdk_entry_for "$md_tmp/dependabot-sdk.yml" "$t" || fail "the dotnet-sdk entry check passes a file with no such entry: $wrong"
   done
   python3 - "$owned/.github/scripts/requirements-tests.txt" << 'PY_REQ' || fail "requirements-tests.txt must pin each package exactly, with at least one sha256 hash, pytest and pyyaml among them"
 import re, sys
@@ -1031,11 +1087,23 @@ text = re.sub(r"(?m)^[ \t]*#[^\n]*\n", "", open(sys.argv[1], encoding="utf-8").r
 text = re.sub(r"\\[ \t]*\n", " ", text)
 sys.exit(0 if re.search(r"^[ \t]*(?i:RUN)[ \t]+[^\n]*\bpip3?[ \t]+install\b[^\n&|;]*[ \t]\"ruff==\$\{RUFF_VERSION\}\"", text, re.M) else 1)' "$seed/.sandcastle/Dockerfile" \
     || fail "the Seed .sandcastle/Dockerfile must have \"ruff==\${RUFF_VERSION}\" on a RUN pip install line, the release the gate's Python lint step takes"
-  # And the .NET SDK channel global.json pins.
-  sdk="$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["sdk"]["version"])' "$owned/global.json")"
+  # And the .NET SDK feature band global.json pins (11.0.100 is the band 11.0.1xx): the newest patch of that band is what
+  # rollForward latestPatch accepts, so a Dependabot patch bump needs no image change (mpaulosky/Application_Factory#103).
+  sdk="$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["sdk"]["version"])' "$owned/global.json")" \
+    || fail "can't read the Template's global.json sdk.version"
   channel="$(sed -nE 's/^ARG DOTNET_CHANNEL=([^ ]+).*/\1/p' "$seed/.sandcastle/Dockerfile")"
-  [[ "$channel" == "$(cut -d. -f1-2 <<< "$sdk")" ]] \
-    || fail "the Seed .sandcastle/Dockerfile's DOTNET_CHANNEL is '$channel'; global.json's SDK is $sdk"
+  if band="$(sdk_band "$sdk")"; then
+    [[ "$channel" == "$band" ]] || fail "the Seed .sandcastle/Dockerfile's DOTNET_CHANNEL is '$channel'; global.json's SDK $sdk is the band $band"
+  else
+    fail "global.json's sdk.version '$sdk' isn't a stable A.B.Cnn version, so the Seed Dockerfile's channel can't be its band"
+  fi
+  # The band itself, at each edge.
+  for pair in 11.0.100=11.0.1xx 11.0.105=11.0.1xx 11.0.199=11.0.1xx 11.0.200=11.0.2xx 12.1.300=12.1.3xx 10.10.900=10.10.9xx; do
+    [[ "$(sdk_band "${pair%%=*}")" == "${pair#*=}" ]] || fail "sdk_band ${pair%%=*} must be ${pair#*=}"
+  done
+  for not_stable in "" 11.0.100-rc.2 11.0.200-preview.1 11.0.1000 11.0.99 11.0.010 11.0 11.0.1xx " 11.0.100" "11.0.100 "; do
+    ! sdk_band "$not_stable" > /dev/null || fail "sdk_band must refuse '$not_stable'"
+  done
 
   step "Hand-off PRs (the sandcastle:follow-up label)"
   # The session guidance is an Owned rules file, so Apply keeps it current in a Sandcastle repo. It loads in every

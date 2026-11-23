@@ -438,3 +438,21 @@ def test_the_checkout_is_left_as_it_was(repo, tmp_path):
 
     # Assert: the base's checker was loaded from a temp folder, not beside the PR's files.
     assert repo.git("status", "--porcelain", "--ignored", "--untracked-files=all") == ""
+
+
+def test_the_templates_owned_list_reports_a_bumped_global_json(tmp_path):
+    # Arrange: the Template's own checker as the base's, and the root global.json bumped the way a Dependabot dotnet-sdk PR
+    # would bump it. The SDK pin is Owned (mpaulosky/Application_Factory#103), so the bump comes through the Factory and a Rollout.
+    real_checker = (SCRIPT.parent / "check_gh_repo.py").read_text()
+    work = tmp_path / "work"
+    work.mkdir()
+    pinned = '{\n  "sdk": {\n    "version": "11.0.100",\n    "rollForward": "latestPatch"\n  }\n}\n'
+    repo = Repo(work, {CHECKER_PATH: real_checker, "global.json": pinned})
+    repo.write({"global.json": pinned.replace("11.0.100", "11.0.101")})
+    repo.commit("bump the SDK")
+
+    # Act
+    code, out, err = repo.check(tmp_path)
+
+    # Assert
+    assert (code, out, err) == (1, differs("global.json"), "")

@@ -871,8 +871,11 @@ def untold(path):
     return found
 
 
-# Repo-relative paths --repo skips (the Owned Baseline files); a trailing / is a folder.
+# Repo-relative paths --repo skips (the Owned Baseline files); a trailing / is a folder. check_owned_files.py reads the
+# same list, so an entry outside SCOPE (global.json, the SDK pin the Factory moves: mpaulosky/Application_Factory#103)
+# is there only for the Owned-files check.
 OWNED = (
+    "global.json",
     "scripts/gate.sh",
     "scripts/check-branch-name.sh",
     "scripts/check-pr-title.sh",

@@ -73,30 +73,9 @@ updates:
         patterns:
           - "*"
 
-  # Maintain DotNet Sdk
-  - package-ecosystem: "dotnet-sdk"
-    directory: "/"
-    target-branch: "main"
-    schedule:
-      interval: "weekly"
-      day: "sunday"
-      time: "16:00"
-    open-pull-requests-limit: 10
-    # Conventional commits, like the repo's own: "chore(deps): bump ...".
-    commit-message:
-      prefix: "chore"
-      include: "scope"
-    # Wait a week before proposing a new release, so a compromised or broken
-    # one is usually caught upstream before it reaches a PR here.
-    cooldown:
-      default-days: 7
-    labels:
-      - "dotnet-sdk"
-      - "dependencies"
-    groups:
-      dotnet-sdk:
-        patterns:
-          - "*"
+  # No dotnet-sdk block: global.json is an Owned Baseline file, and the Factory
+  # moves the SDK for every repo and rolls it out. A bump made here would fail
+  # the Owned files check.
 
   # Maintain dependencies for npm (the root package.json and pnpm lockfile)
   - package-ecosystem: "npm"

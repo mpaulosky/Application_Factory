@@ -167,7 +167,7 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
   - CI's `gh-repo` job (Owned `ci.yml`, on pull requests) runs the base branch's `check_gh_repo.py` against the PR's
     tree, so `--no-verify` or an edited checker can't skip it. The Owned `owned-files.yml` workflow runs the base branch's
     `.github/scripts/check_owned_files.py`, which fails with `Owned file <path> differs from <base>` when a PR changes (blob or mode), deletes, renames
-    or adds an Owned file (the base checker's `OWNED` paths: a file in an Owned folder, or an Owned file the base lacks, such as `scripts/review.sh`;
+    or adds an Owned file (the base checker's `OWNED` paths, the root `global.json` among them: a file in an Owned folder, or an Owned file the base lacks, such as `scripts/review.sh`;
     `\r` and `\n` in a path are logged as those two characters). Both scripts are taken from the PR's base commit (`git show <base>:<path>` into a
     temp folder; for the Owned files check the base is the checked-out merge commit's first parent when its second is the PR's head, else
     `base.sha`) and run with `python3 -I`, so the PR's copies never judge it. A readable base whose tree has neither (the first Apply) passes and says so;

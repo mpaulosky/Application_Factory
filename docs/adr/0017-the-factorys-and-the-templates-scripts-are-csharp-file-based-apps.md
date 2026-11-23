@@ -37,7 +37,7 @@ The trial (mpaulosky/Application_Factory#97) met every threshold set before it r
 So the scripts move, on these rules:
 
 - **The SDK is 11.0.100 everywhere** (mpaulosky/Application_Factory#100).
-  - The Template's Owned `global.json` pins `11.0.100` with `rollForward: latestPatch`, and it joins `OWNED`. The Seed Dockerfile installs the SDK `global.json` names.
+  - The Template's Owned `global.json` pins `11.0.100` with `rollForward: latestPatch`, and it joins `OWNED`. The Seed Dockerfile installs the SDK `global.json` names (see the Update at the end).
   - The Factory owns the bump: its Dependabot gains a `dotnet-sdk` entry that lists both the Factory's root and the Template's `template/owned/`, with a group over both
     folders, as its `github-actions` entry has. So one PR bumps the Template's `global.json` and the Factory's copy together, and the gate's drift check holds. An update the
     group leaves out arrives as one PR per folder, and the Template's is merged after `scripts/gate.sh --sync` brings the copy with it.
@@ -154,3 +154,10 @@ the increments change what their text describes, and the increment that does add
   a script that makes many `gh` calls in one process pays it once for each new code path, not again for each repeat, and `land.py`, which polls in a loop inside one process,
   pays it mostly on its first poll. No loop of polls was measured. A wrapper that starts a script many times pays it each time, and no wrapper today starts one often enough
   for that to matter.
+
+## Update (mpaulosky/Application_Factory#103): the SDK pin lands in two steps
+
+Until the Factory has its own `global.json`, the `dotnet-sdk` entry lists only `template/owned/`, with its group already in place; the increment that brings the copy
+(mpaulosky/Application_Factory#117) adds the root to it. The Seed Dockerfile can't read `global.json`, since Sandcastle builds the image with `.sandcastle/` as its context,
+so it installs the pin's feature band (`DOTNET_CHANNEL=11.0.1xx`), whose newest patch `rollForward: latestPatch` accepts, and `test.sh` holds the channel to the pin's
+band. A Dependabot PR that moves the band fails `test.sh` until a commit on its branch changes the channel.
