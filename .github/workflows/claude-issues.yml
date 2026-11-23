@@ -237,6 +237,10 @@ jobs:
           # Off, so the transcript isn't published in the step summary or the log of this public repository.
           display_report: false
           show_full_output: false
+          # The next run is started by the previous one with the job's token, so its actor is github-actions[bot],
+          # which the action otherwise refuses as a non-human actor. Only this workflow dispatches itself, and the
+          # pick step works only the owner's issues whatever started the run.
+          allowed_bots: "github-actions[bot]"
           prompt: |
             You are working issue #${{ steps.pick.outputs.issue }} of ${{ github.repository }}, which its owner,
             mpaulosky, queued for you. Your job is to resolve it and open a draft pull request.
@@ -261,7 +265,12 @@ jobs:
                the headings of .github/pull_request_template.md and ends with
                `Fixes #${{ steps.pick.outputs.issue }}`.
             7. Comment on the issue with the pull request's link and anything the owner should check.
+          # bypassPermissions (the owner's decision): Claude Code treats `.claude/` as a protected path whose writes
+          # always ask, and a headless run refuses every ask, so without it no edit to the Template (under
+          # `.claude/skills/`) can be made. Bash is unrestricted anyway on this throwaway runner; the disallowed
+          # tools below still hold.
           claude_args: >-
+            --permission-mode bypassPermissions
             --model claude-opus-5-5
             --max-turns 200
             --add-dir ${{ runner.temp }}/claude-task
