@@ -37,20 +37,20 @@ The trial (mpaulosky/Application_Factory#97) met every threshold set before it r
 So the scripts move, on these rules:
 
 - **The SDK is 11.0.100 everywhere** (mpaulosky/Application_Factory#100).
-  - The Template's Owned `global.json` pins `11.0.100` with `rollForward: latestPatch`, and it joins `OWNED`. The Seed Dockerfile installs the SDK `global.json` names.
+  - The Template's Owned `global.json` pins `11.0.100` with `rollForward: latestPatch`, and it joins `OWNED`. The Seed Dockerfile installs the SDK `global.json` names (see the Update below).
   - The Factory owns the bump: its Dependabot gains a `dotnet-sdk` entry that lists both the Factory's root and the Template's `template/owned/`, with a group over both
     folders, as its `github-actions` entry has. So one PR bumps the Template's `global.json` and the Factory's copy together, and the gate's drift check holds. An update the
     group leaves out arrives as one PR per folder, and the Template's is merged after `scripts/gate.sh --sync` brings the copy with it.
-  - **Update (mpaulosky/Application_Factory#103):** the pin landed in two steps. The `dotnet-sdk` entry lists only `template/owned/` until the Factory has its own
-    `global.json`; the increment that brings it (mpaulosky/Application_Factory#117) adds the root and the group. The Seed Dockerfile can't read `global.json`:
-    Sandcastle builds the image with `.sandcastle/` as its context. So it installs the pin's feature band (`DOTNET_CHANNEL=11.0.1xx`), whose newest patch
-    `rollForward: latestPatch` accepts, and `test.sh` holds the channel to the pin's band. A Dependabot PR that moves the band fails `test.sh` until someone changes the
-    channel in the same PR.
   - The Seed `dependabot.yml`'s `dotnet-sdk` entry leaves the Template, and since a Seed file is written once, each existing Application removes its own when its Rollout note
     says so.
   - Target frameworks stay `net10.0`; only the SDK moves.
   - The Factory gets its own `global.json`, a copy of the Template's that `scripts/gate.sh` lists with its other copies and `--sync` keeps equal, in the first increment that adds
     C# to it.
+  - **Update:** the pin landed in two steps (mpaulosky/Application_Factory#103). Until the Factory has its own `global.json`, the `dotnet-sdk` entry lists only
+    `template/owned/`, with its group already in place; the increment that brings the copy (mpaulosky/Application_Factory#117) adds the root to it. The Seed Dockerfile can't
+    read `global.json`, since Sandcastle builds the image with `.sandcastle/` as its context, so it installs the pin's feature band (`DOTNET_CHANNEL=11.0.1xx`), whose newest
+    patch `rollForward: latestPatch` accepts, and `test.sh` holds the channel to the pin's band. A Dependabot PR that moves the band fails `test.sh` until a commit on its
+    branch changes the channel.
 - **One script is one file-based `.cs`** (mpaulosky/Application_Factory#98).
   - The entry file keeps the script's name and sits beside its `.py` (`github/status.cs`, `.github/scripts/check_gh_repo.cs`), so a caller changes only the extension.
   - It is thin: its `#:` lines, then one call into a class (`return Script.Run(() => Status.Run(args, ...))`).

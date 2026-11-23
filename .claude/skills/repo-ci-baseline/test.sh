@@ -59,18 +59,24 @@ sdk_band() {
   [[ "$1" =~ ^([0-9]+)\.([0-9]+)\.([1-9])[0-9]{2}$ ]] || return 1
   printf '%s.%s.%sxx\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
 }
-# Whether a dependabot.yml (argument 1) has a dotnet-sdk entry whose directory, or one of whose directories, is argument 2,
-# read as the Factory's file is written: an entry at "  - package-ecosystem:", its keys at four spaces, a list item at six.
-# A comment line counts for nothing, so a commented-out entry or a comment naming the path doesn't pass.
+# Whether a dependabot.yml (argument 1) has a dotnet-sdk entry whose directory, or one of whose directories, is argument 2.
+# Each entry under updates: (from one "  - " line to the next "  - " line or top-level key) is judged as a whole, whatever its keys'
+# order: its keys at four spaces, a directories item at six. Values are compared as strings (trailing blanks and a CR dropped),
+# so a path's "." is only a dot, and a comment line is no key or item.
 dotnet_sdk_entry_for() {
-  awk -v dir="$2" '
-    /^[ \t]*#/ { next }
-    /^  - package-ecosystem:/ { sdk = ($0 ~ /: "dotnet-sdk" *$/); dirs = 0; next }
-    sdk && /^    directories:/ { dirs = 1; next }
-    sdk && /^    [a-z]/ { dirs = 0 }
-    sdk && $0 ~ ("^    directory: \"" dir "\" *$") { found = 1 }
-    sdk && dirs && $0 ~ ("^      - \"" dir "\" *$") { found = 1 }
-    END { exit !found }' "$1"
+  awk -v want="\"$2\"" '
+    function end_entry() { if (eco == "dotnet-sdk" && hit) found = 1; eco = ""; hit = 0; key = "" }
+    { sub(/[ \t\r]+$/, "") }
+    /^[a-z]/ { end_entry(); next }
+    /^  - / { end_entry(); $0 = "    " substr($0, 5) }
+    match($0, /^    [a-z-]+:/) {
+      key = substr($0, 5, RLENGTH - 5); value = substr($0, RLENGTH + 1); sub(/^[ \t]+/, "", value)
+      if (key == "package-ecosystem") { eco = value; gsub(/"/, "", eco) }
+      if (key == "directory" && value == want) hit = 1
+      next
+    }
+    /^      - / && key == "directories" && substr($0, 9) == want { hit = 1 }
+    END { end_entry(); exit !found }' "$1"
 }
 # The shard is checked first, before the tools, and must be exactly one of the declared names: a value such as "hooks scripts" would match no block and run nothing.
 shards=(hooks scripts checks)
@@ -514,18 +520,29 @@ PY
   template_dir="/.claude/skills/repo-ci-baseline/template/owned"
   dotnet_sdk_entry_for "$skill_dir/../../../.github/dependabot.yml" "$template_dir" \
     || fail "the Factory's .github/dependabot.yml must have a dotnet-sdk entry for $template_dir, the Owned global.json"
-  # The check itself: a directories list passes; a commented-out entry, a comment naming the path, another ecosystem's
-  # directory and the dotnet-sdk entry pointed elsewhere don't.
+  # The check itself, on fixtures: each "right" file has the entry, no "wrong" one does.
   sdk_entry() { printf 'version: 2\nupdates:\n%s\n' "$1" > "$md_tmp/dependabot-sdk.yml"; }
-  sdk_entry "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directories:\n      - "/"\n      - "%s"\n    schedule:\n      interval: "weekly"' "$template_dir")"
-  dotnet_sdk_entry_for "$md_tmp/dependabot-sdk.yml" "$template_dir" || fail "the dotnet-sdk entry check misses a directories list naming the Template"
+  t="$template_dir"
+  for right in \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "%s"' "$t")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directories:\n      - "/"\n      - "%s"\n    schedule:\n      interval: "weekly"' "$t")" \
+    "$(printf '  - directory: "%s"\n    package-ecosystem: "dotnet-sdk"' "$t")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"  \r\n    directory: "%s"\r' "$t")"; do
+    sdk_entry "$right"
+    dotnet_sdk_entry_for "$md_tmp/dependabot-sdk.yml" "$t" || fail "the dotnet-sdk entry check misses an entry naming the Template: $right"
+  done
   for wrong in \
-    "$(printf '  # - package-ecosystem: "dotnet-sdk"\n  #   directory: "%s"' "$template_dir")" \
-    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "/"\n    # directory: "%s"' "$template_dir")" \
-    "$(printf '  - package-ecosystem: "pip"\n    directory: "%s"\n  - package-ecosystem: "dotnet-sdk"\n    directory: "/"' "$template_dir")" \
-    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "%s/sub"' "$template_dir")"; do
+    "$(printf '  # - package-ecosystem: "dotnet-sdk"\n  #   directory: "%s"' "$t")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "/"\n    # directory: "%s"' "$t")" \
+    "$(printf '  - package-ecosystem: "pip"\n    directory: "%s"\n  - package-ecosystem: "dotnet-sdk"\n    directory: "/"' "$t")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "/"\n  - package-ecosystem: "pip"\n    directory: "%s"' "$t")" \
+    "$(printf '  - package-ecosystem: "github-actions"\n    directories:\n      - "/"\n      - "%s"\n  - package-ecosystem: "dotnet-sdk"\n    directory: "/"' "$t")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directories:\n      - "/"\n    ignore:\n      - "%s"' "$t")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "/"\n  - directory: "%s"\n    package-ecosystem: "pip"' "$t")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "%s"' "${t/./X}")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "%s/sub"' "$t")"; do
     sdk_entry "$wrong"
-    ! dotnet_sdk_entry_for "$md_tmp/dependabot-sdk.yml" "$template_dir" || fail "the dotnet-sdk entry check passes a file with no such entry: $wrong"
+    ! dotnet_sdk_entry_for "$md_tmp/dependabot-sdk.yml" "$t" || fail "the dotnet-sdk entry check passes a file with no such entry: $wrong"
   done
   python3 - "$owned/.github/scripts/requirements-tests.txt" << 'PY_REQ' || fail "requirements-tests.txt must pin each package exactly, with at least one sha256 hash, pytest and pyyaml among them"
 import re, sys
