@@ -22,8 +22,8 @@
 # each / replaced by _, so a value can't name a file outside FAKE_GH_DIR. The call is answered from FAKE_GH_DIR/<key>.json
 # (printed on stdout, exit 0) or FAKE_GH_DIR/<key>.fail (printed on stderr, exit 1: a GitHub failure), and the key is logged.
 #
-# Exit 97 is the fake's own: a call no fixture answers (logged as one line, "UNMATCHED <what was asked>"), an argument it
-# doesn't know, an unreadable fixture, or FAKE_GH_DIR or FAKE_GH_LOG unset. A fixture set is complete, so a call nobody
+# Exit 97 is the fake's own: a call no fixture answers, an argument it doesn't know or a fixture it can't read (each
+# logged as one line, "UNMATCHED <what was asked>"), or FAKE_GH_DIR or FAKE_GH_LOG unset. A fixture set is complete, so a call nobody
 # planned for is a difference between implementations, not a GitHub failure.
 set -euo pipefail
 
@@ -81,10 +81,7 @@ fi
 for answer in json fail; do
   file="$FAKE_GH_DIR/$key.$answer"
   [[ -e "$file" ]] || continue
-  if [[ ! -f "$file" || ! -r "$file" ]]; then
-    echo "fake gh: fixture $file is not a readable file." >&2
-    exit 97
-  fi
+  [[ -f "$file" && -r "$file" ]] || unmatched "$key (its fixture $key.$answer is not a readable file)"
   printf '%s\n' "$key" >> "$FAKE_GH_LOG"
   if [[ "$answer" == json ]]; then
     cat -- "$file"

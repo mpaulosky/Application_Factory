@@ -46,6 +46,7 @@ for repo in "$@"; do
   case "$mode" in
     stdout) echo "$repo other" ;;
     token) [[ -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}" && -d "$GH_CONFIG_DIR" && -z "$(ls -A "$GH_CONFIG_DIR")" ]] && echo "$repo ok" ;;
+    terminal) [[ -z "${FORCE_COLOR:-}${CLICOLOR_FORCE:-}${PYTHON_COLORS:-}${COLUMNS:-}${LINES:-}" && "${NO_COLOR:-}" == 1 && "${TERM:-}" == dumb ]] && echo "$repo ok" ;;
     stdin) if read -r line; then echo "$repo read $line"; else echo "$repo ok"; fi ;;
     *) echo "$repo ok" ;;
   esac
@@ -110,6 +111,20 @@ suite 0 "a command given by a relative path" -- ./stub.sh || true
 suite 0 "a relative path as a later word" -- bash stub.sh || true
 suite 0 "a query spaced differently, with -f and -F swapped" STUB_MODE=spaced -- ./stub.sh || true
 suite 0 "a caller's GitHub token and gh config are not passed on" STUB_MODE=token GH_TOKEN=secret GITHUB_TOKEN=secret -- ./stub.sh || true
+suite 0 "a caller's colour and terminal width are not passed on" STUB_MODE=terminal FORCE_COLOR=1 CLICOLOR_FORCE=1 \
+  PYTHON_COLORS=1 COLUMNS=10 LINES=5 NO_COLOR= TERM=xterm-256color -- ./stub.sh || true
+# launch.sh run --file=<script>: runs the script, and fails when its first word isn't `run` as given.
+cat > "$work/launch.sh" << 'EOF'
+#!/usr/bin/env bash
+[[ "$1" == run && "$2" == --file=/* ]] || exit 9
+f="${2#--file=}"
+shift 2
+exec bash "$f" "$@"
+EOF
+chmod +x "$work/launch.sh"
+mkdir "$work/run"
+suite 0 "a word that only happens to name a folder stays as it is, and an --option=path value is made absolute" \
+  -- ./launch.sh run --file=stub.sh || true
 (cd "$work" && STUB_MODE=stdin bash "$runner" ./stub.sh <<< "typed" > "$work/out" 2>&1) || fail "the implementation reads the caller's stdin: $(cat "$work/out")"
 (cd "$skill" && CDPATH="$skill" bash tests/status-parity.test.sh "$work/stub.sh" > "$work/out" 2>&1) || fail "CDPATH breaks the runner: $(cat "$work/out")"
 
@@ -236,13 +251,33 @@ fake 97 '' "a flag with no value" api graphql -f
 fake 97 '' "a command other than api" pr list && logged "a command other than api" "UNMATCHED gh pr list"
 fake 97 '' "a REST call with more arguments" api repos/o/app --method POST
 fake 97 '' "an unreadable fixture" api graphql -f query="$threads_q" -f id=dir.key
-logged "an unreadable fixture isn't logged as answered" ""
+logged "an unreadable fixture is logged as unmatched, not as answered" \
+  "UNMATCHED threads.dir.key (its fixture threads.dir.key.json is not a readable file)"
 code=0
 env -u FAKE_GH_DIR FAKE_GH_LOG="$gh_log" "$fake" api repos/o/app > /dev/null 2>&1 || code=$?
 [[ $code -eq 97 ]] || fail "fake gh: FAKE_GH_DIR unset gives exit $code, expected 97"
 code=0
 env -u FAKE_GH_LOG FAKE_GH_DIR="$gh_dir" "$fake" api repos/o/app > /dev/null 2>&1 || code=$?
 [[ $code -eq 97 ]] || fail "fake gh: FAKE_GH_LOG unset gives exit $code, expected 97"
+
+# --- The committed cases: what a fresh clone has, and no fixture nothing reads ---
+
+real_cases="$here/status-parity/cases"
+tracked=""
+if git -C "$here" rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+  tracked="$(git -C "$here" ls-files -- status-parity/cases)"
+fi
+for dir in "$real_cases"/*/; do
+  dir="${dir%/}" name="${dir##*/}"
+  if [[ -n "$tracked" ]] && ! grep -q "^status-parity/cases/$name/gh/" <<< "$tracked"; then
+    fail "case $name has no file git tracks in gh/, so a fresh clone has no gh/ folder (add gh/.gitkeep)"
+  fi
+  for fixture in "$dir"/gh/*.json "$dir"/gh/*.fail; do
+    [[ -e "$fixture" ]] || continue
+    key="${fixture##*/}" key="${key%.*}"
+    grep -qxF -- "$key" "$dir/expected.calls" || fail "case $name: gh/${fixture##*/} answers no call in expected.calls"
+  done
+done
 
 if [[ $failures -ne 0 ]]; then
   echo "status-parity-runner: $failures check(s) failed." >&2

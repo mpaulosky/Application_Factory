@@ -13,23 +13,25 @@
 #   args             the implementation's arguments, one per line, taken verbatim (a blank line is an empty argument;
 #                    an empty or missing file: none)
 #   gh/              the fixtures tests/status-parity/fake-gh.sh answers the `gh api` calls from (see its header for what
-#                    an implementation must send)
+#                    an implementation must send), each read by a call in expected.calls; a case with no fixtures keeps
+#                    an empty .gitkeep there, since git keeps no empty folder
 #   expected.stdout  stdout, byte for byte
 #   expected.code    the exit code
 #   expected.stderr  one ERE per stderr line, in order: stderr has exactly that many lines, each matching its pattern
 #                    (stderr carries the error text of the language, so only its shape is compared); no line is blank
 #   expected.calls   the fixture keys of the `gh` calls made, in order: the queries a run costs are behaviour too
 #
-# No case file holds a carriage return. Record mode writes expected.stdout, expected.code and expected.calls. It writes a
+# Neither args nor an expected.* file may hold a carriage return (a setup error). Record mode writes expected.stdout, expected.code and expected.calls. It writes a
 # new case's expected.stderr with each line matched literally, for someone to loosen to the shape that matters; an existing
 # one holds that loosening, so it is kept, and the run fails when it no longer fits. A case whose run makes a gh call no
 # fixture answers, or times out, is never recorded.
 #
 # The implementation runs from an empty temporary folder, with stdin from /dev/null, the fake gh first on PATH, no GitHub
-# token in its environment and GH_CONFIG_DIR an empty folder, LC_ALL=C.UTF-8 (best-effort: macOS has no such locale, so
-# PYTHONUTF8=1 is set too), TZ=UTC, and STATUS_PARITY_TIMEOUT seconds (default 60) before it counts as hung. Each command
-# word that names an existing file or folder is made absolute first, so `--file src/Status.cs` works from anywhere; the
-# first word is looked up on PATH unless it holds a /. Build a compiled implementation once before running the suite (a
+# token in its environment and GH_CONFIG_DIR an empty folder, no colour or terminal width the caller set (NO_COLOR=1,
+# TERM=dumb), LC_ALL=C.UTF-8 (best-effort: macOS has no such locale, so PYTHONUTF8=1 is set too), TZ=UTC, and
+# STATUS_PARITY_TIMEOUT seconds (default 60) before it counts as hung. A command word that looks like a path (it holds a
+# /, or after the first word a .) and names an existing file or folder is made absolute first, as is the value of a later
+# --option=value word, so `--file src/Status.cs` works from anywhere; the first word is looked up on PATH unless it holds a /. Build a compiled implementation once before running the suite (a
 # file-based C# app with `dotnet build <file>.cs`, then the command `dotnet run --no-build --file <file>.cs --`), so the
 # build isn't timed inside the first case and two runs of the suite don't build it at once.
 #
@@ -73,12 +75,17 @@ else
   impl=(python3 "$skill_dir/github/status.py")
 fi
 # The command runs from an empty folder, so a relative path in it would name nothing there.
+# Only a word that looks like a path (it holds a /, or after the first word a .) is rewritten, so `dotnet run` stays as it
+# is when the caller's folder holds a `run`; the value of a later --option=value word is treated the same way.
 for i in "${!impl[@]}"; do
-  word="${impl[i]}"
-  [[ "$word" != /* && "$word" != -* ]] || continue
-  [[ $i -gt 0 || "$word" == */* ]] || continue
+  word="${impl[i]}" option=""
+  if [[ $i -gt 0 && "$word" == --?*=* ]]; then
+    option="${word%%=*}=" word="${word#*=}"
+  fi
+  [[ -n "$word" && "$word" != /* && "$word" != -* ]] || continue
+  [[ "$word" == */* || ($i -gt 0 && "$word" == *.*) ]] || continue
   if [[ -e "$word" ]]; then
-    impl[i]="$(CDPATH='' cd -- "$(dirname -- "$word")" && pwd)/$(basename -- "$word")"
+    impl[i]="$option$(CDPATH='' cd -- "$(dirname -- "$word")" && pwd)/$(basename -- "$word")"
   fi
 done
 command -v -- "${impl[0]}" > /dev/null || setup_error "the command '${impl[0]}' can't be run (not found or not executable)."
@@ -151,6 +158,7 @@ for case_dir in "${cases[@]}"; do
   : > "$tmp/calls"
   code=0
   (cd "$tmp/cwd" && timeout -k 5 "$limit" env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN \
+    -u FORCE_COLOR -u CLICOLOR_FORCE -u PYTHON_COLORS -u COLUMNS -u LINES NO_COLOR=1 TERM=dumb \
     PATH="$tmp/bin:$PATH" GH_CONFIG_DIR="$tmp/ghconfig" LC_ALL=C.UTF-8 PYTHONUTF8=1 TZ=UTC \
     FAKE_GH_DIR="$case_dir/gh" FAKE_GH_LOG="$tmp/calls" \
     "${impl[@]}" ${args[@]+"${args[@]}"} < /dev/null > "$tmp/stdout" 2> "$tmp/stderr") || code=$?
