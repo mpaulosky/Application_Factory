@@ -38,8 +38,9 @@ So the scripts move, on these rules:
 
 - **The SDK is 11.0.100 everywhere** (mpaulosky/Application_Factory#100).
   - The Template's Owned `global.json` pins `11.0.100` with `rollForward: latestPatch`, and it joins `OWNED`. The Seed Dockerfile installs the SDK `global.json` names.
-  - The Factory owns the bump: its Dependabot gains a `dotnet-sdk` entry that lists both the Factory's root and the Template's `template/owned/`, as its `github-actions`
-    entry does, so one PR bumps the Template's `global.json` and the Factory's copy together and the gate's drift check holds.
+  - The Factory owns the bump: its Dependabot gains a `dotnet-sdk` entry that lists both the Factory's root and the Template's `template/owned/`, with a group over both
+    folders, as its `github-actions` entry has. So one PR bumps the Template's `global.json` and the Factory's copy together, and the gate's drift check holds. An update the
+    group leaves out arrives as one PR per folder, and the Template's is merged after `scripts/gate.sh --sync` brings the copy with it.
   - The Seed `dependabot.yml`'s `dotnet-sdk` entry leaves the Template, and since a Seed file is written once, each existing Application removes its own when its Rollout note
     says so.
   - Target frameworks stay `net10.0`; only the SDK moves.
