@@ -5,9 +5,11 @@
 #
 #   tests/status-parity-runner.test.sh
 #
-# Copies both into a throwaway skill folder with one case of its own and runs them against a stub implementation, so
-# nothing in the real cases is read or written. Needs what the suite needs (bash 4.4, coreutils, diff, grep, sed) and
-# python3 for the stub reference record mode runs.
+# Copies both into a throwaway skill folder with one case of its own and runs them against a stub implementation, so no
+# real case is run or written. A last section only reads the committed cases: each has a file git tracks in gh/ (the
+# folder a fresh clone needs) and no fixture its expected.calls doesn't read. Needs what the suite needs (bash 4.4,
+# coreutils, diff, grep, sed), python3 for the stub reference record mode runs, and git (outside a git work tree the
+# tracked-file check is skipped).
 set -euo pipefail
 
 here="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -130,7 +132,7 @@ suite 0 "a word that only happens to name a folder stays as it is, and an --opti
 
 for difference in "stdout:stdout differs:" "code:exit 3, expected 0" "extra:gh calls differ:" \
   "stderr-count:2 stderr line(s), expected 1" "stderr-shape:stderr line 1 'nope' doesn't match" \
-  "unmatched:a gh call no fixture answers" "hang:timed out after 1 second(s)"; do
+  "unmatched:a gh call the fake couldn't answer" "hang:timed out after 1 second(s)"; do
   mode="${difference%%:*}" text="${difference#*:}"
   if suite 1 "an implementation that differs ($mode)" STUB_MODE="$mode" STATUS_PARITY_TIMEOUT=1 -- ./stub.sh; then
     says "$mode" "FAIL c1"
@@ -262,22 +264,53 @@ env -u FAKE_GH_LOG FAKE_GH_DIR="$gh_dir" "$fake" api repos/o/app > /dev/null 2>&
 
 # --- The committed cases: what a fresh clone has, and no fixture nothing reads ---
 
-real_cases="$here/status-parity/cases"
-tracked=""
-if git -C "$here" rev-parse --is-inside-work-tree > /dev/null 2>&1; then
-  tracked="$(git -C "$here" ls-files -- status-parity/cases)"
-fi
-for dir in "$real_cases"/*/; do
-  dir="${dir%/}" name="${dir##*/}"
-  if [[ -n "$tracked" ]] && ! grep -q "^status-parity/cases/$name/gh/" <<< "$tracked"; then
-    fail "case $name has no file git tracks in gh/, so a fresh clone has no gh/ folder (add gh/.gitkeep)"
-  fi
-  for fixture in "$dir"/gh/*.json "$dir"/gh/*.fail; do
-    [[ -e "$fixture" ]] || continue
-    key="${fixture##*/}" key="${key%.*}"
-    grep -qxF -- "$key" "$dir/expected.calls" || fail "case $name: gh/${fixture##*/} answers no call in expected.calls"
+# case_problems <cases folder>: one line per case a fresh clone would break (no file in its gh/ that git tracks) or with
+# a fixture no call in its expected.calls reads; nothing when every case is sound. git runs without the caller's GIT_*
+# variables (a hook sets them), and outside a git work tree only the fixtures are checked.
+case_problems() {
+  local cases_dir="$1" tracked="" dir name fixture key
+  local -a clean_git=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR git -C "$cases_dir")
+  local in_tree=""
+  [[ "$("${clean_git[@]}" rev-parse --is-inside-work-tree 2> /dev/null)" != true ]] || in_tree=1
+  [[ -z "$in_tree" ]] || tracked=$'\n'"$("${clean_git[@]}" ls-files -- .)"
+  for dir in "$cases_dir"/*/; do
+    dir="${dir%/}" name="${dir##*/}"
+    if [[ -n "$in_tree" && "$tracked" != *$'\n'"$name/gh/"* ]]; then
+      echo "case $name has no file in gh/ that git tracks, so a fresh clone has no gh/ folder: git add its gh/ files, or add gh/.gitkeep when it has none"
+    fi
+    for fixture in "$dir"/gh/*.json "$dir"/gh/*.fail; do
+      [[ -e "$fixture" ]] || continue
+      key="${fixture##*/}" key="${key%.*}"
+      grep -qxF -- "$key" "$dir/expected.calls" || echo "case $name: gh/${fixture##*/} answers no call in expected.calls"
+    done
   done
+}
+
+# Against cases made to be wrong: an untracked gh/, a stray fixture, and sound ones (an empty-cursor key among them).
+probe="$work/probe"
+mkdir -p "$probe/cases"
+for name in sound untracked stray; do
+  mkdir -p "$probe/cases/$name/gh"
+  echo '{}' > "$probe/cases/$name/gh/repo.o.app.json"
+  printf '%s\n' repo.o.app 'events.PR_1.' > "$probe/cases/$name/expected.calls"
 done
+echo '{}' > "$probe/cases/sound/gh/events.PR_1..json"
+echo '{}' > "$probe/cases/stray/gh/comments.PR_9.json"
+cp -r "$probe/cases" "$work/plain-cases"
+git init -q "$probe"
+git -C "$probe" add cases/sound cases/stray
+want_tree="case untracked has no file in gh/ that git tracks, so a fresh clone has no gh/ folder: git add its gh/ files, or add gh/.gitkeep when it has none"
+want_stray="case stray: gh/comments.PR_9.json answers no call in expected.calls"
+got="$(case_problems "$probe/cases")"
+[[ "$got" == "$want_stray"$'\n'"$want_tree" || "$got" == "$want_tree"$'\n'"$want_stray" ]] \
+  || fail "the committed-cases check, on an untracked gh/ and a stray fixture, said: $got"
+got="$(GIT_DIR="$work/nowhere" GIT_WORK_TREE="$work" case_problems "$probe/cases")"
+[[ "$got" == *"$want_tree"* ]] || fail "the committed-cases check follows the caller's GIT_DIR: $got"
+got="$(case_problems "$work/plain-cases")"
+[[ "$got" == "$want_stray" ]] || fail "the committed-cases check outside a git work tree said: $got"
+
+got="$(case_problems "$here/status-parity/cases")"
+[[ -z "$got" ]] || fail "the committed cases:"$'\n'"$got"
 
 if [[ $failures -ne 0 ]]; then
   echo "status-parity-runner: $failures check(s) failed." >&2

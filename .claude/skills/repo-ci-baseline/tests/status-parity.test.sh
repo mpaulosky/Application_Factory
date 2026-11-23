@@ -23,8 +23,8 @@
 #
 # Neither args nor an expected.* file may hold a carriage return (a setup error). Record mode writes expected.stdout, expected.code and expected.calls. It writes a
 # new case's expected.stderr with each line matched literally, for someone to loosen to the shape that matters; an existing
-# one holds that loosening, so it is kept, and the run fails when it no longer fits. A case whose run makes a gh call no
-# fixture answers, or times out, is never recorded.
+# one holds that loosening, so it is kept, and the run fails when it no longer fits. A case whose run makes a gh call the
+# fake can't answer, or times out, is never recorded.
 #
 # The implementation runs from an empty temporary folder, with stdin from /dev/null, the fake gh first on PATH, no GitHub
 # token in its environment and GH_CONFIG_DIR an empty folder, no colour or terminal width the caller set (NO_COLOR=1,
@@ -168,7 +168,7 @@ for case_dir in "${cases[@]}"; do
     problems+=("timed out after $limit second(s) (exit $code)")
   fi
   if grep -q '^UNMATCHED ' "$tmp/calls"; then
-    problems+=("a gh call no fixture answers (the implementation's call differs from the reference's): $(grep '^UNMATCHED ' "$tmp/calls" | head -3)")
+    problems+=("a gh call the fake couldn't answer (no fixture for it, an argument it doesn't know or an unreadable fixture; from a port, its call likely differs from the reference's): $(grep '^UNMATCHED ' "$tmp/calls" | head -3)")
   fi
 
   if [[ -n "$record" ]]; then
