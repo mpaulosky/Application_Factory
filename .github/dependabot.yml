@@ -1,5 +1,6 @@
 # Dependabot version updates for the Factory (ADR 0009). Its own file, not the Template's Seed: the Factory has GitHub Actions, the local review's npm packages (ADR 0010)
-# and the Template's hashed Python test pins (requirements-tests.txt, a pip block; ADR 0009's Update notes) to update.
+# and the Template's hashed Python test pins (requirements-tests.txt, a pip block; ADR 0009's Update notes) to update, and the Template's Owned
+# global.json, the .NET SDK every Application builds with (a dotnet-sdk block; mpaulosky/Application_Factory#103).
 # For GitHub Actions both directories are listed so one PR bumps an action in a copied workflow and in its source under template/owned/ together,
 # or the gate's drift check would fail the copy. Every label below must exist in the repo.
 ---
@@ -64,6 +65,30 @@ updates:
         update-types:
           - "minor"
           - "patch"
+
+  # The Template's Owned global.json. The Factory moves the SDK for the whole Fleet: an Application's own bump would fail
+  # the Owned files check, so the Seed has no dotnet-sdk block. An Application gets the bump by the next Rollout.
+  - package-ecosystem: "dotnet-sdk"
+    directory: "/.claude/skills/repo-ci-baseline/template/owned"
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "16:00"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    # Wait a week before proposing a new release, so a compromised or broken one is usually caught upstream first.
+    cooldown:
+      default-days: 7
+    labels:
+      - "dotnet-sdk"
+      - "dependencies"
+    groups:
+      dotnet-sdk:
+        patterns:
+          - "*"
 
   # The Template's hashed pins for the Python tests (requirements-tests.txt, which CI installs with --require-hashes). Dependabot
   # rewrites the hashes with the versions. An Application gets the bump by the next Rollout.

@@ -14,6 +14,8 @@ Done when every item below is resolved for this repo and `scripts/gate.sh` passe
   label. A Seed is written only where it's missing, so an Application Applied before the block existed copies it in by hand; without it, the pins move only when
   a Rollout brings the Template's copy, which the Factory's own pip entry bumps. The block ignores ruff, whose pin moves only with the gate's release rule
   (the Factory's ADR 0011, Update: Python): an Application Applied before the `ignore` existed adds `ignore: [{dependency-name: "ruff"}]` to its pip entry by hand.
+  It has no `dotnet-sdk` block: `global.json` is Owned, the Factory's own Dependabot moves the SDK, and a Rollout brings it, so an Application's own bump
+  would fail the Owned files check. An Application Applied before the block left the Seed deletes its `dotnet-sdk` entry by hand (mpaulosky/Application_Factory#103).
 - **Seed files skipped.** Diff each against `template/seed/` and bring over what the repo lacks.
   The repo's version wins on content.
 - **Seed files written.** Check each against what the repo had before.

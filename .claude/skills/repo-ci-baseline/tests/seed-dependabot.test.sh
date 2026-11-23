@@ -94,6 +94,9 @@ for eco, u in updates.items():
     missing = sorted(set(u.get("labels", [])) - set(labels))
     check(f"{eco}: labels.json creates every label the {eco} block uses", not missing, f"missing from labels.json: {missing}")
 check("labels.json creates nuget and dotnet-sdk", {"nuget", "dotnet-sdk"} <= set(labels), repr(labels))
+# global.json is Owned and the Factory moves the SDK (mpaulosky/Application_Factory#103): an Application's own
+# dotnet-sdk PR would fail the Owned files check, so the Seed has no dotnet-sdk block.
+check("the Seed has no dotnet-sdk block (the Factory moves the SDK)", "dotnet-sdk" not in updates, repr(sorted(updates)))
 
 # The Labels row of references/github-settings.md lists every label in labels.json.
 doc_path = sys.argv[1].replace("template/seed/.github/dependabot.yml", "references/github-settings.md")

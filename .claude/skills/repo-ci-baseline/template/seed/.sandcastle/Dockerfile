@@ -81,10 +81,11 @@ RUN groupmod -o -g $AGENT_GID node && usermod -o -u $AGENT_UID -g $AGENT_GID -d 
 RUN corepack enable pnpm
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
-# The .NET SDK the gate builds with (scripts/gate.sh runs dotnet build and test). The channel is global.json's
-# sdk.version, major and minor; set INSTALL_DOTNET=false for a repo with no solution.
+# The .NET SDK the gate builds with (scripts/gate.sh runs dotnet build and test). The channel is the feature band of
+# global.json's sdk.version (11.0.100 is 11.0.1xx), so it installs that band's newest patch, which global.json's
+# rollForward latestPatch accepts; set INSTALL_DOTNET=false for a repo with no solution.
 ARG INSTALL_DOTNET=true
-ARG DOTNET_CHANNEL=10.0
+ARG DOTNET_CHANNEL=11.0.1xx
 RUN if [ "$INSTALL_DOTNET" = true ]; then \
       curl -fsSLo /tmp/dotnet-install.sh https://dot.net/v1/dotnet-install.sh \
       && bash /tmp/dotnet-install.sh --channel "$DOTNET_CHANNEL" --install-dir /usr/share/dotnet \

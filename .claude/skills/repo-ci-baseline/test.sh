@@ -490,6 +490,10 @@ PY
       pip && ign && /^ *- dependency-name: "ruff" *$/ { found = 1 } END { exit !found }' "$file" \
       || fail "$file's pip entry must ignore ruff, whose pin moves only with gate.sh's RUFF_VERSION and release rule"
   done
+  # The Factory moves the SDK: its own dotnet-sdk entry bumps the Template's Owned global.json (mpaulosky/Application_Factory#103).
+  awk '/package-ecosystem: "dotnet-sdk"/ { sdk = 1; next } /package-ecosystem:/ { sdk = 0 }
+    sdk && /"\/\.claude\/skills\/repo-ci-baseline\/template\/owned"/ { found = 1 } END { exit !found }' "$skill_dir/../../../.github/dependabot.yml" \
+    || fail "the Factory's .github/dependabot.yml must have a dotnet-sdk entry for /.claude/skills/repo-ci-baseline/template/owned, the Owned global.json"
   python3 - "$owned/.github/scripts/requirements-tests.txt" << 'PY_REQ' || fail "requirements-tests.txt must pin each package exactly, with at least one sha256 hash, pytest and pyyaml among them"
 import re, sys
 text = open(sys.argv[1]).read()
@@ -1031,10 +1035,12 @@ text = re.sub(r"(?m)^[ \t]*#[^\n]*\n", "", open(sys.argv[1], encoding="utf-8").r
 text = re.sub(r"\\[ \t]*\n", " ", text)
 sys.exit(0 if re.search(r"^[ \t]*(?i:RUN)[ \t]+[^\n]*\bpip3?[ \t]+install\b[^\n&|;]*[ \t]\"ruff==\$\{RUFF_VERSION\}\"", text, re.M) else 1)' "$seed/.sandcastle/Dockerfile" \
     || fail "the Seed .sandcastle/Dockerfile must have \"ruff==\${RUFF_VERSION}\" on a RUN pip install line, the release the gate's Python lint step takes"
-  # And the .NET SDK channel global.json pins.
+  # And the .NET SDK feature band global.json pins (11.0.100 is the band 11.0.1xx): the newest patch of that band is what
+  # rollForward latestPatch accepts, so a Dependabot patch bump needs no image change (mpaulosky/Application_Factory#103).
   sdk="$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["sdk"]["version"])' "$owned/global.json")"
   channel="$(sed -nE 's/^ARG DOTNET_CHANNEL=([^ ]+).*/\1/p' "$seed/.sandcastle/Dockerfile")"
-  [[ "$channel" == "$(cut -d. -f1-2 <<< "$sdk")" ]] \
+  sdk_patch="${sdk##*.}"
+  [[ "$channel" == "$(cut -d. -f1-2 <<< "$sdk").${sdk_patch:0:1}xx" ]] \
     || fail "the Seed .sandcastle/Dockerfile's DOTNET_CHANNEL is '$channel'; global.json's SDK is $sdk"
 
   step "Hand-off PRs (the sandcastle:follow-up label)"

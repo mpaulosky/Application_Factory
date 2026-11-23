@@ -495,10 +495,13 @@ def test_check_repo_checks_what_isnt_an_owned_baseline_file(tmp_path, name):
     assert [line.split(":")[0] for line in found] == [name]
 
 
-def test_owned_names_files_and_folders_under_scripts_the_skills_readme_and_the_review_skills_only():
-    # Arrange, Act, Assert
+def test_owned_names_files_and_folders_under_scripts_the_skills_readme_the_review_skills_and_global_json_only():
+    # Arrange, Act, Assert: global.json is the one root file, the SDK pin (mpaulosky/Application_Factory#103).
     assert check_gh_repo.OWNED
-    assert all(entry.startswith(("scripts/", ".claude/skills/README.md", ".claude/skills/pre-push-review/", ".claude/skills/hardening-review/")) for entry in check_gh_repo.OWNED)
+    assert "global.json" in check_gh_repo.OWNED
+    assert all(entry == "global.json" or entry.startswith(("scripts/", ".claude/skills/README.md", ".claude/skills/pre-push-review/",
+                                                           ".claude/skills/hardening-review/"))
+               for entry in check_gh_repo.OWNED)
 
 
 def test_scope_is_scripts_github_ci_and_skills():
