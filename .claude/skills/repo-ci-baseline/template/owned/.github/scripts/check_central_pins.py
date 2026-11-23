@@ -24,8 +24,10 @@ still holds $(, @( or %(, that is over MAX_ID characters, or that would need mor
 past MAX_VALUE characters with them substituted (any property value over MAX_VALUE does), can't be read without evaluating
 MSBuild. A pin like that is left alone, and a reference like that could be any package, so the pins found are then reported as
 warnings and the check passes. Transitive pinning is on when any of those files sets the property to true, or to a value built
-from $(Name) that resolves, the same way, to true for one of the values. A value that still can't be read counts as on, named in
-a notice, so the check fails closed: under such a value an unreferenced pin either holds a package back or does nothing.
+from $(Name) that resolves, the same way and within the same limits, to true for one combination of values. A value without $(, @(
+or %( is compared as written. Unless another file sets the property to true, which settles it, a value that holds them and can't be
+resolved counts as on, named in a notice, so the check fails closed: under it an unreferenced pin either holds a package back or
+does nothing.
 
 Every file is read as bytes, so expat honours its byte-order mark and XML declaration (MSBuild reads UTF-16 project files too). Only
 regular files are read, not symlinks: an MSBuild file of at most MAX_BYTES, a global.json of at most MAX_GLOBAL_JSON_BYTES. A DOCTYPE is refused: MSBuild files never need one, and entity
@@ -461,8 +463,10 @@ def check(root):
         properties(document, found)
     values = (found, {key: max(map(len, choices)) for key, choices in found.items()})
     cache = {}
-    # The setting is on when any file sets it to true, or to a $(Name) one of whose values is true. A value that can't be read
-    # counts as on, so the check fails closed: under it an unreferenced pin either holds a package back or does nothing.
+    # The setting is on when any file sets it to true, or to a value holding $(Name) that resolves, as an id does, to true for one
+    # combination of values. A value without $(, @( or %( is compared as written, whatever its length. One that holds them and
+    # can't be resolved counts as on, so the check fails closed: under it an unreferenced pin either holds a package back or does
+    # nothing. Resolving splits on ';' and drops '/...', so $(P) with P set to "true;x" counts as on, which is on the safe side.
     transitive = False
     unread_settings = {}
     for path, document in documents:
@@ -470,7 +474,10 @@ def check(root):
             if node.tag != "centralpackagetransitivepinningenabled":
                 continue
             value = node.text.strip()
-            resolved = resolve(value, values, budget, cache) if value else set()
+            if not any(marker in value for marker in UNREADABLE):
+                transitive = transitive or value.lower() == "true"
+                continue
+            resolved = resolve(value, values, budget, cache)
             if resolved is None:
                 unread_settings.setdefault((path.relative_to(root).as_posix(), value))
             elif "true" in resolved:

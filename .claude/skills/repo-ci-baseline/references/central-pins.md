@@ -16,7 +16,8 @@ differently from one restore to the next. Deleting the pin lets NuGet resolve th
 
 ## What the check refuses
 
-With transitive pinning on (any MSBuild file in the repo sets the property to `true`, in any case), the check refuses a `PackageVersion` whose id
+With transitive pinning on (any MSBuild file in the repo sets the property to `true`, in any case, or to a `$(Name)` that resolves to `true`,
+or to a value the check can't read: see below), the check refuses a `PackageVersion` whose id
 nothing references. A reference is an id in a `PackageReference` (`Include` or `Update`), `GlobalPackageReference` or `PackageDownload`, or an MSBuild SDK (a `Project`'s
 `Sdk`, an `Sdk` element, an `Import`'s `Sdk`, or any `global.json`'s `msbuild-sdks`, which may hold comments and trailing commas as the .NET host allows),
 in any MSBuild file: one whose extension ends in `proj` (`.csproj`, `.sqlproj`, `.wixproj` and the rest), or a `.props` or `.targets` file. Ids are
@@ -29,8 +30,10 @@ MSBuild: such a pin is left alone, and such a reference could name any package, 
 naming the reference.
 
 The setting is read the same way: `CentralPackageTransitivePinningEnabled` set to `$(PinTransitive)` is on when any value the repo gives
-`PinTransitive` is `true`. A setting that can't be read that way (no file gives the property a value, or it holds `@(`, `%(` or a property
-function) counts as on, with a notice naming the file and the value, unless another file sets it to `true` anyway. The check fails closed there:
+`PinTransitive` is `true`. A value without `$(`, `@(` or `%(` is compared as written, whatever its length. One that holds them and can't be
+read by the same rules and limits as a reference (no file gives the property a value, a value holding another `$(Name)`, `@(`, `%(`, a
+property function, or one of the limits above) counts as on, with a notice naming the file and the value, unless another file sets it to
+`true` anyway. The check fails closed there:
 under such a setting an unreferenced pin either holds a package back or does nothing, so deleting it, or keeping it with a reason, is safe
 either way.
 

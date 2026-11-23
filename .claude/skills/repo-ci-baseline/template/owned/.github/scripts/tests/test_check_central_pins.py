@@ -192,6 +192,59 @@ def test_an_unreadable_setting_cant_start_a_workflow_command(tmp_path, capsys, m
     assert out.count("\n::") == 0 and out.startswith("::notice file=Directory.Packages.props::")
 
 
+@pytest.mark.parametrize("extra", [-1, 0, 1, 100])
+def test_a_literal_setting_of_any_length_is_compared_as_written(tmp_path, capsys, extra):
+    # Only a value holding $(, @( or %( goes through resolve(), so MAX_ID, which would make it unreadable, doesn't apply.
+    central(tmp_path, '<PackageVersion Include="Polly" Version="8.0.0" />', properties=setting("x" * (ccp.MAX_ID + extra)))
+
+    assert ccp.check(tmp_path)[0] is False
+    assert ccp.check(tmp_path)[4] == []
+    assert run(tmp_path, capsys)[1].startswith("Transitive pinning is off")
+
+
+@pytest.mark.parametrize("properties", [setting(""), setting("  "), setting("$(P)", ("P", "")), setting("$(P)", ("P", " ; "))])
+def test_a_setting_empty_or_resolving_to_nothing_is_off_with_no_notice(tmp_path, capsys, properties):
+    central(tmp_path, '<PackageVersion Include="Polly" Version="8.0.0" />', properties=properties)
+
+    assert ccp.check(tmp_path)[:1] + ccp.check(tmp_path)[4:] == (False, [])
+    assert run(tmp_path, capsys) == (0, "Transitive pinning is off in every MSBuild file read (or there is no central package management): "
+                                     "no pin found can hold a package back.\n", "")
+
+
+def test_a_setting_mixing_properties_is_resolved_whole(tmp_path):
+    central(tmp_path, '<PackageVersion Include="Polly" Version="8.0.0" />', properties=setting("$(A)$(B)", ("A", "tr"), ("B", "UE")))
+
+    assert ccp.check(tmp_path)[:2] == (True, [(tmp_path.resolve() / "Directory.Packages.props", "Polly")])
+    assert ccp.check(tmp_path)[4] == []
+
+
+def test_a_setting_that_refers_to_itself_counts_as_on(tmp_path):
+    value = "$(CentralPackageTransitivePinningEnabled)"
+    central(tmp_path, '<PackageVersion Include="Polly" Version="8.0.0" />', properties=setting(value))
+
+    assert ccp.check(tmp_path)[0] is True
+    assert ccp.check(tmp_path)[4] == [("Directory.Packages.props", value)]
+
+
+@pytest.mark.parametrize("count, readable", [(ccp.MAX_EXPANSIONS, True), (ccp.MAX_EXPANSIONS + 1, False)])
+def test_a_setting_past_max_expansions_counts_as_on(tmp_path, count, readable):
+    groups = "".join(f"<PropertyGroup><P>v{index}</P></PropertyGroup>" for index in range(count))
+    central(tmp_path, '<PackageVersion Include="Polly" Version="8.0.0" />', properties=setting("$(P)") + groups)
+
+    assert ccp.check(tmp_path)[0] is not readable
+    assert (ccp.check(tmp_path)[4] == []) is readable
+
+
+def test_a_setting_that_spends_past_the_runs_budget_is_not_a_pass(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(ccp, "MAX_TOTAL_EXPANSIONS", 2)
+    groups = "".join(f"<PropertyGroup><P>v{index}</P></PropertyGroup>" for index in range(3))
+    central(tmp_path, "", properties=setting("$(P)") + groups)
+
+    status, out, _ = run(tmp_path, capsys)
+    assert status == 1
+    assert out.startswith("❌ Not checked: ") and "combinations of property values" in out
+
+
 def test_a_pin_listed_twice_is_reported_once(tmp_path):
     central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" Condition="x" />\n<PackageVersion Include="a" Version="2.0.0" Condition="y" />')
 
