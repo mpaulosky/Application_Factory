@@ -4,6 +4,8 @@ status: accepted
 # Markdown, YAML, shell and Python are linted as they are written
 
 The file keeps its first name, so links to it still work; the Updates at the end added shell files, then Python files.
+[ADR 0017](0017-the-factorys-and-the-templates-scripts-are-csharp-file-based-apps.md) moves the scripts to C#: the Update: Python holds while any Python is left, and the increment that
+retires Python marks it superseded.
 
 A lint failure in a Markdown or YAML file used to surface late: at the commit (the `pre-commit` hook lints staged Markdown only), at the push (the Factory's gate runs `markdownlint-cli2` and
 `yamllint` over the whole repo), in CI (`lint-markdown`, `lint-yaml`, `lint-actions`), or in a review, where it costs a re-review cycle. This ADR builds on ADR 0006 and ADR 0010.
