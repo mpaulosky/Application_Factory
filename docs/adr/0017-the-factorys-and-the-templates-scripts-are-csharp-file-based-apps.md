@@ -38,8 +38,10 @@ So the scripts move, on these rules:
 
 - **The SDK is 11.0.100 everywhere** (mpaulosky/Application_Factory#100).
   - The Template's Owned `global.json` pins `11.0.100` with `rollForward: latestPatch`, and it joins `OWNED`. The Seed Dockerfile installs the SDK `global.json` names.
-  - The Factory owns the bump: its Dependabot gains a `dotnet-sdk` entry that watches the Template's `global.json`. The Seed `dependabot.yml`'s `dotnet-sdk` entry leaves the
-    Template, and since a Seed file is written once, each existing Application removes its own when its Rollout note says so.
+  - The Factory owns the bump: its Dependabot gains a `dotnet-sdk` entry that lists both the Factory's root and the Template's `template/owned/`, as its `github-actions`
+    entry does, so one PR bumps the Template's `global.json` and the Factory's copy together and the gate's drift check holds.
+  - The Seed `dependabot.yml`'s `dotnet-sdk` entry leaves the Template, and since a Seed file is written once, each existing Application removes its own when its Rollout note
+    says so.
   - Target frameworks stay `net10.0`; only the SDK moves.
   - The Factory gets its own `global.json`, a copy of the Template's that `scripts/gate.sh` lists with its other copies and `--sync` keeps equal, in the first increment that adds
     C# to it.
@@ -126,26 +128,28 @@ Each of these is decided in its increment, and recorded as an Update below:
 
 ## Consequences
 
-This ADR supersedes no ADR. It updates three, each of which now points here, and leaves the rest as they are:
+This ADR supersedes no ADR. It updates ADRs 0011, 0012 and 0013, each of which now points here. ADRs 0006 and 0016 and the skill's ADR 0011 decide nothing different, but
+the increments change what their text describes, and the increment that does adds the Update there. The rest are unchanged:
 
 - [ADR 0005](0005-the-factory-owns-the-template.md) is unchanged: the C# scripts and the shields are Owned files like any other, and reach the Fleet by a Rollout.
 - [ADR 0006](0006-the-factory-carries-the-git-hooks-and-a-gate.md) is unchanged in what it decides. The gate it gave the Factory gains the `global.json` copy in its list of copies,
-  the cache key above, and a build of the scripts before it runs them.
+  the cache key above, and a build of the scripts before it runs them; the first increment that adds C# to the gate adds the Update.
 - [ADR 0011](0011-markdown-and-yaml-are-linted-as-they-are-written.md)'s Update: Python stays in force while any Python is left. The increment that retires Python marks it
   superseded, naming what replaces ruff.
 - [ADR 0012](0012-the-template-tests-workflow-runs-the-gate-in-parallel-parts.md) and [ADR 0013](0013-ci-runs-test-sh-in-shards-and-the-review-tests-as-their-own-part.md): the
   parts and shards stay as they are. `.github/actions/template-tools/` gains `setup-dotnet`, reading the SDK from `global.json`, for the parts that build C#. Each part builds
   its scripts once before it runs them.
-- [ADR 0016](0016-a-rollout-runs-each-applications-review-headless-and-sandboxed-in-its-worktree.md): its preflight's check for ruff 0.17 or uv goes with ruff. It already checks
-  for the SDK `global.json` names.
+- [ADR 0016](0016-a-rollout-runs-each-applications-review-headless-and-sandboxed-in-its-worktree.md): its preflight's check for ruff 0.17 or uv goes with ruff, and the increment
+  that retires ruff adds the Update. It already checks for the SDK `global.json` names.
 - The skill's [ADR 0003](../../.claude/skills/repo-ci-baseline/docs/adr/0003-github-settings-as-code.md) is unchanged: the settings stay data in the skill, read by `Settings.cs`
   once `settings.py` goes.
 - The skill's [ADR 0011](../../.claude/skills/repo-ci-baseline/docs/adr/0011-the-gh-repo-check-parses-shell-with-shfmt.md) is unchanged in what it decides. The C# `check_gh_repo`
   still reads each script's syntax tree from `shfmt -ln bash --to-json`, run in an empty folder. Its text names `check_gh_repo.py`, `python3 -I` and Python's recursion limit, so
   the increment that ports the checker adds an Update there for those.
-- An Application's CI loses `setup-python`, pytest, `requirements-tests.txt` and ruff when the last Python goes. A job that runs a script but builds no .NET today (the change
-  detection, the gh and Owned-files checks, Claude Review, the release jobs) gains a `setup-dotnet` step and a first build of its script, about 12 s on a fresh runner. The Seed
-  image already carries the SDK.
-- A script that makes many `gh` calls in one process pays the JIT cost once for each new code path, not again for each repeat (mpaulosky/Application_Factory#97). `land.py` polls in a
-  loop inside one process, so it pays the cost on its first poll only. A wrapper that starts a script many times pays it each time, and no wrapper today starts one often enough
+- An Application's CI loses `setup-python`, pytest, `requirements-tests.txt` and ruff when the last Python goes. Every job that runs a script but builds no .NET
+  today gains a `setup-dotnet` step and a first build of its script, about 12 s on a fresh runner: among them the change detection, the test discovery, the gh and Owned-files
+  checks, Claude Review, the release jobs and the blog-post backfill. The Seed image already carries the SDK.
+- The trial's reading of the extra start-up cost is first-use JIT along each new code path, an inference its note marks as such (mpaulosky/Application_Factory#97). On that reading,
+  a script that makes many `gh` calls in one process pays it once for each new code path, not again for each repeat, and `land.py`, which polls in a loop inside one process,
+  pays it mostly on its first poll. No loop of polls was measured. A wrapper that starts a script many times pays it each time, and no wrapper today starts one often enough
   for that to matter.
