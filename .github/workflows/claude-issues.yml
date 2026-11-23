@@ -265,7 +265,12 @@ jobs:
                the headings of .github/pull_request_template.md and ends with
                `Fixes #${{ steps.pick.outputs.issue }}`.
             7. Comment on the issue with the pull request's link and anything the owner should check.
+          # bypassPermissions (the owner's decision): Claude Code treats `.claude/` as a protected path whose writes
+          # always ask, and a headless run refuses every ask, so without it no edit to the Template (under
+          # `.claude/skills/`) can be made. Bash is unrestricted anyway on this throwaway runner; the disallowed
+          # tools below still hold.
           claude_args: >-
+            --permission-mode bypassPermissions
             --model claude-opus-5-5
             --max-turns 200
             --add-dir ${{ runner.temp }}/claude-task

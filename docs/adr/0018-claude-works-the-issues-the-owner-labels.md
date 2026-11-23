@@ -36,5 +36,8 @@ Template file; it doesn't reach the Fleet.
 - The repository is public, and an issue's author can edit it after it is queued, so only issues the owner opened are worked. Claude reads the issue from a file the run writes with its
   title, body and the owner's comments only, and its pull request is a draft for the owner to read. Its shell isn't sandboxed: an instruction planted somewhere it reads anyway could still
   reach it.
+- Claude runs with `--permission-mode bypassPermissions`. Claude Code asks before any write under `.claude/`, and a headless run refuses every ask, so without it Claude can't edit the
+  Template (`.claude/skills/repo-ci-baseline/`), where most of the Factory's issues land. The first run, on issue 107, ended that way. Deny rules (`--disallowedTools`) still hold.
+- Each run after the first is started by the one before it with the job's token, so its actor is `github-actions[bot]`, which the action refuses unless `allowed_bots` names it.
 - Each pull request still gets the Factory's review: Copilot's where the ruleset asks for it and its budget lasts, Claude Review where it doesn't (ADR 0008, ADR 0014).
 - A run's Claude usage counts against the owner's subscription, or the API key's account.
