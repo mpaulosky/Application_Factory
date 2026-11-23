@@ -1,0 +1,73 @@
+{
+ "data": {
+  "node": {
+   "reviewThreads": {
+    "nodes": [
+     {
+      "isResolved": false,
+      "path": "src/a.py",
+      "line": 12,
+      "originalLine": 12,
+      "comments": {
+       "totalCount": 1,
+       "nodes": [
+        {
+         "url": "https://github.com/o/r/pull/7#discussion_r1",
+         "author": {
+          "login": "copilot-pull-request-reviewer",
+          "__typename": "Bot"
+         },
+         "pullRequestReview": {
+          "body": ""
+         }
+        }
+       ]
+      }
+     },
+     {
+      "isResolved": false,
+      "path": "src/a.py",
+      "line": 12,
+      "originalLine": 12,
+      "comments": {
+       "totalCount": 1,
+       "nodes": [
+        {
+         "url": "https://github.com/o/r/pull/7#discussion_r1",
+         "author": {
+          "login": "someone",
+          "__typename": "User"
+         },
+         "pullRequestReview": {
+          "body": ""
+         }
+        }
+       ]
+      }
+     },
+     {
+      "isResolved": true,
+      "path": "src/a.py",
+      "line": 12,
+      "originalLine": 12,
+      "comments": {
+       "totalCount": 1,
+       "nodes": [
+        {
+         "url": "https://github.com/o/r/pull/7#discussion_r1",
+         "author": {
+          "login": "copilot-pull-request-reviewer",
+          "__typename": "Bot"
+         },
+         "pullRequestReview": {
+          "body": ""
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ }
+}

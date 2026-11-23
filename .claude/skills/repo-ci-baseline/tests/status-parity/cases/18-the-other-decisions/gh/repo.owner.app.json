@@ -1,0 +1,447 @@
+{
+ "data": {
+  "repository": {
+   "pullRequests": {
+    "nodes": [
+     {
+      "id": "PR_1",
+      "number": 1,
+      "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefOid": "1234567000000000000000000000000000000000",
+      "mergeStateStatus": "CLEAN",
+      "autoMergeRequest": null,
+      "reviews": {
+       "nodes": [
+        {
+         "author": {
+          "login": "copilot-pull-request-reviewer"
+         },
+         "commit": {
+          "oid": "1234567000000000000000000000000000000000"
+         },
+         "body": ""
+        }
+       ]
+      },
+      "reviewThreads": {
+       "nodes": []
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "statusCheckRollup": {
+           "contexts": {
+            "nodes": [
+             {
+              "__typename": "CheckRun",
+              "databaseId": 21,
+              "name": "Build",
+              "status": "COMPLETED",
+              "conclusion": "CANCELLED",
+              "startedAt": "2026-10-07T10:00:00Z"
+             }
+            ]
+           }
+          }
+         }
+        }
+       ]
+      }
+     },
+     {
+      "id": "PR_2",
+      "number": 2,
+      "title": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefOid": "1234567000000000000000000000000000000000",
+      "mergeStateStatus": "BEHIND",
+      "autoMergeRequest": null,
+      "reviews": {
+       "nodes": [
+        {
+         "author": {
+          "login": "copilot-pull-request-reviewer"
+         },
+         "commit": {
+          "oid": "1234567000000000000000000000000000000000"
+         },
+         "body": ""
+        }
+       ]
+      },
+      "reviewThreads": {
+       "nodes": []
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "statusCheckRollup": {
+           "contexts": {
+            "nodes": [
+             {
+              "__typename": "CheckRun",
+              "name": "Test Suite",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-07T10:00:00Z"
+             }
+            ]
+           }
+          }
+         }
+        }
+       ]
+      }
+     },
+     {
+      "id": "PR_3",
+      "number": 3,
+      "title": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz😀tail",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefOid": "1234567000000000000000000000000000000000",
+      "mergeStateStatus": "DIRTY",
+      "autoMergeRequest": null,
+      "reviews": {
+       "nodes": [
+        {
+         "author": {
+          "login": "copilot-pull-request-reviewer"
+         },
+         "commit": {
+          "oid": "1234567000000000000000000000000000000000"
+         },
+         "body": ""
+        }
+       ]
+      },
+      "reviewThreads": {
+       "nodes": []
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "statusCheckRollup": {
+           "contexts": {
+            "nodes": [
+             {
+              "__typename": "CheckRun",
+              "name": "Test Suite",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-07T10:00:00Z"
+             }
+            ]
+           }
+          }
+         }
+        }
+       ]
+      }
+     },
+     {
+      "id": "PR_4",
+      "number": 4,
+      "title": "feat: Something",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefOid": "1234567000000000000000000000000000000000",
+      "mergeStateStatus": "CLEAN",
+      "autoMergeRequest": null,
+      "reviews": {
+       "nodes": [
+        {
+         "author": {
+          "login": "copilot-pull-request-reviewer"
+         },
+         "commit": {
+          "oid": "1234567000000000000000000000000000000000"
+         },
+         "body": ""
+        }
+       ]
+      },
+      "reviewThreads": {
+       "nodes": []
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "statusCheckRollup": {
+           "contexts": {
+            "nodes": [
+             {
+              "__typename": "StatusContext",
+              "context": "codecov",
+              "state": "PENDING",
+              "createdAt": "2026-10-07T10:01:00Z"
+             }
+            ]
+           }
+          }
+         }
+        }
+       ]
+      }
+     },
+     {
+      "id": "PR_5",
+      "number": 5,
+      "title": "feat: Something",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefOid": "1234567000000000000000000000000000000000",
+      "mergeStateStatus": "CLEAN",
+      "autoMergeRequest": null,
+      "reviews": {
+       "nodes": [
+        {
+         "author": {
+          "login": "copilot-pull-request-reviewer"
+         },
+         "commit": {
+          "oid": "1234567000000000000000000000000000000000"
+         },
+         "body": ""
+        }
+       ]
+      },
+      "reviewThreads": {
+       "nodes": [
+        {
+         "isResolved": false
+        },
+        {
+         "isResolved": false
+        }
+       ]
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "statusCheckRollup": {
+           "contexts": {
+            "nodes": [
+             {
+              "__typename": "CheckRun",
+              "name": "Test Suite",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-07T10:00:00Z"
+             }
+            ]
+           }
+          }
+         }
+        }
+       ]
+      }
+     },
+     {
+      "id": "PR_6",
+      "number": 6,
+      "title": "feat: Something",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefOid": "1234567000000000000000000000000000000000",
+      "mergeStateStatus": "CLEAN",
+      "autoMergeRequest": null,
+      "reviews": {
+       "nodes": []
+      },
+      "reviewThreads": {
+       "nodes": []
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "statusCheckRollup": {
+           "contexts": {
+            "nodes": [
+             {
+              "__typename": "CheckRun",
+              "name": "Test Suite",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-07T10:00:00Z"
+             }
+            ]
+           }
+          }
+         }
+        }
+       ]
+      },
+      "labels": {
+       "nodes": [
+        {
+         "name": "review:claude"
+        }
+       ]
+      }
+     },
+     {
+      "id": "PR_11",
+      "number": 11,
+      "title": "feat: Something",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefOid": "1234567000000000000000000000000000000000",
+      "mergeStateStatus": "CLEAN",
+      "autoMergeRequest": null,
+      "reviews": {
+       "nodes": []
+      },
+      "reviewThreads": {
+       "nodes": []
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "statusCheckRollup": {
+           "contexts": {
+            "nodes": [
+             {
+              "__typename": "CheckRun",
+              "name": "Test Suite",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-07T10:00:00Z"
+             }
+            ]
+           }
+          }
+         }
+        }
+       ]
+      },
+      "reviewRequests": {
+       "nodes": [
+        {
+         "requestedReviewer": {
+          "login": "Copilot"
+         }
+        }
+       ]
+      }
+     },
+     {
+      "id": "PR_12",
+      "number": 12,
+      "title": "feat: Something",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefOid": "1234567000000000000000000000000000000000",
+      "mergeStateStatus": "CLEAN",
+      "autoMergeRequest": null,
+      "reviews": {
+       "nodes": [
+        {
+         "author": {
+          "login": "copilot-pull-request-reviewer"
+         },
+         "commit": {
+          "oid": "0000000000000000000000000000000000000001",
+          "parents": {
+           "totalCount": 1
+          }
+         },
+         "body": "",
+         "submittedAt": "2026-01-02T00:01:00Z",
+         "comments": {
+          "totalCount": 1
+         }
+        },
+        {
+         "author": {
+          "login": "copilot-pull-request-reviewer"
+         },
+         "commit": {
+          "oid": "0000000000000000000000000000000000000002",
+          "parents": {
+           "totalCount": 1
+          }
+         },
+         "body": "",
+         "submittedAt": "2026-01-02T00:02:00Z",
+         "comments": {
+          "totalCount": 1
+         }
+        }
+       ]
+      },
+      "reviewThreads": {
+       "nodes": []
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "statusCheckRollup": {
+           "contexts": {
+            "nodes": [
+             {
+              "__typename": "CheckRun",
+              "name": "Test Suite",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-07T10:00:00Z"
+             }
+            ]
+           }
+          }
+         }
+        }
+       ]
+      }
+     },
+     {
+      "id": "PR_13",
+      "number": 13,
+      "title": "feat: Something",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefOid": "1234567000000000000000000000000000000000",
+      "mergeStateStatus": "CLEAN",
+      "autoMergeRequest": null,
+      "reviews": {
+       "nodes": [
+        {
+         "author": {
+          "login": "copilot-pull-request-reviewer"
+         },
+         "commit": {
+          "oid": "1234567000000000000000000000000000000000"
+         },
+         "body": ""
+        }
+       ]
+      },
+      "reviewThreads": {
+       "nodes": []
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "statusCheckRollup": null
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ }
+}

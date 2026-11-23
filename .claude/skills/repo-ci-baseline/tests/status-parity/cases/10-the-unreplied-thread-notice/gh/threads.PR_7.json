@@ -1,0 +1,102 @@
+{
+ "data": {
+  "node": {
+   "reviewThreads": {
+    "nodes": [
+     {
+      "isResolved": true,
+      "path": "src/a.py",
+      "line": 12,
+      "originalLine": 12,
+      "comments": {
+       "totalCount": 1,
+       "nodes": [
+        {
+         "url": "https://github.com/o/r/pull/7#discussion_r1",
+         "author": {
+          "login": "copilot-pull-request-reviewer",
+          "__typename": "Bot"
+         },
+         "pullRequestReview": {
+          "body": ""
+         }
+        }
+       ]
+      }
+     },
+     {
+      "isResolved": true,
+      "path": "src/new\nline\u001b.py",
+      "line": 3,
+      "originalLine": 3,
+      "comments": {
+       "totalCount": 1,
+       "nodes": [
+        {
+         "url": "https://github.com/o/r/pull/7#discussion_r1",
+         "author": {
+          "login": "copilot-pull-request-reviewer",
+          "__typename": "Bot"
+         },
+         "pullRequestReview": {
+          "body": ""
+         }
+        }
+       ]
+      }
+     },
+     {
+      "isResolved": true,
+      "path": null,
+      "line": null,
+      "originalLine": null,
+      "comments": {
+       "totalCount": 1,
+       "nodes": [
+        {
+         "url": "https://github.com/o/r/pull/7#discussion_r1",
+         "author": {
+          "login": "copilot-pull-request-reviewer",
+          "__typename": "Bot"
+         },
+         "pullRequestReview": {
+          "body": ""
+         }
+        }
+       ]
+      }
+     },
+     {
+      "isResolved": true,
+      "path": "src/a.py",
+      "line": 12,
+      "originalLine": 12,
+      "comments": {
+       "totalCount": 2,
+       "nodes": [
+        {
+         "url": "https://github.com/o/r/pull/7#discussion_r1",
+         "author": {
+          "login": "copilot-pull-request-reviewer",
+          "__typename": "Bot"
+         },
+         "pullRequestReview": {
+          "body": ""
+         }
+        },
+        {
+         "url": "https://github.com/o/r/pull/7#discussion_r2",
+         "author": {
+          "login": "someone",
+          "__typename": "User"
+         },
+         "pullRequestReview": null
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ }
+}

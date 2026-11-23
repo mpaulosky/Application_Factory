@@ -1,0 +1,25 @@
+{
+ "data": {
+  "node": {
+   "timelineItems": {
+    "pageInfo": {
+     "hasNextPage": true,
+     "endCursor": "E1"
+    },
+    "nodes": [
+     {
+      "__typename": "LabeledEvent",
+      "createdAt": "2026-01-02T00:30:00Z",
+      "label": {
+       "name": "review:claude"
+      },
+      "actor": {
+       "login": "o",
+       "__typename": "User"
+      }
+     }
+    ]
+   }
+  }
+ }
+}

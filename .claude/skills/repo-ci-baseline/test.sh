@@ -6,7 +6,7 @@
 #
 # Runs the Template's own tests (hook suites, auto-merge script tests,
 # the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle and the GitHub scripts' tests
-# (settings, the landing decision, status, land and rollout), the Claude Review
+# (settings, the landing decision, status, land and rollout) with status's parity suite, the Claude Review
 # benchmark's tests, lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
 # Owned files carry no {{PLACEHOLDER}} and that the Owned scripts, and this repo's own
@@ -16,7 +16,7 @@
 # change. A repo's copies of Owned files are checked by status.sh and apply.sh --dry-run, not here.
 #
 # TEST_SH_SHARD runs one of its three shards, which is how the Factory's CI runs it in parallel jobs (ADR 0013): hooks is the hook and Owned script
-# tests, scripts the auto-merge, Owned .github/scripts, hardening-review, renderer, GitHub script and benchmark tests, checks everything from actionlint on. With
+# tests, scripts the auto-merge, Owned .github/scripts, hardening-review, renderer, GitHub script, status parity and benchmark tests, checks everything from actionlint on. With
 # no TEST_SH_SHARD every shard runs, in that order. Every step sits in exactly one shard; scripts/tests/gate.test.sh checks that.
 set -euo pipefail
 # The step headers carry SECONDS: count from here, whatever SECONDS a caller exported (mpaulosky/dotfiles#417).
@@ -533,6 +533,19 @@ if in_shard scripts; then
   step "GitHub scripts tests (settings, landing decision, status, land, rollout)"
   (cd "$skill_dir" && "${pytest_cmd[@]}" -q -p no:cacheprovider github/tests) || fail "github scripts pytest"
 
+  step "status parity suite (status.py through its command line, against a fake gh) and its runner's tests"
+  bash "$skill_dir/tests/status-parity.test.sh" || fail "status-parity.test.sh"
+  bash "$skill_dir/tests/status-parity-runner.test.sh" || fail "status-parity-runner.test.sh"
+  # Run again as a hook would, with GIT_DIR and the rest naming another repo: its throwaway repo must not touch that one.
+  # The decoy sits under md_tmp, which the EXIT trap removes, and its own git calls run without test.sh's caller's GIT_*.
+  decoy="$md_tmp/parity-decoy"
+  decoy_git=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR git)
+  "${decoy_git[@]}" init -q "$decoy"
+  [[ -d "$decoy/.git" ]] || fail "test.sh's decoy repo for the status parity runner test wasn't made at $decoy (a caller's GIT_DIR reached git init?)"
+  GIT_DIR="$decoy/.git" GIT_WORK_TREE="$decoy" GIT_INDEX_FILE="$decoy/.git/index" \
+    bash "$skill_dir/tests/status-parity-runner.test.sh" > /dev/null || fail "status-parity-runner.test.sh with a hook's GIT_DIR set"
+  [[ -z "$("${decoy_git[@]}" -C "$decoy" ls-files)" && ! -e "$decoy/cases" ]] || fail "status-parity-runner.test.sh staged files in the caller's repository"
+
   step "Claude Review benchmark tests (scoring, arguments, config swap, the workflow it reads)"
   # PyYAML lets the test that reads the Template's claude-review.yml run instead of skipping.
   if python3 -c 'import pytest, yaml' &> /dev/null; then
@@ -565,6 +578,7 @@ if in_shard checks; then
     "$skill_dir/tests/seed-dockerfile.test.sh" "$skill_dir/tests/doc-single-source.test.sh" "$skill_dir/tests/no-dotfiles-dependency.test.sh"
     "$skill_dir/tests/owned-gate-files.test.sh"
     "$skill_dir/tests/sandcastle-check.test.sh" "$skill_dir/tests/repos-scope.test.sh"
+    "$skill_dir/tests/status-parity.test.sh" "$skill_dir/tests/status-parity/fake-gh.sh" "$skill_dir/tests/status-parity-runner.test.sh"
     "$skill_dir/tests/check-git-status.sh" "$skill_dir/tests/check-git-status.test.sh" "$skill_dir/tests/mutations/check-spec.test.sh"
     "$owned/scripts/gate.sh" "$owned/scripts/check-branch-name.sh" "$owned/scripts/tests/check-branch-name.test.sh"
     "$owned/scripts/check-pr-title.sh" "$owned/scripts/tests/check-pr-title.test.sh"

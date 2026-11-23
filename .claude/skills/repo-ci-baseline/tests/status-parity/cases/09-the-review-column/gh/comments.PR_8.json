@@ -1,0 +1,14 @@
+{
+ "data": {
+  "node": {
+   "comments": {
+    "totalCount": 0,
+    "pageInfo": {
+     "hasPreviousPage": false,
+     "startCursor": null
+    },
+    "nodes": []
+   }
+  }
+ }
+}

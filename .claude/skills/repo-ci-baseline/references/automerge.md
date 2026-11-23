@@ -330,6 +330,10 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
 Skill files (not copied into repos): `status.sh`, which runs `github/status.py`, `land.sh`, which runs `github/land.py`,
 and the decision both act on, `github/landing.py`.
 Tests: `github/tests/test_landing.py`, `test_status.py` and `test_land.py`, run by `test.sh`; none calls GitHub.
+`tests/status-parity.test.sh` runs `status.py` through its command line only, against a fake `gh` that answers from fixture files
+(`tests/status-parity/`), so the same cases can judge another implementation of it: `tests/status-parity.test.sh <command> [arg]...`.
+`test.sh` runs it against the Python, and `tests/status-parity-runner.test.sh`, the tests of the runner and the fake themselves.
+`STATUS_PARITY_RECORD=1 tests/status-parity.test.sh` records the cases from the Python only; the runner's header says what a case holds.
 
 ```bash
 status.sh                     # one line per open PR in every repo in github/repos.txt
@@ -344,7 +348,8 @@ A line ends with `notice: resolved without a reply: path:line, ...` (3 named, th
 got no reply, by the rule above. `decide()` ignores it (`PrState.unreplied_threads`), and `land.sh` prints the line again when the notice changes.
 A failed or empty `THREADS_QUERY` for one PR keeps that PR's comment-less threads (no notice) and is reported once on stderr; it never
 makes the repo unreadable.
-Tests: `test_landing.py` (the rule and the notice text), `test_status.py` (the line and the query), `test_land.py` and `pr-automerge.test.mjs`.
+Tests: `test_landing.py` (the rule and the notice text), `test_status.py` (the line and the query), `test_land.py`, `pr-automerge.test.mjs`
+and the status parity suite (case `10-the-unreplied-thread-notice`).
 
 `landing.decide(PrState)` returns one action, the rules PRs are landed by:
 nothing for a merged, closed or already-armed PR; **report blocker** for a failed check, a cancelled check nothing newer replaced, or a conflict;

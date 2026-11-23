@@ -1,0 +1,22 @@
+{
+ "data": {
+  "node": {
+   "comments": {
+    "totalCount": 1,
+    "pageInfo": {
+     "hasPreviousPage": false,
+     "startCursor": null
+    },
+    "nodes": [
+     {
+      "author": {
+       "login": "github-actions"
+      },
+      "body": "**PR Auto-Merge: the review loop is exhausted.**\n\nNothing is left open.\n\n<!-- pr-automerge:review-loop-exhausted 1234567000000000000000000000000000000000 -->",
+      "createdAt": "2026-01-02T01:00:00Z"
+     }
+    ]
+   }
+  }
+ }
+}

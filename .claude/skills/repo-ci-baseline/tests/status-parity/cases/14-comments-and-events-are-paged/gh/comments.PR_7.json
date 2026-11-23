@@ -1,0 +1,22 @@
+{
+ "data": {
+  "node": {
+   "comments": {
+    "totalCount": 150,
+    "pageInfo": {
+     "hasPreviousPage": true,
+     "startCursor": "C1"
+    },
+    "nodes": [
+     {
+      "author": {
+       "login": "github-actions"
+      },
+      "body": "Asked Copilot.\n\n<!-- pr-automerge:copilot-asked -->",
+      "createdAt": "2026-01-01T00:00:00Z"
+     }
+    ]
+   }
+  }
+ }
+}

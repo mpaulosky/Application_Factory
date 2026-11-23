@@ -1,0 +1,91 @@
+{
+ "data": {
+  "node": {
+   "timelineItems": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": [
+     {
+      "__typename": "LabeledEvent",
+      "createdAt": "2026-01-02T01:30:00Z",
+      "label": {
+       "name": "review:claude"
+      },
+      "actor": {
+       "login": "ghost",
+       "__typename": "User"
+      }
+     },
+     {
+      "__typename": "LabeledEvent",
+      "createdAt": "2026-01-02T02:00:00Z",
+      "label": {
+       "name": "review:claude"
+      },
+      "actor": {
+       "login": "writer",
+       "__typename": "User"
+      }
+     },
+     {
+      "__typename": "LabeledEvent",
+      "createdAt": "2026-01-02T02:10:00Z",
+      "label": {
+       "name": "review:claude"
+      },
+      "actor": {
+       "login": "writer",
+       "__typename": "User"
+      }
+     },
+     {
+      "__typename": "LabeledEvent",
+      "createdAt": "2026-01-02T02:20:00Z",
+      "label": {
+       "name": "review:claude"
+      },
+      "actor": {
+       "login": "o",
+       "__typename": "User"
+      }
+     },
+     {
+      "__typename": "UnlabeledEvent",
+      "createdAt": "2026-01-02T02:30:00Z",
+      "label": {
+       "name": "review:claude"
+      },
+      "actor": {
+       "login": "someone",
+       "__typename": "User"
+      }
+     },
+     {
+      "__typename": "LabeledEvent",
+      "createdAt": "2026-01-02T02:40:00Z",
+      "label": {
+       "name": "review:claude"
+      },
+      "actor": {
+       "login": "dependabot",
+       "__typename": "Bot"
+      }
+     },
+     {
+      "__typename": "LabeledEvent",
+      "createdAt": "2026-01-02T02:50:00Z",
+      "label": {
+       "name": "docs-only"
+      },
+      "actor": {
+       "login": "writer",
+       "__typename": "User"
+      }
+     }
+    ]
+   }
+  }
+ }
+}
