@@ -90,14 +90,34 @@ describe("plannerPromptArgs", () => {
   });
 
   // UI_ROLE and REPO_SKILLS (lib/agents.mts#withSharedRules) are passed empty when the repo has no UI role or no skills block. That is only safe
-  // while Sandcastle refuses a prompt argument holding null or undefined and nothing else, which this reads from the pinned package.
+  // while Sandcastle refuses a prompt argument holding null or undefined and nothing else, which this reads from the pinned package. The Seed
+  // package.json asks for ^0.12.0 and each Application moves on with Dependabot, so both shapes are accepted: 0.12's `value == null` on
+  // `sanitizedArgs[key]`, and 0.14's `value === null || value === void 0` on `args[key]`. The installed release exercises one of them, so
+  // "reads both Sandcastle releases' check ..." below holds both, and the shapes that must fail, as text.
+  const NULL_OR_UNDEFINED_ONLY = /const value = (?:sanitizedArgs|args)\[key\];\s*if \((?:value == null|value === null \|\| value === void 0)\) \{/g;
+
   it("passes UI_ROLE empty safely, since the pinned Sandcastle refuses only a null or undefined prompt argument", () => {
     const source = readFileSync(new URL(import.meta.resolve("@ai-hero/sandcastle")), "utf8");
-    const check = /const value = sanitizedArgs\[key\];\s*if \(value == null\) \{/.exec(source);
+    const checks = source.match(NULL_OR_UNDEFINED_ONLY) ?? [];
 
-    assert.ok(check, "Sandcastle's promptArgs check changed: confirm it still accepts an empty string, then update this test");
+    assert.equal(checks.length, 1, "Sandcastle's promptArgs check changed: confirm it still accepts an empty string, then update this test");
     assert.equal(plannerPromptArgs([issue], false).UI_ROLE, "");
     assert.equal(typeof plannerPromptArgs([issue], false).UI_ROLE, "string");
+  });
+
+  it("reads both Sandcastle releases' check as refusing only null or undefined, and no check that also refuses an empty string", () => {
+    const count = (text: string) => (text.match(NULL_OR_UNDEFINED_ONLY) ?? []).length;
+
+    // 0.12.0's and 0.14.0's dist/index.js, as they are written.
+    assert.equal(count("const value = sanitizedArgs[key];\n      if (value == null) {"), 1);
+    assert.equal(count("const value = args[key];\n    if (value === null || value === void 0) {"), 1);
+    // Two lookalikes count as two, so the installed package's single match is the only one.
+    assert.equal(count("const value = args[key]; if (value == null) {\nconst value = args[key]; if (value == null) {"), 2);
+    // A check that also refuses "", in either release's shape, or under another name.
+    assert.equal(count('const value = sanitizedArgs[key];\n      if (value == null || value === "") {'), 0);
+    assert.equal(count('const value = args[key];\n    if (value === null || value === void 0 || value === "") {'), 0);
+    assert.equal(count('const value = args[key];\n    if (!value) {'), 0);
+    assert.equal(count("const v = args[key];\n    if (v == null) {"), 0);
   });
 
   it("words the ui bullet for any repo: no Blazor, and it points at the shared rules for which files are the UI developer's", () => {
