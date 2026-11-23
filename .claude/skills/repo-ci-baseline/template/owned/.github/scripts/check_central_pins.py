@@ -23,7 +23,11 @@ case. An id holding $(Name) is resolved from the values the repo's MSBuild files
 still holds $(, @( or %(, that is over MAX_ID characters, or that would need more than MAX_EXPANSIONS combinations of values or grow
 past MAX_VALUE characters with them substituted (any property value over MAX_VALUE does), can't be read without evaluating
 MSBuild. A pin like that is left alone, and a reference like that could be any package, so the pins found are then reported as
-warnings and the check passes. Transitive pinning is on when any of those files sets the property to true.
+warnings and the check passes. Transitive pinning is on when any of those files sets the property to true, or to a value built
+from $(Name) that resolves, the same way and within the same limits, to true for one combination of values. A value without $(, @(
+or %( is compared as written. Unless transitive pinning is on anyway (another setting, in any file, is true or resolves to true),
+a value that holds them and can't be resolved counts as on, named in a notice, so the check fails closed: under it an unreferenced pin either holds a package back or
+does nothing.
 
 Every file is read as bytes, so expat honours its byte-order mark and XML declaration (MSBuild reads UTF-16 project files too). Only
 regular files are read, not symlinks: an MSBuild file of at most MAX_BYTES, a global.json of at most MAX_GLOBAL_JSON_BYTES. A DOCTYPE is refused: MSBuild files never need one, and entity
@@ -425,7 +429,8 @@ def pins(document, budget):
 
 
 def check(root):
-    """(transitive pinning on, [(central file, id)] unreferenced, [unreadable references], [(where, why, fails the check)] problems).
+    """(transitive pinning on, [(central file, id)] unreferenced, [unreadable references], [(where, why, fails the check)] problems,
+    [(file, value)] settings that can't be read and made transitive pinning count as on).
 
     Raises Exhausted when the repo needs more than the run's budget."""
     budget = Budget()
@@ -457,12 +462,30 @@ def check(root):
     for _, document in documents:
         properties(document, found)
     values = (found, {key: max(map(len, choices)) for key, choices in found.items()})
-    transitive = any(
-        node.tag == "centralpackagetransitivepinningenabled" and node.text.strip().lower() == "true"
-        for _, document in documents
-        for node in document.iter()
-    )
     cache = {}
+    # The setting is on when any file sets it to true, or to a value holding $(Name) that resolves, as an id does, to true for one
+    # combination of values. A value without $(, @( or %( is compared as written, whatever its length. One that holds them and
+    # can't be resolved counts as on, so the check fails closed: under it an unreferenced pin either holds a package back or does
+    # nothing. Resolving splits on ';' and drops '/...', so $(P) with P set to "true;x" counts as on, which is on the safe side.
+    transitive = False
+    unread_settings = {}
+    for path, document in documents:
+        for node in document.iter():
+            if node.tag != "centralpackagetransitivepinningenabled":
+                continue
+            value = node.text.strip()
+            if not any(marker in value for marker in UNREADABLE):
+                transitive = transitive or value.lower() == "true"
+                continue
+            resolved = resolve(value, values, budget, cache)
+            if resolved is None:
+                unread_settings.setdefault((path.relative_to(root).as_posix(), value))
+            elif "true" in resolved:
+                transitive = True
+    if not transitive and unread_settings:
+        transitive = True
+    else:
+        unread_settings = {}
     unreadable = {}
     for _, document in documents:
         for name in references(document, budget):
@@ -492,7 +515,7 @@ def check(root):
         # pinning off no pin is reported, and a skipped file whose bytes name the setting (in ASCII, or UTF-16 or UTF-32 with the
         # NULs dropped) already fails; one in an encoding that spells it otherwise is the gap may_be_central() leaves.
         problems = [(where, why, blocks or not where.lower().endswith("global.json")) for where, why, blocks in problems]
-    return transitive, [(path, name) for (path, _), name in unreferenced.items()], list(unreadable), problems
+    return transitive, [(path, name) for (path, _), name in unreferenced.items()], list(unreadable), problems, list(unread_settings)
 
 
 def main(argv=None):
@@ -504,10 +527,16 @@ def main(argv=None):
         parser.error(f"--root {printable(args.root)} is not a folder")
 
     try:
-        transitive, unreferenced, unreadable, problems = check(root)
+        transitive, unreferenced, unreadable, problems, unread_settings = check(root)
     except Exhausted as error:
         report("error", ".", f"Not checked: {error}.")
         return 1
+    report_all(
+        "notice",
+        unread_settings,
+        lambda where, value: f"{where} sets CentralPackageTransitivePinningEnabled to {value}, which this check can't read without evaluating "
+        "MSBuild, so it counts transitive pinning as on.",
+    )
     skipped = [(where, why) for where, why, blocks in problems if not blocks]
     blocking = [(where, why) for where, why, blocks in problems if blocks]
     report_all("notice", skipped, lambda where, why: f"{where} was skipped: {why}. A reference or property in it wasn't seen.")

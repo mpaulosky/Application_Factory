@@ -108,6 +108,164 @@ def test_transitive_pinning_set_in_directory_build_props_counts(tmp_path):
     assert ccp.check(tmp_path)[:2] == (True, [(tmp_path.resolve() / "Directory.Packages.props", "Polly")])
 
 
+def setting(value, *others):
+    """The PropertyGroups of a Directory.Packages.props that sets the setting to value, and others as its other properties."""
+    rest = "".join(f"<{name}>{text}</{name}>" for name, text in others)
+    return f"<PropertyGroup><CentralPackageTransitivePinningEnabled>{value}</CentralPackageTransitivePinningEnabled>{rest}</PropertyGroup>"
+
+
+@pytest.mark.parametrize("value", ["true", "True "])
+def test_a_setting_built_from_a_property_set_to_true_is_on(tmp_path, capsys, value):
+    # The finding on mpaulosky/Application_Factory#110: $(PinTransitive) read as off, so every unreferenced pin passed.
+    central(tmp_path, '<PackageVersion Include="Polly" Version="8.0.0" />', properties=setting("$(PinTransitive)"))
+    (tmp_path / "Directory.Build.props").write_text(f"<Project><PropertyGroup><PinTransitive>{value}</PinTransitive></PropertyGroup></Project>\n")
+
+    assert ccp.check(tmp_path)[0] is True
+    assert ccp.check(tmp_path)[4] == []
+    status, out, _ = run(tmp_path, capsys)
+    assert status == 1
+    assert out == "❌ Polly is pinned in Directory.Packages.props but no project references it\n"
+
+
+def test_a_setting_built_from_a_property_set_to_anything_else_is_off(tmp_path, capsys):
+    central(tmp_path, '<PackageVersion Include="Polly" Version="8.0.0" />', properties=setting("$(PinTransitive)", ("PinTransitive", "false")))
+
+    assert ccp.check(tmp_path)[0] is False
+    status, out, _ = run(tmp_path, capsys)
+    assert status == 0
+    assert out.startswith("Transitive pinning is off")
+
+
+def test_a_setting_built_from_a_property_with_true_among_its_values_is_on(tmp_path):
+    central(tmp_path, '<PackageVersion Include="Polly" Version="8.0.0" />', properties=setting("$(P)", ("P", "false")))
+    (tmp_path / "Directory.Build.props").write_text("<Project><PropertyGroup><P>true</P></PropertyGroup></Project>\n")
+
+    assert ccp.check(tmp_path)[:2] == (True, [(tmp_path.resolve() / "Directory.Packages.props", "Polly")])
+
+
+@pytest.mark.parametrize("value", ["$(NotSetAnywhere)", "@(Items)", "%(Meta)", "$(P)", "$([MSBuild]::ValueOrDefault('', 'true'))"])
+def test_a_setting_that_cant_be_read_counts_as_on_and_is_named(tmp_path, capsys, value):
+    # Under it an unreferenced pin is held back or does nothing, so deleting it is safe either way: the check fails closed.
+    others = [("P", "$(Q)")] if value == "$(P)" else []
+    central(tmp_path, '<PackageVersion Include="Polly" Version="8.0.0" />', properties=setting(value, *others))
+
+    assert ccp.check(tmp_path)[0] is True
+    assert ccp.check(tmp_path)[4] == [("Directory.Packages.props", value)]
+    status, out, _ = run(tmp_path, capsys)
+    assert status == 1
+    assert out == (
+        f"ℹ️  Directory.Packages.props sets CentralPackageTransitivePinningEnabled to {value}, which this check can't read without "
+        "evaluating MSBuild, so it counts transitive pinning as on.\n"
+        "❌ Polly is pinned in Directory.Packages.props but no project references it\n"
+    )
+
+
+def test_a_setting_that_cant_be_read_with_every_pin_referenced_passes(tmp_path, capsys):
+    central(tmp_path, '<PackageVersion Include="Polly" Version="8.0.0" />', properties=setting("$(NotSetAnywhere)"))
+    project(tmp_path, "src/A/A.csproj", '<PackageReference Include="Polly" />')
+
+    status, out, _ = run(tmp_path, capsys)
+    assert status == 0
+    assert out.endswith("Every central pin is referenced by a project, or kept with a reason.\n")
+    assert "can't read without evaluating MSBuild" in out
+
+
+def test_a_setting_that_cant_be_read_is_named_once_however_often_it_is_set(tmp_path, capsys):
+    central(tmp_path, "", properties=setting("$(X)") + setting("$(X)"))
+
+    assert ccp.check(tmp_path)[4] == [("Directory.Packages.props", "$(X)")]
+
+
+@pytest.mark.parametrize("split", [True, False])
+def test_a_later_false_doesnt_turn_off_an_earlier_true(tmp_path, split):
+    # Directory.Build.props is read before Directory.Packages.props, so its true comes first; in one file, the first group's does.
+    if split:
+        (tmp_path / "Directory.Build.props").write_text(f"<Project>{TRANSITIVE}</Project>\n")
+        properties = setting("false")
+    else:
+        properties = TRANSITIVE + setting("false")
+    central(tmp_path, '<PackageVersion Include="Polly" Version="8.0.0" />', properties=properties)
+
+    assert ccp.check(tmp_path)[:2] == (True, [(tmp_path.resolve() / "Directory.Packages.props", "Polly")])
+    assert ccp.check(tmp_path)[4] == []
+
+
+def test_a_setting_resolving_to_true_in_the_same_file_settles_an_unreadable_one(tmp_path):
+    central(tmp_path, '<PackageVersion Include="Polly" Version="8.0.0" />', properties=setting("$(NotSetAnywhere)") + setting("$(P)", ("P", "true")))
+
+    assert ccp.check(tmp_path)[0] is True
+    assert ccp.check(tmp_path)[4] == []
+
+
+def test_a_literal_true_elsewhere_settles_it_and_names_no_setting(tmp_path):
+    central(tmp_path, '<PackageVersion Include="Polly" Version="8.0.0" />', properties=setting("$(NotSetAnywhere)"))
+    (tmp_path / "Directory.Build.props").write_text(f"<Project>{TRANSITIVE}</Project>\n")
+
+    assert ccp.check(tmp_path)[0] is True
+    assert ccp.check(tmp_path)[4] == []
+
+
+def test_an_unreadable_setting_cant_start_a_workflow_command(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    central(tmp_path, "", properties=setting("$(A)\n::error::x"))
+
+    out = run(tmp_path, capsys)[1]
+    assert out.count("\n::") == 0 and out.startswith("::notice file=Directory.Packages.props::")
+
+
+@pytest.mark.parametrize("extra", [-1, 0, 1, 100])
+def test_a_literal_setting_of_any_length_is_compared_as_written(tmp_path, capsys, extra):
+    # Only a value holding $(, @( or %( goes through resolve(), so MAX_ID, which would make it unreadable, doesn't apply.
+    central(tmp_path, '<PackageVersion Include="Polly" Version="8.0.0" />', properties=setting("x" * (ccp.MAX_ID + extra)))
+
+    assert ccp.check(tmp_path)[0] is False
+    assert ccp.check(tmp_path)[4] == []
+    assert run(tmp_path, capsys)[1].startswith("Transitive pinning is off")
+
+
+@pytest.mark.parametrize("properties", [setting(""), setting("  "), setting("$(P)", ("P", "")), setting("$(P)", ("P", " ; "))])
+def test_a_setting_empty_or_resolving_to_nothing_is_off_with_no_notice(tmp_path, capsys, properties):
+    central(tmp_path, '<PackageVersion Include="Polly" Version="8.0.0" />', properties=properties)
+
+    assert ccp.check(tmp_path)[:1] + ccp.check(tmp_path)[4:] == (False, [])
+    assert run(tmp_path, capsys) == (0, "Transitive pinning is off in every MSBuild file read (or there is no central package management): "
+                                     "no pin found can hold a package back.\n", "")
+
+
+def test_a_setting_mixing_properties_is_resolved_whole(tmp_path):
+    central(tmp_path, '<PackageVersion Include="Polly" Version="8.0.0" />', properties=setting("$(A)$(B)", ("A", "tr"), ("B", "UE")))
+
+    assert ccp.check(tmp_path)[:2] == (True, [(tmp_path.resolve() / "Directory.Packages.props", "Polly")])
+    assert ccp.check(tmp_path)[4] == []
+
+
+def test_a_setting_that_refers_to_itself_counts_as_on(tmp_path):
+    value = "$(CentralPackageTransitivePinningEnabled)"
+    central(tmp_path, '<PackageVersion Include="Polly" Version="8.0.0" />', properties=setting(value))
+
+    assert ccp.check(tmp_path)[0] is True
+    assert ccp.check(tmp_path)[4] == [("Directory.Packages.props", value)]
+
+
+@pytest.mark.parametrize("count, readable", [(ccp.MAX_EXPANSIONS, True), (ccp.MAX_EXPANSIONS + 1, False)])
+def test_a_setting_past_max_expansions_counts_as_on(tmp_path, count, readable):
+    groups = "".join(f"<PropertyGroup><P>v{index}</P></PropertyGroup>" for index in range(count))
+    central(tmp_path, '<PackageVersion Include="Polly" Version="8.0.0" />', properties=setting("$(P)") + groups)
+
+    assert ccp.check(tmp_path)[0] is not readable
+    assert (ccp.check(tmp_path)[4] == []) is readable
+
+
+def test_a_setting_that_spends_past_the_runs_budget_is_not_a_pass(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(ccp, "MAX_TOTAL_EXPANSIONS", 2)
+    groups = "".join(f"<PropertyGroup><P>v{index}</P></PropertyGroup>" for index in range(3))
+    central(tmp_path, "", properties=setting("$(P)") + groups)
+
+    status, out, _ = run(tmp_path, capsys)
+    assert status == 1
+    assert out.startswith("❌ Not checked: ") and "combinations of property values" in out
+
+
 def test_a_pin_listed_twice_is_reported_once(tmp_path):
     central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" Condition="x" />\n<PackageVersion Include="a" Version="2.0.0" Condition="y" />')
 
@@ -346,7 +504,7 @@ def test_a_property_value_over_max_value_characters_cant_be_read(tmp_path, extra
     central(tmp_path, '<PackageVersion Include="A" Version="1.0.0" />', properties=TRANSITIVE + f"<PropertyGroup><P>{value}</P></PropertyGroup>")
     project(tmp_path, "src/App/App.csproj", '<PackageReference Include="$(P)" />')
 
-    _, found, unreadable, _ = ccp.check(tmp_path)
+    _, found, unreadable, _, _ = ccp.check(tmp_path)
 
     assert (unreadable == [] and found == []) is readable
 
