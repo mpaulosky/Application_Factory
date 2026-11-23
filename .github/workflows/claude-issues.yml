@@ -265,6 +265,10 @@ jobs:
                the headings of .github/pull_request_template.md and ends with
                `Fixes #${{ steps.pick.outputs.issue }}`.
             7. Comment on the issue with the pull request's link and anything the owner should check.
+
+            Whenever you stop without a pull request, for any reason (a step failed, a push or `gh` call was
+            refused, the issue needs the owner), first comment on the issue saying what you did, what stopped
+            you, and the exact error if there was one.
           # bypassPermissions (the owner's decision): Claude Code treats `.claude/` as a protected path whose writes
           # always ask, and a headless run refuses every ask, so without it no edit to the Template (under
           # `.claude/skills/`) can be made. Bash is unrestricted anyway on this throwaway runner; the disallowed
@@ -284,8 +288,18 @@ jobs:
           GH_REPO: ${{ github.repository }}
           ISSUE: ${{ steps.pick.outputs.issue }}
           OUTCOME: ${{ steps.claude.outcome }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
         run: |
           set -uo pipefail
+          # Claude's last message and its turn count, in this log only (where GitHub masks the secrets), so a run
+          # that ends without a pull request or a comment can still be read. The transcript isn't shown.
+          if [ -n "${EXECUTION_FILE:-}" ] && [ -f "$EXECUTION_FILE" ]; then
+            echo "::group::Claude's last message"
+            jq -r '[.[] | select(.type == "result")] | last | "turns: \(.num_turns), subtype: \(.subtype)\n\(.result // "")"' \
+              "$EXECUTION_FILE" | head -c 4000 || true
+            echo
+            echo "::endgroup::"
+          fi
           gh api --silent -X DELETE "repos/$GH_REPO/issues/$ISSUE/labels/claude:working" || true
           gh api --silent -X DELETE "repos/$GH_REPO/issues/$ISSUE/labels/claude" || true
           pr="$(gh api --paginate "repos/$GH_REPO/pulls?state=open&per_page=100" \
