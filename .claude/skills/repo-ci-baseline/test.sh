@@ -61,8 +61,9 @@ sdk_band() {
 }
 # Whether a dependabot.yml (argument 1) has a dotnet-sdk entry whose directory, or one of whose directories, is argument 2.
 # Each entry under updates: (from one "  - " line to the next "  - " line or top-level key) is judged as a whole, whatever its keys'
-# order: its keys at four spaces, a directories item at six. Values are compared as strings (trailing blanks and a CR dropped),
-# so a path's "." is only a dot, and a comment line is no key or item.
+# order: its keys at four spaces, a directories item at six. A path is compared as a string, written in double quotes with no comment
+# after it, as the Factory's file writes it (trailing blanks and a CR dropped): a path's "." is only a dot, a comment line is no key or
+# item, and another spelling of the path fails closed.
 dotnet_sdk_entry_for() {
   awk -v want="\"$2\"" '
     function end_entry() { if (eco == "dotnet-sdk" && hit) found = 1; eco = ""; hit = 0; key = "" }
@@ -519,7 +520,7 @@ PY
   # The Factory moves the SDK: its own dotnet-sdk entry bumps the Template's Owned global.json (mpaulosky/Application_Factory#103).
   template_dir="/.claude/skills/repo-ci-baseline/template/owned"
   dotnet_sdk_entry_for "$skill_dir/../../../.github/dependabot.yml" "$template_dir" \
-    || fail "the Factory's .github/dependabot.yml must have a dotnet-sdk entry for $template_dir, the Owned global.json"
+    || fail "the Factory's .github/dependabot.yml must have a dotnet-sdk entry for \"$template_dir\" (double-quoted), the Owned global.json"
   # The check itself, on fixtures: each "right" file has the entry, no "wrong" one does.
   sdk_entry() { printf 'version: 2\nupdates:\n%s\n' "$1" > "$md_tmp/dependabot-sdk.yml"; }
   t="$template_dir"
@@ -540,6 +541,7 @@ PY
     "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directories:\n      - "/"\n    ignore:\n      - "%s"' "$t")" \
     "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "/"\n  - directory: "%s"\n    package-ecosystem: "pip"' "$t")" \
     "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "%s"' "${t/./X}")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "/"\nregistries:\n  r:\n    directory: "%s"' "$t")" \
     "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "%s/sub"' "$t")"; do
     sdk_entry "$wrong"
     ! dotnet_sdk_entry_for "$md_tmp/dependabot-sdk.yml" "$t" || fail "the dotnet-sdk entry check passes a file with no such entry: $wrong"
