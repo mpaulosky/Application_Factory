@@ -63,7 +63,8 @@ Under `template/seed/`. Each one describes the repo, so it's the repo's once wri
 `test.sh` keeps dotfiles' own text out of the Seed's `roles/shared-rules.md`, and checks that the Dockerfile's linter versions match the Owned `scripts/gate.sh`,
 its shfmt release and amd64 SHA-256 match the Owned `ci.yml`'s (`tests/gh_repo/test_shfmt_install.py`), and its .NET channel is the feature band of `global.json`'s SDK (`11.0.1xx` for `11.0.100`),
 whose newest patch `rollForward: latestPatch` accepts, so a patch bump of the pin needs no image change. The image is built with `.sandcastle/` as its context, which
-holds no `global.json`, so the channel is written in the Dockerfile rather than read from the pin.
+holds no `global.json`, so the channel is written in the Dockerfile rather than read from the pin. So the sandbox's SDK is the band's newest patch when the image is built,
+which Dependabot's 7-day cooldown on the pin doesn't hold back; CI's `setup-dotnet` reads the pin itself (`global-json-file`).
 A repo with `Microsoft.Playwright` in its `Directory.Packages.props` sets `INSTALL_PLAYWRIGHT_DEPS=true` in the Dockerfile (it is `false` by default, where `INSTALL_DOTNET` is `true`),
 so its E2E tests find Chromium's system libraries in the sandbox. The step runs `pnpm dlx playwright@${PLAYWRIGHT_VERSION} install-deps chromium` as root and clears root's caches;
 keep `PLAYWRIGHT_VERSION` near the repo's `Microsoft.Playwright` version. It installs only the libraries: the browser itself is left to the test fixture at run time,

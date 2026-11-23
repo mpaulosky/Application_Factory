@@ -68,6 +68,9 @@ updates:
 
   # The Template's Owned global.json. The Factory moves the SDK for the whole Fleet: an Application's own bump would fail
   # the Owned files check, so the Seed has no dotnet-sdk block. An Application gets the bump by the next Rollout.
+  # A patch bump (11.0.100 to 11.0.101) merges as it is. A new feature band or major (11.0.200, 12.0.100) fails test.sh, which holds
+  # the Seed Dockerfile's DOTNET_CHANNEL to the pin's band: it waits for a commit on its branch that moves the channel, and for the
+  # decision a new band needs. update-types can't tell the two apart: 11.0.100 to 11.0.200 is a semver patch.
   - package-ecosystem: "dotnet-sdk"
     directory: "/.claude/skills/repo-ci-baseline/template/owned"
     target-branch: "main"
