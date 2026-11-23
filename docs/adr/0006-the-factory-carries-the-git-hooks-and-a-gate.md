@@ -35,3 +35,10 @@ clone, so CI runs the same gate for a push from a clone without hooks.
 - `scripts/gate.sh` is the Factory's own and is not overwritten by any Apply. The hooks and `check-branch-name.sh` are copies, kept in sync by the gate, as `dotfiles` does.
 - Not carried yet: Sandcastle, `scripts/watch-pr.sh`, `scripts/work-issue.sh` and `scripts/cleanup.sh` (Owned Template files that reach the Fleet by a Rollout). Each needs its own decision.
   Claude Review and PR Auto-Merge: ADR 0008. The local review: ADR 0010.
+
+## Update (mpaulosky/Application_Factory#117): the .NET SDK
+
+[ADR 0017](0017-the-factorys-and-the-templates-scripts-are-csharp-file-based-apps.md) brings the .NET SDK into the Factory; what this ADR decides is unchanged. The gate's list of
+copies gains `global.json`. Its `static` part, in `--quick` too, checks every C# file with `dotnet format whitespace` and builds every C# script with warnings as errors but CA2266.
+`test.sh` builds `tests/Scripts.Tests` and runs its tests, and the pass `run_cached` remembers is for the tree and the SDK, so an SDK change runs `test.sh` again. A push now needs the
+SDK `global.json` names.

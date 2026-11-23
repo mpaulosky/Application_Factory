@@ -1,7 +1,7 @@
 # Dependabot version updates for the Factory (ADR 0009). Its own file, not the Template's Seed: the Factory has GitHub Actions, the local review's npm packages (ADR 0010)
 # and the Template's hashed Python test pins (requirements-tests.txt, a pip block; ADR 0009's Update notes) to update, and the Template's Owned
-# global.json, the .NET SDK every Application builds with (a dotnet-sdk block; mpaulosky/Application_Factory#103).
-# For GitHub Actions both directories are listed so one PR bumps an action in a copied workflow and in its source under template/owned/ together,
+# global.json, the .NET SDK every Application builds with, and the Factory's copy of it (a dotnet-sdk block; mpaulosky/Application_Factory#103, ADR 0017).
+# For GitHub Actions and the SDK both directories are listed so one PR bumps an action in a copied workflow and in its source under template/owned/ together,
 # or the gate's drift check would fail the copy. Every label below must exist in the repo.
 ---
 
@@ -66,13 +66,16 @@ updates:
           - "minor"
           - "patch"
 
-  # The Template's Owned global.json. The Factory moves the SDK for the whole Fleet: an Application's own bump would fail
+  # The Template's Owned global.json and the Factory's copy of it at the root, as for GitHub Actions: the group bumps both in one PR, or the
+  # gate's drift check would fail the copy (ADR 0017). The Factory moves the SDK for the whole Fleet: an Application's own bump would fail
   # the Owned files check, so the Seed has no dotnet-sdk block. An Application gets the bump by the next Rollout.
   # A patch bump (11.0.100 to 11.0.101) merges as it is. A new feature band or major (11.0.200, 12.0.100) fails test.sh, which holds
   # the Seed Dockerfile's DOTNET_CHANNEL to the pin's band: it waits for a commit on its branch that moves the channel, and for the
   # decision a new band needs. update-types can't tell the two apart: 11.0.100 to 11.0.200 is a semver patch.
   - package-ecosystem: "dotnet-sdk"
-    directory: "/.claude/skills/repo-ci-baseline/template/owned"
+    directories:
+      - "/"
+      - "/.claude/skills/repo-ci-baseline/template/owned"
     target-branch: "main"
     schedule:
       interval: "weekly"

@@ -2,16 +2,16 @@
 # The Application Factory's pre-push gate, run by .github/hooks/pre-push (a copy of the Template's) and safe to run by hand.
 # The Factory isn't a .NET repo, so its gate is what its CI runs: first this script's own test and the review's three stand-alone tests (they install
 # the packages with pnpm), then that its copies of Template files haven't drifted from the Template (ADR 0006), then that no Owned file has a bare #N,
-# then that no Owned script reads git status --porcelain without --untracked-files (tests/check-git-status.sh), then the Markdown and YAML lint, then shellcheck of the shell files the branch changes, then that every shell file is formatted as shfmt formats it, then ruff over every Python file, then that the branch passed the local review (scripts/review.sh check, ADR 0010; GATE_SKIP_REVIEW=1 skips it),
-# then the repo-ci-baseline skill's test.sh (skipped when it already passed on the same clean tree; GATE_NO_CACHE=1 runs it). This script is the Factory's own, not a copy of the Template's scripts/gate.sh.
+# then that no Owned script reads git status --porcelain without --untracked-files (tests/check-git-status.sh), then the Markdown and YAML lint, then shellcheck of the shell files the branch changes, then that every shell file is formatted as shfmt formats it, then ruff over every Python file, then dotnet format whitespace of every C# file and a build of every C# script with warnings as errors (ADR 0017), then that the branch passed the local review (scripts/review.sh check, ADR 0010; GATE_SKIP_REVIEW=1 skips it),
+# then the repo-ci-baseline skill's test.sh (skipped when it already passed on the same clean tree and .NET SDK; GATE_NO_CACHE=1 runs it). This script is the Factory's own, not a copy of the Template's scripts/gate.sh.
 
 # GATE_PART=self|review|static|template|sandcastle runs one part of this gate, which is how CI runs a part per job (ADR 0012, ADR 0013): self is this script's own test, review the
-# review's stand-alone tests, static the copies, the issue references, the git status guards, the lint, shellcheck, shfmt and ruff, template the review check and test.sh, sandcastle the Template's Sandcastle check.
+# review's stand-alone tests, static the copies, the issue references, the git status guards, the lint, shellcheck, shfmt, ruff and the C# check, template the review check and test.sh, sandcastle the Template's Sandcastle check.
 # With no GATE_PART every part runs, in that order, except that sandcastle runs only when the branch changed a file it reads (a part run by name always runs). The pre-push hook drops GATE_PART.
 # TEST_SH_SHARD=hooks|scripts|checks, with GATE_PART=template, runs one shard of test.sh (ADR 0013); any other run of the gate ignores it and runs the whole of test.sh.
 set -euo pipefail
 
-# scripts/gate.sh --quick: the checks that finish in about a minute (its test, the review tests, the copies' drift, the bare-#N check, the git status guard check, lint, shellcheck of the shell files the branch changes, shfmt of every shell file, ruff of every Python file), then stop before the local
+# scripts/gate.sh --quick: the checks that finish in about a minute (its test, the review tests, the copies' drift, the bare-#N check, the git status guard check, lint, shellcheck of the shell files the branch changes, shfmt of every shell file, ruff of every Python file, the C# check), then stop before the local
 # review check, test.sh and the Sandcastle check. It is for iterating, never for pushing: the pre-push hook and CI call this script with no argument.
 # scripts/gate.sh --sync: copies every Template file the Factory carries over its copy (cp -p keeps the execute bit), prints the ones that changed,
 # and stops. A copy edited by hand is overwritten, so edit the Template's file. Run it after editing the Template's file; the drift check below is what finds a copy you forgot.
@@ -59,8 +59,9 @@ RESET='\033[0m'
 skill=".claude/skills/repo-ci-baseline"
 owned="$skill/template/owned"
 
-# The Factory carries these Owned files as copies, for its git hooks, review layer, issue and PR process, edit-time lint and its script rule, and shell style (.editorconfig). Edit the Template's file, then run scripts/gate.sh --sync to copy it over.
-# Keep this list in step with ADR 0006, ADR 0008, ADR 0009, ADR 0010, ADR 0011, ADR 0015 and CLAUDE.md.
+# The Factory carries these Owned files as copies, for its git hooks, review layer, issue and PR process, edit-time lint and its script rule, shell style (.editorconfig) and .NET SDK (global.json).
+# Edit the Template's file, then run scripts/gate.sh --sync to copy it over.
+# Keep this list in step with ADR 0006, ADR 0008, ADR 0009, ADR 0010, ADR 0011, ADR 0015, ADR 0017 and CLAUDE.md.
 copies=(
   .github/hooks/pre-commit
   .github/hooks/pre-push
@@ -96,6 +97,7 @@ copies=(
   .security/README.md
   .editorconfig
   .claude/rules/script-edits.md
+  global.json
 )
 
 if ((sync)); then
@@ -329,6 +331,70 @@ run_static() {
   fi
   echo "${#py_all[@]} Python file(s) checked."
 
+  # Every tracked and untracked C# file is formatted as dotnet format whitespace formats it, under .editorconfig, and every script entry file builds with warnings as
+  # errors but CA2266, which stays a warning (ADR 0017, Updates: what lints C#, and CA2266). The edit-time lint doesn't check C#: a dotnet format run takes 1 to 2 s.
+  # The format check runs in folder mode, which reads no project and runs no MSBuild. An entry file is a .cs in no project's folder (no *.csproj in its folder or any
+  # folder above it) that no .cs in its folder pulls in with #:include; an included file can't hold top-level statements, so it builds only as part of its entry file.
+  # A project's .cs files are built by the test that runs the project (test.sh builds tests/Scripts.Tests). Each entry file is built from its own folder, so the
+  # global.json read is the nearest to it (ADR 0017, How a script runs). With no .cs file the step checks nothing and needs no SDK.
+  echo -e "\n${CYAN}▶ C# (dotnet format whitespace of every C# file, a build of every script)${RESET}"
+  cs_all=()
+  while IFS= read -r -d '' f; do
+    [[ -f "$f" && "$f" == *.cs ]] || continue
+    cs_all+=("$f")
+  done < "$all_list"
+  cs_entries=()
+  if ((${#cs_all[@]})); then
+    if ! command -v dotnet > /dev/null 2>&1; then
+      echo -e "${RED}❌ dotnet not found: the gate needs the .NET SDK global.json names to check the C# files.${RESET}" >&2
+      exit 1
+    fi
+    # ./ before each name, so a name that starts with - is a file to dotnet format, not an option.
+    format_rc=0
+    dotnet format whitespace . --folder --verify-no-changes --include "${cs_all[@]/#/./}" || format_rc=$?
+    if ((format_rc == 2)); then
+      echo -e "${RED}❌ dotnet format: run dotnet format whitespace . --folder --include <file> on each file named above (it reads .editorconfig).${RESET}" >&2
+      exit 1
+    elif ((format_rc != 0)); then
+      echo -e "${RED}❌ dotnet format failed (exit $format_rc) without checking the format: check the .NET SDK install.${RESET}" >&2
+      exit 1
+    fi
+    # Each folder's #:include targets, as <folder>/<name> (a CR at a line's end dropped), then every .cs outside a project that isn't one of them.
+    included=$'\n'
+    for f in "${cs_all[@]}"; do
+      # git names a file at the root without a folder, so its includes are named without one too; a leading ./ in an #:include is dropped.
+      dir="$(dirname -- "$f")/"
+      [[ "$dir" != ./ ]] || dir=""
+      while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "${line%$'\r'}" =~ ^#:include[[:space:]]+(\./)?([^[:space:]]+)[[:space:]]*$ ]] || continue
+        included+="$dir${BASH_REMATCH[2]}"$'\n'
+      done < "$f"
+    done
+    for f in "${cs_all[@]}"; do
+      [[ "$included" != *$'\n'"$f"$'\n'* ]] || continue
+      dir="$(dirname -- "$f")"
+      in_project=0
+      while :; do
+        if compgen -G "$dir/*.csproj" > /dev/null; then
+          in_project=1
+          break
+        fi
+        [[ "$dir" != . ]] || break
+        dir="$(dirname -- "$dir")"
+      done
+      ((in_project)) || cs_entries+=("$f")
+    done
+    for f in "${cs_entries[@]}"; do
+      dir="$(dirname -- "$f")"
+      [[ "$dir" == . ]] && dir="$ROOT" || dir="$ROOT/$dir"
+      if ! (cd "$dir" && dotnet build "$ROOT/$f" -p:TreatWarningsAsErrors=true -p:WarningsNotAsErrors=CA2266); then
+        echo -e "${RED}❌ dotnet build $f: fix each warning or error shown above (in the Template's file for a copy, then scripts/gate.sh --sync).${RESET}" >&2
+        exit 1
+      fi
+    done
+  fi
+  echo "${#cs_all[@]} C# file(s) format-checked, ${#cs_entries[@]} script(s) built."
+
 }
 
 # cache_lock <lock>: takes the per-tree cache lock, a folder (mkdir is atomic), trying 20 times 0.1 seconds apart (about 2 seconds); 1 when it can't. A cache-hit check and a
@@ -405,7 +471,17 @@ stamp_write() {
   return 1
 }
 
-# run_cached <name> <label> <command...>: runs the command (minutes long), unless it already passed on this tree. A pass is remembered for the tree HEAD points at, when nothing is
+# sdk_key: the SDK part of the cache key (ADR 0017): the release dotnet --version answers from the root, which global.json picks, and the version global.json names,
+# each with every byte but a letter, digit or dot as _, and none for one that can't be read (no dotnet, no global.json, no jq). So a pass on one SDK isn't trusted on
+# another, even on the same tree: rollForward lets a newer patch answer for the same global.json.
+sdk_key() {
+  local version named
+  version="$(dotnet --version 2> /dev/null)" || version=""
+  named="$(jq -r '.sdk.version // empty' global.json 2> /dev/null)" || named=""
+  printf 'sdk_%s_global_%s' "${version:-none}" "${named:-none}" | LC_ALL=C tr -c 'A-Za-z0-9._' '_'
+}
+
+# run_cached <name> <label> <command...>: runs the command (minutes long), unless it already passed on this tree and SDK (sdk_key). A pass is remembered for the tree HEAD points at, when nothing is
 # uncommitted or untracked (ignored files don't count), in the common git directory so every worktree of the clone shares it: the same tree is not checked twice. Only a pass is stored, and
 # only when the tree is still that clean tree after the command ran. GATE_NO_CACHE=1 always runs it. A git that fails here (a broken index, a lock) leaves the tree unproven clean, so the
 # command runs and nothing is stored.
@@ -417,11 +493,12 @@ stamp_write() {
 # (a read-only cache folder, or a lock left by a paused or killed gate) checks no pass, still writes its stamps, and stores no pass.
 # A stamp that can be neither written nor removed fails the gate (stamp_write). Clearing the old pass files is only tidying.
 run_cached() {
-  local name="$1" label="$2" cache="" dirty tree common after dir whole token="" mark held s
+  local name="$1" label="$2" cache="" dirty tree common after dir whole token="" mark held s key
   shift 2
   if dirty="$(git status --porcelain --untracked-files=all)" && [[ -z "$dirty" ]] \
     && tree="$(git rev-parse -q --verify 'HEAD^{tree}' 2> /dev/null)" && common="$(git rev-parse --git-common-dir)"; then
-    cache="$common/gate-cache/$name-$tree"
+    key="$tree.$(sdk_key)"
+    cache="$common/gate-cache/$name-$key"
     dir="${cache%/*}"
     whole="${name%%.*}"
   fi
@@ -429,32 +506,32 @@ run_cached() {
     mark="$$.$RANDOM$RANDOM.$(date +%s)"
     token="$mark"
     mkdir -p "$dir" 2> /dev/null || true
-    if ! cache_lock "$dir/lock-$tree"; then
+    if ! cache_lock "$dir/lock-$key"; then
       token=""
       # Only a writable cache folder waited for the lock; a read-only one gave up at once and is reported by the stamps or "could not record".
-      if [[ -e "$dir/lock-$tree" && -w "$dir" ]]; then
-        echo "the cache lock $dir/lock-$tree has been held for over 2 seconds: $label runs and its pass is not remembered. If no gate is running, remove it." >&2
+      if [[ -e "$dir/lock-$key" && -w "$dir" ]]; then
+        echo "the cache lock $dir/lock-$key has been held for over 2 seconds: $label runs and its pass is not remembered. If no gate is running, remove it." >&2
       fi
     fi
     if [[ -n "$cache_locked" && -f "$cache" && "${GATE_NO_CACHE:-}" != "1" ]] && held="$(cat -- "$cache" 2> /dev/null)" \
-      && [[ -n "$held" && "$held" == "$(cat -- "$dir/started.$name-$tree" 2> /dev/null)" ]]; then
+      && [[ -n "$held" && "$held" == "$(cat -- "$dir/started.$name-$key" 2> /dev/null)" ]]; then
       cache_unlock
       echo "$label already passed on this tree (${cache##*-}): skipped. GATE_NO_CACHE=1 runs it again."
       return 0
     fi
     # The run's own stamp first, then the ones it overlaps. A whole run lists the shard stamps only after writing its own: a shard run that stamps after the list
     # writes the whole's stamp after this run did, so this run's pass is not trusted either way.
-    stamp_write "$label" "$dir/started.$name-$tree" "$mark" || token=""
+    stamp_write "$label" "$dir/started.$name-$key" "$mark" || token=""
     if [[ "$name" == "$whole" ]]; then
       # Only the * is a pattern: the folder and names are quoted, so a clone path holding [, ] or ? is matched literally; an unmatched * stays literal and fails -e.
-      for s in "$dir/started.$whole."*"-$tree"; do [[ ! -e "$s" ]] || stamp_write "$label" "$s" "$mark" || true; done
+      for s in "$dir/started.$whole."*"-$key"; do [[ ! -e "$s" ]] || stamp_write "$label" "$s" "$mark" || true; done
     else
-      stamp_write "$label" "$dir/started.$whole-$tree" "$mark" || true
+      stamp_write "$label" "$dir/started.$whole-$key" "$mark" || true
     fi
     cache_unlock
     # Without its own stamp, or without the lock, this run's pass is not stored (token is empty). Removing old pass files is only tidying.
-    command rm -f -- "$cache" "$dir/$whole-$tree" 2> /dev/null || true
-    if [[ "$name" == "$whole" ]]; then command rm -f -- "$dir/$whole."*"-$tree" 2> /dev/null || true; fi
+    command rm -f -- "$cache" "$dir/$whole-$key" 2> /dev/null || true
+    if [[ "$name" == "$whole" ]]; then command rm -f -- "$dir/$whole."*"-$key" 2> /dev/null || true; fi
   fi
   "$@"
   # Remembering the pass is best effort: a folder that can't be written to must not turn a passing command into a failing gate.
@@ -462,7 +539,7 @@ run_cached() {
     if after="$(git status --porcelain --untracked-files=all)" && [[ -z "$after" && "$(git rev-parse -q --verify 'HEAD^{tree}' 2> /dev/null)" == "$tree" ]]; then
       if [[ -z "$token" ]] || ! { printf '%s\n' "$token" > "$cache"; } 2> /dev/null; then
         echo "could not record the $label pass in $dir: it will run again next time." >&2
-      elif [[ "$(cat -- "$dir/started.$name-$tree" 2> /dev/null)" != "$token" ]]; then
+      elif [[ "$(cat -- "$dir/started.$name-$key" 2> /dev/null)" != "$token" ]]; then
         echo "another run of $label, or of a part it overlaps, started on this tree while it ran: this pass will not be trusted." >&2
       fi
     else
