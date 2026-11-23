@@ -101,6 +101,9 @@ each Markdown, YAML or shell file an agent writes, with no Bash prompt, and vets
 
 ## Update: Python
 
+[ADR 0017](0017-the-factorys-and-the-templates-scripts-are-csharp-file-based-apps.md) moves the scripts to C#. This Update holds while any Python is left, and the increment that
+retires Python marks it superseded, naming what replaces ruff.
+
 No linter checked Python anywhere: not the hook, not a gate, not CI. ruff's bug-finding rules alone, F (pyflakes) and B (bugbear), found 16 problems over the
 Factory's 58 Python files, one of them a test that checked less than it meant to (a dict built with one key, so it kept only the last install step it found). So Python is
 linted at all three places, with the same command: `ruff check --isolated --no-cache --select F,B --target-version py312`.

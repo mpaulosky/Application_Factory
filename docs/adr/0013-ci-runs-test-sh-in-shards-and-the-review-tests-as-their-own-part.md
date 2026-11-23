@@ -3,6 +3,8 @@ status: accepted
 ---
 # CI runs test.sh in shards, and the review's tests as their own part
 
+[ADR 0017](0017-the-factorys-and-the-templates-scripts-are-csharp-file-based-apps.md) keeps the shards, and gives a shard that builds C# scripts a .NET SDK and a build before the runs.
+
 ADR 0012 split the `repo-ci-baseline Template` workflow into one job per gate part, which took a pull request's run from about 13 minutes to about 5½. The run
 now takes as long as its slowest job: the `template` part, which is `test.sh` (about 5 minutes), followed by the `self` part (`scripts/tests/gate.test.sh`, about
 3 minutes, then the review's stand-alone tests, about 1 minute). ADR 0012 deferred two ways of going further: sharding `test.sh`, and path filters that skip the

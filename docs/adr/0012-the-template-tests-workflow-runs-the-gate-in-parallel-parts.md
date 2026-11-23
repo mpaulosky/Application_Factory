@@ -4,6 +4,7 @@ status: accepted
 # The Template tests workflow runs the gate in parallel parts, and the pre-push gate runs the Sandcastle check when its files changed
 
 ADR 0013 shards `test.sh` and makes the review's tests their own part, `review`; it decides against the path filters deferred below.
+[ADR 0017](0017-the-factorys-and-the-templates-scripts-are-csharp-file-based-apps.md) keeps the parts, and gives the ones that build C# scripts a .NET SDK and a build before the runs.
 
 The `repo-ci-baseline Template` workflow took 9 to 13 minutes on every pull request. It ran one job with two steps in a row: `scripts/gate.sh` (about 10 minutes on a GitHub runner) and the
 Sandcastle check (about 3 minutes). The pre-push hook already runs the same gate, so a push from a clone with the hooks on had run everything except the Sandcastle check, which `CLAUDE.md`
