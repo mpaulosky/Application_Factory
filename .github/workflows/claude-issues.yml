@@ -237,6 +237,10 @@ jobs:
           # Off, so the transcript isn't published in the step summary or the log of this public repository.
           display_report: false
           show_full_output: false
+          # The next run is started by the previous one with the job's token, so its actor is github-actions[bot],
+          # which the action otherwise refuses as a non-human actor. Only this workflow dispatches itself, and the
+          # pick step works only the owner's issues whatever started the run.
+          allowed_bots: "github-actions[bot]"
           prompt: |
             You are working issue #${{ steps.pick.outputs.issue }} of ${{ github.repository }}, which its owner,
             mpaulosky, queued for you. Your job is to resolve it and open a draft pull request.
