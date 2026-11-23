@@ -22,6 +22,59 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # PROTOTYPE (research/status-cs-trial, never merged; mpaulosky/Application_Factory#97): the C# port of status.py, built
+  # once, then judged by the parity suite, the whitespace format check and the warm-start timing. Run through
+  # workflow_dispatch --ref research/status-cs-trial.
+  status-cs-trial:
+    name: Trial - status.cs
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DOTNET_NOLOGO: "1"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 11.0.100
+
+      - name: Build the port once (a cold first build)
+        working-directory: .claude/skills/repo-ci-baseline
+        run: |
+          dotnet --version
+          start=$(date +%s%N)
+          dotnet build github/status.cs
+          echo "cold build: $((($(date +%s%N) - start) / 1000000)) ms"
+
+      - name: Run the parity suite against the port
+        working-directory: .claude/skills/repo-ci-baseline
+        run: bash tests/status-parity.test.sh dotnet run --no-build --file github/status.cs --
+
+      - name: Run the parity suite against status.py
+        working-directory: .claude/skills/repo-ci-baseline
+        run: bash tests/status-parity.test.sh
+
+      - name: Check the port's whitespace
+        working-directory: .claude/skills/repo-ci-baseline/github
+        run: |
+          start=$(date +%s%N)
+          dotnet format whitespace --verify-no-changes --folder .
+          echo "format check: $((($(date +%s%N) - start) / 1000000)) ms"
+
+      - name: Time the warm start
+        working-directory: .claude/skills/repo-ci-baseline
+        run: |
+          for case_name in 01-no-open-prs 14-comments-and-events-are-paged; do
+            echo "== $case_name"
+            bash tests/status-cs-trial-measure.sh "$PWD" "$case_name" 21
+          done
+
   self:
     name: Gate - self-tests
     runs-on: ubuntu-latest
