@@ -1,0 +1,1 @@
+app#7 feat: Something                          1234567 ready CLEAN review:no threads:2 automerge:off running:0 failed:0 cancelled:0 -> wait (review loop exhausted, but 1 thread(s) opened by a person hold the merge) notice: resolved without a reply: src/a.py:12

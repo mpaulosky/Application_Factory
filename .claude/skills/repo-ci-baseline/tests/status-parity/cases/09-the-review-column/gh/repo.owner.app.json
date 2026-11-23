@@ -1,0 +1,146 @@
+{
+ "data": {
+  "repository": {
+   "pullRequests": {
+    "nodes": [
+     {
+      "id": "PR_7",
+      "number": 7,
+      "title": "feat: Something",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefOid": "1234567000000000000000000000000000000000",
+      "mergeStateStatus": "CLEAN",
+      "autoMergeRequest": null,
+      "reviews": {
+       "nodes": [
+        {
+         "author": {
+          "login": "copilot-pull-request-reviewer"
+         },
+         "commit": {
+          "oid": "1234567000000000000000000000000000000000"
+         },
+         "body": "Copilot was unable to review this pull request because the quota is used up."
+        },
+        {
+         "author": {
+          "login": "github-actions"
+         },
+         "commit": {
+          "oid": "1234567000000000000000000000000000000000"
+         },
+         "body": "<!-- claude-review -->\n**Claude Review**"
+        }
+       ]
+      },
+      "reviewThreads": {
+       "nodes": []
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "statusCheckRollup": {
+           "contexts": {
+            "nodes": [
+             {
+              "__typename": "CheckRun",
+              "name": "Test Suite",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-07T10:00:00Z"
+             }
+            ]
+           }
+          }
+         }
+        }
+       ]
+      }
+     },
+     {
+      "id": "PR_8",
+      "number": 8,
+      "title": "feat: Something",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefOid": "1234567000000000000000000000000000000000",
+      "mergeStateStatus": "CLEAN",
+      "autoMergeRequest": null,
+      "reviews": {
+       "nodes": [
+        {
+         "author": {
+          "login": "github-actions"
+         },
+         "commit": {
+          "oid": "1234567000000000000000000000000000000000"
+         },
+         "body": "Something else."
+        }
+       ]
+      },
+      "reviewThreads": {
+       "nodes": []
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "statusCheckRollup": null
+         }
+        }
+       ]
+      }
+     },
+     {
+      "id": "PR_9",
+      "number": 9,
+      "title": "feat: Something",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefOid": "1234567000000000000000000000000000000000",
+      "mergeStateStatus": "CLEAN",
+      "autoMergeRequest": null,
+      "reviews": {
+       "nodes": [
+        {
+         "author": {
+          "login": "copilot-pull-request-reviewer"
+         },
+         "commit": {
+          "oid": "1234567000000000000000000000000000000000"
+         },
+         "body": "Copilot was unable to review this pull request because the quota is used up."
+        },
+        {
+         "author": {
+          "login": "github-actions"
+         },
+         "commit": {
+          "oid": "1234567000000000000000000000000000000000"
+         },
+         "body": "<!-- claude-review -->\n<!-- claude-review:off-diff -->\n**Claude Review**"
+        }
+       ]
+      },
+      "reviewThreads": {
+       "nodes": []
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "statusCheckRollup": null
+         }
+        }
+       ]
+      },
+      "headRefName": "docs/release-notes"
+     }
+    ]
+   }
+  }
+ }
+}

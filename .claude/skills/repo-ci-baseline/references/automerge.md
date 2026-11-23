@@ -330,6 +330,8 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
 Skill files (not copied into repos): `status.sh`, which runs `github/status.py`, `land.sh`, which runs `github/land.py`,
 and the decision both act on, `github/landing.py`.
 Tests: `github/tests/test_landing.py`, `test_status.py` and `test_land.py`, run by `test.sh`; none calls GitHub.
+`tests/status-parity.test.sh` runs `status.py` through its command line only, against a fake `gh` that answers from fixture files
+(`tests/status-parity/`), so the same cases can judge another implementation of it: `tests/status-parity.test.sh <command> [arg]...`.
 
 ```bash
 status.sh                     # one line per open PR in every repo in github/repos.txt

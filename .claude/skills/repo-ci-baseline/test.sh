@@ -6,7 +6,7 @@
 #
 # Runs the Template's own tests (hook suites, auto-merge script tests,
 # the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle and the GitHub scripts' tests
-# (settings, the landing decision, status, land and rollout), the Claude Review
+# (settings, the landing decision, status, land and rollout) with status's parity suite, the Claude Review
 # benchmark's tests, lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
 # Owned files carry no {{PLACEHOLDER}} and that the Owned scripts, and this repo's own
@@ -533,6 +533,9 @@ if in_shard scripts; then
   step "GitHub scripts tests (settings, landing decision, status, land, rollout)"
   (cd "$skill_dir" && "${pytest_cmd[@]}" -q -p no:cacheprovider github/tests) || fail "github scripts pytest"
 
+  step "status parity suite (status.py through its command line, against a fake gh)"
+  bash "$skill_dir/tests/status-parity.test.sh" || fail "status-parity.test.sh"
+
   step "Claude Review benchmark tests (scoring, arguments, config swap, the workflow it reads)"
   # PyYAML lets the test that reads the Template's claude-review.yml run instead of skipping.
   if python3 -c 'import pytest, yaml' &> /dev/null; then
@@ -565,6 +568,7 @@ if in_shard checks; then
     "$skill_dir/tests/seed-dockerfile.test.sh" "$skill_dir/tests/doc-single-source.test.sh" "$skill_dir/tests/no-dotfiles-dependency.test.sh"
     "$skill_dir/tests/owned-gate-files.test.sh"
     "$skill_dir/tests/sandcastle-check.test.sh" "$skill_dir/tests/repos-scope.test.sh"
+    "$skill_dir/tests/status-parity.test.sh" "$skill_dir/tests/status-parity/fake-gh.sh"
     "$skill_dir/tests/check-git-status.sh" "$skill_dir/tests/check-git-status.test.sh" "$skill_dir/tests/mutations/check-spec.test.sh"
     "$owned/scripts/gate.sh" "$owned/scripts/check-branch-name.sh" "$owned/scripts/tests/check-branch-name.test.sh"
     "$owned/scripts/check-pr-title.sh" "$owned/scripts/tests/check-pr-title.test.sh"

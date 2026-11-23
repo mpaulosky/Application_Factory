@@ -1,0 +1,21 @@
+{
+ "data": {
+  "node": {
+   "timelineItems": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": [
+     {
+      "__typename": "ReviewRequestedEvent",
+      "createdAt": "2026-01-02T00:40:00Z",
+      "requestedReviewer": {
+       "login": "Copilot"
+      }
+     }
+    ]
+   }
+  }
+ }
+}

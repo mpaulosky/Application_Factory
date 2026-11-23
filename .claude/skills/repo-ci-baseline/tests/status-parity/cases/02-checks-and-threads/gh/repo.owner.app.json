@@ -1,0 +1,79 @@
+{
+ "data": {
+  "repository": {
+   "pullRequests": {
+    "nodes": [
+     {
+      "id": "PR_7",
+      "number": 7,
+      "title": "feat: Something",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefOid": "1234567000000000000000000000000000000000",
+      "mergeStateStatus": "CLEAN",
+      "autoMergeRequest": null,
+      "reviews": {
+       "nodes": [
+        {
+         "author": {
+          "login": "copilot-pull-request-reviewer"
+         },
+         "commit": {
+          "oid": "1234567000000000000000000000000000000000"
+         },
+         "body": ""
+        }
+       ]
+      },
+      "reviewThreads": {
+       "nodes": [
+        {
+         "isResolved": true
+        },
+        {
+         "isResolved": false
+        }
+       ]
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "statusCheckRollup": {
+           "contexts": {
+            "nodes": [
+             {
+              "__typename": "CheckRun",
+              "databaseId": 11,
+              "name": "Test Suite",
+              "status": "COMPLETED",
+              "conclusion": "CANCELLED",
+              "startedAt": "2026-10-07T10:00:00Z"
+             },
+             {
+              "__typename": "CheckRun",
+              "databaseId": 12,
+              "name": "Test Suite",
+              "status": "IN_PROGRESS",
+              "conclusion": null,
+              "startedAt": "2026-10-07T10:02:00Z"
+             },
+             {
+              "__typename": "StatusContext",
+              "context": "codecov",
+              "state": "FAILURE",
+              "createdAt": "2026-10-07T10:01:00Z"
+             }
+            ]
+           }
+          }
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ }
+}

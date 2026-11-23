@@ -1,0 +1,35 @@
+{
+ "data": {
+  "repository": {
+   "pullRequests": {
+    "nodes": [
+     {
+      "id": "PR_7",
+      "number": 7,
+      "title": "feat: Résumé of a title that is far too long to fit in the column",
+      "state": "OPEN",
+      "isDraft": true,
+      "headRefOid": "1234567000000000000000000000000000000000",
+      "mergeStateStatus": "BLOCKED",
+      "autoMergeRequest": null,
+      "reviews": {
+       "nodes": []
+      },
+      "reviewThreads": {
+       "nodes": []
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "statusCheckRollup": null
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ }
+}

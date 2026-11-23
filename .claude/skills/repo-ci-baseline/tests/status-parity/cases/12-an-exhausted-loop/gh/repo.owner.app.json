@@ -1,0 +1,160 @@
+{
+ "data": {
+  "repository": {
+   "pullRequests": {
+    "nodes": [
+     {
+      "id": "PR_7",
+      "number": 7,
+      "title": "feat: Something",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefOid": "1234567000000000000000000000000000000000",
+      "mergeStateStatus": "CLEAN",
+      "autoMergeRequest": null,
+      "reviews": {
+       "nodes": [
+        {
+         "author": {
+          "login": "copilot-pull-request-reviewer"
+         },
+         "commit": {
+          "oid": "0000000000000000000000000000000000000001",
+          "parents": {
+           "totalCount": 1
+          }
+         },
+         "body": "",
+         "submittedAt": "2026-01-02T00:01:00Z",
+         "comments": {
+          "totalCount": 1
+         }
+        },
+        {
+         "author": {
+          "login": "copilot-pull-request-reviewer"
+         },
+         "commit": {
+          "oid": "0000000000000000000000000000000000000002",
+          "parents": {
+           "totalCount": 1
+          }
+         },
+         "body": "",
+         "submittedAt": "2026-01-02T00:02:00Z",
+         "comments": {
+          "totalCount": 1
+         }
+        },
+        {
+         "author": {
+          "login": "copilot-pull-request-reviewer"
+         },
+         "commit": {
+          "oid": "0000000000000000000000000000000000000003",
+          "parents": {
+           "totalCount": 1
+          }
+         },
+         "body": "",
+         "submittedAt": "2026-01-02T00:03:00Z",
+         "comments": {
+          "totalCount": 1
+         }
+        }
+       ]
+      },
+      "reviewThreads": {
+       "nodes": [
+        {
+         "isResolved": false,
+         "path": "src/a.py",
+         "line": 12,
+         "originalLine": 12,
+         "comments": {
+          "totalCount": 1,
+          "nodes": [
+           {
+            "url": "https://github.com/o/r/pull/7#discussion_r1",
+            "author": {
+             "login": "copilot-pull-request-reviewer",
+             "__typename": "Bot"
+            },
+            "pullRequestReview": {
+             "body": ""
+            }
+           }
+          ]
+         }
+        },
+        {
+         "isResolved": false,
+         "path": "src/a.py",
+         "line": 12,
+         "originalLine": 12,
+         "comments": {
+          "totalCount": 1,
+          "nodes": [
+           {
+            "url": "https://github.com/o/r/pull/7#discussion_r1",
+            "author": {
+             "login": "copilot-pull-request-reviewer",
+             "__typename": "Bot"
+            },
+            "pullRequestReview": {
+             "body": ""
+            }
+           }
+          ]
+         }
+        },
+        {
+         "isResolved": true,
+         "path": "src/a.py",
+         "line": 12,
+         "originalLine": 12,
+         "comments": {
+          "totalCount": 1,
+          "nodes": [
+           {
+            "url": "https://github.com/o/r/pull/7#discussion_r1",
+            "author": {
+             "login": "copilot-pull-request-reviewer",
+             "__typename": "Bot"
+            },
+            "pullRequestReview": {
+             "body": ""
+            }
+           }
+          ]
+         }
+        }
+       ]
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "statusCheckRollup": {
+           "contexts": {
+            "nodes": [
+             {
+              "__typename": "CheckRun",
+              "name": "Test Suite",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-07T10:00:00Z"
+             }
+            ]
+           }
+          }
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ }
+}
