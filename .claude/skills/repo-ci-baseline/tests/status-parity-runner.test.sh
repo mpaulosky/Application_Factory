@@ -6,11 +6,13 @@
 #   tests/status-parity-runner.test.sh
 #
 # Copies both into a throwaway skill folder with one case of its own and runs them against a stub implementation, so no
-# real case is run or written. A last section only reads the committed cases: each has a file git tracks in gh/ (the
-# folder a fresh clone needs) and no fixture its expected.calls doesn't read. Needs what the suite needs (bash 4.4,
-# coreutils, diff, grep, sed), python3 for the stub reference record mode runs, and git (outside a git work tree the
-# tracked-file check is skipped).
+# real case is run or written. A last section checks the committed cases: each has a file git tracks in gh/ (the folder a
+# fresh clone needs) and no fixture its expected.calls doesn't read. It first tries that check on cases made to be wrong,
+# in a git repo of its own and in a folder git treats as outside any repo. Needs what the suite needs (bash 4.4,
+# coreutils, diff, grep, sed), python3 for the stub reference record mode runs, and git.
 set -euo pipefail
+# A hook, or git rebase --exec, may have set these; the throwaway repo below must not be the caller's.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR
 
 here="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 work="$(mktemp -d)"
@@ -265,8 +267,9 @@ env -u FAKE_GH_LOG FAKE_GH_DIR="$gh_dir" "$fake" api repos/o/app > /dev/null 2>&
 # --- The committed cases: what a fresh clone has, and no fixture nothing reads ---
 
 # case_problems <cases folder>: one line per case a fresh clone would break (no file in its gh/ that git tracks) or with
-# a fixture no call in its expected.calls reads; nothing when every case is sound. git runs without the caller's GIT_*
-# variables (a hook sets them), and outside a git work tree only the fixtures are checked.
+# a fixture no call in its expected.calls reads; nothing when every case is sound. git runs without the caller's GIT_DIR,
+# GIT_WORK_TREE, GIT_INDEX_FILE, GIT_PREFIX and GIT_COMMON_DIR (a hook sets them), and outside a git work tree only the
+# fixtures are checked.
 case_problems() {
   local cases_dir="$1" tracked="" dir name fixture key
   local -a clean_git=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR git -C "$cases_dir")
@@ -296,8 +299,10 @@ for name in sound untracked stray; do
 done
 echo '{}' > "$probe/cases/sound/gh/events.PR_1..json"
 echo '{}' > "$probe/cases/stray/gh/comments.PR_9.json"
-cp -r "$probe/cases" "$work/plain-cases"
 git init -q "$probe"
+# A copy inside the probe repo, with git told to look no higher than its folder: outside any work tree, wherever TMPDIR is.
+mkdir "$probe/plain"
+cp -r "$probe/cases" "$probe/plain/cases"
 git -C "$probe" add cases/sound cases/stray
 want_tree="case untracked has no file in gh/ that git tracks, so a fresh clone has no gh/ folder: git add its gh/ files, or add gh/.gitkeep when it has none"
 want_stray="case stray: gh/comments.PR_9.json answers no call in expected.calls"
@@ -306,7 +311,7 @@ got="$(case_problems "$probe/cases")"
   || fail "the committed-cases check, on an untracked gh/ and a stray fixture, said: $got"
 got="$(GIT_DIR="$work/nowhere" GIT_WORK_TREE="$work" case_problems "$probe/cases")"
 [[ "$got" == *"$want_tree"* ]] || fail "the committed-cases check follows the caller's GIT_DIR: $got"
-got="$(case_problems "$work/plain-cases")"
+got="$(GIT_CEILING_DIRECTORIES="$probe/plain" case_problems "$probe/plain/cases")"
 [[ "$got" == "$want_stray" ]] || fail "the committed-cases check outside a git work tree said: $got"
 
 got="$(case_problems "$here/status-parity/cases")"

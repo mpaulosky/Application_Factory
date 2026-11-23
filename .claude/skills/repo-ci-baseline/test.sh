@@ -536,6 +536,13 @@ if in_shard scripts; then
   step "status parity suite (status.py through its command line, against a fake gh) and its runner's tests"
   bash "$skill_dir/tests/status-parity.test.sh" || fail "status-parity.test.sh"
   bash "$skill_dir/tests/status-parity-runner.test.sh" || fail "status-parity-runner.test.sh"
+  # Run again as a hook would, with GIT_DIR and the rest naming another repo: its throwaway repo must not touch that one.
+  decoy="$(mktemp -d)"
+  git init -q "$decoy"
+  GIT_DIR="$decoy/.git" GIT_WORK_TREE="$decoy" GIT_INDEX_FILE="$decoy/.git/index" \
+    bash "$skill_dir/tests/status-parity-runner.test.sh" > /dev/null || fail "status-parity-runner.test.sh with a hook's GIT_DIR set"
+  [[ -z "$(git -C "$decoy" ls-files)" && ! -e "$decoy/cases" ]] || fail "status-parity-runner.test.sh staged files in the caller's repository"
+  rm -rf "$decoy"
 
   step "Claude Review benchmark tests (scoring, arguments, config swap, the workflow it reads)"
   # PyYAML lets the test that reads the Template's claude-review.yml run instead of skipping.
