@@ -268,7 +268,8 @@ jobs:
 
             Whenever you stop without a pull request, for any reason (a step failed, a push or `gh` call was
             refused, the issue needs the owner), first comment on the issue saying what you did, what stopped
-            you, and the exact error if there was one.
+            you, and the exact error if there was one. The repository is public: never paste a token, a
+            credential or a remote URL into a comment, and leave those parts out of any error you quote.
           # bypassPermissions (the owner's decision): Claude Code treats `.claude/` as a protected path whose writes
           # always ask, and a headless run refuses every ask, so without it no edit to the Template (under
           # `.claude/skills/`) can be made. Bash is unrestricted anyway on this throwaway runner; the disallowed
@@ -291,13 +292,18 @@ jobs:
           EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
         run: |
           set -uo pipefail
-          # Claude's last message and its turn count, in this log only (where GitHub masks the secrets), so a run
-          # that ends without a pull request or a comment can still be read. The transcript isn't shown.
+          # Claude's last message and its turn count, so a run that ends without a pull request or a comment can
+          # still be read. A deliberate trade against the transcript being hidden: up to 4000 bytes of Claude's own
+          # text reach this public log, where GitHub masks only the registered secrets and the App token. The
+          # message is printed between stop-commands markers, so a `::` line in it is text, not a workflow command.
           if [ -n "${EXECUTION_FILE:-}" ] && [ -f "$EXECUTION_FILE" ]; then
             echo "::group::Claude's last message"
+            stop="$(cat /proc/sys/kernel/random/uuid)"
+            echo "::stop-commands::$stop"
             jq -r '[.[] | select(.type == "result")] | last | "turns: \(.num_turns), subtype: \(.subtype)\n\(.result // "")"' \
               "$EXECUTION_FILE" | head -c 4000 || true
             echo
+            echo "::$stop::"
             echo "::endgroup::"
           fi
           gh api --silent -X DELETE "repos/$GH_REPO/issues/$ISSUE/labels/claude:working" || true
