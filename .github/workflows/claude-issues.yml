@@ -189,8 +189,9 @@ jobs:
                joined by hyphens). Git hooks are off in this checkout, so commit in it directly rather than in a
                worktree. Commit subjects are `<type>(<scope>): <Summary>`, with the scope `baseline` for the
                Template.
-            5. Make the change, with tests where CLAUDE.md asks for them. Run `scripts/gate.sh --quick` and fix
-               what it reports. The full gate runs in CI on the pull request.
+            5. Make the change, with tests where CLAUDE.md asks for them. Run the gate in the quick mode that
+               CLAUDE.md's Commands list gives for iterating, and fix what it reports. The full gate runs in CI
+               on the pull request.
             6. Push with `git push -u origin HEAD`, then open the pull request as a draft with
                `gh pr create --draft --base main`. Its title follows the commit format above. Its body fills in
                the headings of .github/pull_request_template.md and ends with
