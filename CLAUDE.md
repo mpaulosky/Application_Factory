@@ -22,6 +22,8 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
 - `.github/workflows/template-tests.yml`: the Factory's own workflow (named `repo-ci-baseline Template`, the required job `Template tests`). It runs the gate one part per job in parallel
   (`GATE_PART`: `self`, `review`, `static`, `template`, `sandcastle`, ADR 0012), with `test.sh` in three shards (`TEST_SH_SHARD`, ADR 0013), and
   `Template tests` passes only when every part did. `.github/actions/template-tools/` installs the tools each job needs.
+- `.github/workflows/claude-issues.yml`: the Factory's own workflow (ADR 0018). Claude works the open issues labelled `claude`, one at a time and skipping blocked ones, and opens a draft
+  pull request for each; its header lists the labels it uses.
 - `.github/hooks/` (`pre-commit`, `pre-push`, `post-checkout`), `scripts/check-branch-name.sh`, `.github/workflows/{claude-review,pr-automerge,pr-review-submitted}.yml` and
   `.github/scripts/post_claude_review.py`, and the issue and PR process (ADR 0009): `.github/ISSUE_TEMPLATE/*`, `.github/pull_request_template.md`, `.github/workflows/pr-title.yml` and
   `scripts/check-pr-title.sh`, and `.github/workflows/lint-{markdown,yaml,actions}.yml`, and the local review (ADR 0010): `scripts/review.sh`, five `.sandcastle/lib/` modules with three tests,
@@ -42,7 +44,7 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
 - `~/.claude/skills/repo-ci-baseline` is a symlink to the skill here, so editing it changes what `apply.sh` copies everywhere.
 
 The Factory carries the git hooks and a gate of its own (ADR 0006), Claude Review with PR Auto-Merge (ADR 0008), the issue and PR process (ADR 0009), the local review
-(ADR 0010), the edit-time lint (ADR 0011) and the shell style (ADR 0015), not the rest of the Baseline: no other `.sandcastle/` code, .NET workflows or
+(ADR 0010), the edit-time lint (ADR 0011), the shell style (ADR 0015) and the issue worker (ADR 0018), not the rest of the Baseline: no other `.sandcastle/` code, .NET workflows or
 release workflows; its `package.json` holds only `tsx` and `zod`.
 Don't add more without an ADR.
 
