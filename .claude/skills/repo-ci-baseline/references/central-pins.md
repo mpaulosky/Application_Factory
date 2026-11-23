@@ -1,7 +1,8 @@
 # Central package pins
 
 Template files (Owned): `.github/scripts/check_central_pins.py` and its tests, run by `scripts/gate.sh` right before the build and by `ci.yml`'s
-`Build Solution` job right after the checkout, before Setup .NET. Its tests pin both places. mpaulosky/Application_Factory#105.
+`Build Solution` job right after the checkout, before Setup .NET. Its tests pin both places. mpaulosky/Application_Factory#105; the decision is
+[ADR 0012](../docs/adr/0012-an-unreferenced-central-pin-fails-the-gate-and-build-solution.md).
 
 ## Why
 
