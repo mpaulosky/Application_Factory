@@ -28,6 +28,12 @@ values or grow past 1,024 characters with them substituted (any property value o
 MSBuild: such a pin is left alone, and such a reference could name any package, so the pins found are printed as warnings and the check passes,
 naming the reference.
 
+The setting is read the same way: `CentralPackageTransitivePinningEnabled` set to `$(PinTransitive)` is on when any value the repo gives
+`PinTransitive` is `true`. A setting that can't be read that way (no file gives the property a value, or it holds `@(`, `%(` or a property
+function) counts as on, with a notice naming the file and the value, unless another file sets it to `true` anyway. The check fails closed there:
+under such a setting an unreferenced pin either holds a package back or does nothing, so deleting it, or keeping it with a reason, is safe
+either way.
+
 The check needs Python 3.11 or later: CI's `Build Solution` step and the gate run the host's `python3`, and an older one stops it with a message
 saying so.
 
