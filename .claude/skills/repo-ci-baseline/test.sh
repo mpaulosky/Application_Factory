@@ -52,6 +52,26 @@ need() {
     exit 2
   }
 }
+# The dotnet-install.sh channel of a global.json SDK version: its feature band (11.0.100 and 11.0.105 are 11.0.1xx), whose
+# newest patch rollForward latestPatch accepts. Fails, printing nothing, for anything but a stable A.B.Cnn version
+# (a prerelease, a four-digit patch, an empty value): global.json's allowPrerelease is false, and no band is A.B.0xx.
+sdk_band() {
+  [[ "$1" =~ ^([0-9]+)\.([0-9]+)\.([1-9])[0-9]{2}$ ]] || return 1
+  printf '%s.%s.%sxx\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+}
+# Whether a dependabot.yml (argument 1) has a dotnet-sdk entry whose directory, or one of whose directories, is argument 2,
+# read as the Factory's file is written: an entry at "  - package-ecosystem:", its keys at four spaces, a list item at six.
+# A comment line counts for nothing, so a commented-out entry or a comment naming the path doesn't pass.
+dotnet_sdk_entry_for() {
+  awk -v dir="$2" '
+    /^[ \t]*#/ { next }
+    /^  - package-ecosystem:/ { sdk = ($0 ~ /: "dotnet-sdk" *$/); dirs = 0; next }
+    sdk && /^    directories:/ { dirs = 1; next }
+    sdk && /^    [a-z]/ { dirs = 0 }
+    sdk && $0 ~ ("^    directory: \"" dir "\" *$") { found = 1 }
+    sdk && dirs && $0 ~ ("^      - \"" dir "\" *$") { found = 1 }
+    END { exit !found }' "$1"
+}
 # The shard is checked first, before the tools, and must be exactly one of the declared names: a value such as "hooks scripts" would match no block and run nothing.
 shards=(hooks scripts checks)
 shard="${TEST_SH_SHARD:-}"
@@ -491,9 +511,22 @@ PY
       || fail "$file's pip entry must ignore ruff, whose pin moves only with gate.sh's RUFF_VERSION and release rule"
   done
   # The Factory moves the SDK: its own dotnet-sdk entry bumps the Template's Owned global.json (mpaulosky/Application_Factory#103).
-  awk '/package-ecosystem: "dotnet-sdk"/ { sdk = 1; next } /package-ecosystem:/ { sdk = 0 }
-    sdk && /"\/\.claude\/skills\/repo-ci-baseline\/template\/owned"/ { found = 1 } END { exit !found }' "$skill_dir/../../../.github/dependabot.yml" \
-    || fail "the Factory's .github/dependabot.yml must have a dotnet-sdk entry for /.claude/skills/repo-ci-baseline/template/owned, the Owned global.json"
+  template_dir="/.claude/skills/repo-ci-baseline/template/owned"
+  dotnet_sdk_entry_for "$skill_dir/../../../.github/dependabot.yml" "$template_dir" \
+    || fail "the Factory's .github/dependabot.yml must have a dotnet-sdk entry for $template_dir, the Owned global.json"
+  # The check itself: a directories list passes; a commented-out entry, a comment naming the path, another ecosystem's
+  # directory and the dotnet-sdk entry pointed elsewhere don't.
+  sdk_entry() { printf 'version: 2\nupdates:\n%s\n' "$1" > "$md_tmp/dependabot-sdk.yml"; }
+  sdk_entry "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directories:\n      - "/"\n      - "%s"\n    schedule:\n      interval: "weekly"' "$template_dir")"
+  dotnet_sdk_entry_for "$md_tmp/dependabot-sdk.yml" "$template_dir" || fail "the dotnet-sdk entry check misses a directories list naming the Template"
+  for wrong in \
+    "$(printf '  # - package-ecosystem: "dotnet-sdk"\n  #   directory: "%s"' "$template_dir")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "/"\n    # directory: "%s"' "$template_dir")" \
+    "$(printf '  - package-ecosystem: "pip"\n    directory: "%s"\n  - package-ecosystem: "dotnet-sdk"\n    directory: "/"' "$template_dir")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "%s/sub"' "$template_dir")"; do
+    sdk_entry "$wrong"
+    ! dotnet_sdk_entry_for "$md_tmp/dependabot-sdk.yml" "$template_dir" || fail "the dotnet-sdk entry check passes a file with no such entry: $wrong"
+  done
   python3 - "$owned/.github/scripts/requirements-tests.txt" << 'PY_REQ' || fail "requirements-tests.txt must pin each package exactly, with at least one sha256 hash, pytest and pyyaml among them"
 import re, sys
 text = open(sys.argv[1]).read()
@@ -1037,11 +1070,21 @@ sys.exit(0 if re.search(r"^[ \t]*(?i:RUN)[ \t]+[^\n]*\bpip3?[ \t]+install\b[^\n&
     || fail "the Seed .sandcastle/Dockerfile must have \"ruff==\${RUFF_VERSION}\" on a RUN pip install line, the release the gate's Python lint step takes"
   # And the .NET SDK feature band global.json pins (11.0.100 is the band 11.0.1xx): the newest patch of that band is what
   # rollForward latestPatch accepts, so a Dependabot patch bump needs no image change (mpaulosky/Application_Factory#103).
-  sdk="$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["sdk"]["version"])' "$owned/global.json")"
+  sdk="$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["sdk"]["version"])' "$owned/global.json")" \
+    || fail "can't read the Template's global.json sdk.version"
   channel="$(sed -nE 's/^ARG DOTNET_CHANNEL=([^ ]+).*/\1/p' "$seed/.sandcastle/Dockerfile")"
-  sdk_patch="${sdk##*.}"
-  [[ "$channel" == "$(cut -d. -f1-2 <<< "$sdk").${sdk_patch:0:1}xx" ]] \
-    || fail "the Seed .sandcastle/Dockerfile's DOTNET_CHANNEL is '$channel'; global.json's SDK is $sdk"
+  if band="$(sdk_band "$sdk")"; then
+    [[ "$channel" == "$band" ]] || fail "the Seed .sandcastle/Dockerfile's DOTNET_CHANNEL is '$channel'; global.json's SDK $sdk is the band $band"
+  else
+    fail "global.json's sdk.version '$sdk' isn't a stable A.B.Cnn version, so the Seed Dockerfile's channel can't be its band"
+  fi
+  # The band itself, at each edge.
+  for pair in 11.0.100=11.0.1xx 11.0.105=11.0.1xx 11.0.199=11.0.1xx 11.0.200=11.0.2xx 12.1.300=12.1.3xx 10.10.900=10.10.9xx; do
+    [[ "$(sdk_band "${pair%%=*}")" == "${pair#*=}" ]] || fail "sdk_band ${pair%%=*} must be ${pair#*=}"
+  done
+  for not_stable in "" 11.0.100-rc.2 11.0.200-preview.1 11.0.1000 11.0.99 11.0.010 11.0 11.0.1xx " 11.0.100" "11.0.100 "; do
+    ! sdk_band "$not_stable" > /dev/null || fail "sdk_band must refuse '$not_stable'"
+  done
 
   step "Hand-off PRs (the sandcastle:follow-up label)"
   # The session guidance is an Owned rules file, so Apply keeps it current in a Sandcastle repo. It loads in every

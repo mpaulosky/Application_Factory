@@ -15,7 +15,11 @@ Done when every item below is resolved for this repo and `scripts/gate.sh` passe
   a Rollout brings the Template's copy, which the Factory's own pip entry bumps. The block ignores ruff, whose pin moves only with the gate's release rule
   (the Factory's ADR 0011, Update: Python): an Application Applied before the `ignore` existed adds `ignore: [{dependency-name: "ruff"}]` to its pip entry by hand.
   It has no `dotnet-sdk` block: `global.json` is Owned, the Factory's own Dependabot moves the SDK, and a Rollout brings it, so an Application's own bump
-  would fail the Owned files check. An Application Applied before the block left the Seed deletes its `dotnet-sdk` entry by hand (mpaulosky/Application_Factory#103).
+  would fail the Owned files check. An Application Applied before the Seed dropped it deletes its own `dotnet-sdk` entry by hand (mpaulosky/Application_Factory#103);
+  the `dotnet-sdk` label stays in `labels.json`.
+- **Seed `.sandcastle/Dockerfile`.** Its `DOTNET_CHANNEL` is the feature band of the Owned `global.json`'s SDK (`11.0.1xx` for `11.0.100`). A Seed is written once, so
+  when a Rollout brings a pin in a new band, an Application with Sandcastle sets `ARG DOTNET_CHANNEL` to that band in its own Dockerfile by hand (from `10.0` to
+  `11.0.1xx` for mpaulosky/Application_Factory#103); otherwise the sandbox has no SDK the pin accepts and its gate fails.
 - **Seed files skipped.** Diff each against `template/seed/` and bring over what the repo lacks.
   The repo's version wins on content.
 - **Seed files written.** Check each against what the repo had before.

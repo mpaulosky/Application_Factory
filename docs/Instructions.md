@@ -151,7 +151,7 @@ its checks pass. While it's a draft:
 
 Then add the `baseline:apply` label, which `github-settings.sh --fix` has made:
 `gh pr edit <number> --repo mpaulosky/[Repo] --add-label baseline:apply`. The Owned files check (`owned-files.yml`) fails a PR that changes a
-file in the base's `check_gh_repo.py` `OWNED` list (the Owned scripts, their tests and the review skills; not the workflows or
+file in the base's `check_gh_repo.py` `OWNED` list (the Owned scripts, their tests, the review skills and the root `global.json`; not the workflows or
 `.github/scripts/`) unless it is a `chore/standardize-baseline` or `chore/reapply-baseline` branch of the repo itself with that label; adding it
 reruns the check. Then land it by hand as `references/automerge.md` describes, while nothing else is in flight: the merge is the new
 `release.yml`'s first live run. Run `github-settings.sh --fix` again right after the merge, so the new required checks

@@ -64,3 +64,6 @@ and its .NET required checks, and CLAUDE.md is the Factory's process document; t
   `python-tests` job installs with `--require-hashes`, so nothing keeps them stale. Its directory is the Template's alone (there is no copy at the root), the
   `template-tools` action installs the same file so the bump's PR runs the Template's tests on it, and the bump reaches the Fleet by a Rollout. The Seed's
   `dependabot.yml` gains the same block for Applications Applied from now on.
+- **Update:** the Factory's `dependabot.yml` also carries a `dotnet-sdk` block for the Template's Owned `global.json`, the SDK every Application builds with
+  (mpaulosky/Application_Factory#103, ADR 0017). The bump reaches the Fleet by a Rollout. The Seed's `dotnet-sdk` block goes: `global.json` is Owned, so an
+  Application's own bump would fail the Owned files check.
