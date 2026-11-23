@@ -176,6 +176,27 @@ def test_a_setting_that_cant_be_read_is_named_once_however_often_it_is_set(tmp_p
     assert ccp.check(tmp_path)[4] == [("Directory.Packages.props", "$(X)")]
 
 
+@pytest.mark.parametrize("split", [True, False])
+def test_a_later_false_doesnt_turn_off_an_earlier_true(tmp_path, split):
+    # Directory.Build.props is read before Directory.Packages.props, so its true comes first; in one file, the first group's does.
+    if split:
+        (tmp_path / "Directory.Build.props").write_text(f"<Project>{TRANSITIVE}</Project>\n")
+        properties = setting("false")
+    else:
+        properties = TRANSITIVE + setting("false")
+    central(tmp_path, '<PackageVersion Include="Polly" Version="8.0.0" />', properties=properties)
+
+    assert ccp.check(tmp_path)[:2] == (True, [(tmp_path.resolve() / "Directory.Packages.props", "Polly")])
+    assert ccp.check(tmp_path)[4] == []
+
+
+def test_a_setting_resolving_to_true_in_the_same_file_settles_an_unreadable_one(tmp_path):
+    central(tmp_path, '<PackageVersion Include="Polly" Version="8.0.0" />', properties=setting("$(NotSetAnywhere)") + setting("$(P)", ("P", "true")))
+
+    assert ccp.check(tmp_path)[0] is True
+    assert ccp.check(tmp_path)[4] == []
+
+
 def test_a_literal_true_elsewhere_settles_it_and_names_no_setting(tmp_path):
     central(tmp_path, '<PackageVersion Include="Polly" Version="8.0.0" />', properties=setting("$(NotSetAnywhere)"))
     (tmp_path / "Directory.Build.props").write_text(f"<Project>{TRANSITIVE}</Project>\n")

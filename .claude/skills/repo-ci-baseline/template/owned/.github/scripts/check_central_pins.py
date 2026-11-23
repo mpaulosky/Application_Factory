@@ -25,8 +25,8 @@ past MAX_VALUE characters with them substituted (any property value over MAX_VAL
 MSBuild. A pin like that is left alone, and a reference like that could be any package, so the pins found are then reported as
 warnings and the check passes. Transitive pinning is on when any of those files sets the property to true, or to a value built
 from $(Name) that resolves, the same way and within the same limits, to true for one combination of values. A value without $(, @(
-or %( is compared as written. Unless another file sets the property to true, which settles it, a value that holds them and can't be
-resolved counts as on, named in a notice, so the check fails closed: under it an unreferenced pin either holds a package back or
+or %( is compared as written. Unless transitive pinning is on anyway (another setting, in any file, is true or resolves to true),
+a value that holds them and can't be resolved counts as on, named in a notice, so the check fails closed: under it an unreferenced pin either holds a package back or
 does nothing.
 
 Every file is read as bytes, so expat honours its byte-order mark and XML declaration (MSBuild reads UTF-16 project files too). Only

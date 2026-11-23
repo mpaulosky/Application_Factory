@@ -32,8 +32,8 @@ naming the reference.
 The setting is read the same way: `CentralPackageTransitivePinningEnabled` set to `$(PinTransitive)` is on when any value the repo gives
 `PinTransitive` is `true`. A value without `$(`, `@(` or `%(` is compared as written, whatever its length. One that holds them and can't be
 read by the same rules and limits as a reference (no file gives the property a value, a value holding another `$(Name)`, `@(`, `%(`, a
-property function, or one of the limits above) counts as on, with a notice naming the file and the value, unless another file sets it to
-`true` anyway. The check fails closed there:
+property function, or one of the limits above) counts as on, with a notice naming the file and the value, unless transitive pinning
+is on anyway (another setting, in any file, is `true` or resolves to `true`). The check fails closed there:
 under such a setting an unreferenced pin either holds a package back or does nothing, so deleting it, or keeping it with a reason, is safe
 either way.
 
