@@ -18,8 +18,7 @@ public partial class StatusTests
 	// A reviews entry: (login, oid[, body[, extras]]); extras: At (submittedAt), Threads (inline comments), Merge. A null extra is absent.
 	sealed record Rev(string Login, string Oid, string? Body = null, string? At = null, int? Threads = null, bool? Merge = null);
 
-	// The fixtures' numbers are longs: J.Int reads a JsonValue built from an int as no number at all (TryGetValue<long> fails on it),
-	// where parsed JSON, which is what GitHub's answers are, reads as one.
+	// The fixtures' numbers are longs, as parsed JSON's (GitHub's answers) read.
 	static JsonNode P(string json) => JsonNode.Parse(json)!;
 
 	// A node that can go into another tree: a JsonNode has one parent, where a Python dict can sit in any number of lists.

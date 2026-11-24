@@ -88,7 +88,8 @@ static class J
 	// (n.get(key) or ""), for a string.
 	public static string Str(JsonNode? n, string key) => S(Get(n, key)) ?? "";
 
-	public static long? Int(JsonNode? v) => v is JsonValue jv && jv.TryGetValue<long>(out var l) ? l : null;
+	// A whole number, parsed or built in code (a JsonValue built from an int doesn't read as a long).
+	public static long? Int(JsonNode? v) => v is JsonValue jv ? jv.TryGetValue<long>(out var l) ? l : jv.TryGetValue<int>(out var i) ? i : null : null;
 
 	// Python's truth of a JSON value.
 	public static bool B(JsonNode? v) => v switch
