@@ -330,7 +330,7 @@ if [[ "$(wc -l <<< "$built" | tr -d ' ')" != 1 || "$built" != */skill/github\|bu
   fail "a C# reference of a suite with github/ wasn't built once from the copy: $(cat "$work/dotnet.log")"
 fi
 ran="$(grep '|run ' "$work/dotnet.log" || true)"
-if [[ "$(wc -l <<< "$ran" | tr -d ' ')" != 1 || "$ran" != "${built%%|*}|run --no-build --file ${built##* } -- "* ]]; then
+if [[ "$(wc -l <<< "$ran" | tr -d ' ')" != 1 || "$ran" != "${built%%|build *}|run --no-build --file ${built#*|build } -- "* ]]; then
   fail "a C# reference of a suite with github/ didn't run the copy's .cs from the copy: $(cat "$work/dotnet.log")"
 fi
 rm -rf "$skill/tests/parity/ovcs" "$skill/github/ovcs.cs" "$cases/c1"
@@ -618,15 +618,10 @@ fake 97 '' "-X with no value" api repos/o/app -X
 fake 97 '' "--input twice" api -X PATCH repos/o/app --input - --input - <<< '{}'
 fake 97 '' "an empty --input body" api -X PATCH repos/o/app --input - < /dev/null
 logged "an empty --input body" "UNMATCHED rest.PATCH.repos_o_app (its --input body is not one JSON value)"
-# With no jq on PATH, a call with --input is refused, not logged without its body: PATH holds every command but jq.
-mkdir "$work/no-jq"
-IFS=: read -ra path_dirs <<< "$PATH"
-for dir in "${path_dirs[@]}"; do
-  for tool in "$dir"/*; do
-    [[ "$(basename -- "$tool")" == jq || -e "$work/no-jq/$(basename -- "$tool")" || ! -x "$tool" ]] || ln -s "$tool" "$work/no-jq/"
-  done
-done
-PATH="$work/no-jq" fake 97 '' "--input with no jq" api -X PATCH repos/o/app --input - <<< '{}'
+# With no jq on PATH, a call with --input is refused, not logged without its body. PATH holds the few commands the fake runs, and no jq.
+mkdir "$work/nojq"
+for tool in bash cat mktemp rm; do ln -s "$(command -v "$tool")" "$work/nojq/$tool"; done
+PATH="$work/nojq" fake 97 '' "--input with no jq" api -X PATCH repos/o/app --input - <<< '{}'
 logged "--input with no jq" "UNMATCHED rest.PATCH.repos_o_app (jq, which a call with --input needs, is not on PATH)"
 fake 97 '' "two paths" api repos/o/app repos/o/lib
 fake 97 '' "no path" api -X GET
@@ -660,8 +655,6 @@ echo 'HTTP 502: Bad Gateway' > "$gh_dir/rest.repos_o_down.fail"
 fake 1 '' "a .fail fixture for a call with --jq" api repos/o/down --paginate --jq .title
 logged "a .fail fixture for a call with --jq" 'rest.repos_o_down gh api repos/o/down --paginate --jq .title'
 # jq missing from PATH: the call is unmatched, not answered with the raw fixture.
-mkdir "$work/nojq"
-for tool in bash cat mktemp rm; do ln -s "$(command -v "$tool")" "$work/nojq/$tool"; done
 code=0
 PATH="$work/nojq" FAKE_GH_DIR="$gh_dir" FAKE_GH_LOG="$gh_log" "$work/nojq/bash" "$fake" api "$rel" --jq . > "$work/fout" 2>&1 || code=$?
 [[ $code -eq 97 && "$(tail -1 "$gh_log")" == *"jq, which a call with --jq needs, is not on PATH"* ]] \
