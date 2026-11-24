@@ -126,8 +126,9 @@ static class J
 	// (n.get("nodes") or []).
 	public static IEnumerable<JsonNode?> Nodes(JsonNode? n) => Get(n, "nodes") is JsonArray a ? a : [];
 
-	// n["nodes"], iterated: a missing key, a parent that isn't an object, or a value that isn't a list throws, as the Python's KeyError or
-	// TypeError did, so an answer that lacks a list is unread rather than read as empty.
+	// n["nodes"], iterated: a missing key, a parent that isn't an object, or a value that isn't a list throws, so an answer that lacks a
+	// list is unread rather than read as empty. The Python's KeyError or TypeError did the same for a missing key or null; it iterated an
+	// object or a string as empty, which this refuses on purpose (GitHub sends neither).
 	public static JsonArray NodesOf(JsonNode? n) =>
 			Req(n, "nodes") as JsonArray ?? throw new InvalidOperationException("'nodes' is not a list");
 

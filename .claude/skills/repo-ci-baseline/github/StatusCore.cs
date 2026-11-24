@@ -102,7 +102,9 @@ sealed class StatusReader
 			{
 				try
 				{
-					var read = J.Req(J.Req(J.Req(Graphql(Status.ThreadsQuery, [], [("id", Id())]), "node"), "reviewThreads"), "nodes");
+					// The answer's list is checked here, so one that isn't a list keeps the threads the first read gave and is reported, rather than
+					// stored for ToState's strict read to fail on outside this try.
+					var read = J.NodesOf(J.Req(J.Req(Graphql(Status.ThreadsQuery, [], [("id", Id())]), "node"), "reviewThreads"));
 					((JsonObject)J.Req(node, "reviewThreads")!)["nodes"] = J.Copy(read);
 				}
 				catch (Exception error) // an advisory notice mustn't make the repo unreadable
@@ -388,7 +390,8 @@ static class Status
 				J.Int(J.Get(node, "databaseId")) ?? 0);
 	}
 
-	// text with every character Python's str.isprintable() refuses replaced by its repr escape; thread paths are PR-controlled.
+	// text with every character Python's str.isprintable() refuses replaced by its repr escape. Every PR- or writer-controlled string status
+	// and land print goes through it: a PR's title, a thread's path, a check run's name and a status context.
 	public static string Printable(string text)
 	{
 		var result = new StringBuilder();
@@ -479,6 +482,7 @@ static class Status
 		return found;
 	}
 
+	// Its strict read can't fail first: every caller reads the same list through Reviews() before it.
 	// The reviews of Status.Query's node as ReviewRounds() reads them: (login, oid, body, submittedAt, inline thread count, is a merge).
 	static (string?, string?, string?, string?, long, bool)[] ReviewRecords(JsonNode node) =>
 			[.. J.NodesOf(J.Req(node, "reviews")).Select(r => (J.S(J.Get(J.Get(r, "author"), "login")), J.S(J.Get(J.Get(r, "commit"), "oid")), J.S(J.Get(r, "body")),

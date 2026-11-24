@@ -90,13 +90,15 @@ static class Landing
 
 	public static string NoBot(string s) => s.EndsWith("[bot]", StringComparison.Ordinal) ? s[..^5] : s;
 
-	// An ISO-8601 time as epoch seconds, or null when it is missing or unreadable. Only the extended form datetime.fromisoformat() read is
-	// taken (a date, then T or a space and a time to the second or its fraction, then an offset), never the other forms
-	// DateTimeOffset.TryParse would guess at ("Jan 5 2026", "1/2/2026"); Python's basic and week forms aren't read either, and GitHub sends
-	// neither. A time with no offset is UTC, where the Python took the machine's zone: GitHub's times carry Z, and the runners are on UTC.
+	// ISO-8601's extended form, as Epoch reads it: a date, then T or a space and a time to the hour, minute, second or its fraction, then
+	// an offset.
 	static readonly Regex IsoTime = new(
 			@"\A[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9]{2}(?::[0-9]{2}(?::[0-9]{2}(?:\.[0-9]{1,6})?)?)?(?:[+-][0-9]{2}:[0-9]{2})?)?\z", RegexOptions.CultureInvariant);
 
+	// An ISO-8601 time as epoch seconds, or null when it is missing or unreadable. Only the extended form datetime.fromisoformat() read
+	// (IsoTime) is taken, never the other forms DateTimeOffset.TryParse would guess at ("Jan 5 2026", "1/2/2026"); Python's basic and week
+	// forms aren't read either, and GitHub sends neither. A time with no offset is UTC, where the Python took the machine's zone: GitHub's
+	// times carry Z, and the runners are on UTC.
 	public static double? Epoch(string? text)
 	{
 		text = text?.Replace("Z", "+00:00", StringComparison.Ordinal);

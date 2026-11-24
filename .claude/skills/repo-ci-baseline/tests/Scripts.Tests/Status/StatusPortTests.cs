@@ -138,8 +138,36 @@ public partial class StatusTests
 		var node = PrNode(contexts: Green);
 		node[key] = P(value);
 
-		Assert.ThrowsAny<Exception>(() => StateOf(node));
-		Assert.ThrowsAny<Exception>(() => Run(["owner/app"], new() { ["owner/app"] = Repo(node) }));
+		Assert.Contains("'nodes'", Assert.ThrowsAny<Exception>(() => StateOf(node)).Message, StringComparison.Ordinal);
+		Assert.Contains("'nodes'", Assert.ThrowsAny<Exception>(() => Run(["owner/app"], new() { ["owner/app"] = Repo(node) })).Message, StringComparison.Ordinal);
+	}
+
+	// Not a moved test: Status.Run reads the repo's PR list again after the fetch, outside its per-repo try, so a fetch that hands back
+	// an answer without it ends the run (exit 1 through Script.Run) rather than print that the repo has no open PRs.
+	[Theory]
+	[InlineData("{}")]
+	[InlineData("""{"nodes": null}""")]
+	public void Run_refuses_a_fetched_answer_without_its_pr_list(string pullRequests)
+	{
+		using var output = new StringWriter();
+		using var err = new StringWriter();
+		var error = Assert.ThrowsAny<Exception>(() =>
+				Status.Run(["owner/app"], output, err, (_, _) => P($$$"""{"repository": {"pullRequests": {{{pullRequests}}}}}"""), FleetList));
+
+		Assert.Contains("'nodes'", error.Message, StringComparison.Ordinal);
+		Assert.Equal("", output.ToString());
+	}
+
+	// Not a moved test: whether a bot reviewed the PR is read strictly too, so a reviews list that isn't one isn't "no bot review".
+	[Theory]
+	[InlineData("{}")]
+	[InlineData("""{"nodes": null}""")]
+	public void Bot_reviewed_refuses_a_reviews_answer_without_its_list(string reviews)
+	{
+		var node = PrNode();
+		node["reviews"] = P(reviews);
+
+		Assert.Contains("'nodes'", Assert.ThrowsAny<Exception>(() => Status.BotReviewed(node)).Message, StringComparison.Ordinal);
 	}
 
 	[Fact]
@@ -148,17 +176,44 @@ public partial class StatusTests
 		var node = PrNode(contexts: Green);
 		((JsonObject)J.Get(J.Get(J.NodesOf(J.Req(node, "commits"))[0], "commit"), "statusCheckRollup")!)["contexts"] = new JsonObject();
 
-		Assert.ThrowsAny<Exception>(() => StateOf(node));
+		Assert.Contains("'nodes'", Assert.ThrowsAny<Exception>(() => StateOf(node)).Message, StringComparison.Ordinal);
 	}
 
+	// Not a moved test: the fetch reads a PR's thread list strictly, so a null one makes the repo unreadable.
 	[Fact]
-	public void A_reader_with_an_unlisted_thread_list_makes_the_repo_unreadable()
+	public void Fetch_refuses_a_pr_whose_thread_list_is_null()
 	{
 		var node = PrNode();
 		node["reviewThreads"] = new JsonObject { ["nodes"] = null };
 		var reader = new StatusReader(err: new StringWriter()) { Graphql = (_, _, _) => Repo(node) };
 
-		Assert.ThrowsAny<Exception>(() => reader.Fetch("owner", "app"));
+		Assert.Contains("'nodes' is not a list", Assert.ThrowsAny<Exception>(() => reader.Fetch("owner", "app")).Message, StringComparison.Ordinal);
+	}
+
+	// Not a moved test: the threads query only adds to what the first read gave (a notice), so an answer whose list isn't one keeps the
+	// first read's threads and is reported, and the run still prints the PR's line.
+	[Theory]
+	[InlineData("""{"node": {"reviewThreads": {"nodes": null}}}""")]
+	[InlineData("""{"node": {"reviewThreads": {}}}""")]
+	public void A_threads_answer_without_its_list_keeps_the_first_reads_threads(string answer)
+	{
+		Rev[] reviewed = [new("copilot-pull-request-reviewer", Head)];
+		var done = With(PrNode(number: 1, reviews: reviewed, threads: [true, true]), ("id", "PR_done"));
+		var err = new StringWriter();
+		var reader = new StatusReader(err: err)
+		{
+			Graphql = (query, _, _) =>
+				query == Status.ThreadsQuery ? P(answer)
+				: query == Status.CommentsQuery ? new JsonObject { ["node"] = new JsonObject { ["comments"] = CommentsOf() } }
+				: query == Status.EventsQuery ? P("""{"node": {"timelineItems": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}}}""")
+				: Repo(done),
+		};
+		using var output = new StringWriter();
+		using var runErr = new StringWriter();
+
+		Assert.Equal(0, Status.Run(["owner/app"], output, runErr, reader.Fetch, FleetList));
+		Assert.StartsWith("app#1 ", output.ToString(), StringComparison.Ordinal);
+		Assert.Contains("owner/app#1: thread comments unreadable, no notice", err.ToString(), StringComparison.Ordinal);
 	}
 
 	// Not a moved test: a check's name is the PR's (a fork's workflow names its jobs) or a writer's (a status context), so what the
