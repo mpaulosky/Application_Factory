@@ -15,7 +15,7 @@ runs:
         python-version: "3.12"
 
     # The SDK the Factory's global.json names (a copy of the Template's, ADR 0017): the gate builds and format-checks the C# scripts, and
-    # test.sh builds and runs tests/Scripts.Tests.
+    # test.sh builds and runs tests/Scripts.Tests. The action and its pin are the Template ci.yml's (test.sh checks they match; Dependabot lists this folder).
     - name: Setup .NET
       uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
       with:
