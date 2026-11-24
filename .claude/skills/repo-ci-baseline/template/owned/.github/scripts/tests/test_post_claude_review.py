@@ -1062,6 +1062,44 @@ def test_the_batch_count_is_kept_between_one_and_the_review_steps(tmp_path, batc
         f"00{n}.diff" for n in range(1, counted + 1)) + ":")
 
 
+@pytest.mark.parametrize("batches, counted", [("3", 3), ("4", 4), ("5", 4)])
+def test_the_review_has_a_section_for_each_counted_batch_and_no_more(tmp_path, batches, counted):
+    answered = {f"ANSWERED_{n}": "false" for n in range(2, 6)}
+
+    _, outputs, _ = check(tmp_path, ANSWER, [SECRET], extra={"BATCHES": batches, "PIECES_DIR": str(tmp_path), **answered})
+
+    summary = json.loads(outputs["findings"])["summary"]
+    assert summary.startswith(f"Claude Review read this PR's diff in {counted} batches")
+    assert f"### Batch {counted} of {counted}" in summary and f"### Batch {counted + 1} " not in summary
+
+
+def test_a_finding_two_batches_both_report_is_posted_once(tmp_path):
+    same = {"path": "a.py", "line": 1, "body": "one"}
+    answers = [{"summary": "first", "findings": [same, {"path": "a.py", "line": 1, "body": "other"}]},
+               {"summary": "second", "findings": [dict(same), {"path": "a.py", "line": 2, "body": "one"},
+                                                  {"path": "a.py", "line": 2, "body": "one"}]}]
+    listed = ["001.diff", "002.diff"]
+    reads = {1: read_whole_of(tmp_path, listed[0], "a"), 2: read_whole_of(tmp_path, listed[1], "b")}
+
+    code, answer, _ = batched(tmp_path, answers, listed, reads)
+
+    # Only a repeat of an earlier batch's goes: the same line with another body, the same body on another line,
+    # and a batch's own repeat stay.
+    assert code == 0 and answer["findings"] == [same, {"path": "a.py", "line": 1, "body": "other"},
+                                                {"path": "a.py", "line": 2, "body": "one"},
+                                                {"path": "a.py", "line": 2, "body": "one"}]
+
+
+def test_a_finding_one_batch_reports_twice_is_kept_as_it_was(tmp_path):
+    # One batch alone is posted as it answered, as before batches.
+    same = {"path": "a.py", "line": 1, "body": "one"}
+    answer = {"summary": "s", "findings": [same, dict(same)]}
+
+    code, posted, _ = batched(tmp_path, [answer], ["001.diff"], {1: read_whole_of(tmp_path, "001.diff", "a")})
+
+    assert code == 0 and posted["findings"] == [same, same]
+
+
 def review_steps():
     """[(name, id, if, the env's REVIEW_PIECES and REVIEW_BATCH)] for each claude-code-action step, in order."""
     yaml = pytest.importorskip("yaml")
@@ -1095,6 +1133,23 @@ def test_each_batch_has_a_review_step_with_the_same_inputs_and_its_own_pieces():
         assert f"OUTCOME_{number}: ${{{{ steps.claude_{number}.outcome }}}}" in script
         # The job's reviewed output, the answer check's condition and the two ANSWERED_N.
         assert script.count(f"steps.claude_{number}.outputs.structured_output != ''") == 4
+
+
+def test_the_review_steps_differ_only_in_their_name_id_condition_and_pieces():
+    yaml = pytest.importorskip("yaml")
+    text = WORKFLOW.read_text()
+    steps = [step for step in yaml.safe_load(text)["jobs"]["review"]["steps"]
+             if str(step.get("uses", "")).startswith("anthropics/claude-code-action@")]
+    first = steps[0]
+    for step in steps:
+        assert set(step) == {"name", "id", "if", "timeout-minutes", "continue-on-error", "uses", "env", "with"}
+        assert {key: step[key] for key in ("timeout-minutes", "continue-on-error", "uses")} == {
+            key: first[key] for key in ("timeout-minutes", "continue-on-error", "uses")}
+        assert step["continue-on-error"] is True
+        assert set(step["env"]) == {"ACTIONS_STEP_DEBUG", "REVIEW_PIECES", "REVIEW_BATCH"}
+        assert step["env"]["ACTIONS_STEP_DEBUG"] == "false"
+    # One set of inputs, written once: every later step takes the first's through the alias.
+    assert text.count("with: &review\n") == 1 and text.count("with: *review\n") == len(steps) - 1
 
 
 # Each batch's transcript, kept apart: the action writes every review's to one fixed path
@@ -1240,6 +1295,22 @@ def warn(env):
 
 def test_no_warning_when_every_batch_answered():
     assert warn({"BATCHES": "2", "ANSWERED_1": "true", "ANSWERED_2": "true"}) == ""
+
+
+def test_the_warning_runs_on_every_review_it_could_warn_about():
+    # Not only when no batch answered: a batch that didn't answer beside one that did is warned about too.
+    yaml = pytest.importorskip("yaml")
+    step = next(step for step in yaml.safe_load(WORKFLOW.read_text())["jobs"]["review"]["steps"]
+                if step.get("name") == "Warn when Claude didn't review")
+    assert step["if"] == "steps.secret.outputs.enabled == 'true' && runner.debug != '1'"
+
+
+@pytest.mark.parametrize("batches, counted", [("", 1), ("0", 1), ("x", 1), ("3", 3), ("4", 4), ("5", 4), ("9", 4)])
+def test_the_warnings_batch_count_is_kept_between_one_and_the_review_steps(batches, counted):
+    out = warn({"BATCHES": batches, "ANSWERED_1": "true", **{f"ANSWERED_{n}": "false" for n in range(2, 10)}})
+
+    assert [line.split(" ended")[0] for line in out.splitlines()] == [
+        f"::warning::Claude Review's batch {n} of {counted}" for n in range(2, counted + 1)]
 
 
 def test_a_batch_without_an_answer_beside_one_that_answered_warns_that_its_pieces_hold(tmp_path):

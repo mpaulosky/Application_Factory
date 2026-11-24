@@ -2460,9 +2460,16 @@ jobs:
                   fields[number]["summary"] if number in fields
                   else "This batch's review ended without an answer, so its pieces weren't reviewed.")
                           for number in range(1, count + 1)]
+              # A finding an earlier batch already reported (the same path, line and body) is posted once, the
+              # first's; one batch's own findings are kept as it answered.
+              joined, seen = [], set()
+              for number in sorted(fields):
+                  keys = [json.dumps(finding, sort_keys=True) for finding in fields[number]["findings"]]
+                  joined += [finding for finding, key in zip(fields[number]["findings"], keys) if key not in seen]
+                  seen |= set(keys)
               answer = {"summary": f"Claude Review read this PR's diff in {count} batches, a review each.\n\n"
                                    + "\n\n".join(sections),
-                        "findings": [finding for number in sorted(fields) for finding in fields[number]["findings"]]}
+                        "findings": joined}
           answer, redacted = redact(answer)
           # Pieces past the last batch, and listed ones Claude didn't read whole
           # (a Read that failed, came back cut at the token cap or in part, or
