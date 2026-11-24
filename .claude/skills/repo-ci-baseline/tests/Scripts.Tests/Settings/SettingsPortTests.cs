@@ -122,6 +122,38 @@ public partial class SettingsTests
 		Assert.Throws<ArgumentException>(() => Settings.ReadWorkflows(Answer, "o/app", "main"));
 	}
 
+	// Each read that GitHub may refuse is read as an answer for the statuses settings.py caught there, and any other failure stops the
+	// check as an ApiError (exit 1): 404 alone where a missing thing is the answer, 403 or 404 where a plan may not offer the feature.
+	[Theory]
+	[InlineData("/contents/.github/workflows", 404, true)]
+	[InlineData("/contents/.github/workflows", 403, false)]
+	[InlineData("/contents/.github/workflows", 500, false)]
+	[InlineData("/vulnerability-alerts", 404, true)]
+	[InlineData("/vulnerability-alerts", 403, false)]
+	[InlineData("/vulnerability-alerts", 500, false)]
+	[InlineData("/automated-security-fixes", 404, true)]
+	[InlineData("/automated-security-fixes", 403, false)]
+	[InlineData("/automated-security-fixes", 500, false)]
+	[InlineData("/code-scanning/default-setup", 403, true)]
+	[InlineData("/code-scanning/default-setup", 404, true)]
+	[InlineData("/code-scanning/default-setup", 500, false)]
+	[InlineData("/rulesets", 403, true)]
+	[InlineData("/rulesets", 404, true)]
+	[InlineData("/rulesets", 500, false)]
+	[InlineData("/branches/main/protection", 403, true)]
+	[InlineData("/branches/main/protection", 404, true)]
+	[InlineData("/branches/main/protection", 500, false)]
+	public void A_refused_read_is_an_answer_only_for_the_statuses_it_expects(string route, int status, bool answered)
+	{
+		var fake = new FakeGitHub { Protection = true };
+		fake.Fails[("GET", route)] = status;
+
+		if (answered)
+			Assert.NotEmpty(Settings.Check(fake.Api, Github, RepoName));
+		else
+			Assert.Equal(status, Assert.Throws<ApiError>(() => Settings.Check(fake.Api, Github, RepoName)).Status);
+	}
+
 	[Fact]
 	public void Gh_api_sends_the_method_path_and_accept_header_and_a_body_on_stdin()
 	{

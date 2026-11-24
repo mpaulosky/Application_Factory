@@ -96,6 +96,8 @@ public partial class SettingsTests
 		public List<string> Secrets = Strings(Standard["required_secrets"]);
 		public bool Protection;
 		public bool RulesetsForbidden;
+		// A route (its path after the repo, without the query) and method that fails with an HTTP status, as GitHub's answer.
+		public readonly Dictionary<(string Method, string Route), int> Fails = [];
 		public readonly List<(string Method, string Path, JsonNode? Body)> Writes = [];
 
 		public FakeGitHub()
@@ -122,6 +124,8 @@ public partial class SettingsTests
 				Writes.Add((method, path, Copy(body)));
 			path = path.StartsWith($"repos/{FullName}", StringComparison.Ordinal) ? path[$"repos/{FullName}".Length..] : path;
 			var route = path.Split('?')[0];
+			if (Fails.TryGetValue((method, route), out var failure))
+				throw new ApiError(failure, $"HTTP {failure} from the fake");
 			if (route == "" && method == "GET")
 				return Copy(Repo);
 			if (route == "" && method == "PATCH")
