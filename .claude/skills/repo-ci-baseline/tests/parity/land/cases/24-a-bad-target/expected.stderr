@@ -1,4 +1,3 @@
 ^usage: 
-^ +\[--timeout TIMEOUT\] \[--blog-wait BLOG_WAIT\]$
-^ +\[prs \.\.\.\]$
-error: not owner/repo or owner/repo#n: owner$
+...
+error: .*owner

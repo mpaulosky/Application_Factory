@@ -153,6 +153,22 @@ done
 suite 1 "the unmatched call is named on one line" STUB_MODE=unmatched -- ./stub.sh || true
 says "the unmatched call is named on one line" "UNMATCHED repo.elsewhere.app"
 
+# A ... line in expected.stderr stands for any number of lines, none included: a usage block an argument parser wraps its own
+# way is matched by its first line and ... alone. stderr-count writes "note: o/app" then "note: again".
+for fits in $'^note: o/app$\n...' $'...\n^note: again$' $'...\n^note: o/app$\n...\n^note: again$\n...' $'^note: o/app$\n...\n^note: again$'; do
+  printf '%s\n' "$fits" > "$cases/c1/expected.stderr"
+  suite 0 "a ... line in expected.stderr fits two lines: ${fits//$'\n'/ | }" STUB_MODE=stderr-count -- ./stub.sh || true
+done
+printf '%s\n' '^note: o/app$' ... > "$cases/c1/expected.stderr"
+suite 0 "a ... line in expected.stderr fits no line at all" -- ./stub.sh || true
+for misfit in $'^note: o/app$\n...\n^nope$' $'...\n^nope$\n...' $'^note: again$\n...'; do
+  printf '%s\n' "$misfit" > "$cases/c1/expected.stderr"
+  if suite 1 "stderr that doesn't fit patterns with a ... line fails: ${misfit//$'\n'/ | }" STUB_MODE=stderr-count -- ./stub.sh; then
+    says "a misfit with ..." "stderr doesn't fit its patterns (a ... line stands for any number of lines)"
+  fi
+done
+echo '^note: o/app$' > "$cases/c1/expected.stderr"
+
 # --- Usage and setup errors exit 2 ---
 
 suite 2 "a command that can't be run" -- ./no-such-command && says "a missing command" "the command './no-such-command' can't be run"
