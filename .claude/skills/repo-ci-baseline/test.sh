@@ -32,7 +32,8 @@ export PYTHONDONTWRITEBYTECODE=1
 # machine's own hooks into each of them and block their commits.
 GIT_TEMPLATE_DIR="$(mktemp -d)"
 export GIT_TEMPLATE_DIR
-md_tmp="$(mktemp -d)"
+# Absolute, so a relative TMPDIR still names this folder from the folders the steps cd into.
+md_tmp="$(cd -- "$(mktemp -d)" && pwd)"
 trap 'command rm -rf "$GIT_TEMPLATE_DIR" "$md_tmp"' EXIT
 
 failures=0
@@ -81,12 +82,13 @@ dependabot_entry_for() {
 }
 # Whether a dependabot.yml (argument 1) has a dotnet-sdk entry for the directory argument 2.
 dotnet_sdk_entry_for() { dependabot_entry_for dotnet-sdk "$1" "$2"; }
-# Whether the setup-dotnet pins of a workflow (argument 2) are all the commit argument 1: at least one 40-hex pin, and no other. Prints the pins it found.
+# Whether the setup-dotnet refs of a workflow (argument 2) are all the commit argument 1, a 40-hex pin: at least one, and no other ref of any kind (a tag,
+# a branch, a short or longer hex). A commented-out line is no step. Prints the refs it found.
 setup_dotnet_pins_are() {
   local pins
-  pins="$({ grep -oE 'actions/setup-dotnet@[0-9a-f]{40}' "$2" || true; } | sort -u)"
+  pins="$({ grep -vE '^[[:space:]]*#' "$2" | grep -oE "actions/setup-dotnet@[^[:space:]\"']*" || true; } | sort -u)"
   printf '%s\n' "$pins"
-  [[ -n "$1" && "$pins" == "actions/setup-dotnet@$1" ]]
+  [[ "$1" =~ ^[0-9a-f]{40}$ && "$pins" == "actions/setup-dotnet@$1" ]]
 }
 # Whether a dotnet test run of the C# scripts' test project (argument 2) passes, given its exit (argument 1): 0 passes; 8, "no test ran", passes only
 # while the project holds no .cs source of its own, so a suite that loses its tests fails. What a build writes under the project (bin/, obj/, TestResults/:
@@ -104,9 +106,13 @@ scripts_tests_pass() {
 # the Factory's own addition). Exits as dotnet test does.
 # No build server is left running, as in the gate's build of the scripts: dotnet test passes --disable-build-servers on to the test app (which exits 5),
 # so the MSBuild node, the MSBuild server and the compiler server are turned off one by one.
+# The output folder and TMPDIR are made absolute first: from the project's folder a relative one would name a folder inside the tree.
 scripts_tests_run() {
-  (cd "$1" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 \
-    dotnet test --project Scripts.Tests.csproj -p:RestoreLockedMode=true -p:UseSharedCompilation=false --artifacts-path "$2" --results-directory "$2/results")
+  local out="$2" tmp="${TMPDIR:-/tmp}"
+  [[ "$out" == /* ]] || out="$PWD/$out"
+  [[ "$tmp" == /* ]] || tmp="$PWD/$tmp"
+  (cd "$1" && TMPDIR="$tmp" DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 \
+    dotnet test --project Scripts.Tests.csproj -p:RestoreLockedMode=true -p:UseSharedCompilation=false --artifacts-path "$out" --results-directory "$out/results")
 }
 # Whether an action or workflow (argument 1) has an actions/setup-dotnet step pinned to a 40-hex commit with global-json-file: global.json under it,
 # before the next step; prints the commit. A commented-out line is no step.
@@ -577,13 +583,18 @@ PY
   pins_fixture "$(printf '      - uses: actions/setup-dotnet@%s # v6.1.0\n      - uses: actions/setup-dotnet@%s' "$a40" "$a40")"
   setup_dotnet_pins_are "$a40" "$md_tmp/ci-pins.yml" > /dev/null || fail "the setup-dotnet pin check refuses a ci.yml whose pins are all the action's"
   for wrong in "$(printf '      - uses: actions/setup-dotnet@%s\n      - uses: actions/setup-dotnet@%s' "$a40" "$b40")" \
-    "$(printf '      - uses: actions/setup-dotnet@%s' "$b40")" "$(printf '      - uses: actions/setup-dotnet@v6')" "$(printf '      - run: "true"')"; do
+    "$(printf '      - uses: actions/setup-dotnet@%s' "$b40")" "$(printf '      - uses: actions/setup-dotnet@v6')" "$(printf '      - run: "true"')" \
+    "$(printf '      - uses: actions/setup-dotnet@%s\n      - uses: actions/setup-dotnet@v6' "$a40")" \
+    "$(printf '      - uses: actions/setup-dotnet@%s\n      - uses: "actions/setup-dotnet@main"' "$a40")" \
+    "$(printf '      - uses: actions/setup-dotnet@%s0' "$a40")"; do
     pins_fixture "$wrong"
     ! setup_dotnet_pins_are "$a40" "$md_tmp/ci-pins.yml" > /dev/null || fail "the setup-dotnet pin check passes: $wrong"
   done
-  pins_fixture "$(printf '      - uses: actions/setup-dotnet@%s' "$a40")"
+  pins_fixture "$(printf '      - uses: actions/setup-dotnet@%s\n      # - uses: actions/setup-dotnet@v6' "$a40")"
+  setup_dotnet_pins_are "$a40" "$md_tmp/ci-pins.yml" > /dev/null || fail "the setup-dotnet pin check counts a commented-out step"
+  ! setup_dotnet_pins_are "v6" "$md_tmp/ci-pins.yml" > /dev/null || fail "the setup-dotnet pin check passes an action pin that isn't a commit"
   ! setup_dotnet_pins_are "" "$md_tmp/ci-pins.yml" > /dev/null || fail "the setup-dotnet pin check passes an empty action pin"
-  # Dependabot reads the template-tools action only where its folder is listed (R6), so its pins move with ci.yml's.
+  # Dependabot reads the template-tools action only where its folder is listed (mpaulosky/Application_Factory#145), so its pins move with ci.yml's.
   dependabot_entry_for github-actions "$skill_dir/../../../.github/dependabot.yml" "/.github/actions/template-tools" \
     || fail "the Factory's .github/dependabot.yml must list \"/.github/actions/template-tools\" (double-quoted) in its github-actions entry, so the action's pins are bumped"
   ga_fixture() { printf 'version: 2\nupdates:\n%s\n' "$1" > "$md_tmp/dependabot-ga.yml"; }
@@ -720,6 +731,7 @@ if in_shard scripts; then
   # The white-box tests of the C# scripts (ADR 0017), on Microsoft Testing Platform (the Factory's global.json). The build output and results go to md_tmp,
   # so the run leaves no file in the tree. Exit 8 is "no test ran", accepted only while the project holds no .cs file, so a suite that loses its tests fails.
   need dotnet
+  need jq
   scripts_tests="$skill_dir/tests/Scripts.Tests"
   dotnet_rc=0
   scripts_tests_run "$scripts_tests" "$md_tmp/scripts-tests" || dotnet_rc=$?
@@ -738,6 +750,21 @@ if in_shard scripts; then
   for bad in "8 $st/source" "8 $st/root-source" "1 $st/empty" "9 $st/empty" "2 $st/built" "8 $st/missing"; do
     ! scripts_tests_pass "${bad%% *}" "${bad#* }" || fail "scripts_tests_pass accepts exit ${bad%% *} for ${bad#* }"
   done
+  # The run's paths, with a stub dotnet: a relative output folder and a relative TMPDIR reach dotnet absolute, naming the folders they named from where
+  # test.sh stood, not folders inside the project.
+  mkdir -p "$st/stub" "$st/proj" "$st/cwd/rel-tmp"
+  # shellcheck disable=SC2016 # the stub's own $PWD, $TMPDIR and $@, expanded when it runs
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$PWD" "$TMPDIR" "$@" > "%s"\n' "$st/stub.log" > "$st/stub/dotnet"
+  chmod +x "$st/stub/dotnet"
+  (cd "$st/cwd" && PATH="$st/stub:$PATH" TMPDIR=rel-tmp scripts_tests_run "$st/proj" rel-out) || fail "scripts_tests_run fails with a stub dotnet"
+  stub_log="$(cat "$st/stub.log" 2> /dev/null)"
+  for want in "$st/proj" "$st/cwd/rel-tmp" "$st/cwd/rel-out" "$st/cwd/rel-out/results" "-p:RestoreLockedMode=true"; do
+    grep -qxF -- "$want" <<< "$stub_log" || fail "scripts_tests_run doesn't pass dotnet $want (it got: ${stub_log//$'\n'/ })"
+  done
+  # The audit reads advisories from nuget.org alone too: a NuGet.config above the folder can't point it at a feed that reports none.
+  audit="$(tr -d '\n\t' < "$scripts_tests/NuGet.config" | grep -oE '<auditSources>.*</auditSources>' || true)"
+  [[ "$audit" =~ ^\<auditSources\>[[:space:]]*\<clear[[:space:]]*/\>[[:space:]]*\<add[[:space:]]+key=\"nuget\.org\"[[:space:]]+value=\"https://api\.nuget\.org/v3/index\.json\"[^/]*/\>[[:space:]]*\</auditSources\>$ ]] \
+    || fail "tests/Scripts.Tests/NuGet.config must clear its auditSources and add nuget.org alone (found: ${audit:-none})"
   # It targets the runtime of the SDK global.json names, so it runs where only that SDK is installed (a net10.0 build wouldn't start on runtime 11 alone).
   sdk_major="$(jq -r '.sdk.version // empty' "$skill_dir/../../../global.json")"
   sdk_major="${sdk_major%%.*}"

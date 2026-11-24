@@ -218,19 +218,24 @@ run_static() {
   changed_list=""
   all_list=""
   cs_out=""
-  cs_pid=""
+  cs_pid="" cs_starting="" cs_before=""
   # cs_stop: ends the C# build running as cs_pid, if any: a TERM, up to 5 seconds for it to exit, then a KILL, so a build that ignores the TERM can't hold the
   # gate open. The pid is dotnet's own (the build execs it); with --disable-build-servers it leaves no server behind, and on SDK 11.0.100 a TERM ends it and its
-  # child processes within a tenth of a second.
+  # child processes within a tenth of a second. A signal between the build's fork and cs_pid=$! finds cs_pid empty: cs_starting says a build was forked,
+  # and $! names it once it differs from cs_before, the last background pid before the fork. The KILL goes only to a build still running, since an
+  # exited one's pid may be another process's by then.
   cs_stop() {
     local tries
+    [[ -n "$cs_pid" || -z "$cs_starting" || "${!:-}" == "$cs_before" ]] || cs_pid="${!:-}"
     [[ -n "$cs_pid" ]] || return 0
     kill -TERM "$cs_pid" 2> /dev/null || true
     for ((tries = 0; tries < 50; tries++)); do
       kill -0 "$cs_pid" 2> /dev/null || break
       sleep 0.1
     done
-    kill -KILL "$cs_pid" 2> /dev/null || true
+    if kill -0 "$cs_pid" 2> /dev/null; then
+      kill -KILL "$cs_pid" 2> /dev/null || true
+    fi
     wait "$cs_pid" 2> /dev/null || true
   }
   trap 'cs_stop; command rm -rf -- ${changed_list:+"$changed_list"} ${all_list:+"$all_list"} ${cs_out:+"$cs_out"}' EXIT
@@ -424,9 +429,11 @@ run_static() {
         dir="$(dirname -- "$f")"
         [[ "$dir" == . ]] && dir="$ROOT" || dir="$ROOT/$dir"
         # The build runs in the background with exec, so its pid is dotnet's own and the EXIT trap can end it.
+        cs_before="${!:-}" cs_starting=1
         (cd -- "$dir" && TMPDIR="$cs_tmp" exec dotnet build "$ROOT/$f" --no-incremental --disable-build-servers --artifacts-path "$cs_out" \
           -p:TreatWarningsAsErrors=true -p:WarningsNotAsErrors=CA2266%3BNU1900) &
         cs_pid=$!
+        cs_starting=""
         build_rc=0
         wait "$cs_pid" || build_rc=$?
         cs_pid=""
