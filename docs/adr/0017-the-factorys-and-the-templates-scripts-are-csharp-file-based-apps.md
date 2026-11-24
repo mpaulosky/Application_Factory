@@ -37,7 +37,7 @@ The trial (mpaulosky/Application_Factory#97) met every threshold set before it r
 So the scripts move, on these rules:
 
 - **The SDK is 11.0.100 everywhere** (mpaulosky/Application_Factory#100).
-  - The Template's Owned `global.json` pins `11.0.100` with `rollForward: latestPatch`, and it joins `OWNED`. The Seed Dockerfile installs the SDK `global.json` names (see the Update at the end).
+  - The Template's Owned `global.json` pins `11.0.100` with `rollForward: latestPatch`, and it joins `OWNED`. The Seed Dockerfile installs the SDK band the pin names (see the Update for mpaulosky/Application_Factory#103).
   - The Factory owns the bump: its Dependabot gains a `dotnet-sdk` entry that lists both the Factory's root and the Template's `template/owned/`, with a group over both
     folders, as its `github-actions` entry has. So one PR bumps the Template's `global.json` and the Factory's copy together, and the gate's drift check holds. An update the
     group leaves out arrives as one PR per folder, and the Template's is merged after `scripts/gate.sh --sync` brings the copy with it.
