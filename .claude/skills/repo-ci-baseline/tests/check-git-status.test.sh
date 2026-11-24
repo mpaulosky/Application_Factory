@@ -4,7 +4,8 @@
 #
 #   bash tests/check-git-status.test.sh                     the C#: built once, then run as dotnet <its dll> from this folder
 #   bash tests/check-git-status.test.sh <command> [arg]...  another implementation (the Python it was ported from was
-#                                                           python3 -I tests/check-git-status.py); a word that names a file is made absolute
+#                                                           python3 -I tests/check-git-status.py, deleted once this passed against the C#);
+#                                                           a word that names a file is made absolute
 #
 # Each run gets the folder as its one argument (absolute), from this folder (so dotnet picks the Factory's SDK). The C# exits 2 where the Python's
 # guarded_main() turned a crash into exit 2 too, which Scripts.Tests checks, since no input here crashes either. The unreadable file and folder

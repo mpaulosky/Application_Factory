@@ -4,7 +4,8 @@
 #
 #   bash tests/check-issue-refs.test.sh                     the C#: built once, then run as dotnet <its dll> from this folder
 #   bash tests/check-issue-refs.test.sh <command> [arg]...  another implementation (the Python it was ported from was
-#                                                           python3 -I tests/check-issue-refs.py); a word that names a file is made absolute
+#                                                           python3 -I tests/check-issue-refs.py, deleted once this passed against the C#);
+#                                                           a word that names a file is made absolute
 #
 # Each run gets the folder as its one argument (absolute), and stdin from /dev/null, with 20 seconds before it counts as hung (a FIFO it opens
 # would block), and a KILL 5 seconds after the TERM, which a .NET app blocked in open() outlives. The Python ran the same rule; the C# exits 2 where an uncaught Python error exited 1, which Scripts.Tests checks, since no input
