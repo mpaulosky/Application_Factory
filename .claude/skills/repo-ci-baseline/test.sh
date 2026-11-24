@@ -7,7 +7,7 @@
 # Runs the Template's own tests (hook suites, auto-merge script tests,
 # the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle and the GitHub scripts' tests
 # (settings, the landing decision, status, land and rollout) with status's parity suite, the Claude Review
-# benchmark's tests, the C# script tests (tests/Scripts.Tests), lints its workflows, YAML, shell
+# benchmark's tests and the C# scripts' xUnit tests (tests/Scripts.Tests), lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
 # Owned files carry no {{PLACEHOLDER}} and that the Owned scripts, and this repo's own
 # scripts and skills, tell every gh command its repository, checks the Seed Sandcastle files, and smoke-tests apply.sh and
@@ -59,14 +59,14 @@ sdk_band() {
   [[ "$1" =~ ^([0-9]+)\.([0-9]+)\.([1-9])[0-9]{2}$ ]] || return 1
   printf '%s.%s.%sxx\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
 }
-# Whether a dependabot.yml (argument 1) has a dotnet-sdk entry whose directory, or one of whose directories, is argument 2.
+# Whether a dependabot.yml (argument 2) has an entry for the package-ecosystem argument 1 whose directory, or one of whose directories, is argument 3.
 # Each entry under updates: (from one "  - " line to the next "  - " line or top-level key) is judged as a whole, whatever its keys'
 # order: its keys at four spaces, a directories item at six. A path is compared as a string, written in double quotes with no comment
 # after it, as the Factory's file writes it (trailing blanks and a CR dropped): a path's "." is only a dot, a comment line is no key or
 # item, and another spelling of the path fails closed.
-dotnet_sdk_entry_for() {
-  awk -v want="\"$2\"" '
-    function end_entry() { if (eco == "dotnet-sdk" && hit) found = 1; eco = ""; hit = 0; key = "" }
+dependabot_entry_for() {
+  awk -v ecosystem="$1" -v want="\"$3\"" '
+    function end_entry() { if (eco == ecosystem && hit) found = 1; eco = ""; hit = 0; key = "" }
     { sub(/[ \t\r]+$/, "") }
     /^[a-z]/ { end_entry(); next }
     /^  - / { end_entry(); $0 = "    " substr($0, 5) }
@@ -77,7 +77,46 @@ dotnet_sdk_entry_for() {
       next
     }
     /^      - / && key == "directories" && substr($0, 9) == want { hit = 1 }
-    END { end_entry(); exit !found }' "$1"
+    END { end_entry(); exit !found }' "$2"
+}
+# Whether a dependabot.yml (argument 1) has a dotnet-sdk entry for the directory argument 2.
+dotnet_sdk_entry_for() { dependabot_entry_for dotnet-sdk "$1" "$2"; }
+# Whether the setup-dotnet pins of a workflow (argument 2) are all the commit argument 1: at least one 40-hex pin, and no other. Prints the pins it found.
+setup_dotnet_pins_are() {
+  local pins
+  pins="$({ grep -oE 'actions/setup-dotnet@[0-9a-f]{40}' "$2" || true; } | sort -u)"
+  printf '%s\n' "$pins"
+  [[ -n "$1" && "$pins" == "actions/setup-dotnet@$1" ]]
+}
+# Whether a dotnet test run of the C# scripts' test project (argument 2) passes, given its exit (argument 1): 0 passes; 8, "no test ran", passes only
+# while the project holds no .cs source of its own, so a suite that loses its tests fails. What a build writes under the project (bin/, obj/, TestResults/:
+# an IDE's build leaves generated .cs files in obj/) isn't a source. A find that fails passes nothing.
+scripts_tests_pass() {
+  local sources
+  (($1 == 0)) && return 0
+  (($1 == 8)) || return 1
+  sources="$(find "$2" -mindepth 1 \( -name bin -o -name obj -o -name TestResults \) -prune -o -name '*.cs' -print)" || return 1
+  [[ -z "$sources" ]]
+}
+# Runs the C# scripts' test project in folder argument 1, building into argument 2, as test.sh's scripts shard does: from the project's folder, as ADR 0017's
+# wrappers run a script, so the SDK and the test runner come from the global.json found from there up; with no CLI usage data, no first-run setup (as in the Template's ci.yml) and no logo (DOTNET_NOLOGO,
+# the Factory's own addition). Exits as dotnet test does.
+# No build server is left running, as in the gate's build of the scripts: dotnet test passes --disable-build-servers on to the test app (which exits 5),
+# so the MSBuild node, the MSBuild server and the compiler server are turned off one by one.
+scripts_tests_run() {
+  (cd "$1" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 \
+    dotnet test --project Scripts.Tests.csproj -p:UseSharedCompilation=false --artifacts-path "$2" --results-directory "$2/results")
+}
+# Whether an action or workflow (argument 1) has an actions/setup-dotnet step pinned to a 40-hex commit with global-json-file: global.json under it,
+# before the next step; prints the commit. A commented-out line is no step.
+setup_dotnet_step() {
+  awk '
+    { sub(/[ \t\r]+$/, "") }
+    /^[ \t]*#/ { next }
+    /^ *- / || /^ *uses:/ { if (sha != "" && json) { print sha; found = 1; exit } sha = ""; json = 0 }
+    match($0, /uses: actions\/setup-dotnet@[0-9a-f]+( |$)/) { s = $0; sub(/.*@/, "", s); sub(/ .*/, "", s); if (length(s) == 40) sha = s }
+    sha != "" && /^ +global-json-file: global\.json$/ { json = 1 }
+    END { if (!found && sha != "" && json) { print sha; found = 1 } exit !found }' "$1"
 }
 # The shard is checked first, before the tools, and must be exactly one of the declared names: a value such as "hooks scripts" would match no block and run nothing.
 shards=(hooks scripts checks)
@@ -517,13 +556,63 @@ PY
       pip && ign && /^ *- dependency-name: "ruff" *$/ { found = 1 } END { exit !found }' "$file" \
       || fail "$file's pip entry must ignore ruff, whose pin moves only with gate.sh's RUFF_VERSION and release rule"
   done
-  # The Factory moves the SDK: its own dotnet-sdk entry bumps the Template's Owned global.json (mpaulosky/Application_Factory#103).
+  # The Factory moves the SDK: its own dotnet-sdk entry bumps the Template's Owned global.json (mpaulosky/Application_Factory#103) and the Factory's copy of it
+  # at the root (mpaulosky/Application_Factory#117), so the copy never drifts from it.
   template_dir="/.claude/skills/repo-ci-baseline/template/owned"
   dotnet_sdk_entry_for "$skill_dir/../../../.github/dependabot.yml" "$template_dir" \
     || fail "the Factory's .github/dependabot.yml must have a dotnet-sdk entry for \"$template_dir\" (double-quoted), the Owned global.json"
-  # And the Factory's own global.json, a copy of the Template's that the gate keeps equal (mpaulosky/Application_Factory#117).
+  dependabot_entry_for nuget "$skill_dir/../../../.github/dependabot.yml" "/.claude/skills/repo-ci-baseline/tests/Scripts.Tests" \
+    || fail "the Factory's .github/dependabot.yml must have a nuget entry for \"/.claude/skills/repo-ci-baseline/tests/Scripts.Tests\", so its packages and lock file are bumped"
   dotnet_sdk_entry_for "$skill_dir/../../../.github/dependabot.yml" "/" \
     || fail "the Factory's .github/dependabot.yml must have a dotnet-sdk entry for \"/\" (double-quoted), the Factory's copy of global.json"
+  # The template-tools action installs the SDK the Factory's global.json names, with the Template ci.yml's setup-dotnet pin (ADR 0017).
+  tools_sha="$(setup_dotnet_step "$template_tools")" \
+    || fail "the template-tools action must have an actions/setup-dotnet step pinned to a commit, with global-json-file: global.json"
+  ci_shas="$(setup_dotnet_pins_are "$tools_sha" "$owned/.github/workflows/ci.yml")" \
+    || fail "the template-tools action's setup-dotnet pin ($tools_sha) must be the Template ci.yml's, its only one (found: ${ci_shas//$'\n'/ })"
+  a40="0f4a354dd5547a28c70b7853dbd95d5b67886e73"
+  b40="1111111111111111111111111111111111111111"
+  pins_fixture() { printf 'jobs:\n  a:\n    steps:\n%s\n' "$1" > "$md_tmp/ci-pins.yml"; }
+  pins_fixture "$(printf '      - uses: actions/setup-dotnet@%s # v6.1.0\n      - uses: actions/setup-dotnet@%s' "$a40" "$a40")"
+  setup_dotnet_pins_are "$a40" "$md_tmp/ci-pins.yml" > /dev/null || fail "the setup-dotnet pin check refuses a ci.yml whose pins are all the action's"
+  for wrong in "$(printf '      - uses: actions/setup-dotnet@%s\n      - uses: actions/setup-dotnet@%s' "$a40" "$b40")" \
+    "$(printf '      - uses: actions/setup-dotnet@%s' "$b40")" "$(printf '      - uses: actions/setup-dotnet@v6')" "$(printf '      - run: "true"')"; do
+    pins_fixture "$wrong"
+    ! setup_dotnet_pins_are "$a40" "$md_tmp/ci-pins.yml" > /dev/null || fail "the setup-dotnet pin check passes: $wrong"
+  done
+  pins_fixture "$(printf '      - uses: actions/setup-dotnet@%s' "$a40")"
+  ! setup_dotnet_pins_are "" "$md_tmp/ci-pins.yml" > /dev/null || fail "the setup-dotnet pin check passes an empty action pin"
+  # Dependabot reads the template-tools action only where its folder is listed (R6), so its pins move with ci.yml's.
+  dependabot_entry_for github-actions "$skill_dir/../../../.github/dependabot.yml" "/.github/actions/template-tools" \
+    || fail "the Factory's .github/dependabot.yml must list \"/.github/actions/template-tools\" (double-quoted) in its github-actions entry, so the action's pins are bumped"
+  ga_fixture() { printf 'version: 2\nupdates:\n%s\n' "$1" > "$md_tmp/dependabot-ga.yml"; }
+  ga_fixture "$(printf '  - package-ecosystem: "github-actions"\n    directories:\n      - "/"\n      - "/.github/actions/template-tools"')"
+  dependabot_entry_for github-actions "$md_tmp/dependabot-ga.yml" "/.github/actions/template-tools" || fail "the github-actions entry check misses the template-tools folder"
+  for wrong in \
+    "$(printf '  - package-ecosystem: "github-actions"\n    directories:\n      - "/"\n      # - "/.github/actions/template-tools"')" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directories:\n      - "/.github/actions/template-tools"\n  - package-ecosystem: "github-actions"\n    directory: "/"')" \
+    "$(printf '  - package-ecosystem: "github-actions"\n    directories:\n      - "/.github/actions/template-tools/"')"; do
+    ga_fixture "$wrong"
+    ! dependabot_entry_for github-actions "$md_tmp/dependabot-ga.yml" "/.github/actions/template-tools" || fail "the github-actions entry check passes: $wrong"
+  done
+  dn_fixture() { printf 'runs:\n  using: composite\n  steps:\n%s\n    - name: Next\n      shell: bash\n      run: "true"\n' "$1" > "$md_tmp/action-dotnet.yml"; }
+  for right in \
+    "$(printf '    - name: Setup .NET\n      uses: actions/setup-dotnet@%s # v6.1.0\n      with:\n        global-json-file: global.json' "$a40")" \
+    "$(printf '    - uses: actions/setup-dotnet@%s\n      with:\n        global-json-file: global.json  \r' "$a40")"; do
+    dn_fixture "$right"
+    [[ "$(setup_dotnet_step "$md_tmp/action-dotnet.yml")" == "$a40" ]] || fail "the setup-dotnet step check misses: $right"
+  done
+  for wrong in \
+    "$(printf '    - name: Setup .NET\n      uses: actions/setup-dotnet@v6\n      with:\n        global-json-file: global.json')" \
+    "$(printf '    - name: Setup .NET\n      uses: actions/setup-dotnet@%s\n      with:\n        dotnet-version: 11.0.x' "$a40")" \
+    "$(printf '    - name: Setup .NET\n      uses: actions/setup-dotnet@%s\n      with:\n        global-json-file: other/global.json' "$a40")" \
+    "$(printf '    # - uses: actions/setup-dotnet@%s\n    #   with:\n    #     global-json-file: global.json' "$a40")" \
+    "$(printf '    - uses: actions/setup-dotnet@%s\n    - uses: actions/setup-python@%s\n      with:\n        global-json-file: global.json' "$a40" "$a40")" \
+    "$(printf '    - uses: actions/setup-dotnet@%s0\n      with:\n        global-json-file: global.json' "$a40")" \
+    "$(printf '    - name: Setup Python\n      uses: actions/setup-python@%s\n      with:\n        global-json-file: global.json' "$a40")"; do
+    dn_fixture "$wrong"
+    ! setup_dotnet_step "$md_tmp/action-dotnet.yml" > /dev/null || fail "the setup-dotnet step check passes: $wrong"
+  done
   # The check itself, on fixtures: each "right" file has the entry, no "wrong" one does.
   sdk_entry() { printf 'version: 2\nupdates:\n%s\n' "$1" > "$md_tmp/dependabot-sdk.yml"; }
   t="$template_dir"
@@ -548,6 +637,17 @@ PY
     "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "%s/sub"' "$t")"; do
     sdk_entry "$wrong"
     ! dotnet_sdk_entry_for "$md_tmp/dependabot-sdk.yml" "$t" || fail "the dotnet-sdk entry check passes a file with no such entry: $wrong"
+  done
+  # And for the root, the Factory's copy: the Template's folder alone, or "/" under another ecosystem, is no entry for it.
+  sdk_entry "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directories:\n      - "/"\n      - "%s"' "$t")"
+  dotnet_sdk_entry_for "$md_tmp/dependabot-sdk.yml" "/" || fail "the dotnet-sdk entry check misses \"/\" in a directories list"
+  for wrong in \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directories:\n      - "%s"' "$t")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directory: "%s"' "$t")" \
+    "$(printf '  - package-ecosystem: "github-actions"\n    directories:\n      - "/"\n  - package-ecosystem: "dotnet-sdk"\n    directory: "%s"' "$t")" \
+    "$(printf '  - package-ecosystem: "dotnet-sdk"\n    directories:\n      # - "/"\n      - "%s"' "$t")"; do
+    sdk_entry "$wrong"
+    ! dotnet_sdk_entry_for "$md_tmp/dependabot-sdk.yml" "/" || fail "the dotnet-sdk entry check passes a file with no entry for \"/\": $wrong"
   done
   python3 - "$owned/.github/scripts/requirements-tests.txt" << 'PY_REQ' || fail "requirements-tests.txt must pin each package exactly, with at least one sha256 hash, pytest and pyyaml among them"
 import re, sys
@@ -615,16 +715,59 @@ if in_shard scripts; then
   fi
   (cd "$skill_dir" && "${bench_cmd[@]}" -q -p no:cacheprovider -rs bench/tests) || fail "benchmark pytest"
 
-  step "C# script tests (tests/Scripts.Tests, xUnit v3; ADR 0017)"
-  # Built into a temp folder, so no bin/ or obj/ is left in the skill for the gate to see as a change. The SDK is the one the
-  # Factory's global.json names (the folder has none of its own). Until the project holds a test it is only built: Microsoft
-  # Testing Platform fails a run in which no test ran (exit 8), and a test file turns the run on.
+  step "C# script tests (tests/Scripts.Tests, xUnit v3)"
+  # The white-box tests of the C# scripts (ADR 0017), on Microsoft Testing Platform (the Factory's global.json). The build output and results go to md_tmp,
+  # so the run leaves no file in the tree. Exit 8 is "no test ran", accepted only while the project holds no .cs file, so a suite that loses its tests fails.
   need dotnet
   scripts_tests="$skill_dir/tests/Scripts.Tests"
-  if [[ -n "$(find "$scripts_tests" -name '*.cs' -not -path '*/bin/*' -not -path '*/obj/*' -print -quit)" ]]; then
-    dotnet test --project "$scripts_tests" --artifacts-path "$md_tmp/scripts-tests" || fail "dotnet test tests/Scripts.Tests"
-  else
-    dotnet build "$scripts_tests" --artifacts-path "$md_tmp/scripts-tests" || fail "dotnet build tests/Scripts.Tests"
+  dotnet_rc=0
+  scripts_tests_run "$scripts_tests" "$md_tmp/scripts-tests" || dotnet_rc=$?
+  scripts_tests_pass "$dotnet_rc" "$scripts_tests" || fail "Scripts.Tests (dotnet test exit $dotnet_rc; 8 is accepted only while the project holds no .cs source)"
+  # The rule itself, on fixtures: build output is no source, a source anywhere else is, and a missing folder passes nothing.
+  st="$md_tmp/scripts-tests-rule"
+  mkdir -p "$st/empty" "$st/built/obj/Debug" "$st/built/bin" "$st/built/TestResults" "$st/source/sub" "$st/root-source"
+  : > "$st/built/obj/Debug/Scripts.Tests.AssemblyInfo.cs"
+  : > "$st/built/bin/x.cs"
+  : > "$st/built/TestResults/x.cs"
+  : > "$st/source/sub/StatusTests.cs"
+  : > "$st/root-source/Tests.cs"
+  for ok in "0 $st/empty" "8 $st/empty" "8 $st/built" "0 $st/source"; do
+    scripts_tests_pass "${ok%% *}" "${ok#* }" || fail "scripts_tests_pass refuses exit ${ok%% *} for ${ok#* }"
+  done
+  for bad in "8 $st/source" "8 $st/root-source" "1 $st/empty" "9 $st/empty" "2 $st/built" "8 $st/missing"; do
+    ! scripts_tests_pass "${bad%% *}" "${bad#* }" || fail "scripts_tests_pass accepts exit ${bad%% *} for ${bad#* }"
+  done
+  # It targets the runtime of the SDK global.json names, so it runs where only that SDK is installed (a net10.0 build wouldn't start on runtime 11 alone).
+  sdk_major="$(jq -r '.sdk.version // empty' "$skill_dir/../../../global.json")"
+  sdk_major="${sdk_major%%.*}"
+  tfms="$(sed -n -E 's#^[[:space:]]*<TargetFrameworks?>([^<]*)</TargetFrameworks?>[[:space:]]*$#\1#p' "$scripts_tests/Scripts.Tests.csproj")"
+  [[ -n "$sdk_major" && "$tfms" == "net$sdk_major.0" ]] \
+    || fail "tests/Scripts.Tests must target net$sdk_major.0, the runtime of the SDK global.json names (it targets: ${tfms:-nothing})"
+  # The shields (ADR 0017): an empty Directory.Build.props, Directory.Build.targets and Directory.Packages.props in github/ and in the test project, so the
+  # files of those names above them never reach their builds.
+  for shielded in github tests/Scripts.Tests; do
+    for shield in Directory.Build.props Directory.Build.targets Directory.Packages.props; do
+      [[ "$(cat "$skill_dir/$shielded/$shield" 2> /dev/null)" == "<Project />" ]] || fail "$shielded/$shield must be the empty shield, <Project />"
+    done
+  done
+  # A vulnerability feed that can't be reached (NU1900) is a warning, not an error: on a copy whose nuget.org can't be reached, with the packages already in
+  # the cache from the run above, the run still passes and says why. NU1901 to NU1904, a vulnerable package, stay errors (ADR 0017). The copy sits under a
+  # Directory.Build.props, Directory.Build.targets and Directory.Packages.props that would each fail its build, which the shields keep out.
+  offline="$md_tmp/scripts-tests-offline"
+  mkdir -p "$offline"
+  cp "$skill_dir/../../../global.json" "$offline/"
+  printf '<Project><Target Name="ParentProps" BeforeTargets="Build"><Error Text="a Directory.Build.props above Scripts.Tests reached its build" /></Target></Project>\n' \
+    > "$offline/Directory.Build.props"
+  printf '<Project><Target Name="ParentTargets" BeforeTargets="Build"><Error Text="a Directory.Build.targets above Scripts.Tests reached its build" /></Target></Project>\n' \
+    > "$offline/Directory.Build.targets"
+  printf '<Project><PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup></Project>\n' > "$offline/Directory.Packages.props"
+  printf '<configuration><packageSources><clear /><add key="gone" value="https://nuget.invalid/v3/index.json" /></packageSources></configuration>\n' > "$offline/NuGet.config"
+  cp -R "$scripts_tests" "$offline/Scripts.Tests"
+  rm -rf "$offline/Scripts.Tests/bin" "$offline/Scripts.Tests/obj" "$offline/Scripts.Tests/TestResults"
+  offline_rc=0
+  scripts_tests_run "$offline/Scripts.Tests" "$offline/out" > "$offline/run.log" 2>&1 || offline_rc=$?
+  if ! scripts_tests_pass "$offline_rc" "$offline/Scripts.Tests" || ! grep -q 'warning NU1900' "$offline/run.log"; then
+    fail "Scripts.Tests must pass with NU1900 a warning when its feed can't be reached, its shields keeping out the files above it (exit $offline_rc): $(grep -m 3 -E 'error|NU1' "$offline/run.log" | tr '\n' ' ')"
   fi
 fi # the scripts shard
 

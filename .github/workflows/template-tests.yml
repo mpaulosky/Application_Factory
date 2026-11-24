@@ -21,6 +21,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# dotnet sends no CLI usage data and skips its first-run setup, as in the Template's ci.yml, and prints no logo (DOTNET_NOLOGO, the Factory's own addition).
+# scripts/gate.sh and test.sh set the same three for local runs.
+env:
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_NOLOGO: true
+
 jobs:
   self:
     name: Gate - self-tests

@@ -8,3 +8,5 @@ node_modules/
 !.security/README.md
 .claude/skills/repo-ci-baseline/tests/Scripts.Tests/bin/
 .claude/skills/repo-ci-baseline/tests/Scripts.Tests/obj/
+# What an IDE build of the C# scripts' test project writes; test.sh builds it outside the tree.
+.claude/skills/repo-ci-baseline/tests/Scripts.Tests/TestResults/

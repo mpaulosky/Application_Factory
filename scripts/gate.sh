@@ -11,6 +11,9 @@
 # TEST_SH_SHARD=hooks|scripts|checks, with GATE_PART=template, runs one shard of test.sh (ADR 0013); any other run of the gate ignores it and runs the whole of test.sh.
 set -euo pipefail
 
+# dotnet sends no CLI usage data and skips its first-run setup, as in the Template's ci.yml, and prints no logo (DOTNET_NOLOGO, the Factory's own addition).
+export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1
+
 # scripts/gate.sh --quick: the checks that finish in about a minute (its test, the review tests, the copies' drift, the bare-#N check, the git status guard check, lint, shellcheck of the shell files the branch changes, shfmt of every shell file, ruff of every Python file, the C# check), then stop before the local
 # review check, test.sh and the Sandcastle check. It is for iterating, never for pushing: the pre-push hook and CI call this script with no argument.
 # scripts/gate.sh --sync: copies every Template file the Factory carries over its copy (cp -p keeps the execute bit), prints the ones that changed,
@@ -209,10 +212,28 @@ run_static() {
     esac
     return 1
   }
-  # The two steps' file lists, removed however the gate ends. Both names are set before the trap, so it never reads an unset one under set -u.
+  # The two steps' file lists and the C# step's build folder, removed however the gate ends (an exit, or a signal that ends it). A build still running is ended, and
+  # waited for, first: bash runs the trap as the signal comes, not when the build ends, and a build left running would write into the folder once it is gone.
+  # Every name is set before the trap, so it never reads an unset one under set -u.
   changed_list=""
   all_list=""
-  trap 'command rm -f -- ${changed_list:+"$changed_list"} ${all_list:+"$all_list"}' EXIT
+  cs_out=""
+  cs_pid=""
+  # cs_stop: ends the C# build running as cs_pid, if any: a TERM, up to 5 seconds for it to exit, then a KILL, so a build that ignores the TERM can't hold the
+  # gate open. The pid is dotnet's own (the build execs it); with --disable-build-servers it leaves no server behind, and on SDK 11.0.100 a TERM ends it and its
+  # child processes within a tenth of a second.
+  cs_stop() {
+    local tries
+    [[ -n "$cs_pid" ]] || return 0
+    kill -TERM "$cs_pid" 2> /dev/null || true
+    for ((tries = 0; tries < 50; tries++)); do
+      kill -0 "$cs_pid" 2> /dev/null || break
+      sleep 0.1
+    done
+    kill -KILL "$cs_pid" 2> /dev/null || true
+    wait "$cs_pid" 2> /dev/null || true
+  }
+  trap 'cs_stop; command rm -rf -- ${changed_list:+"$changed_list"} ${all_list:+"$all_list"} ${cs_out:+"$cs_out"}' EXIT
   # Lint with ShellCheck the shell files this branch changes (added, copied, modified, renamed or type-changed, committed or not, against its merge base with origin/main; every tracked and untracked
   # shell file when there is no origin/main or no merge base), so --quick finds what test.sh's shellcheck step would fail in the template part.
   echo -e "\n${CYAN}▶ shellcheck (changed shell files)${RESET}"
@@ -332,11 +353,15 @@ run_static() {
   echo "${#py_all[@]} Python file(s) checked."
 
   # Every tracked and untracked C# file is formatted as dotnet format whitespace formats it, under .editorconfig, and every script entry file builds with warnings as
-  # errors but CA2266, which stays a warning (ADR 0017, Updates: what lints C#, and CA2266). The edit-time lint doesn't check C#: a dotnet format run takes 1 to 2 s.
+  # errors but CA2266 and NU1900, which stay warnings (ADR 0017, Updates: what lints C#, CA2266, and mpaulosky/Application_Factory#145). NU1900 is a #:package
+  # restore that couldn't fetch the vulnerability data (a feed outage), which says nothing of the package; NuGetAudit's NU1901 to NU1904 stay errors. %3B is
+  # MSBuild's escaped ';', so the property holds both. The edit-time lint doesn't check C#: a dotnet format run takes 1 to 2 s.
   # The format check runs in folder mode, which reads no project and runs no MSBuild. An entry file is a .cs in no project's folder (no *.csproj in its folder or any
   # folder above it) that no .cs in its folder pulls in with #:include; an included file can't hold top-level statements, so it builds only as part of its entry file.
   # A project's .cs files are built by the test that runs the project (test.sh builds tests/Scripts.Tests). Each entry file is built from its own folder, so the
-  # global.json read is the nearest to it (ADR 0017, How a script runs). With no .cs file the step checks nothing and needs no SDK.
+  # global.json read is the nearest to it (ADR 0017, How a script runs); --no-incremental, so a build cached without these properties can't hide a warning; into a
+  # folder of this run's own, removed after it or by the EXIT trap however the gate ends, so two gates in one worktree don't build into the same output; and with no
+  # build server left running. With no .cs file the step checks nothing and needs no SDK.
   echo -e "\n${CYAN}▶ C# (dotnet format whitespace of every C# file, a build of every script)${RESET}"
   cs_all=()
   while IFS= read -r -d '' f; do
@@ -349,9 +374,13 @@ run_static() {
       echo -e "${RED}❌ dotnet not found: the gate needs the .NET SDK global.json names to check the C# files.${RESET}" >&2
       exit 1
     fi
+    # TMPDIR made absolute, for dotnet and for the build folder: each build runs from its script's folder, where a relative one names another folder (dotnet
+    # fails on it, "Unable to find the specified file", and a relative --artifacts-path would miss the folder the trap removes).
+    cs_tmp="${TMPDIR:-/tmp}"
+    [[ "$cs_tmp" == /* ]] || cs_tmp="$PWD/$cs_tmp"
     # ./ before each name, so a name that starts with - is a file to dotnet format, not an option.
     format_rc=0
-    dotnet format whitespace . --folder --verify-no-changes --include "${cs_all[@]/#/./}" || format_rc=$?
+    TMPDIR="$cs_tmp" dotnet format whitespace . --folder --verify-no-changes --include "${cs_all[@]/#/./}" || format_rc=$?
     if ((format_rc == 2)); then
       echo -e "${RED}❌ dotnet format: run dotnet format whitespace . --folder --include <file> on each file named above (it reads .editorconfig).${RESET}" >&2
       exit 1
@@ -384,14 +413,31 @@ run_static() {
       done
       ((in_project)) || cs_entries+=("$f")
     done
-    for f in "${cs_entries[@]}"; do
-      dir="$(dirname -- "$f")"
-      [[ "$dir" == . ]] && dir="$ROOT" || dir="$ROOT/$dir"
-      if ! (cd "$dir" && dotnet build "$ROOT/$f" -p:TreatWarningsAsErrors=true -p:WarningsNotAsErrors=CA2266); then
-        echo -e "${RED}❌ dotnet build $f: fix each warning or error shown above (in the Template's file for a copy, then scripts/gate.sh --sync).${RESET}" >&2
+    if ((${#cs_entries[@]})); then
+      # Named gate-cs.*, so a test can tell the gate's folder from those dotnet keeps in TMPDIR for itself (NuGetScratch<user>, and others by SDK and OS).
+      if ! cs_out="$(mktemp -d "$cs_tmp/gate-cs.XXXXXX")"; then
+        cs_out=""
+        echo -e "${RED}❌ could not make a temporary folder for the C# builds (mktemp -d failed): check TMPDIR.${RESET}" >&2
         exit 1
       fi
-    done
+      for f in "${cs_entries[@]}"; do
+        dir="$(dirname -- "$f")"
+        [[ "$dir" == . ]] && dir="$ROOT" || dir="$ROOT/$dir"
+        # The build runs in the background with exec, so its pid is dotnet's own and the EXIT trap can end it.
+        (cd -- "$dir" && TMPDIR="$cs_tmp" exec dotnet build "$ROOT/$f" --no-incremental --disable-build-servers --artifacts-path "$cs_out" \
+          -p:TreatWarningsAsErrors=true -p:WarningsNotAsErrors=CA2266%3BNU1900) &
+        cs_pid=$!
+        build_rc=0
+        wait "$cs_pid" || build_rc=$?
+        cs_pid=""
+        if ((build_rc != 0)); then
+          echo -e "${RED}❌ dotnet build $f: fix each warning or error shown above (CA2266 and NU1900 alone are allowed; in the Template's file for a copy, then scripts/gate.sh --sync).${RESET}" >&2
+          exit 1
+        fi
+      done
+      command rm -rf -- "$cs_out"
+      cs_out=""
+    fi
   fi
   echo "${#cs_all[@]} C# file(s) format-checked, ${#cs_entries[@]} script(s) built."
 
