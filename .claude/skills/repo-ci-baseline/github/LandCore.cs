@@ -433,7 +433,8 @@ sealed class Lander
 		try
 		{
 			final = PrState(repo, number);
-			// Only MERGED and CLOSED end the watch: any other answer is unread, so a PR that may still be open isn't called gone.
+			// Only MERGED and CLOSED end the watch and OPEN keeps it; any other answer is unread and reported, so a PR that may still be
+			// open isn't called gone.
 			if (final is not ("MERGED" or "CLOSED" or "OPEN"))
 				throw new GhException($"not a PR state: {Status.Printable(final)}");
 		}
