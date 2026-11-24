@@ -13,7 +13,7 @@
 # is (tests/parity/.gitattributes), and the blank-key cases' env files still hold their blanks (tests/parity/.editorconfig).
 # It first tries the first three checks on cases made to be wrong, in git repos of their own and in a folder git treats
 # as outside any repo. Needs what the suite needs (bash 4.4, coreutils, findutils, diff, grep, sed), python3 for the stub
-# reference record mode runs, git, and jq for the fake's --jq.
+# reference record mode runs, git 2.32 or later, and jq 1.6 or later for the fake's --jq.
 set -euo pipefail
 # A hook, or git rebase --exec, may have set these; the throwaway repo below must not be the caller's.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR
@@ -61,6 +61,9 @@ for repo in "$@"; do
     terminal) [[ -z "${FORCE_COLOR:-}${CLICOLOR_FORCE:-}${PYTHON_COLORS:-}${COLUMNS:-}${LINES:-}" && "${NO_COLOR:-}" == 1 && "${TERM:-}" == dumb ]] && echo "$repo ok" ;;
     stdin) if read -r line; then echo "$repo read $line"; else echo "$repo ok"; fi ;;
     crlf) printf '%s ok\r\n' "$repo" ;;
+    vars) echo "$repo ${PYTHONDONTWRITEBYTECODE-unset} ${GIT_TERMINAL_PROMPT-unset} ${GIT_OBJECT_DIRECTORY-unset} ${GIT_ALTERNATE_OBJECT_DIRECTORIES-unset} ${GIT_NAMESPACE-unset} ${GIT_CONFIG-unset}" ;;
+    ceiling) if git rev-parse --show-toplevel > /dev/null 2>&1; then echo "$repo in a repo"; else echo "$repo ok"; fi ;;
+    emptydir) mkdir -p left/inner && echo "$repo ok" ;;
     litter) [[ -z "$(ls -A .)" && -z "$(ls -A "$GH_CONFIG_DIR")" ]] && echo "$repo ok" && : > left-here && : > "$GH_CONFIG_DIR/left-here" ;;
     env) echo "$repo ${CASE_VAR-unset} ${REPOSITORY-unset} ${GITHUB_REPOSITORY-unset} ${ANTHROPIC_API_KEY-unset} ${ANTHROPIC_MODEL-unset}" ;;
     write | write-other)
@@ -71,7 +74,7 @@ for repo in "$@"; do
     git)
       git fetch -q origin main
       where=elsewhere
-      [[ "$(git rev-parse --show-toplevel)" != "$PWD" ]] || where=here
+      [[ "$(git rev-parse --show-toplevel)" != "$(pwd -P)" ]] || where=here
       echo "$repo $(git log -1 --format=%s) $(git rev-parse HEAD) $where $(git branch -r --format='%(refname:short)') ${GIT_DIR-unset}"
       ;;
     *) echo "$repo ok" ;;
@@ -291,6 +294,24 @@ echo "o/app a value=with=signs unset unset unset unset" > "$cases/c1/expected.st
 suite 0 "the case's env is set, and a caller's repository and Anthropic key and model are not passed on" STUB_MODE=env \
   REPOSITORY=caller/repo GITHUB_REPOSITORY=caller/repo ANTHROPIC_API_KEY=secret ANTHROPIC_MODEL=model -- ./stub.sh || true
 
+# The rest of what the runner sets and unsets for a run, each against a caller's value that would show.
+new_case c1
+echo "o/app 1 0 unset unset unset unset" > "$cases/c1/expected.stdout"
+suite 0 "a caller's git object store, namespace and config file are not passed on, and Python writes no bytecode" STUB_MODE=vars \
+  PYTHONDONTWRITEBYTECODE= GIT_TERMINAL_PROMPT=1 GIT_OBJECT_DIRECTORY=/nowhere GIT_ALTERNATE_OBJECT_DIRECTORIES=/nowhere \
+  GIT_NAMESPACE=caller GIT_CONFIG=/nowhere -- ./stub.sh || true
+# A temporary folder inside a git repository: the run must not find that repository above its own folder.
+new_case c1
+env -u GIT_DIR -u GIT_WORK_TREE GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init -q "$work/above"
+suite 0 "a run under a temporary folder inside a git repository finds no repository" STUB_MODE=ceiling TMPDIR="$work/above" \
+  -- ./stub.sh || true
+# git stores no empty folder, so record mode refuses a run that leaves one.
+new_case c1
+suite 1 "record mode refuses a run that leaves an empty folder" PARITY_RECORD=1 STUB_MODE=emptydir \
+  && says "record mode refuses an empty folder" "the run left an empty folder, which git can't store:" \
+  && says "record mode names the empty folder" "     ./left/inner"
+[[ ! -e "$cases/c1/expected.tree" ]] || fail "record mode wrote an expected.tree/ holding an empty folder"
+
 # write_case <name>: a case whose tree holds in.txt, which the stub copies, and whose expected.tree/ holds what it writes.
 write_case() {
   new_case "$1"
@@ -353,6 +374,11 @@ suite 0 "a caller's GIT_DIR, git config, hash format and template folder reach n
   GIT_CONFIG_GLOBAL="$work/caller.gitconfig" GIT_CONFIG_PARAMETERS="'remote.origin.fetch'='+refs/heads/*:refs/remotes/param/*'" \
   GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.fetch GIT_CONFIG_VALUE_0='+refs/heads/*:refs/remotes/count/*' \
   GIT_DEFAULT_HASH=sha256 GIT_TEMPLATE_DIR="$work/caller-template" -- ./stub.sh || true
+# Again under a temporary folder reached through a symlink, as macOS's is: git names the run's folder by its real path.
+mkdir "$work/real-tmp"
+ln -s "$work/real-tmp" "$work/linked-tmp"
+suite 0 "a run under a temporary folder reached through a symlink sees its own repo" STUB_MODE=git TMPDIR="$work/linked-tmp" \
+  -- ./stub.sh || true
 # A run that leaves a file beside its .git: record mode keeps the file and drops the .git.
 echo 'echo kept > kept.txt' >> "$cases/c1/setup.sh"
 suite 0 "record mode with a file beside the .git" PARITY_RECORD=1 STUB_MODE=git || true
@@ -437,6 +463,13 @@ logged "--jq, with --paginate" "rest.repos_o_app_releases?per_page=100 gh api \"
 fake 0 $'a\u2028b\nc' "a string result is printed raw" api "$rel" --jq '.[].t'
 fake 0 '' "a result of nothing prints nothing" api "$rel" --jq '.[] | select(.n > 5)'
 [[ ! -s "$work/fout" ]] || fail "fake gh: a --jq with no result printed '$(cat "$work/fout")'"
+# Anything but a string is printed as gh prints it: null as an empty line, the rest as compact JSON with sorted keys and
+# Go's escapes.
+fake 0 '{"draft":false,"n":1,"t":"a\u2028b"}' "an object result is compact, sorted and escaped" api "$rel" --jq '.[0] | {t, n, draft}'
+fake 0 '["\u003c\u0026\u003e\u2029"]' "<, &, > and U+2029 in a JSON result are escaped" api "$rel" --jq '["<&>\u2029"]'
+fake 0 $'1\nfalse' "a number and a boolean" api "$rel" --jq '.[0].n, .[0].draft'
+fake 0 - "null is an empty line" api "$rel" --jq '.[0].missing'
+[[ "$(od -An -c "$work/fout" | tr -d ' ')" == '\n' ]] || fail "fake gh: null printed $(od -An -c "$work/fout")"
 fake 0 '"rest.repos_o_app"' "a plain REST call is still logged as its key" api repos/o/app && logged "a plain REST call" rest.repos_o_app
 fake 97 '' "an expression jq can't run" api "$rel" --jq '.[] | nope('
 logged "an expression jq can't run" "UNMATCHED rest.repos_o_app_releases?per_page=100 (jq can't run .[] | nope( over its fixture rest.repos_o_app_releases?per_page=100.json)"

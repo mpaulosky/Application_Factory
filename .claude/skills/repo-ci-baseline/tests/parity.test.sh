@@ -63,8 +63,8 @@
 #
 # Exit 0 when every case passes, 1 when one fails, 2 on a usage or setup error (a case missing a file or holding a bad
 # one, a command that can't be run, a temporary folder that can't be made). Needs bash 4.4 or later, coreutils (mktemp,
-# mkdir, rm, ln, cp, cat, head, sort, env, basename, dirname, timeout), findutils (find), diff, grep and sed, and git for a
-# case with a setup.sh; the fake gh needs bash and cat, and mktemp, rm and jq (any version) for a REST call with --jq.
+# mkdir, rm, ln, cp, cat, head, sort, env, basename, dirname, timeout), findutils (find), diff, grep and sed, and git 2.32 or later
+# (GIT_CONFIG_GLOBAL) for a case with a setup.sh; the fake gh needs bash and cat, and mktemp, rm and jq 1.6 or later (for walk) for a REST call with --jq.
 set -euo pipefail
 
 setup_error() {
@@ -302,6 +302,14 @@ for case_dir in "${cases[@]}"; do
     cp "$tmp/stdout" "$case_dir/expected.stdout"
     printf '%s\n' "$code" > "$case_dir/expected.code"
     cp "$tmp/calls" "$case_dir/expected.calls"
+    # git stores no empty folder, so one in expected.tree/ would be missing from a fresh clone and fail the case there.
+    empty="$(cd -- "$run" && find . -mindepth 1 -name .git -prune -o -type d -empty -print | sort)"
+    if [[ -n "$empty" ]]; then
+      echo "FAIL $name: not recorded: the run left an empty folder, which git can't store:"
+      while IFS= read -r folder; do echo "     $folder"; done <<< "$empty"
+      failed+=("$name")
+      continue
+    fi
     rm -rf "$case_dir/expected.tree"
     if [[ -n "$(cd -- "$run" && find . -mindepth 1 -maxdepth 1 ! -name .git)" ]]; then
       cp -R "$run/." "$case_dir/expected.tree/" || setup_error "can't record $name/expected.tree."

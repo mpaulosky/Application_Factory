@@ -2,7 +2,7 @@
 
 The Template's `.github/scripts/release_queue.py` through its command line: `tests/parity.test.sh release_queue [command...]`. The runner's header says what a case holds.
 
-Each case's `setup.sh` builds main's history in the run's folder, one empty commit per merge with the Release tags on theirs, and a local bare origin. Its commits
+Each case but the usage errors (13 to 15) has a `setup.sh` that builds main's history in the run's folder, one empty commit per merge with the Release tags on theirs, and a local bare origin. Its commits
 get the same hashes on every run, and the `gh` fixtures' `merge_commit_sha` names them. Cases 04 to 08 push one merge to origin after the checkout, so the queue
 holds it only because the script fetches main.
 
@@ -17,7 +17,8 @@ Release names it, and one has `[skip-release]` and no merge commit. Cases 17 to 
 login under `user`, not `author`), one with `[skip-release]`, and one never merged. Case 20 takes v1.10.0 over v1.9.0 as the cutoff, which string order would
 reverse. Case 21 queues a merge in the cutoff's own second and goes on to the next page while a PR's update time equals the cutoff's merge time; case 22 stops
 at a PR with no update time. Case 23 is a failed Release listing: exit 1, nothing on stdout, and stderr matched only as not empty, since the Python's is a
-traceback. Case 24 gives `--rep` for `--repo`: an abbreviated option is accepted, as argparse does.
+traceback. Case 24 gives `--rep` for `--repo`: an abbreviated option is accepted, as argparse does. Case 25 gives `--pr ' +0_5 '`, which
+Python's `int()` reads as 5.
 
 Not covered, on purpose:
 

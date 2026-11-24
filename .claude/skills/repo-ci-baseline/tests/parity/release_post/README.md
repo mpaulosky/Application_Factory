@@ -14,7 +14,7 @@ Case 08 is the hostile corpus: a title and body with astral characters, named, n
 U+2029, Liquid, HTML, `javascript:` links, reference definitions, a CR, and commit subjects and file names that would start a definition or break a code span.
 The file list pins the order of `tests/a-b/x.cs` before `tests/a/x.cs`, a sort by the name as a string.
 
-Cases 17 to 26 pin what a port is likely to get wrong:
+Cases 17 to 28 pin what a port is likely to get wrong:
 
 - 17: `\v`, `\f`, U+0085 and U+001C to U+001E in a title, a commit subject and the PR description stay in the text: Markdown breaks lines only at CR and LF.
   The card's excerpt, read back with `splitlines()`, does split there, so the list markers after each separator are dropped.
@@ -29,6 +29,11 @@ Cases 17 to 26 pin what a port is likely to get wrong:
 - 24: an `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` of only blanks count as unset: no API call, and the post says no AI summary.
 - 25: a failed read of the PR: exit 1, nothing on stdout and no file written, and stderr matched only as not empty, since the Python's is a traceback.
 - 26: `--ta` for `--tag`: an abbreviated option is accepted, as argparse does.
+- 27: the README's links as `docs/README.md` rebases them, one shape per line: `#`, `?`, `/` and scheme targets kept; `./` and the bare `docs`, `docs/`,
+  `docs#x` and `docs?x` forms; angle-bracket destinations with a space; titles; an escaped and a nested parenthesis, at depths 31 and 32 (rebased) and 33
+  (left alone); `src=` and `href=` quoted three ways, and `data-src` left alone; reference definitions; a blockquote; and left alone, code spans (one across
+  two lines) and an indented code block, while an HTML block's backticks are text.
+- 28: `--pr ' +0_7 '`, which Python's `int()` reads as 7.
 
 Not covered, on purpose:
 

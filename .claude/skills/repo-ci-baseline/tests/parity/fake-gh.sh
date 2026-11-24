@@ -202,7 +202,9 @@ for fixture in "$key.$n.json" "$key.$n.fail" "$key.json" "$key.fail"; do
   [[ -e "$file" ]] || continue
   [[ -f "$file" && -r "$file" ]] || unmatched "$key (its fixture $fixture is not a readable file)"
   if [[ "$fixture" == *.json && -n "${has_jq:-}" ]]; then
-    # gh runs the expression over the response and prints a string result raw, as jq -r does.
+    # gh runs the expression over the response and prints each result as gh does: a string raw, null as an empty line,
+    # and anything else as compact JSON with its keys sorted at every level and <, >, &, U+2028 and U+2029 escaped (Go's
+    # encoder). A number that isn't an integer is the one result printed otherwise (gh writes 1.5 as 1.50).
     command -v jq > /dev/null || unmatched "$key (jq, which a call with --jq needs, is not on PATH)"
     # jq reads the program from a file (-f): jq before 1.7 refuses -- ahead of a program given as an argument, and without
     # -- a program that starts with - (such as -.n) would be read as an option.
@@ -212,7 +214,14 @@ for fixture in "$key.$n.json" "$key.$n.fail" "$key.json" "$key.fail"; do
       unmatched "$key (no temporary file for jq's program)"
     }
     trap 'rm -f "$answer" "$program"' EXIT
-    printf '%s\n' "$jq" > "$program" || unmatched "$key (can't write jq's program)"
+    {
+      printf '%s\n' 'def gh_escape(from; to): split(from) | join(to);'
+      printf '%s\n' 'def gh_print: if type == "string" then . elif . == null then "" else'
+      printf '%s\n' '  walk(if type == "object" then to_entries | sort_by(.key) | from_entries else . end) | tojson'
+      printf '%s\n' '  | gh_escape("<"; "\\u003c") | gh_escape(">"; "\\u003e") | gh_escape("&"; "\\u0026")'
+      printf '%s\n' '  | gh_escape("\u2028"; "\\u2028") | gh_escape("\u2029"; "\\u2029") end;'
+      printf '(\n%s\n) | gh_print\n' "$jq"
+    } > "$program" || unmatched "$key (can't write jq's program)"
     jq -r -f "$program" < "$file" > "$answer" 2> /dev/null || unmatched "$key (jq can't run $jq over its fixture $fixture)"
     printf '%s\n' "$entry" >> "$FAKE_GH_LOG"
     cat -- "$answer"
