@@ -76,7 +76,8 @@ jobs:
           || github.event_name == 'schedule'
           || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # The work step's 300 minutes plus the setup and Finish steps around it, under the hosted runner's 360-minute cap.
+    timeout-minutes: 330
     concurrency:
       group: claude-issues
       cancel-in-progress: false
@@ -229,7 +230,9 @@ jobs:
       - name: Work the issue
         id: claude
         if: steps.pick.outputs.issue != ''
-        timeout-minutes: 75
+        # Issue 119's port (five scripts and 286 tests) ran out of 75 minutes with nothing pushed, so a large port
+        # gets five hours. The Finish step still runs after a timeout and reports it on the issue.
+        timeout-minutes: 300
         continue-on-error: true
         uses: anthropics/claude-code-action@6fed3ca145920b639991cb756090506e1bcaf515 # v1.0.245
         with:
@@ -287,7 +290,7 @@ jobs:
           claude_args: >-
             --permission-mode bypassPermissions
             --model claude-opus-5-5
-            --max-turns 200
+            --max-turns 500
             --add-dir ${{ runner.temp }}/claude-task
             --allowedTools "Bash,Read,Edit,Write,MultiEdit,Glob,Grep"
             --disallowedTools "WebFetch,WebSearch,Monitor,ScheduleWakeup,Read(//proc/**)"
