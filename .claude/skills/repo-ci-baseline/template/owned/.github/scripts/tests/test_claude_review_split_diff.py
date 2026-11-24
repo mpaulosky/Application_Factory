@@ -458,6 +458,100 @@ def test_past_the_last_batch_the_rest_are_named(repo, tmp_path):
     assert f"past what {MAX_BATCHES} reviews read" in repo.log
 
 
+def with_constant(name, value):
+    """The step's script with constant name set to value."""
+    script = step_script()
+    assert len(re.findall(rf"^\s*{name} = [\d_]+", script, re.M)) == 1
+    return re.sub(rf"^(\s*{name} = )[\d_]+", rf"\g<1>{value}", script, flags=re.M)
+
+
+def listed_of(repo):
+    return [repo.outputs[f"listed_{n}"].split() for n in range(1, repo.batches + 1)]
+
+
+@pytest.mark.parametrize("over, first", [(-1, ["001.diff"]), (0, ["001.diff", "002.diff"]), (1, ["001.diff", "002.diff"])],
+                         ids=["n-1", "n", "n+1"])
+def test_a_batch_takes_pieces_up_to_exactly_its_byte_budget(repo, tmp_path, over, first):
+    head = repo.commit(big_files(3))
+    for name in ("measure", "run"):
+        (tmp_path / name).mkdir()
+    repo.split(repo.base, head, tmp_path / "measure")
+    sizes = [(tmp_path / "measure" / "runner" / "claude-review" / "diff" / f"00{n}.diff").stat().st_size for n in (1, 2, 3)]
+    assert len(set(sizes)) == 1  # alike, so the third piece never fits beside the second at n-1
+    budget = sizes[0] + sizes[1] + over
+    repo.split(repo.base, head, tmp_path / "run", script=with_constant("MAX_READ_BYTES", budget))
+    batches = listed_of(repo)
+    # The piece that passed the budget starts the next batch, and every piece is read, in order.
+    assert batches[0] == first and batches[1][0] == f"00{len(first) + 1}.diff"
+    assert [name for batch in batches for name in batch] == ["001.diff", "002.diff", "003.diff"] and repo.skipped == ""
+
+
+@pytest.mark.parametrize("count, batches", [(MAX_READ_PIECES - 1, 1), (MAX_READ_PIECES, 1), (MAX_READ_PIECES + 1, 2)])
+def test_a_batch_takes_at_most_max_read_pieces(repo, tmp_path, count, batches):
+    head = repo.commit(big_files(count))
+    repo.split(repo.base, head, tmp_path)
+    assert [len(batch) for batch in listed_of(repo)] == [min(count, MAX_READ_PIECES), *([1] if batches == 2 else [])]
+    assert repo.batches == batches and repo.skipped == ""
+
+
+@pytest.mark.parametrize("over", [-1, 0, 1], ids=["n-1", "n", "n+1"])
+def test_the_last_batch_takes_pieces_up_to_exactly_max_batches_reviews(repo, tmp_path, over):
+    count = MAX_READ_PIECES * MAX_BATCHES + over
+    head = repo.commit(big_files(count))
+    text, folder, _ = repo.split(repo.base, head, tmp_path)
+    assert repo.batches == MAX_BATCHES
+    unread = [name for name, flag in batch_of(folder).items() if flag == "not read"]
+    assert unread == ([f"{count:03d}.diff"] if over > 0 else []) and repo.skipped.split() == unread
+    assert ("Not asked for" in text) is (over > 0)
+
+
+def test_past_the_last_batch_no_later_piece_is_read_even_one_that_would_fit(repo, tmp_path):
+    # MAX_BATCHES - 1 batches of MAX_READ_PIECES pieces of about 30 KB, then a last batch of 7 pieces of about 39 KB,
+    # one more 39 KB piece that doesn't fit beside them, and a 15 KB one that would: the unread pieces stay the tail.
+    files = big_files(MAX_READ_PIECES * (MAX_BATCHES - 1))
+    files |= {f"docs/g{i:02d}.md": "".join(f"n{i}_{n} = {n:030d}\n" for n in range(950)) for i in range(8)}
+    files["docs/g08.md"] = "".join(f"name_8_{n} = {n:020d}\n" for n in range(450))
+    head = repo.commit(files)
+    _, folder, _ = repo.split(repo.base, head, tmp_path)
+    names = list(index(folder))
+    last = repo.outputs[f"listed_{MAX_BATCHES}"].split()
+    sizes = {name: (folder / name).stat().st_size for name in names}
+    assert len(last) == 7 < MAX_READ_PIECES and last == names[-9:-2]
+    # The test's premise: the small piece would have fit in the last batch.
+    assert sum(sizes[name] for name in last) + sizes[names[-1]] <= MAX_READ_BYTES
+    assert sum(sizes[name] for name in last) + sizes[names[-2]] > MAX_READ_BYTES
+    assert repo.skipped.split() == names[-2:]
+    assert [name for name, flag in batch_of(folder).items() if flag == "not read"] == names[-2:]
+
+
+def context_log(repo):
+    """(the context's bytes, the files left out of it, the biggest batch's bytes), from the step's log."""
+    found = re.search(r"Wrote \d+ context piece\(s\) of whole files \((\d+) bytes\); left out (\d+) file\(s\)", repo.log)
+    biggest = re.search(r"\(at most (\d+) bytes in one\)", repo.log)
+    return int(found[1]), int(found[2]), int(biggest[1])
+
+
+@pytest.mark.parametrize("over, left_out", [(-1, 1), (0, 0)], ids=["n-1", "n"])
+def test_the_context_fits_beside_the_biggest_batch_not_every_piece(repo, tmp_path, over, left_out):
+    # One piece a batch: a 30 KB file and a smaller one. Each review reads one batch and the context, so the
+    # context gets what MAX_TOTAL_BYTES leaves beside the biggest batch, not beside both.
+    files = big_files(1) | {"docs/small.md": "".join(f"small_{n} = {n:020d}\n" for n in range(300))}
+    head = repo.commit(files)
+    one_each = with_constant("MAX_READ_PIECES", 1)
+    for name in ("measure", "run"):
+        (tmp_path / name).mkdir()
+    repo.split(repo.base, head, tmp_path / "measure", script=one_each)
+    context, none_left, biggest = context_log(repo)
+    assert repo.batches == 2 and none_left == 0 and context > 0
+    sizes = [(tmp_path / "measure" / "runner" / "claude-review" / "diff" / name).stat().st_size
+             for name in ("001.diff", "002.diff")]
+    assert biggest == max(sizes) and min(sizes) > 1
+    total = biggest + context + over
+    repo.split(repo.base, head, tmp_path / "run", script=one_each.replace(
+        re.search(r"MAX_TOTAL_BYTES = [\d_]+", one_each)[0], f"MAX_TOTAL_BYTES = {total}"))
+    assert context_log(repo)[1] == left_out
+
+
 # Copilot code review's exclusions, as https://docs.github.com/en/copilot/reference/review-excluded-files lists them
 
 COPILOT_EXCLUDED_NAMES = [

@@ -1041,20 +1041,24 @@ jobs:
               if part["kind"] not in piece["kinds"]:
                   piece["kinds"].append(part["kind"])
           # Pieces in batches, one review each: consecutive pieces within MAX_READ_PIECES and MAX_READ_BYTES, at most
-          # MAX_BATCHES batches. A piece is never bigger than MAX_READ_BYTES, so it always fits a new batch.
-          batches, read = [], []
+          # MAX_BATCHES batches. A piece is never bigger than MAX_READ_BYTES, so it always fits a new batch. From the
+          # first piece past the last batch on, none is read, even one that would fit, so the unread pieces are the tail.
+          batches, read, full = [], [], False
           for index, piece in enumerate(pieces):
               piece["name"] = f"{index + 1:03d}.diff"
               piece["lines"] = piece["content"].count(b"\n")
               with open(os.path.join(folder, piece["name"]), "wb") as file:
                   file.write(piece["content"])
               batch = batches[-1] if batches else None
-              if (batch is None or len(batch["pieces"]) >= MAX_READ_PIECES
-                      or batch["size"] + len(piece["content"]) > MAX_READ_BYTES):
+              if not full and (batch is None or len(batch["pieces"]) >= MAX_READ_PIECES
+                               or batch["size"] + len(piece["content"]) > MAX_READ_BYTES):
                   if len(batches) >= MAX_BATCHES:
-                      continue
-                  batch = {"pieces": [], "size": 0}
-                  batches.append(batch)
+                      full = True
+                  else:
+                      batch = {"pieces": [], "size": 0}
+                      batches.append(batch)
+              if full:
+                  continue
               batch["pieces"].append(index)
               batch["size"] += len(piece["content"])
               read.append(index)
