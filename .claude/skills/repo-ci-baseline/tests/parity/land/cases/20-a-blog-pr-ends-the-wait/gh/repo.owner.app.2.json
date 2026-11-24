@@ -9,6 +9,7 @@
       "title": "[skip-release] docs: Release notes",
       "state": "OPEN",
       "isDraft": false,
+      "isCrossRepository": false,
       "headRefName": "docs/release-notes",
       "headRefOid": "1234567000000000000000000000000000000000",
       "mergeStateStatus": "CLEAN",

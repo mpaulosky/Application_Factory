@@ -100,7 +100,7 @@ PAT means `RELEASE_PR_PAT`. Every workflow below falls back to `GITHUB_TOKEN` wh
 
 In PR Auto-Merge, `github` is the `GITHUB_TOKEN` client and `patClient` the PAT's, so a PAT call has to say `patClient.`.
 `pr-automerge.test.mjs` pins the six PAT calls and the fourteen `GITHUB_TOKEN` ones, and runs scenarios against a fake of each client that refuses the other's calls.
-`test_tokens_doc.py` fails when the script makes a call this table doesn't list.
+`tests/Scripts.Tests/Land/TokensDocTests.cs` fails when the script makes a call this table doesn't list.
 
 What's left on the PAT is writes only, plus one `users.getAuthenticated` a run when Dependabot is asked to rebase.
 Moving the bots to a GitHub App, whose installation tokens have an allowance of their own, is a possible follow-up.
@@ -112,13 +112,13 @@ Almost all of it is GraphQL points (its poll, and `gh pr update-branch`, `edit`,
 The 5,000 REST requests an hour, the allowance that ran out on 2026-10-18, are left to the PAT's and Sandcastle's REST calls.
 
 - **Interval:** it polls every 60 s by default (`--interval`).
-- **A quiet round** costs one `gh api graphql` per repo: status.py's `QUERY`, about 3 GraphQL points
+- **A quiet round** costs one `gh api graphql` per repo: `Status.Query` in `github/StatusCore.cs`, about 3 GraphQL points
   (50 PRs, each with five nested lists and the head's check list: 301 requests, divided by 100).
   With `github/repos.txt`'s seven repos that's 420 queries and about 1,260 of the account's 5,000 GraphQL points an hour.
-  A PR whose review threads are all resolved and that Copilot or Claude Review reviewed adds one more query a poll, `THREADS_QUERY`
+  A PR whose review threads are all resolved and that Copilot or Claude Review reviewed adds one more query a poll, `Status.ThreadsQuery`
   (the comments of its threads, for the unreplied-thread notice: 101 requests, 1 point).
-  The comments aren't in `QUERY`: nested under 50 PRs of 100 threads they'd add 5,000 requests, about 53 points a read.
-- **A PR awaiting its first review** adds one more query a poll, `COMMENTS_QUERY` (the last 100 comments, for the record that Copilot was asked: 101 requests, 1 point),
+  The comments aren't in `Status.Query`: nested under 50 PRs of 100 threads they'd add 5,000 requests, about 53 points a read.
+- **A PR awaiting its first review** adds one more query a poll, `Status.CommentsQuery` (the last 100 comments, for the record that Copilot was asked: 101 requests, 1 point),
   only for an open, ready PR whose head has no real Copilot review and no Copilot request.
 - **Actions** cost more, once per PR head: updating a branch is `gh pr update-branch` alone (it asks nobody for a review);
   requesting Copilot is once per PR: one `gh pr comment` (the record), one `gh pr edit` and one read-back; adding `review:claude`, marking a PR ready and arming auto-merge are one call each.

@@ -435,10 +435,15 @@ def test_preflight_never_builds_an_install_command_from_an_unreadable_version(tm
     assert problems == ["no installed .NET SDK matches the Template's global.json (the .NET SDK it names)"]
 
 
-def test_preflight_wants_dotnet_only_when_the_template_has_a_global_json(tmp_path):
-    assert fake_preflight(on_path=auto.TOOLS + auto.SANDBOX_TOOLS + ("uvx",), global_json=None, tmp_path=tmp_path)[0] == []
-    problems, _ = fake_preflight(on_path=auto.TOOLS + auto.SANDBOX_TOOLS + ("uvx",), tmp_path=tmp_path)
-    assert problems == ["the Template's global.json names .NET SDK 10.0.403, and dotnet isn't on PATH"]
+def test_preflight_wants_dotnet_for_land_sh_and_asks_it_for_the_sdk_only_when_the_template_has_a_global_json(tmp_path):
+    # land.sh runs github/land.cs (ADR 0017), so dotnet is wanted with or without the Template's global.json, and named once.
+    no_dotnet = tuple(tool for tool in ALL_TOOLS if tool != "dotnet")
+    assert "dotnet" in auto.TOOLS
+    assert fake_preflight(on_path=no_dotnet, global_json=None, tmp_path=tmp_path)[0] == ["dotnet isn't on PATH"]
+    problems, calls = fake_preflight(global_json=None, tmp_path=tmp_path)
+    assert problems == [] and not any(call["command"][0] == "dotnet" for call in calls)
+    # With the global.json written: still named once.
+    assert fake_preflight(on_path=no_dotnet, tmp_path=tmp_path)[0] == ["dotnet isn't on PATH"]
 
 
 def test_preflight_names_an_unreadable_global_json_and_runs_no_dotnet(tmp_path):
@@ -2066,7 +2071,7 @@ def test_the_sandbox_and_session_lists_word_for_word():
         "above every exit code, so a session's can't read as one"
     assert inspect.signature(auto.run_bounded).parameters["timeout"].default == auto.RECORD_TIMEOUT_SECONDS
     assert auto.SANDBOX_TOOLS == (("bwrap", "socat") if sys.platform.startswith("linux") else ())
-    assert auto.TOOLS == ("git", "gh", "python3", "node", "pnpm", "shfmt", "claude")
+    assert auto.TOOLS == ("git", "gh", "dotnet", "python3", "node", "pnpm", "shfmt", "claude")
     assert (auto.GROUP_WAIT_SECONDS, auto.SESSION_BROKE_A_RULE) == (10, 126)
     assert auto.NO_PUSH == "https://push.invalid/"
     assert auto.SESSION_GIT_CONFIG == (
