@@ -1191,7 +1191,7 @@ for fail in comments run; do
   pick_case 1
   check "an issue whose $fail can't be read keeps its slot, so a full cap picks nothing" \
     "$(picked '[]' && ! unlabelled 1 && ! labelled 3 && { [[ $fail != comments ]] || grep -qF "::warning::Couldn't read the comments on #1" "$pick/log"; } \
-      && echo 0 || echo 1)"
+      && { [[ $fail != run ]] || grep -qF "::warning::Couldn't read run 101 of #1: gh: Server Error (HTTP 500)" "$pick/log"; } && echo 0 || echo 1)"
 done
 for gone in 404 none; do
   api_reset
@@ -1200,7 +1200,7 @@ for gone in 404 none; do
   [[ $gone == none ]] || { comments_fx issues.1.comments "$(started 1 101)" && touch "$api/actions.runs.101.404"; }
   owner_labelled 1
   pick_case 1
-  check "an issue left claude:working by a run that is gone ($gone) is queued again" "$(picked '[1]' && unlabelled 1 && labelled 1 && echo 0 || echo 1)"
+  check "an issue left claude:working by a run that is gone ($gone) is queued again" "$(picked '[1]' && unlabelled 1 && labelled 1 && ! grep -qF "Couldn't read run" "$pick/log" && echo 0 || echo 1)"
 done
 # The latest "Claude started" comment can be past the first page of 100.
 api_reset
