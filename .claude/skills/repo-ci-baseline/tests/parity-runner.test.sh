@@ -618,12 +618,18 @@ converted_cases() {
 # Tried first on a probe: a case file git converts is named, the attribute file silences it, and a pathspec that
 # matches nothing is a failure, not a pass.
 attr_probe="$work/attr-probe"
+mkdir -p "$work/hostile-xdg/git"
+printf '%s\n' '* text=auto' stdin > "$work/hostile-xdg/git/attributes"
+printf '%s\n' stdin > "$work/hostile-xdg/git/ignore"
 mkdir -p "$attr_probe/parity/s/cases/c"
 printf 'a\r\n' > "$attr_probe/parity/s/cases/c/stdin"
 git init -q "$attr_probe"
-"${own_git[@]}" -C "$attr_probe" -c core.safecrlf=false add parity
+XDG_CONFIG_HOME="$work/hostile-xdg" "${own_git[@]}" -C "$attr_probe" -c core.safecrlf=false add parity
 got="$(converted_cases "$attr_probe" 'parity/*/cases/*')"
 [[ "$got" == "parity/s/cases/c/stdin: text: unspecified" ]] || fail "the line-ending check missed a converted case file: '$got'"
+# A machine's own attributes and excludes (the global `* text=auto` and ignored stdin made above) change neither answer.
+got="$(XDG_CONFIG_HOME="$work/hostile-xdg" converted_cases "$attr_probe" 'parity/*/cases/*')"
+[[ "$got" == "parity/s/cases/c/stdin: text: unspecified" ]] || fail "the line-ending check read the machine's own attributes: '$got'"
 printf '%s\n' '*/cases/** -text' > "$attr_probe/parity/.gitattributes"
 got="$(converted_cases "$attr_probe" 'parity/*/cases/*')"
 [[ -z "$got" ]] || fail "the line-ending check named a case file stored as it is: '$got'"
