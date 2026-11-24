@@ -345,9 +345,10 @@ Those are the Read tool's limits in Claude Code 2.1.293 (what the action pin ins
     - GitHub's PR diff still detects renames, so a finding on a line of a renamed file outside GitHub's hunks, or on the old path,
       can't be anchored. `post_claude_review.py` checks each finding against GitHub's own patches (`pulls/{n}/files`)
       and puts one it can't anchor in the review body under the off-diff marker, which holds the merge.
-  - The prompt asks for at most 8 pieces and 300,000 bytes (about 80,000 tokens), leaving room for source files; the rest are listed as not read,
+  - One review reads at most 8 pieces and 300,000 bytes (about 80,000 tokens), leaving room for source files. A bigger diff is read in batches of that size,
+    a review each (see [A big diff is read in batches](#a-big-diff-is-read-in-batches-174)); past the last batch the rest are listed as not read,
     and the summary must name them. Each one adds a finding outside the diff, which holds the merge for a person; the log lists its files.
-    So does a listed piece Claude didn't read whole, judged from the Read results in the execution file.
+    So does a listed piece Claude didn't read whole, judged from the Read results in its batch's execution file.
 - **Pieces are named by number only (`001.diff`), and the prompt lists them by name, line count and kind.**
   A PR's paths are its author's: none becomes a file name or reaches the prompt. The list reaches the prompt as a step output,
   since Claude can't read an index before its one turn of reads. `diff/INDEX` maps each piece to its files' paths, as git prints them (quoted when unusual, one per line),
@@ -539,3 +540,31 @@ text has them (a generated test's file name quoted in a finding, a long identifi
 A JWT glued straight onto a `ghp_` or `sk-ant-` token is redacted as it always was: the token's pattern takes the JWT's first segment too, and the rest is no longer a JWT.
 A finding's `path` gets only `CREDENTIAL` (`redact_path`), not the long-run rule: a long generated file name that holds a credential start without being one is no credential,
 and a path that no longer matched the diff would move its finding into the review body, where it holds the merge. A path past 1,024 characters is no real path and gets the full rule.
+
+## A big diff is read in batches (#174)
+
+One review reads at most 8 diff pieces, so a big PR was reviewed only in part: Application_Factory PR 173's review read pieces 001 to 008 and skipped 009 to 023,
+and its not-read finding held the merge for the owner to review the rest by hand. The owner asked for every PR's whole diff to be reviewed.
+
+- **The diff is read in batches, a review each.** The diff step packs consecutive pieces into batches within the same 8 pieces and 300,000 bytes one review
+  reads, at most four batches (`MAX_BATCHES`), and writes each batch's piece list (`pieces_N`), names (`listed_N`) and a note for the prompt (`note_N`).
+  The Review step reads batch 1, and "Review batch 2" to "Review batch 4" run only when the diff has that many. Every batch's review also reads every context
+  piece, so it sees the code around its change; the prompt's note says which batch it reads and keeps its Changes table to that batch's files.
+- **The owner's limit holds per review.** Each batch's review is held to one turn of reads and `--max-turns 30` like the single review it was, so a
+  batch is the same review the bench measured, on less of the diff. Raising the turn limit for one review to read everything was not chosen: it would read
+  all the pieces into one context, past what the bench measured, where the limit was set because more turns didn't find more.
+- **One review is posted.** The answer check reads each batch's execution file, checks every answer for a secret (one quoting a secret withholds them all),
+  withholds them all when one is malformed, and joins them: the summary in one section per batch, the findings in batch order. A batch's pieces count as read
+  only from its own execution file. A batch whose review didn't answer (a cap, a usage limit, a timeout) has its summary section say so, and its pieces
+  join the not-read finding, which holds the merge; the warning step names each such batch. When no batch answered, nothing is posted, as before.
+- **The steps share their inputs through a YAML anchor** (`with: &review`, then `with: *review`), and the prompt takes the batch's pieces and note from the
+  step's own `env` (`REVIEW_PIECES`, `REVIEW_BATCH`), so the prompt and the Read restrictions are written once. zizmor warns that it audits anchored
+  inputs less precisely; actionlint and GitHub read them. A test keeps the four steps' inputs equal and the three `MAX_BATCHES` (the diff step, the
+  answer check, the warning step) the number of Review steps.
+- **Cost.** Up to one review per batch: a PR within 8 pieces costs what it did; PR 173's 23 pieces would take three reviews. The steps run one after another,
+  so the job's limit rose from 31 to 106 minutes (four steps of 25, and 6 for the rest), and `--max-budget-usd 3` caps each, $12 for the biggest diff.
+- **Past four batches** (about 32 pieces, over a megabyte of diff) the rest still aren't read, and the not-read finding holds the merge as before.
+  Running the batches in parallel, as a matrix of jobs, was not chosen: each job would rebuild the diff and the context, and the answers would have to meet
+  in another job through artifacts.
+
+The benchmark runs the Review step's prompt on one batch, the first; it has not been rerun for this change.

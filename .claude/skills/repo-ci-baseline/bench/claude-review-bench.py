@@ -56,12 +56,12 @@ WORKFLOW = HERE.parent / "template/owned/.github/workflows/claude-review.yml"
 
 
 def review_step(workflow):
-    """The prompt and claude_args of the workflow's Review step."""
+    """The prompt and claude_args of the workflow's Review step, the one that reads the diff's first batch."""
     import yaml  # PyYAML; imported here so the scoring code and its tests don't need it
     jobs = yaml.safe_load(workflow.read_text())["jobs"]
-    step = next((s for s in jobs["review"]["steps"] if s.get("id") == "claude"), None)
+    step = next((s for s in jobs["review"]["steps"] if s.get("id") == "claude_1"), None)
     if step is None:
-        sys.exit(f"claude-review-bench.py: no step with id: claude in {workflow}'s review job")
+        sys.exit(f"claude-review-bench.py: no step with id: claude_1 in {workflow}'s review job")
     return step["with"]["prompt"], step["with"]["claude_args"]
 
 
@@ -80,8 +80,9 @@ def diff_step(workflow):
 
 def split_diff(script, temp, tree, base, head):
     """Run the diff step's Python on temp/claude-review/pr.diff in the case's worktree, as the runner does: the
-    pieces under temp/claude-review/diff and context/, and the lists of them the prompt gets (its pieces and
-    context outputs)."""
+    pieces under temp/claude-review/diff and context/, and the lists of them the prompt gets (its pieces_1 and
+    context outputs). A case reviews the diff's first batch, as the Review step does; a diff big enough for more
+    batches is reviewed only that far, and the note_1 output that would say so isn't given."""
     output = Path(temp) / "github-output"
     output.write_text("")
     subprocess.run([sys.executable, "-I", "-"], input=script, text=True, check=True, capture_output=True, cwd=tree,
@@ -90,9 +91,9 @@ def split_diff(script, temp, tree, base, head):
                         "GITHUB_WORKSPACE": str(Path(temp) / "work" / "repo" / "repo"),
                         "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"})
     written = output.read_text()
-    found = re.match(r"pieces<<(EOF_[0-9a-f]+)\n(.*?)\n\1\n", written, re.S)
+    found = re.match(r"pieces_1<<(EOF_[0-9a-f]+)\n(.*?)\n\1\n", written, re.S)
     if not found:
-        raise OSError(f"the diff step wrote no pieces output: {written[:500]}")
+        raise OSError(f"the diff step wrote no pieces_1 output: {written[:500]}")
     context = re.search(r"^context<<(EOF_[0-9a-f]+)\n(.*?)\n\1\n", written, re.S | re.M)
     return found[2], context[2] if context else None
 
@@ -103,7 +104,9 @@ def render(text, pr, temp, pieces=None, context=None):
     github.workspace is temp/work/repo/repo, so its ../../_actions is temp/work/_actions, laid out as on a runner.
     """
     if pieces is not None:
-        text = text.replace("${{ steps.diff.outputs.pieces }}", pieces)
+        # The Review step's env: its batch's pieces, and no note, since a case reviews one batch alone.
+        text = text.replace("${{ env.REVIEW_PIECES }}", pieces)
+        text = text.replace("${{ env.REVIEW_BATCH }}\n", "")
     if context is not None:
         text = text.replace("${{ steps.diff.outputs.context }}", context)
     # A case reviews its PR's head as a first review would: no thread of it is resolved yet.

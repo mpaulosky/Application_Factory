@@ -479,7 +479,7 @@ def check(tmp_path, answer=None, secrets=(), path=None, raw=None, messages=(), e
                                         {"type": "result", "subtype": "success", "structured_output": answer}]))
     output = tmp_path / "output"
     output.write_text("")
-    env = {"PATH": os.environ["PATH"], "GITHUB_OUTPUT": str(output), "EXECUTION_FILE": str(path),
+    env = {"PATH": os.environ["PATH"], "GITHUB_OUTPUT": str(output), "EXECUTION_FILE_1": str(path), "ANSWERED_1": "true",
            "OAUTH_TOKEN": secrets[0] if secrets else "", "JOB_TOKEN": secrets[1] if len(secrets) > 1 else "",
            **(extra or {})}
     done = subprocess.run([sys.executable, "-I", "-"], input=answer_check_script(), env=env,
@@ -694,7 +694,7 @@ def test_no_answer_in_the_execution_file_fails_the_step(tmp_path, raw):
     code, outputs, out = check(tmp_path, raw=raw)
 
     assert code == 1 and outputs["findings"] == ""
-    assert out.startswith("::error::Claude answered, but its answer isn't in the action's execution file")
+    assert out.startswith("::error::Claude answered batch 1, but its answer isn't in the action's execution file")
     assert "rotate" not in out
 
 
@@ -851,7 +851,7 @@ def hold(tmp_path, messages=(), listed="", skipped="", answer=ANSWER, held=""):
                                   "held\t(nobody reads these here, so they hold the merge for a person)\n"
                                   "\texcluded\tdist/index.js\n\tbinary\tlib/Tool.dll\n")
     code, outputs, out = check(tmp_path, answer, [SECRET], messages=messages, extra={
-        "PIECES_DIR": str(folder), "LISTED": listed, "SKIPPED": skipped, "HELD": held})
+        "PIECES_DIR": str(folder), "LISTED_1": listed, "SKIPPED": skipped, "HELD": held})
     assert code == 0
     return json.loads(outputs["findings"])["findings"][1:], out
 
@@ -917,8 +917,184 @@ def test_no_held_files_hold_nothing(tmp_path, held):
 def test_an_answer_without_findings_gets_no_hold(tmp_path):
     # A malformed answer becomes the placeholder; adding to it would let it through as findings.
     code, outputs, _ = check(tmp_path, {"summary": "s"}, [SECRET], extra={
-        "PIECES_DIR": str(tmp_path), "LISTED": "001.diff", "SKIPPED": "002.diff"})
+        "PIECES_DIR": str(tmp_path), "LISTED_1": "001.diff", "SKIPPED": "002.diff"})
     assert code == 0 and list(json.loads(outputs["findings"])) == ["malformed"]
+
+
+# A diff read in batches, a Review step each
+
+
+def execution(tmp_path, name, answer, messages=()):
+    """An execution file holding messages, then a result with answer (none when answer is None)."""
+    path = tmp_path / name
+    result = [{"type": "result", "subtype": "success", "structured_output": answer}] if answer is not None else [
+        {"type": "result", "subtype": "error_during_execution", "is_error": True}]
+    path.write_text(json.dumps([{"type": "system"}, *messages, *result]))
+    return path
+
+
+def batched(tmp_path, answers, listed, reads=None, secrets=(SECRET,), skipped=""):
+    """Run the answer check over len(answers) batches; answers[n] is batch n + 1's answer, None when it didn't
+    answer, and reads[n] the Reads in its execution file. Returns (code, the posted answer or None, the log)."""
+    folder = tmp_path / "claude-review" / "diff"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "INDEX").write_text("The PR's diff.\n" + "".join(
+        f"{name}\t40 lines\tread in batch {n} of {len(answers)}\n\tsource\tsrc/{name}.py\n"
+        for n, names in enumerate(listed, 1) for name in names.split()))
+    extra = {"PIECES_DIR": str(folder), "BATCHES": str(len(answers)), "SKIPPED": skipped}
+    for n, answer in enumerate(answers, 1):
+        path = execution(tmp_path, f"execution{n}.json", answer, (reads or {}).get(n, ()))
+        extra |= {f"EXECUTION_FILE_{n}": str(path), f"ANSWERED_{n}": "true" if answer is not None else "false",
+                  f"LISTED_{n}": listed[n - 1]}
+    code, outputs, out = check(tmp_path, secrets=secrets, path=tmp_path / "execution1.json", extra=extra)
+    return code, json.loads(outputs["findings"]) if outputs.get("findings") else None, out
+
+
+def read_whole_of(tmp_path, names, tag):
+    folder = tmp_path / "claude-review" / "diff"
+    return [message for name in names.split() for message in read_of(folder, name, f"{tag}{name}")]
+
+
+def test_batches_answers_are_posted_as_one_review(tmp_path):
+    answers = [{"summary": "first", "findings": [{"path": "a.py", "line": 1, "body": "one"}]},
+               {"summary": "second", "findings": [{"path": "b.py", "line": 2, "body": "two"}]}]
+    listed = ["001.diff 002.diff", "003.diff"]
+    reads = {1: read_whole_of(tmp_path, listed[0], "a"), 2: read_whole_of(tmp_path, listed[1], "b")}
+
+    code, answer, out = batched(tmp_path, answers, listed, reads)
+
+    assert code == 0 and "::warning::" not in out
+    assert answer["findings"] == [{"path": "a.py", "line": 1, "body": "one"}, {"path": "b.py", "line": 2, "body": "two"}]
+    summary = answer["summary"]
+    assert summary.startswith("Claude Review read this PR's diff in 2 batches")
+    assert summary.index("### Batch 1 of 2\n\nfirst") < summary.index("### Batch 2 of 2\n\nsecond")
+
+
+def test_one_batch_posts_its_answer_as_it_is(tmp_path):
+    code, answer, _ = batched(tmp_path, [ANSWER], ["001.diff"], {1: read_whole_of(tmp_path, "001.diff", "a")})
+    assert code == 0 and answer == ANSWER
+
+
+def test_a_batch_that_didnt_answer_holds_the_merge_on_its_pieces(tmp_path):
+    listed = ["001.diff", "002.diff 003.diff"]
+
+    code, answer, out = batched(tmp_path, [ANSWER, None], listed, {1: read_whole_of(tmp_path, listed[0], "a")})
+
+    assert code == 0
+    assert "### Batch 2 of 2\n\nThis batch's review ended without an answer" in answer["summary"]
+    assert answer["findings"][0] == ANSWER["findings"][0]
+    assert [(f["path"], f["line"]) for f in answer["findings"][1:]] == [("diff", 0)]
+    assert "pieces 002.diff, 003.diff:" in answer["findings"][1]["body"]
+    assert "src/002.diff.py" in out and "src/001.diff.py" not in out
+
+
+def test_only_a_later_batch_answering_is_still_posted(tmp_path):
+    listed = ["001.diff", "002.diff"]
+
+    code, answer, _ = batched(tmp_path, [None, ANSWER], listed, {2: read_whole_of(tmp_path, listed[1], "b")})
+
+    assert code == 0 and "pieces 001.diff:" in answer["findings"][-1]["body"]
+
+
+def test_a_later_batchs_unread_piece_holds_the_merge(tmp_path):
+    listed = ["001.diff", "002.diff 003.diff"]
+    reads = {1: read_whole_of(tmp_path, "001.diff", "a"), 2: read_whole_of(tmp_path, "002.diff", "b")}
+
+    _, answer, _ = batched(tmp_path, [ANSWER, ANSWER], listed, reads)
+
+    assert "pieces 003.diff:" in answer["findings"][-1]["body"]
+
+
+def test_a_piece_read_by_another_batch_doesnt_count(tmp_path):
+    # Batch 2's pieces must be read in batch 2's review: batch 1 reading them proves nothing about batch 2's answer.
+    listed = ["001.diff", "002.diff"]
+    reads = {1: read_whole_of(tmp_path, "001.diff 002.diff", "a")}
+
+    _, answer, _ = batched(tmp_path, [ANSWER, ANSWER], listed, reads)
+
+    assert "pieces 002.diff:" in answer["findings"][-1]["body"]
+
+
+def test_a_secret_in_any_batch_withholds_the_whole_review(tmp_path):
+    leak = {"summary": "s " + SECRET, "findings": []}
+
+    code, answer, out = batched(tmp_path, [ANSWER, leak], ["001.diff", "002.diff"])
+
+    assert code == 0 and answer is None and out.startswith("::error::Claude's answer quotes")
+
+
+def test_a_malformed_batch_withholds_the_whole_review(tmp_path):
+    code, answer, out = batched(tmp_path, [ANSWER, {"summary": "s"}], ["001.diff", "002.diff"])
+
+    assert code == 0 and list(answer) == ["malformed"] and "doesn't fit the schema" in out
+
+
+def test_a_batch_that_answered_with_no_answer_in_its_file_fails_the_step(tmp_path):
+    folder = tmp_path / "claude-review" / "diff"
+    folder.mkdir(parents=True)
+    (folder / "INDEX").write_text("x\n")
+    second = tmp_path / "execution2.json"
+    second.write_text("[]")
+
+    code, outputs, out = check(tmp_path, ANSWER, [SECRET], extra={
+        "PIECES_DIR": str(folder), "BATCHES": "2", "EXECUTION_FILE_2": str(second), "ANSWERED_2": "true"})
+
+    assert code == 1 and outputs["findings"] == "" and "answered batch 2, but its answer isn't" in out
+
+
+def test_no_batch_that_could_be_read_fails_the_step(tmp_path):
+    # The step runs because a Review step answered, but the batch count leaves it out.
+    code, outputs, out = check(tmp_path, ANSWER, [SECRET], extra={"BATCHES": "1", "ANSWERED_1": "false"})
+
+    assert code == 1 and outputs["findings"] == "" and "No answer of the 1 batch(es)" in out
+
+
+@pytest.mark.parametrize("batches, counted", [("", 1), ("0", 1), ("x", 1), ("9", 4)])
+def test_the_batch_count_is_kept_between_one_and_the_review_steps(tmp_path, batches, counted):
+    listed = {f"LISTED_{n}": f"00{n}.diff" for n in range(1, 5)}
+    answered = {f"ANSWERED_{n}": "false" for n in range(2, 5)}
+
+    _, outputs, _ = check(tmp_path, ANSWER, [SECRET], extra={"BATCHES": batches, "PIECES_DIR": str(tmp_path),
+                                                             **listed, **answered})
+
+    held = json.loads(outputs["findings"])["findings"][-1]["body"]
+    assert held.startswith("Claude Review didn't read all of diff pieces " + ", ".join(
+        f"00{n}.diff" for n in range(1, counted + 1)) + ":")
+
+
+def review_steps():
+    """[(name, id, if, the env's REVIEW_PIECES and REVIEW_BATCH)] for each claude-code-action step, in order."""
+    yaml = pytest.importorskip("yaml")
+    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["review"]["steps"]
+    return [(step["name"], step["id"], step.get("if", ""), step.get("env", {}).get("REVIEW_PIECES"),
+             step.get("env", {}).get("REVIEW_BATCH"), step["with"])
+            for step in steps if str(step.get("uses", "")).startswith("anthropics/claude-code-action@")]
+
+
+def test_each_batch_has_a_review_step_with_the_same_inputs_and_its_own_pieces():
+    steps = review_steps()
+    script = WORKFLOW.read_text()
+    limits = {int(n) for n in re.findall(r"^\s+MAX_BATCHES = (\d+)", script, re.M)}
+    assert len(re.findall(r"^\s+MAX_BATCHES = \d+", script, re.M)) == 3 and limits == {len(steps)}
+    for number, (name, step_id, condition, pieces, note, inputs) in enumerate(steps, 1):
+        assert step_id == f"claude_{number}"
+        assert name == ("Review" if number == 1 else f"Review batch {number}")
+        assert pieces == f"${{{{ steps.diff.outputs.pieces_{number} }}}}"
+        assert note == f"${{{{ steps.diff.outputs.note_{number} }}}}"
+        assert inputs == steps[0][5]
+        assert condition.startswith("steps.secret.outputs.enabled == 'true' && runner.debug != '1'")
+        if number > 1:
+            assert condition.endswith(f"fromJSON(steps.diff.outputs.batches || '0') >= {number}")
+    assert "${{ env.REVIEW_PIECES }}" in steps[0][5]["prompt"] and "${{ env.REVIEW_BATCH }}" in steps[0][5]["prompt"]
+    # Every batch's answer, outcome and file reach the steps that read them.
+    for number in range(1, len(steps) + 1):
+        for needed in (f"EXECUTION_FILE_{number}: ${{{{ steps.claude_{number}.outputs.execution_file }}}}",
+                       f"ANSWERED_{number}: ${{{{ steps.claude_{number}.outputs.structured_output != '' }}}}"):
+            assert script.count(needed) == 2, needed
+        assert f"LISTED_{number}: ${{{{ steps.diff.outputs.listed_{number} }}}}" in script
+        assert f"OUTCOME_{number}: ${{{{ steps.claude_{number}.outcome }}}}" in script
+        # The job's reviewed output, the answer check's condition and the two ANSWERED_N.
+        assert script.count(f"steps.claude_{number}.outputs.structured_output != ''") == 4
 
 
 # The "Warn when Claude didn't review" step
@@ -951,7 +1127,7 @@ def test_the_warning_tells_a_sign_in_failure_from_a_limit(tmp_path, result, sign
     execution.write_text(json.dumps([{"type": "system"},
                                      {"type": "result", "total_cost_usd": 0, "modelUsage": {}, **result}]))
     done = subprocess.run(["bash", "-e", "-c", warn_script()], capture_output=True, text=True,
-                          env={"PATH": os.environ["PATH"], "OUTCOME": "failure", "EXECUTION_FILE": str(execution)})
+                          env={"PATH": os.environ["PATH"], "OUTCOME_1": "failure", "EXECUTION_FILE_1": str(execution)})
     assert done.returncode == 0, done.stderr
     assert ("Claude never reached the model" in done.stdout) is sign_in
     assert ("once a usage limit has reset" in done.stdout) is not sign_in
@@ -963,7 +1139,7 @@ def test_the_warning_says_a_capped_review_shouldnt_be_rerun(tmp_path, subtype):
     execution.write_text(json.dumps([{"type": "result", "subtype": subtype, "is_error": True, "result": "",
                                       "total_cost_usd": 2.97, "modelUsage": {"claude-opus-5-5": {}}}]))
     done = subprocess.run(["bash", "-e", "-c", warn_script()], capture_output=True, text=True,
-                          env={"PATH": os.environ["PATH"], "OUTCOME": "failure", "EXECUTION_FILE": str(execution)})
+                          env={"PATH": os.environ["PATH"], "OUTCOME_1": "failure", "EXECUTION_FILE_1": str(execution)})
     assert done.returncode == 0, done.stderr
     assert "hit its spending or turn cap" in done.stdout and "once a usage limit has reset" not in done.stdout
 
@@ -973,7 +1149,7 @@ def test_the_warning_says_a_review_the_action_rejected_for_its_turns_shouldnt_be
     execution = tmp_path / "execution.json"
     execution.write_text(json.dumps([{"type": "result", "subtype": "success", "is_error": False, "num_turns": 31,
                                       "total_cost_usd": 1.9, "modelUsage": {"claude-opus-5-5": {}}}]))
-    env = {"PATH": os.environ["PATH"], "OUTCOME": "failure", "EXECUTION_FILE": str(execution), "MAX_TURNS": "30"}
+    env = {"PATH": os.environ["PATH"], "OUTCOME_1": "failure", "EXECUTION_FILE_1": str(execution), "MAX_TURNS": "30"}
     done = subprocess.run(["bash", "-e", "-c", warn_script()], capture_output=True, text=True, env=env)
     assert done.returncode == 0, done.stderr
     assert "hit its spending or turn cap" in done.stdout
@@ -1001,9 +1177,51 @@ def test_the_warning_steps_max_turns_is_the_review_steps():
     assert set(re.findall(r'--max-turns(?:=|\s+)"?(\d+)', text)) == set(limit)
 
 
+def warn(env):
+    done = subprocess.run(["bash", "-e", "-c", warn_script()], capture_output=True, text=True,
+                          env={"PATH": os.environ["PATH"], **env})
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+def test_no_warning_when_every_batch_answered():
+    assert warn({"BATCHES": "2", "ANSWERED_1": "true", "ANSWERED_2": "true"}) == ""
+
+
+def test_a_batch_without_an_answer_beside_one_that_answered_warns_that_its_pieces_hold(tmp_path):
+    capped = execution(tmp_path, "capped.json", None)
+    capped.write_text(json.dumps([{"type": "result", "subtype": "error_max_budget_usd", "is_error": True}]))
+
+    out = warn({"BATCHES": "3", "ANSWERED_1": "true", "ANSWERED_2": "false", "OUTCOME_2": "failure",
+                "EXECUTION_FILE_2": str(capped), "ANSWERED_3": "false", "OUTCOME_3": "failure",
+                "EXECUTION_FILE_3": str(tmp_path / "missing.json")})
+
+    lines = out.splitlines()
+    assert len(lines) == 2 and all("so its pieces hold the merge" in line for line in lines)
+    assert lines[0].startswith("::warning::Claude Review's batch 2 of 3") and "spending or turn cap" in lines[0]
+    assert lines[1].startswith("::warning::Claude Review's batch 3 of 3") and "usage limit has reset" in lines[1]
+
+
+def test_batches_past_the_count_arent_warned_about():
+    assert warn({"BATCHES": "1", "ANSWERED_1": "true", "ANSWERED_2": "false"}) == ""
+
+
+def test_when_no_batch_answered_a_sign_in_failure_comes_first(tmp_path):
+    unreached = execution(tmp_path, "unreached.json", None)
+    unreached.write_text(json.dumps([{"type": "result", "is_error": True, "result": "Invalid API key · Please run /login",
+                                      "total_cost_usd": 0, "modelUsage": {}}]))
+    capped = tmp_path / "capped.json"
+    capped.write_text(json.dumps([{"type": "result", "subtype": "error_max_turns", "is_error": True}]))
+
+    out = warn({"BATCHES": "2", "EXECUTION_FILE_1": str(capped), "EXECUTION_FILE_2": str(unreached),
+                "OUTCOME_1": "failure", "OUTCOME_2": "failure"})
+
+    assert out.count("::warning::") == 1 and "Claude never reached the model" in out
+
+
 def test_the_warning_survives_a_missing_execution_file(tmp_path):
     done = subprocess.run(["bash", "-e", "-c", warn_script()], capture_output=True, text=True,
-                          env={"PATH": os.environ["PATH"], "OUTCOME": "failure", "EXECUTION_FILE": str(tmp_path / "x")})
+                          env={"PATH": os.environ["PATH"], "OUTCOME_1": "failure", "EXECUTION_FILE_1": str(tmp_path / "x")})
     assert done.returncode == 0 and "once a usage limit has reset" in done.stdout
 
 

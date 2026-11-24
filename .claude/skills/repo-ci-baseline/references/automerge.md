@@ -253,7 +253,9 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
   Claude (`anthropics/claude-code-action`; model, effort and prompt in [ADR 0004](../docs/adr/0004-claude-review-as-copilots-backup.md#model-effort-and-prompt-117))
   never holds a write token: its job has read-only permissions,
   gets the diff against the base in pieces, with context pieces of whole files around the change and the pinned actions' gatekeeping source
-  ([ADR 0004](../docs/adr/0004-claude-review-as-copilots-backup.md#context-pieces-117)), all read in one turn,
+  ([ADR 0004](../docs/adr/0004-claude-review-as-copilots-backup.md#context-pieces-117)), all read in one turn;
+  a diff too big for one review is read in up to four batches, a review each, posted as one review
+  ([ADR 0004](../docs/adr/0004-claude-review-as-copilots-backup.md#a-big-diff-is-read-in-batches-174)),
   leaving out a root copy of an Owned file when the PR changes the Template's file to the same bytes (INDEX lists it as an identical copy; a copy that differs
   from the Template's file, or whose Template file isn't in the PR, is still read, so drift reaches the review),
   and reads only the checkout, the diff and the runner's `_actions`, with no tool granted outright

@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import re
 import shlex
 from pathlib import Path
 
@@ -182,24 +183,28 @@ def test_a_failed_or_timed_out_review_doesnt_fail_the_check():
     # #123: a failed check leaves the PR UNSTABLE, which PR Auto-Merge never merges.
     yaml = pytest.importorskip("yaml")
     jobs = yaml.safe_load(bench.WORKFLOW.read_text())["jobs"]
-    step = next(s for s in jobs["review"]["steps"] if s.get("id") == "claude")
-    assert step["continue-on-error"] is True
-    assert step["timeout-minutes"] < jobs["review"]["timeout-minutes"]
+    steps = [s for s in jobs["review"]["steps"] if str(s.get("id", "")).startswith("claude_")]
+    assert len(steps) > 1 and all(step["continue-on-error"] is True for step in steps)
+    # The job outlasts every batch's review.
+    assert sum(step["timeout-minutes"] for step in steps) < jobs["review"]["timeout-minutes"]
     # Gated on a flag that can't hold a secret, not on findings, which GitHub
     # empties when they quote one: the post step then fails on them.
     assert "needs.review.outputs.reviewed == 'true'" in jobs["post"]["if"]
     assert "findings" not in jobs["post"]["if"]
-    assert jobs["review"]["outputs"]["reviewed"] == "${{ steps.claude.outputs.structured_output != '' }}"
+    assert jobs["review"]["outputs"]["reviewed"] == "${{ " + " || ".join(
+        f"steps.{step['id']}.outputs.structured_output != ''" for step in steps) + " }}"
     # Findings come from the answer check, never straight from Claude's step,
     # whose value the post job's log would print.
     assert jobs["review"]["outputs"]["findings"] == "${{ steps.answer.outputs.findings }}"
     answer = next(s for s in jobs["review"]["steps"] if s.get("id") == "answer")
     # Nothing publishes Claude's transcript before that check runs.
-    review = next(s for s in jobs["review"]["steps"] if s.get("id") == "claude")
-    assert review["with"]["display_report"] is False and review["with"]["show_full_output"] is False
-    # Nor does a debug run, where the action shows the full output anyway.
-    assert "runner.debug != '1'" in review["if"] and review["env"]["ACTIONS_STEP_DEBUG"] == "false"
-    assert "structured_output" not in str(answer.get("env"))
+    for review in steps:
+        assert review["with"]["display_report"] is False and review["with"]["show_full_output"] is False
+        # Nor does a debug run, where the action shows the full output anyway.
+        assert "runner.debug != '1'" in review["if"] and review["env"]["ACTIONS_STEP_DEBUG"] == "false"
+    # The check reads the answer from the execution file: its env takes only whether each batch answered.
+    env = str(answer.get("env"))
+    assert "structured_output" not in re.sub(r"steps\.claude_\d\.outputs\.structured_output != ''", "", env)
     # The check holds the OAuth token, so it runs inline from the workflow,
     # never from a script the PR could change.
     assert "python3 -I - <<'PY'" in answer["run"] and ".github/scripts" not in answer["run"]
