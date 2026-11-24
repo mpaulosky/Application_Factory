@@ -281,3 +281,12 @@ The first ported scripts, Factory-only, so the `.py` files are deleted in the PR
   open, decided with the first Owned script's port.
 - **The Owned files.** The comments in the Template's `pr-automerge.yml` and `pr-automerge.test.mjs` that named `github/landing.py` name `github/Landing.cs`.
   The change is comments only, so it rides the next Rollout rather than calling one of its own.
+
+## Update (mpaulosky/Application_Factory#121): the rollout suite has a runner of its own
+
+`rollout.py` calls `reapply.sh` and `land.sh` by absolute path beside itself, and keeps its lock, logs and sessions under `~`, which `tests/parity.test.sh`
+has no way to give a run. So its suite, which judges `auto_rollout.py` too (it has no command line of its own), has a second runner,
+`tests/rollout-parity.test.sh [command...]`: each run is of a temporary copy of the skill folder, with stubs for those two and a fixed `repos.txt`, and a HOME
+of its own, and `git` and `claude` are fakes on `PATH` beside the fake `gh`. A command word that names a file in the skill folder names the copy's, so a port
+finds the stubs as the reference does. The two runners share the fake `gh` and the stderr match (`tests/parity/stderr.sh`), not their case loops.
+The plain-mode cases come first; `--auto`'s follow in mpaulosky/Application_Factory#156.
