@@ -197,7 +197,9 @@ The first increment brings the .NET SDK into the Factory, with no script ported 
 - **`test.sh` runs the test project with no build server** (`MSBUILDDISABLENODEREUSE=1`, `DOTNET_CLI_USE_MSBUILD_SERVER=0`, `-p:UseSharedCompilation=false`: `dotnet test`
   passes `--disable-build-servers` on to the test app). It runs `dotnet test` whether or not the project holds a test, and accepts exit 8, "no test ran", only while the project
   holds no `.cs` source. It checks that the project targets `net<major>.0` of the SDK `global.json` names, that each of the six shield files is `<Project />`, and that a copy
-  passes, NU1900 a warning, with its feed unreachable and hostile `Directory.*` files above it.
+  passes, NU1900 and NU1905 warnings, with its feed unreachable and hostile `Directory.*` files above it. It hands dotnet an absolute output folder and TMPDIR, which a
+  stub dotnet checks, since the run starts in the project's folder.
+- **The audit reads nuget.org alone.** The project's `NuGet.config` clears `auditSources` and adds nuget.org, which `test.sh` checks.
 - **The test project's restore is pinned.** Its own `NuGet.config` clears every source and mapping and restores from nuget.org alone, and `packages.lock.json` pins
   every package by hash; `test.sh` restores in locked mode, so a version moved without the lock file fails with NU1004, and checks both on a copy under a `NuGet.config`
   that adds another feed. Dependabot's NuGet updater restores after a bump, so it rewrites the lock file with the version.

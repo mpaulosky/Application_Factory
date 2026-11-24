@@ -30,10 +30,14 @@ seed="$skill_dir/template/seed"
 export PYTHONDONTWRITEBYTECODE=1
 # The tests build throwaway repos. A global init.templateDir would install this
 # machine's own hooks into each of them and block their commits.
+# Both folders are made absolute, so a relative TMPDIR still names them from the folders the steps cd into. Each mktemp is its own assignment, so a failed
+# one stops the run under set -e: a cd -- "$(mktemp -d)" would turn it into the current folder on a bash whose cd takes an empty operand, and the trap
+# below would remove that folder.
 GIT_TEMPLATE_DIR="$(mktemp -d)"
+GIT_TEMPLATE_DIR="$(cd -- "$GIT_TEMPLATE_DIR" && pwd)"
 export GIT_TEMPLATE_DIR
-# Absolute, so a relative TMPDIR still names this folder from the folders the steps cd into.
-md_tmp="$(cd -- "$(mktemp -d)" && pwd)"
+md_tmp="$(mktemp -d)"
+md_tmp="$(cd -- "$md_tmp" && pwd)"
 trap 'command rm -rf "$GIT_TEMPLATE_DIR" "$md_tmp"' EXIT
 
 failures=0
@@ -592,7 +596,10 @@ PY
   done
   pins_fixture "$(printf '      - uses: actions/setup-dotnet@%s\n      # - uses: actions/setup-dotnet@v6' "$a40")"
   setup_dotnet_pins_are "$a40" "$md_tmp/ci-pins.yml" > /dev/null || fail "the setup-dotnet pin check counts a commented-out step"
+  # The action's pin must be a commit itself: these workflows' refs equal it, so only that rule refuses them.
+  pins_fixture '      - uses: actions/setup-dotnet@v6'
   ! setup_dotnet_pins_are "v6" "$md_tmp/ci-pins.yml" > /dev/null || fail "the setup-dotnet pin check passes an action pin that isn't a commit"
+  pins_fixture '      - uses: actions/setup-dotnet@'
   ! setup_dotnet_pins_are "" "$md_tmp/ci-pins.yml" > /dev/null || fail "the setup-dotnet pin check passes an empty action pin"
   # Dependabot reads the template-tools action only where its folder is listed (mpaulosky/Application_Factory#145), so its pins move with ci.yml's.
   dependabot_entry_for github-actions "$skill_dir/../../../.github/dependabot.yml" "/.github/actions/template-tools" \
@@ -819,8 +826,9 @@ if in_shard scripts; then
   rm -f "$offline/Scripts.Tests/NuGet.config.bak"
   offline_rc=0
   scripts_tests_run "$offline/Scripts.Tests" "$offline/out" > "$offline/run.log" 2>&1 || offline_rc=$?
-  if ! scripts_tests_pass "$offline_rc" "$offline/Scripts.Tests" || ! grep -q 'warning NU1900' "$offline/run.log"; then
-    fail "Scripts.Tests must pass with NU1900 a warning when its feed can't be reached, its shields keeping out the files above it (exit $offline_rc): $(grep -m 3 -E 'error|NU1' "$offline/run.log" | tr '\n' ' ')"
+  if ! scripts_tests_pass "$offline_rc" "$offline/Scripts.Tests" || ! grep -q 'warning NU1900' "$offline/run.log" \
+    || ! grep -q 'warning NU1905' "$offline/run.log"; then
+    fail "Scripts.Tests must pass with NU1900 and NU1905 warnings when its feed can't be reached, its shields keeping out the files above it (exit $offline_rc): $(grep -m 3 -E 'error|NU1' "$offline/run.log" | tr '\n' ' ')"
   fi
 fi # the scripts shard
 

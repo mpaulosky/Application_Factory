@@ -692,6 +692,30 @@ slow_out="$(cat "$work/slowdotnet/building" 2> /dev/null || true)"
 sleep 3.5
 check "a TERM while a script builds ends the build and waits for it, then removes the build folder, a gate-cs.* folder in TMPDIR" \
   "$([[ "$slow_out" == "$cs_tmp"/gate-cs.* && ! -e "$slow_out" && -z "$(cs_tmp_left)" ]] && echo 0 || echo 1)"
+# A TERM between the build's fork and cs_pid=$! (a DEBUG trap, from BASH_ENV, sends it there) still ends the build: cs_stop finds it as $!. A build
+# left running would write its late file 3 seconds after it started.
+mkdir -p "$work/forkdotnet"
+cat > "$work/forkdotnet/dotnet" << FORK
+#!/usr/bin/env bash
+if [[ "\$1" == build ]]; then
+  : > "$work/forkdotnet/started"
+  sleep 3 &
+  wait "\$!"
+  : > "$work/forkdotnet/late"
+fi
+exit 0
+FORK
+chmod +x "$work/forkdotnet/dotnet"
+# shellcheck disable=SC2016 # the trap's $BASH_COMMAND and $BASHPID are the gate's, when it runs
+printf '%s\n' 'set -T' "trap '[[ \$BASH_COMMAND != \"cs_pid=\\\$!\" ]] || { : > \"$work/forkdotnet/signalled\"; kill -TERM \$BASHPID; }' DEBUG" \
+  > "$work/forkdotnet/env.sh"
+rm -f "$work/forkdotnet/started" "$work/forkdotnet/late" "$work/forkdotnet/signalled"
+# shellcheck disable=SC2016 # $1 is the inner bash's argument, the repo
+env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 TMPDIR="$cs_tmp" PATH="$work/forkdotnet:$PATH" BASH_ENV="$work/forkdotnet/env.sh" \
+  bash -c 'cd "$1" && exec bash scripts/gate.sh --quick' _ "$repoC" > "$repoC/out" 2>&1 || true
+sleep 3.5
+check "a TERM between the build's fork and cs_pid=\$! still ends the build, and the gate leaves no build folder" \
+  "$([[ -e "$work/forkdotnet/signalled" && ! -e "$work/forkdotnet/late" && -z "$(cs_tmp_left)" ]] && echo 0 || echo 1)"
 # A build that ignores the TERM is killed after 5 seconds: the gate still ends, and still removes the folder.
 mkdir -p "$work/stubborndotnet"
 cat > "$work/stubborndotnet/dotnet" << STUBBORN
