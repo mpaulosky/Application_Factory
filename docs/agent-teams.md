@@ -119,10 +119,11 @@ If Claude used subagents instead (they share the same panel, so look closely), a
 
 | Mode | How | Needs |
 | :- | :- | :- |
-| In-process (default) | All teammates in your terminal, listed in the agent panel under the prompt | Any terminal |
+| In-process | All teammates in your terminal, listed in the agent panel under the prompt | Any terminal |
 | Split panes | One pane per teammate | tmux, or iTerm2 with the `it2` CLI and the Python API enabled |
 
-Set `teammateMode` in `~/.claude/settings.json` (or `claude --teammate-mode <mode>` for one session; the flag is experimental and not in `--help`):
+Teammates run in-process until you set `teammateMode`. Set it in `~/.claude/settings.json` (or `claude --teammate-mode <mode>` for one session;
+the flag is experimental and not in `--help`):
 
 - `"auto"`: split panes inside tmux or iTerm2, in-process elsewhere.
 - `"tmux"`: panes in a separate tmux session even outside tmux; run the command on the `View teammates` line in a second terminal to watch.
@@ -407,19 +408,31 @@ sources. Then have them critique each other's conclusions before you summarize.
 
 ## 14. Using teams in the Application Factory
 
-This repo's rules shape how a team should work here:
+[`CLAUDE.md`](../CLAUDE.md) holds this repo's rules, in its "Git workflow" and "Working on the Template" sections, and it wins wherever this
+section differs. What they mean for a team:
 
-- **One worktree per writing teammate.** `pre-commit` refuses commits in the primary checkout. Give each teammate that writes code its own branch
-  and worktree: `git worktree add --no-track -b <branch> ../Application_Factory-worktrees/<folder> origin/main`.
-- **Respect the pull request size limit.** 30 files and 3,000 changed lines per PR. Split the work into issues ordered with "blocked by" links and
-  map each to a teammate or task, rather than one large team PR.
-- **Edit the Template, not the copies.** A teammate changing an Owned file edits it under `template/owned/` and runs `scripts/gate.sh --sync`.
-  Two teammates must not edit the same Template file.
-- **Gate as the completion check.** `scripts/gate.sh --quick` while iterating is a good `TaskCompleted` check; the full `scripts/gate.sh` runs before a push.
+- **Enable teams in your own settings only**: `~/.claude/settings.json` or the git-ignored `.claude/settings.local.json`, never the checked-in
+  `.claude/settings.json`. While teams are on, any named Agent call can launch a teammate, the reviewers `pre-push-review` starts included, so
+  turning it on for every contributor changes how those skills run. The issue worker (`claude-issues.yml`, ADR 0018) runs non-interactively,
+  so it never spawns teammates.
+- **One branch and worktree per writing teammate.** `pre-commit` refuses commits in the primary checkout. Give each teammate its exact branch and
+  folder in the spawn prompt: the branch follows CLAUDE.md's names (`feature/{issue}-{slug}`, `fix/{issue}-{slug}`, `hotfix/{issue}-{slug}` or
+  `chore/{slug}`), and the folder is the branch with `/` as `-`, made with CLAUDE.md's `git worktree add` command.
+- **Each branch is pushed, gated and reviewed on its own.** `pre-push` refuses a bad branch name, a dirty tree or a branch behind `origin/main`,
+  and the gate refuses a branch without its own local review (ADR 0010). Have the lead do the pushes, since teammates' permission prompts
+  surface there anyway.
+- **Keep each pull request within CLAUDE.md's size limit.** Split the work into issues ordered with "blocked by" links and map each to a teammate
+  or task, rather than one large team PR.
+- **One owner per Template file.** Two teammates must not edit the same file under `template/`, and the one editing an Owned file runs
+  `scripts/gate.sh --sync` in its own worktree.
+- **Done means the quick gate passed.** `scripts/gate.sh --quick` takes about a minute and checks the tree it runs in, so make it the done check
+  each spawn prompt names, run by the teammate in its own worktree before it marks a task complete. Keep a `TaskCompleted` hook to a narrow,
+  fast check that first changes to the hook input's `cwd`. Registering a team hook means changing the checked-in `.claude/settings.json`,
+  which holds only the edit-time lint hook (ADR 0011), so do it on purpose, in its own pull request.
 - **Markdown and YAML with Write and Edit only**, so the edit-time lint hook sees them. Put this in every spawn prompt for a writing teammate.
 - **Review lenses map well to a review team**: the `pre-push-review` skill already splits review into lenses; a team version gives each lens a
   teammate that can challenge the others.
-- Use the Glossary's terms (Factory, Application, Template, Baseline, Apply, Fleet, Drift) in spawn prompts so teammates read the docs the same way.
+- **Use the terms in [`GLOSSARY.md`](../GLOSSARY.md) as written** in spawn prompts, so teammates read the docs the same way.
 
 ## 15. Pre-flight checklist
 
