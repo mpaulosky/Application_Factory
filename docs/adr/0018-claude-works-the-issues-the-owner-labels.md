@@ -44,3 +44,12 @@ Template file; it doesn't reach the Fleet.
 - Each run after the first is started by the one before it with the job's token, so its actor is `github-actions[bot]`, which the action refuses unless `allowed_bots` names it.
 - Each pull request still gets the Factory's review: Copilot's where the ruleset asks for it and its budget lasts, Claude Review where it doesn't (ADR 0008, ADR 0014).
 - A run's Claude usage counts against the owner's subscription, or the API key's account.
+
+## Update (mpaulosky/Application_Factory#119): long runs
+
+Issue 119's run, a port of five scripts and 286 tests, reached the work step's 75-minute timeout with nothing pushed. The work step now has 300 minutes and 500 turns, and the job 330
+minutes, under the hosted runner's 360. One issue can therefore hold the queue for about five and a half hours, and a stuck run can spend that much of the owner's usage.
+
+The action exchanges the OIDC token for the Claude GitHub App's once, when the work step starts, and an App installation token expires after an hour, so Claude no longer pushes or opens
+the pull request itself. It commits as it goes and writes the pull request's title and body to files. The "Publish the branch" step then exchanges a fresh token, pushes the branch, also
+after a timeout, and opens the draft pull request when the title and body are there. A later run on the same issue continues from the branch it finds.

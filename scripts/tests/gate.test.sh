@@ -916,6 +916,61 @@ finish_case ""
 check "with no execution file the Finish step still prints that group, saying Claude left no message" \
   "$(grep -qxF "::group::Claude's last message" "$finish/log" && grep -qF 'left no execution file' "$finish/log" \
     && grep -qF "under \"Claude's last message\"" "$finish/comment" && echo 0 || echo 1)"
+# The Claude GitHub App token the work step gets expires after an hour, so the Publish step exchanges a fresh one and pushes and opens the pull request
+# with it. Its script runs here with stub git, curl and gh: git reports $PUB_BRANCH and $PUB_COMMITS and records a push, curl answers the OIDC request
+# and the exchange (or fails it with PUB_EXCHANGE=fail), and gh finds no open pull request and records `pr create`.
+publish="$work/publish"
+mkdir -p "$publish/bin" "$publish/task"
+sed -n '/^      - name: Publish the branch$/,/^      - name: /p' "$issues_wf" | sed -n '/^        run: |$/,$p' | sed '1d;$d' | sed 's/^          //' > "$publish/run.sh"
+cat > "$publish/bin/git" << 'STUBGIT'
+#!/usr/bin/env bash
+case "$*" in
+  "rev-parse --abbrev-ref HEAD") echo "$PUB_BRANCH" ;;
+  rev-list*) [[ -z $PUB_COMMITS ]] || echo "$PUB_COMMITS" ;;
+  *" push "*) printf '%s\n' "$*" > "$PUB_DIR/push" ;;
+esac
+STUBGIT
+cat > "$publish/bin/curl" << 'STUBCURL'
+#!/usr/bin/env bash
+if [[ " $* " == *" -X POST "* ]]; then
+  [[ ${PUB_EXCHANGE:-} != fail ]] || exit 22
+  echo '{"token": "fresh-app-token"}'
+else
+  echo '{"value": "oidc-jwt"}'
+fi
+STUBCURL
+cat > "$publish/bin/gh" << 'STUBGH'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "pr create") printf '%s\n' "$GH_TOKEN $*" > "$PUB_DIR/pr"; echo "https://github.com/o/r/pull/9" ;;
+  "issue comment") printf '%s\n' "$5" > "$PUB_DIR/comment" ;;
+esac
+exit 0
+STUBGH
+chmod +x "$publish/bin/git" "$publish/bin/curl" "$publish/bin/gh"
+publish_case() { # publish_case <branch> <commits>: runs the Publish step, leaving its exit status in $publish_rc and what it pushed and opened in $publish
+  rm -f "$publish/push" "$publish/pr" "$publish/comment"
+  env PUB_DIR="$publish" PUB_BRANCH="$1" PUB_COMMITS="$2" PATH="$publish/bin:$PATH" GH_REPO=o/r ISSUE=7 TASK_DIR="$publish/task" \
+    GITHUB_REPOSITORY_OWNER=o ACTIONS_ID_TOKEN_REQUEST_TOKEN=x ACTIONS_ID_TOKEN_REQUEST_URL='https://example.test/oidc?v=1' \
+    bash "$publish/run.sh" > "$publish/log" 2>&1
+  publish_rc=$?
+}
+publish_case main ""
+check "the Publish step pushes nothing when Claude left no branch for the issue" \
+  "$([[ $publish_rc == 0 && ! -e $publish/push ]] && grep -qF 'nothing to publish' "$publish/log" && echo 0 || echo 1)"
+publish_case feature/7-port "abc123"
+check "without the pull request's title and body the Publish step pushes the branch with a fresh token but opens no pull request" \
+  "$([[ $publish_rc == 0 && ! -e $publish/pr ]] && grep -qF 'x-access-token:fresh-app-token@github.com/o/r.git HEAD:refs/heads/feature/7-port' "$publish/push" \
+    && grep -qF 'http.extraheader=' "$publish/push" && echo 0 || echo 1)"
+printf 'feat(baseline): Port it\n' > "$publish/task/pr-title.txt"
+printf 'Fixes #7\n' > "$publish/task/pr-body.md"
+publish_case feature/7-port "abc123"
+check "with the title and body the Publish step opens a draft pull request with the fresh token and links it on the issue" \
+  "$([[ $publish_rc == 0 ]] && grep -qF 'fresh-app-token pr create --draft --base main --head feature/7-port --title feat(baseline): Port it' "$publish/pr" \
+    && grep -qF 'pull/9' "$publish/comment" && echo 0 || echo 1)"
+PUB_EXCHANGE=fail publish_case feature/7-port "abc123"
+check "a failed token exchange fails the Publish step without a push" \
+  "$([[ $publish_rc == 1 && ! -e $publish/push && ! -e $publish/pr ]] && echo 0 || echo 1)"
 
 # The local review check (ADR 0010). The stub review.sh stands for scripts/review.sh; GATE_SKIP_REVIEW=1 skips it, anything else doesn't.
 repo="$(new_repo review-skipped)"

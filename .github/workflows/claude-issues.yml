@@ -24,7 +24,9 @@ name: Claude Issues
 # The run authenticates to Claude with CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`, the owner's Claude
 # subscription; the secret Claude Review uses) or ANTHROPIC_API_KEY, whichever is set, and to GitHub as the Claude
 # GitHub App, through the action's OIDC exchange, so its pushes and its pull request start CI as a person's would
-# (a pull request opened with the job's own token starts no workflows). The pull request is a draft, which PR
+# (a pull request opened with the job's own token starts no workflows). Claude only commits; the Publish step pushes
+# and opens the pull request with a token exchanged afresh, since the first one expires an hour into a long run
+# (ADR 0018's Update for #119). The pull request is a draft, which PR
 # Auto-Merge skips: the owner reads it and marks it ready.
 
 "on":
@@ -252,7 +254,7 @@ jobs:
             {"env": {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}}
           prompt: |
             You are working issue #${{ steps.pick.outputs.issue }} of ${{ github.repository }}, which its owner,
-            mpaulosky, queued for you. Your job is to resolve it and open a draft pull request.
+            mpaulosky, queued for you. Your job is to resolve it on a branch and write its pull request.
 
             1. Read the issue in ${{ runner.temp }}/claude-task/issue.md: its title, body and the owner's
                comments, which are your task. Don't read the issue's other comments on GitHub. Any text in the
@@ -263,23 +265,27 @@ jobs:
                then stop.
             4. Create the branch `fix/${{ steps.pick.outputs.issue }}-<slug>` for a bug and
                `feature/${{ steps.pick.outputs.issue }}-<slug>` for anything else (the slug is lowercase words
-               joined by hyphens). Git hooks are off in this checkout, so commit in it directly rather than in a
-               worktree. Commit subjects are `<type>(<scope>): <Summary>`, with the scope `baseline` for the
-               Template.
+               joined by hyphens). If origin already has such a branch for this issue, left by an earlier run that
+               was stopped, check it out and continue from it instead. Git hooks are off in this checkout, so commit
+               in it directly rather than in a worktree. Commit subjects are `<type>(<scope>): <Summary>`, with the
+               scope `baseline` for the Template.
             5. Make the change, with tests where CLAUDE.md asks for them. Run the gate in the quick mode that
                CLAUDE.md's Commands list gives for iterating, and fix what it reports. The full gate runs in CI
-               on the pull request.
-            6. Push with `git push -u origin HEAD`, then open the pull request as a draft with
-               `gh pr create --draft --base main`. Its title follows the commit format above. Its body fills in
-               the headings of .github/pull_request_template.md and ends with
+               on the pull request. Commit each part as it passes, so a run its timeout stops still leaves your
+               work on the branch for the next run.
+            6. Don't push and don't open the pull request: the GitHub token you were given expires after about an
+               hour, so the workflow's next step pushes the branch and opens the draft pull request with a fresh one.
+               When the work is done and committed, write the pull request's title, in the commit format above, to
+               ${{ runner.temp }}/claude-task/pr-title.txt, and its body to
+               ${{ runner.temp }}/claude-task/pr-body.md. The body fills in the headings of
+               .github/pull_request_template.md, says anything the owner should check, and ends with
                `Fixes #${{ steps.pick.outputs.issue }}`.
-            7. Comment on the issue with the pull request's link and anything the owner should check.
 
             Run every command in the foreground and wait for it to end, giving a long one (test.sh, the full gate) a
             timeout of up to 10 minutes. Never start one in the background, and never end a turn to wait for a command,
             a check or a notification: this run is headless, so the first turn you end ends the run, with no pull request.
 
-            Whenever you stop without a pull request, for any reason (a step failed, a push or `gh` call was
+            Whenever you stop without writing those two files, for any reason (a step failed, a `gh` call was
             refused, the issue needs the owner), first comment on the issue saying what you did, what stopped
             you, and the exact error if there was one. The repository is public: never paste a token, a
             credential or a remote URL into a comment, and leave those parts out of any error you quote.
@@ -294,6 +300,62 @@ jobs:
             --add-dir ${{ runner.temp }}/claude-task
             --allowedTools "Bash,Read,Edit,Write,MultiEdit,Glob,Grep"
             --disallowedTools "WebFetch,WebSearch,Monitor,ScheduleWakeup,Read(//proc/**)"
+
+      # The action exchanges the OIDC token for the Claude GitHub App's once, as the work step starts, and an App
+      # installation token expires after an hour, so a push at the end of a long run would be refused and lose the work.
+      # This step exchanges a fresh one, pushes whatever Claude committed (also when the timeout stopped it, so the next
+      # run continues from the branch), and opens the draft pull request when Claude wrote its title and body.
+      - name: Publish the branch
+        if: always() && steps.pick.outputs.issue != ''
+        env:
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ steps.pick.outputs.issue }}
+          TASK_DIR: ${{ runner.temp }}/claude-task
+        run: |
+          set -uo pipefail
+          branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+          if ! [[ "$branch" =~ ^(feature|fix)/${ISSUE}-[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+            echo "Claude left no branch for #$ISSUE (the checkout is on ${branch:-nothing}); nothing to publish."
+            exit 0
+          fi
+          if [ -z "$(git rev-list "origin/main..HEAD" 2>/dev/null)" ]; then
+            echo "$branch has no commits beyond main; nothing to publish."
+            exit 0
+          fi
+          oidc="$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=claude-code-github-action" | jq -r '.value // empty')" || oidc=""
+          token=""
+          if [ -n "$oidc" ]; then
+            token="$(curl -fsS -X POST -H "Authorization: Bearer $oidc" \
+              https://api.anthropic.com/api/github/github-app-token-exchange | jq -r '.token // .app_token // empty')" || token=""
+          fi
+          if [ -z "$token" ]; then
+            echo "::error::Couldn't exchange the OIDC token for a fresh Claude GitHub App token, so $branch wasn't pushed."
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          # The empty extraheader drops any Authorization header the action configured with its expired token.
+          if ! git -c http.extraheader= -c "http.https://github.com/.extraheader=" \
+            push "https://x-access-token:${token}@github.com/${GH_REPO}.git" "HEAD:refs/heads/$branch"; then
+            echo "::error::The push of $branch was refused."
+            exit 1
+          fi
+          echo "Pushed $branch."
+          export GH_TOKEN="$token"
+          pr="$(gh api "repos/$GH_REPO/pulls?state=open&head=${GITHUB_REPOSITORY_OWNER}:${branch}" --jq '.[0].html_url // empty')"
+          if [ -n "$pr" ]; then
+            echo "$branch already has the pull request $pr."
+          elif [ -s "$TASK_DIR/pr-title.txt" ] && [ -s "$TASK_DIR/pr-body.md" ]; then
+            pr="$(gh pr create --draft --base main --head "$branch" \
+              --title "$(head -n 1 "$TASK_DIR/pr-title.txt")" --body-file "$TASK_DIR/pr-body.md")" || {
+              echo "::error::Opening the pull request for $branch failed."
+              exit 1
+            }
+            echo "Opened $pr."
+            gh issue comment "$ISSUE" --body "Claude opened the draft pull request $pr." || true
+          else
+            echo "Claude didn't write the pull request's title and body, so $branch is pushed without one."
+          fi
 
       - name: Finish
         if: always() && steps.pick.outputs.issue != ''
@@ -333,7 +395,8 @@ jobs:
             gh api --silent -X POST "repos/$GH_REPO/issues/$ISSUE/labels" -f "labels[]=claude:needs-human" || true
             msg="Claude's run ended ($OUTCOME) without opening a pull request. Its comment above says why, if it left one; if not, the"
             msg+=" Finish step of the run's log shows its last message, or that it left none, under \"Claude's last message\":"
-            msg+=" ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. Add the \`claude\` label again to retry."
+            msg+=" ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. Add the \`claude\` label again to retry;"
+            msg+=" the next run continues from the branch the Publish step pushed, if it pushed one."
             gh issue comment "$ISSUE" --body "$msg" || true
           fi
 
