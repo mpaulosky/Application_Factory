@@ -99,13 +99,14 @@ scripts_tests_pass() {
   [[ -z "$sources" ]]
 }
 # Runs the C# scripts' test project in folder argument 1, building into argument 2, as test.sh's scripts shard does: from the project's folder, as ADR 0017's
-# wrappers run a script, so the SDK and the test runner come from the global.json found from there up; with no CLI usage data, no first-run setup (as in the Template's ci.yml) and no logo (DOTNET_NOLOGO,
+# wrappers run a script, so the SDK and the test runner come from the global.json found from there up; restoring in locked mode, so a package version
+# packages.lock.json doesn't pin fails (NU1004); with no CLI usage data, no first-run setup (as in the Template's ci.yml) and no logo (DOTNET_NOLOGO,
 # the Factory's own addition). Exits as dotnet test does.
 # No build server is left running, as in the gate's build of the scripts: dotnet test passes --disable-build-servers on to the test app (which exits 5),
 # so the MSBuild node, the MSBuild server and the compiler server are turned off one by one.
 scripts_tests_run() {
   (cd "$1" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 \
-    dotnet test --project Scripts.Tests.csproj -p:UseSharedCompilation=false --artifacts-path "$2" --results-directory "$2/results")
+    dotnet test --project Scripts.Tests.csproj -p:RestoreLockedMode=true -p:UseSharedCompilation=false --artifacts-path "$2" --results-directory "$2/results")
 }
 # Whether an action or workflow (argument 1) has an actions/setup-dotnet step pinned to a 40-hex commit with global-json-file: global.json under it,
 # before the next step; prints the commit. A commented-out line is no step.
@@ -750,6 +751,28 @@ if in_shard scripts; then
       [[ "$(cat "$skill_dir/$shielded/$shield" 2> /dev/null)" == "<Project />" ]] || fail "$shielded/$shield must be the empty shield, <Project />"
     done
   done
+  # The restore is pinned, on a copy of the project under a folder whose NuGet.config adds another feed: the project's own NuGet.config leaves
+  # nuget.org alone, and a version moved in the project file but not in packages.lock.json fails the run with NU1004.
+  [[ -s "$scripts_tests/packages.lock.json" ]] || fail "tests/Scripts.Tests/packages.lock.json is missing: run dotnet restore in that folder and commit it"
+  pinned="$md_tmp/scripts-tests-pinned"
+  mkdir -p "$pinned"
+  cp "$skill_dir/../../../global.json" "$pinned/"
+  printf '<configuration><packageSources><add key="other" value="https://other.invalid/v3/index.json" /></packageSources></configuration>\n' > "$pinned/NuGet.config"
+  cp -R "$scripts_tests" "$pinned/Scripts.Tests"
+  rm -rf "$pinned/Scripts.Tests/bin" "$pinned/Scripts.Tests/obj" "$pinned/Scripts.Tests/TestResults"
+  sources="$(cd "$pinned/Scripts.Tests" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 dotnet nuget list source --format short)" \
+    || fail "dotnet nuget list source failed in the copy of Scripts.Tests"
+  [[ "$sources" == "E https://api.nuget.org/v3/index.json" ]] \
+    || fail "Scripts.Tests must restore from nuget.org alone, whatever a NuGet.config above says; it sees: ${sources//$'\n'/ | }"
+  sed -i.bak -E 's/(PackageReference Include="xunit\.v3\.mtp-v2" Version=")[^"]*"/\10.0.1"/' "$pinned/Scripts.Tests/Scripts.Tests.csproj"
+  ! cmp -s "$pinned/Scripts.Tests/Scripts.Tests.csproj" "$pinned/Scripts.Tests/Scripts.Tests.csproj.bak" \
+    || fail "the locked-restore check couldn't move xunit.v3.mtp-v2's version in its copy of Scripts.Tests.csproj"
+  rm -f "$pinned/Scripts.Tests/Scripts.Tests.csproj.bak"
+  locked_rc=0
+  scripts_tests_run "$pinned/Scripts.Tests" "$pinned/out" > "$pinned/run.log" 2>&1 || locked_rc=$?
+  if ((locked_rc == 0 || locked_rc == 8)) || ! grep -q NU1004 "$pinned/run.log"; then
+    fail "a Scripts.Tests whose package version packages.lock.json doesn't pin must fail its locked restore with NU1004 (exit $locked_rc)"
+  fi
   # A vulnerability feed that can't be reached (NU1900) is a warning, not an error: on a copy whose nuget.org can't be reached, with the packages already in
   # the cache from the run above, the run still passes and says why. NU1901 to NU1904, a vulnerable package, stay errors (ADR 0017). The copy sits under a
   # Directory.Build.props, Directory.Build.targets and Directory.Packages.props that would each fail its build, which the shields keep out.
@@ -761,9 +784,12 @@ if in_shard scripts; then
   printf '<Project><Target Name="ParentTargets" BeforeTargets="Build"><Error Text="a Directory.Build.targets above Scripts.Tests reached its build" /></Target></Project>\n' \
     > "$offline/Directory.Build.targets"
   printf '<Project><PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup></Project>\n' > "$offline/Directory.Packages.props"
-  printf '<configuration><packageSources><clear /><add key="gone" value="https://nuget.invalid/v3/index.json" /></packageSources></configuration>\n' > "$offline/NuGet.config"
   cp -R "$scripts_tests" "$offline/Scripts.Tests"
   rm -rf "$offline/Scripts.Tests/bin" "$offline/Scripts.Tests/obj" "$offline/Scripts.Tests/TestResults"
+  sed -i.bak 's#https://api.nuget.org/v3/index.json#https://nuget.invalid/v3/index.json#' "$offline/Scripts.Tests/NuGet.config"
+  ! cmp -s "$offline/Scripts.Tests/NuGet.config" "$offline/Scripts.Tests/NuGet.config.bak" \
+    || fail "the NU1900 check couldn't point its copy of Scripts.Tests at an unreachable feed"
+  rm -f "$offline/Scripts.Tests/NuGet.config.bak"
   offline_rc=0
   scripts_tests_run "$offline/Scripts.Tests" "$offline/out" > "$offline/run.log" 2>&1 || offline_rc=$?
   if ! scripts_tests_pass "$offline_rc" "$offline/Scripts.Tests" || ! grep -q 'warning NU1900' "$offline/run.log"; then

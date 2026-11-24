@@ -13,6 +13,10 @@
     <IsTestProject>true</IsTestProject>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1900</WarningsNotAsErrors>
+    <!-- The NuGet.config beside it restores from nuget.org alone, and packages.lock.json pins every package, direct and transitive, by hash:
+         test.sh restores in locked mode, so a version moved here without the lock file fails with NU1004 (dotnet restore rewrites it, as
+         Dependabot's NuGet updater does after a bump). -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="xunit.v3.mtp-v2" Version="4.0.3" />
