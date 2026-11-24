@@ -71,14 +71,14 @@ Consequence that issues are worked one after another.
 - A short pick job holds the `claude-issues` concurrency group, so two runs never pick the same issue. It counts the open issues labelled `claude:working` (with `claude` or without it)
   whose run, the one the workflow's latest "Claude started" comment names, is still going, picks the oldest unblocked issues up to the free slots, and labels and comments on each
   before it ends; one it can't label or comment on is left for the next run. A `claude:working` label left by a run that has ended or is gone, or with no "Claude started" comment, is
-  taken off and the issue queued again; one whose comments or run can't be read keeps its slot. The Finish step takes `claude` off before `claude:working`, so an issue is never queued
-  with no slot held.
+  taken off, and the issue is queued again if it still carries `claude`; one whose comments or run can't be read keeps its slot. The Finish step takes `claude` off before
+  `claude:working`, so a finished issue isn't left queued with its slot freed, where another run's pick could take it again.
 - The work job is a matrix over the picks, each on its own runner and checkout of `main`, so the issues worked at once share nothing but the repository. Each one starts the next run as it
   ends, which fills the slot it freed, and keeps work it couldn't push as its own `claude-branch-<issue>` artifact, since an artifact's name is unique in a run. The job's token stays
   read-only for pull requests: the merge order comment goes through the issues API, which `issues: write` covers.
 - Issues worked at once can still change the same files. Each run comments on its pull request naming the open pull requests from this repository's branches that change the same
-  files (at most five plainly named files each), and the order to merge them: the oldest first, merging `main` into each before it lands. A fork's pull request is left out, since a fork
-  names its branch as it likes. The comment is written when the run ends, so an older pull request's comment doesn't learn of one opened later, and two runs ending together may each
-  miss the other's. The pull requests stay drafts, so the owner still reads and lands each one on its own.
+  files (at most five plainly named files each, or "files with other names" when none is plain), and the order to merge them: the oldest first, merging `main` into each
+  before it lands. A fork's pull request is left out, since a fork names its branch as it likes. The comment is written when the run ends, so an older pull request's
+  comment doesn't learn of one opened later, and two runs ending together may each miss the other's. The pull requests stay drafts, so the owner still reads and lands each one on its own.
 - Three runs of up to five and a half hours each draw on the owner's Claude usage at once, so a usage limit can end a run early, as `claude:needs-human`. Runner minutes are free on the
   public repository, and each run makes a few dozen GitHub API calls.
