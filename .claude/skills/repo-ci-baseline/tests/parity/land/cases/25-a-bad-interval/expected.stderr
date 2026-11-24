@@ -1,4 +1,3 @@
 ^usage: 
-^ +\[--timeout TIMEOUT\] \[--blog-wait BLOG_WAIT\]$
-^ +\[prs \.\.\.\]$
-error: argument --interval: invalid float value: 'x'$
+...
+error: .*--interval

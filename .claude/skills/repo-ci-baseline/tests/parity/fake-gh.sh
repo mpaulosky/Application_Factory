@@ -24,7 +24,9 @@
 #   rest.<path>                   gh api <path>, with or without --paginate and --jq (the path's query string is in it)
 #   pr.<sub>.<owner>.<name>.<n>   gh pr <sub> (a view's key ends .<fields> too: pr.view.<owner>.<name>.<n>.<fields>)
 #
-# A cursor given but empty is part of the key too (comments.<id>.), so it never passes for a first page. Every key part has
+# A cursor given but empty is part of the key too (comments.<id>.), so it never passes for a first page. A cursor of digits
+# alone is unmatched: <key>.<digits> names the nth call's fixture below, so comments.<id>.1.json would answer both the page
+# after cursor 1 and the first un-paged call, and a case would pass on the wrong answer. Every key part has
 # each / replaced by _, so a value can't name a file outside FAKE_GH_DIR. The nth call with a key is answered from
 # FAKE_GH_DIR/<key>.<n>.json or .fail when there is one, else from <key>.json or <key>.fail, so a looping run can see a
 # repo change between polls: a .json is printed on stdout (exit 0), a .fail on stderr (exit 1: a GitHub failure). For a
@@ -173,6 +175,8 @@ else
       shift 2
     done
     q="${query//[[:space:]]/}"
+    [[ ! ("$has_cursor" && "$cursor" =~ ^[0-9]+$) ]] \
+      || unmatched "gh api graphql with the cursor $cursor, digits alone, which a fixture name would read as a call number"
     page="${has_cursor:+.$(part "$cursor")}"
     case "$q" in
       *"pullRequests("*"states:OPEN"*) key="repo.$(part "$owner").$(part "$name")" ;;

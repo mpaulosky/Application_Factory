@@ -1,0 +1,64 @@
+{
+ "data": {
+  "repository": {
+   "pullRequests": {
+    "nodes": [
+     {
+      "id": "PR_3",
+      "number": 3,
+      "title": "feat: Something",
+      "state": "OPEN",
+      "isDraft": true,
+      "headRefName": "feature/x",
+      "headRefOid": "1234567000000000000000000000000000000000",
+      "mergeStateStatus": "BEHIND",
+      "autoMergeRequest": null,
+      "labels": {
+       "nodes": []
+      },
+      "reviewRequests": {
+       "nodes": []
+      },
+      "reviews": {
+       "nodes": [
+        {
+         "author": {
+          "login": "copilot-pull-request-reviewer"
+         },
+         "commit": {
+          "oid": "1234567000000000000000000000000000000000"
+         },
+         "body": ""
+        }
+       ]
+      },
+      "reviewThreads": {
+       "nodes": []
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "statusCheckRollup": {
+           "contexts": {
+            "nodes": [
+             {
+              "__typename": "CheckRun",
+              "name": "Test Suite",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-07T10:00:00Z"
+             }
+            ]
+           }
+          }
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ }
+}

@@ -20,7 +20,9 @@
 #   expected.stdout  stdout, byte for byte
 #   expected.code    the exit code
 #   expected.stderr  one ERE per stderr line, in order: stderr has exactly that many lines, each matching its pattern
-#                    (stderr carries the error text of the language, so only its shape is compared); no line is blank
+#                    (stderr carries the error text of the language, so only its shape is compared); no line is blank.
+#                    A line that is exactly ... stands for any number of lines, none included, so a usage block whose
+#                    wrapping is the argument parser's own is matched by its first line and ... alone
 #   expected.calls   the fake's log of the `gh` calls made, in order: each call's fixture key, and for a `gh pr` call or a
 #                    REST call with --paginate or --jq the key and the call's whole argv; the queries a run costs, and
 #                    what it writes, are behaviour too
@@ -43,9 +45,9 @@
 # one holds that loosening, so it is kept, and the run fails when it no longer fits. A case whose run makes a gh call the
 # fake can't answer, or times out, is never recorded.
 #
-# The implementation runs from a temporary folder of its own for each case (empty, or the case's tree/ and setup), with
+# Each case's run starts in a new temporary folder of its own (empty, or the case's tree/ and setup), with
 # stdin from /dev/null or the case's stdin, the fake gh first on PATH, no GitHub token in its environment and GH_CONFIG_DIR
-# an empty folder, no repository, Anthropic key or model the caller set (REPOSITORY, GITHUB_REPOSITORY, ANTHROPIC_API_KEY,
+# a new empty folder (nothing an earlier case wrote is left), no repository, Anthropic key or model the caller set (REPOSITORY, GITHUB_REPOSITORY, ANTHROPIC_API_KEY,
 # ANTHROPIC_MODEL: a case's env sets them), no git repository or config the caller set (GIT_DIR and the rest unset,
 # GIT_CONFIG_GLOBAL=/dev/null, GIT_CONFIG_NOSYSTEM=1), no colour or terminal width the caller set (NO_COLOR=1, TERM=dumb),
 # LC_ALL=C.UTF-8 (best-effort: macOS has no such locale, so PYTHONUTF8=1 is set too), PYTHONDONTWRITEBYTECODE=1 (so a
@@ -166,12 +168,42 @@ check_case() {
   done < "$dir/expected.stderr"
 }
 
+# stderr_fits <patterns file> <stderr file>: whether stderr fits patterns that hold a ... line, which matches any number of lines
+# (none included). Glob matching with one backtrack point: a pattern line matches one line, and on a mismatch the last ...
+# takes one more line.
+stderr_fits() {
+  local -a patterns=() lines=()
+  local p=0 l=0 star=-1 mark=0
+  mapfile -t patterns < "$1"
+  mapfile -t lines < "$2"
+  while ((l < ${#lines[@]})); do
+    if ((p < ${#patterns[@]})) && [[ "${patterns[p]}" == ... ]]; then
+      star=$p mark=$l p=$((p + 1))
+    elif ((p < ${#patterns[@]})) && grep -qE -- "${patterns[p]}" <<< "${lines[l]}"; then
+      p=$((p + 1)) l=$((l + 1))
+    elif ((star >= 0)); then
+      mark=$((mark + 1)) p=$((star + 1)) l=$mark
+    else
+      return 1
+    fi
+  done
+  while ((p < ${#patterns[@]})) && [[ "${patterns[p]}" == ... ]]; do p=$((p + 1)); done
+  ((p == ${#patterns[@]}))
+}
+
 # stderr_problems <patterns file> <stderr file>: prints the ways stderr doesn't fit its patterns, nothing when it does.
 stderr_problems() {
   local -a patterns=() lines=()
   local i
   mapfile -t patterns < "$1"
   mapfile -t lines < "$2"
+  if grep -qx -- '\.\.\.' "$1"; then
+    if ! stderr_fits "$1" "$2"; then
+      echo "stderr doesn't fit its patterns (a ... line stands for any number of lines):"
+      cat -- "$2"
+    fi
+    return
+  fi
   if [[ ${#lines[@]} -ne ${#patterns[@]} ]]; then
     echo "${#lines[@]} stderr line(s), expected ${#patterns[@]}:"
     cat -- "$2"
@@ -233,6 +265,9 @@ for case_dir in "${cases[@]}"; do
       || setup_error "$name/setup failed:"$'\n'"$(cat "$tmp/setup.log")"
   fi
   : > "$tmp/calls"
+  # Each case starts with an empty GH_CONFIG_DIR, whatever an earlier case's run left in it (its folder is new above).
+  rm -rf -- "$tmp/ghconfig"
+  mkdir "$tmp/ghconfig" || setup_error "can't make folders under $tmp."
   code=0
   (cd "$run" && timeout -k 5 "$limit" env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN \
     -u FORCE_COLOR -u CLICOLOR_FORCE -u PYTHON_COLORS -u COLUMNS -u LINES \
