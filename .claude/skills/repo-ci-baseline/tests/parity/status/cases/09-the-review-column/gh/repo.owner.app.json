@@ -137,6 +137,7 @@
         }
        ]
       },
+      "isCrossRepository": false,
       "headRefName": "docs/release-notes"
      }
     ]
