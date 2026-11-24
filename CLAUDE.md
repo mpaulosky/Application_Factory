@@ -10,7 +10,8 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
 - `.claude/skills/repo-ci-baseline/`: the skill. `SKILL.md` and `CONTEXT.md` describe it; `template/owned/` (overwritten on every Apply) and
   `template/seed/` (written only if missing) hold the Template's files; `references/` and its own `docs/adr/` describe the parts;
   `github/repos.txt` is the Fleet registry; `apply.sh`, `reapply.sh`, `rollout.sh`, `status.sh`, `land.sh` and `github-settings.sh` are the scripts;
-  `test.sh` and `tests/` test all of it.
+  `test.sh` and `tests/` test all of it. `tests/Scripts.Tests/` is the xUnit v3 project for the C# scripts (ADR 0017); it and `github/` each hold three empty shield
+  files (`Directory.Build.props`, `Directory.Build.targets`, `Directory.Packages.props`), which are not Owned.
 - `.claude/skills/`: also the shared skills (`build-repair`, `dotnet-*`, `remove-squad`, `review-changes`), and `starting-points/`: the optional app-stack files
   (`.aspire/`, `.github/instructions/`, the `beast` agent, the `code-review` skill) that `docs/Instructions.md` Part C says to copy into an Application. ADR 0007.
 - `.claude/rules/sandcastle.md`: the rules for writing the Template's Sandcastle code (loaded when you edit `template/**/.sandcastle/**`). The tests about the Template itself
@@ -29,33 +30,34 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   `scripts/check-pr-title.sh`, and `.github/workflows/lint-{markdown,yaml,actions}.yml`, and the local review (ADR 0010): `scripts/review.sh`, five `.sandcastle/lib/` modules with three tests,
   `.claude/skills/pre-push-review/`, `.claude/agents/pre-push-reviewer.md` and `.security/README.md`: copies of the Template's Owned files. `.github/dependabot.yml`, `.yamllint.yml` and
   `.markdownlint-cli2.jsonc` are the Factory's own (ADR 0009). `.editorconfig`, which holds the shell style shfmt reads (ADR 0015), is a copy too, and so is
-  `.claude/rules/script-edits.md`, the checks to make when editing a shell or Python script (ADR 0011).
+  `.claude/rules/script-edits.md`, the checks to make when editing a shell or Python script (ADR 0011), and `global.json`, the .NET SDK (ADR 0017).
   Edit the Template's file and run `scripts/gate.sh --sync` to copy it over; `scripts/gate.sh` fails when a copy drifts.
   The review's own, non-copy files are `.sandcastle/lib/repo-config.mts` (`REPO_SLUG`, `NOT_OWNED_BASELINE_PATHS`), `package.json`, `pnpm-workspace.yaml`,
   `pnpm-lock.yaml` and the `.gitignore` lines for `node_modules/` and `.security/`.
 - `.claude/settings.json` and `scripts/lint-edited-file.sh` (a copy of the Template's Owned file): the edit-time lint (ADR 0011). The settings file holds one `PostToolUse` hook
   that lints each Markdown, YAML, shell or Python file Claude writes; the Template carries the script but not the settings file.
 - `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too; its header lists the steps (its test and the review's three tests, the copies' drift check, the bare-`#N` check,
-  the Git-status check, lint, shellcheck of the changed shell files, shfmt of every shell file, ruff of every Python file, the local review check, then `test.sh`,
-  which it skips for a tree that already passed it, then the Sandcastle check when the branch changed a file it reads).
+  the Git-status check, lint, shellcheck of the changed shell files, shfmt of every shell file, ruff of every Python file, `dotnet format whitespace` of every C# file and a build
+  of every C# script with warnings as errors but CA2266 (ADR 0017), the local review check, then `test.sh`, which it skips for a tree and .NET SDK that already passed it, then
+  the Sandcastle check when the branch changed a file it reads).
   `GATE_PART=<part>` runs one part (CI's jobs; the pre-push hook drops it), and `TEST_SH_SHARD` one shard of `test.sh` in the `template` part only.
   [ADR 0006](docs/adr/0006-the-factory-carries-the-git-hooks-and-a-gate.md), [ADR
   0012](docs/adr/0012-the-template-tests-workflow-runs-the-gate-in-parallel-parts.md), [ADR 0013](docs/adr/0013-ci-runs-test-sh-in-shards-and-the-review-tests-as-their-own-part.md).
 - `~/.claude/skills/repo-ci-baseline` is a symlink to the skill here, so editing it changes what `apply.sh` copies everywhere.
 
 The Factory carries the git hooks and a gate of its own (ADR 0006), Claude Review with PR Auto-Merge (ADR 0008), the issue and PR process (ADR 0009), the local review
-(ADR 0010), the edit-time lint (ADR 0011), the shell style (ADR 0015) and the issue worker (ADR 0018), not the rest of the Baseline: no other `.sandcastle/` code, .NET workflows or
-release workflows; its `package.json` holds only `tsx` and `zod`.
+(ADR 0010), the edit-time lint (ADR 0011), the shell style (ADR 0015), the issue worker (ADR 0018) and the .NET SDK with the C# its ported scripts need (ADR 0017), not the
+rest of the Baseline: no other `.sandcastle/` code, .NET workflows or release workflows; its `package.json` holds only `tsx` and `zod`.
 Don't add more without an ADR.
 
 ## Commands
 
 ```bash
 scripts/gate.sh --sync                                        # copy the Template's files over the Factory's copies of them (after editing the Template)
-scripts/gate.sh --quick                                       # while iterating: the gate up to and including shellcheck of the shell files the branch changed, shfmt of every shell file and ruff of every Python file, without the local review check, test.sh and the Sandcastle check (about a minute); never for a push
-scripts/gate.sh                                               # the pre-push gate (needs pnpm on the first run, test.sh's tools, shfmt among them, and ruff 0.17: uv tool install ruff@0.17.6); GATE_NO_CACHE=1 runs test.sh and the Sandcastle check again on a tree that already passed them
+scripts/gate.sh --quick                                       # while iterating: the gate up to and including shellcheck of the shell files the branch changed, shfmt of every shell file, ruff of every Python file and the C# check, without the local review check, test.sh and the Sandcastle check (about a minute); never for a push
+scripts/gate.sh                                               # the pre-push gate (needs pnpm on the first run, test.sh's tools, shfmt and the .NET SDK among them, and ruff 0.17: uv tool install ruff@0.17.6); GATE_NO_CACHE=1 runs test.sh and the Sandcastle check again on a tree that already passed them
 GATE_PART=sandcastle scripts/gate.sh                          # one part alone (self, review, static, template, sandcastle), as a CI job runs it; the Sandcastle check needs pnpm and the network
-.claude/skills/repo-ci-baseline/test.sh                       # all the Template's tests (TEST_SH_SHARD=hooks|scripts|checks runs one shard); needs actionlint, zizmor, yamllint, shellcheck, shfmt (v3.14 or a later v3), markdownlint-cli2, node, git, jq
+.claude/skills/repo-ci-baseline/test.sh                       # all the Template's tests (TEST_SH_SHARD=hooks|scripts|checks runs one shard); needs actionlint, zizmor, yamllint, shellcheck, shfmt (v3.14 or a later v3), markdownlint-cli2, node, git, jq, and the .NET SDK global.json names for the scripts shard
 .claude/skills/repo-ci-baseline/tests/sandcastle-check.test.sh # Sandcastle's type-check and tests on a throwaway Application; needs pnpm and the network
 .claude/skills/repo-ci-baseline/template/owned/.claude/skills/hardening-review/scripts/mutate.py .claude/skills/repo-ci-baseline/tests/gh_repo/mutations.json  # ~5 min, from the repo root, needs uvx: edits check_gh_repo.py one mutation at a time and restores it; commit the checker change first (a dirty target is refused)
 .claude/skills/repo-ci-baseline/template/owned/.claude/skills/hardening-review/scripts/mutate.py .claude/skills/repo-ci-baseline/tests/mutations/cleanup-work-issue.json  # same, for cleanup.sh and work-issue.sh; ~30 min, run in the background after committing (test.sh checks that the spec still fits the code)

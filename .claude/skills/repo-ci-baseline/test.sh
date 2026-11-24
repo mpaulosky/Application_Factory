@@ -6,8 +6,8 @@
 #
 # Runs the Template's own tests (hook suites, auto-merge script tests,
 # the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle and the GitHub scripts' tests
-# (settings, the landing decision, status, land and rollout) with status's and land's parity suites, the Claude Review
-# benchmark's tests, lints its workflows, YAML, shell
+# (settings, the landing decision, status, land and rollout) with status's parity suite, the Claude Review
+# benchmark's tests, the C# script tests (tests/Scripts.Tests), lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
 # Owned files carry no {{PLACEHOLDER}} and that the Owned scripts, and this repo's own
 # scripts and skills, tell every gh command its repository, checks the Seed Sandcastle files, and smoke-tests apply.sh and
@@ -16,7 +16,7 @@
 # change. A repo's copies of Owned files are checked by status.sh and apply.sh --dry-run, not here.
 #
 # TEST_SH_SHARD runs one of its three shards, which is how the Factory's CI runs it in parallel jobs (ADR 0013): hooks is the hook and Owned script
-# tests, scripts the auto-merge, Owned .github/scripts, hardening-review, renderer, GitHub script, parity suite and benchmark tests, checks everything from actionlint on. With
+# tests, scripts the auto-merge, Owned .github/scripts, hardening-review, renderer, GitHub script, status parity, benchmark and C# script tests, checks everything from actionlint on. With
 # no TEST_SH_SHARD every shard runs, in that order. Every step sits in exactly one shard; scripts/tests/gate.test.sh checks that.
 set -euo pipefail
 # The step headers carry SECONDS: count from here, whatever SECONDS a caller exported (mpaulosky/dotfiles#417).
@@ -521,6 +521,9 @@ PY
   template_dir="/.claude/skills/repo-ci-baseline/template/owned"
   dotnet_sdk_entry_for "$skill_dir/../../../.github/dependabot.yml" "$template_dir" \
     || fail "the Factory's .github/dependabot.yml must have a dotnet-sdk entry for \"$template_dir\" (double-quoted), the Owned global.json"
+  # And the Factory's own global.json, a copy of the Template's that the gate keeps equal (mpaulosky/Application_Factory#117).
+  dotnet_sdk_entry_for "$skill_dir/../../../.github/dependabot.yml" "/" \
+    || fail "the Factory's .github/dependabot.yml must have a dotnet-sdk entry for \"/\" (double-quoted), the Factory's copy of global.json"
   # The check itself, on fixtures: each "right" file has the entry, no "wrong" one does.
   sdk_entry() { printf 'version: 2\nupdates:\n%s\n' "$1" > "$md_tmp/dependabot-sdk.yml"; }
   t="$template_dir"
@@ -613,6 +616,18 @@ if in_shard scripts; then
     bench_cmd=(uvx --with pyyaml pytest)
   fi
   (cd "$skill_dir" && "${bench_cmd[@]}" -q -p no:cacheprovider -rs bench/tests) || fail "benchmark pytest"
+
+  step "C# script tests (tests/Scripts.Tests, xUnit v3; ADR 0017)"
+  # Built into a temp folder, so no bin/ or obj/ is left in the skill for the gate to see as a change. The SDK is the one the
+  # Factory's global.json names (the folder has none of its own). Until the project holds a test it is only built: Microsoft
+  # Testing Platform fails a run in which no test ran (exit 8), and a test file turns the run on.
+  need dotnet
+  scripts_tests="$skill_dir/tests/Scripts.Tests"
+  if [[ -n "$(find "$scripts_tests" -name '*.cs' -not -path '*/bin/*' -not -path '*/obj/*' -print -quit)" ]]; then
+    dotnet test --project "$scripts_tests" --artifacts-path "$md_tmp/scripts-tests" || fail "dotnet test tests/Scripts.Tests"
+  else
+    dotnet build "$scripts_tests" --artifacts-path "$md_tmp/scripts-tests" || fail "dotnet build tests/Scripts.Tests"
+  fi
 fi # the scripts shard
 
 if in_shard checks; then
