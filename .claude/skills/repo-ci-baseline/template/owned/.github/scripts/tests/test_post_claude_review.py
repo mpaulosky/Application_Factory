@@ -1200,6 +1200,31 @@ def test_a_line_that_would_pass_the_budget_only_by_its_newline_is_left_out(tmp_p
     assert part.count("\n") == 2_000 and len(part) == budget - 3
 
 
+@pytest.mark.parametrize("end", ["\r", "\r\n"])
+def test_every_line_markdown_sees_in_a_cut_summary_is_quoted(tmp_path, end):
+    # Markdown ends a line at "\r\n" and a lone "\r" too: one without its "> " would end the quote, and a fence on it
+    # would open outside it.
+    part = quoted_part(cut(tmp_path, f"Intro{end}```python{end}" + f"code = 1{end}" * 3_000))
+    assert "\r" not in part and all(line.startswith(">") for line in part.split("\n"))
+    assert part.split("\n")[:3] == ["> Intro", "> ```python", "> code = 1"]
+
+
+def test_a_comment_left_open_in_a_crlf_summary_is_closed_on_its_quoted_line(tmp_path):
+    part = quoted_part(cut(tmp_path, "Seen.\r\n<!-- hidden\r\n" + "still hidden\r\n" * 1_000))
+    assert part.endswith("> still hidden -->") and "\r" not in part
+
+
+def test_a_summary_within_the_share_once_its_line_ends_are_one_character_is_posted_whole(tmp_path):
+    summary = "a\r\n" * 4_000
+    answers = [{"summary": summary, "findings": []}, {"summary": "second", "findings": []}]
+    listed = ["001.diff", "002.diff"]
+    reads = {1: read_whole_of(tmp_path, listed[0], "a"), 2: read_whole_of(tmp_path, listed[1], "b")}
+
+    code, answer, _ = batched(tmp_path, answers, listed, reads)
+
+    assert code == 0 and batch_sections(answer["summary"], 2)[1] == "a\n" * 4_000
+
+
 def test_quoting_counts_toward_the_share(tmp_path):
     # Short lines nearly double when quoted; cut() checks the share holds, this that it is filled.
     section = cut(tmp_path, "a\n" * 6_000)

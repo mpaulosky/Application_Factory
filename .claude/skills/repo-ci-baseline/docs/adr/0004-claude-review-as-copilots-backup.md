@@ -565,9 +565,10 @@ and its not-read finding held the merge for the owner to review the rest by hand
   join the not-read finding, which holds the merge; the warning step names each such batch. When no batch answered, nothing is posted, as before.
   GitHub refuses a review body over 65,536 characters, and the findings outside the diff go in it whole, so the joined review keeps at most 10,000
   characters of each batch's summary (a quarter of 40,000) and ends a longer one with a note that it was cut. The cut is at a line's end (mid-line only
-  in a first line longer than that), and the part kept is posted as a quote: Markdown ends a code fence with the quote that holds it, however it is
+  in a first line too long to fit quoted), and the part kept is posted as a quote: Markdown ends a code fence with the quote that holds it, however it is
   indented, and the HTML parser ends a `<details>` at the quote's end, so the note and the later sections still render. An HTML comment the part leaves
-  open is closed. Parsing the summary's Markdown to close each block was tried and dropped: it missed fences in lists and quotes.
+  open is closed. A cut summary's `\r\n` and lone `\r` become `\n` first, since Markdown ends a line at each
+  and every line needs its quote marker. Parsing the summary's Markdown to close each block was tried and dropped: it missed fences in lists and quotes.
   One batch alone is posted as it answered.
 - **The steps share their inputs through a YAML anchor** (`with: &review`, then `with: *review`), and the prompt takes the batch's pieces and note from the
   step's own `env` (`REVIEW_PIECES`, `REVIEW_BATCH`), so the prompt and the Read restrictions are written once. zizmor warns that it audits anchored
