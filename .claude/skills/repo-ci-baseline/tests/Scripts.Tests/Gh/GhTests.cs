@@ -144,6 +144,13 @@ public class GhTests
 		new[] { "--interval", "-\U0001D7D3" },
 		new[] { "-\U0001D7D3" },
 		new[] { "--interval", "\u00b2" },
+		// float() strips the whitespace str.strip() strips, which U+001C to U+001F and U+200B are not.
+		new[] { "--interval", "\u001c5" },
+		new[] { "--interval", "5\u001f" },
+		new[] { "--interval", "\u00855" },
+		new[] { "--interval", "\u20285" },
+		new[] { "--interval", "\u30005" },
+		new[] { "--interval", "\u200b5" },
 		// An argument with a space that names no option is positional.
 		new[] { "-x y" },
 		new[] { "--interval", "-x y" },

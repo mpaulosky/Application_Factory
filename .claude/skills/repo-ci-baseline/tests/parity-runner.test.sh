@@ -265,6 +265,15 @@ for file in tree setup.sh expected.tree; do
     "c2/$file: a C# reference runs from its .cs's folder, so a case of its suite has no $file." cs
   rm -rf "${skill:?}/tests/parity/cs/cases/c2/$file"
 done
+# Record mode refuses one too, and another implementation, which runs in the case's folder, is not refused.
+mkdir "$skill/tests/parity/cs/cases/c2/tree"
+code=0
+(cd "$work" && PATH="$work/dotnet-stub:$PATH" PARITY_RECORD=1 bash "$runner" cs < /dev/null > "$work/out" 2>&1) || code=$?
+if [[ $code -ne 2 ]] || ! grep -qF "c2/tree: a C# reference runs from its .cs's folder" "$work/out"; then
+  fail "record mode recorded a C# reference's case with tree/: exit $code: $(cat "$work/out")"
+fi
+runner 0 "another implementation of a C# reference's suite, with a tree/" "cs: 2 case(s) pass against: $work/stub.sh" cs ./stub.sh
+rm -rf "${skill:?}/tests/parity/cs/cases/c2/tree"
 # A .py beside the .cs is still the reference: the Python stays until its port is judged (ADR 0017).
 cp "$skill/github/stub.py" "$skill/github/cs.py"
 : > "$work/dotnet.log"

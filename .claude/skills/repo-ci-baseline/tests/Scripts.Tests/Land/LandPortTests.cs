@@ -10,8 +10,12 @@ public class LandPortTests
 		Assert.True(Land.ParseTargets(["o/app#0009223372036854775806"])["o/app"]!.SetEquals([long.MaxValue - 1]));
 		Assert.Throws<ArgumentException>(() => Land.ParseTargets(["o/app#9223372036854775808"]));
 		Assert.Throws<ArgumentException>(() => Land.ParseTargets(["o/app#18446744073709551617"]));
-		// Unicode digits are read as int() reads them.
+		// Unicode digits are read as int() reads them, an astral one (a surrogate pair) too; another astral character is refused.
 		Assert.True(Land.ParseTargets(["o/app#\u0661\u0662"])["o/app"]!.SetEquals([12]));
+		Assert.True(Land.ParseTargets(["o/app#\U0001D7D3"])["o/app"]!.SetEquals([5]));
+		Assert.True(Land.ParseTargets(["https://github.com/o/app/pull/1\U0001D7D3"])["o/app"]!.SetEquals([15]));
+		Assert.Throws<ArgumentException>(() => Land.ParseTargets(["o/app#1\U0001F600"]));
+		Assert.Throws<ArgumentException>(() => Land.ParseTargets(["o/app#\uD835"]));
 		using var err = new StringWriter();
 		Assert.Equal(2, Land.Run(["o/app#18446744073709551617"], new StringWriter(), err, readRepoList: () => new()));
 		Assert.Contains("land.cs: error: not owner/repo or owner/repo#n: o/app#18446744073709551617", err.ToString());
@@ -119,16 +123,17 @@ public class LandPortTests
 			Assert.Equal(seconds, waits.Sum(wait => wait.TotalSeconds), 3);
 		}
 
-		// time.sleep's longest wait, long.MaxValue ns: it and the double below it are slept (counted, not waited), the next one up throws.
+		// time.sleep's bound, 2^63 ns: the double below it is slept (counted, not waited), and it and every one above it throw, as
+		// Python 3.12 and 3.14 raise OverflowError for 9223372036.854776 (run here).
 		var longest = Land.LongestSleep;
 		Assert.Equal(9223372036.854776, longest, 6);
-		foreach (var seconds in new[] { longest, Math.BitDecrement(longest) })
+		foreach (var seconds in new[] { Math.BitDecrement(longest), Math.BitDecrement(Math.BitDecrement(longest)) })
 		{
 			long count = 0;
 			Land.Sleep(seconds, _ => count++);
 			Assert.Equal((long)Math.Ceiling(seconds / most), count);
 		}
-		foreach (var bad in new[] { Math.BitIncrement(longest), 1e300, double.MaxValue })
+		foreach (var bad in new[] { longest, Math.BitIncrement(longest), 1e300, double.MaxValue })
 			Assert.Throws<ArgumentOutOfRangeException>(() => Land.Sleep(bad, waits.Add));
 	}
 }

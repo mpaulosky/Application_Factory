@@ -42,6 +42,7 @@
 // instead of making them; a usage error exits 2.
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
@@ -50,7 +51,10 @@ using static Landing;
 static class Land
 {
 	// A PR: owner/repo#n or its URL, anchored at both ends (a trailing line break is refused); its repo must be a Status.RepoName too.
-	static readonly Regex PrRef = new(@"\A(?:https://github\.com/)?([^/#\s]+/[^/#\s]+)(?:#|/pull/)(\d+)\z", RegexOptions.CultureInvariant);
+	// Its number's digits are any Unicode decimal digits, as Python's \d and int() read them: a surrogate pair is let through here and
+	// PrNumber refuses one that isn't a digit.
+	static readonly Regex PrRef = new(@"\A(?:https://github\.com/)?([^/#\s]+/[^/#\s]+)(?:#|/pull/)((?:\d|[\uD800-\uDBFF][\uDC00-\uDFFF])+)\z",
+			RegexOptions.CultureInvariant);
 
 	// The defaults of --interval (seconds), --timeout and --blog-wait (minutes).
 	public const double DefaultInterval = 60, DefaultTimeout = 180, DefaultBlogWait = 15;
@@ -80,16 +84,18 @@ static class Land
 		return targets;
 	}
 
-	// A PR number's digits (\d is any Unicode digit, as int() reads it) as a long. A number past long's range throws ArgumentException,
-	// so it is a usage error rather than another PR's number wrapped around.
+	// A PR number's digits (any Unicode decimal digit, astral ones too, as int() reads them) as a long. A rune that isn't a decimal digit,
+	// or a number past long's range, throws ArgumentException, so it is a usage error rather than another PR's number wrapped around.
 	public static long PrNumber(string digits, string arg)
 	{
 		long number = 0;
-		foreach (var digit in digits)
+		foreach (var rune in digits.EnumerateRunes())
 		{
+			if (Rune.GetUnicodeCategory(rune) != UnicodeCategory.DecimalDigitNumber)
+				throw new ArgumentException($"not owner/repo or owner/repo#n: {arg}");
 			try
 			{
-				number = checked(number * 10 + (long)char.GetNumericValue(digit));
+				number = checked(number * 10 + (long)Rune.GetNumericValue(rune));
 			}
 			catch (OverflowException)
 			{
@@ -99,16 +105,18 @@ static class Land
 		return number;
 	}
 
-	// The longest wait time.sleep takes: long.MaxValue nanoseconds (its PyTime_t), about 292 years.
+	// The bound of time.sleep's wait: seconds * 1e9 must stay below 2^63 nanoseconds (its PyTime_t), about 292 years, so this double,
+	// which rounds to 2^63 ns, is refused and the one below it is not. (On Linux time.sleep also refuses the last few days below it,
+	// where its deadline on the monotonic clock overflows; that is not mimicked.)
 	public const double LongestSleep = long.MaxValue / 1e9;
 
-	// Waits seconds, as time.sleep does: a negative or NaN length, or one past LongestSleep (infinity too), throws
+	// Waits seconds, as time.sleep does: a negative or NaN length, or one from LongestSleep up (infinity too), throws
 	// ArgumentOutOfRangeException (exit 1, as time.sleep's ValueError and OverflowError were) rather than reach Thread.Sleep, which reads
 	// -1 ms as forever and refuses more than int.MaxValue ms; a long wait is slept in steps of at most that, a whole number of them, so the
 	// loop ends. wait is Thread.Sleep by default.
 	public static void Sleep(double seconds, Action<TimeSpan>? wait = null)
 	{
-		if (double.IsNaN(seconds) || seconds < 0 || seconds > LongestSleep)
+		if (double.IsNaN(seconds) || seconds < 0 || seconds >= LongestSleep)
 			throw new ArgumentOutOfRangeException(nameof(seconds), seconds, $"sleep length must be from 0 to {LongestSleep} seconds");
 		wait ??= System.Threading.Thread.Sleep;
 		const double most = int.MaxValue / 1000.0;
