@@ -57,6 +57,7 @@ for repo in "$@"; do
     token) [[ -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}" && -d "$GH_CONFIG_DIR" && -z "$(ls -A "$GH_CONFIG_DIR")" ]] && echo "$repo ok" ;;
     terminal) [[ -z "${FORCE_COLOR:-}${CLICOLOR_FORCE:-}${PYTHON_COLORS:-}${COLUMNS:-}${LINES:-}" && "${NO_COLOR:-}" == 1 && "${TERM:-}" == dumb ]] && echo "$repo ok" ;;
     stdin) if read -r line; then echo "$repo read $line"; else echo "$repo ok"; fi ;;
+    litter) [[ -z "$(ls -A .)" && -z "$(ls -A "$GH_CONFIG_DIR")" ]] && echo "$repo ok" && : > left-here && : > "$GH_CONFIG_DIR/left-here" ;;
     *) echo "$repo ok" ;;
   esac
   case "$mode" in
@@ -138,6 +139,11 @@ suite 0 "a word that only happens to name a folder stays as it is, and an --opti
   -- ./launch.sh run --file=stub.sh || true
 (cd "$work" && STUB_MODE=stdin bash "$runner" stub ./stub.sh <<< "typed" > "$work/out" 2>&1) || fail "the implementation reads the caller's stdin: $(cat "$work/out")"
 (cd "$skill" && CDPATH="$skill" bash tests/parity.test.sh stub "$work/stub.sh" > "$work/out" 2>&1) || fail "CDPATH breaks the runner: $(cat "$work/out")"
+# Each case starts with an empty folder and GH_CONFIG_DIR: a stub that passes only on empty ones, and leaves a file in each, passes two cases.
+new_case c2
+suite 0 "each case runs in an empty folder with an empty GH_CONFIG_DIR, whatever the case before left" STUB_MODE=litter -- ./stub.sh \
+  && says "each case runs in empty folders" "2 case(s) pass against"
+rm -rf -- "$cases/c2"
 
 for difference in "stdout:stdout differs:" "code:exit 3, expected 0" "extra:gh calls differ:" \
   "argv:-$comment_call" "order:gh calls differ:" \
@@ -276,6 +282,11 @@ fake 0 '"threads.PR_1"' "the threads query" api graphql -f query="$threads_q" -f
 fake 0 '"rest.repos_o_app"' "a REST path" api repos/o/app && logged "a REST path" rest.repos_o_app
 fake 0 '"threads.a_b"' "a / in an id is a _" api graphql -f query="$threads_q" -f id=a/b
 fake 0 '"events.PR_1.c_d"' "a / in a cursor is a _" api graphql -f query="$events_q" -f id=PR_1 -f cursor=c/d
+echo '"page 1"' > "$gh_dir/comments.PR_1.1.json"
+fake 97 '' "a cursor of digits alone, which a fixture name would read as a call number" api graphql -f query="$comments_q" -f id=PR_1 -f cursor=1
+logged "a cursor of digits alone" "UNMATCHED gh api graphql with the cursor 1, digits alone, which a fixture name would read as a call number"
+fake 0 '"events.PR_1.E1"' "a cursor with a letter is a page" api graphql -f query="$events_q" -f id=PR_1 -f cursor=E1
+rm "$gh_dir/comments.PR_1.1.json"
 fake 97 '' "a value can't climb out of FAKE_GH_DIR" api graphql -f query="$threads_q" -f id=../escape
 logged "a value can't climb out of FAKE_GH_DIR" "UNMATCHED threads..._escape"
 fake 97 '' "a call no fixture answers" api graphql -f query="$repo_q" -F owner=o -F name=none

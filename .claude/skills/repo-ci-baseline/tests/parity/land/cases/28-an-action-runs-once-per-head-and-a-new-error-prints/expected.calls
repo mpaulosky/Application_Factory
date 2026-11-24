@@ -1,0 +1,13 @@
+repo.owner.app
+pr.update-branch.owner.app.2 gh pr update-branch 2 -R owner/app
+repo.owner.lib
+repo.owner.app
+comments.PR_2
+repo.owner.lib
+repo.owner.app
+comments.PR_2
+pr.update-branch.owner.app.2 gh pr update-branch 2 -R owner/app
+repo.owner.lib
+repo.owner.app
+pr.view.owner.app.2.state gh pr view 2 -R owner/app --json state --jq .state
+repo.owner.lib

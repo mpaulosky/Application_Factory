@@ -189,6 +189,9 @@ for case_dir in "${cases[@]}"; do
     mapfile -t args < "$case_dir/args"
   fi
   : > "$tmp/calls"
+  # Each case starts in an empty folder with an empty GH_CONFIG_DIR, whatever an earlier case's run left in them.
+  rm -rf -- "$tmp/cwd" "$tmp/ghconfig"
+  mkdir "$tmp/cwd" "$tmp/ghconfig" || setup_error "can't make folders under $tmp."
   code=0
   (cd "$tmp/cwd" && timeout -k 5 "$limit" env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN \
     -u FORCE_COLOR -u CLICOLOR_FORCE -u PYTHON_COLORS -u COLUMNS -u LINES NO_COLOR=1 TERM=dumb \
