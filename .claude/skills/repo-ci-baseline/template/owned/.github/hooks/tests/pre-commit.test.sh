@@ -312,16 +312,69 @@ reset_repo
 # Only the name that isn't UTF-8 may be skipped (macOS's filesystem refuses
 # it), and only when a plain name can still be written; any other name that
 # can't be written, or a git add that fails, fails the case.
+
+# write_file <name> <text>: write text to the file of that name in the lint
+# worktree, as the filesystem allows.
+write_file() {
+  echo "$2" > "$REPO/$1"
+}
+
+# write_hard_name <writer> <name>: write a violation to the hard-named file
+# with writer (write_file, or a stand-in taking the same arguments). Returns 0
+# when it was written, 1 when the case is skipped and 2 when it fails, with
+# what the writer said in WRITE_ERROR.
+WRITE_ERROR=""
+write_hard_name() {
+  local writer="$1" name="$2"
+  WRITE_ERROR="$("$writer" "$name" 'BAD text.' 2>&1)" && return 0
+  if [[ "$name" == $'\xff.md' ]] && "$writer" plain.md 'Some text.' 2> /dev/null; then
+    rm -f "$REPO/plain.md"
+    return 1
+  fi
+  return 2
+}
+
+# Two stand-ins for a filesystem that refuses names: one refuses every name
+# but plain.md, the other every name.
+refuse_hard_names() {
+  if [[ "$1" != plain.md ]]; then
+    echo "refused: $1" >&2
+    return 1
+  fi
+  write_file "$@"
+}
+refuse_all_names() {
+  echo "refused: $1" >&2
+  return 1
+}
+
+# expect_write <name> <writer> <file name> <0|1|2>
+expect_write() {
+  local got=0
+  write_hard_name "$2" "$3" || got=$?
+  if [[ $got -eq $4 ]]; then
+    pass "$1"
+  else
+    fail "$1" "write_hard_name returned $got, not $4"
+  fi
+  reset_repo
+}
+expect_write "a non-UTF-8 name the filesystem refuses is skipped when a plain name writes" \
+  refuse_hard_names $'\xff.md' 1
+expect_write "a[1].md the filesystem refuses fails the case" refuse_hard_names 'a[1].md' 2
+expect_write "a non-UTF-8 name fails the case when a plain name can't be written either" \
+  refuse_all_names $'\xff.md' 2
+
 for name in 'a[1].md' 'a*.md' '-dash.md' '!bang.md' ':colon.md' 'a b.md' $'new\nline.md' $'\xff.md'; do
   shown="$(printf '%q' "$name")"
-  if ! written="$({ echo 'BAD text.' > "$REPO/$name"; } 2>&1)"; then
-    if [[ "$name" == $'\xff.md' ]] && { echo 'Some text.' > "$REPO/plain.md"; } 2> /dev/null; then
-      rm -f "$REPO/plain.md"
-      echo "skip - this filesystem refuses the name $shown: $written"
-    else
-      fail "a staged $shown is linted as that file" "setup: couldn't write it: $written"
-      reset_repo
-    fi
+  written=0
+  write_hard_name write_file "$name" || written=$?
+  if [[ $written -eq 1 ]]; then
+    echo "skip - this filesystem refuses the name $shown: $WRITE_ERROR"
+    continue
+  elif [[ $written -ne 0 ]]; then
+    fail "a staged $shown is linted as that file" "setup: couldn't write it: $WRITE_ERROR"
+    reset_repo
     continue
   fi
   echo 'Some text.' > "$REPO/a1.md"
@@ -387,8 +440,9 @@ else
   fail "without a temporary folder the hook says why it refuses the commit" "no reason in the output"
 fi
 # The two folders made inside it: the one the version is read in, and the
-# snapshot. Either one failing refuses the commit, saying which.
-for failing in "/probe:to read markdownlint-cli2's version in" "/snapshot:to lint the staged Markdown in"; do
+# snapshot. Either one failing refuses the commit, saying which: each says
+# something other than the work folder does.
+for failing in "/probe:to read markdownlint-cli2's version in" "/snapshot:to snapshot the staged Markdown in"; do
   said="${failing#*:}" failing="${failing%%:*}"
   : > "$LOG"
   : > "$ARGS"
@@ -573,12 +627,11 @@ fi
 # case here: the hook lints only staged files, so a decoy it could match as a
 # glob would be staged, and linted, either way. owned-gate-files.test.sh, in
 # the Application Factory, covers it with a decoy beside the file.) The suite's
-# own PATH never holds the stub; a markdownlint-cli2 found under $STUBS fails.
+# own PATH never holds the stub: only the commands that run the hook put
+# $STUBS on their PATH, so the lookup below finds a real one or none.
 REAL_LINT="$(command -v markdownlint-cli2 || true)"
 if [[ -z "$REAL_LINT" ]]; then
   echo "skip - no markdownlint-cli2 installed, so the real-linter cases don't run"
-elif [[ "$REAL_LINT" == "$STUBS"/* ]]; then
-  fail "the real-linter case runs the real markdownlint-cli2" "found the stub, $REAL_LINT"
 else
   REAL="$WORK/real"
   git init -q -b main "$REAL"
