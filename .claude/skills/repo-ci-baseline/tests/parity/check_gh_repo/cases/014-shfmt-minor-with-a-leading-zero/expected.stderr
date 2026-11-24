@@ -1,0 +1,1 @@
+^check_gh_repo[^:]*: check_gh_repo[^ ]* needs shfmt v3\.14 or a later v3 release, found 'v3\.014\.0'.*$

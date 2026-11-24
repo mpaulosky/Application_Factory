@@ -1,0 +1,37 @@
+# The check_gh_repo parity suite
+
+`template/owned/.github/scripts/check_gh_repo.py` through its command line: a tree of scripts and skills in, the untold `gh` commands and the exit code out. The runner's header
+(`tests/parity.test.sh`) says what a case holds. It stands in for the white-box pytest tests (`tests/test_check_gh_repo.py`), which a port can't run.
+
+Run it with the shim first on `PATH`, under the name `shfmt`, as `test.sh` does:
+
+```bash
+shim="$(mktemp -d)" && ln -s "$PWD/.claude/skills/repo-ci-baseline/tests/parity/check_gh_repo/shfmt-shim.sh" "$shim/shfmt"
+PATH="$shim:$PATH" .claude/skills/repo-ci-baseline/tests/parity.test.sh check_gh_repo [command...]
+```
+
+`shfmt-shim.sh` hands each call to the real shfmt (v3.14 or a later v3, the next one on `PATH`), after checking that the checker runs it from an empty folder with nothing but
+`PATH` in its environment. A case whose folder holds `.shfmt-version` gets that line as shfmt's `--version`, so the suite can stand for an older or malformed release; the shim
+reads the checker's folder through `/proc`, so those cases need Linux.
+
+## Where the cases come from
+
+- `001` to `018`, written by hand: both modes and every exit, the usage errors, the hint `--repo` prints, the order of `a/` and `a-b/` (Python's `sorted` on paths compares by
+  segment, the reverse of an ordinal string sort), shfmt releases, a skill file named `.sh` (Python's `Path.suffix` is empty there, unlike C#'s `GetExtension`), and symlinks.
+- `019` to `057`, the inputs the white-box tests give the checker, captured from a run of them: the fewest that between them tell every mutation in
+  `tests/gh_repo/mutations.json` that any captured input tells from the original, each as `scripts/check.bash` (each case is named for the test it came from).
+  A script is a `*.bash` here, never a `*.sh`, so the gate's shellcheck and shfmt, which take every `*.sh`, don't lint a fixture written to fail; the checker reads both as shell.
+- `058`: every Markdown input the white-box tests give the checker, one skill file each: fences of backticks and tildes, in quotes and lists, and inline code.
+- `059`: scripts that aren't UTF-8, and control bytes.
+
+## Decided
+
+- **The name in messages.** stderr is matched by its shape, and its prefix is `check_gh_repo` with any extension, so a port's messages may name the port's own file. The
+  hint's text after its first sentence is free too: it still names `mpaulosky/dotfiles`, where the skill lived, and a fix to it shouldn't fail the suite.
+- **No `.py` changes.** The suite records the Python as it is.
+
+## Not covered, on purpose
+
+- A file or folder the checker can't read (exit 2): the runner runs as whoever runs `test.sh`, root in some containers, who reads every file.
+- shfmt missing from `PATH`, or hanging: the runner looks `python3` up on the same `PATH`, so a case can't take shfmt away alone. The shim's own test covers the shim.
+- The Owned files `--repo` skips: their names end in `.sh`, which the gate would lint as fixtures.

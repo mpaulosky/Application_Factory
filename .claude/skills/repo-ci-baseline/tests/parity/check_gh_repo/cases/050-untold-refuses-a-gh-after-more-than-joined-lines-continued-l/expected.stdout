@@ -1,0 +1,1 @@
+scripts/check.bash:103: GH_REPO=o/r gh pr view 1

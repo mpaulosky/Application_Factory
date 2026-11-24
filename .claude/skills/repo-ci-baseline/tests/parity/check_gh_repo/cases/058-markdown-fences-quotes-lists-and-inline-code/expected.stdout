@@ -1,0 +1,76 @@
+.claude/skills/x/000.md:2: gh pr view 1
+.claude/skills/x/001.md:2: gh pr view 1
+.claude/skills/x/002.md:2: gh pr view 1
+.claude/skills/x/003.md:2: gh pr view 1
+.claude/skills/x/004.md:1: Run `gh pr view 1` to see it.
+.claude/skills/x/005.md:1: - Run `gh pr list`
+.claude/skills/x/006.md:1: 1. Then ``gh pr list`` shows them.
+.claude/skills/x/007.md:1: Use `gh pr view 1` or `gh pr view 2 --repo o/r`.
+.claude/skills/x/008.md:2: GH_REPO="$repo" gh pr view 1
+.claude/skills/x/009.md:2: gh pr view 1 --repo "$repo"
+.claude/skills/x/010.md:3: gh pr view 1
+.claude/skills/x/011.md:2: GH_REPO=o/r echo; gh pr view 1
+.claude/skills/x/012.md:2: GH_REPO= gh pr view 1
+.claude/skills/x/013.md:2: gh api repos/o/r/pulls --repo o/r
+.claude/skills/x/014.md:2: gh api repos/{owner}/{repo}/pulls
+.claude/skills/x/015.md:2: gh repo view
+.claude/skills/x/016.md:2: gh repo view --json name
+.claude/skills/x/017.md:2: gh repo view --repo o/r
+.claude/skills/x/018.md:2: GH_REPO=o/r gh repo view
+.claude/skills/x/019.md:1: Run `gh repo edit --enable-auto-merge`.
+.claude/skills/x/020.md:2: gh \
+.claude/skills/x/021.md:2: gh pr view 1 \
+.claude/skills/x/022.md:2: gh "$@"
+.claude/skills/x/023.md:2: gh $sub view 1
+.claude/skills/x/024.md:2: gh
+.claude/skills/x/025.md:3: gh pr view 1
+.claude/skills/x/026.md:3: gh pr view 1
+.claude/skills/x/027.md:3: gh pr view 1
+.claude/skills/x/028.md:5: gh pr view 1
+.claude/skills/x/029.md:7: More `gh issue list`
+.claude/skills/x/030.md:2: > gh pr view 1
+.claude/skills/x/031.md:3: > gh pr view 1
+.claude/skills/x/032.md:2: >> gh pr view 1
+.claude/skills/x/033.md:2:   gh pr view 1
+.claude/skills/x/034.md:2:    gh pr view 1
+.claude/skills/x/035.md:3:   > gh pr view 1
+.claude/skills/x/036.md:2: > gh pr view 1
+.claude/skills/x/037.md:2:   gh pr view 1
+.claude/skills/x/075.md:5: gh pr view 1
+.claude/skills/x/075.md:8: Try `gh pr list` now.
+.claude/skills/x/076.md:4: gh pr list
+.claude/skills/x/077.md:3: gh pr list
+.claude/skills/x/078.md:3: gh pr view 1
+.claude/skills/x/079.md:2: gh pr view 1
+.claude/skills/x/083.md:2: `gh pr view 1`
+.claude/skills/x/084.md:2: gh.exe pr view 1
+.claude/skills/x/085.md:1: Run `gh.exe pr list`.
+.claude/skills/x/086.md:2: gh.exe repo view
+.claude/skills/x/087.md:3: gh.exe pr list
+.claude/skills/x/093.md:2: gh pr view 1 --repo <owner>/<repo>
+.claude/skills/x/094.md:2: gh pr view 1 --repo=<owner>/<repo>
+.claude/skills/x/095.md:2: gh pr view 1 -R <owner>/<repo>
+.claude/skills/x/096.md:2: GH_REPO=<owner>/<repo> gh pr view 1
+.claude/skills/x/097.md:2: gh repo view <owner>/<repo>
+.claude/skills/x/098.md:1: Run `gh pr list --repo <owner>/<repo>`.
+.claude/skills/x/099.md:1: Run `gh pr list -R OWNER/REPO` or `gh pr list --repo <owner>/<repo>`.
+.claude/skills/x/100.md:3:     gh pr view 1
+.claude/skills/x/101.md:3: 	gh pr view 1
+.claude/skills/x/102.md:3:         gh pr view 1
+.claude/skills/x/103.md:4:     gh pr view 1
+.claude/skills/x/104.md:5:     gh pr view 1
+.claude/skills/x/105.md:4:     gh pr list
+.claude/skills/x/106.md:3:     GH_REPO="$repo" gh pr view 1
+.claude/skills/x/107.md:5:     gh issue list
+.claude/skills/x/120.md:2: gh pr view 1
+.claude/skills/x/121.md:3: gh pr view 1
+.claude/skills/x/122.md:2: gh pr view 1
+.claude/skills/x/123.md:1: <pre><code>gh pr view 1
+.claude/skills/x/124.md:2: gh pr view 1
+.claude/skills/x/125.md:1: <pre>gh pr view 1</pre>
+.claude/skills/x/126.md:5: gh pr view 1
+.claude/skills/x/134.md:1: Run <code>gh pr view 1</code> now.
+.claude/skills/x/135.md:2: <code>gh issue list</code>
+.claude/skills/x/136.md:1: Use <code>gh pr view 1 --repo o/r</code> or <code>gh pr list</code>.
+.claude/skills/x/137.md:1: <code class="sh">gh pr view 1</code>
+.claude/skills/x/150.md:1: `gh pr view 1`\r::error::x

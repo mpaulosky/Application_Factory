@@ -1,0 +1,3 @@
+scripts/a.bash:2: gh pr view 1
+scripts/b.bash:1: echo �; gh pr view 1
+scripts/c.bash:2: echo "\x01\x1b[0m\x7f"; gh pr view 1

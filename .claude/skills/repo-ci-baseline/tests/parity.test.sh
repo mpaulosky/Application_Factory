@@ -37,8 +37,9 @@
 #                    PARITY_SCRATCH, a folder outside the run's for what the run mustn't see as its own (the bare
 #                    origin), and the git identity and dates fixed, so its commits get the same hashes everywhere and
 #                    the gh fixtures can name them
-#   expected.tree/   the run's folder afterwards, every file byte for byte (a .git anywhere is left out); missing: the run
-#                    must leave the folder holding nothing but a .git, so a script that writes no file is held to that
+#   expected.tree/   the run's folder afterwards, every file byte for byte and every symlink by its target, not followed
+#                    (a .git anywhere is left out); missing: the run must leave the folder holding nothing but a .git,
+#                    so a script that writes no file is held to that
 #
 # Neither args, env nor an expected.* file but expected.stdout may hold a carriage return (a setup error, since each is read
 # line by line); stdin, a tree and expected.stdout, compared byte for byte, may, and
@@ -221,11 +222,12 @@ stderr_problems() {
 }
 
 # tree_problems <case folder> <run folder>: prints how the run's folder differs from the case's expected.tree/ (or, with
-# none, the files it left), nothing when it fits. A .git is left out either way.
+# none, the files it left), nothing when it fits. A .git is left out either way. A symlink is compared by its target and not
+# followed, so one to nothing or out of the folder (a case's setup.sh may make them) is held to where it points.
 tree_problems() {
   local left
   if [[ -d "$1/expected.tree" ]]; then
-    diff -r -x .git -- "$1/expected.tree" "$2" > "$tmp/diff" 2>&1 || echo "the files differ:"$'\n'"$(cat "$tmp/diff")"
+    diff -r --no-dereference -x .git -- "$1/expected.tree" "$2" > "$tmp/diff" 2>&1 || echo "the files differ:"$'\n'"$(cat "$tmp/diff")"
     return
   fi
   left="$(cd -- "$2" && find . -mindepth 1 -maxdepth 1 ! -name .git | sort)"

@@ -351,6 +351,20 @@ rm -rf "$cases/c1/tree"
 suite 0 "record mode removes expected.tree/ when the run leaves no file" PARITY_RECORD=1 || true
 [[ ! -e "$cases/c1/expected.tree" ]] || fail "record mode kept an expected.tree/ the run no longer leaves"
 
+# A symlink the run leaves is compared by its target, not followed: one to nothing, or out of the folder, is held to where it points.
+new_case c1
+printf '%s\n' 'set -euo pipefail' 'ln -s missing dangling' 'ln -s / outside' > "$cases/c1/setup.sh"
+mkdir "$cases/c1/expected.tree"
+ln -s missing "$cases/c1/expected.tree/dangling"
+ln -s / "$cases/c1/expected.tree/outside"
+suite 0 "a run that leaves a symlink to nothing and one out of its folder" -- ./stub.sh || true
+rm "$cases/c1/expected.tree/outside" && ln -s /elsewhere "$cases/c1/expected.tree/outside"
+suite 1 "a symlink to another target" -- ./stub.sh && says "a symlink to another target" "the files differ:"
+rm -rf "$cases/c1/expected.tree"
+suite 0 "record mode keeps a symlink as a symlink" PARITY_RECORD=1 || true
+[[ "$(readlink "$cases/c1/expected.tree/dangling")" == missing && "$(readlink "$cases/c1/expected.tree/outside")" == / ]] \
+  || fail "record mode didn't keep the run's symlinks: $(ls -l "$cases/c1/expected.tree")"
+
 # setup.sh builds a git repo in the run's folder, with a local origin under PARITY_SCRATCH; the run sees it, not a caller's.
 new_case c1
 cat > "$cases/c1/setup.sh" << 'EOF'

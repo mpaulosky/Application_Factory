@@ -1,0 +1,1 @@
+^usage: check_gh_repo[^ ]* --repo <root> \| <dir>\.\.\.$
