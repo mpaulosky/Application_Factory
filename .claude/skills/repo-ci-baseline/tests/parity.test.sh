@@ -40,7 +40,8 @@
 #   expected.tree/   the run's folder afterwards, every file byte for byte (a .git anywhere is left out); missing: the run
 #                    must leave the folder holding nothing but a .git, so a script that writes no file is held to that
 #
-# Neither args, env nor an expected.* file may hold a carriage return (a setup error); stdin and a tree may, and
+# Neither args, env nor an expected.* file but expected.stdout may hold a carriage return (a setup error, since each is read
+# line by line); stdin, a tree and expected.stdout, compared byte for byte, may, and
 # tests/parity/.gitattributes stores every case file as it is, so a clone keeps them, and tests/parity/.editorconfig keeps
 # an editor from trimming or converting them. Record mode writes
 # expected.stdout, expected.code, expected.calls and expected.tree/ (removed when the run leaves no file). It writes a
@@ -134,7 +135,7 @@ check_case() {
   local dir="$1" name="$2" file pattern n status
   [[ -d "$dir/gh" ]] || setup_error "$name has no gh/ folder."
   for file in "$dir/args" "$dir/env" "$dir"/expected.*; do
-    [[ -f "$file" ]] || continue
+    [[ -f "$file" && "$file" != "$dir/expected.stdout" ]] || continue
     if grep -q $'\r' "$file"; then
       setup_error "$name/$(basename -- "$file") holds a carriage return."
     fi

@@ -11,8 +11,8 @@
 # implementation, so no real case is run or written. A last section checks the committed cases: each has a file git tracks
 # in gh/ (the folder a fresh clone needs) and no fixture its expected.calls doesn't read, git stores every case file as it
 # is (tests/parity/.gitattributes), and the blank-key cases' env files still hold their blanks (tests/parity/.editorconfig).
-# It first tries the first two checks on cases made to be wrong, in git repos of their own and in a folder git treats as
-# outside any repo. Needs what the suite needs (bash 4.4, coreutils, findutils, diff, grep, sed), python3 for the stub
+# It first tries the first three checks on cases made to be wrong, in git repos of their own and in a folder git treats
+# as outside any repo. Needs what the suite needs (bash 4.4, coreutils, findutils, diff, grep, sed), python3 for the stub
 # reference record mode runs, git, and jq for the fake's --jq.
 set -euo pipefail
 # A hook, or git rebase --exec, may have set these; the throwaway repo below must not be the caller's.
@@ -60,6 +60,7 @@ for repo in "$@"; do
     token) [[ -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}" && -d "$GH_CONFIG_DIR" && -z "$(ls -A "$GH_CONFIG_DIR")" ]] && echo "$repo ok" ;;
     terminal) [[ -z "${FORCE_COLOR:-}${CLICOLOR_FORCE:-}${PYTHON_COLORS:-}${COLUMNS:-}${LINES:-}" && "${NO_COLOR:-}" == 1 && "${TERM:-}" == dumb ]] && echo "$repo ok" ;;
     stdin) if read -r line; then echo "$repo read $line"; else echo "$repo ok"; fi ;;
+    crlf) printf '%s ok\r\n' "$repo" ;;
     litter) [[ -z "$(ls -A .)" && -z "$(ls -A "$GH_CONFIG_DIR")" ]] && echo "$repo ok" && : > left-here && : > "$GH_CONFIG_DIR/left-here" ;;
     env) echo "$repo ${CASE_VAR-unset} ${REPOSITORY-unset} ${GITHUB_REPOSITORY-unset} ${ANTHROPIC_API_KEY-unset} ${ANTHROPIC_MODEL-unset}" ;;
     write | write-other)
@@ -239,6 +240,7 @@ broken "a blank stderr pattern" "c1/expected.stderr line 1 is blank" eval "echo 
 broken "an invalid stderr pattern" "c1/expected.stderr line 1 is not a valid ERE" eval "echo '^note: (' > '$cases/c1/expected.stderr'"
 broken "a carriage return in args" "c1/args holds a carriage return" eval "printf 'o/app\r\n' > '$cases/c1/args'"
 broken "a carriage return in env" "c1/env holds a carriage return" eval "printf 'A=b\r\n' > '$cases/c1/env'"
+broken "a carriage return in expected.calls" "c1/expected.calls holds a carriage return" eval "printf 'x\r\n' > '$cases/c1/expected.calls'"
 broken "an env line that isn't NAME=value" "c1/env line 2 is not NAME=value: -u A" eval "printf 'A=b\n-u A\n' > '$cases/c1/env'"
 broken "a tree/ that isn't a folder" "c1/tree is not a folder" touch "$cases/c1/tree"
 broken "an expected.tree/ that isn't a folder" "c1/expected.tree is not a folder" touch "$cases/c1/expected.tree"
@@ -276,6 +278,12 @@ new_case c1
 printf 'typed\nmore\n' > "$cases/c1/stdin"
 echo "o/app read typed" > "$cases/c1/expected.stdout"
 suite 0 "the case's stdin is the implementation's" STUB_MODE=stdin -- ./stub.sh || true
+
+# expected.stdout may hold a CR, and is compared byte for byte: CRLF output passes it, LF output doesn't.
+new_case c1
+printf 'o/app ok\r\n' > "$cases/c1/expected.stdout"
+suite 0 "a CR in expected.stdout is matched" STUB_MODE=crlf -- ./stub.sh || true
+suite 1 "LF output against a CR in expected.stdout fails" -- ./stub.sh && says "LF output against a CR" "stdout differs:"
 
 new_case c1
 printf '%s\n' "CASE_VAR=a value=with=signs" "" > "$cases/c1/env"
@@ -594,9 +602,12 @@ done
 # off. converted_cases <repo folder> <pathspec>: one line per tracked file the pathspec matches that git would convert, or
 # a line saying git couldn't list or read them, or listed none; nothing when every one is stored as it is. git runs without
 # the caller's GIT_DIR and the rest, as in case_problems, and reads only the repository's own config and attributes: a
-# global or system attributes file (a `* text=auto`) or excludes file would change what the probe below sees.
+# global or system attributes file (a `* text=auto`) or excludes file would change what the probe below sees. Without
+# the global config there is no safe.directory either, which git reads only from there, the system's or the command line:
+# so it is given on the command line, or a checkout another user owns (a container's bind mount) would be refused.
 own_git=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR GIT_CONFIG_GLOBAL=/dev/null
-  GIT_CONFIG_NOSYSTEM=1 GIT_ATTR_NOSYSTEM=1 git -c core.attributesFile=/dev/null -c core.excludesFile=/dev/null)
+  GIT_CONFIG_NOSYSTEM=1 GIT_ATTR_NOSYSTEM=1 git -c core.attributesFile=/dev/null -c core.excludesFile=/dev/null
+  -c safe.directory='*')
 converted_cases() {
   local -a clean_git=("${own_git[@]}" -C "$1")
   local list="$work/case-files" attrs="$work/case-attrs"
@@ -637,6 +648,9 @@ got="$(converted_cases "$attr_probe" 'nowhere/*/cases/*')"
 [[ "$got" == "git tracks no file nowhere/*/cases/* matches in $attr_probe" ]] || fail "the line-ending check passed on no file: '$got'"
 got="$(GIT_DIR="$work/nowhere" GIT_WORK_TREE="$work" converted_cases "$attr_probe" 'parity/*/cases/*')"
 [[ -z "$got" ]] || fail "the line-ending check follows the caller's GIT_DIR: '$got'"
+# A checkout another user owns (git's own test switch stands in for one) is still read.
+got="$(GIT_TEST_ASSUME_DIFFERENT_OWNER=1 converted_cases "$attr_probe" 'parity/*/cases/*')"
+[[ -z "$got" ]] || fail "the line-ending check refuses a checkout another user owns: '$got'"
 
 # The blank-key cases pin that a value of only blanks counts as unset, which an empty value (what a trimming editor would
 # leave, and tests/parity/.editorconfig forbids) can't show: both env files must still hold blanks.
@@ -652,7 +666,7 @@ done
 
 # The committed cases, when this copy is in a git work tree (a copy of the skill outside one, such as an unpacked archive,
 # has no index to ask).
-if [[ "$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR git -C "$here" rev-parse --is-inside-work-tree 2> /dev/null)" == true ]]; then
+if [[ "$("${own_git[@]}" -C "$here" rev-parse --is-inside-work-tree 2> /dev/null)" == true ]]; then
   got="$(converted_cases "$here" 'parity/*/cases/*')"
   [[ -z "$got" ]] || fail "git converts the line endings of these case files (tests/parity/.gitattributes):"$'\n'"$got"
 fi

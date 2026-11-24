@@ -14,7 +14,7 @@ Case 08 is the hostile corpus: a title and body with astral characters, named, n
 U+2029, Liquid, HTML, `javascript:` links, reference definitions, a CR, and commit subjects and file names that would start a definition or break a code span.
 The file list pins the order of `tests/a-b/x.cs` before `tests/a/x.cs`, a sort by the name as a string.
 
-Cases 17 to 24 pin what a port is likely to get wrong:
+Cases 17 to 26 pin what a port is likely to get wrong:
 
 - 17: `\v`, `\f`, U+0085 and U+001C to U+001E in a title, a commit subject and the PR description stay in the text: Markdown breaks lines only at CR and LF.
   The card's excerpt, read back with `splitlines()`, does split there, so the list markers after each separator are dropped.
@@ -27,6 +27,8 @@ Cases 17 to 24 pin what a port is likely to get wrong:
   A post whose BOM comes before its front matter is read without it: its card shows the file name, the date from the file name and no tag.
 - 22: `REPOSITORY` wins over `GITHUB_REPOSITORY`. 23: an empty `REPOSITORY` falls back to `GITHUB_REPOSITORY`.
 - 24: an `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` of only blanks count as unset: no API call, and the post says no AI summary.
+- 25: a failed read of the PR: exit 1, nothing on stdout and no file written, and stderr matched only as not empty, since the Python's is a traceback.
+- 26: `--ta` for `--tag`: an abbreviated option is accepted, as argparse does.
 
 Not covered, on purpose:
 
@@ -34,5 +36,4 @@ Not covered, on purpose:
   No case sets a key other than blanks (case 24), and the unit tests cover the request and its failures. So the model a blank
   `ANTHROPIC_MODEL` falls back to is never seen in a case.
 - A PR with no merge time: the post is dated today, and the clock isn't fixed.
-- A `gh` failure other than a title's: the script ends in a Python traceback, which is no contract a port should copy.
-- Option abbreviations (`--ta` for `--tag`): argparse accepts them, but no caller relies on them and a port's parser needn't copy them.
+- The traceback a `gh` failure ends in: no contract a port should copy, so case 25 pins only the exit code, stdout and the files.

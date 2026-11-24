@@ -7,11 +7,9 @@ The cases cover a marker on a line of its own (with spaces and tabs around it, o
 no final newline, notes that lose only their trailing newlines, a draft naming another PR (a longer number, or another PR beside this one; with and without
 `--tag`), a marker whose number is this PR's only as a number (`#042`, or Arabic-Indic digits: not another PR, but not this one's marker either, so the notes are
 added) and Arabic-Indic digits for another PR (exit 1), a draft whose bytes pass through untouched (astral characters, named entities, non-ASCII case, U+2028 and U+2029, and a byte that isn't UTF-8),
-and the usage errors (exit 2).
+and the usage errors (exit 2). Case 21 gives `--note` for `--notes-file`: an abbreviated option is accepted, as argparse does. Cases 22 and 23 are drafts with
+CRLF line endings, published with them: one with its marker on a CRLF line, kept as it is, and one with no marker, whose notes are added with LF after it.
 
 Not covered, on purpose:
 
 - A notes file that can't be read: the script ends in a Python traceback, which is no contract a port should copy.
-- A draft with CRLF line endings: its body would be published with them, and the runner refuses a carriage return in `expected.stdout`. The unit tests cover
-  the marker on a CRLF line.
-- Option abbreviations (`--note` for `--notes-file`): argparse accepts them, but no caller relies on them and a port's parser needn't copy them.

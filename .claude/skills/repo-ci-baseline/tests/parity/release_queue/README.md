@@ -16,10 +16,10 @@ Case 16 keeps each rule apart: one PR is out only because the cutoff's tag holds
 Release names it, and one has `[skip-release]` and no merge commit. Cases 17 to 19 fetch a trigger the list doesn't hold that isn't owed: Dependabot's (its
 login under `user`, not `author`), one with `[skip-release]`, and one never merged. Case 20 takes v1.10.0 over v1.9.0 as the cutoff, which string order would
 reverse. Case 21 queues a merge in the cutoff's own second and goes on to the next page while a PR's update time equals the cutoff's merge time; case 22 stops
-at a PR with no update time.
+at a PR with no update time. Case 23 is a failed Release listing: exit 1, nothing on stdout, and stderr matched only as not empty, since the Python's is a
+traceback. Case 24 gives `--rep` for `--repo`: an abbreviated option is accepted, as argparse does.
 
 Not covered, on purpose:
 
-- Exit 1: a `gh` or `git` failure, and a merge commit missing from the fetched main, end in a Python traceback, which is no contract a port should copy.
-  The unit tests in the Template's `.github/scripts/tests/` cover the missing merge commit.
-- Option abbreviations (`--rep` for `--repo`): argparse accepts them, but no caller relies on them and a port's parser needn't copy them.
+- The other exits 1: a `git` failure, and a merge commit missing from the fetched main. The unit tests in the Template's `.github/scripts/tests/` cover the
+  missing merge commit.
