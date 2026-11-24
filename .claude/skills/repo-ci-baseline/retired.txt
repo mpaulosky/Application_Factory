@@ -1,0 +1,10 @@
+# Owned files the Template no longer ships, which Apply removes from an Application (ADR 0017, Update: retired Owned files).
+#
+# One line per version of the file the Template ever shipped: its SHA-256, two spaces, then its path in the Application, as sha256sum prints it.
+# Apply deletes the Application's copy only when it is a regular file identical to one of these versions, and keeps and reports any other.
+# A path here must no longer be under template/owned/ or template/seed/, and must also be in RETIRED_PATHS in the ledger
+# (template/owned/.sandcastle/lib/review-ledger.mts), so a re-Apply that deletes it needs no review; test.sh checks both.
+# To list every version of a file the Template shipped, from the repo root (path relative to template/owned/):
+#   p=.claude/skills/repo-ci-baseline/template/owned/<path>
+#   git log --diff-filter=AM --format=%H -- "$p" | while read -r c; do git show "$c:$p" | sha256sum | sed "s|-\$|<path>|"; done | sort -u
+# (--diff-filter=AM: only the commits that wrote the file, so the one that deleted it adds no empty version.)

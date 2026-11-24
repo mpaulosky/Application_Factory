@@ -112,7 +112,7 @@ Each of these is decided in its increment, and recorded as an Update below:
 - The Python heredocs in `claude-review.yml`, and the `python3` calls inside the bash (`lint-edited-file.sh`, the test scripts, the Seed Dockerfile), likely `jq` where a hook can't
   pay a `dotnet` start.
 - Mutation testing: `mutate.py` and its specs, which mutate bash too.
-- Retiring Python from the Baseline: Apply never deletes a file, so how Apply or a Rollout removes retired Owned files, and how `OWNED` and the leftovers report treat them.
+- Retiring Python from the Baseline: which files retire when, now that Apply can remove a retired Owned file (Update: retired Owned files, below).
 
 ## Considered Options
 
@@ -184,3 +184,20 @@ The first increment brings the .NET SDK into the Factory, with no script ported 
   and CA2266 stays visible as a warning. Checked on SDK 11.0.100: `TreatWarningsAsErrors` alone makes CA2266 an error (exit 1), with `WarningsNotAsErrors=CA2266` the build
   exits 0, and `dotnet build app.cs -warnaserror` isn't accepted for a file-based app (MSB4025). The other two ways were turned down: a shebang fails
   `dotnet format whitespace --verify-no-changes` (exit 2, the `# !` rewrite above), and an entry file with no `#:include` would undo the thin-entry-file rule.
+
+## Update (mpaulosky/Application_Factory#124): retired Owned files
+
+Apply can now remove an Owned file the Template retired, so the increments that replace a `.py` with a `.cs` can take the `.py` out of every Application:
+
+- **Where the list lives.** `retired.txt`, beside `apply.sh` in the skill, holds one `<sha256>  <path>` line for every version of a retired file the Template shipped, as
+  `sha256sum` prints it. It is a data file, not a tuple beside `OWNED` in `check_gh_repo.py`, which mpaulosky/Application_Factory#131 ports, and it holds hashes because a retired file is no longer in
+  `template/owned/` to compare with. A retired path still in the Template stops Apply and fails `test.sh`.
+- **What Apply removes.** A regular file, in a folder that resolves inside the repo, identical to one of those versions. A changed copy, a symlink, a folder or a file reached
+  through a symlinked folder is kept and reported once, in its own section of the report and never as a leftover too; a copy already gone isn't mentioned; `--dry-run` says
+  "would be removed". `reapply.sh` commits the deletion with the rest of Apply's output.
+- **The review.** A re-Apply that deletes a retired file, where `main` had a regular file, passes the gate's review check unreviewed, as one that writes an Owned file does:
+  the retirement was reviewed in the Template's PR. The ledger's `RETIRED_PATHS` names the paths, since the Application has no `retired.txt`, and `test.sh` holds the two
+  equal. `rollout.sh --auto` lists a deleted retired file in its review's prompt with the Owned files the branch changes.
+- **The Factory's copies.** A retired file the Factory copies leaves `scripts/gate.sh`'s copies list, and the Factory's copy is deleted, in the PR that retires it; `--sync`
+  doesn't delete a copy.
+- **Status.** `status.sh` prints no per-file Drift, so it gains no retired line: a retired file still present shows in the next Apply's report.

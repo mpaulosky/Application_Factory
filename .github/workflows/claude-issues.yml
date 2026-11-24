@@ -242,13 +242,11 @@ jobs:
           # which the action otherwise refuses as a non-human actor. Only this workflow dispatches itself, and the
           # pick step works only the owner's issues whatever started the run.
           allowed_bots: "github-actions[bot]"
-          # A headless run ends when Claude ends its turn, so a command Claude starts in the background and waits for
-          # ends the run with no branch, pull request or comment: the gate, waited on that way, ended four runs (#124,
-          # #130, #136). Background tasks are off, so every command runs in the foreground; a command given no timeout may
-          # run for 20 minutes (Claude Code's own default is 2), and one given a timeout for up to 60 (its own limit is
-          # 10), so the gate's longer steps and mutate.py fit in one call.
+          # A headless run ends at the first turn that ends, so a command left running in the background never reports
+          # back: issue 124's two runs each started test.sh in the background, said they'd wait for it, and ended with
+          # no pull request. With background tasks off every command runs in the foreground until it ends.
           settings: |
-            {"env": {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1", "BASH_DEFAULT_TIMEOUT_MS": "1200000", "BASH_MAX_TIMEOUT_MS": "3600000"}}
+            {"env": {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}}
           prompt: |
             You are working issue #${{ steps.pick.outputs.issue }} of ${{ github.repository }}, which its owner,
             mpaulosky, queued for you. Your job is to resolve it and open a draft pull request.
@@ -274,9 +272,9 @@ jobs:
                `Fixes #${{ steps.pick.outputs.issue }}`.
             7. Comment on the issue with the pull request's link and anything the owner should check.
 
-            This run ends the moment you end a turn, and nothing wakes you again. Run every command in the
-            foreground and wait for it, giving a long one (the gate, `test.sh`, `mutate.py`) a timeout that fits;
-            never end a turn to wait for a command, a monitor or a notification.
+            Run every command in the foreground and wait for it to end, giving a long one (test.sh, the full gate) a
+            timeout of up to 10 minutes. Never start one in the background, and never end a turn to wait for a command,
+            a check or a notification: this run is headless, so the first turn you end ends the run, with no pull request.
 
             Whenever you stop without a pull request, for any reason (a step failed, a push or `gh` call was
             refused, the issue needs the owner), first comment on the issue saying what you did, what stopped
@@ -292,7 +290,7 @@ jobs:
             --max-turns 200
             --add-dir ${{ runner.temp }}/claude-task
             --allowedTools "Bash,Read,Edit,Write,MultiEdit,Glob,Grep"
-            --disallowedTools "WebFetch,WebSearch,Read(//proc/**)"
+            --disallowedTools "WebFetch,WebSearch,Monitor,ScheduleWakeup,Read(//proc/**)"
 
       - name: Finish
         if: always() && steps.pick.outputs.issue != ''
