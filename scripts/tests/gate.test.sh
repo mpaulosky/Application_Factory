@@ -4,7 +4,7 @@
 # skips only on GATE_SKIP_REVIEW=1, fails without an origin/main or when origin/main shares no history with HEAD, and passes review.sh check's status on, ahead of test.sh. It also checks
 # that gate.sh names each copied stand-alone test and lists every copy, that repo-config.mts lists the Factory's own files under Owned patterns,
 # that test.sh's pass is remembered per clean tree (skipped the second time, shared by worktrees, trusted only while its token is in its start stamp, checked and stamped under a per-tree lock that a held lock or a signal leaves safe, never stored for a tree that changed), that --quick stops after the lint and --sync restores drifted, missing and non-executable copies and then stops, that a bare #N in an Owned file fails the gate
-# and --quick (and a missing python3 or a broken checker fails closed), that dependabot.yml watches the root package.json, and the review tests' install step (a missing pnpm, a pnpm that leaves no tsx, a pnpm that installs it).
+# and --quick (and a missing dotnet or a broken checker fails closed), that dependabot.yml watches the root package.json, and the review tests' install step (a missing pnpm, a pnpm that leaves no tsx, a pnpm that installs it).
 # It also checks that .claude/settings.json runs the executable scripts/lint-edited-file.sh after Edit, Write and MultiEdit (ADR 0011), and that the check fails on a dropped matcher, another event or hook type,
 # a command without the quotes around CLAUDE_PROJECT_DIR or naming another script, a non-executable script and a file that is not JSON.
 # It also checks the shfmt step (ADR 0015): every shell file, changed or not, the three hooks among them, is formatted in the style .editorconfig gives; a file that is not a shell file,
@@ -41,6 +41,23 @@ check() { # check <description> <condition: 0 for ok>
 }
 
 skill=".claude/skills/repo-ci-baseline"
+# The two checkers the gate runs (tests/check-issue-refs.sh and tests/check-git-status.sh, C# file-based apps, ADR 0017), built once from the
+# skill's tests/ folder into this run's own: each throwaway repo's tests/<checker>.sh runs the dll with this dotnet, by its absolute path, so a
+# gate run starts it in a twentieth of a second, builds nothing, holds no .cs file for its own C# step to check, and runs under a PATH that has no dotnet.
+checkers="$work/checkers"
+checker_dotnet="$(command -v dotnet)" || {
+  echo "gate.test.sh: dotnet isn't on PATH: the gate's checkers run on the .NET SDK global.json names" >&2
+  exit 1
+}
+for checker in check-issue-refs check-git-status; do
+  (cd "$here/$skill/tests" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 \
+    dotnet build "$checker.cs" --artifacts-path "$checkers" -p:UseSharedCompilation=false > "$work/$checker-build.log" 2>&1) \
+    && [[ -f "$checkers/bin/$checker.cs/debug/$checker.dll" ]] || {
+    cat "$work/$checker-build.log" >&2
+    echo "gate.test.sh: the build of $skill/tests/$checker.cs failed" >&2
+    exit 1
+  }
+done
 copies=(.github/hooks/pre-commit .github/hooks/pre-push .github/hooks/post-checkout scripts/check-branch-name.sh .github/workflows/claude-review.yml .github/workflows/pr-automerge.yml .github/workflows/pr-review-submitted.yml .github/scripts/post_claude_review.py .github/ISSUE_TEMPLATE/bug_report.md .github/ISSUE_TEMPLATE/feature_request.md .github/ISSUE_TEMPLATE/config.yml .github/pull_request_template.md .github/workflows/pr-title.yml scripts/check-pr-title.sh .github/workflows/lint-markdown.yml .github/workflows/lint-yaml.yml .github/workflows/lint-actions.yml scripts/review.sh scripts/lint-edited-file.sh .sandcastle/lib/review-ledger.mts .sandcastle/lib/security-record.mts .sandcastle/lib/errors.mts .sandcastle/lib/host-limit.mts .sandcastle/lib/plain-text.mts .sandcastle/lib/review-ledger.test.mts .sandcastle/lib/security-record.test.mts .sandcastle/lib/plain-text.test.mts .claude/skills/pre-push-review/SKILL.md .claude/skills/pre-push-review/lenses.md .claude/skills/pre-push-review/review-bar.md .claude/agents/pre-push-reviewer.md .security/README.md .editorconfig .claude/rules/script-edits.md global.json)
 
 # A repo shaped like the Factory: gate.sh, the Template's Owned originals, matching copies, and a stub test.sh that records
@@ -59,7 +76,10 @@ new_repo() {
   cp -p "$here/.yamllint.yml" "$here/.markdownlint-cli2.jsonc" "$repo/"
   cp -p "$here/$skill/template/owned/.markdownlint-cli2.jsonc" "$repo/$skill/template/owned/"
   mkdir -p "$repo/$skill/tests"
-  cp -p "$here/$skill/tests/check-issue-refs.py" "$here/$skill/tests/check-git-status.sh" "$here/$skill/tests/check-git-status.py" "$repo/$skill/tests/"
+  local checker
+  for checker in check-issue-refs check-git-status; do
+    printf '#!/usr/bin/env bash\nexec "%s" "%s" "$@"\n' "$checker_dotnet" "$checkers/bin/$checker.cs/debug/$checker.dll" > "$repo/$skill/tests/$checker.sh"
+  done
   cat > "$repo/$skill/test.sh" << 'STUB'
 #!/usr/bin/env bash
 touch "$(dirname "${BASH_SOURCE[0]}")/ran"
@@ -803,8 +823,7 @@ check "a mktemp that fails for the build folder fails the step, saying so, and b
 
 # A bare git status --porcelain in an Owned script fails the full gate and --quick, before test.sh.
 repo11="$(new_repo git-status)"
-mkdir -p "$repo11/$skill/tests" "$repo11/$skill/template/owned/scripts"
-cp -p "$here/$skill/tests/check-git-status.sh" "$repo11/$skill/tests/"
+mkdir -p "$repo11/$skill/template/owned/scripts"
 # shellcheck disable=SC2016 # the script's own text
 printf '%s\n' '[[ -z "$(git status --porcelain)" ]] || exit 1' > "$repo11/$skill/template/owned/scripts/guard.sh"
 GATE_ARGS=--quick run "$repo11"
@@ -863,8 +882,10 @@ check "--sync drops the execute bit where the Template's original lacks it" "$([
 run "$repo"
 check "the gate passes after that --sync" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
 
-# The issue-reference step fails closed: no python3, or a checker that can't check, fails the gate with its own message and doesn't read as a pass.
-repo="$(new_repo no-python)"
+# The issue-reference step fails closed: no dotnet for the checker (its real wrapper, which then exits 2), or a checker that can't check, fails the
+# gate with its own message and doesn't read as a pass.
+repo="$(new_repo no-dotnet)"
+cp -p "$here/$skill/tests/check-issue-refs.sh" "$repo/$skill/tests/"
 mkdir -p "$work/nopy"
 for tool in bash cat cmp dirname env git markdownlint-cli2 node pnpm rm yamllint; do
   tool_path="$(command -v "$tool" 2> /dev/null || true)"
@@ -872,11 +893,15 @@ for tool in bash cat cmp dirname env git markdownlint-cli2 node pnpm rm yamllint
 done
 status=0
 (cd "$repo" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 PATH="$work/nopy" bash scripts/gate.sh > "$repo/out" 2>&1) || status=$?
-check "a missing python3 fails the gate and says so" "$([[ $status == 1 ]] && grep -q 'python3 not found' "$repo/out" && echo 0 || echo 1)"
-repo="$(new_repo broken-checker)"
-printf 'import sys\nsys.exit(2)\n' > "$repo/$skill/tests/check-issue-refs.py"
-run "$repo"
-check "a checker that fails without checking fails the gate with its own message" "$([[ $status == 1 && $ran == no ]] && grep -q 'failed (exit 2) without checking' "$repo/out" && echo 0 || echo 1)"
+check "a missing dotnet fails the gate and says so" \
+  "$([[ $status == 1 ]] && grep -q "dotnet isn't on PATH" "$repo/out" && grep -q 'check-issue-refs.sh failed (exit 2) without checking' "$repo/out" && echo 0 || echo 1)"
+for checker in check-issue-refs check-git-status; do
+  repo="$(new_repo "broken-$checker")"
+  printf '#!/usr/bin/env bash\nexit 2\n' > "$repo/$skill/tests/$checker.sh"
+  run "$repo"
+  check "a $checker that fails without checking fails the gate with its own message" \
+    "$([[ $status == 1 && $ran == no ]] && grep -q "$checker.sh failed (exit 2) without checking" "$repo/out" && echo 0 || echo 1)"
+done
 
 # What gates a push never passes --quick or --sync (--sync runs no check at all): the pre-push hook and the Factory's CI call the gate with no argument.
 check "the pre-push hook runs the gate with no argument" "$(grep -E 'scripts/gate\.sh' "$here/.github/hooks/pre-push" | grep -vE '^#' | grep -qE 'gate\.sh"?$' && echo 0 || echo 1)"

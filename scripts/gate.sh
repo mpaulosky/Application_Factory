@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The Application Factory's pre-push gate, run by .github/hooks/pre-push (a copy of the Template's) and safe to run by hand.
 # The Factory isn't a .NET repo, so its gate is what its CI runs: first this script's own test and the review's three stand-alone tests (they install
-# the packages with pnpm), then that its copies of Template files haven't drifted from the Template (ADR 0006), then that no Owned file has a bare #N,
-# then that no Owned script reads git status --porcelain without --untracked-files (tests/check-git-status.sh), then the Markdown and YAML lint, then shellcheck of the shell files the branch changes, then that every shell file is formatted as shfmt formats it, then ruff over every Python file, then dotnet format whitespace of every C# file and a build of every C# script with warnings as errors (ADR 0017), then that the branch passed the local review (scripts/review.sh check, ADR 0010; GATE_SKIP_REVIEW=1 skips it),
+# the packages with pnpm), then that its copies of Template files haven't drifted from the Template (ADR 0006), then that no Owned file has a bare #N (tests/check-issue-refs.sh),
+# then that no Owned script reads git status --porcelain without --untracked-files (tests/check-git-status.sh; both are C# file-based apps, ADR 0017), then the Markdown and YAML lint, then shellcheck of the shell files the branch changes, then that every shell file is formatted as shfmt formats it, then ruff over every Python file, then dotnet format whitespace of every C# file and a build of every C# script with warnings as errors (ADR 0017), then that the branch passed the local review (scripts/review.sh check, ADR 0010; GATE_SKIP_REVIEW=1 skips it),
 # then the repo-ci-baseline skill's test.sh (skipped when it already passed on the same clean tree and .NET SDK; GATE_NO_CACHE=1 runs it). This script is the Factory's own, not a copy of the Template's scripts/gate.sh.
 
 # GATE_PART=self|review|static|template|sandcastle runs one part of this gate, which is how CI runs a part per job (ADR 0012, ADR 0013): self is this script's own test, review the
@@ -162,19 +162,17 @@ run_static() {
   echo "${#copies[@]} copies match the Template."
 
   # test.sh's issue-reference rule (a bare #N in an Owned file), run here too so --quick catches it and not only the template part (test.sh).
+  # Both checkers are C# file-based apps (ADR 0017) that their wrappers run with dotnet run from the checker's own folder, which builds one on its
+  # first run in a worktree (about a second; this part runs each once). A wrapper with no dotnet on PATH exits 2, saying so.
   echo -e "\n${CYAN}▶ Issue references in Owned files${RESET}"
-  # Exit 1 is a bare #N (the checker printed it); anything else (2: a folder, file or directory it could not check) is the check itself failing, and fails the gate too. An uncaught Python error also exits 1, with its traceback above.
-  if ! command -v python3 > /dev/null 2>&1; then
-    echo -e "${RED}❌ python3 not found: the issue-reference check needs it.${RESET}" >&2
-    exit 1
-  fi
+  # Exit 1 is a bare #N (the checker printed it); anything else (2: a folder, file or directory it could not check, a crash, or no dotnet) is the check itself failing, and fails the gate too.
   refs_rc=0
-  python3 -I "$skill/tests/check-issue-refs.py" "$owned" || refs_rc=$?
+  bash "$skill/tests/check-issue-refs.sh" "$owned" || refs_rc=$?
   if ((refs_rc == 1)); then
     echo -e "${RED}❌ Write issue references in Owned files as mpaulosky/dotfiles#N (or <Repo>#N), not a bare #N.${RESET}" >&2
     exit 1
   elif ((refs_rc != 0)); then
-    echo -e "${RED}❌ check-issue-refs.py failed (exit $refs_rc) without checking: see its output above.${RESET}" >&2
+    echo -e "${RED}❌ check-issue-refs.sh failed (exit $refs_rc) without checking: see its output above.${RESET}" >&2
     exit 1
   fi
 
