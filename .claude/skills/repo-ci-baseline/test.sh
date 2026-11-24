@@ -874,6 +874,10 @@ HALF
   printf '<configuration>\n\t<auditSources>\n\t\t<clear />\n\t\t<add key="nuget.org"\n\t\t\tvalue="https://api.nuget.org/v3/index.json" />\n\t</auditSources>\n</configuration>\n' \
     > "$md_tmp/audit.config"
   audit_sources_nuget_only "$md_tmp/audit.config" > /dev/null || fail "the auditSources check refuses a tab-indented config with the add's attributes on two lines"
+  # Comments inside the element, one with hyphens in it and one hiding a second feed, are dropped, so the element still passes.
+  printf '<configuration><auditSources><clear /><!-- nuget-only: audit -->%s /><!-- <add key="other" value="https://other.example/v3/index.json" /> --></auditSources></configuration>\n' \
+    "$nuget_org" > "$md_tmp/audit.config"
+  audit_sources_nuget_only "$md_tmp/audit.config" > /dev/null || fail "the auditSources check refuses a config with comments, one hyphenated, inside the element"
   for wrong in \
     "<!-- <auditSources><clear />$nuget_org /></auditSources> -->" \
     "<auditSources><clear />$nuget_org /><add key=\"other\" value=\"https://other.example/v3/index.json\" /></auditSources>" \
