@@ -1,6 +1,7 @@
 # Dependabot version updates for the Factory (ADR 0009). Its own file, not the Template's Seed: the Factory has GitHub Actions, the local review's npm packages (ADR 0010)
 # and the Template's hashed Python test pins (requirements-tests.txt, a pip block; ADR 0009's Update notes) to update, and the Template's Owned
-# global.json, the .NET SDK every Application builds with, and the Factory's copy of it (a dotnet-sdk block; mpaulosky/Application_Factory#103, ADR 0017).
+# global.json, the .NET SDK every Application builds with, and the Factory's copy of it (a dotnet-sdk block; mpaulosky/Application_Factory#103, ADR 0017),
+# and the C# test project's packages (a nuget block).
 # For GitHub Actions and the SDK both directories are listed so one PR bumps an action in a copied workflow and in its source under template/owned/ together,
 # or the gate's drift check would fail the copy. Every label below must exist in the repo.
 ---
@@ -121,6 +122,34 @@ updates:
     groups:
       # Minor and patch only: a major bump arrives as its own PR to look at.
       minor-and-patch-pip:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # The xUnit v3 project for the C# scripts (ADR 0017). Its shield files turn central package management off, so the versions are in
+  # Scripts.Tests.csproj itself. It is the Factory's own, not Owned, so a bump reaches no Application.
+  - package-ecosystem: "nuget"
+    directory: "/.claude/skills/repo-ci-baseline/tests/Scripts.Tests"
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "16:00"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    # Wait a week before proposing a new release, so a compromised or broken one is usually caught upstream first.
+    cooldown:
+      default-days: 7
+    labels:
+      - "nuget"
+      - "dependencies"
+    groups:
+      # Minor and patch only: a major bump arrives as its own PR to look at.
+      minor-and-patch-nuget:
         patterns:
           - "*"
         update-types:
