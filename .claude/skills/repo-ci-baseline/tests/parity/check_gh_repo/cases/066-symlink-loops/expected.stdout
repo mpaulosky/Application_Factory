@@ -1,0 +1,4 @@
+scripts/a: a symlink to nothing
+scripts/b: a symlink to nothing
+scripts/real.bash:1: gh pr view 1
+scripts/self: a symlink to nothing

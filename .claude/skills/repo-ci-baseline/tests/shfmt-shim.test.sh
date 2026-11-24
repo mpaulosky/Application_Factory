@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for tests/parity/check_gh_repo/shfmt-shim.sh, the shfmt the check_gh_repo parity suite runs the checker with: it hands a call
-# to the real shfmt only from an empty folder with nothing but PATH set, answers --version from the checker's .shfmt-version and
-# any other call from its .shfmt-parse, and finds the real shfmt past any link to itself.
+# to the real shfmt only from an empty folder with nothing but PATH set, answers --version from the checker's .shfmt-version (or
+# fails it from .shfmt-version-exit) and any other call from its .shfmt-parse, and finds the real shfmt past any link to itself.
 # check() evals its condition string later, so the single quotes are deliberate and the variables it reads look unused to shellcheck.
 # shellcheck disable=SC2016,SC2034
 set -euo pipefail
@@ -34,7 +34,7 @@ done
   exit 2
 }
 real_dir="$(dirname "$real")"
-mkdir -p "$work/shim" "$work/shim2" "$work/empty" "$work/full" "$work/dotonly" "$work/checker" "$work/twolines" "$work/parse" "$work/parse-fails"
+mkdir -p "$work/shim" "$work/shim2" "$work/empty" "$work/full" "$work/dotonly" "$work/checker" "$work/twolines" "$work/parse" "$work/parse-fails" "$work/version-fails"
 ln -s "$shim_file" "$work/shim/shfmt"
 ln -s "$shim_file" "$work/shim2/shfmt"
 touch "$work/full/file" "$work/dotonly/.hidden"
@@ -51,12 +51,13 @@ printf 'v3.13.1\n' > "$work/checker/.shfmt-version"
 printf 'v3.13.1\nv3.14.0\n' > "$work/twolines/.shfmt-version"
 printf '0\nnot a tree\nsecond line\n' > "$work/parse/.shfmt-parse"
 printf '3\nboom\n' > "$work/parse-fails/.shfmt-parse"
+printf '5\n' > "$work/version-fails/.shfmt-version-exit"
 path="$work/shim:$real_dir:/usr/bin:/bin"
 shim() { (cd "$1" && shift && env -i PATH="$path" shfmt "$@"); }
 # from_checker <folder> <stdin> <arg>...: the shim run from an empty folder by a process whose own folder is <folder>, as the checker runs it;
 # prints its stdout, then its stderr and exit code on a line of their own.
 from_checker() {
-  (cd "$1" && python3 -c 'import subprocess, sys
+  (cd "$1" && python3 -I -c 'import subprocess, sys
 r = subprocess.run(["shfmt", *sys.argv[4:]], input=sys.argv[3], cwd=sys.argv[1], env={"PATH": sys.argv[2]}, capture_output=True, text=True)
 sys.stdout.write(r.stdout + "|" + r.stderr.strip() + "|" + str(r.returncode))' "$work/empty" "$path" "$2" "${@:3}")
 }
@@ -101,6 +102,10 @@ if [[ -d /proc/self ]]; then
   check "the caller's .shfmt-parse answers any other call: exit 0, the rest on stdout" '[[ "$out" == "not a tree"$'"'"'\n'"'"'"second line"$'"'"'\n'"'"'"||0" ]]'
   out="$(from_checker "$work/parse-fails" $'a  b\n' -ln bash --to-json)"
   check "and another exit code with the rest on stderr" '[[ "$out" == "|boom|3" ]]'
+  out="$(from_checker "$work/version-fails" "" --version)"
+  check "the caller's .shfmt-version-exit makes --version fail with its code" '[[ "$out" == "|shfmt-shim: --version fails, as .shfmt-version-exit says|5" ]]'
+  out="$(from_checker "$work/version-fails" $'a  b\n' -)"
+  check "but not any other call" '[[ "$out" == "a b"$'"'"'\n'"'"'"||0" ]]'
   out="$(from_checker "$work/parse" "" --version)"
   check "but not --version" '[[ "$out" == "$("$real" --version)"$'"'"'\n'"'"'"||0" ]]'
 else

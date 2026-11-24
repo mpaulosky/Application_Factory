@@ -66,7 +66,7 @@
 #
 # Exit 0 when every case passes, 1 when one fails, 2 on a usage or setup error (a case missing a file or holding a bad
 # one, a command that can't be run, a temporary folder that can't be made). Needs bash 4.4 or later, coreutils (mktemp,
-# mkdir, rm, ln, cp, cat, head, sort, env, basename, dirname, timeout), findutils (find), diff, grep and sed, and git 2.32 or later
+# mkdir, rm, ln, cp, cat, head, sort, env, basename, dirname, timeout), findutils (find), a diff with --no-dereference (GNU diffutils 3.3 or later), grep and sed, and git 2.32 or later
 # (GIT_CONFIG_GLOBAL) for a case with a setup.sh; the fake gh needs bash and cat, and mktemp, rm and jq 1.6 or later (for walk) for a REST call with --jq.
 set -euo pipefail
 

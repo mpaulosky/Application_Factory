@@ -1,0 +1,1 @@
+^check_gh_repo[^:]*: shfmt --version failed with exit 5.*$

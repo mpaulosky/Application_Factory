@@ -4,7 +4,7 @@
 (`tests/parity.test.sh`) says what a case holds. It stands in for the white-box pytest tests (`template/owned/.github/scripts/tests/test_check_gh_repo.py`), which a port can't run.
 
 Run it, against the Python or a port, and record it (`PARITY_RECORD=1`) with the shim first on `PATH`, under the name `shfmt`, as `test.sh` does; without it the
-cases that stand for a shfmt the checker refuses (`013` to `015` and `061` to `063`) fail, the ones that stand for a release it accepts (`016`, `060`) pass without
+cases that stand for a shfmt the checker refuses (`013` to `015` and `061` to `065`) fail, the ones that stand for a release it accepts (`016`, `060`) pass without
 testing anything, and nothing checks how the checker runs shfmt:
 
 ```bash
@@ -14,7 +14,7 @@ PATH="$shim:$PATH" .claude/skills/repo-ci-baseline/tests/parity.test.sh check_gh
 
 `shfmt-shim.sh` hands each call to the real shfmt (v3.14 or a later v3, the next one on `PATH`), after checking that the checker runs it from an empty folder with nothing but
 `PATH` in its environment. A case whose folder holds `.shfmt-version` gets that file's first line as shfmt's `--version`, so the suite can stand for an older or malformed
-release, and one whose folder holds `.shfmt-parse` gets every other call answered from it (its first line the exit code, the rest the output), so it can stand for a shfmt that
+release (or `.shfmt-version-exit`, whose first line `--version` exits with), and one whose folder holds `.shfmt-parse` gets every other call answered from it (its first line the exit code, the rest the output), so it can stand for a shfmt that
 fails or prints no syntax tree. The shim reads the checker's folder through `/proc`, so those cases need Linux; `tests/shfmt-shim.test.sh` tests the shim itself.
 
 ## Where the cases come from
@@ -29,6 +29,8 @@ fails or prints no syntax tree. The shim reads the checker's folder through `/pr
 - `059`: scripts that aren't UTF-8, and control bytes.
 - `060` to `063`, written by hand after the review: shfmt v3.14.0, the oldest release accepted, and a shfmt that fails to parse, prints no syntax tree, or prints JSON
   that isn't an object (exit 2).
+- `064` to `069`, written by hand after a second review: a shfmt whose `--version` fails, a syntax tree of a shape the checker doesn't read (exit 2), links to
+  themselves and to each other, `scripts/` itself a link out of the repo or to nothing, and a link at an Owned path to a file that isn't Owned.
 
 ## Decided
 

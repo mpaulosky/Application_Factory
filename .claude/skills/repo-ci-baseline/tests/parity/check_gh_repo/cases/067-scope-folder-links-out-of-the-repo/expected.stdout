@@ -1,0 +1,2 @@
+scripts: a symlink to a target outside the repo
+.github/ci/a.bash:1: gh pr view 1

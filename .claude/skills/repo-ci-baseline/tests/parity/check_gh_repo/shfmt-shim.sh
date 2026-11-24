@@ -6,7 +6,8 @@
 #     no file or variable of the repository it checks reaches shfmt. Otherwise, or when it can't list the folder or the
 #     environment, it exits 97 with what it saw, which the checker reports as a failed shfmt;
 #   - when the folder the checker runs from (read through /proc, so only on Linux) holds .shfmt-version, it answers --version
-#     with that file's first line instead, so a case can stand for an older or a malformed shfmt release;
+#     with that file's first line instead, so a case can stand for an older or a malformed shfmt release, and when it holds
+#     .shfmt-version-exit, --version exits with that file's first line as its code;
 #   - and when that folder holds .shfmt-parse, it answers every other call from it instead of parsing: its first line is the
 #     exit code, and the rest goes to stdout when that is 0, to stderr otherwise, so a case can stand for a shfmt that fails
 #     or prints no syntax tree.
@@ -40,6 +41,10 @@ if [[ -n "$extra" ]]; then
 fi
 
 parent_cwd="$(readlink "/proc/$PPID/cwd" 2> /dev/null || true)"
+if [[ -n "$parent_cwd" && "${1:-}" == --version && -f "$parent_cwd/.shfmt-version-exit" ]]; then
+  echo "shfmt-shim: --version fails, as .shfmt-version-exit says" >&2
+  exit "$(head -n 1 "$parent_cwd/.shfmt-version-exit")"
+fi
 if [[ -n "$parent_cwd" && "${1:-}" == --version && -f "$parent_cwd/.shfmt-version" ]]; then
   head -n 1 "$parent_cwd/.shfmt-version"
   exit 0

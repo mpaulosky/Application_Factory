@@ -1,0 +1,1 @@
+^check_gh_repo[^:]*: export GH_REPO before the first gh command in a script; in a skill write GH_REPO=owner/repo \(or "\$\{repo:\?\}"\) before each gh command, or give --repo; gh repo's subcommands take the repository first\..*$
