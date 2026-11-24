@@ -1,0 +1,24 @@
+
+o/app
+  DRIFT       repo settings: allow_merge_commit: True → False, squash_merge_commit_title: 'COMMIT_OR_PR_TITLE' → 'PR_TITLE', delete_branch_on_merge: None → True, allow_auto_merge: None → True
+  DRIFT       secret_scanning: disabled → enabled
+  DRIFT       secret_scanning_push_protection: None → enabled
+  DRIFT       Dependabot alerts: disabled → enabled
+  DRIFT       Dependabot security updates: disabled → enabled
+  DRIFT       CodeQL default setup: configured → not-configured (codeql-analysis.yml runs CodeQL)
+  DRIFT       Actions token: default_workflow_permissions: 'write' → 'read', can_approve_pull_request_reviews: False → True
+  MANUAL      pinned actions: not required yet; pin these to a commit SHA first: actions/cache@v4, actions/setup-node@v4
+  DRIFT       ruleset main-rules: conditions: {"ref_name": {"include": ["refs/heads/main", "~DEFAULT_BRANCH"], "exclude": []}} → {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}}; bypass_actors: [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "pull_request"}] → []; rule code_quality: remove; pull_request.allowed_merge_methods: ["rebase", "squash"] → ["squash"]; pull_request.required_review_thread_resolution: true → false; required_status_checks.required_status_checks: [["All Tests Passed", 15368], ["Build Solution", 15368], ["Gone Check", 15368], ["PR title", null]] → [["All Tests Passed", 15368], ["Build Solution", 15368], ["PR title", 15368], ["markdownlint", 15368]]
+  LEGACY      ruleset dev-rules: legacy ruleset; --remove-legacy deletes it
+  INFO        ruleset release-rules: not managed; left as it is
+  INFO        required checks: kept outside the standard while a workflow still reports them: All Tests Passed
+  LEGACY      branch protection on main: classic protection alongside main-rules; --remove-legacy deletes it
+  MANUAL      review cap: cap 5; re-Apply the Template for the 3-round cap
+  DRIFT       label docs-only: color or description → the standard's
+  DRIFT       label review:claude: missing → created
+  DRIFT       label squad: retired label → deleted
+  DRIFT       label squad:mal: retired label → deleted
+  MANUAL      secret RELEASE_PR_PAT: missing; add it in the repo's Actions secrets
+  OK          secret CLAUDE_CODE_OAUTH_TOKEN: present
+
+Not at the standard: see DRIFT, MANUAL and LEGACY above.

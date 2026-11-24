@@ -9,6 +9,7 @@
 #
 #   gh api graphql -f query=<query> [-f|-F <variable>=<value>]...   variables: owner, name, id, cursor
 #   gh api <path> [--paginate] [--jq <expression>]                  a REST GET
+#   gh api -X <METHOD> <path> [-H <header>]... [--input -]          a REST call of any method, its body (--input -) on stdin
 #   gh pr ready|update-branch <n> -R <owner/repo>
 #   gh pr comment <n> -R <owner/repo> --body <text>
 #   gh pr edit <n> -R <owner/repo> --add-reviewer|--add-label <value>
@@ -21,7 +22,8 @@
 #   events.<id>[.<cursor>]        a query holding timelineItems( (a PR's label and review-request events)
 #   comments.<id>[.<cursor>]      a query holding comments(last: (a PR's comments, paged backwards)
 #   threads.<id>                  a query holding reviewThreads( and comments(first: (a PR's threads with their comments)
-#   rest.<path>                   gh api <path>, with or without --paginate and --jq (the path's query string is in it)
+#   rest.<path>                   gh api <path>, with or without --paginate and --jq (the path's query string is in it), or -X GET
+#   rest.<METHOD>.<path>          gh api -X <METHOD> <path>, for any METHOD but GET (rest.PATCH.repos_o_app)
 #   pr.<sub>.<owner>.<name>.<n>   gh pr <sub> (a view's key ends .<fields> too: pr.view.<owner>.<name>.<n>.<fields>)
 #
 # A cursor given but empty is part of the key too (comments.<id>.), so it never passes for a first page. A cursor of digits
@@ -36,10 +38,13 @@
 # with sorted keys and Go's escapes; see the jq call for the one exception), so the calls that read one path through different
 # expressions share its fixture; --paginate is taken as given, the fixture being every page at once.
 #
-# Each call is logged as its key; a `gh pr` call, and a REST call with --paginate or --jq, as its key, a space and its whole
+# Each call is logged as its key; a `gh pr` call, and a REST call with --paginate, --jq, -X or -H, as its key, a space and its whole
 # argv, each argument as it is or, when it
 # holds anything but letters, digits and _ . / : @ , + = # -, in double quotes with \ " and line breaks, tabs and carriage
-# returns written \\ \" \n \t \r, so a line holds one call and the body a comment carries is compared too.
+# returns written \\ \" \n \t \r, so a line holds one call and the body a comment carries is compared too. A REST call with
+# --input - reads one JSON value from stdin, and its line ends with " <<< " and that body as canonical JSON (jq -cS: compact,
+# every object's keys sorted), quoted as an argument is, so two implementations that serialize the same body differently log
+# the same line; stdin that isn't one JSON value is unmatched, and jq is needed for it.
 #
 # Exit 97 is the fake's own: a call no fixture answers, an argument it doesn't know or a fixture it can't read (each
 # logged as one line, "UNMATCHED <what was asked>"), or FAKE_GH_DIR or FAKE_GH_LOG unset. A fixture set is complete, so a call nobody
@@ -135,12 +140,25 @@ else
   shift
 
   if [[ "${1:-}" != graphql ]]; then
-    [[ $# -ge 1 && -n "$1" && "$1" != -* ]] || unmatched "gh api $*"
-    key="rest.$(part "$1")"
-    shift
-    paginate="" jq="" has_jq=""
+    # The path is the one argument that isn't an option, before, between or after them, as gh takes it.
+    path="" paginate="" jq="" has_jq="" method="" headers="" input=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
+        -X)
+          [[ $# -ge 2 && -z "$method" && "$2" =~ ^[A-Z]+$ ]] || unmatched "gh $all"
+          method="$2"
+          shift 2
+          ;;
+        -H)
+          [[ $# -ge 2 && -n "$2" ]] || unmatched "gh $all"
+          headers=1
+          shift 2
+          ;;
+        --input)
+          [[ $# -ge 2 && -z "$input" && "$2" == - ]] || unmatched "gh $all"
+          input=1
+          shift 2
+          ;;
         --paginate)
           [[ -z "$paginate" ]] || unmatched "gh $all"
           paginate=1
@@ -151,14 +169,31 @@ else
           jq="$2" has_jq=1
           shift 2
           ;;
-        *) unmatched "gh $all" ;;
+        *)
+          [[ -z "$path" && -n "$1" && "$1" != -* ]] || unmatched "gh $all"
+          path="$1"
+          shift
+          ;;
       esac
     done
-    if [[ -n "$paginate$has_jq" ]]; then
+    [[ -n "$path" ]] || unmatched "gh $all"
+    if [[ -z "$method" || "$method" == GET ]]; then
+      key="rest.$(part "$path")"
+    else
+      key="rest.$method.$(part "$path")"
+    fi
+    if [[ -n "$paginate$has_jq$method$headers$input" ]]; then
       entry="$key gh"
       for arg in "${argv[@]}"; do
         entry+=" $(encode "$arg")"
       done
+    fi
+    if [[ -n "$input" ]]; then
+      command -v jq > /dev/null || unmatched "$key (jq, which a call with --input needs, is not on PATH)"
+      # -s reads every value on stdin into one list, so a body of none, or of two, is refused rather than logged as one.
+      body="$(jq -cS -s 'if length == 1 then .[0] else error("not one value") end' 2> /dev/null)" \
+        || unmatched "$key (its --input body is not one JSON value)"
+      entry+=" <<< $(encode "$body")"
     fi
   else
     shift

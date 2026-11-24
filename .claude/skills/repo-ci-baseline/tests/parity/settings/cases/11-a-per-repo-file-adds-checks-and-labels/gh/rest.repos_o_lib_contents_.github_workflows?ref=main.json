@@ -1,0 +1,22 @@
+[
+  {
+    "name": "ci.yml",
+    "path": ".github/workflows/ci.yml",
+    "type": "file"
+  },
+  {
+    "name": "pr-automerge.yml",
+    "path": ".github/workflows/pr-automerge.yml",
+    "type": "file"
+  },
+  {
+    "name": "sandcastle.yml",
+    "path": ".github/workflows/sandcastle.yml",
+    "type": "file"
+  },
+  {
+    "name": "README.md",
+    "path": ".github/workflows/README.md",
+    "type": "file"
+  }
+]

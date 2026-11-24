@@ -1,0 +1,18 @@
+{
+  "required_checks": [
+    "Sandcastle",
+    "Build Solution"
+  ],
+  "labels": [
+    {
+      "name": "sandcastle",
+      "color": "C5DEF5",
+      "description": "Sandcastle works this issue"
+    },
+    {
+      "name": "docs-only",
+      "color": "000000",
+      "description": "ignored: the standard has it"
+    }
+  ]
+}

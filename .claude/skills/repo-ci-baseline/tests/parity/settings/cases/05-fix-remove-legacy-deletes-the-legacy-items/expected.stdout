@@ -1,0 +1,41 @@
+
+o/app
+  OK          repo settings: merge, branch and forking settings
+  OK          secret_scanning: enabled
+  OK          secret_scanning_push_protection: enabled
+  OK          Dependabot alerts: enabled
+  OK          Dependabot security updates: enabled
+  OK          CodeQL default setup: not-configured
+  OK          Actions token: read by default; may create PRs
+  OK          pinned actions: required
+  OK          ruleset main-rules: matches the standard
+  LEGACY      ruleset dev-rules: legacy ruleset; --remove-legacy deletes it
+  INFO        ruleset release-rules: not managed; left as it is
+  LEGACY      branch protection on main: classic protection alongside main-rules; --remove-legacy deletes it
+  OK          review cap: pr-automerge.yml stops waiting for a review of the head after 3 rounds
+  OK          label docs-only: present
+  OK          label review:claude: present
+  OK          secret RELEASE_PR_PAT: present
+  OK          secret CLAUDE_CODE_OAUTH_TOKEN: present
+  applying 2 change(s)
+  applied     ruleset dev-rules
+  applied     branch protection on main
+
+o/app
+  OK          repo settings: merge, branch and forking settings
+  OK          secret_scanning: enabled
+  OK          secret_scanning_push_protection: enabled
+  OK          Dependabot alerts: enabled
+  OK          Dependabot security updates: enabled
+  OK          CodeQL default setup: not-configured
+  OK          Actions token: read by default; may create PRs
+  OK          pinned actions: required
+  OK          ruleset main-rules: matches the standard
+  INFO        ruleset release-rules: not managed; left as it is
+  OK          review cap: pr-automerge.yml stops waiting for a review of the head after 3 rounds
+  OK          label docs-only: present
+  OK          label review:claude: present
+  OK          secret RELEASE_PR_PAT: present
+  OK          secret CLAUDE_CODE_OAUTH_TOKEN: present
+
+All repos match the standard.

@@ -280,6 +280,39 @@ cp "$skill/github/stub.py" "$skill/github/cs.py"
 PATH="$work/dotnet-stub:$PATH" runner 0 "a .py beside the .cs" "cs: 2 case(s) pass against: python3 $skill/github/cs.py" cs
 [[ ! -s "$work/dotnet.log" ]] || fail "a suite with a .py beside its .cs built or ran the C#: $(cat "$work/dotnet.log")"
 rm -rf "$skill/tests/parity/cs" "$skill/github/cs.cs" "$skill/github/cs.py" "$cases/c1"
+# A suite's github/ is laid over a copy of the skill's github/, which the reference runs from: the copy holds the overlay's files over the
+# skill's own, no tests/, and the nearest global.json above github/; a command naming a skill wrapper the copy holds runs the copy's. The
+# reference prints what it finds beside it, so a run from the skill's own github/ (whose data.txt says "skill") fails the case.
+mkdir -p "$skill/tests/parity/ov/cases/c1/gh" "$skill/tests/parity/ov/github" "$skill/github/tests"
+echo skill > "$skill/github/data.txt"
+echo overlay > "$skill/tests/parity/ov/github/data.txt"
+echo '{"sdk": "pinned"}' > "$work/global.json"
+cat > "$skill/github/ov.py" << EOF
+import os
+here = os.path.dirname(os.path.abspath(__file__))
+pin = os.path.join(here, "..", "global.json")
+print(open(os.path.join(here, "data.txt")).read().strip(), os.path.isdir(os.path.join(here, "tests")),
+      open(pin).read().strip() if os.path.exists(pin) else "no global.json", here.startswith("$skill/"))
+EOF
+# shellcheck disable=SC2016 # the wrapper's own $0 and $@, expanded when it runs
+printf '#!/usr/bin/env bash\nexec python3 "$(dirname -- "$0")/github/ov.py" "$@"\n' > "$skill/ov.sh"
+chmod +x "$skill/ov.sh"
+ov_case="$skill/tests/parity/ov/cases/c1"
+echo 'overlay False {"sdk": "pinned"} False' > "$ov_case/expected.stdout"
+echo 0 > "$ov_case/expected.code"
+: > "$ov_case/expected.calls"
+: > "$ov_case/expected.stderr"
+runner 0 "a suite with github/ runs its reference from a copy with the overlay" "ov: 1 case(s) pass against: python3 $skill/github/ov.py" ov
+runner 0 "a command naming a skill wrapper runs the copy's" "ov: 1 case(s) pass against: $skill/ov.sh" ov "$skill/ov.sh"
+(cd "$skill" && bash tests/parity.test.sh ov ./ov.sh < /dev/null > "$work/out" 2>&1) || fail "a wrapper named by a relative path didn't run the copy's: $(cat "$work/out")"
+[[ "$(cat "$skill/github/data.txt")" == skill && -z "$(find "$skill/github" -name '__pycache__')" ]] || fail "the overlay wrote into the skill's own github/"
+rm "$work/global.json"
+echo 'overlay False no global.json False' > "$ov_case/expected.stdout"
+runner 0 "with no global.json above github/, the copy has none" "ov: 1 case(s) pass against" ov
+rm -rf "$skill/tests/parity/ov/github"
+: > "$skill/tests/parity/ov/github"
+runner 2 "a suite's github/ that isn't a folder" "$skill/tests/parity/ov/github is not a folder." ov
+rm -rf "$skill/tests/parity/ov" "$skill/github/ov.py" "$skill/github/data.txt" "$skill/github/tests" "$skill/ov.sh"
 chmod -x "$fake"
 suite 2 "a fake gh that isn't executable" -- ./stub.sh || true
 chmod +x "$fake"
@@ -529,6 +562,35 @@ fake 97 '' "an unknown variable" api graphql -f query="$repo_q" -F owner=o -F na
 fake 97 '' "a flag with no value" api graphql -f
 fake 97 '' "a command other than api" pr list && logged "a command other than api" "UNMATCHED gh pr list"
 fake 97 '' "a REST call with more arguments" api repos/o/app --method POST
+
+# A REST call of any method (-X), with headers (-H) and a body on stdin (--input -): keyed by its method unless GET, logged with its whole
+# argv, and its body as canonical JSON, so two serializations of one body log the same line.
+echo '{"id":1}' > "$gh_dir/rest.PATCH.repos_o_app.json"
+echo 'gh: Not Found (HTTP 404)' > "$gh_dir/rest.repos_o_app_vulnerability-alerts.fail"
+accept="Accept: application/vnd.github+json"
+patch_logged="rest.PATCH.repos_o_app gh api -X PATCH repos/o/app -H \"$accept\" --input - <<< \"{\\\"a\\\":[1,true],\\\"b\\\":\\\"é\\\"}\""
+for body in '{"b": "é", "a": [1, true]}' $'{\n  "a": [1, true],\n  "b": "é"\n}'; do
+  : > "$gh_log"
+  code=0
+  FAKE_GH_DIR="$gh_dir" FAKE_GH_LOG="$gh_log" "$fake" api -X PATCH repos/o/app -H "$accept" --input - <<< "$body" > "$work/fout" 2> "$work/ferr" || code=$?
+  [[ $code -eq 0 && "$(cat "$work/fout")" == '{"id":1}' ]] || fail "fake gh, a PATCH with a body: exit $code, '$(cat "$work/fout")' ($(cat "$work/ferr"))"
+  logged "a PATCH's body, as canonical JSON" "$patch_logged"
+done
+fake 0 '{"id":1}' "options before the path" api -X PATCH -H "$accept" --input - repos/o/app <<< '{}'
+fake 0 '"rest.repos_o_app"' "-X GET has the plain key" api -X GET repos/o/app -H "$accept"
+logged "-X GET is logged with its argv" "rest.repos_o_app gh api -X GET repos/o/app -H \"$accept\""
+fake 1 '' "a .fail fixture for -X GET" api -X GET repos/o/app/vulnerability-alerts
+grep -qF 'HTTP 404' "$work/ferr" || fail "fake gh: a -X GET .fail fixture isn't printed on stderr"
+fake 97 '' "a body that isn't JSON" api -X PATCH repos/o/app --input - <<< 'not json'
+logged "a body that isn't JSON" "UNMATCHED rest.PATCH.repos_o_app (its --input body is not one JSON value)"
+fake 97 '' "a body of two values" api -X PATCH repos/o/app --input - <<< '{} {}'
+fake 97 '' "a body from a file" api -X PATCH repos/o/app --input body.json
+fake 97 '' "-X twice" api -X PATCH -X PUT repos/o/app
+fake 97 '' "a lower-case method" api -X patch repos/o/app
+fake 97 '' "-H with no value" api repos/o/app -H
+fake 97 '' "two paths" api repos/o/app repos/o/lib
+fake 97 '' "no path" api -X GET
+fake 97 '' "a method with no fixture" api -X DELETE repos/o/app && logged "a method with no fixture" "UNMATCHED rest.DELETE.repos_o_app"
 
 # A REST call with --paginate and --jq: real jq over the fixture, each result printed as gh prints it, and the whole argv logged.
 printf '%s\n' '[{"n":1,"draft":false,"t":"a\u2028b"},{"n":2,"draft":true,"t":"c"}]' > "$gh_dir/rest.repos_o_app_releases?per_page=100.json"

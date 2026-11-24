@@ -1,0 +1,8 @@
+[
+  {
+    "id": 3,
+    "name": "main-rules",
+    "target": "branch",
+    "enforcement": "active"
+  }
+]

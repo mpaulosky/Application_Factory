@@ -1,0 +1,104 @@
+{
+  "o/app": [
+    {
+      "area": "repo settings",
+      "status": "DRIFT",
+      "detail": "allow_merge_commit: True \u2192 False, squash_merge_commit_title: 'COMMIT_OR_PR_TITLE' \u2192 'PR_TITLE', delete_branch_on_merge: None \u2192 True, allow_auto_merge: None \u2192 True"
+    },
+    {
+      "area": "secret_scanning",
+      "status": "DRIFT",
+      "detail": "disabled \u2192 enabled"
+    },
+    {
+      "area": "secret_scanning_push_protection",
+      "status": "DRIFT",
+      "detail": "None \u2192 enabled"
+    },
+    {
+      "area": "Dependabot alerts",
+      "status": "DRIFT",
+      "detail": "disabled \u2192 enabled"
+    },
+    {
+      "area": "Dependabot security updates",
+      "status": "DRIFT",
+      "detail": "disabled \u2192 enabled"
+    },
+    {
+      "area": "CodeQL default setup",
+      "status": "DRIFT",
+      "detail": "configured \u2192 not-configured (codeql-analysis.yml runs CodeQL)"
+    },
+    {
+      "area": "Actions token",
+      "status": "DRIFT",
+      "detail": "default_workflow_permissions: 'write' \u2192 'read', can_approve_pull_request_reviews: False \u2192 True"
+    },
+    {
+      "area": "pinned actions",
+      "status": "MANUAL",
+      "detail": "not required yet; pin these to a commit SHA first: actions/cache@v4, actions/setup-node@v4"
+    },
+    {
+      "area": "ruleset main-rules",
+      "status": "DRIFT",
+      "detail": "conditions: {\"ref_name\": {\"include\": [\"refs/heads/main\", \"~DEFAULT_BRANCH\"], \"exclude\": []}} \u2192 {\"ref_name\": {\"include\": [\"~DEFAULT_BRANCH\"], \"exclude\": []}}; bypass_actors: [{\"actor_id\": 5, \"actor_type\": \"RepositoryRole\", \"bypass_mode\": \"pull_request\"}] \u2192 []; rule code_quality: remove; pull_request.allowed_merge_methods: [\"rebase\", \"squash\"] \u2192 [\"squash\"]; pull_request.required_review_thread_resolution: true \u2192 false; required_status_checks.required_status_checks: [[\"All Tests Passed\", 15368], [\"Build Solution\", 15368], [\"Gone Check\", 15368], [\"PR title\", null]] \u2192 [[\"All Tests Passed\", 15368], [\"Build Solution\", 15368], [\"PR title\", 15368], [\"markdownlint\", 15368]]"
+    },
+    {
+      "area": "ruleset dev-rules",
+      "status": "LEGACY",
+      "detail": "legacy ruleset; --remove-legacy deletes it"
+    },
+    {
+      "area": "ruleset release-rules",
+      "status": "INFO",
+      "detail": "not managed; left as it is"
+    },
+    {
+      "area": "required checks",
+      "status": "INFO",
+      "detail": "kept outside the standard while a workflow still reports them: All Tests Passed"
+    },
+    {
+      "area": "branch protection on main",
+      "status": "LEGACY",
+      "detail": "classic protection alongside main-rules; --remove-legacy deletes it"
+    },
+    {
+      "area": "review cap",
+      "status": "MANUAL",
+      "detail": "cap 5; re-Apply the Template for the 3-round cap"
+    },
+    {
+      "area": "label docs-only",
+      "status": "DRIFT",
+      "detail": "color or description \u2192 the standard's"
+    },
+    {
+      "area": "label review:claude",
+      "status": "DRIFT",
+      "detail": "missing \u2192 created"
+    },
+    {
+      "area": "label squad",
+      "status": "DRIFT",
+      "detail": "retired label \u2192 deleted"
+    },
+    {
+      "area": "label squad:mal",
+      "status": "DRIFT",
+      "detail": "retired label \u2192 deleted"
+    },
+    {
+      "area": "secret RELEASE_PR_PAT",
+      "status": "MANUAL",
+      "detail": "missing; add it in the repo's Actions secrets"
+    },
+    {
+      "area": "secret CLAUDE_CODE_OAUTH_TOKEN",
+      "status": "OK",
+      "detail": "present"
+    }
+  ]
+}

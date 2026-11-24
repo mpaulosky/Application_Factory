@@ -1,0 +1,51 @@
+
+o/app
+  DRIFT       repo settings: allow_merge_commit: True → False, allow_auto_merge: False → True
+  OK          secret_scanning: enabled
+  DRIFT       secret_scanning_push_protection: disabled → enabled
+  DRIFT       Dependabot alerts: disabled → enabled
+  DRIFT       Dependabot security updates: disabled → enabled
+  DRIFT       CodeQL default setup: configured → not-configured (codeql-analysis.yml runs CodeQL)
+  DRIFT       Actions token: default_workflow_permissions: 'write' → 'read'
+  DRIFT       pinned actions: not required → required
+  DRIFT       ruleset main-rules: missing → created
+  LEGACY      ruleset dev-rules: legacy ruleset; --remove-legacy deletes it
+  LEGACY      branch protection on main: classic protection; --remove-legacy deletes it once main-rules is active (run --fix twice)
+  OK          review cap: pr-automerge.yml stops waiting for a review of the head after 3 rounds
+  DRIFT       label docs-only: missing → created
+  DRIFT       label review:claude: color or description → the standard's
+  DRIFT       label squad:frodo: retired label → deleted
+  OK          secret RELEASE_PR_PAT: present
+  OK          secret CLAUDE_CODE_OAUTH_TOKEN: present
+  applying 11 change(s)
+  applied     repo settings
+  applied     secret_scanning_push_protection
+  applied     Dependabot alerts
+  applied     Dependabot security updates
+  applied     CodeQL default setup
+  applied     Actions token
+  applied     pinned actions
+  applied     ruleset main-rules
+  applied     label docs-only
+  applied     label review:claude
+  applied     label squad:frodo
+
+o/app
+  OK          repo settings: merge, branch and forking settings
+  OK          secret_scanning: enabled
+  OK          secret_scanning_push_protection: enabled
+  OK          Dependabot alerts: enabled
+  OK          Dependabot security updates: enabled
+  OK          CodeQL default setup: not-configured
+  OK          Actions token: read by default; may create PRs
+  OK          pinned actions: required
+  OK          ruleset main-rules: matches the standard
+  LEGACY      ruleset dev-rules: legacy ruleset; --remove-legacy deletes it
+  LEGACY      branch protection on main: classic protection alongside main-rules; --remove-legacy deletes it
+  OK          review cap: pr-automerge.yml stops waiting for a review of the head after 3 rounds
+  OK          label docs-only: present
+  OK          label review:claude: present
+  OK          secret RELEASE_PR_PAT: present
+  OK          secret CLAUDE_CODE_OAUTH_TOKEN: present
+
+Not at the standard: see DRIFT, MANUAL and LEGACY above.

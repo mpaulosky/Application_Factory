@@ -1,0 +1,21 @@
+{
+  "full_name": "o/dots",
+  "default_branch": "main",
+  "allow_squash_merge": true,
+  "allow_merge_commit": false,
+  "squash_merge_commit_title": "PR_TITLE",
+  "delete_branch_on_merge": true,
+  "allow_auto_merge": false,
+  "allow_rebase_merge": true,
+  "security_and_analysis": {
+    "secret_scanning": {
+      "status": "enabled"
+    },
+    "secret_scanning_push_protection": {
+      "status": "enabled"
+    },
+    "dependabot_security_updates": {
+      "status": "enabled"
+    }
+  }
+}

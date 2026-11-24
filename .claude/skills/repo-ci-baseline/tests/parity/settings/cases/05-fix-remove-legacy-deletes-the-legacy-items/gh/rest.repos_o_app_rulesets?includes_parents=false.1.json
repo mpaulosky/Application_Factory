@@ -1,0 +1,20 @@
+[
+  {
+    "id": 7,
+    "name": "main-rules",
+    "target": "branch",
+    "enforcement": "active"
+  },
+  {
+    "id": 8,
+    "name": "dev-rules",
+    "target": "branch",
+    "enforcement": "active"
+  },
+  {
+    "id": 9,
+    "name": "release-rules",
+    "target": "branch",
+    "enforcement": "active"
+  }
+]
