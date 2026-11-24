@@ -18,9 +18,6 @@ Template file; it doesn't reach the Fleet.
   issue keeps `claude` and gets `claude:blocked` and one comment naming its blockers, and starts by itself once they close.
 - `claude:working` marks the issue being worked. A run that ends without a pull request labels the issue `claude:needs-human` and says why on the issue, or, when Claude left no comment,
   where its last message is in the run's log.
-- Claude runs with background tasks off (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`), and a command may run for 20 minutes when it names no timeout (`BASH_DEFAULT_TIMEOUT_MS`) and up to
-  60 when it does (`BASH_MAX_TIMEOUT_MS`). A headless run ends when Claude ends its turn, and nothing wakes it when a background command finishes: runs on issues 124, 130 and 136
-  started the gate in the background, ended their turn to wait for it, and stopped with no branch, pull request or comment.
 - Claude authenticates with `CLAUDE_CODE_OAUTH_TOKEN` (the secret Claude Review already uses, made by `claude setup-token` from the owner's subscription) or `ANTHROPIC_API_KEY`. Without either, a
   run does nothing. Its GitHub token is the Claude GitHub App's, from the action's OIDC exchange, so its pull request starts the required checks; one opened with the job's own token would start
   none. The exchange accepts only a workflow file that matches the default branch's, so the workflow first runs once merged.

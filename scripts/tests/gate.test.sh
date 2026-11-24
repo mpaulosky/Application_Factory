@@ -726,13 +726,11 @@ grep -rqE -e '--(quick|sync)' "$here/.github/hooks" "$here/.github/workflows" 2>
 check "no hook or workflow passes --quick or --sync" "$([[ -d $here/.github/hooks && -d $here/.github/workflows && $quick_rc == 1 ]] && echo 0 || echo 1)"
 check "the Factory's CI runs the gate with no argument" "$(grep -E 'run: bash "scripts/gate\.sh"$' "$here/.github/workflows/template-tests.yml" > /dev/null && echo 0 || echo 1)"
 # The issue worker's Claude runs headless, where ending a turn ends the run: its settings turn background tasks off, so it can't start the gate in the
-# background and end the run waiting for it, and a command has the 20 minutes (60 when it asks) that ADR 0018 gives it. The settings are the JSON line after
-# `settings: |` in the "Work the issue" step, the one step that runs Claude.
+# background and end the run waiting for it. The settings are the JSON line after `settings: |` in the "Work the issue" step, the one step that runs Claude.
 issues_wf="$here/.github/workflows/claude-issues.yml"
 issues_settings="$(sed -n '/^      - name: Work the issue$/,/^      - name: /p' "$issues_wf" | sed -n '/^          settings: |$/{n;p;}')"
-check "the issue worker's Claude runs with background tasks off, a 20-minute default and a 60-minute limit for a foreground command" \
-  "$(jq -e '.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS == "1" and .env.BASH_DEFAULT_TIMEOUT_MS == "1200000" and .env.BASH_MAX_TIMEOUT_MS == "3600000"' \
-    <<< "${issues_settings:-null}" > /dev/null 2>&1 && echo 0 || echo 1)"
+check "the issue worker's Claude runs with background tasks off" \
+  "$(jq -e '.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS == "1"' <<< "${issues_settings:-null}" > /dev/null 2>&1 && echo 0 || echo 1)"
 # The comment on a run with no pull request sends the owner to the Finish step's "Claude's last message" group, so the step prints that group whether or not
 # the work step left an execution file. The step's script runs here with a stub gh that finds no pull request and keeps the comment's body.
 finish="$work/finish"
