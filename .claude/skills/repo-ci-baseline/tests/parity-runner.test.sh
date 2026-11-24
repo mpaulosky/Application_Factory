@@ -711,10 +711,21 @@ got="$(GIT_DIR="$work/nowhere" GIT_WORK_TREE="$work" case_problems "$probe/cases
 got="$(GIT_CEILING_DIRECTORIES="$probe/plain" case_problems "$probe/plain/cases")"
 [[ "$got" == "$want_stray" ]] || fail "the committed-cases check outside a git work tree said: $got"
 
-for suite_dir in "$here"/parity/*/; do
+# The rollout suite's cases (tests/rollout-parity.test.sh) need the same, and a tracked file in fakes/ too: its runner exits
+# 2 when a case has no fakes/ folder.
+for suite_dir in "$here"/parity/*/ "$here"/rollout-parity/; do
   got="$(case_problems "$suite_dir/cases")"
   [[ -z "$got" ]] || fail "the committed cases of ${suite_dir%/}:"$'\n'"$got"
 done
+rollout_git=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR git -C "$here/rollout-parity/cases")
+if [[ "$("${rollout_git[@]}" rev-parse --is-inside-work-tree 2> /dev/null)" == true ]]; then
+  rollout_tracked=$'\n'"$("${rollout_git[@]}" ls-files -- .)"
+  for dir in "$here"/rollout-parity/cases/*/; do
+    dir="${dir%/}"
+    [[ "$rollout_tracked" == *$'\n'"${dir##*/}/fakes/"* ]] \
+      || fail "case ${dir##*/} of rollout-parity has no file in fakes/ that git tracks, so a fresh clone has no fakes/ folder: add fakes/.gitkeep"
+  done
+fi
 # A case's files are compared byte for byte, so git must store them as they are: with text conversion on, a CRLF case
 # would reach a clone (or a commit, under core.autocrlf=input) as LF and pin nothing. tests/parity/.gitattributes turns it
 # off. converted_cases <repo folder> <pathspec>: one line per tracked file the pathspec matches that git would convert, or
@@ -787,6 +798,8 @@ done
 if [[ "$("${own_git[@]}" -C "$here" rev-parse --is-inside-work-tree 2> /dev/null)" == true ]]; then
   got="$(converted_cases "$here" 'parity/*/cases/*')"
   [[ -z "$got" ]] || fail "git converts the line endings of these case files (tests/parity/.gitattributes):"$'\n'"$got"
+  got="$(converted_cases "$here" 'rollout-parity/cases/*')"
+  [[ -z "$got" ]] || fail "git converts the line endings of these case files (tests/rollout-parity/.gitattributes):"$'\n'"$got"
 fi
 
 if [[ $failures -ne 0 ]]; then
