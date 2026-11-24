@@ -31,7 +31,7 @@ the paths are unchanged.
 - It fails closed. The staged list is written to a file and a `git diff --cached` that fails refuses the commit, and so does
   a failed snapshot (`git ls-files` or either `git checkout-index`): an empty list or a tree missing a staged file would
   otherwise let the commit through unlinted. A temporary folder it can't make (the work folder, the one the version is read
-  in, or the snapshot) refuses the commit too, saying which.
+  in, or the snapshot) refuses the commit too, each with its own message, so the refusal says which.
 
 ## Tests
 
@@ -52,16 +52,18 @@ can't tell which config the hook used. Cases that must exist:
 - the hard names (`a[1].md`, `a*.md`, `-dash.md`, `!bang.md`, `:colon.md`, a space, a newline, a byte that isn't UTF-8) → each
   linted as that file and passed with its `:`; the stub refuses an argument without one, as the real linter would misread it.
   Only the name that isn't UTF-8 may be skipped (macOS refuses it), saying so, and only when a plain name can still be
-  written; another name that can't be written, or a `git add` that fails, fails the case.
+  written; another name that can't be written, or a `git add` that fails, fails the case. That decision is a function taking
+  the writer, so it runs on any filesystem: with a writer that refuses every name but a plain one, the name that isn't UTF-8
+  skips and `a[1].md` fails; with one that refuses every name, the name that isn't UTF-8 fails too.
 - a hard name renamed (guarded on `R`, as above) → linted under its new name; a hard name staged bad and fixed in the working
   copy → refused
 - a markdownlint-cli2 before 0.4.0, or a banner without a version → refused; 0.4.0 and 0.10.0 → linted; a warning on stderr and
   a line on stdout before the banner → linted; an unstaged working-copy config that turns the banner off → linted; a linter
   that prints only an error on stderr and exits 127 → refused, showing that error
 - no temporary folder → allowed with no staged Markdown, refused (saying why) with some; the folder the version is read in, or
-  the snapshot folder, that can't be made (a `mkdir` wrapper on `PATH` fails the one `FAIL_MKDIR` names) → refused, saying
-  which; `GIT_LITERAL_PATHSPECS` set → still linted
-- with a real markdownlint-cli2 installed (skipped otherwise; one found under the stub folder fails the case), a staged
+  the snapshot folder, that can't be made (a `mkdir` wrapper on `PATH` fails the one `FAIL_MKDIR` names) → refused, each
+  with a message of its own; `GIT_LITERAL_PATHSPECS` set → still linted
+- with a real markdownlint-cli2 installed (skipped otherwise; the suite's own `PATH` never holds the stub), a staged
   `!bang.md` → linted as that file, not a negation. No glob-named case runs with the real linter here: the hook lints only
   staged files, so a decoy a glob could match would be staged, and linted, either way. The Factory's
   `owned-gate-files.test.sh` covers `a[1].md` and `a*.md` with a decoy beside each.
