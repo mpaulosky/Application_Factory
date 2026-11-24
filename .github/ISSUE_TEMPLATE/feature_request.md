@@ -18,8 +18,9 @@ A clear and concise description of what you want to happen.
 
 ## Size
 
-Keep the change small enough for one pull request that one review can read in full: about 2,000 changed lines or fewer, tests included, and at most one
-open decision. Split a bigger change into smaller issues before work starts, ordered with GitHub's "blocked by" links, so each one merges on its own.
+Keep the change small enough for one pull request that one review can read in full: 30 files and 3,000 changed lines at most, tests included (the line
+the pre-push review warns at), and at most one open decision. Split a bigger change into smaller issues before work starts, ordered with GitHub's
+"blocked by" links, so each one merges on its own.
 
 ## Describe alternatives you've considered
 
