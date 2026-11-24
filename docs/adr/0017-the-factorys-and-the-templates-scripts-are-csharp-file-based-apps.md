@@ -311,7 +311,11 @@ under the import rule above they port together (mpaulosky/Application_Factory#12
   The fake `gh` answers `gh api -X <method> <path> [-H <header>]... [--input -]`, keys a write by its method (`rest.PATCH.<path>`), and logs each call's argv and its
   body as canonical JSON (`jq -cS`), so two serializations of one body log the same line.
 - **What the port changes on purpose.** A repo that isn't `owner/repo` is refused before any call: a usage error (exit 2) for an argument, exit 1 for a `repos.txt`
-  line, as `status.sh` refuses one. The Python sent it to `gh` as it was, where `..` would step out of the REST path a write goes to.
+  line, as `status.sh` refuses one. The Python sent it to `gh` as it was, where `..` would step out of the REST path a write goes to. The names GitHub answers with
+  that go into a path or a query (a workflow's path, the default branch, a ruleset's id) are percent-encoded, a segment at a time with the slashes kept
+  (`Settings.Segments`), and a `.` or `..` segment is refused, so a `?`, `#` or `%` in one can't change the call; the Python spliced them in as they were. Plain
+  names are sent as before, so the parity cases are unchanged. `Gh.Process` ignores a broken pipe on gh's stdin, as Python's `communicate()` did, so a `gh` that
+  fails before it reads its body still reports its own exit code and error.
 - **The wrapper's build leaves CA2266 out.** `dotnet run` prints its build's warnings on stdout, so the first run after a change would start its report, or its
   `--json`, with the CA2266 line. `github-settings.sh` passes `-p:NoWarn=CA2266` to that build alone; the gate's build of every script still shows it.
   `status.sh` and `land.sh` print it too on a first run, which this Update leaves for their own change.

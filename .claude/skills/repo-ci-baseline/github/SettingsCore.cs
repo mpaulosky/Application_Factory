@@ -320,7 +320,7 @@ static class Settings
 		JsonNode? listing;
 		try
 		{
-			listing = gh("GET", $"repos/{repo}/contents/.github/workflows?ref={branch}");
+			listing = gh("GET", $"repos/{repo}/contents/.github/workflows?ref={Quote(branch)}");
 		}
 		catch (ApiError error) when (error.Status == 404)
 		{
@@ -333,7 +333,7 @@ static class Settings
 			if (!name.EndsWith(".yml", StringComparison.Ordinal) && !name.EndsWith(".yaml", StringComparison.Ordinal))
 				continue;
 			var path = Py.Str(J.Req(entry, "path"));
-			var blob = gh("GET", $"repos/{repo}/contents/{path}?ref={branch}");
+			var blob = gh("GET", $"repos/{repo}/contents/{Segments(path)}?ref={Quote(branch)}");
 			texts[path] = Encoding.UTF8.GetString(Py.B64Decode(J.S(J.Req(blob, "content")) ?? throw new InvalidOperationException("a workflow's content is not a string")));
 		}
 		return texts;
@@ -591,10 +591,10 @@ static class Settings
 		{
 			var name = J.Req(summary, "name");
 			if (Py.Eq(name, mainName))
-				main = gh("GET", $"repos/{repo}/rulesets/{Py.Str(J.Req(summary, "id"))}");
+				main = gh("GET", $"repos/{repo}/rulesets/{Quote(Py.Str(J.Req(summary, "id")))}");
 			else if (Py.Items(J.Req(std.Legacy, "rulesets")).Any(legacy => Py.Eq(legacy, name)))
 			{
-				var id = Py.Str(J.Req(summary, "id"));
+				var id = Quote(Py.Str(J.Req(summary, "id")));
 				findings.Add(new($"ruleset {Py.Str(name)}", Legacy, "legacy ruleset; --remove-legacy deletes it",
 						removeLegacy ? () => gh("DELETE", $"repos/{repo}/rulesets/{id}") : null));
 			}
@@ -620,7 +620,7 @@ static class Settings
 				diffs.Insert(0, $"SUSPENDED (enforcement {Py.Str(Py.Get(main, "enforcement"))}); --fix restores it");
 			if (diffs.Count > 0)
 			{
-				var id = Py.Str(J.Req(main, "id"));
+				var id = Quote(Py.Str(J.Req(main, "id")));
 				findings.Insert(0, new("ruleset main-rules", Drift, string.Join("; ", diffs), () => gh("PUT", $"repos/{repo}/rulesets/{id}", want)));
 			}
 			else
@@ -637,7 +637,7 @@ static class Settings
 		// Classic protection on the default branch: a leftover once main-rules is active.
 		try
 		{
-			gh("GET", $"repos/{repo}/branches/{defaultBranch}/protection");
+			gh("GET", $"repos/{repo}/branches/{Segments(defaultBranch)}/protection");
 		}
 		catch (ApiError error) when (error.Status is 403 or 404)
 		{
@@ -647,7 +647,7 @@ static class Settings
 		var detail = active ? "classic protection alongside main-rules; --remove-legacy deletes it"
 				: "classic protection; --remove-legacy deletes it once main-rules is active (run --fix twice)";
 		findings.Add(new($"branch protection on {defaultBranch}", Legacy, detail,
-				removeLegacy && active ? () => gh("DELETE", $"repos/{repo}/branches/{defaultBranch}/protection") : null));
+				removeLegacy && active ? () => gh("DELETE", $"repos/{repo}/branches/{Segments(defaultBranch)}/protection") : null));
 		return findings;
 	}
 
@@ -691,6 +691,12 @@ static class Settings
 
 	// A label name as one path segment: every byte but the unreserved ones percent-encoded, as quote(name, safe="") does.
 	public static string Quote(string name) => Uri.EscapeDataString(name);
+
+	// A path GitHub answered with (a workflow's, a branch name) as path segments: each segment encoded as Quote encodes it, the slashes
+	// kept, so a ?, # or % in it can't change the call. A . or .. segment would step out of the REST path, so it is refused.
+	public static string Segments(string path) => string.Join('/', path.Split('/').Select(segment => segment is "." or ".."
+			? throw new ArgumentException($"a path GitHub answered with has a {segment} segment: {path}", nameof(path))
+			: Quote(segment)));
 
 	// const COPILOT_REVIEW_CAP = <digits>;, a digit being any Unicode decimal digit as Python's \d reads it, one outside the BMP too
 	// (the pair is matched here, and Cap checks it is a digit).
@@ -751,7 +757,7 @@ static class Settings
 		{
 			if (J.S(J.Req(summary, "name")) != "main-rules")
 				continue;
-			var id = Py.Str(J.Req(summary, "id"));
+			var id = Quote(Py.Str(J.Req(summary, "id")));
 			var live = gh("GET", $"repos/{repo}/rulesets/{id}");
 			var body = new JsonObject();
 			foreach (var key in new[] { "name", "target", "conditions", "bypass_actors", "rules" })

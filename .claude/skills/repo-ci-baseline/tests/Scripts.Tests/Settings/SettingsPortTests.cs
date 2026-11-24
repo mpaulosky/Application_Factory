@@ -61,6 +61,67 @@ public partial class SettingsTests
 		Assert.Equal("repos.txt: not owner/repo: o/..\n", err.ToString());
 	}
 
+	// Names GitHub answers with (a workflow's path, the default branch, a ruleset's id) are percent-encoded where they go into a REST
+	// path or a query, so a ?, # or % in one can't change which call gh makes; plain names are sent as they are.
+	[Fact]
+	public void Names_from_githubs_answers_are_encoded_in_the_paths_they_go_into()
+	{
+		List<string> calls = [];
+		var legacy = (string)Settings.Load(Github, "o/app").Legacy["rulesets"]![0]!;
+		JsonNode? Answer(string method, string path, JsonNode? body = null)
+		{
+			calls.Add($"{method} {path}");
+			return path switch
+			{
+				_ when path.StartsWith("repos/o/app/contents/.github/workflows?", StringComparison.Ordinal) => P("""
+						[{"name": "a.yml?ref=x#.yml", "path": ".github/workflows/a.yml?ref=x#.yml"}, {"name": "ci.yml", "path": ".github/workflows/ci.yml"},
+						 {"name": "%2e%2e.yml", "path": ".github/workflows/%2e%2e.yml"}]
+						"""),
+				_ when path.StartsWith("repos/o/app/contents/", StringComparison.Ordinal) => P("""{"content": "eDo="}"""),
+				"repos/o/app/rulesets?includes_parents=false" => new JsonArray(P("""{"id": "m#1", "name": "main-rules"}"""), new JsonObject { ["id"] = "8/../../x?y#z", ["name"] = legacy }),
+				"repos/o/app/rulesets/m%231" => P("""{"id": "m#1", "enforcement": "active", "rules": []}"""),
+				_ => new JsonObject(),
+			};
+		}
+
+		Settings.ReadWorkflows(Answer, "o/app", "a#b?c=%41");
+		Settings.ReadWorkflows(Answer, "o/app", "main");
+		var std = Settings.Load(Github, "o/app");
+		foreach (var finding in Settings.CheckRulesets(Answer, "o/app", std, [], "rel/a#b", removeLegacy: true).Where(f => f.Fix is not null))
+			finding.Fix!();
+		Settings.Suspend(Answer, "o/app");
+
+		Assert.Equal([
+			"GET repos/o/app/contents/.github/workflows?ref=a%23b%3Fc%3D%2541",
+			"GET repos/o/app/contents/.github/workflows/a.yml%3Fref%3Dx%23.yml?ref=a%23b%3Fc%3D%2541",
+			"GET repos/o/app/contents/.github/workflows/ci.yml?ref=a%23b%3Fc%3D%2541",
+			"GET repos/o/app/contents/.github/workflows/%252e%252e.yml?ref=a%23b%3Fc%3D%2541",
+			"GET repos/o/app/contents/.github/workflows?ref=main",
+			"GET repos/o/app/contents/.github/workflows/a.yml%3Fref%3Dx%23.yml?ref=main",
+			"GET repos/o/app/contents/.github/workflows/ci.yml?ref=main",
+			"GET repos/o/app/contents/.github/workflows/%252e%252e.yml?ref=main",
+		], calls.Take(8));
+		Assert.Contains("GET repos/o/app/rulesets/m%231", calls);
+		Assert.Equal(2, calls.Count(call => call == "PUT repos/o/app/rulesets/m%231"));
+		Assert.Contains("DELETE repos/o/app/rulesets/8%2F..%2F..%2Fx%3Fy%23z", calls);
+		Assert.Contains("GET repos/o/app/branches/rel/a%23b/protection", calls);
+		Assert.Contains("DELETE repos/o/app/branches/rel/a%23b/protection", calls);
+		Assert.DoesNotContain(calls, call => call.Contains("/../", StringComparison.Ordinal) || call.Contains('#', StringComparison.Ordinal));
+	}
+
+	// A path segment of . or .. would step out of the REST path it goes into: refused, not sent.
+	[Theory]
+	[InlineData(".github/workflows/../../x.yml")]
+	[InlineData(".github/./workflows/x.yml")]
+	public void A_workflow_path_with_a_dot_segment_is_refused(string path)
+	{
+		JsonNode? Answer(string method, string call, JsonNode? body = null) =>
+				call.Contains("?ref=", StringComparison.Ordinal) && !call.Contains("x.yml", StringComparison.Ordinal)
+						? new JsonArray(new JsonObject { ["name"] = "x.yml", ["path"] = path })
+						: throw new InvalidOperationException($"called {method} {call}");
+		Assert.Throws<ArgumentException>(() => Settings.ReadWorkflows(Answer, "o/app", "main"));
+	}
+
 	[Fact]
 	public void Gh_api_sends_the_method_path_and_accept_header_and_a_body_on_stdin()
 	{
