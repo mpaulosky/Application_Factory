@@ -191,15 +191,17 @@ sealed class Arguments(string prog, string usage, string description)
 			}
 			taken |= Positional.Count > 0;
 			var (name, value) = arg.IndexOf('=') is var eq and > 0 ? (arg[..eq], arg[(eq + 1)..]) : (arg, null);
-			// -h with more after it: -h=x is -h given a value, and anything else is -h and further short flags, -h first.
+			// -h with more after it, as argparse reads it in 3.11 to 3.14: -h=x is -h given x, -h-x is -h given -x, and anything else
+			// (-hx, -hx=1) is -h and further short flags, -h first, so it is help.
 			if (!arg.StartsWith("--", StringComparison.Ordinal) && arg.StartsWith("-h", StringComparison.Ordinal))
-				name = "-h";
+				(name, value) = ("-h", arg.Length > 2 && arg[2] is '=' or '-' ? arg[2] == '=' ? arg[3..] : arg[2..] : null);
 			var matches = Matches(name);
 			if (matches.Count > 1)
 				return Error($"ambiguous option: {name} could match {string.Join(", ", matches.Select(o => o.Name))}", err);
+			// LooksLikeOption read an argument with a space or a negative number that matches nothing as positional, so this is an unknown option.
 			if (matches.Count == 0)
 			{
-				(arg.Contains(' ') ? taken ? unknown : Positional : unknown).Add(arg);
+				unknown.Add(arg);
 				continue;
 			}
 			var option = matches[0];
@@ -253,7 +255,7 @@ sealed class Arguments(string prog, string usage, string description)
 
 	static double ParseFloat(string name, string text)
 	{
-		var trimmed = text.Trim();
+		var trimmed = AsciiDigits(text).Trim();
 		var sign = trimmed.StartsWith('-') ? -1 : 1;
 		// One sign at most: float() refuses "--inf".
 		var bare = (trimmed.StartsWith('-') || trimmed.StartsWith('+') ? trimmed[1..] : trimmed).ToLowerInvariant();
@@ -308,10 +310,21 @@ sealed class Arguments(string prog, string usage, string description)
 			return true;
 		if (Matches(name).Count > 0)
 			return true;
-		return !(NegativeNumber.IsMatch(arg) || arg.Contains(' '));
+		return !(NegativeNumber.IsMatch(AsciiDigits(arg)) || arg.Contains(' '));
 	}
 
-	// argparse's _negative_number_matcher: a - then a digit, or a . and a digit.
+	// text with every Unicode decimal digit made its ASCII one, astral ones too, as float() and Python's \d read them (-\u0665 is -5).
+	static string AsciiDigits(string text)
+	{
+		var ascii = new StringBuilder(text.Length);
+		foreach (var rune in text.EnumerateRunes())
+			ascii.Append(Rune.GetUnicodeCategory(rune) == UnicodeCategory.DecimalDigitNumber ? (char)('0' + (int)Rune.GetNumericValue(rune)) : rune.ToString());
+		return ascii.ToString();
+	}
+
+	// argparse's _negative_number_matcher as Python 3.14 has it, on AsciiDigits' text: a - then a digit, or a . and a digit, with anything after (-5x and -1e3
+	// are values). 3.12 and earlier take only the -5 and -.5 forms and read -5x and -1e3 as options, so GhTests leaves those to a fixed
+	// expectation rather than the machine's python3.
 	static readonly Regex NegativeNumber = new(@"\A-\.?\d", RegexOptions.CultureInvariant);
 }
 

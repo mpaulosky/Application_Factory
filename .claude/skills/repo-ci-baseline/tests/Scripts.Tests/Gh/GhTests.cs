@@ -105,6 +105,20 @@ public class GhTests
 		new[] { "--he=1" },
 		new[] { "--help=1" },
 		new[] { "-h=1" },
+		// After -h, a = or a - starts a value (refused), and anything else is more short flags behind -h, so help: the same in 3.11 to 3.14.
+		new[] { "-hx" },
+		new[] { "-hh" },
+		new[] { "-hxx" },
+		new[] { "-hx=1" },
+		new[] { "-hx-" },
+		new[] { "-hx=-" },
+		new[] { "-h", "--bogus" },
+		new[] { "-h-" },
+		new[] { "-h-x" },
+		new[] { "-h--" },
+		new[] { "-h-=" },
+		new[] { "-h=" },
+		new[] { "-h=-" },
 		new[] { "--bogus", "-h" },
 		new[] { "--interval", "-h" },
 		new[] { "--interval", "--h" },
@@ -120,6 +134,16 @@ public class GhTests
 		new[] { "--interval=-inf" },
 		new[] { "--interval", "-.5" },
 		new[] { "--interval", "-0" },
+		new[] { "--interval", "-." },
+		new[] { "--interval", "-5x" },
+		new[] { "--interval", "-\u0665" },
+		new[] { "-\u0665" },
+		// float() and \d read any Unicode decimal digit, an astral one (a surrogate pair here) too.
+		new[] { "--interval", "\u0661\u0662.\u0665" },
+		new[] { "--interval", "\U0001D7D3" },
+		new[] { "--interval", "-\U0001D7D3" },
+		new[] { "-\U0001D7D3" },
+		new[] { "--interval", "\u00b2" },
 		// An argument with a space that names no option is positional.
 		new[] { "-x y" },
 		new[] { "--interval", "-x y" },
@@ -142,6 +166,21 @@ public class GhTests
 			Assert.Matches(@"\Ausage: land .*\nland: error: .+\n\z", error);
 	}
 
+	// Not a moved test: what Python 3.12 and 3.14 read differently (a - then a digit with more after it: 3.14 reads a value, 3.12 an
+	// option), held to 3.14's reading, which Arguments' negative-number pattern is, rather than to the machine's python3.
+	[Theory]
+	[InlineData(new[] { "--interval", "-1e3" }, 0, "[[],false,false,false,\"-1000\",\"180\",\"15\"]")]
+	[InlineData(new[] { "-5x" }, 0, "[[\"-5x\"],false,false,false,\"60\",\"180\",\"15\"]")]
+	[InlineData(new[] { "-1e3", "o/app" }, 0, "[[\"-1e3\",\"o/app\"],false,false,false,\"60\",\"180\",\"15\"]")]
+	[InlineData(new[] { "-x5" }, 2, "")]
+	public void A_negative_number_with_more_after_it_is_read_as_python_314_reads_it(string[] args, int wantCode, string wantParsed)
+	{
+		var (code, parsed, _) = Parse(args);
+
+		Assert.Equal(wantCode, code);
+		Assert.Equal(wantParsed, parsed);
+	}
+
 	// Not a moved test: gh is found in PATH's absolute folders only, never in the current folder or the program's, which .NET's own
 	// lookup tries first.
 	[Fact]
@@ -160,9 +199,9 @@ public class GhTests
 			File.WriteAllText(Path.Combine(plain, "gh"), "not executable\n");
 
 			Assert.Equal(Path.Combine(found, "gh"), Gh.Which("gh", $"{empty}:{plain}:{found}"));
-			// A relative folder, an empty entry (execvp's current folder) and . are skipped, even when they hold a gh.
+			// A relative folder is skipped, even when it holds a gh (GhLookupTests holds the empty entry and . with a gh in the current folder).
 			var relative = Path.GetRelativePath(Environment.CurrentDirectory, found);
-			Assert.Throws<FileNotFoundException>(() => Gh.Which("gh", $"{relative}::.:{empty}"));
+			Assert.Throws<FileNotFoundException>(() => Gh.Which("gh", $"{relative}:{empty}"));
 			Assert.Throws<FileNotFoundException>(() => Gh.Which("gh", plain));
 			Assert.Throws<FileNotFoundException>(() => Gh.Which("gh", ""));
 			Assert.Throws<FileNotFoundException>(() => Gh.Which("gh", null));

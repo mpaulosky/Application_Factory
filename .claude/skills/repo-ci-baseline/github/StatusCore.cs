@@ -604,9 +604,15 @@ static class Status
 		fetch ??= new StatusReader(err: err).Fetch;
 		var listed = (readRepoList ?? (() => Repos.Read()))();
 		var repos = parser.Positional.Count > 0 ? parser.Positional : [.. listed.Keys];
-		// A name gh would read otherwise (-F reads a value starting with @ from a file) is refused before any call.
+		// A name gh would read otherwise (-F reads a value starting with @ from a file, and . or .. would step out of a REST path) is
+		// refused before any call: a usage error when it was an argument, and exit 1 when it came from the Fleet registry.
 		if (repos.FirstOrDefault(repo => !RepoName.IsMatch(repo)) is { } bad)
-			return parser.Error($"not owner/repo: {bad}", err);
+		{
+			if (parser.Positional.Count > 0)
+				return parser.Error($"not owner/repo: {bad}", err);
+			err.Write($"repos.txt: not owner/repo: {bad}\n");
+			return 1;
+		}
 
 		List<string> lines = [];
 		var status = 0;
@@ -635,8 +641,9 @@ static class Status
 		return status;
 	}
 
-	// owner/repo: letters, digits, _, . and - on each side of one / (a trailing line break too is refused).
-	public static readonly Regex RepoName = new(@"\A[\w.-]+/[\w.-]+\z", RegexOptions.CultureInvariant);
+	// owner/repo: ASCII letters and digits, _, . and - on each side of one /, as GitHub names are, and neither side . or .. (a path
+	// step in the REST calls); a trailing line break too is refused.
+	public static readonly Regex RepoName = new(@"\A(?!\.\.?/)[A-Za-z0-9_.-]+/(?!\.\.?\z)[A-Za-z0-9_.-]+\z", RegexOptions.CultureInvariant);
 
 	// owner/name split at its /; anything but owner/repo throws.
 	public static (string Owner, string Name) SplitRepo(string repo)

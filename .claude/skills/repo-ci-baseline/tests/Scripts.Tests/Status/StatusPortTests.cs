@@ -47,6 +47,13 @@ public partial class StatusTests
 	[InlineData("/app")]
 	[InlineData("owner/")]
 	[InlineData("own er/app")]
+	[InlineData("../..")]
+	[InlineData("./x")]
+	[InlineData("x/..")]
+	[InlineData("x/.")]
+	[InlineData("..//x")]
+	[InlineData("o/\u00e9")]
+	[InlineData("\u0661/x")]
 	public void A_repo_that_isnt_owner_repo_is_a_usage_error_before_any_call(string repo)
 	{
 		var fetched = 0;
@@ -58,6 +65,32 @@ public partial class StatusTests
 		In($"status.cs: error: not owner/repo: {repo}", err.ToString());
 		Assert.Throws<ArgumentException>(() => Status.SplitRepo(repo));
 		Assert.Equal(("o.x", "a_b-c"), Status.SplitRepo("o.x/a_b-c"));
+	}
+
+	// Names a dot starts or ends, but that are no path step, and GitHub's other characters, are owner/repo.
+	[Theory]
+	[InlineData("a/b")]
+	[InlineData("-a/-b")]
+	[InlineData("..x/x..")]
+	[InlineData(".x/x.")]
+	[InlineData("...//...", false)]
+	[InlineData(".../...")]
+	[InlineData("A_9/z-.")]
+	public void A_repo_name_of_githubs_characters_is_owner_repo(string repo, bool valid = true) =>
+		Assert.Equal(valid, Status.RepoName.IsMatch(repo));
+
+	// Not a moved test: a bad name in the Fleet registry ends status with exit 1 before any call, not a usage error.
+	[Fact]
+	public void A_fleet_registry_name_that_isnt_owner_repo_ends_the_run_before_any_call()
+	{
+		var fetched = 0;
+		using var output = new StringWriter();
+		using var err = new StringWriter();
+		var code = Status.Run([], output, err, (_, _) => { fetched++; return Repo(); }, () => new() { ["owner/app"] = "full", ["x/.."] = "full" });
+
+		Assert.Equal(1, code);
+		Assert.Equal(0, fetched);
+		Assert.Equal("repos.txt: not owner/repo: x/..\n", err.ToString());
 	}
 
 	// Not a moved test: an answer gh gave that isn't an object (the Python's .get raised on it) leaves the permission unread, and

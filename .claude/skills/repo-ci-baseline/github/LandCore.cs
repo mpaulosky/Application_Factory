@@ -36,8 +36,10 @@
 // merges, the command waits up to --blog-wait minutes for its release-blog PR.
 //
 // It prints only changes: one line per PR whose state or action changed (status.sh's line), the calls it made under it, and nothing
-// when nothing changed. It exits 0 once every watched PR is merged or closed, or after one pass with --once, and 1 at the time limit or
-// when a repo can't be read on the last pass. --dry-run prints the calls instead of making them; a usage error exits 2.
+// when nothing changed. It exits 0 once every watched PR is merged or closed, or after one pass with --once, and 1 at the time limit,
+// when a repo can't be read on the last pass, when a repos.txt name isn't owner/repo (before any call), or when it first has to wait
+// a --interval time.sleep refuses (negative, NaN, or past about 292 years: Land.Sleep; --once never waits). --dry-run prints the calls
+// instead of making them; a usage error exits 2.
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json.Nodes;
@@ -47,8 +49,8 @@ using static Landing;
 
 static class Land
 {
-	static readonly Regex PrRef = new(@"^(?:https://github\.com/)?([\w.-]+/[\w.-]+)(?:#|/pull/)(\d+)$", RegexOptions.CultureInvariant);
-	static readonly Regex RepoRef = new(@"^[\w.-]+/[\w.-]+$", RegexOptions.CultureInvariant);
+	// A PR: owner/repo#n or its URL, anchored at both ends (a trailing line break is refused); its repo must be a Status.RepoName too.
+	static readonly Regex PrRef = new(@"\A(?:https://github\.com/)?([^/#\s]+/[^/#\s]+)(?:#|/pull/)(\d+)\z", RegexOptions.CultureInvariant);
 
 	// The defaults of --interval (seconds), --timeout and --blog-wait (minutes).
 	public const double DefaultInterval = 60, DefaultTimeout = 180, DefaultBlogWait = 15;
@@ -61,14 +63,16 @@ static class Land
 		foreach (var arg in args)
 		{
 			var match = PrRef.Match(arg);
-			if (match.Success)
+			if (match.Success && Status.RepoName.IsMatch(match.Groups[1].Value))
 			{
 				var repo = match.Groups[1].Value;
+				// The number is read whether or not the repo is already watched whole, so a bad one is refused in any order.
+				var number = PrNumber(match.Groups[2].Value, arg);
 				if (!targets.TryGetValue(repo, out var numbers))
 					targets[repo] = numbers = [];
-				numbers?.Add(PrNumber(match.Groups[2].Value, arg));
+				numbers?.Add(number);
 			}
-			else if (RepoRef.IsMatch(arg))
+			else if (!match.Success && Status.RepoName.IsMatch(arg))
 				targets[arg] = null;
 			else
 				throw new ArgumentException($"not owner/repo or owner/repo#n: {arg}");
@@ -95,21 +99,24 @@ static class Land
 		return number;
 	}
 
-	// Waits seconds, as time.sleep does: a negative, NaN or infinite length throws ArgumentOutOfRangeException (exit 1, as time.sleep's
-	// error was) rather than reach Thread.Sleep, which reads -1 ms as forever and refuses more than int.MaxValue ms; a long wait is
-	// slept in steps of at most that. wait is Thread.Sleep by default.
+	// The longest wait time.sleep takes: long.MaxValue nanoseconds (its PyTime_t), about 292 years.
+	public const double LongestSleep = long.MaxValue / 1e9;
+
+	// Waits seconds, as time.sleep does: a negative or NaN length, or one past LongestSleep (infinity too), throws
+	// ArgumentOutOfRangeException (exit 1, as time.sleep's ValueError and OverflowError were) rather than reach Thread.Sleep, which reads
+	// -1 ms as forever and refuses more than int.MaxValue ms; a long wait is slept in steps of at most that, a whole number of them, so the
+	// loop ends. wait is Thread.Sleep by default.
 	public static void Sleep(double seconds, Action<TimeSpan>? wait = null)
 	{
-		if (!double.IsFinite(seconds) || seconds < 0)
-			throw new ArgumentOutOfRangeException(nameof(seconds), seconds, "sleep length must be a finite number of seconds, 0 or more");
+		if (double.IsNaN(seconds) || seconds < 0 || seconds > LongestSleep)
+			throw new ArgumentOutOfRangeException(nameof(seconds), seconds, $"sleep length must be from 0 to {LongestSleep} seconds");
 		wait ??= System.Threading.Thread.Sleep;
 		const double most = int.MaxValue / 1000.0;
-		while (seconds > 0)
-		{
-			var step = Math.Min(seconds, most);
-			wait(TimeSpan.FromSeconds(step));
-			seconds -= step;
-		}
+		var steps = (long)Math.Floor(seconds / most);
+		for (long i = 0; i < steps; i++)
+			wait(TimeSpan.FromSeconds(most));
+		if (seconds - steps * most is var last and > 0)
+			wait(TimeSpan.FromSeconds(last));
 	}
 
 	// The gh calls that carry out one decision's action; none for the rest.
@@ -194,6 +201,12 @@ static class Land
 		catch (ArgumentException error)
 		{
 			return parser.Error(error.Message, err);
+		}
+		// A Fleet registry name that isn't owner/repo is refused before any call, as status.cs refuses it.
+		if (parser.Positional.Count == 0 && targets.Keys.FirstOrDefault(repo => !Status.RepoName.IsMatch(repo)) is { } bad)
+		{
+			err.Write($"repos.txt: not owner/repo: {bad}\n");
+			return 1;
 		}
 
 		lander ??= new Lander(targets, listed, output, err);

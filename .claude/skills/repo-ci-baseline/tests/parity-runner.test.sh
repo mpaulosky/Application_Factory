@@ -258,6 +258,13 @@ rm "$skill/tests/parity/cs/cases/c1"/expected.* "$skill/tests/parity/cs/cases/c2
 (cd "$work" && PATH="$work/dotnet-stub:$PATH" PARITY_RECORD=1 bash "$runner" cs < /dev/null > "$work/out" 2>&1) || fail "record mode from a C# reference failed: $(cat "$work/out")"
 [[ "$(cat "$skill/tests/parity/cs/cases/c1/expected.stdout" 2> /dev/null)" == "o/app ok" ]] || fail "record mode didn't record from the C# reference: $(cat "$work/out")"
 grep -qF "cs: 2 case(s) recorded from dotnet run --no-build --file $skill/github/cs.cs --" "$work/out" || fail "record mode doesn't name the C# reference: $(cat "$work/out")"
+# A C# reference runs from its .cs's folder, so a case of its suite that puts files in its own folder, or expects some there, is refused.
+for file in tree setup.sh expected.tree; do
+  if [[ "$file" == *.sh ]]; then : > "$skill/tests/parity/cs/cases/c2/$file"; else mkdir "$skill/tests/parity/cs/cases/c2/$file"; fi
+  PATH="$work/dotnet-stub:$PATH" runner 2 "a C# reference's case with $file" \
+    "c2/$file: a C# reference runs from its .cs's folder, so a case of its suite has no $file." cs
+  rm -rf "${skill:?}/tests/parity/cs/cases/c2/$file"
+done
 # A .py beside the .cs is still the reference: the Python stays until its port is judged (ADR 0017).
 cp "$skill/github/stub.py" "$skill/github/cs.py"
 : > "$work/dotnet.log"

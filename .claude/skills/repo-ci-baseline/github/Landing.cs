@@ -456,7 +456,8 @@ sealed record Decision(string Action, string Reason);
 // comment is on the PR and review:claude hasn't been added since: no review is asked for. LoopUnread: the comments or label events that
 // tell the loop's state couldn't be read, so it is never called exhausted. WantReady: the caller's say that a draft should be marked
 // ready. MergedByWorkflow: the repo's own PR Auto-Merge workflow merges it (a Baseline repo), so it is left to that workflow rather than
-// armed. ReleaseBlog: a release-blog PR (see ReleaseBlogBranches).
+// armed. ReleaseBlog: a release-blog PR: its head branch is one of ReleaseBlogBranches and it is from the repo itself (Status.ToState
+// reads isCrossRepository; a fork's PR never is one).
 sealed record PrState
 {
 	public string State { get; init; } = "OPEN"; // OPEN, MERGED or CLOSED

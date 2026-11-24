@@ -8,7 +8,8 @@
 #
 #   tests/parity.test.sh <suite>                    run the suite's cases against its reference: python3 <the .py>, or
 #                                                   dotnet run --no-build --file <the .cs> --, built once first and run
-#                                                   from the .cs's folder, as its .sh runs it (so its cases write no files)
+#                                                   from the .cs's folder, as its .sh runs it, so dotnet picks the SDK
+#                                                   that built it (its suite's cases have no tree/, setup.sh or expected.tree/)
 #   tests/parity.test.sh <suite> <command> [arg]... run them against another implementation
 #   PARITY_RECORD=1 tests/parity.test.sh <suite>
 #                                                   record the cases from the suite's reference (no command is accepted,
@@ -57,7 +58,8 @@
 # fake can't answer, times out, or leaves an empty folder (git stores none, so a fresh clone's expected.tree/ would lack
 # it) is never recorded: its files are left as they were.
 #
-# Each case's run starts in a new temporary folder of its own (empty, or the case's tree/ and setup.sh), with
+# Each case's run starts in a new temporary folder of its own (empty, or the case's tree/ and setup.sh; a C# reference
+# then changes to its .cs's folder, which is why its suite's cases may have none of those), with
 # stdin from /dev/null or the case's stdin, the fake gh first on PATH, no GitHub token in its environment and GH_CONFIG_DIR
 # a new empty folder (nothing an earlier case wrote is left), no repository, Anthropic key or model the caller set (REPOSITORY, GITHUB_REPOSITORY, ANTHROPIC_API_KEY,
 # ANTHROPIC_MODEL: a case's env sets them), no git repository or config the caller set (GIT_DIR and the rest unset,
@@ -178,6 +180,12 @@ check_case() {
     [[ ! -e "$dir/$file" || -f "$dir/$file" ]] || setup_error "$name/$file is not a file."
   done
   [[ ! -e "$dir/setup" ]] || setup_error "$name/setup is not read: a case's setup script is setup.sh."
+  # A C# reference runs from its .cs's folder, not the case's, so files a case puts there or expects there would go unseen.
+  if [[ -n "$build_cs" ]]; then
+    for file in tree setup.sh expected.tree; do
+      [[ ! -e "$dir/$file" ]] || setup_error "$name/$file: a C# reference runs from its .cs's folder, so a case of its suite has no $file."
+    done
+  fi
   if [[ -f "$dir/env" ]]; then
     n=0
     while IFS= read -r pattern || [[ -n "$pattern" ]]; do
