@@ -562,6 +562,8 @@ and its not-read finding held the merge for the owner to review the rest by hand
   outside the folder the reviews read; a later batch can neither overwrite it nor, when it writes none, pass it off as its own.
   A batch whose review didn't answer (a cap, a usage limit, a timeout) has its summary section say so, and its pieces
   join the not-read finding, which holds the merge; the warning step names each such batch. When no batch answered, nothing is posted, as before.
+  GitHub refuses a review body over 65,536 characters, and the findings outside the diff go in it whole, so the joined review keeps at most 10,000
+  characters of each batch's summary (a quarter of 40,000) and ends a longer one with a note that it was cut. One batch alone is posted as it answered.
 - **The steps share their inputs through a YAML anchor** (`with: &review`, then `with: *review`), and the prompt takes the batch's pieces and note from the
   step's own `env` (`REVIEW_PIECES`, `REVIEW_BATCH`), so the prompt and the Read restrictions are written once. zizmor warns that it audits anchored
   inputs less precisely; actionlint and GitHub read them. A test keeps the four steps' inputs equal and the three `MAX_BATCHES` (the diff step, the

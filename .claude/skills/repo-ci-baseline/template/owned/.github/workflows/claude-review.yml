@@ -2456,8 +2456,20 @@ jobs:
           elif count == 1:
               answer = fields[1]
           else:
+              # GitHub refuses a review body over 65,536 characters, and the findings outside the diff go in it
+              # after the summary, whole. So each batch's summary keeps at most its quarter of 40,000 characters,
+              # and a longer one is cut, saying so.
+              MAX_SUMMARY_CHARS = 10_000
+              CUT_NOTE = ("\n\n_This batch's summary was cut here to fit GitHub's limit on a review's length; "
+                          "its findings are whole._")
+
+              def within_share(summary):
+                  if len(summary) <= MAX_SUMMARY_CHARS:
+                      return summary
+                  return summary[:MAX_SUMMARY_CHARS - len(CUT_NOTE)] + CUT_NOTE
+
               sections = [f"### Batch {number} of {count}\n\n" + (
-                  fields[number]["summary"] if number in fields
+                  within_share(fields[number]["summary"]) if number in fields
                   else "This batch's review ended without an answer, so its pieces weren't reviewed.")
                           for number in range(1, count + 1)]
               # A finding an earlier batch already reported (the same path, line and body) is posted once, the

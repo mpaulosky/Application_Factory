@@ -1100,6 +1100,49 @@ def test_a_finding_one_batch_reports_twice_is_kept_as_it_was(tmp_path):
     assert code == 0 and posted["findings"] == [same, same]
 
 
+def summary_share():
+    """The workflow's MAX_SUMMARY_CHARS: the most of one batch's summary the joined review keeps."""
+    return int(re.search(r"^\s+MAX_SUMMARY_CHARS = ([\d_]+)", WORKFLOW.read_text(), re.M)[1])
+
+
+def batch_sections(summary, count):
+    """{number: the text of its section} in a joined review's summary."""
+    parts = re.split(rf"(?:\n\n)?### Batch (\d+) of {count}\n\n", summary)
+    return {int(number): text for number, text in zip(parts[1::2], parts[2::2], strict=True)}
+
+
+@pytest.mark.parametrize("extra", [-1, 0, 1])
+def test_a_batchs_summary_is_cut_to_its_share_with_a_note_and_only_past_it(tmp_path, extra):
+    share = summary_share()
+    long = "x" * (share + extra)
+    findings = [{"path": "a.py", "line": 1, "body": "y" * share}]
+    answers = [{"summary": long, "findings": findings}, {"summary": "second", "findings": []}]
+    listed = ["001.diff", "002.diff"]
+    reads = {1: read_whole_of(tmp_path, listed[0], "a"), 2: read_whole_of(tmp_path, listed[1], "b")}
+
+    code, answer, _ = batched(tmp_path, answers, listed, reads)
+
+    sections = batch_sections(answer["summary"], 2)
+    assert code == 0 and sections[2] == "second" and answer["findings"] == findings
+    if extra <= 0:
+        assert sections[1] == long
+    else:
+        assert len(sections[1]) == share and "was cut" in sections[1]
+        note = sections[1].lstrip("x")
+        assert sections[1] == long[:share - len(note)] + note and note.startswith("\n\n")
+
+
+def test_the_joined_summary_leaves_room_for_the_findings_under_githubs_limit(tmp_path):
+    # A review's body is at most 65,536 characters; the findings outside the diff go in it after the summary, whole.
+    answers = [{"summary": "z" * 100_000, "findings": []} for _ in range(4)]
+    listed = ["001.diff", "002.diff", "003.diff", "004.diff"]
+    reads = {n: read_whole_of(tmp_path, name, f"r{n}") for n, name in enumerate(listed, 1)}
+
+    code, answer, _ = batched(tmp_path, answers, listed, reads)
+
+    assert code == 0 and len(answer["summary"]) <= 4 * summary_share() + 200 <= 65_536 - 20_000
+
+
 def review_steps():
     """[(name, id, if, the env's REVIEW_PIECES and REVIEW_BATCH)] for each claude-code-action step, in order."""
     yaml = pytest.importorskip("yaml")
