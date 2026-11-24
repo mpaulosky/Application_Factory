@@ -22,6 +22,8 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   Applied to and runs them there. They ran in `dotfiles` before the Template moved.
 - `docs/adr/`: the Factory's decisions. `docs/Instructions.md`: the steps for setting up a new Application or standardizing an existing one.
 - `docs/research/`: dated research notes that the ADRs cite as evidence; they decide nothing, an ADR does.
+- `docs/agent-teams.md`: the reference for building Claude Code agent teams (when to use one, setup, spawn prompts, hooks, limits) and what this file's
+  rules mean for a team. It is compiled from Claude Code's docs on the date it gives, and agent teams are experimental: check those docs again before relying on a detail.
 - `docs/SECURITY.md`: how to report a vulnerability, and where an accepted security finding's reason goes (ADR 0009).
 - `.github/workflows/template-tests.yml`: the Factory's own workflow (named `repo-ci-baseline Template`, the required job `Template tests`). It runs the gate one part per job in parallel
   (`GATE_PART`: `self`, `review`, `static`, `template`, `sandcastle`, ADR 0012), with `test.sh` in three shards (`TEST_SH_SHARD`, ADR 0013), and
