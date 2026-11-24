@@ -169,7 +169,9 @@ The first increment brings the .NET SDK into the Factory, with no script ported 
 - **The SDK.** The Factory's `global.json` is a copy of the Template's, in `scripts/gate.sh`'s list of copies, so `--sync` keeps it equal and the drift check fails it otherwise.
   The `dotnet-sdk` Dependabot entry lists `/` beside `template/owned/`, under its one group. `.github/actions/template-tools/` runs `setup-dotnet` with `global-json-file: global.json`,
   so every part of the gate has the SDK. The gate's cache key is the tree and then the SDK: the release `dotnet --version` answers from the root and the version `global.json` names.
-- **The tests.** `tests/Scripts.Tests/` is an xUnit v3 project (`net10.0`, `xunit.v3.mtp-v2`, warnings as errors), shielded by its own three empty files, as is the skill's `github/`.
+- **The tests.** `tests/Scripts.Tests/` is an xUnit v3 project (`net11.0`, `xunit.v3.mtp-v2`, warnings as errors), shielded by its own three empty files, as is the skill's `github/`.
+  It targets `net11.0`, not the Applications' `net10.0`: a file-based script builds for the SDK's own framework, so the tests run on the runtime the scripts do, and the pinned SDK
+  alone runs them, with no .NET 10 runtime installed beside it.
   `test.sh` runs it in the `scripts` shard, built into a temp folder so the skill's tree stays clean. Until it holds a test it is only built: Microsoft Testing Platform fails
   a run in which no test ran (exit 8).
 - **What lints C#: the gate and CI, not the edit-time hook** (Still open: what replaces ruff). The `static` part, and so `--quick` and CI, runs
