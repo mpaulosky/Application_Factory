@@ -38,6 +38,8 @@ Template file; it doesn't reach the Fleet.
   reach it.
 - Claude runs with `--permission-mode bypassPermissions`. Claude Code asks before any write under `.claude/`, and a headless run refuses every ask, so without it Claude can't edit the
   Template (`.claude/skills/repo-ci-baseline/`), where most of the Factory's issues land. The first run, on issue 107, ended that way. Deny rules (`--disallowedTools`) still hold.
+- A headless run ends at the first turn Claude ends, so a command it leaves running in the background never reports back. Issue 124's first two runs ended that way, waiting on
+  `test.sh`. The run turns background tasks off (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`), denies `Monitor` and `ScheduleWakeup`, and the prompt says to run every command in the foreground.
 - Each run after the first is started by the one before it with the job's token, so its actor is `github-actions[bot]`, which the action refuses unless `allowed_bots` names it.
 - Each pull request still gets the Factory's review: Copilot's where the ruleset asks for it and its budget lasts, Claude Review where it doesn't (ADR 0008, ADR 0014).
 - A run's Claude usage counts against the owner's subscription, or the API key's account.
