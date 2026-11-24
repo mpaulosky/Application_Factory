@@ -12,6 +12,8 @@ Why it works this way is in [ADR 0001](docs/adr/0001-standardize-by-copying-a-te
 
 - **Owned files** (`template/owned/`) are overwritten on every Apply, mode included, except a `.sandcastle/check.sh` the repo uses as its sandbox gate, which Apply keeps and reports as a conflict.
   They carry no per-repo values.
+- **Retired Owned files** (`retired.txt`) are Owned files the Template no longer ships. Apply deletes the repo's copy when it is a regular file identical to a version the
+  Template shipped, and keeps and reports any other ([references/apply.md](references/apply.md#retired-owned-files)).
 - **Seed files** (`template/seed/`) are written only where the repo has none, with `{{OWNER}}`, `{{REPO}}`, `{{SOLUTION}}` and `{{YEAR}}` (the year of the Apply) filled
   in. `LICENSE` is a Seed file for that reason: a new project gets its creation year and an existing one keeps its own.
   Per-repo CI setup goes in the Seed `.github/ci/prepare.sh`, which `ci.yml` calls; per-repo gate checks go in the Seed `.github/ci/gate-checks.sh`, which `scripts/gate.sh` calls.
@@ -58,7 +60,7 @@ The Owned `.claude/rules/markdown-and-yaml-edits.md` goes into every repo, with 
 So does `.claude/rules/script-edits.md`, which loads when a session works on a script: the same for shell and Python scripts, and the checks reviewers keep raising on
 shell and Python scripts.
 Where `.claude/settings.json` has no `PostToolUse` entry for the hook, both rules tell the session to run the linters for each kind of file itself.
-A repo that got a `.claude/settings.json` from an earlier Apply deletes it by hand, since `apply.sh` never deletes.
+A repo that got a `.claude/settings.json` from an earlier Apply deletes it by hand: `apply.sh` deletes only the retired Owned files `retired.txt` names, and it isn't one.
 The Factory has a `.claude/settings.json` of its own for the edit-time lint hook
 ([the Factory's ADR 0011](../../../docs/adr/0011-markdown-and-yaml-are-linted-as-they-are-written.md)); an Application does not receive it.
 

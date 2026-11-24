@@ -114,7 +114,7 @@ From the repo's primary checkout, on any branch:
 ```
 
 The dry run writes nothing. Read the report with the skill's `references/apply.md`, and plan an action for every line:
-drift in overwritten Owned files, skipped Seed files, unfilled placeholders, Leftovers and Conflicts.
+drift in overwritten Owned files, retired Owned files removed or kept, skipped Seed files, unfilled placeholders, Leftovers and Conflicts.
 
 ### B2. Apply
 

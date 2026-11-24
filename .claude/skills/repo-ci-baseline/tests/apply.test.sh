@@ -530,5 +530,83 @@ check "gate check (awk error): Apply stops" '[[ $status -ne 0 ]]'
 check "gate check (awk error): it says which file it can't read" 'grep -q "can.t read .*repo-config.mts" <<< "$out"'
 check "gate check (awk error): nothing was written" '[[ -z "$(git -C "$repo" status --porcelain)" ]]'
 
+# ── Retired Owned files (retired.txt): removed when identical, kept otherwise (mpaulosky/Application_Factory#124) ──
+# A second skill copy, so the cases above run with no retired.txt. Two versions of old.py shipped; the repo has each case:
+# the second version (removed), a changed old.yml (kept and reported once, not as a leftover too), a symlink, a folder,
+# a file reached through a symlinked folder (kept, its target untouched), and gone.txt, which isn't there (not mentioned).
+rskill="$work/retired-skill"
+command cp -a "$skill" "$rskill"
+rapply="$rskill/apply.sh"
+sha() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
+write_retired() {
+  {
+    printf '# a comment, then a blank line\n\n'
+    printf '%s  .github/scripts/old.py\r\n' "$(sha $'print(1)\n')"
+    printf '%s  .github/scripts/old.py\n' "$(sha $'print(2)\n')"
+    printf '%s  .github/workflows/old.yml\n' "$(sha $'name: old\n')"
+    printf '%s  gone.txt\n' "$(sha $'x\n')"
+    printf '%s  link.txt\n' "$(sha $'secret\n')"
+    printf '%s  folder\n' "$(sha $'x\n')"
+    printf '%s  via/inside.txt\n' "$(sha $'secret\n')"
+    printf '%s  top level.txt\n' "$(sha $'top\n')"
+  } > "$rskill/retired.txt"
+}
+write_retired
+outside="$work/outside"
+mkdir -p "$outside"
+printf 'secret\n' > "$outside/secret.txt"
+printf 'secret\n' > "$outside/inside.txt"
+repo="$work/retired"
+new_repo "$repo"
+mkdir -p "$repo/.github/scripts" "$repo/.github/workflows" "$repo/folder"
+printf 'print(2)\n' > "$repo/.github/scripts/old.py"
+printf 'name: ours now\n' > "$repo/.github/workflows/old.yml"
+printf 'top\n' > "$repo/top level.txt"
+printf 'x\n' > "$repo/folder/f"
+ln -s "$outside/secret.txt" "$repo/link.txt"
+ln -s "$outside" "$repo/via"
+commit_all "$repo" "init"
+git_q -C "$repo" switch -q -c chore/reapply-baseline
+
+out="$("$rapply" --dry-run "$repo")"
+check "retired (dry run): says the identical file would be removed" \
+  'grep -A3 "Retired Owned files that would be removed" <<< "$out" | grep -qx "  .github/scripts/old.py"'
+check "retired (dry run): nothing is deleted" '[[ -f "$repo/.github/scripts/old.py" && -z "$(git -C "$repo" status --porcelain)" ]]'
+
+out="$("$rapply" "$repo")"
+check "retired: a file identical to a shipped version is removed (CRLF line in retired.txt too)" '[[ ! -e "$repo/.github/scripts/old.py" ]]'
+check "retired: a path with a space is removed" '[[ ! -e "$repo/top level.txt" ]]'
+check "retired: the removals are reported" \
+  '[[ "$(grep -A2 "Retired Owned files that were removed (2)" <<< "$out" | tail -2)" == "  .github/scripts/old.py"$'"'\n'"'"  top level.txt" ]]'
+check "retired: a changed copy is kept" 'grep -qx "name: ours now" "$repo/.github/workflows/old.yml"'
+check "retired: a changed copy is reported as kept" 'grep -A5 "Retired Owned files kept" <<< "$out" | grep -qx "  .github/workflows/old.yml"'
+check "retired: a kept file is listed once, not as a leftover too" '[[ "$(grep -c "old.yml" <<< "$out")" -eq 1 ]]'
+check "retired: a symlink is kept, and its target too" '[[ -L "$repo/link.txt" && -f "$outside/secret.txt" ]]'
+check "retired: a folder is kept" '[[ -d "$repo/folder" ]]'
+check "retired: a file through a symlinked folder is kept, and its target too" '[[ -f "$outside/inside.txt" ]]'
+check "retired: symlink, folder and the symlinked folder's file reported as not regular files" \
+  '[[ "$(grep -c "(not a regular file in the repo)" <<< "$out")" -eq 3 ]]'
+check "retired: a path that's already gone isn't mentioned" '! grep -q "gone.txt" <<< "$out"'
+check "retired: git sees the deletions for the Apply commit" \
+  '[[ "$(git -C "$repo" status --porcelain -- .github/scripts "top level.txt")" == " D .github/scripts/old.py"$'"'\n'"'" D \"top level.txt\"" ]]'
+
+# A bad retired.txt stops Apply before it writes anything.
+repo="$work/retired-bad"
+new_repo "$repo"
+printf 'print(2)\n' > "$repo/kept.py"
+commit_all "$repo" "init"
+git_q -C "$repo" switch -q -c chore/reapply-baseline
+for bad in "$(sha x)  ../escape" "$(sha x)  /etc/passwd" "$(sha x)  a/./b" "$(sha x)  a//b" "$(sha x)  .git/config" "$(sha x)  sub/.git/config" \
+  "$(sha x) one-space" "nothex  kept.py" "$(sha x)  .github/workflows/ci.yml" "$(sha x)  docs/SECURITY.md"; do
+  printf '%s\n' "$bad" > "$rskill/retired.txt"
+  status=0
+  err="$("$rapply" "$repo" 2>&1 > /dev/null)" || status=$?
+  check "retired.txt '$bad': Apply stops (exit 1), naming the line" '[[ $status -eq 1 && "$err" == *"retired.txt line 1"* ]]'
+  check "retired.txt '$bad': nothing is written" '[[ -z "$(git -C "$repo" status --porcelain)" && ! -e "$repo/.github" ]]'
+done
+check "retired.txt: a path still in the Template is named as such" '[[ "$err" == *"retired but still in the Template"* ]]'
+command rm -f "$rskill/retired.txt"
+check "retired.txt: none at all is fine" '"$rapply" --dry-run "$repo" > /dev/null'
+
 echo "apply.test.sh: $pass passed, $failed failed"
 [[ $failed -eq 0 ]]

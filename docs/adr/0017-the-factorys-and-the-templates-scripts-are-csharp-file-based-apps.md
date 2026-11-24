@@ -112,7 +112,7 @@ Each of these is decided in its increment, and recorded as an Update below:
 - The Python heredocs in `claude-review.yml`, and the `python3` calls inside the bash (`lint-edited-file.sh`, the test scripts, the Seed Dockerfile), likely `jq` where a hook can't
   pay a `dotnet` start.
 - Mutation testing: `mutate.py` and its specs, which mutate bash too.
-- Retiring Python from the Baseline: Apply never deletes a file, so how Apply or a Rollout removes retired Owned files, and how `OWNED` and the leftovers report treat them.
+- Retiring Python from the Baseline: which files retire when, now that Apply can remove a retired Owned file (Update: retired Owned files, below).
 
 ## Considered Options
 
@@ -184,28 +184,20 @@ The first increment brings the .NET SDK into the Factory, with no script ported 
   and CA2266 stays visible as a warning. Checked on SDK 11.0.100: `TreatWarningsAsErrors` alone makes CA2266 an error (exit 1), with `WarningsNotAsErrors=CA2266` the build
   exits 0, and `dotnet build app.cs -warnaserror` isn't accepted for a file-based app (MSB4025). The other two ways were turned down: a shebang fails
   `dotnet format whitespace --verify-no-changes` (exit 2, the `# !` rewrite above), and an entry file with no `#:include` would undo the thin-entry-file rule.
-  (The Update for mpaulosky/Application_Factory#145 below adds NU1900 to `WarningsNotAsErrors`.)
 
-## Update (mpaulosky/Application_Factory#145): the C# step and the test project are hardened
+## Update (mpaulosky/Application_Factory#124): retired Owned files
 
-- **NU1900 stays a warning too.** The gate builds each script with `-p:WarningsNotAsErrors=CA2266%3BNU1900` (`%3B` is MSBuild's escaped `;`), and `Scripts.Tests.csproj`
-  adds NU1900 to its `WarningsNotAsErrors`. NU1900 says the vulnerability data couldn't be fetched, a feed outage, which says nothing of a package, so it no longer fails
-  every run while nuget.org is unreachable. The test project names its audit source, nuget.org alone (its `NuGet.config` clears `auditSources`, so a config above it
-  can't point the audit at a feed that reports nothing), and then an outage is also NU1905, "the audit source gave no data", which it allows for the same reason.
-  NuGetAudit's NU1901 to NU1904, a vulnerable package, stay errors.
-- **Each build is its own.** The gate builds each entry file with `--no-incremental`, so a build cached without these properties can't hide a warning; into a `gate-cs.*`
-  folder of the run's own (`--artifacts-path`), which the EXIT trap removes however the gate ends; and with `--disable-build-servers`. A TERM mid-build ends the build (a TERM,
-  then a KILL after 5 s) and waits for it before the folder is removed. TMPDIR is made absolute first: dotnet fails on a relative one.
-- **`test.sh` runs the test project with no build server** (`MSBUILDDISABLENODEREUSE=1`, `DOTNET_CLI_USE_MSBUILD_SERVER=0`, `-p:UseSharedCompilation=false`: `dotnet test`
-  passes `--disable-build-servers` on to the test app). It runs `dotnet test` whether or not the project holds a test, and accepts exit 8, "no test ran", only while the project
-  holds no `.cs` source. It checks that the project targets `net<major>.0` of the SDK `global.json` names, that each of the six shield files is `<Project />`, and that a copy
-  passes, NU1900 and NU1905 warnings, with its feed unreachable and hostile `Directory.*` files above it. It hands dotnet an absolute output folder and TMPDIR, since the run
-  starts in the project's folder, and sets no build server, no node reuse and no first-run setup whatever the caller set; a stub dotnet checks both. `test.sh`'s
-  own temp folders are made absolute by prefixing the working folder, not by `cd`, which a caller's `CDPATH` makes print the folder, and a run under a relative
-  TMPDIR with `CDPATH=.` checks that its trap leaves nothing behind.
-- **The audit reads nuget.org alone.** The project's `NuGet.config` clears `auditSources` and adds nuget.org, which `test.sh` checks.
-- **The test project's restore is pinned.** Its own `NuGet.config` clears every source and mapping and restores from nuget.org alone, and `packages.lock.json` pins
-  every package by hash; `test.sh` restores in locked mode, so a version moved without the lock file fails with NU1004, and checks both on a copy under a `NuGet.config`
-  that adds another feed. Dependabot's NuGet updater restores after a bump, so it rewrites the lock file with the version.
-- **The template-tools action's `setup-dotnet` pin** is the Template ci.yml's, which `test.sh` checks, and Dependabot's `github-actions` entry lists the action's folder.
-- **dotnet runs with telemetry off, no first-run setup and no logo** in the gate, `test.sh` and the workflow, as in the Template's ci.yml.
+Apply can now remove an Owned file the Template retired, so the increments that replace a `.py` with a `.cs` can take the `.py` out of every Application:
+
+- **Where the list lives.** `retired.txt`, beside `apply.sh` in the skill, holds one `<sha256>  <path>` line for every version of a retired file the Template shipped, as
+  `sha256sum` prints it. It is a data file, not a tuple beside `OWNED` in `check_gh_repo.py`, which mpaulosky/Application_Factory#131 ports, and it holds hashes because a retired file is no longer in
+  `template/owned/` to compare with. A retired path still in the Template stops Apply and fails `test.sh`.
+- **What Apply removes.** A regular file, in a folder that resolves inside the repo, identical to one of those versions. A changed copy, a symlink, a folder or a file reached
+  through a symlinked folder is kept and reported once, in its own section of the report and never as a leftover too; a copy already gone isn't mentioned; `--dry-run` says
+  "would be removed". `reapply.sh` commits the deletion with the rest of Apply's output.
+- **The review.** A re-Apply that deletes a retired file, where `main` had a regular file, passes the gate's review check unreviewed, as one that writes an Owned file does:
+  the retirement was reviewed in the Template's PR. The ledger's `RETIRED_PATHS` names the paths, since the Application has no `retired.txt`, and `test.sh` holds the two
+  equal. `rollout.sh --auto` lists a deleted retired file in its review's prompt with the Owned files the branch changes.
+- **The Factory's copies.** A retired file the Factory copies leaves `scripts/gate.sh`'s copies list, and the Factory's copy is deleted, in the PR that retires it; `--sync`
+  doesn't delete a copy.
+- **Status.** `status.sh` prints no per-file Drift, so it gains no retired line: a retired file still present shows in the next Apply's report.
