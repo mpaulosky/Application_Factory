@@ -1,0 +1,2 @@
+repo.owner.app
+pr.ready.owner.app.7 gh pr ready 7 -R owner/app

@@ -1,0 +1,3 @@
+repo.owner.app
+comments.PR_7
+pr.comment.owner.app.7 gh pr comment 7 -R owner/app --body "Copilot's review was requested for this PR. It is asked once per PR; if GitHub drops the request, review:claude calls in Claude instead. mpaulosky/dotfiles#360\n\n<!-- pr-automerge:copilot-asked -->"

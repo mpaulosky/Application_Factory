@@ -1,0 +1,2 @@
+repo.owner.app
+pr.merge.owner.app.7 gh pr merge 7 -R owner/app --auto --squash --match-head-commit 1234567000000000000000000000000000000000
