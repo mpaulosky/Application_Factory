@@ -41,7 +41,6 @@
 .claude/skills/x/076.md:4: gh pr list
 .claude/skills/x/077.md:3: gh pr list
 .claude/skills/x/078.md:3: gh pr view 1
-.claude/skills/x/079.md:2: gh pr view 1
 .claude/skills/x/083.md:2: `gh pr view 1`
 .claude/skills/x/084.md:2: gh.exe pr view 1
 .claude/skills/x/085.md:1: Run `gh.exe pr list`.

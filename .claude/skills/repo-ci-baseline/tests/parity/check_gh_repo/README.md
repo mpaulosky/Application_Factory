@@ -21,7 +21,7 @@ reads the checker's folder through `/proc`, so those cases need Linux.
 - `019` to `057`, the inputs the white-box tests give the checker, captured from a run of them: the fewest that between them tell every mutation in
   `tests/gh_repo/mutations.json` that any captured input tells from the original, each as `scripts/check.bash` (each case is named for the test it came from).
   A script is a `*.bash` here, never a `*.sh`, so the gate's shellcheck and shfmt, which take every `*.sh`, don't lint a fixture written to fail; the checker reads both as shell.
-- `058`: every Markdown input the white-box tests give the checker, one skill file each: fences of backticks and tildes, in quotes and lists, and inline code.
+- `058`: every Markdown input the white-box tests give the checker but one holding a NUL byte, one skill file each: fences of backticks and tildes, in quotes and lists, and inline code.
 - `059`: scripts that aren't UTF-8, and control bytes.
 
 ## Decided
@@ -34,7 +34,8 @@ reads the checker's folder through `/proc`, so those cases need Linux.
 
 - A file or folder the checker can't read (exit 2): the runner runs as whoever runs `test.sh`, root in some containers, who reads every file.
 - shfmt missing from `PATH`, or hanging: the runner looks `python3` up on the same `PATH`, so a case can't take shfmt away alone. The shim's own test covers the shim.
-- A script holding a NUL byte: the local review can't read a fixture git shows as binary, so `032` stands for the one such input the selection picked.
+- A script or skill file holding a NUL byte: the local review can't read a fixture git shows as binary, so `032` stands for the one such script the selection
+  picked, and `058` leaves out the one such skill file.
 - The Owned files `--repo` skips: their names end in `.sh`, which the gate would lint as fixtures.
 - Four of the 67 mutations in `tests/gh_repo/mutations.json`, which no command line tells from the original: none of the 964 captured inputs does, run in-process against
   each mutant. The pytest suite catches them only from inside:
