@@ -332,9 +332,10 @@ and the decision both act on, `github/landing.py`.
 Tests: `github/tests/test_landing.py`, `test_status.py` and `test_land.py`, run by `test.sh`; none calls GitHub.
 The parity suites run `status.py` and `land.py` through their command lines only, against a fake `gh` (`tests/parity/fake-gh.sh`) that answers
 from fixture files, so the same cases can judge another implementation: `tests/parity.test.sh <suite> <command> [arg]...`, where the suite is `status` or
-`land`, with its cases in `tests/parity/<suite>/cases/` and its gaps in that folder's `README.md`. The fake logs each `gh pr` call with its whole argv
+`land` (or one of the release scripts, [release-pipeline.md](release-pipeline.md)), with its cases in `tests/parity/<suite>/cases/`
+and its gaps in that folder's `README.md`. The fake logs each `gh pr` call with its whole argv
 (the body `land.py`'s Copilot comment carries among it), and answers the nth call with a key from its own fixture, so a case can loop through several polls.
-`test.sh` runs both suites against the Python, and `tests/parity-runner.test.sh`, the tests of the runner and the fake themselves.
+`test.sh` runs every suite against the Python, and `tests/parity-runner.test.sh`, the tests of the runner and the fake themselves.
 `PARITY_RECORD=1 tests/parity.test.sh <suite>` records a suite's cases from the Python only; the runner's header says what a case holds.
 
 ```bash

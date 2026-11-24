@@ -6,7 +6,7 @@
 #
 # Runs the Template's own tests (hook suites, auto-merge script tests,
 # the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle and the GitHub scripts' tests
-# (settings, the landing decision, status, land and rollout) with status's parity suite, the Claude Review
+# (settings, the landing decision, status, land and rollout), the parity suites (status, land and the release scripts), the Claude Review
 # benchmark's tests, the C# script tests (tests/Scripts.Tests), lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
 # Owned files carry no {{PLACEHOLDER}} and that the Owned scripts, and this repo's own
@@ -16,7 +16,7 @@
 # change. A repo's copies of Owned files are checked by status.sh and apply.sh --dry-run, not here.
 #
 # TEST_SH_SHARD runs one of its three shards, which is how the Factory's CI runs it in parallel jobs (ADR 0013): hooks is the hook and Owned script
-# tests, scripts the auto-merge, Owned .github/scripts, hardening-review, renderer, GitHub script, status parity, benchmark and C# script tests, checks everything from actionlint on. With
+# tests, scripts the auto-merge, Owned .github/scripts, hardening-review, renderer, GitHub script, parity suite, benchmark and C# script tests, checks everything from actionlint on. With
 # no TEST_SH_SHARD every shard runs, in that order. Every step sits in exactly one shard; scripts/tests/gate.test.sh checks that.
 set -euo pipefail
 # The step headers carry SECONDS: count from here, whatever SECONDS a caller exported (mpaulosky/dotfiles#417).
@@ -592,8 +592,8 @@ if in_shard scripts; then
   step "GitHub scripts tests (settings, landing decision, status, land, rollout)"
   (cd "$skill_dir" && "${pytest_cmd[@]}" -q -p no:cacheprovider github/tests) || fail "github scripts pytest"
 
-  step "Parity suites (status.py and land.py through their command lines, against a fake gh) and their runner's tests"
-  for suite in status land; do
+  step "Parity suites (status.py, land.py and the release scripts through their command lines, against a fake gh) and their runner's tests"
+  for suite in status land release_queue draft_release release_post backfill_blog_posts; do
     bash "$skill_dir/tests/parity.test.sh" "$suite" || fail "parity.test.sh $suite"
   done
   bash "$skill_dir/tests/parity-runner.test.sh" || fail "parity-runner.test.sh"

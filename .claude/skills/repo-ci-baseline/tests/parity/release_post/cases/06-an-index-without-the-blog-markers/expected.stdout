@@ -1,0 +1,3 @@
+::notice::ANTHROPIC_API_KEY is not set; writing the post without an AI summary.
+Wrote docs/blogs/2026-03-01-pr-7-feat-add-a-thing.md
+::notice::docs/index.html has no BLOGS_HTML_START/END markers; leaving that table alone.

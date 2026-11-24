@@ -1,0 +1,13 @@
+{
+  "number": 3,
+  "title": "feat: Earlier, renamed",
+  "body": "",
+  "merged_at": "2026-02-20T10:00:00Z",
+  "html_url": "https://github.com/o/app/pull/3",
+  "user": {
+    "login": "alice"
+  },
+  "base": {
+    "ref": "main"
+  }
+}
