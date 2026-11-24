@@ -1,0 +1,1 @@
+pr.list.mpaulosky.TicketManager gh pr list -R mpaulosky/TicketManager --head chore/reapply-baseline --state all --limit 100 --json number,state,headRefOid,isCrossRepository --jq "[.[] | select(.isCrossRepository == false)][0] // empty | \"\\(.number) \\(.state) \\(.headRefOid)\""

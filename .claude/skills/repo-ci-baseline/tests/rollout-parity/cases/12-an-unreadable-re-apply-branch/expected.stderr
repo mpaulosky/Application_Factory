@@ -1,0 +1,1 @@
+^rollout\.sh: can't read TicketManager's re-Apply branch: .*exited 128: fatal: cannot change to '~/github/TicketManager-worktrees/chore-reapply-baseline': No such file or directory$

@@ -1,0 +1,2 @@
+^gate: no review recorded$
+^rollout\.sh: reapply failed on TicketManager: the gate asks for a review: run /pre-push-review in its re-Apply worktree \(or rollout\.sh --auto\), then run this again$
