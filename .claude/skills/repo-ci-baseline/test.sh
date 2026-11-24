@@ -128,7 +128,8 @@ setup_dotnet_step() {
     sha != "" && /^ +global-json-file: global\.json$/ { json = 1 }
     END { if (!found && sha != "" && json) { print sha; found = 1 } exit !found }' "$1"
 }
-# The shard is checked first, before the tools, and must be exactly one of the declared names: a value such as "hooks scripts" would match no block and run nothing.
+# The shard is checked before the tools, after the temp folders and their trap above (the scripts shard's CDPATH check relies on that), and must be
+# exactly one of the declared names: a value such as "hooks scripts" would match no block and run nothing.
 shards=(hooks scripts checks)
 shard="${TEST_SH_SHARD:-}"
 known=0
@@ -768,8 +769,8 @@ if in_shard scripts; then
   for bad in "8 $st/source" "8 $st/root-source" "1 $st/empty" "9 $st/empty" "2 $st/built" "8 $st/missing"; do
     ! scripts_tests_pass "${bad%% *}" "${bad#* }" || fail "scripts_tests_pass accepts exit ${bad%% *} for ${bad#* }"
   done
-  # The run's paths, with a stub dotnet: a relative output folder and a relative TMPDIR reach dotnet absolute, naming the folders they named from where
-  # test.sh stood, not folders inside the project.
+  # The run's paths and settings, with a stub dotnet: a relative output folder and a relative TMPDIR reach dotnet absolute, naming the folders they named
+  # from where test.sh stood, not folders inside the project, and the run sets no build server, no node reuse and no first-run setup whatever the caller set.
   mkdir -p "$st/stub" "$st/proj" "$st/cwd/rel-tmp"
   # shellcheck disable=SC2016 # the stub's own $PWD, $TMPDIR and $@, expanded when it runs
   printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$PWD" "$TMPDIR" "$@" "MSBUILDDISABLENODEREUSE=$MSBUILDDISABLENODEREUSE" "DOTNET_CLI_USE_MSBUILD_SERVER=$DOTNET_CLI_USE_MSBUILD_SERVER" "DOTNET_CLI_TELEMETRY_OPTOUT=$DOTNET_CLI_TELEMETRY_OPTOUT" "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=$DOTNET_SKIP_FIRST_TIME_EXPERIENCE" "DOTNET_NOLOGO=$DOTNET_NOLOGO" > "%s"\n' "$st/stub.log" > "$st/stub/dotnet"
@@ -783,11 +784,15 @@ if in_shard scripts; then
     grep -qxF -- "$want" <<< "$stub_log" || fail "scripts_tests_run doesn't pass dotnet $want (it got: ${stub_log//$'\n'/ })"
   done
   # test.sh's own temp folders, under a relative TMPDIR and a CDPATH that holds ., are removed by its EXIT trap: an unknown shard ends the run just
-  # after they are made, so nothing may be left under that TMPDIR.
+  # after they are made, so nothing may be left under that TMPDIR. The run must end at the shard check (exit 2 and its message), which sits below the
+  # two mktemp lines and the trap, so an earlier failure that never made the folders can't pass this.
   cdp="$md_tmp/cdpath"
   mkdir -p "$cdp/rel"
-  ! (cd "$cdp" && TMPDIR=rel CDPATH=. TEST_SH_SHARD=no-such-shard bash "$skill_dir/test.sh" > "$cdp/out" 2>&1) \
-    || fail "test.sh passed with an unknown TEST_SH_SHARD: $(cat "$cdp/out")"
+  cdp_code=0
+  (cd "$cdp" && TMPDIR=rel CDPATH=. TEST_SH_SHARD=no-such-shard bash "$skill_dir/test.sh" > "$cdp/out" 2>&1) || cdp_code=$?
+  if [[ "$cdp_code" != 2 ]] || ! grep -qF "TEST_SH_SHARD must be one of" "$cdp/out"; then
+    fail "test.sh under a relative TMPDIR with CDPATH=. didn't end at its shard check (exit $cdp_code): $(cat "$cdp/out")"
+  fi
   [[ -z "$(ls -A "$cdp/rel")" ]] || fail "test.sh left its temp folders under a relative TMPDIR with CDPATH=.: $(ls -A "$cdp/rel")"
   # The audit reads advisories from nuget.org alone too: a NuGet.config above the folder can't point it at a feed that reports none.
   audit="$(tr -d '\n\t' < "$scripts_tests/NuGet.config" | grep -oE '<auditSources>.*</auditSources>' || true)"
