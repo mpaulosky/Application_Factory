@@ -51,5 +51,8 @@ Issue 119's run, a port of five scripts and 286 tests, reached the work step's 7
 minutes, under the hosted runner's 360. One issue can therefore hold the queue for about five and a half hours, and a stuck run can spend that much of the owner's usage.
 
 The action exchanges the OIDC token for the Claude GitHub App's once, when the work step starts, and an App installation token expires after an hour, so Claude no longer pushes or opens
-the pull request itself. It commits as it goes and writes the pull request's title and body to files. The "Publish the branch" step then exchanges a fresh token, pushes the branch, also
-after a timeout, and opens the draft pull request when the title and body are there. A later run on the same issue continues from the branch it finds.
+the pull request itself. It commits as it goes and writes the pull request's title and body to files. The "Publish the branch" step then commits anything left uncommitted, exchanges a
+fresh token, pushes the branch, also after a timeout, and opens the draft pull request when the title and body are there. A later run on the same issue continues from the branch it finds.
+The runner and its commits are gone when the job ends, so each of the step's network calls is retried, and a branch it still can't push (a token without the workflows permission refuses
+one that edits `.github/workflows/`) is uploaded as the run's `claude-branch` artifact, a git bundle, which the Finish step's comment names. The exchange from a plain step is the one the
+action makes, so the first long run after this change is the one to watch.
