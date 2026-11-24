@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # The parity suites: a script's behaviour through its command line only, so the same cases judge any implementation of it
-# (its C# port, ADR 0017) against the Python. One runner and one fake gh serve every suite; a suite is a folder
+# (its C# port, ADR 0017) against the suite's reference (below). One runner and one fake gh serve every suite; a suite is a folder
 # tests/parity/<suite>/, named for the script it was recorded from, and its README.md says what its cases cover and what they
 # leave out on purpose, and anything a run of it needs besides (check_gh_repo's runs with its shfmt shim first on PATH).
 # The suite's reference is that script: github/<suite>.py, else github/<suite>.cs once a port has replaced the .py (a
 # Factory-only script, whose .py goes in the PR that ports it, ADR 0017), else the Template's template/owned/.github/scripts/<suite>.py.
 #
 #   tests/parity.test.sh <suite>                    run the suite's cases against its reference: python3 <the .py>, or
-#                                                   dotnet run --no-build --file <the .cs> --, built once first
+#                                                   dotnet run --no-build --file <the .cs> --, built once first and run
+#                                                   from the .cs's folder, as its .sh runs it (so its cases write no files)
 #   tests/parity.test.sh <suite> <command> [arg]... run them against another implementation
 #   PARITY_RECORD=1 tests/parity.test.sh <suite>
-#                                                   record the cases from the suite's reference (no command is accepted:
-#                                                   a port never records its own oracle); review the diff before committing
+#                                                   record the cases from the suite's reference (no command is accepted,
+#                                                   so a port under test never records its own oracle; once a port has
+#                                                   replaced the .py, the .cs is the reference and records); review the diff
+#                                                   before committing
 #
 # Each case is a folder under tests/parity/<suite>/cases/:
 #
@@ -130,6 +133,8 @@ for i in "${!impl[@]}"; do
     impl[i]="$option$(CDPATH='' cd -- "$(dirname -- "$word")" && pwd)/$(basename -- "$word")"
   fi
 done
+# shown: the command as the summary names it (a C# reference's dotnet run, not the script that runs it from its folder).
+shown="${impl[*]}"
 command -v -- "${impl[0]}" > /dev/null || setup_error "the command '${impl[0]}' can't be run (not found or not executable)."
 [[ -f "$fake" && -x "$fake" ]] || setup_error "$fake is missing or not executable."
 
@@ -137,10 +142,18 @@ tmp="$(mktemp -d)" || setup_error "can't make a temporary folder."
 trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/bin" "$tmp/ghconfig" || setup_error "can't make folders under $tmp."
 ln -s "$fake" "$tmp/bin/gh" || setup_error "can't link the fake gh into $tmp/bin."
-# A C# reference is built once, from its own folder, so the SDK is the one the global.json above it names (ADR 0017).
+# A C# reference is built once, from its own folder, so the SDK is the one the global.json above it names (ADR 0017), and
+# each case runs it from that folder too (a script in tmp/bin that cds there), since dotnet picks the SDK by the folder it runs
+# in: from the case's folder, --no-build could run on an SDK other than the one that built it.
 if [[ -n "$build_cs" ]]; then
   (cd -- "$(dirname -- "$build_cs")" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 \
+    MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 UseSharedCompilation=false \
     dotnet build "$build_cs" < /dev/null > "$tmp/build.log" 2>&1) || setup_error "dotnet build $build_cs failed:"$'\n'"$(cat "$tmp/build.log")"
+  {
+    printf '#!/usr/bin/env bash\ncd -- %q && exec dotnet run --no-build --file %q -- "$@"\n' "$(dirname -- "$build_cs")" "$build_cs" > "$tmp/bin/reference"
+    chmod +x "$tmp/bin/reference"
+  } || setup_error "can't write $tmp/bin/reference."
+  impl=("$tmp/bin/reference")
 fi
 
 shopt -s nullglob
@@ -369,11 +382,11 @@ for case_dir in "${cases[@]}"; do
 done
 
 if [[ ${#failed[@]} -gt 0 ]]; then
-  echo "parity: $suite: ${#failed[@]} case(s) failed against ${impl[*]}: ${failed[*]}" >&2
+  echo "parity: $suite: ${#failed[@]} case(s) failed against $shown: ${failed[*]}" >&2
   exit 1
 fi
 if [[ -n "$record" ]]; then
-  echo "parity: $suite: ${#cases[@]} case(s) recorded from ${impl[*]}"
+  echo "parity: $suite: ${#cases[@]} case(s) recorded from $shown"
 else
-  echo "parity: $suite: ${#cases[@]} case(s) pass against: ${impl[*]}"
+  echo "parity: $suite: ${#cases[@]} case(s) pass against: $shown"
 fi

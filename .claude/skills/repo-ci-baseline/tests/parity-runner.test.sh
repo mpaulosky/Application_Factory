@@ -248,6 +248,9 @@ PATH="$work/dotnet-stub:$PATH" runner 0 "a suite whose script is github/<suite>.
 [[ "$(grep -c '|build ' "$work/dotnet.log")" == 1 ]] || fail "the C# reference wasn't built exactly once: $(cat "$work/dotnet.log")"
 grep -qxF "$skill/github|build $skill/github/cs.cs" "$work/dotnet.log" || fail "the C# reference wasn't built from its own folder: $(cat "$work/dotnet.log")"
 [[ "$(head -1 "$work/dotnet.log")" == *"|build "* ]] || fail "the C# reference was run before it was built: $(cat "$work/dotnet.log")"
+# Each case runs it from its own folder too, so the SDK that runs it is the one that built it.
+[[ "$(grep -c '|run ' "$work/dotnet.log")" == 2 && "$(awk -v want="$skill/github|run --no-build --file $skill/github/cs.cs -- " 'index($0, want) == 1' "$work/dotnet.log" | wc -l | tr -d " ")" == 2 ]] \
+  || fail "the C# reference's cases didn't each run from its own folder: $(cat "$work/dotnet.log")"
 PATH="$work/dotnet-stub:$PATH" STUB_BUILD_FAILS=1 runner 2 "a C# reference whose build fails" "dotnet build $skill/github/cs.cs failed:" cs
 says "a C# reference whose build fails" "error CS1002"
 # Record mode records from it too, now that no Python is left to record from.

@@ -787,10 +787,23 @@ if in_shard scripts; then
   mkdir -p "$other_sdk"
   printf '{"sdk": {"version": "8.0.1", "rollForward": "disable"}}\n' > "$other_sdk/global.json"
   ! (cd "$other_sdk" && dotnet --version) > /dev/null 2>&1 || fail "dotnet ran in a folder whose global.json pins SDK 8.0.1, so the wrappers' check below proves nothing"
-  TMPDIR="$other_sdk" bash "$skill_dir/tests/parity.test.sh" status "$skill_dir/status.sh" > "$md_tmp/status-sh.log" 2>&1 \
+  # The build output of a file-based app is under the temp folder, so with this TMPDIR status.sh builds status.cs again inside the
+  # first case: it gets 300 seconds, not the runner's 60.
+  TMPDIR="$other_sdk" PARITY_TIMEOUT=300 bash "$skill_dir/tests/parity.test.sh" status "$skill_dir/status.sh" > "$md_tmp/status-sh.log" 2>&1 \
     || fail "status.sh fails the status suite from under a global.json that pins another SDK: $(tail -5 "$md_tmp/status-sh.log")"
   land_help="$(cd "$other_sdk" && bash "$skill_dir/land.sh" --help 2>&1)" || fail "land.sh --help fails from a folder whose global.json pins another SDK: $land_help"
   [[ "$land_help" == "usage: land.cs "* ]] || fail "land.sh --help didn't print land's usage from a folder whose global.json pins another SDK: $land_help"
+  # With no dotnet on PATH (only bash and dirname, which the wrappers need first), each wrapper exits 127 and says so.
+  no_dotnet="$md_tmp/no-dotnet"
+  mkdir -p "$no_dotnet"
+  ln -sf "$(command -v bash)" "$no_dotnet/bash"
+  ln -sf "$(command -v dirname)" "$no_dotnet/dirname"
+  for wrapper in status land; do
+    code=0
+    said="$(PATH="$no_dotnet" "$no_dotnet/bash" "$skill_dir/$wrapper.sh" --help 2>&1)" || code=$?
+    [[ $code -eq 127 && "$said" == "$wrapper.sh: dotnet isn't on PATH; github/$wrapper.cs runs on the .NET SDK"* ]] \
+      || fail "$wrapper.sh with no dotnet on PATH exited $code, not 127 with its message: $said"
+  done
   bash "$skill_dir/tests/parity-runner.test.sh" || fail "parity-runner.test.sh"
   # Run again as a hook would, with GIT_DIR and the rest naming another repo: its throwaway repo must not touch that one.
   # The decoy sits under md_tmp, which the EXIT trap removes, and its own git calls run without test.sh's caller's GIT_*.
