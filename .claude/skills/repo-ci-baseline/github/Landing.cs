@@ -273,7 +273,9 @@ static class Landing
 	// comments are (author login, body, createdAt ISO-8601) triples, oldest first, or null when they couldn't be read, which counts as
 	// asked but not settled: nothing asks, and nothing is called dropped, on a record nobody can see. Only github-actions (PR Auto-Merge)
 	// or the repository owner (land.cs) can write the record: anyone can comment the marker. The first record decides; it settles
-	// CopilotAskSettleSeconds after it was written, and one with an unreadable time never settles. now is epoch seconds.
+	// CopilotAskSettleSeconds after it was written, and one with an unreadable time never settles. now is epoch seconds. The owner is
+	// matched ignoring case, as GitHub matches logins: land's owner is the target as typed or as repos.txt spells it (landing.py compared
+	// exactly, so land asked again on every run for an owner in another case). github-actions is matched exactly.
 	public static (bool Asked, bool Settled) CopilotAsk(IEnumerable<(string? Login, string? Body, string? CreatedAt)>? comments, string owner, double now)
 	{
 		if (comments is null)
@@ -281,7 +283,8 @@ static class Landing
 		foreach (var (login, body, createdAt) in comments)
 		{
 			var who = NoBot(login ?? "");
-			if (!(body ?? "").Contains(CopilotAskedMarker, StringComparison.Ordinal) || who == "" || (who != GithubActions && who != owner))
+			if (!(body ?? "").Contains(CopilotAskedMarker, StringComparison.Ordinal) || who == ""
+					|| (who != GithubActions && !string.Equals(who, owner, StringComparison.OrdinalIgnoreCase)))
 				continue;
 			if (Epoch(createdAt) is not double written)
 				return (true, false);

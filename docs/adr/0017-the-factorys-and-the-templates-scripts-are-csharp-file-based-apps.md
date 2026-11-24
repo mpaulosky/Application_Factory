@@ -256,7 +256,9 @@ The first ported scripts, Factory-only, so the `.py` files are deleted in the PR
   GitHub's ASCII characters, with neither side `.` or `..` (a usage error for an argument, exit 1 for a `repos.txt` line); a permission answer that isn't an
   object is unread rather than no write access; and `land.sh` refuses a PR number past a 64-bit integer whatever came before it, and a `--interval`
   `time.sleep` refuses (negative, NaN, or from 2^63 nanoseconds, about 292 years, up, infinity among them) ends it with exit 1 when it first waits, as `time.sleep` did,
-  rather than hang. The parity suites' fixtures carry `isCrossRepository` where a case needs a release-blog PR.
+  rather than hang. The owner's Copilot ask record is matched ignoring case, as GitHub matches logins, so `land.sh` finds its own record for an owner typed
+  or listed in another case rather than ask Copilot again on every run (`github-actions` is still matched exactly). The parity suites' fixtures carry
+  `isCrossRepository` where a case needs a release-blog PR.
 - **The wrappers.** `status.sh` and `land.sh` change to `github/` and run `dotnet run --file` with the script's absolute path, so the Factory's `global.json` picks the SDK.
   The build leaves no MSBuild node, MSBuild server or compiler server behind, and a missing `dotnet` exits 127 with a message.
   `test.sh` runs the status suite against `status.sh`, and `land.sh --help`, under a `global.json` that pins an SDK nobody has installed.

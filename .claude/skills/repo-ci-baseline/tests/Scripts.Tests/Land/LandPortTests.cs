@@ -1,3 +1,5 @@
+using System.Globalization;
+
 // What the port changes on purpose in land (ADR 0017's Update for mpaulosky/Application_Factory#119): not moved tests, so LandTests
 // keeps test_land.py's and its count can be checked against that file's.
 public class LandPortTests
@@ -135,5 +137,21 @@ public class LandPortTests
 		}
 		foreach (var bad in new[] { longest, Math.BitIncrement(longest), 1e300, double.MaxValue })
 			Assert.Throws<ArgumentOutOfRangeException>(() => Land.Sleep(bad, waits.Add));
+	}
+
+	// Not a moved test: GitHub logins ignore case, and land's owner is the target as typed (land.sh MPaulosky/app#5) or as repos.txt spells
+	// it, while the record's author is GitHub's spelling; landing.py compared them exactly, so land asked Copilot again on every run.
+	// A record by github-actions is still matched exactly.
+	[Fact]
+	public void The_owners_ask_record_counts_whatever_the_case_the_owner_was_given_in()
+	{
+		const double now = 1_800_000_000.0;
+		var written = DateTimeOffset.FromUnixTimeSeconds((long)now - 3600).UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+		(string?, string?, string?) Record(string login) => (login, $"Asked Copilot.\n\n{Landing.CopilotAskedMarker}", written);
+		Assert.Equal((true, true), Landing.CopilotAsk([Record("mpaulosky")], "MPaulosky", now));
+		Assert.Equal((true, true), Landing.CopilotAsk([Record("MPaulosky")], "mpaulosky", now));
+		Assert.Equal((true, true), Landing.CopilotAsk([Record("MPaulosky[bot]")], "mpaulosky", now));
+		Assert.Equal((false, false), Landing.CopilotAsk([Record("mpaulosky-other")], "MPaulosky", now));
+		Assert.Equal((false, false), Landing.CopilotAsk([Record("GitHub-Actions")], "o", now));
 	}
 }
