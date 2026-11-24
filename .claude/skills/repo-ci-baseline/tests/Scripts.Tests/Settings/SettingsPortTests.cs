@@ -19,10 +19,9 @@ public partial class SettingsTests
 			UseShellExecute = false,
 			StandardInputEncoding = new UTF8Encoding(false),
 		};
-		foreach (var arg in new[] { "-I", "-c", $"import sys; sys.path.insert(0, sys.argv[1])\n{script}", Github })
+		// -I ignores every PYTHON* variable, so UTF-8 mode and no bytecode (no __pycache__ in the skill's github/) are asked for by option.
+		foreach (var arg in new[] { "-I", "-B", "-X", "utf8", "-c", $"import sys; sys.path.insert(0, sys.argv[1])\n{script}", Github })
 			start.ArgumentList.Add(arg);
-		start.Environment["PYTHONUTF8"] = "1";
-		start.Environment["PYTHONDONTWRITEBYTECODE"] = "1";
 		using var run = Process.Start(start)!;
 		run.StandardInput.Write(input);
 		run.StandardInput.Close();

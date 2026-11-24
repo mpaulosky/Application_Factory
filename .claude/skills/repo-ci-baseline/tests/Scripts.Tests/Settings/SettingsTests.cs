@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 // Tests for github/SettingsCore.cs against an in-memory GitHub (moved from the pytest suite it replaced, github/tests/test_settings.py).
 // FakeGitHub keeps the state the script reads and writes (repo settings, workflows, rulesets, labels, secrets, protection), so a test can
 // run --fix and then check that a second run finds nothing left to change. Every write is logged in fake.Writes.
-public partial class SettingsTests
+public partial class SettingsTests : IDisposable
 {
 	const string RepoName = "owner/app";
 	static readonly string Github = Skill.Path("github");
@@ -298,10 +298,21 @@ public partial class SettingsTests
 		return findings;
 	}
 
+	// The copies of github/ this test made, deleted after it as the pytest suite's tmp_path was.
+	readonly List<string> copies = [];
+
+	public void Dispose()
+	{
+		foreach (var copy in copies)
+			Directory.Delete(copy, true);
+		GC.SuppressFinalize(this);
+	}
+
 	// A copy of github/ (its tests left out), for a test that changes repos.txt or a per-repo file, as the pytest suite's copytree did.
-	static string CopyGithub()
+	string CopyGithub()
 	{
 		var folder = Directory.CreateTempSubdirectory("settings-test.").FullName;
+		copies.Add(folder);
 		foreach (var file in Directory.EnumerateFiles(Github, "*", SearchOption.AllDirectories))
 		{
 			var relative = Path.GetRelativePath(Github, file);
