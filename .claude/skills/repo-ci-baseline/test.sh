@@ -6,8 +6,8 @@
 #
 # Runs the Template's own tests (hook suites, auto-merge script tests,
 # the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle and the GitHub scripts' pytest
-# (settings and rollout) with the parity suites (status, land, check_gh_repo and the release scripts), the Claude Review
-# benchmark's tests and the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land and what they share), lints its workflows, YAML, shell
+# (rollout) with the parity suites (status, land, settings, check_gh_repo and the release scripts), the Claude Review
+# benchmark's tests and the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land, settings and what they share), lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
 # Owned files carry no {{PLACEHOLDER}} and that the Owned scripts, and this repo's own
 # scripts and skills, tell every gh command its repository, checks the Seed Sandcastle files, and smoke-tests apply.sh and
@@ -750,12 +750,14 @@ if in_shard scripts; then
   fi
   (cd "$skill_dir/tests/render_oracle" && "${oracle_cmd[@]}" -q -p no:cacheprovider .) || fail "renderer oracle"
 
-  step "GitHub scripts tests (settings, rollout)"
+  step "GitHub scripts tests (rollout)"
   (cd "$skill_dir" && "${pytest_cmd[@]}" -q -p no:cacheprovider github/tests) || fail "github scripts pytest"
 
-  step "Parity suites (status.cs, land.cs, check_gh_repo.py and the release scripts through their command lines, against a fake gh) and their runner's tests"
-  # The fake gh runs jq for a REST call's --jq, which the release scripts' suites make. The status and land suites' reference is the C#
-  # (github/status.cs, github/land.cs), which the runner builds once before its cases (ADR 0017).
+  step "Parity suites (status.cs, land.cs, settings.py and settings.cs, check_gh_repo.py and the release scripts through their command lines, against a fake gh) and their runner's tests"
+  # The fake gh runs jq for a REST call's --jq, which the release scripts' suites make, and for a REST call's --input body, which the
+  # settings suite's make. The status and land suites' reference is the C# (github/status.cs, github/land.cs), which the runner builds once
+  # before its cases (ADR 0017). The settings suite's is settings.py, which stays for rollout.py, and it runs against github-settings.sh
+  # (settings.cs) below.
   need jq
   need dotnet
   # Every suite is run: each folder under tests/parity/ with a cases/ folder, so a suite added later can't be left out. Each needs its README.md
@@ -767,7 +769,7 @@ if in_shard scripts; then
     parity_suites+=("$suite")
     [[ -f "$suite_dir/README.md" ]] || fail "tests/parity/$suite has cases but no README.md saying what they cover and leave out"
   done
-  ((${#parity_suites[@]} >= 7)) || fail "found ${#parity_suites[@]} parity suite(s) under tests/parity/, expected status, land, check_gh_repo and the four release scripts' at least"
+  ((${#parity_suites[@]} >= 8)) || fail "found ${#parity_suites[@]} parity suite(s) under tests/parity/, expected status, land, settings, check_gh_repo and the four release scripts' at least"
   # check_gh_repo's suite runs the checker with tests/parity/check_gh_repo/shfmt-shim.sh first on PATH as shfmt (its README says why); the
   # shim's own test runs first, so a broken shim fails as itself and not as a case.
   bash "$skill_dir/tests/shfmt-shim.test.sh" || fail "shfmt-shim.test.sh"
@@ -793,15 +795,23 @@ if in_shard scripts; then
     || fail "status.sh fails the status suite from under a global.json that pins another SDK: $(tail -5 "$md_tmp/status-sh.log")"
   land_help="$(cd "$other_sdk" && bash "$skill_dir/land.sh" --help 2>&1)" || fail "land.sh --help fails from a folder whose global.json pins another SDK: $land_help"
   [[ "$land_help" == "usage: land.cs "* ]] || fail "land.sh --help didn't print land's usage from a folder whose global.json pins another SDK: $land_help"
+  # The settings suite against github-settings.sh, the C# port, run as status.sh is: from under that global.json, with a TMPDIR that makes
+  # the runner's copy of github/ (the suite's github/ laid over it, so settings.cs is built afresh in the first case) a new path. The first
+  # case passing shows the first build's CA2266 warning stays off stdout.
+  TMPDIR="$other_sdk" PARITY_TIMEOUT=300 bash "$skill_dir/tests/parity.test.sh" settings "$skill_dir/github-settings.sh" > "$md_tmp/settings-sh.log" 2>&1 \
+    || fail "github-settings.sh fails the settings suite from under a global.json that pins another SDK: $(tail -5 "$md_tmp/settings-sh.log")"
+  settings_help="$(cd "$other_sdk" && bash "$skill_dir/github-settings.sh" --help 2>&1)" \
+    || fail "github-settings.sh --help fails from a folder whose global.json pins another SDK: $settings_help"
+  [[ "$settings_help" == "usage: settings.cs "* ]] || fail "github-settings.sh --help didn't print settings' usage: $settings_help"
   # With no dotnet on PATH (only bash and dirname, which the wrappers need first), each wrapper exits 127 and says so.
   no_dotnet="$md_tmp/no-dotnet"
   mkdir -p "$no_dotnet"
   ln -sf "$(command -v bash)" "$no_dotnet/bash"
   ln -sf "$(command -v dirname)" "$no_dotnet/dirname"
-  for wrapper in status land; do
-    code=0
+  for wrapper in status:status land:land github-settings:settings; do
+    script="${wrapper#*:}" wrapper="${wrapper%%:*}" code=0
     said="$(PATH="$no_dotnet" "$no_dotnet/bash" "$skill_dir/$wrapper.sh" --help 2>&1)" || code=$?
-    [[ $code -eq 127 && "$said" == "$wrapper.sh: dotnet isn't on PATH; github/$wrapper.cs runs on the .NET SDK"* ]] \
+    [[ $code -eq 127 && "$said" == "$wrapper.sh: dotnet isn't on PATH; github/$script.cs runs on the .NET SDK"* ]] \
       || fail "$wrapper.sh with no dotnet on PATH exited $code, not 127 with its message: $said"
   done
   bash "$skill_dir/tests/parity-runner.test.sh" || fail "parity-runner.test.sh"
@@ -1645,7 +1655,7 @@ sys.exit(0 if re.search(r"^[ \t]*(?i:RUN)[ \t]+[^\n]*\bpip3?[ \t]+install\b[^\n&
     fail "pr-automerge.yml's header still says every unresolved thread holds the merge past the cap"
   fi
   grep -qE 'const COPILOT_REVIEW_CAP = 3;' "$pr_automerge" \
-    || fail "pr-automerge.yml must keep 'const COPILOT_REVIEW_CAP = 3;': github-settings.sh and settings.py read the cap by that line"
+    || fail "pr-automerge.yml must keep 'const COPILOT_REVIEW_CAP = 3;': github-settings.sh and SettingsCore.cs read the cap by that line"
   grep -qE 'const MAX_CLAUDE_ROUNDS = 3;' "$pr_automerge" \
     || fail "pr-automerge.yml must keep 'const MAX_CLAUDE_ROUNDS = 3;'"
   grep -qF -- 'const EXHAUSTED_MARKER = "<!-- pr-automerge:review-loop-exhausted";' "$pr_automerge" \

@@ -17,7 +17,7 @@ fail=0
   exit 1
 }
 
-# Read the registry as github/settings.py's read_repo_list does: drop inline comments, scope defaults to "full".
+# Read the registry as github/Repos.cs reads it: drop inline comments, scope defaults to "full".
 while read -r line; do
   read -r repo scope _ <<< "${line%%#*}"
   [[ -z "$repo" ]] && continue

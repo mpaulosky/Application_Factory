@@ -281,3 +281,30 @@ The first ported scripts, Factory-only, so the `.py` files are deleted in the PR
   open, decided with the first Owned script's port.
 - **The Owned files.** The comments in the Template's `pr-automerge.yml` and `pr-automerge.test.mjs` that named `github/landing.py` name `github/Landing.cs`.
   The change is comments only, so it rides the next Rollout rather than calling one of its own.
+
+## Update (mpaulosky/Application_Factory#120): settings is C#, and settings.py stays for rollout.py
+
+The second Factory-only port. `rollout` isn't part of it: `rollout.py` imports `auto_rollout` in plain mode too, and `test_auto_rollout.py` imports `rollout`, so
+under the import rule above they port together (mpaulosky/Application_Factory#122).
+
+- **The files.** `github/settings.cs` is the entry file; it pulls in `SettingsCore.cs` (the logic; the `Settings.cs` the Consequences name would clash with
+  `settings.cs` where case is ignored), `Repos.cs` and `Gh.cs`. `github-settings.sh` changes to `github/` and runs it, as `status.sh` does. `Gh.Process` gains an overload
+  that writes a body to gh's stdin, and the `owner/repo` pattern moves from `StatusCore.cs` to `Repos.cs` (`Repos.Name`), so `settings.cs` needs no `StatusCore.cs`.
+- **settings.py stays.** `rollout.py` imports its `read_repo_list`, so it is deleted with `rollout.py`; nothing runs it as a command now. While it is left it is the
+  settings parity suite's reference (the runner's rule above), `test.sh` runs the suite against `github-settings.sh` too, and `SettingsPortTests.cs` checks the
+  Python readings the C# re-implements against it, run by `python3`.
+- **Its output is Python's, byte for byte.** A report prints settings as `repr()` did (`True`, `None`, `'PR_TITLE'`), ruleset parts as `json.dumps()` did
+  (`", "` and `": "`, every character past ASCII escaped), and `--json` as `json.dump(indent=2)` did, so `SettingsCore.cs` carries those readings (`Py`), with
+  Python's `==` (a bool is an int), `sorted()` (by code point; None against a number fails), `str.splitlines()`, `str.strip()` and `b64decode()`.
+- **The parity suite runs on a copy of `github/`.** The suite holds a `github/` of its own (a small standard, a `repos.txt` with each scope and two per-repo files),
+  which the runner lays over a copy of the skill's `github/`, beside copies of the skill's wrappers and the `global.json` above it; the reference and any command word
+  naming a skill file the copy holds run from the copy. So its cases don't change when the Fleet's standard or registry does, and `--all` and the scopes are covered.
+  The fake `gh` answers `gh api -X <method> <path> [-H <header>]... [--input -]`, keys a write by its method (`rest.PATCH.<path>`), and logs each call's argv and its
+  body as canonical JSON (`jq -cS`), so two serializations of one body log the same line.
+- **What the port changes on purpose.** A repo that isn't `owner/repo` is refused before any call: a usage error (exit 2) for an argument, exit 1 for a `repos.txt`
+  line, as `status.sh` refuses one. The Python sent it to `gh` as it was, where `..` would step out of the REST path a write goes to.
+- **The wrapper's build leaves CA2266 out.** `dotnet run` prints its build's warnings on stdout, so the first run after a change would start its report, or its
+  `--json`, with the CA2266 line. `github-settings.sh` passes `-p:NoWarn=CA2266` to that build alone; the gate's build of every script still shows it.
+  `status.sh` and `land.sh` print it too on a first run, which this Update leaves for their own change.
+- **The pytest suite.** `github/tests/test_settings.py` is deleted, its 34 tests moved to `tests/Scripts.Tests/Settings/SettingsTests.cs` under the rule above. It held
+  no `read_repo_list` test: `ReposTests.cs` already holds `Repos.cs` to it.

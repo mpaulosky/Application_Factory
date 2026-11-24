@@ -1,8 +1,10 @@
 # GitHub settings
 
-Skill files (not copied into repos): `github-settings.sh`, which runs `github/settings.py`, and the standard beside it in `github/`:
-`settings.json`, `main-rules.json`, `labels.json`, `legacy.json`, `repos.txt` and `repos/<repo>.json`.
-Tests: `github/tests/test_settings.py`, run by `test.sh`. Decisions: [ADR 0003](../docs/adr/0003-github-settings-as-code.md).
+Skill files (not copied into repos): `github-settings.sh`, which runs `github/settings.cs` (its logic is `SettingsCore.cs`) on the .NET SDK
+the Factory's `global.json` names, and the standard beside it in `github/`: `settings.json`, `main-rules.json`, `labels.json`, `legacy.json`,
+`repos.txt` and `repos/<repo>.json`. `github/settings.py` stays beside it, run by nothing, until `rollout.py`, which imports its `read_repo_list`,
+is ported (ADR 0017). Tests: `tests/Scripts.Tests/Settings/` and the `settings` parity suite, run by `test.sh`.
+Decisions: [ADR 0003](../docs/adr/0003-github-settings-as-code.md).
 
 `apply.sh` copies the Baseline's files. Everything a file can't carry lives on GitHub: merge settings, the ruleset and its required checks,
 labels, Actions permissions and security features. Before this script, each repo's were set by hand, and the survey found every repo different.
@@ -77,13 +79,18 @@ Repo features unrelated to PRs (wiki, projects, discussions) aren't managed.
 
 ## Tests
 
-`github/tests/test_settings.py` runs the script against an in-memory GitHub that keeps state, so a case can run `--fix` and then show that a
-second run writes nothing. Cases cover each area's drift and fix, a check-only run writing nothing, required checks limited to what workflows report,
+`tests/Scripts.Tests/Settings/SettingsTests.cs` runs the script against an in-memory GitHub that keeps state, so a case can run `--fix` and then
+show that a second run writes nothing. Cases cover each area's drift and fix, a check-only run writing nothing, required checks limited to what workflows report,
 an old check kept while reported, a required check from another app, the suspend/restore cycle (keeping every rule), 403s,
 squad labels deleted, legacy rulesets deleted only on request (and classic protection only with `main-rules` active), the review loop,
 pinning only when all workflows are pinned, scope and per-repo additions, a per-repo file that tries to loosen the standard, and `--json`.
 The fake rejects a partial ruleset update, as GitHub may. Mutation-check the safety rules: breaking each one (kept checks, unreported checks,
 the app comparison, the active guard, the pinning guard, the legacy flag, the suspended check, the additive-only rule) must fail a test.
+
+`SettingsPortTests.cs` holds what the port adds: a repo that isn't `owner/repo` refused before any call, the `gh api` call's argv and body, and the
+Python readings the output depends on (`repr`, `str`, `json.dumps`, `sorted`, `==`, `splitlines`, `strip`, `b64decode` and the workflow and branch
+readers), each checked against `settings.py` run by `python3` while it is left. The `settings` parity suite (`tests/parity/settings/`) runs the
+command line against a fake `gh`, on the suite's own standard: the Python is its reference, and `test.sh` runs it against `github-settings.sh` too.
 
 ## Verify live
 

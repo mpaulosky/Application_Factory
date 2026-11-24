@@ -10,8 +10,9 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
 - `.claude/skills/repo-ci-baseline/`: the skill. `SKILL.md` and `CONTEXT.md` describe it; `template/owned/` (overwritten on every Apply) and
   `template/seed/` (written only if missing) hold the Template's files; `references/` and its own `docs/adr/` describe the parts;
   `github/repos.txt` is the Fleet registry; `apply.sh`, `reapply.sh`, `rollout.sh`, `status.sh`, `land.sh` and `github-settings.sh` are the scripts;
-  `status.sh` and `land.sh` run the C# file-based apps `github/status.cs` and `github/land.cs`, which include `Landing.cs`, `StatusCore.cs`, `LandCore.cs`,
-  `Repos.cs` and `Gh.cs` (ADR 0017); `settings.py`, `rollout.py` and `auto_rollout.py` are still Python.
+  `status.sh`, `land.sh` and `github-settings.sh` run the C# file-based apps `github/status.cs`, `github/land.cs` and `github/settings.cs`, which include
+  `Landing.cs`, `StatusCore.cs`, `LandCore.cs`, `SettingsCore.cs`, `Repos.cs` and `Gh.cs` (ADR 0017); `rollout.py` and `auto_rollout.py` are still Python,
+  and `settings.py` stays, run by nothing, for the `read_repo_list` that `rollout.py` imports.
   `test.sh` and `tests/` test all of it. `tests/Scripts.Tests/` is the xUnit v3 project for the C# scripts (ADR 0017); it and `github/` each hold three empty shield
   files (`Directory.Build.props`, `Directory.Build.targets`, `Directory.Packages.props`), which are not Owned. The test project also holds its own `NuGet.config`
   (nuget.org alone) and `packages.lock.json`, which `test.sh` restores against in locked mode (ADR 0017's Update on hardening the C# step).
