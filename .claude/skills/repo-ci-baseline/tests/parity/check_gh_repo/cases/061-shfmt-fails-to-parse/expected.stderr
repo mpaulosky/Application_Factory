@@ -1,0 +1,1 @@
+^check_gh_repo[^:]*: shfmt failed with exit 3: .*boom.*$

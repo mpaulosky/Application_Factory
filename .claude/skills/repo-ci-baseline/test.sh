@@ -6,7 +6,7 @@
 #
 # Runs the Template's own tests (hook suites, auto-merge script tests,
 # the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle and the GitHub scripts' tests
-# (settings, the landing decision, status, land and rollout) with the parity suites (status, land and the release scripts), the Claude Review
+# (settings, the landing decision, status, land and rollout) with the parity suites (status, land, check_gh_repo and the release scripts), the Claude Review
 # benchmark's tests and the C# scripts' xUnit tests (tests/Scripts.Tests), lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
 # Owned files carry no {{PLACEHOLDER}} and that the Owned scripts, and this repo's own
@@ -745,11 +745,11 @@ if in_shard scripts; then
   step "GitHub scripts tests (settings, landing decision, status, land, rollout)"
   (cd "$skill_dir" && "${pytest_cmd[@]}" -q -p no:cacheprovider github/tests) || fail "github scripts pytest"
 
-  step "Parity suites (status.py, land.py and the release scripts through their command lines, against a fake gh) and their runner's tests"
+  step "Parity suites (status.py, land.py, check_gh_repo.py and the release scripts through their command lines, against a fake gh) and their runner's tests"
   # The fake gh runs jq for a REST call's --jq, which the release scripts' suites make.
   need jq
   # Every suite is run: each folder under tests/parity/ with a cases/ folder, so a suite added later can't be left out. Each needs its README.md
-  # (what its cases cover and leave out), and there are at least the six suites this was written with, so a glob that matched nothing can't pass.
+  # (what its cases cover and leave out), and there are at least the seven suites there are now, so a glob that matched nothing can't pass.
   parity_suites=()
   for suite_dir in "$skill_dir"/tests/parity/*/; do
     [[ -d "$suite_dir/cases" ]] || continue
@@ -757,9 +757,18 @@ if in_shard scripts; then
     parity_suites+=("$suite")
     [[ -f "$suite_dir/README.md" ]] || fail "tests/parity/$suite has cases but no README.md saying what they cover and leave out"
   done
-  ((${#parity_suites[@]} >= 6)) || fail "found ${#parity_suites[@]} parity suite(s) under tests/parity/, expected status, land and the four release scripts' at least"
+  ((${#parity_suites[@]} >= 7)) || fail "found ${#parity_suites[@]} parity suite(s) under tests/parity/, expected status, land, check_gh_repo and the four release scripts' at least"
+  # check_gh_repo's suite runs the checker with tests/parity/check_gh_repo/shfmt-shim.sh first on PATH as shfmt (its README says why); the
+  # shim's own test runs first, so a broken shim fails as itself and not as a case.
+  bash "$skill_dir/tests/shfmt-shim.test.sh" || fail "shfmt-shim.test.sh"
+  shfmt_shim="$md_tmp/shfmt-shim"
+  mkdir -p "$shfmt_shim" && ln -sf "$skill_dir/tests/parity/check_gh_repo/shfmt-shim.sh" "$shfmt_shim/shfmt"
   for suite in "${parity_suites[@]}"; do
-    bash "$skill_dir/tests/parity.test.sh" "$suite" || fail "parity.test.sh $suite"
+    if [[ "$suite" == check_gh_repo ]]; then
+      PATH="$shfmt_shim:$PATH" bash "$skill_dir/tests/parity.test.sh" "$suite" || fail "parity.test.sh $suite"
+    else
+      bash "$skill_dir/tests/parity.test.sh" "$suite" || fail "parity.test.sh $suite"
+    fi
   done
   bash "$skill_dir/tests/parity-runner.test.sh" || fail "parity-runner.test.sh"
   # Run again as a hook would, with GIT_DIR and the rest naming another repo: its throwaway repo must not touch that one.
@@ -992,6 +1001,7 @@ if in_shard checks; then
     "$skill_dir/tests/owned-gate-files.test.sh"
     "$skill_dir/tests/sandcastle-check.test.sh" "$skill_dir/tests/repos-scope.test.sh"
     "$skill_dir/tests/parity.test.sh" "$skill_dir/tests/parity/fake-gh.sh" "$skill_dir/tests/parity-runner.test.sh"
+    "$skill_dir/tests/parity/check_gh_repo/shfmt-shim.sh" "$skill_dir/tests/shfmt-shim.test.sh"
     "$skill_dir/tests/check-git-status.sh" "$skill_dir/tests/check-git-status.test.sh" "$skill_dir/tests/mutations/check-spec.test.sh"
     "$owned/scripts/gate.sh" "$owned/scripts/check-branch-name.sh" "$owned/scripts/tests/check-branch-name.test.sh"
     "$owned/scripts/check-pr-title.sh" "$owned/scripts/tests/check-pr-title.test.sh"

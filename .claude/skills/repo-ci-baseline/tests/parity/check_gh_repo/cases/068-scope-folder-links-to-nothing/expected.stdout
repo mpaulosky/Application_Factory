@@ -1,0 +1,2 @@
+scripts: a symlink to nothing
+.github/ci/a.bash:1: gh pr view 1

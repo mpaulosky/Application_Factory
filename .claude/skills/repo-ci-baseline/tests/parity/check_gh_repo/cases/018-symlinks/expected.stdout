@@ -1,0 +1,3 @@
+scripts/real/a.bash:1: gh pr view 1
+scripts/dangling: a symlink to nothing
+scripts/outside: a symlink to a target outside the repo

@@ -2,7 +2,8 @@
 # The parity suites: a script's behaviour through its command line only, so the same cases judge any implementation of it
 # (its C# port, ADR 0017) against the Python. One runner and one fake gh serve every suite; a suite is a folder
 # tests/parity/<suite>/, named for the script it was recorded from (github/<suite>.py, else the Template's
-# template/owned/.github/scripts/<suite>.py), and its README.md says what its cases cover and what they leave out on purpose.
+# template/owned/.github/scripts/<suite>.py), and its README.md says what its cases cover and what they leave out on purpose, and
+# anything a run of it needs besides (check_gh_repo's runs with its shfmt shim first on PATH).
 #
 #   tests/parity.test.sh <suite>                    run the suite's cases against python3 <that script>
 #   tests/parity.test.sh <suite> <command> [arg]... run them against another implementation
@@ -37,8 +38,9 @@
 #                    PARITY_SCRATCH, a folder outside the run's for what the run mustn't see as its own (the bare
 #                    origin), and the git identity and dates fixed, so its commits get the same hashes everywhere and
 #                    the gh fixtures can name them
-#   expected.tree/   the run's folder afterwards, every file byte for byte (a .git anywhere is left out); missing: the run
-#                    must leave the folder holding nothing but a .git, so a script that writes no file is held to that
+#   expected.tree/   the run's folder afterwards, every file byte for byte and every symlink by its target, not followed
+#                    (a .git anywhere is left out); missing: the run must leave the folder holding nothing but a .git,
+#                    so a script that writes no file is held to that
 #
 # Neither args, env nor an expected.* file but expected.stdout may hold a carriage return (a setup error, since each is read
 # line by line); stdin, a tree and expected.stdout, compared byte for byte, may, and
@@ -64,7 +66,7 @@
 #
 # Exit 0 when every case passes, 1 when one fails, 2 on a usage or setup error (a case missing a file or holding a bad
 # one, a command that can't be run, a temporary folder that can't be made). Needs bash 4.4 or later, coreutils (mktemp,
-# mkdir, rm, ln, cp, cat, head, sort, env, basename, dirname, timeout), findutils (find), diff, grep and sed, and git 2.32 or later
+# mkdir, rm, ln, cp, cat, head, sort, env, basename, dirname, timeout), findutils (find), a diff with --no-dereference (GNU diffutils 3.3 or later), grep and sed, and git 2.32 or later
 # (GIT_CONFIG_GLOBAL) for a case with a setup.sh; the fake gh needs bash and cat, and mktemp, rm and jq 1.6 or later (for walk) for a REST call with --jq.
 set -euo pipefail
 
@@ -221,11 +223,12 @@ stderr_problems() {
 }
 
 # tree_problems <case folder> <run folder>: prints how the run's folder differs from the case's expected.tree/ (or, with
-# none, the files it left), nothing when it fits. A .git is left out either way.
+# none, the files it left), nothing when it fits. A .git is left out either way. A symlink is compared by its target and not
+# followed, so one to nothing or out of the folder (a case's setup.sh may make them) is held to where it points.
 tree_problems() {
   local left
   if [[ -d "$1/expected.tree" ]]; then
-    diff -r -x .git -- "$1/expected.tree" "$2" > "$tmp/diff" 2>&1 || echo "the files differ:"$'\n'"$(cat "$tmp/diff")"
+    diff -r --no-dereference -x .git -- "$1/expected.tree" "$2" > "$tmp/diff" 2>&1 || echo "the files differ:"$'\n'"$(cat "$tmp/diff")"
     return
   fi
   left="$(cd -- "$2" && find . -mindepth 1 -maxdepth 1 ! -name .git | sort)"

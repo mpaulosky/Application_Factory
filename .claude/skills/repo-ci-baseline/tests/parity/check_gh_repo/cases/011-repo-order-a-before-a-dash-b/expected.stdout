@@ -1,0 +1,2 @@
+scripts/a/x.bash:1: gh pr view 2
+scripts/a-b/x.bash:1: gh pr view 1

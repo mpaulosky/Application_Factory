@@ -94,10 +94,10 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
 1. Edit `template/` (and the part's reference) in a Factory worktree.
 2. Run `test.sh`: the hook suites, the auto-merge script tests, the Owned `.github/scripts` tests (release scripts, Claude Review, the gh check
    and the Owned files check), the hardening review script tests, the renderer oracle, the GitHub scripts' tests
-   (settings, the landing decision, status, land, rollout), the parity suites (status, land and the release scripts) and their runner's tests,
+   (settings, the landing decision, status, land, rollout), the parity suites (status, land, check_gh_repo and the release scripts) and their runner's tests,
    the Claude Review benchmark's tests, actionlint, zizmor, yamllint, shellcheck, markdownlint, the no-placeholders-in-Owned
    check, the check that the Owned scripts' `gh` commands are told their repository, the Sandcastle copy and Seed checks, and the `apply.sh` and `reapply.sh` tests.
-   It needs those tools, and shfmt v3.14 or a later v3 for the gh check's tests (ADR 0011); the Factory's CI runs the same script.
+   It needs those tools, and shfmt v3.14 or a later v3 for the gh check's tests and its parity suite (ADR 0011); the Factory's CI runs the same script.
    Done when it passes.
 3. After the Factory PR merges, re-Apply to each repo in its own PR; the overwritten Owned files are the change.
    Open it ready, not as a draft: the repo's own auto-merge lands it ([automerge.md](references/automerge.md#landing)).

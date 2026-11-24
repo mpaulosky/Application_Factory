@@ -1,0 +1,1 @@
+scripts/check.bash:1: gh pr merge 1 <<'# gh-repo: ok'

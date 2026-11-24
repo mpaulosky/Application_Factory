@@ -1,0 +1,1 @@
+^check_gh_repo[^:]*: shfmt's syntax tree isn't the shape check_gh_repo[^ ]* reads.*$
