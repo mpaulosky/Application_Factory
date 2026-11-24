@@ -160,6 +160,12 @@ def test_the_benchmark_can_read_the_template_workflows_review_step():
     rendered = shlex.split(bench.render(claude_args, 7, "/tmp/t"))
     assert "#7" in bench.render(prompt, 7, "/tmp/t", pieces="- /tmp/t/claude-review/diff/001.diff (3 lines: source)",
                                 context="- /tmp/t/claude-review/context/001.txt (9 lines)")
+    # The Review step's env: batch 1's pieces in place, and its note's line gone, since a case reviews one batch alone.
+    pieces = "- /tmp/t/claude-review/diff/001.diff (3 lines: source)"
+    assert prompt.count("${{ env.REVIEW_PIECES }}") == 1 and prompt.count("${{ env.REVIEW_BATCH }}\n") == 1
+    alone = bench.render(prompt, 7, "/tmp/t", pieces=pieces, context="-")
+    assert pieces in alone and "REVIEW_" not in alone and "${{" not in alone
+    assert alone.count("\n") == prompt.count("\n") - 1 + pieces.count("\n")
     with pytest.raises(SystemExit):
         bench.render(prompt, 7, "/tmp/t")  # the diff step's pieces must be filled in
     with pytest.raises(SystemExit):

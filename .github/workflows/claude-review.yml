@@ -1513,10 +1513,10 @@ jobs:
       #
       # A failed read warns, and the review goes on without them, as before.
       # It has a minute, and each GraphQL call CALL_TIMEOUT seconds. A job
-      # past its 31 minutes fails "Review with Claude", which leaves the PR
+      # past its 106 minutes fails "Review with Claude", which leaves the PR
       # UNSTABLE, and PR Auto-Merge never merges it
       # (mpaulosky/TicketManager#233). With this step's minute, the notes step's
-      # minute, the Review step's 25 and the diff step's grep (USERS_TIMEOUT), 2
+      # minute, the four Review steps' 25 each and the diff step's grep (USERS_TIMEOUT), 2
       # minutes are left for what has no limit of its own: job setup, the full-history
       # checkout, the diff step's other git calls and the answer check. That
       # they fit is an assumption, which holds for these repos' size; the
@@ -2622,7 +2622,8 @@ jobs:
   post:
     name: Post Claude's review
     needs: review
-    # Nothing to post when the Review step failed, timed out or was refused.
+    # Nothing to post when no Review step answered: each failed, timed out or
+    # was refused.
     # Gated on reviewed, not on findings, so findings withheld for quoting a
     # secret still reach the script, which fails on them.
     if: needs.review.outputs.enabled == 'true' && needs.review.outputs.reviewed == 'true'

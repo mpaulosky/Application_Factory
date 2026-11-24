@@ -99,7 +99,8 @@ def split_diff(script, temp, tree, base, head):
 
 
 def render(text, pr, temp, pieces=None, context=None):
-    """Fill in the workflow expressions the prompt and args use; pieces is the diff step's pieces output.
+    """Fill in the workflow expressions the prompt and args use; pieces is the diff step's pieces_1 output, filled
+    in as the Review step's REVIEW_PIECES env.
 
     github.workspace is temp/work/repo/repo, so its ../../_actions is temp/work/_actions, laid out as on a runner.
     """

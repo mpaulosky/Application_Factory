@@ -248,8 +248,9 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
   It skips drafts, Dependabot and events a bot started (the action refuses a bot actor, `Copilot` included, which has no `[bot]` suffix),
   and logs a notice and succeeds without the `CLAUDE_CODE_OAUTH_TOKEN` secret.
   It must not fail on its own: it isn't a required check, so a failed run leaves the PR `UNSTABLE`, which this workflow never merges.
-  So a Review step that fails, times out or hits the usage limit warns and posts nothing (`continue-on-error`), and the PR waits for a review of its head:
-  Copilot's, or Claude's on a rerun. The one deliberate failure is a review the post step had to redact a credential from.
+  So a Review step that fails, times out or hits the usage limit warns (`continue-on-error`). When no batch answered, nothing is posted and the PR waits for a
+  review of its head: Copilot's, or Claude's on a rerun.
+  When another batch answered, its answers are posted and the unanswered batch's pieces hold the merge. The one deliberate failure is a review the post step had to redact a credential from.
   Claude (`anthropics/claude-code-action`; model, effort and prompt in [ADR 0004](../docs/adr/0004-claude-review-as-copilots-backup.md#model-effort-and-prompt-117))
   never holds a write token: its job has read-only permissions,
   gets the diff against the base in pieces, with context pieces of whole files around the change and the pinned actions' gatekeeping source

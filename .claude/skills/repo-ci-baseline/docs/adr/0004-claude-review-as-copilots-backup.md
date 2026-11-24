@@ -174,7 +174,8 @@ A PR never gets both reviewers' reviews. This update (mpaulosky/dotfiles#378) ch
   And it would leave the PR `UNSTABLE`, which PR Auto-Merge never merges. The review's marker holds below an exhausted review loop;
   at exhaustion the finding is listed in the exhaustion comment instead (ADR 0002, mpaulosky/dotfiles#375).
 - Dependabot PRs are left out: their own auto-merge path is unchanged, and they get no secrets.
-- A Review step that fails, times out (its own 25 minutes, under the job's 31) or is refused at the usage limit doesn't fail the job either (#123):
+- A Review step that fails, times out (its own 25 minutes, under the job's 106 since a big diff is
+  [read in batches](#a-big-diff-is-read-in-batches-174)) or is refused at the usage limit doesn't fail the job either (#123):
   `continue-on-error` lets a warning step say so, and the post job skips when there's nothing to post (an empty output would fail it as malformed).
   The PR then has no Claude review of its head, so PR Auto-Merge waits for Copilot's or a rerun, instead of the PR going `UNSTABLE`.
   The prompt also has Claude skip the files Copilot code review excludes (see the split-diff decision below).
@@ -222,7 +223,8 @@ It also replays three ordinary merged PRs to read for noise. Required findings c
   for anything else it says what it's relying on. The benchmark copies the case head's pinned actions into the same layout.
   In that run (`v4-scoped-actions`) Claude caught finding 5 for the first time, from the action's `checkHumanActor`, along with 3 and 4 and the marker limit;
   it missed finding 1, which the v2 runs caught. The same run is the check that scoping reads (#121) cost nothing.
-- **The review job's `timeout-minutes` is 31** (30 until the Review notes step took a minute), and the Review step's 25. Opus took up to about 7 minutes on these diffs; a
+- **The review job's `timeout-minutes` was 31** (30 until the Review notes step took a minute, 106 since a big diff is
+  [read in batches](#a-big-diff-is-read-in-batches-174)), and each Review step's 25. Opus took up to about 7 minutes on these diffs; a
   step that times out now warns instead of failing the check (#123).
   `review:claude` goes mostly on re-Apply PRs, which carry only the Owned files that changed: 2 to 8 files and under 800 lines in the #116 and #82 rounds,
   the largest being Articles#298, the benchmark's own case.
@@ -554,8 +556,11 @@ and its not-read finding held the merge for the owner to review the rest by hand
   batch is the same review the bench measured, on less of the diff. Raising the turn limit for one review to read everything was not chosen: it would read
   all the pieces into one context, past what the bench measured, where the limit was set because more turns didn't find more.
 - **One review is posted.** The answer check reads each batch's execution file, checks every answer for a secret (one quoting a secret withholds them all),
-  withholds them all when one is malformed, and joins them: the summary in one section per batch, the findings in batch order. A batch's pieces count as read
-  only from its own execution file. A batch whose review didn't answer (a cap, a usage limit, a timeout) has its summary section say so, and its pieces
+  withholds them all when one is malformed, and joins them: the summary in one section per batch, the findings in batch order, a finding an earlier batch
+  already reported (the same path, line and body) once. A batch's pieces count as read only from its own execution file. The action writes every review's
+  transcript to one fixed path (`$RUNNER_TEMP/claude-execution-output.json`), so a step after each Review step moves it to a file of the batch's own,
+  outside the folder the reviews read; a later batch can neither overwrite it nor, when it writes none, pass it off as its own.
+  A batch whose review didn't answer (a cap, a usage limit, a timeout) has its summary section say so, and its pieces
   join the not-read finding, which holds the merge; the warning step names each such batch. When no batch answered, nothing is posted, as before.
 - **The steps share their inputs through a YAML anchor** (`with: &review`, then `with: *review`), and the prompt takes the batch's pieces and note from the
   step's own `env` (`REVIEW_PIECES`, `REVIEW_BATCH`), so the prompt and the Read restrictions are written once. zizmor warns that it audits anchored
@@ -564,6 +569,7 @@ and its not-read finding held the merge for the owner to review the rest by hand
 - **Cost.** Up to one review per batch: a PR within 8 pieces costs what it did; PR 173's 23 pieces would take three reviews. The steps run one after another,
   so the job's limit rose from 31 to 106 minutes (four steps of 25, and 6 for the rest), and `--max-budget-usd 3` caps each, $12 for the biggest diff.
 - **Past four batches** (about 32 pieces, over a megabyte of diff) the rest still aren't read, and the not-read finding holds the merge as before.
+  From the first piece past the last batch on, none is read, even a smaller one that would still fit, so the unread pieces are the diff's tail.
   Running the batches in parallel, as a matrix of jobs, was not chosen: each job would rebuild the diff and the context, and the answers would have to meet
   in another job through artifacts.
 
