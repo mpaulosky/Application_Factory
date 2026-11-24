@@ -41,7 +41,8 @@
 #                    must leave the folder holding nothing but a .git, so a script that writes no file is held to that
 #
 # Neither args, env nor an expected.* file may hold a carriage return (a setup error); stdin and a tree may, and
-# tests/parity/.gitattributes stores every case file as it is, so a clone keeps them. Record mode writes
+# tests/parity/.gitattributes stores every case file as it is, so a clone keeps them, and tests/parity/.editorconfig keeps
+# an editor from trimming or converting them. Record mode writes
 # expected.stdout, expected.code, expected.calls and expected.tree/ (removed when the run leaves no file). It writes a
 # new case's expected.stderr with each line matched literally, for someone to loosen to the shape that matters; an existing
 # one holds that loosening, so it is kept, and the run fails when it no longer fits. A case whose run makes a gh call the

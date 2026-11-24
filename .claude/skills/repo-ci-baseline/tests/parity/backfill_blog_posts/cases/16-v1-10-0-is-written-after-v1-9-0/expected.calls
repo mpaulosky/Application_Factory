@@ -1,13 +1,13 @@
 rest.repos_o_app_releases?per_page=100 gh api "repos/o/app/releases?per_page=100" --paginate --jq ".[] | select(.draft | not) | @json"
-rest.repos_o_app_pulls_3 gh api repos/o/app/pulls/3 --paginate
-rest.repos_o_app_pulls_3_commits?per_page=100 gh api "repos/o/app/pulls/3/commits?per_page=100" --paginate --jq ".[] | @json"
-rest.repos_o_app_pulls_3_files?per_page=100 gh api "repos/o/app/pulls/3/files?per_page=100" --paginate --jq ".[] | @json"
 rest.repos_o_app_pulls_2 gh api repos/o/app/pulls/2 --paginate
 rest.repos_o_app_pulls_2_commits?per_page=100 gh api "repos/o/app/pulls/2/commits?per_page=100" --paginate --jq ".[] | @json"
 rest.repos_o_app_pulls_2_files?per_page=100 gh api "repos/o/app/pulls/2/files?per_page=100" --paginate --jq ".[] | @json"
+rest.repos_o_app_pulls_3 gh api repos/o/app/pulls/3 --paginate
+rest.repos_o_app_pulls_3_commits?per_page=100 gh api "repos/o/app/pulls/3/commits?per_page=100" --paginate --jq ".[] | @json"
+rest.repos_o_app_pulls_3_files?per_page=100 gh api "repos/o/app/pulls/3/files?per_page=100" --paginate --jq ".[] | @json"
 rest.repos_o_app_pulls_1 gh api repos/o/app/pulls/1 --paginate
 rest.repos_o_app_pulls_1_commits?per_page=100 gh api "repos/o/app/pulls/1/commits?per_page=100" --paginate --jq ".[] | @json"
 rest.repos_o_app_pulls_1_files?per_page=100 gh api "repos/o/app/pulls/1/files?per_page=100" --paginate --jq ".[] | @json"
 rest.repos_o_app_pulls_1 gh api repos/o/app/pulls/1 --paginate --jq .title
-rest.repos_o_app_pulls_2 gh api repos/o/app/pulls/2 --paginate --jq .title
 rest.repos_o_app_pulls_3 gh api repos/o/app/pulls/3 --paginate --jq .title
+rest.repos_o_app_pulls_2 gh api repos/o/app/pulls/2 --paginate --jq .title

@@ -11,8 +11,8 @@ Release at all with `--repo` over `REPOSITORY`, the hostile Markdown corpus of t
 
 Cases 16 to 20 add:
 
-- 16: the posts written in version order. v1.2.0, v1.9.0, then v1.10.0, which is neither the listing's order nor the tags' string order (the PRs, 3, 2
-  and 1, are in reverse number order, so a port sorting by PR number in reverse would pass this case).
+- 16: the posts written in version order. v1.2.0, v1.9.0, then v1.10.0, so PRs 2, 3 and 1: neither the listing's order (3, 1, 2), the tags' string
+  order, nor the PRs' numbers either way round.
 - 17: CRLF and a UTF-8 BOM in the docs the tables rewrite. They come out with LF line endings and keep the BOM.
 - 18 and 19: `REPOSITORY` over `GITHUB_REPOSITORY`, and an empty `REPOSITORY` falling back to it.
 - 20: an `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` of only blanks count as unset.

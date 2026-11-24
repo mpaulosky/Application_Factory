@@ -8,10 +8,12 @@
 #   tests/parity-runner.test.sh
 #
 # Copies both into a throwaway skill folder with a suite of its own (stub, one case) and runs them against a stub
-# implementation, so no real case is run or written. A last section checks the committed cases: each has a file git tracks in gh/ (the folder a
-# fresh clone needs) and no fixture its expected.calls doesn't read. It first tries that check on cases made to be wrong,
-# in a git repo of its own and in a folder git treats as outside any repo. Needs what the suite needs (bash 4.4,
-# coreutils, diff, grep, sed), python3 for the stub reference record mode runs, git, and jq for the fake's --jq.
+# implementation, so no real case is run or written. A last section checks the committed cases: each has a file git tracks
+# in gh/ (the folder a fresh clone needs) and no fixture its expected.calls doesn't read, git stores every case file as it
+# is (tests/parity/.gitattributes), and the blank-key cases' env files still hold their blanks (tests/parity/.editorconfig).
+# It first tries the first two checks on cases made to be wrong, in git repos of their own and in a folder git treats as
+# outside any repo. Needs what the suite needs (bash 4.4, coreutils, findutils, diff, grep, sed), python3 for the stub
+# reference record mode runs, git, and jq for the fake's --jq.
 set -euo pipefail
 # A hook, or git rebase --exec, may have set these; the throwaway repo below must not be the caller's.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR
@@ -591,9 +593,12 @@ done
 # would reach a clone (or a commit, under core.autocrlf=input) as LF and pin nothing. tests/parity/.gitattributes turns it
 # off. converted_cases <repo folder> <pathspec>: one line per tracked file the pathspec matches that git would convert, or
 # a line saying git couldn't list or read them, or listed none; nothing when every one is stored as it is. git runs without
-# the caller's GIT_DIR and the rest, as in case_problems.
+# the caller's GIT_DIR and the rest, as in case_problems, and reads only the repository's own config and attributes: a
+# global or system attributes file (a `* text=auto`) or excludes file would change what the probe below sees.
+own_git=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR GIT_CONFIG_GLOBAL=/dev/null
+  GIT_CONFIG_NOSYSTEM=1 GIT_ATTR_NOSYSTEM=1 git -c core.attributesFile=/dev/null -c core.excludesFile=/dev/null)
 converted_cases() {
-  local -a clean_git=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR git -C "$1")
+  local -a clean_git=("${own_git[@]}" -C "$1")
   local list="$work/case-files" attrs="$work/case-attrs"
   "${clean_git[@]}" ls-files -z -- "$2" > "$list" || {
     echo "git can't list the files $2 matches in $1"
@@ -616,7 +621,7 @@ attr_probe="$work/attr-probe"
 mkdir -p "$attr_probe/parity/s/cases/c"
 printf 'a\r\n' > "$attr_probe/parity/s/cases/c/stdin"
 git init -q "$attr_probe"
-env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$attr_probe" -c core.safecrlf=false add parity
+"${own_git[@]}" -C "$attr_probe" -c core.safecrlf=false add parity
 got="$(converted_cases "$attr_probe" 'parity/*/cases/*')"
 [[ "$got" == "parity/s/cases/c/stdin: text: unspecified" ]] || fail "the line-ending check missed a converted case file: '$got'"
 printf '%s\n' '*/cases/** -text' > "$attr_probe/parity/.gitattributes"
@@ -639,7 +644,8 @@ for env_file in "$here"/parity/*/cases/*-a-blank-anthropic-key-and-model-mean-no
 done
 [[ $blank_envs -eq 2 ]] || fail "expected the 2 blank-key cases (release_post, backfill_blog_posts), found $blank_envs"
 
-# The committed cases, when this copy is in a git work tree (test.sh also runs it from a folder outside any).
+# The committed cases, when this copy is in a git work tree (a copy of the skill outside one, such as an unpacked archive,
+# has no index to ask).
 if [[ "$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR git -C "$here" rev-parse --is-inside-work-tree 2> /dev/null)" == true ]]; then
   got="$(converted_cases "$here" 'parity/*/cases/*')"
   [[ -z "$got" ]] || fail "git converts the line endings of these case files (tests/parity/.gitattributes):"$'\n'"$got"
