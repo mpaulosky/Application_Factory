@@ -613,6 +613,21 @@ fake 97 '' "a body from a file" api -X PATCH repos/o/app --input body.json
 fake 97 '' "-X twice" api -X PATCH -X PUT repos/o/app
 fake 97 '' "a lower-case method" api -X patch repos/o/app
 fake 97 '' "-H with no value" api repos/o/app -H
+fake 97 '' "an empty -H" api repos/o/app -H ''
+fake 97 '' "-X with no value" api repos/o/app -X
+fake 97 '' "--input twice" api -X PATCH repos/o/app --input - --input - <<< '{}'
+fake 97 '' "an empty --input body" api -X PATCH repos/o/app --input - < /dev/null
+logged "an empty --input body" "UNMATCHED rest.PATCH.repos_o_app (its --input body is not one JSON value)"
+# With no jq on PATH, a call with --input is refused, not logged without its body: PATH holds every command but jq.
+mkdir "$work/no-jq"
+IFS=: read -ra path_dirs <<< "$PATH"
+for dir in "${path_dirs[@]}"; do
+  for tool in "$dir"/*; do
+    [[ "$(basename -- "$tool")" == jq || -e "$work/no-jq/$(basename -- "$tool")" || ! -x "$tool" ]] || ln -s "$tool" "$work/no-jq/"
+  done
+done
+PATH="$work/no-jq" fake 97 '' "--input with no jq" api -X PATCH repos/o/app --input - <<< '{}'
+logged "--input with no jq" "UNMATCHED rest.PATCH.repos_o_app (jq, which a call with --input needs, is not on PATH)"
 fake 97 '' "two paths" api repos/o/app repos/o/lib
 fake 97 '' "no path" api -X GET
 fake 97 '' "a method with no fixture" api -X DELETE repos/o/app && logged "a method with no fixture" "UNMATCHED rest.DELETE.repos_o_app"
