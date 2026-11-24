@@ -807,8 +807,8 @@ if in_shard scripts; then
   if ((locked_rc == 0 || locked_rc == 8)) || ! grep -q NU1004 "$pinned/run.log"; then
     fail "a Scripts.Tests whose package version packages.lock.json doesn't pin must fail its locked restore with NU1004 (exit $locked_rc)"
   fi
-  # A vulnerability feed that can't be reached (NU1900) is a warning, not an error: on a copy whose nuget.org can't be reached, with the packages already in
-  # the cache from the run above, the run still passes and says why. NU1901 to NU1904, a vulnerable package, stay errors (ADR 0017). The copy sits under a
+  # A vulnerability feed that can't be reached (NU1900, and NU1905 since the audit source, nuget.org alone, gave no data) is a warning, not an error: on a
+  # copy whose nuget.org can't be reached, with the packages already in the cache from the run above, the run still passes and says why. NU1901 to NU1904, a vulnerable package, stay errors (ADR 0017). The copy sits under a
   # Directory.Build.props, Directory.Build.targets and Directory.Packages.props that would each fail its build, which the shields keep out.
   offline="$md_tmp/scripts-tests-offline"
   mkdir -p "$offline"

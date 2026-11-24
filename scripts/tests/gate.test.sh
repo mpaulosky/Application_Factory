@@ -15,7 +15,7 @@
 # It also checks the C# step (ADR 0017): with no .cs file it passes without an SDK; otherwise it needs dotnet, format-checks every .cs in one folder-mode run, builds only the
 # entry files (no #:include'd file, no project's file) from their own folders with warnings as errors but CA2266 and NU1900, from scratch into a gate-cs.* folder of its own with
 # no build server, and tells a finding from a failed dotnet; that the build folder is gone after a pass, a failing build, a TERM mid-build (the build ended and waited for
-# first, and one that ignores the TERM killed) and with a relative TMPDIR, and a mktemp that can't make it fails the step; that the gate and the CI workflow run dotnet with
+# first, and one that ignores the TERM killed), a TERM between the build's fork and cs_pid=$! (sent there by a DEBUG trap BASH_ENV sets) and with a relative TMPDIR, and a mktemp that can't make it fails the step; that the gate and the CI workflow run dotnet with
 # telemetry off, no first-run setup and no logo; and that a pass is remembered per .NET SDK as well as per tree.
 #
 #   scripts/tests/gate.test.sh
@@ -698,7 +698,6 @@ mkdir -p "$work/forkdotnet"
 cat > "$work/forkdotnet/dotnet" << FORK
 #!/usr/bin/env bash
 if [[ "\$1" == build ]]; then
-  : > "$work/forkdotnet/started"
   sleep 3 &
   wait "\$!"
   : > "$work/forkdotnet/late"
@@ -709,7 +708,7 @@ chmod +x "$work/forkdotnet/dotnet"
 # shellcheck disable=SC2016 # the trap's $BASH_COMMAND and $BASHPID are the gate's, when it runs
 printf '%s\n' 'set -T' "trap '[[ \$BASH_COMMAND != \"cs_pid=\\\$!\" ]] || { : > \"$work/forkdotnet/signalled\"; kill -TERM \$BASHPID; }' DEBUG" \
   > "$work/forkdotnet/env.sh"
-rm -f "$work/forkdotnet/started" "$work/forkdotnet/late" "$work/forkdotnet/signalled"
+rm -f "$work/forkdotnet/late" "$work/forkdotnet/signalled"
 # shellcheck disable=SC2016 # $1 is the inner bash's argument, the repo
 env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 TMPDIR="$cs_tmp" PATH="$work/forkdotnet:$PATH" BASH_ENV="$work/forkdotnet/env.sh" \
   bash -c 'cd "$1" && exec bash scripts/gate.sh --quick' _ "$repoC" > "$repoC/out" 2>&1 || true
