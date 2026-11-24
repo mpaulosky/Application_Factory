@@ -1119,6 +1119,41 @@ describe("checkReview", () => {
     assert.equal(checkReview(repo, mergeBase(repo), {}).ok, false);
   });
 
+  it("passes a re-Apply that deletes a retired Owned file beside its Owned writes, as Apply does (mpaulosky/Application_Factory#124)", () => {
+    mkdirSync(join(upstream, ".github", "scripts"), { recursive: true });
+    commit(upstream, ".github/scripts/old.py", "print(1)\n", "main has a file the Template retired");
+    run(repo, "fetch", "--quiet", "origin", "main");
+    run(repo, "switch", "--quiet", "-C", "chore/reapply-baseline", "origin/main");
+    run(repo, "rm", "--quiet", ".github/scripts/old.py");
+    run(repo, "commit", "--quiet", "-m", "Apply removes the retired file");
+    commit(repo, ".editorconfig", "{}\n", "re-Apply");
+
+    assert.equal(checkReview(repo, mergeBase(repo), {}, new Set([".github/scripts/old.py"])).ok, true);
+    assert.equal(checkReview(repo, mergeBase(repo), {}).ok, false, "a deleted file no retired list names is still reviewed");
+  });
+
+  it("reviews a re-Apply that deletes a retired path when main had a symlink there, which Apply never deletes", () => {
+    symlinkSync("/etc/passwd", join(upstream, "old.py"));
+    run(upstream, "add", "old.py");
+    run(upstream, "commit", "--quiet", "-m", "main has a symlink at a retired path");
+    run(repo, "fetch", "--quiet", "origin", "main");
+    run(repo, "switch", "--quiet", "-C", "chore/reapply-baseline", "origin/main");
+    run(repo, "rm", "--quiet", "old.py");
+    run(repo, "commit", "--quiet", "-m", "delete the symlink");
+
+    assert.equal(checkReview(repo, mergeBase(repo), {}, new Set(["old.py"])).ok, false);
+  });
+
+  it("reviews a re-Apply that deletes a retired file on a branch that isn't the re-Apply's", () => {
+    commit(upstream, "old.py", "print(1)\n", "main has a file the Template retired");
+    run(repo, "fetch", "--quiet", "origin", "main");
+    run(repo, "switch", "--quiet", "-C", "feature/1-x", "origin/main");
+    run(repo, "rm", "--quiet", "old.py");
+    run(repo, "commit", "--quiet", "-m", "delete it");
+
+    assert.equal(checkReview(repo, mergeBase(repo), {}, new Set(["old.py"])).ok, false);
+  });
+
   it("reviews a re-Apply that turns an Owned path into a symlink", () => {
     run(repo, "switch", "--quiet", "-C", "chore/reapply-baseline", "origin/main");
     symlinkSync("/etc/passwd", join(repo, ".editorconfig"));

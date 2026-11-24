@@ -16,6 +16,7 @@ _Avoid_: Copy set, scaffold, reference implementation
 **Owned file**:
 A Template file the Baseline controls outright; applying the Template overwrites the repo's copy,
 except a `.sandcastle/check.sh` a repo uses as its sandbox gate, which Apply keeps and reports as a conflict.
+Once the Template stops shipping one it is retired (`retired.txt`): Apply deletes the repo's copy when it is identical to a version the Template shipped, and keeps and reports it otherwise.
 _Avoid_: Managed file, core file
 
 **Seed file**:

@@ -1524,6 +1524,23 @@ PY
   grep -qF -- '.claude/rules/sandcastle-hand-off.md' "$skill_dir/CONTEXT.md" \
     || fail "CONTEXT.md's Sandcastle section must list the Owned .claude/rules/sandcastle-hand-off.md"
 
+  # retired.txt (the Owned files Apply deletes, mpaulosky/Application_Factory#124): each path is out of the Template, and the ledger's
+  # RETIRED_PATHS, which lets a re-Apply's deletion through without a review, names exactly the same paths.
+  step "retired Owned files"
+  retired_listed=""
+  if [[ -f "$skill_dir/retired.txt" ]]; then
+    retired_listed="$(sed 's/\r$//' "$skill_dir/retired.txt" | awk '/^#/ || /^$/ { next } { print substr($0, 67) }' | LC_ALL=C sort -u)"
+  fi
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    if [[ -e "$owned/$rel" || -e "$seed/$rel" ]]; then fail "retired.txt names $rel, which is still in the Template"; fi
+  done <<< "$retired_listed"
+  retired_line="$(grep -E '^export const RETIRED_PATHS' "$owned/.sandcastle/lib/review-ledger.mts")" \
+    || fail "review-ledger.mts must export RETIRED_PATHS on one line"
+  retired_ledger="$({ grep -oE '"[^"]+"' <<< "${retired_line#*\(\[}" || true; } | tr -d '"' | LC_ALL=C sort -u)"
+  [[ "$retired_ledger" == "$retired_listed" ]] \
+    || fail "review-ledger.mts's RETIRED_PATHS must name exactly retired.txt's paths: it has '${retired_ledger//$'\n'/, }', retired.txt '${retired_listed//$'\n'/, }'"
+
   step "apply.sh smoke test"
   "$skill_dir/tests/apply.test.sh" || fail "apply.test.sh"
   "$skill_dir/tests/seed-check.test.sh" || fail "seed-check.test.sh"

@@ -144,6 +144,8 @@ LAND = os.path.join(SKILL_DIR, "land.sh")
 REAPPLY = os.path.join(SKILL_DIR, "reapply.sh")
 OWNED = os.path.join(SKILL_DIR, "template", "owned")
 TEMPLATE_GLOBAL_JSON = os.path.join(OWNED, "global.json")
+# The Owned files the Template retired, which Apply deletes (apply.sh reads the same file).
+RETIRED = os.path.join(SKILL_DIR, "retired.txt")
 # The lock that lets one round run at a time.
 LOCK = os.path.expanduser("~/.cache/repo-ci-baseline/rollout-auto.lock")
 # The 0700 folder of each review session's log, and of its settings file beside it (settings_path).
@@ -583,13 +585,26 @@ def held_lock_fds():
     return tuple(LOCK_FDS)
 
 
-def owned_changes(worktree, run=run_quiet, owned=OWNED):
-    """The Owned files the worktree's branch changes against origin/main, for the review's prompt."""
+def retired_paths(path=RETIRED):
+    """The paths retired.txt names (its `<sha256>  <path>` lines), or none when there is no such file."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except FileNotFoundError:
+        return set()
+    return {line.rstrip("\r")[66:] for line in lines if line.strip() and not line.startswith("#") and line[64:66] == "  "}
+
+
+def owned_changes(worktree, run=run_quiet, owned=OWNED, retired=None):
+    """The Owned files the worktree's branch changes against origin/main, a retired one it deletes among them, for
+    the review's prompt."""
+    retired = retired_paths() if retired is None else retired
     # --no-renames, as checkReview's own diff: a renamed Owned file is a change to the Owned path too.
     code, out, error = run(["git", "-C", worktree, "diff", "--no-renames", "--name-only", "-z", "origin/main...HEAD"])
     if code != 0:
         raise RuntimeError(f"git diff in {worktree} failed: {error.strip()}")
-    return sorted(path for path in out.split("\0") if path and os.path.isfile(os.path.join(owned, path)))
+    return sorted(path for path in out.split("\0")
+                  if path and (os.path.isfile(os.path.join(owned, path)) or path in retired))
 
 
 def front_matter(text, path):
