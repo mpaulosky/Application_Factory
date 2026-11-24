@@ -411,8 +411,10 @@ sources. Then have them critique each other's conclusions before you summarize.
 [`CLAUDE.md`](../CLAUDE.md) holds this repo's rules, in its "Git workflow" and "Working on the Template" sections, and it wins wherever this
 section differs. What they mean for a team:
 
-- **Enable teams in your own settings only**: `~/.claude/settings.json` or `.claude/settings.local.json` (never commit it), never the checked-in
-  `.claude/settings.json`. While teams are on, any named Agent call can launch a teammate, the reviewers `pre-push-review` starts included, so
+- **Enable teams in your user settings, `~/.claude/settings.json`**, never the checked-in `.claude/settings.json`. This repo's `.gitignore`
+  doesn't list `.claude/settings.local.json`, and `pre-push` refuses a push while any file sits untracked, so use that file only when your global
+  git ignore or `.git/info/exclude` covers it. User settings also reach every teammate worktree at once. While teams are on, any named Agent
+  call can launch a teammate, the reviewers `pre-push-review` starts included, so
   turning it on for every contributor changes how those skills run. The issue worker (`claude-issues.yml`, ADR 0018) runs non-interactively,
   so it never spawns teammates.
 - **One branch and worktree per writing teammate.** `pre-commit` refuses commits in the primary checkout. Give each teammate its exact branch and
@@ -427,8 +429,8 @@ section differs. What they mean for a team:
   `scripts/gate.sh --sync` in its own worktree.
 - **Done means the quick gate passed.** `scripts/gate.sh --quick` takes about a minute and checks the tree it runs in, so make it the done check
   each spawn prompt names, run by the teammate in its own worktree before it marks a task complete. Keep a `TaskCompleted` hook to a narrow,
-  fast check that first changes to the hook input's `cwd`. Registering a team hook means changing the checked-in `.claude/settings.json`,
-  which holds only the edit-time lint hook (ADR 0011), so do it on purpose, in its own pull request.
+  fast check that first changes to the hook input's `cwd`, and register it in your user settings like the switch above. Adding a team hook to the
+  checked-in `.claude/settings.json`, which holds only the edit-time lint hook (ADR 0011), is a decision for its own pull request.
 - **Markdown and YAML with Write and Edit only**, so the edit-time lint hook sees them. Put this in every spawn prompt for a writing teammate.
 - **Review lenses map well to a review team**: the `pre-push-review` skill already splits review into lenses; a team version gives each lens a
   teammate that can challenge the others.
@@ -442,6 +444,6 @@ section differs. What they mean for a team:
 - [ ] Each spawn prompt has goal, scope, known facts, deliverable, who to talk to, and the done check.
 - [ ] Models chosen: Sonnet for bounded work, the strongest model where judgment decides the result.
 - [ ] Common commands pre-approved; the lead isn't in a broader permission mode than the team should have.
-- [ ] Hooks in place for the gates you need (`TaskCompleted`, `TeammateIdle`, `TaskCreated`).
+- [ ] Hooks in place for the gates you need (`TaskCompleted`, `TeammateIdle`, `TaskCreated`), in your own settings (section 14 for this repo).
 - [ ] Tasks sized at 5 to 6 per teammate with dependencies set.
 - [ ] A plan to monitor, synthesize, and shut teammates down when done.
