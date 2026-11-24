@@ -3,7 +3,10 @@
 # global.json, the .NET SDK every Application builds with, and the Factory's copy of it (a dotnet-sdk block; mpaulosky/Application_Factory#103, ADR 0017),
 # and the C# test project's packages (a nuget block).
 # For GitHub Actions and the SDK both directories are listed so one PR bumps an action in a copied workflow and in its source under template/owned/ together,
-# or the gate's drift check would fail the copy. Every label below must exist in the repo.
+# or the gate's drift check would fail the copy. GitHub Actions also lists the Factory's template-tools action, whose pins Dependabot reads only there;
+# test.sh holds its setup-dotnet pin equal to the Template ci.yml's (mpaulosky/Application_Factory#145). A major bump, which the minor-and-patch group leaves
+# out, can come as one PR per folder, each failing that check or the drift check: move the pin in every folder on one of them, merge it, and close the others.
+# Every label below must exist in the repo.
 ---
 
 version: 2
@@ -13,6 +16,7 @@ updates:
     directories:
       - "/"
       - "/.claude/skills/repo-ci-baseline/template/owned"
+      - "/.github/actions/template-tools"
     target-branch: "main"
     schedule:
       interval: "weekly"
@@ -129,7 +133,9 @@ updates:
           - "patch"
 
   # The xUnit v3 project for the C# scripts (ADR 0017). Its shield files turn central package management off, so the versions are in
-  # Scripts.Tests.csproj itself. It is the Factory's own, not Owned, so a bump reaches no Application.
+  # Scripts.Tests.csproj itself. It is the Factory's own, not Owned, so a bump reaches no Application. Its packages.lock.json moves with the versions: test.sh
+  # restores in locked mode, and Dependabot's NuGet updater restores after a bump, which rewrites the lock file. A PR that still fails with NU1004 needs
+  # dotnet restore in that folder and the lock file committed on its branch.
   - package-ecosystem: "nuget"
     directory: "/.claude/skills/repo-ci-baseline/tests/Scripts.Tests"
     target-branch: "main"

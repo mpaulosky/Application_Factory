@@ -174,7 +174,7 @@ The first increment brings the .NET SDK into the Factory, with no script ported 
   It targets `net11.0`, not the Applications' `net10.0`: a file-based script builds for the SDK's own framework, so the tests run on the runtime the scripts do, and the pinned SDK
   alone runs them, with no .NET 10 runtime installed beside it.
   `test.sh` runs it in the `scripts` shard, built into a temp folder so the skill's tree stays clean. Until it holds a test it is only built: Microsoft Testing Platform fails
-  a run in which no test ran (exit 8).
+  a run in which no test ran (exit 8). (The Update for mpaulosky/Application_Factory#145 below replaces the build-only run with `dotnet test`.)
 - **What lints C#: the gate and CI, not the edit-time hook** (Still open: what replaces ruff). The `static` part, and so `--quick` and CI, runs
   `dotnet format whitespace . --folder --verify-no-changes` over every C# file, in folder mode, which reads no project and runs no MSBuild; then it builds every script entry file
   with warnings as errors. An entry file is a `.cs` in no project's folder that no `.cs` in its folder pulls in with `#:include`. A project's own files are built by the test that

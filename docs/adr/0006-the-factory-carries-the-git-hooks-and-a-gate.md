@@ -39,6 +39,7 @@ clone, so CI runs the same gate for a push from a clone without hooks.
 ## Update (mpaulosky/Application_Factory#117): the .NET SDK
 
 [ADR 0017](0017-the-factorys-and-the-templates-scripts-are-csharp-file-based-apps.md) brings the .NET SDK into the Factory; what this ADR decides is unchanged. The gate's list of
-copies gains `global.json`. Its `static` part, in `--quick` too, checks every C# file with `dotnet format whitespace` and builds every C# script with warnings as errors but CA2266.
+copies gains `global.json`. Its `static` part, in `--quick` too, checks every C# file with `dotnet format whitespace` and builds every C# script with warnings as errors but CA2266
+(and NU1900, ADR 0017's Update for mpaulosky/Application_Factory#145).
 `test.sh` builds `tests/Scripts.Tests` and runs its tests, and the pass `run_cached` remembers is for the tree and the SDK, so an SDK change runs `test.sh` again. A push now needs the
 SDK `global.json` names.
