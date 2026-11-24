@@ -742,6 +742,40 @@ wait "$stubborn_gate" 2> /dev/null || true
 stubborn_took=$((SECONDS - stubborn_start))
 check "a build that ignores the TERM is killed: the gate ends within 5 to 10 seconds and leaves no build folder" \
   "$([[ -e "$work/stubborndotnet/building" ]] && ((stubborn_took >= 4 && stubborn_took <= 10)) && [[ -z "$(cs_tmp_left)" ]] && echo 0 || echo 1)"
+# A second TERM while the gate is ending that build (a cancel sent twice, Ctrl-C pressed twice) doesn't cut the cleanup short: the build is still killed and
+# waited for, and the folder still removed. The stub notes its pid, which exec keeps for the sleep.
+mkdir -p "$work/twicedotnet"
+cat > "$work/twicedotnet/dotnet" << TWICE
+#!/usr/bin/env bash
+if [[ "\$1" == build ]]; then
+  trap '' TERM
+  echo "\$\$" > "$work/twicedotnet/pid"
+  exec sleep 30
+fi
+exit 0
+TWICE
+chmod +x "$work/twicedotnet/dotnet"
+rm -f "$work/twicedotnet/pid"
+# shellcheck disable=SC2016 # $1 is the inner bash's argument, the repo
+env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 TMPDIR="$cs_tmp" PATH="$work/twicedotnet:$PATH" \
+  bash -c 'cd "$1" && exec bash scripts/gate.sh --quick' _ "$repoC" > "$repoC/out" 2>&1 &
+twice_gate=$!
+for _ in $(seq 1 600); do
+  [[ ! -s "$work/twicedotnet/pid" ]] || break
+  sleep 0.1
+done
+twice_build="$(cat "$work/twicedotnet/pid" 2> /dev/null || true)"
+twice_start=$SECONDS
+kill -TERM "$twice_gate" 2> /dev/null || true
+sleep 1
+kill -TERM "$twice_gate" 2> /dev/null || true
+wait "$twice_gate" 2> /dev/null || true
+twice_took=$((SECONDS - twice_start))
+twice_alive=0
+[[ -z "$twice_build" ]] || ! kill -0 "$twice_build" 2> /dev/null || twice_alive=1
+[[ -z "$twice_build" ]] || kill -KILL "$twice_build" 2> /dev/null || true
+check "a second TERM while the gate ends a build that ignores the first still kills the build within 5 to 10 seconds and leaves no build folder" \
+  "$([[ -n "$twice_build" && $twice_alive == 0 ]] && ((twice_took >= 4 && twice_took <= 10)) && [[ -z "$(cs_tmp_left)" ]] && echo 0 || echo 1)"
 check "the gate runs dotnet with telemetry off, no first-run setup and no logo, over a caller's 0s" \
   "$([[ -s "$work/slowdotnet/env" ]] && ! grep -vqx 'optout=1 first=1 nologo=1' "$work/slowdotnet/env" && echo 0 || echo 1)"
 check "the build's warnings as errors leave CA2266 and NU1900 (a vulnerability feed that can't be reached) warnings, and nothing else" \

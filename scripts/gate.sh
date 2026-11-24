@@ -223,11 +223,14 @@ run_static() {
   # gate open. The pid is dotnet's own (the build execs it); with --disable-build-servers it leaves no server behind, and on SDK 11.0.100 a TERM ends it and its
   # child processes within a tenth of a second. A signal between the build's fork and cs_pid=$! finds cs_pid empty: cs_starting says a build was forked,
   # and $! names it once it differs from cs_before, the last background pid before the fork. The KILL goes only to a build still running, since an
-  # exited one's pid may be another process's by then.
+  # exited one's pid may be another process's by then. It runs only from the EXIT trap, which bash clears before running it, so a second signal there (a
+  # cancel sent twice, Ctrl-C pressed twice) would end the gate by default before the KILL, the wait and the removal: INT, TERM and HUP are ignored first,
+  # as in cache_unlock, and only when there is a build to end.
   cs_stop() {
     local tries
     [[ -n "$cs_pid" || -z "$cs_starting" || "${!:-}" == "$cs_before" ]] || cs_pid="${!:-}"
     [[ -n "$cs_pid" ]] || return 0
+    trap '' INT TERM HUP
     kill -TERM "$cs_pid" 2> /dev/null || true
     for ((tries = 0; tries < 50; tries++)); do
       kill -0 "$cs_pid" 2> /dev/null || break
