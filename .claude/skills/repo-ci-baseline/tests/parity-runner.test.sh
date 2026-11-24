@@ -200,7 +200,7 @@ echo '^note: o/app$' > "$cases/c1/expected.stderr"
 
 suite 2 "a command that can't be run" -- ./no-such-command && says "a missing command" "the command './no-such-command' can't be run"
 suite 2 "a bad PARITY_RECORD" PARITY_RECORD=2 || true
-suite 2 "record mode with a command" PARITY_RECORD=1 -- ./stub.sh && says "record mode with a command" "records from the Python reference only"
+suite 2 "record mode with a command" PARITY_RECORD=1 -- ./stub.sh && says "record mode with a command" "records from the suite's reference only"
 suite 2 "a bad PARITY_TIMEOUT" PARITY_TIMEOUT=0 -- ./stub.sh || true
 # runner <expected exit> <what> <text> [arg]...: the copied runner with these arguments instead of the stub suite's.
 runner() {
@@ -218,10 +218,49 @@ runner 2 "a suite name that could name a path" "'../stub' is not a suite name" .
 mkdir -p "$skill/tests/parity/tpl/cases" "$skill/template/owned/.github/scripts"
 new_case c1
 cp -R "$cases/c1" "$skill/tests/parity/tpl/cases/"
-runner 2 "a suite with no script" "no script for suite 'tpl': neither github/tpl.py nor template/owned/.github/scripts/tpl.py is a file." tpl
+runner 2 "a suite with no script" "no script for suite 'tpl': none of github/tpl.py, github/tpl.cs and template/owned/.github/scripts/tpl.py is a file." tpl
 cp "$skill/github/stub.py" "$skill/template/owned/.github/scripts/tpl.py"
 runner 0 "a suite whose script is the Template's" "tpl: 1 case(s) pass against: python3 $skill/template/owned/.github/scripts/tpl.py" tpl
 rm -rf "$skill/tests/parity/tpl" "$skill/template" "$cases/c1"
+# Once a port replaced github/<suite>.py, the reference is github/<suite>.cs (ADR 0017): built once, from its own folder, before the first
+# case, then run with dotnet run --no-build. A stub dotnet logs each call with its folder, fails a build when told to, and runs the stub
+# implementation for a run; two cases show the build isn't repeated per case.
+mkdir -p "$work/dotnet-stub" "$skill/tests/parity/cs/cases"
+cat > "$work/dotnet-stub/dotnet" << EOF
+#!/usr/bin/env bash
+printf '%s|%s\n' "\$PWD" "\$*" >> "$work/dotnet.log"
+if [[ "\$1" == build ]]; then
+  [[ -z "\${STUB_BUILD_FAILS:-}" ]] || { echo "error CS1002: ; expected"; exit 1; }
+  exit 0
+fi
+[[ "\$1 \$2 \$3" == "run --no-build --file" && "\$5" == -- ]] || { echo "stub dotnet: unexpected call: \$*" >&2; exit 64; }
+shift 5
+exec bash "$work/stub.sh" "\$@"
+EOF
+chmod +x "$work/dotnet-stub/dotnet"
+: > "$skill/github/cs.cs"
+new_case c1
+cp -R "$cases/c1" "$skill/tests/parity/cs/cases/c1"
+cp -R "$cases/c1" "$skill/tests/parity/cs/cases/c2"
+: > "$work/dotnet.log"
+PATH="$work/dotnet-stub:$PATH" runner 0 "a suite whose script is github/<suite>.cs" \
+  "cs: 2 case(s) pass against: dotnet run --no-build --file $skill/github/cs.cs --" cs
+[[ "$(grep -c '|build ' "$work/dotnet.log")" == 1 ]] || fail "the C# reference wasn't built exactly once: $(cat "$work/dotnet.log")"
+grep -qxF "$skill/github|build $skill/github/cs.cs" "$work/dotnet.log" || fail "the C# reference wasn't built from its own folder: $(cat "$work/dotnet.log")"
+[[ "$(head -1 "$work/dotnet.log")" == *"|build "* ]] || fail "the C# reference was run before it was built: $(cat "$work/dotnet.log")"
+PATH="$work/dotnet-stub:$PATH" STUB_BUILD_FAILS=1 runner 2 "a C# reference whose build fails" "dotnet build $skill/github/cs.cs failed:" cs
+says "a C# reference whose build fails" "error CS1002"
+# Record mode records from it too, now that no Python is left to record from.
+rm "$skill/tests/parity/cs/cases/c1"/expected.* "$skill/tests/parity/cs/cases/c2"/expected.*
+(cd "$work" && PATH="$work/dotnet-stub:$PATH" PARITY_RECORD=1 bash "$runner" cs < /dev/null > "$work/out" 2>&1) || fail "record mode from a C# reference failed: $(cat "$work/out")"
+[[ "$(cat "$skill/tests/parity/cs/cases/c1/expected.stdout" 2> /dev/null)" == "o/app ok" ]] || fail "record mode didn't record from the C# reference: $(cat "$work/out")"
+grep -qF "cs: 2 case(s) recorded from dotnet run --no-build --file $skill/github/cs.cs --" "$work/out" || fail "record mode doesn't name the C# reference: $(cat "$work/out")"
+# A .py beside the .cs is still the reference: the Python stays until its port is judged (ADR 0017).
+cp "$skill/github/stub.py" "$skill/github/cs.py"
+: > "$work/dotnet.log"
+PATH="$work/dotnet-stub:$PATH" runner 0 "a .py beside the .cs" "cs: 2 case(s) pass against: python3 $skill/github/cs.py" cs
+[[ ! -s "$work/dotnet.log" ]] || fail "a suite with a .py beside its .cs built or ran the C#: $(cat "$work/dotnet.log")"
+rm -rf "$skill/tests/parity/cs" "$skill/github/cs.cs" "$skill/github/cs.py" "$cases/c1"
 chmod -x "$fake"
 suite 2 "a fake gh that isn't executable" -- ./stub.sh || true
 chmod +x "$fake"

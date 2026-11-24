@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # The parity suites: a script's behaviour through its command line only, so the same cases judge any implementation of it
 # (its C# port, ADR 0017) against the Python. One runner and one fake gh serve every suite; a suite is a folder
-# tests/parity/<suite>/, named for the script it was recorded from (github/<suite>.py, else the Template's
-# template/owned/.github/scripts/<suite>.py), and its README.md says what its cases cover and what they leave out on purpose, and
-# anything a run of it needs besides (check_gh_repo's runs with its shfmt shim first on PATH).
+# tests/parity/<suite>/, named for the script it was recorded from, and its README.md says what its cases cover and what they
+# leave out on purpose, and anything a run of it needs besides (check_gh_repo's runs with its shfmt shim first on PATH).
+# The suite's reference is that script: github/<suite>.py, else github/<suite>.cs once a port has replaced the .py (a
+# Factory-only script, whose .py goes in the PR that ports it, ADR 0017), else the Template's template/owned/.github/scripts/<suite>.py.
 #
-#   tests/parity.test.sh <suite>                    run the suite's cases against python3 <that script>
+#   tests/parity.test.sh <suite>                    run the suite's cases against its reference: python3 <the .py>, or
+#                                                   dotnet run --no-build --file <the .cs> --, built once first
 #   tests/parity.test.sh <suite> <command> [arg]... run them against another implementation
 #   PARITY_RECORD=1 tests/parity.test.sh <suite>
-#                                                   record the cases from the Python reference (no command is accepted:
+#                                                   record the cases from the suite's reference (no command is accepted:
 #                                                   a port never records its own oracle); review the diff before committing
 #
 # Each case is a folder under tests/parity/<suite>/cases/:
@@ -58,11 +60,14 @@
 # ANTHROPIC_MODEL: a case's env sets them), no git repository or config the caller set (GIT_DIR and the rest unset,
 # GIT_CONFIG_GLOBAL=/dev/null, GIT_CONFIG_NOSYSTEM=1), no colour or terminal width the caller set (NO_COLOR=1, TERM=dumb),
 # LC_ALL=C.UTF-8 (best-effort: macOS has no such locale, so PYTHONUTF8=1 is set too), PYTHONDONTWRITEBYTECODE=1 (so a
-# script's imports leave no __pycache__ beside it), TZ=UTC, and PARITY_TIMEOUT seconds (default 60) before it counts as hung. A command word that looks like a path (it holds a
+# script's imports leave no __pycache__ beside it), TZ=UTC, dotnet's CLI usage data, first-run setup and logo off
+# (DOTNET_CLI_TELEMETRY_OPTOUT, DOTNET_SKIP_FIRST_TIME_EXPERIENCE and DOTNET_NOLOGO set to 1), and PARITY_TIMEOUT seconds
+# (default 60) before it counts as hung. A command word that looks like a path (it holds a
 # /, or after the first word a .) and names an existing file or folder is made absolute first, as is the value of a later
 # --option=value word, so `--file src/Status.cs` works from anywhere; the first word is looked up on PATH unless it holds a /. Build a compiled implementation once before running the suite (a
 # file-based C# app with `dotnet build <file>.cs`, then the command `dotnet run --no-build --file <file>.cs --`), so the
-# build isn't timed inside the first case and two runs of the suite don't build it at once.
+# build isn't timed inside the first case and two runs of the suite don't build it at once; a .cs reference the runner picks
+# is built that way for you, from its own folder, and a build that fails is a setup error.
 #
 # Exit 0 when every case passes, 1 when one fails, 2 on a usage or setup error (a case missing a file or holding a bad
 # one, a command that can't be run, a temporary folder that can't be made). Needs bash 4.4 or later, coreutils (mktemp,
@@ -91,20 +96,25 @@ if [[ -n "$record" && "$record" != 1 ]]; then
   setup_error "PARITY_RECORD must be 1 or unset, not '$record'."
 fi
 if [[ -n "$record" && $# -gt 0 ]]; then
-  setup_error "PARITY_RECORD records from the Python reference only; run it with no command."
+  setup_error "PARITY_RECORD records from the suite's reference only (github/$suite.py, github/$suite.cs or the Template's $suite.py); run it with no command."
 fi
 limit="${PARITY_TIMEOUT:-60}"
 [[ "$limit" =~ ^[1-9][0-9]*$ ]] || setup_error "PARITY_TIMEOUT must be a whole number of seconds, not '$limit'."
 command -v timeout > /dev/null || setup_error "timeout (coreutils) is not on PATH."
 
+# build_cs: a C# reference, built once below, before the first case.
+build_cs=""
 if [[ $# -gt 0 ]]; then
   impl=("$@")
 elif [[ -f "$skill_dir/github/$suite.py" ]]; then
   impl=(python3 "$skill_dir/github/$suite.py")
+elif [[ -f "$skill_dir/github/$suite.cs" ]]; then
+  build_cs="$skill_dir/github/$suite.cs"
+  impl=(dotnet run --no-build --file "$build_cs" --)
 elif [[ -f "$skill_dir/template/owned/.github/scripts/$suite.py" ]]; then
   impl=(python3 "$skill_dir/template/owned/.github/scripts/$suite.py")
 else
-  setup_error "no script for suite '$suite': neither github/$suite.py nor template/owned/.github/scripts/$suite.py is a file."
+  setup_error "no script for suite '$suite': none of github/$suite.py, github/$suite.cs and template/owned/.github/scripts/$suite.py is a file."
 fi
 # The command runs from a temporary folder, so a relative path in it would name nothing there.
 # Only a word that looks like a path (it holds a /, or after the first word a .) is rewritten, so `dotnet run` stays as it
@@ -127,6 +137,11 @@ tmp="$(mktemp -d)" || setup_error "can't make a temporary folder."
 trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/bin" "$tmp/ghconfig" || setup_error "can't make folders under $tmp."
 ln -s "$fake" "$tmp/bin/gh" || setup_error "can't link the fake gh into $tmp/bin."
+# A C# reference is built once, from its own folder, so the SDK is the one the global.json above it names (ADR 0017).
+if [[ -n "$build_cs" ]]; then
+  (cd -- "$(dirname -- "$build_cs")" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 \
+    dotnet build "$build_cs" < /dev/null > "$tmp/build.log" 2>&1) || setup_error "dotnet build $build_cs failed:"$'\n'"$(cat "$tmp/build.log")"
+fi
 
 shopt -s nullglob
 cases=("$cases_dir"/*/)
@@ -284,6 +299,7 @@ for case_dir in "${cases[@]}"; do
     -u FORCE_COLOR -u CLICOLOR_FORCE -u PYTHON_COLORS -u COLUMNS -u LINES \
     -u REPOSITORY -u GITHUB_REPOSITORY -u ANTHROPIC_API_KEY -u ANTHROPIC_MODEL "${git_env[@]}" NO_COLOR=1 TERM=dumb \
     PATH="$tmp/bin:$PATH" GH_CONFIG_DIR="$tmp/ghconfig" LC_ALL=C.UTF-8 PYTHONUTF8=1 PYTHONDONTWRITEBYTECODE=1 TZ=UTC \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 \
     FAKE_GH_DIR="$case_dir/gh" FAKE_GH_LOG="$tmp/calls" ${case_env[@]+"${case_env[@]}"} \
     "${impl[@]}" ${args[@]+"${args[@]}"} < "$stdin" > "$tmp/stdout" 2> "$tmp/stderr") || code=$?
 

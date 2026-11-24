@@ -5,9 +5,9 @@
 #   TEST_SH_SHARD=hooks|scripts|checks test.sh
 #
 # Runs the Template's own tests (hook suites, auto-merge script tests,
-# the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle and the GitHub scripts' tests
-# (settings, the landing decision, status, land and rollout) with the parity suites (status, land, check_gh_repo and the release scripts), the Claude Review
-# benchmark's tests and the C# scripts' xUnit tests (tests/Scripts.Tests), lints its workflows, YAML, shell
+# the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle and the GitHub scripts' pytest
+# (settings and rollout) with the parity suites (status, land, check_gh_repo and the release scripts), the Claude Review
+# benchmark's tests and the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land and what they share), lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
 # Owned files carry no {{PLACEHOLDER}} and that the Owned scripts, and this repo's own
 # scripts and skills, tell every gh command its repository, checks the Seed Sandcastle files, and smoke-tests apply.sh and
@@ -150,6 +150,14 @@ scripts_tests_run() {
   [[ "$tmp" == /* ]] || tmp="$PWD/$tmp"
   (cd "$1" && TMPDIR="$tmp" DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 \
     dotnet test --project Scripts.Tests.csproj -p:RestoreLockedMode=true -p:UseSharedCompilation=false --artifacts-path "$out" --results-directory "$out/results")
+}
+# Copies the skill into folder argument 1, as <argument 1>/skill, for a check on a copy of the C# scripts' test project, and prints the copy's project
+# folder: the project compiles the scripts in the skill's github/ and its tests read the skill's files, so a copy builds only beside them. What a
+# build wrote into the project's folder (bin/, obj/, TestResults/) is left out.
+scripts_tests_copy() {
+  cp -R "$skill_dir/." "$1/skill" || return 1
+  rm -rf "$1/skill/tests/Scripts.Tests/bin" "$1/skill/tests/Scripts.Tests/obj" "$1/skill/tests/Scripts.Tests/TestResults"
+  printf '%s\n' "$1/skill/tests/Scripts.Tests"
 }
 # Whether an action or workflow (argument 1) has an actions/setup-dotnet step pinned to a 40-hex commit with global-json-file: global.json under it,
 # before the next step; prints the commit. A commented-out line is no step.
@@ -742,12 +750,14 @@ if in_shard scripts; then
   fi
   (cd "$skill_dir/tests/render_oracle" && "${oracle_cmd[@]}" -q -p no:cacheprovider .) || fail "renderer oracle"
 
-  step "GitHub scripts tests (settings, landing decision, status, land, rollout)"
+  step "GitHub scripts tests (settings, rollout)"
   (cd "$skill_dir" && "${pytest_cmd[@]}" -q -p no:cacheprovider github/tests) || fail "github scripts pytest"
 
-  step "Parity suites (status.py, land.py, check_gh_repo.py and the release scripts through their command lines, against a fake gh) and their runner's tests"
-  # The fake gh runs jq for a REST call's --jq, which the release scripts' suites make.
+  step "Parity suites (status.cs, land.cs, check_gh_repo.py and the release scripts through their command lines, against a fake gh) and their runner's tests"
+  # The fake gh runs jq for a REST call's --jq, which the release scripts' suites make. The status and land suites' reference is the C#
+  # (github/status.cs, github/land.cs), which the runner builds once before its cases (ADR 0017).
   need jq
+  need dotnet
   # Every suite is run: each folder under tests/parity/ with a cases/ folder, so a suite added later can't be left out. Each needs its README.md
   # (what its cases cover and leave out), and there are at least the seven suites there are now, so a glob that matched nothing can't pass.
   parity_suites=()
@@ -770,6 +780,17 @@ if in_shard scripts; then
       bash "$skill_dir/tests/parity.test.sh" "$suite" || fail "parity.test.sh $suite"
     fi
   done
+  # status.sh and land.sh run their C# from its own folder, so a global.json in the caller's folder that pins an SDK nobody has installed
+  # changes nothing: the status suite passes against status.sh with one above every case's folder (the runner's TMPDIR), and land.sh
+  # answers --help from such a folder. dotnet itself fails there, which shows the global.json is read.
+  other_sdk="$md_tmp/other-sdk"
+  mkdir -p "$other_sdk"
+  printf '{"sdk": {"version": "8.0.1", "rollForward": "disable"}}\n' > "$other_sdk/global.json"
+  ! (cd "$other_sdk" && dotnet --version) > /dev/null 2>&1 || fail "dotnet ran in a folder whose global.json pins SDK 8.0.1, so the wrappers' check below proves nothing"
+  TMPDIR="$other_sdk" bash "$skill_dir/tests/parity.test.sh" status "$skill_dir/status.sh" > "$md_tmp/status-sh.log" 2>&1 \
+    || fail "status.sh fails the status suite from under a global.json that pins another SDK: $(tail -5 "$md_tmp/status-sh.log")"
+  land_help="$(cd "$other_sdk" && bash "$skill_dir/land.sh" --help 2>&1)" || fail "land.sh --help fails from a folder whose global.json pins another SDK: $land_help"
+  [[ "$land_help" == "usage: land.cs "* ]] || fail "land.sh --help didn't print land's usage from a folder whose global.json pins another SDK: $land_help"
   bash "$skill_dir/tests/parity-runner.test.sh" || fail "parity-runner.test.sh"
   # Run again as a hook would, with GIT_DIR and the rest naming another repo: its throwaway repo must not touch that one.
   # The decoy sits under md_tmp, which the EXIT trap removes, and its own git calls run without test.sh's caller's GIT_*.
@@ -939,18 +960,17 @@ HALF
   mkdir -p "$pinned"
   cp "$skill_dir/../../../global.json" "$pinned/"
   printf '<configuration><packageSources><add key="other" value="https://other.invalid/v3/index.json" /></packageSources></configuration>\n' > "$pinned/NuGet.config"
-  cp -R "$scripts_tests" "$pinned/Scripts.Tests"
-  rm -rf "$pinned/Scripts.Tests/bin" "$pinned/Scripts.Tests/obj" "$pinned/Scripts.Tests/TestResults"
-  sources="$(cd "$pinned/Scripts.Tests" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 dotnet nuget list source --format short)" \
+  pinned_project="$(scripts_tests_copy "$pinned")" || fail "can't copy the skill under $pinned for the locked-restore check"
+  sources="$(cd "$pinned_project" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 dotnet nuget list source --format short)" \
     || fail "dotnet nuget list source failed in the copy of Scripts.Tests"
   [[ "$sources" == "E https://api.nuget.org/v3/index.json" ]] \
     || fail "Scripts.Tests must restore from nuget.org alone, whatever a NuGet.config above says; it sees: ${sources//$'\n'/ | }"
-  sed -i.bak -E 's/(PackageReference Include="xunit\.v3\.mtp-v2" Version=")[^"]*"/\10.0.1"/' "$pinned/Scripts.Tests/Scripts.Tests.csproj"
-  ! cmp -s "$pinned/Scripts.Tests/Scripts.Tests.csproj" "$pinned/Scripts.Tests/Scripts.Tests.csproj.bak" \
+  sed -i.bak -E 's/(PackageReference Include="xunit\.v3\.mtp-v2" Version=")[^"]*"/\10.0.1"/' "$pinned_project/Scripts.Tests.csproj"
+  ! cmp -s "$pinned_project/Scripts.Tests.csproj" "$pinned_project/Scripts.Tests.csproj.bak" \
     || fail "the locked-restore check couldn't move xunit.v3.mtp-v2's version in its copy of Scripts.Tests.csproj"
-  rm -f "$pinned/Scripts.Tests/Scripts.Tests.csproj.bak"
+  rm -f "$pinned_project/Scripts.Tests.csproj.bak"
   locked_rc=0
-  scripts_tests_run "$pinned/Scripts.Tests" "$pinned/out" > "$pinned/run.log" 2>&1 || locked_rc=$?
+  scripts_tests_run "$pinned_project" "$pinned/out" > "$pinned/run.log" 2>&1 || locked_rc=$?
   if ((locked_rc == 0 || locked_rc == 8)) || ! grep -q NU1004 "$pinned/run.log"; then
     fail "a Scripts.Tests whose package version packages.lock.json doesn't pin must fail its locked restore with NU1004 (exit $locked_rc)"
   fi
@@ -965,15 +985,14 @@ HALF
   printf '<Project><Target Name="ParentTargets" BeforeTargets="Build"><Error Text="a Directory.Build.targets above Scripts.Tests reached its build" /></Target></Project>\n' \
     > "$offline/Directory.Build.targets"
   printf '<Project><PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup></Project>\n' > "$offline/Directory.Packages.props"
-  cp -R "$scripts_tests" "$offline/Scripts.Tests"
-  rm -rf "$offline/Scripts.Tests/bin" "$offline/Scripts.Tests/obj" "$offline/Scripts.Tests/TestResults"
-  sed -i.bak 's#https://api.nuget.org/v3/index.json#https://nuget.invalid/v3/index.json#' "$offline/Scripts.Tests/NuGet.config"
-  ! cmp -s "$offline/Scripts.Tests/NuGet.config" "$offline/Scripts.Tests/NuGet.config.bak" \
+  offline_project="$(scripts_tests_copy "$offline")" || fail "can't copy the skill under $offline for the NU1900 check"
+  sed -i.bak 's#https://api.nuget.org/v3/index.json#https://nuget.invalid/v3/index.json#' "$offline_project/NuGet.config"
+  ! cmp -s "$offline_project/NuGet.config" "$offline_project/NuGet.config.bak" \
     || fail "the NU1900 check couldn't point its copy of Scripts.Tests at an unreachable feed"
-  rm -f "$offline/Scripts.Tests/NuGet.config.bak"
+  rm -f "$offline_project/NuGet.config.bak"
   offline_rc=0
-  scripts_tests_run "$offline/Scripts.Tests" "$offline/out" > "$offline/run.log" 2>&1 || offline_rc=$?
-  if ! scripts_tests_pass "$offline_rc" "$offline/Scripts.Tests" || ! grep -q 'warning NU1900' "$offline/run.log" \
+  scripts_tests_run "$offline_project" "$offline/out" > "$offline/run.log" 2>&1 || offline_rc=$?
+  if ! scripts_tests_pass "$offline_rc" "$offline_project" || ! grep -q 'warning NU1900' "$offline/run.log" \
     || ! grep -q 'warning NU1905' "$offline/run.log"; then
     fail "Scripts.Tests must pass with NU1900 and NU1905 warnings when its feed can't be reached, its shields keeping out the files above it (exit $offline_rc): $(grep -m 3 -E 'error|NU1' "$offline/run.log" | tr '\n' ' ')"
   fi
@@ -1617,7 +1636,7 @@ sys.exit(0 if re.search(r"^[ \t]*(?i:RUN)[ \t]+[^\n]*\bpip3?[ \t]+install\b[^\n&
   grep -qE 'const MAX_CLAUDE_ROUNDS = 3;' "$pr_automerge" \
     || fail "pr-automerge.yml must keep 'const MAX_CLAUDE_ROUNDS = 3;'"
   grep -qF -- 'const EXHAUSTED_MARKER = "<!-- pr-automerge:review-loop-exhausted";' "$pr_automerge" \
-    || fail "pr-automerge.yml must declare the exhaustion marker github/landing.py's EXHAUSTED_MARKER must equal"
+    || fail "pr-automerge.yml must declare the exhaustion marker github/Landing.cs's ExhaustedMarker must equal"
   # Claude reviews only where Copilot can't, and a person's threads still hold at an exhausted loop (mpaulosky/dotfiles#378): the label is
   # ignored while Copilot can review, a person's open thread holds the merge, the exhaustion comment says when the head was not reviewed, and
   # only a login with write access restarts a loop.

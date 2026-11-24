@@ -464,7 +464,9 @@ check "request fails: names land.sh as the next step" 'grep -q "next: land.sh ac
 # until the PR carries it); land.sh then adds review:claude. A request that
 # registers needs none.
 marker='<!-- pr-automerge:copilot-asked -->'
-expected_comment="$(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import landing; sys.stdout.write(landing.COPILOT_ASKED_COMMENT)' "$skill_dir/github")"
+# reapply.sh's own asked_comment, as bash reads its two lines; Scripts.Tests holds it equal to github/Landing.cs's CopilotAskedComment.
+expected_comment="$(bash -c 'eval "$(grep -E "^(asked_marker|asked_comment)=" "$1")" && printf %s "$asked_comment"' _ "$skill_dir/reapply.sh")"
+check "ask record: reapply.sh's asked_comment reads, its marker last" '[[ "$expected_comment" == "Copilot'"'"'s review was requested"*"$marker" ]]'
 ci_round=0
 # Another Template change (so the run isn't "nothing to commit") against the PR
 # and the stub as they are; sets out and rc.
@@ -510,7 +512,7 @@ touch "$stub/dropped"
 rerun
 check "ask record, request dropped: exits 0" '[[ $rc -eq 0 ]] || { echo "$out" >&2; false; }'
 check "ask record, request dropped: one comment posted on #7" '[[ "$(comments_posted)" -eq 1 ]] && grep -q "^pr comment 7 --body " "$stub/gh.log"'
-check "ask record, request dropped: the comment is landing.py's ask comment, marker included" \
+check "ask record, request dropped: the comment is reapply.sh's ask comment (Landing.cs's), marker included" \
   '[[ "$(cat "$stub/comment-body" 2>/dev/null)" == "$expected_comment" && "$expected_comment" == *"$marker" ]]'
 check "ask record, request dropped: the record is by the owner and counts once" '[[ "$(marker_comments)" -eq 1 ]]'
 check "ask record, request dropped: still never adds review:claude" 'only_apply_label'
