@@ -47,7 +47,8 @@
 # expected.stdout, expected.code, expected.calls and expected.tree/ (removed when the run leaves no file). It writes a
 # new case's expected.stderr with each line matched literally, for someone to loosen to the shape that matters; an existing
 # one holds that loosening, so it is kept, and the run fails when it no longer fits. A case whose run makes a gh call the
-# fake can't answer, or times out, is never recorded.
+# fake can't answer, times out, or leaves an empty folder (git stores none, so a fresh clone's expected.tree/ would lack
+# it) is never recorded: its files are left as they were.
 #
 # Each case's run starts in a new temporary folder of its own (empty, or the case's tree/ and setup.sh), with
 # stdin from /dev/null or the case's stdin, the fake gh first on PATH, no GitHub token in its environment and GH_CONFIG_DIR
@@ -299,9 +300,6 @@ for case_dir in "${cases[@]}"; do
       failed+=("$name")
       continue
     fi
-    cp "$tmp/stdout" "$case_dir/expected.stdout"
-    printf '%s\n' "$code" > "$case_dir/expected.code"
-    cp "$tmp/calls" "$case_dir/expected.calls"
     # git stores no empty folder, so one in expected.tree/ would be missing from a fresh clone and fail the case there.
     empty="$(cd -- "$run" && find . -mindepth 1 -name .git -prune -o -type d -empty -print | sort)"
     if [[ -n "$empty" ]]; then
@@ -310,6 +308,9 @@ for case_dir in "${cases[@]}"; do
       failed+=("$name")
       continue
     fi
+    cp "$tmp/stdout" "$case_dir/expected.stdout"
+    printf '%s\n' "$code" > "$case_dir/expected.code"
+    cp "$tmp/calls" "$case_dir/expected.calls"
     rm -rf "$case_dir/expected.tree"
     if [[ -n "$(cd -- "$run" && find . -mindepth 1 -maxdepth 1 ! -name .git)" ]]; then
       cp -R "$run/." "$case_dir/expected.tree/" || setup_error "can't record $name/expected.tree."

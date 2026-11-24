@@ -32,7 +32,8 @@
 # repo change between polls: a .json is printed on stdout (exit 0), a .fail on stderr (exit 1: a GitHub failure). For a
 # `gh pr view`, the .json holds what its --jq would print: the fake runs no jq there, and the expression is in the logged
 # argv, which a port must send unchanged. For a REST call, the .json holds the API's response, and with --jq the fake runs
-# real jq over it and prints a string result raw, as gh does, so the calls that read one path through different
+# real jq over it and prints each result as gh does (a string raw, null as an empty line, anything else as compact JSON
+# with sorted keys and Go's escapes; see the jq call for the one exception), so the calls that read one path through different
 # expressions share its fixture; --paginate is taken as given, the fixture being every page at once.
 #
 # Each call is logged as its key; a `gh pr` call, and a REST call with --paginate or --jq, as its key, a space and its whole

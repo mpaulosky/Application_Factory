@@ -305,12 +305,17 @@ new_case c1
 env -u GIT_DIR -u GIT_WORK_TREE GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init -q "$work/above"
 suite 0 "a run under a temporary folder inside a git repository finds no repository" STUB_MODE=ceiling TMPDIR="$work/above" \
   -- ./stub.sh || true
-# git stores no empty folder, so record mode refuses a run that leaves one.
+# git stores no empty folder, so record mode refuses a run that leaves one, and leaves the case's files as they were.
 new_case c1
+echo "an older recording" > "$cases/c1/expected.stdout"
+echo 7 > "$cases/c1/expected.code"
+echo "older calls" > "$cases/c1/expected.calls"
 suite 1 "record mode refuses a run that leaves an empty folder" PARITY_RECORD=1 STUB_MODE=emptydir \
   && says "record mode refuses an empty folder" "the run left an empty folder, which git can't store:" \
   && says "record mode names the empty folder" "     ./left/inner"
 [[ ! -e "$cases/c1/expected.tree" ]] || fail "record mode wrote an expected.tree/ holding an empty folder"
+[[ "$(cat "$cases/c1/expected.stdout" "$cases/c1/expected.code" "$cases/c1/expected.calls")" == $'an older recording\n7\nolder calls' ]] \
+  || fail "record mode refused a case but rewrote its files: $(cat "$cases/c1/expected.stdout" "$cases/c1/expected.code" "$cases/c1/expected.calls")"
 
 # write_case <name>: a case whose tree holds in.txt, which the stub copies, and whose expected.tree/ holds what it writes.
 write_case() {
@@ -453,7 +458,7 @@ fake 97 '' "a flag with no value" api graphql -f
 fake 97 '' "a command other than api" pr list && logged "a command other than api" "UNMATCHED gh pr list"
 fake 97 '' "a REST call with more arguments" api repos/o/app --method POST
 
-# A REST call with --paginate and --jq: real jq over the fixture, a string printed raw, and the whole argv logged.
+# A REST call with --paginate and --jq: real jq over the fixture, each result printed as gh prints it, and the whole argv logged.
 printf '%s\n' '[{"n":1,"draft":false,"t":"a\u2028b"},{"n":2,"draft":true,"t":"c"}]' > "$gh_dir/rest.repos_o_app_releases?per_page=100.json"
 rel="repos/o/app/releases?per_page=100"
 fake 0 "$(printf '%s\n' '[{"n":1,"draft":false,"t":"a\u2028b"},{"n":2,"draft":true,"t":"c"}]')" "--paginate alone" api "$rel" --paginate
