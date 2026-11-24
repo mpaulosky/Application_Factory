@@ -2052,6 +2052,25 @@ jobs:
             "findings": {"type": "array", "items": {"type": "object", "required": ["path", "line", "body"], "additionalProperties": false,
             "properties": {"path": {"type": "string"}, "line": {"type": "integer", "minimum": 0, "maximum": 1000000}, "body": {"type": "string"}}}}}}'
 
+      # The action writes every review's transcript to one fixed path
+      # ($RUNNER_TEMP/claude-execution-output.json at this pin, in its
+      # base-action/src/execution-file.ts), and names it as a later Review
+      # step's execution_file while it's there. So each batch's is moved to a
+      # file of its own straight after its step, outside the folder the
+      # reviews read: a later batch can neither overwrite it nor, when it
+      # writes none, pass it off as its own. The answer check and the warning
+      # read the moved file.
+      - name: Keep batch 1's transcript
+        id: kept_1
+        if: always() && steps.claude_1.outputs.execution_file != ''
+        env:
+          EXECUTION_FILE: ${{ steps.claude_1.outputs.execution_file }}
+          BATCH: "1"
+        run: &keep |
+          kept="${RUNNER_TEMP}/claude-execution-${BATCH}.json"
+          mv -f -- "${EXECUTION_FILE}" "${kept}"
+          echo "execution_file=${kept}" >> "${GITHUB_OUTPUT}"
+
       # The same review for each further batch (see the Review step).
       - name: Review batch 2
         id: claude_2
@@ -2065,6 +2084,14 @@ jobs:
           REVIEW_BATCH: ${{ steps.diff.outputs.note_2 }}
         with: *review
 
+      - name: Keep batch 2's transcript
+        id: kept_2
+        if: always() && steps.claude_2.outputs.execution_file != ''
+        env:
+          EXECUTION_FILE: ${{ steps.claude_2.outputs.execution_file }}
+          BATCH: "2"
+        run: *keep
+
       - name: Review batch 3
         id: claude_3
         if: steps.secret.outputs.enabled == 'true' && runner.debug != '1' && fromJSON(steps.diff.outputs.batches || '0') >= 3
@@ -2077,6 +2104,14 @@ jobs:
           REVIEW_BATCH: ${{ steps.diff.outputs.note_3 }}
         with: *review
 
+      - name: Keep batch 3's transcript
+        id: kept_3
+        if: always() && steps.claude_3.outputs.execution_file != ''
+        env:
+          EXECUTION_FILE: ${{ steps.claude_3.outputs.execution_file }}
+          BATCH: "3"
+        run: *keep
+
       - name: Review batch 4
         id: claude_4
         if: steps.secret.outputs.enabled == 'true' && runner.debug != '1' && fromJSON(steps.diff.outputs.batches || '0') >= 4
@@ -2088,6 +2123,14 @@ jobs:
           REVIEW_PIECES: ${{ steps.diff.outputs.pieces_4 }}
           REVIEW_BATCH: ${{ steps.diff.outputs.note_4 }}
         with: *review
+
+      - name: Keep batch 4's transcript
+        id: kept_4
+        if: always() && steps.claude_4.outputs.execution_file != ''
+        env:
+          EXECUTION_FILE: ${{ steps.claude_4.outputs.execution_file }}
+          BATCH: "4"
+        run: *keep
 
       # Before the answer becomes a job output, whose value the post job's log
       # prints: dropped when it holds 16 characters in a row of the secret
@@ -2130,10 +2173,10 @@ jobs:
           || steps.claude_4.outputs.structured_output != '')
         env:
           # Each batch's review: its execution file, whether it answered, and the pieces it was asked for.
-          EXECUTION_FILE_1: ${{ steps.claude_1.outputs.execution_file }}
-          EXECUTION_FILE_2: ${{ steps.claude_2.outputs.execution_file }}
-          EXECUTION_FILE_3: ${{ steps.claude_3.outputs.execution_file }}
-          EXECUTION_FILE_4: ${{ steps.claude_4.outputs.execution_file }}
+          EXECUTION_FILE_1: ${{ steps.kept_1.outputs.execution_file }}
+          EXECUTION_FILE_2: ${{ steps.kept_2.outputs.execution_file }}
+          EXECUTION_FILE_3: ${{ steps.kept_3.outputs.execution_file }}
+          EXECUTION_FILE_4: ${{ steps.kept_4.outputs.execution_file }}
           ANSWERED_1: ${{ steps.claude_1.outputs.structured_output != '' }}
           ANSWERED_2: ${{ steps.claude_2.outputs.structured_output != '' }}
           ANSWERED_3: ${{ steps.claude_3.outputs.structured_output != '' }}
@@ -2479,10 +2522,10 @@ jobs:
           OUTCOME_2: ${{ steps.claude_2.outcome }}
           OUTCOME_3: ${{ steps.claude_3.outcome }}
           OUTCOME_4: ${{ steps.claude_4.outcome }}
-          EXECUTION_FILE_1: ${{ steps.claude_1.outputs.execution_file }}
-          EXECUTION_FILE_2: ${{ steps.claude_2.outputs.execution_file }}
-          EXECUTION_FILE_3: ${{ steps.claude_3.outputs.execution_file }}
-          EXECUTION_FILE_4: ${{ steps.claude_4.outputs.execution_file }}
+          EXECUTION_FILE_1: ${{ steps.kept_1.outputs.execution_file }}
+          EXECUTION_FILE_2: ${{ steps.kept_2.outputs.execution_file }}
+          EXECUTION_FILE_3: ${{ steps.kept_3.outputs.execution_file }}
+          EXECUTION_FILE_4: ${{ steps.kept_4.outputs.execution_file }}
           ANSWERED_1: ${{ steps.claude_1.outputs.structured_output != '' }}
           ANSWERED_2: ${{ steps.claude_2.outputs.structured_output != '' }}
           ANSWERED_3: ${{ steps.claude_3.outputs.structured_output != '' }}

@@ -1088,13 +1088,67 @@ def test_each_batch_has_a_review_step_with_the_same_inputs_and_its_own_pieces():
     assert "${{ env.REVIEW_PIECES }}" in steps[0][5]["prompt"] and "${{ env.REVIEW_BATCH }}" in steps[0][5]["prompt"]
     # Every batch's answer, outcome and file reach the steps that read them.
     for number in range(1, len(steps) + 1):
-        for needed in (f"EXECUTION_FILE_{number}: ${{{{ steps.claude_{number}.outputs.execution_file }}}}",
+        for needed in (f"EXECUTION_FILE_{number}: ${{{{ steps.kept_{number}.outputs.execution_file }}}}",
                        f"ANSWERED_{number}: ${{{{ steps.claude_{number}.outputs.structured_output != '' }}}}"):
             assert script.count(needed) == 2, needed
         assert f"LISTED_{number}: ${{{{ steps.diff.outputs.listed_{number} }}}}" in script
         assert f"OUTCOME_{number}: ${{{{ steps.claude_{number}.outcome }}}}" in script
         # The job's reviewed output, the answer check's condition and the two ANSWERED_N.
         assert script.count(f"steps.claude_{number}.outputs.structured_output != ''") == 4
+
+
+# Each batch's transcript, kept apart: the action writes every review's to one fixed path
+# (base-action/src/execution-file.ts at the pin), and names it as any later step's execution_file while it's there.
+
+def keep_steps():
+    """{N: the step right after Review step claude_N}."""
+    yaml = pytest.importorskip("yaml")
+    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["review"]["steps"]
+    return {int(step["id"].rsplit("_", 1)[1]): steps[index + 1]
+            for index, step in enumerate(steps) if str(step.get("id", "")).startswith("claude_")}
+
+
+def test_each_batchs_transcript_is_moved_to_a_file_of_its_own_straight_after_its_review():
+    kept = keep_steps()
+    script = WORKFLOW.read_text()
+    assert sorted(kept) == list(range(1, len(review_steps()) + 1))
+    for number, step in kept.items():
+        assert step["id"] == f"kept_{number}"
+        # Whatever the Review step's outcome, and only when it named a file.
+        assert step["if"] == f"always() && steps.claude_{number}.outputs.execution_file != ''"
+        assert step["env"] == {"EXECUTION_FILE": f"${{{{ steps.claude_{number}.outputs.execution_file }}}}",
+                               "BATCH": str(number)}
+        assert step["run"] == kept[1]["run"]
+        # Nothing else reads the Review step's own execution_file: the answer check and the warning read the kept one.
+        assert script.count(f"steps.claude_{number}.outputs.execution_file") == 2
+
+
+def keep(tmp_path, batch, content=None):
+    """Run the keep step's script for batch, the action having written content to its fixed path (none when None).
+    Returns the execution_file output it wrote, or None."""
+    temp = tmp_path / "runner"
+    temp.mkdir(exist_ok=True)
+    fixed = temp / "claude-execution-output.json"
+    if content is not None:
+        fixed.write_text(content)
+    output = temp / f"output{batch}"
+    output.write_text("")
+    done = subprocess.run(["bash", "-e", "-c", keep_steps()[1]["run"]], capture_output=True, text=True, env={
+        "PATH": os.environ["PATH"], "RUNNER_TEMP": str(temp), "GITHUB_OUTPUT": str(output),
+        "EXECUTION_FILE": str(fixed), "BATCH": str(batch)})
+    assert done.returncode == 0, done.stderr
+    found = re.fullmatch(r"execution_file=(.*)\n", output.read_text())
+    return found[1] if found else None
+
+
+def test_each_batchs_transcript_survives_the_next_batch(tmp_path):
+    first, second = keep(tmp_path, 1, "batch 1"), keep(tmp_path, 2, "batch 2")
+    assert first != second
+    assert Path(first).read_text() == "batch 1" and Path(second).read_text() == "batch 2"
+    # Moved, not copied: a later Review step that writes nothing finds no file to name as its own.
+    assert not (tmp_path / "runner" / "claude-execution-output.json").exists()
+    # Outside the folder the reviews can read.
+    assert all(Path(path).parent == tmp_path / "runner" for path in (first, second))
 
 
 # The "Warn when Claude didn't review" step
