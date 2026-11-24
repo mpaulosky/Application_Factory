@@ -255,7 +255,7 @@ The first ported scripts, Factory-only, so the `.py` files are deleted in the PR
   before it is printed; `status.sh` and `land.sh` refuse a repo that isn't `owner/repo` before any call, the whole argument (a trailing line break too), in
   GitHub's ASCII characters, with neither side `.` or `..` (a usage error for an argument, exit 1 for a `repos.txt` line); a permission answer that isn't an
   object is unread rather than no write access; and `land.sh` refuses a PR number past a 64-bit integer whatever came before it, and a `--interval`
-  `time.sleep` refuses (negative, NaN, or past its 64-bit nanoseconds, infinity among them) ends it with exit 1 when it first waits, as `time.sleep` did,
+  `time.sleep` refuses (negative, NaN, or from 2^63 nanoseconds, about 292 years, up, infinity among them) ends it with exit 1 when it first waits, as `time.sleep` did,
   rather than hang. The parity suites' fixtures carry `isCrossRepository` where a case needs a release-blog PR.
 - **The wrappers.** `status.sh` and `land.sh` change to `github/` and run `dotnet run --file` with the script's absolute path, so the Factory's `global.json` picks the SDK.
   The build leaves no MSBuild node, MSBuild server or compiler server behind, and a missing `dotnet` exits 127 with a message.

@@ -144,7 +144,8 @@ public class GhTests
 		new[] { "--interval", "-\U0001D7D3" },
 		new[] { "-\U0001D7D3" },
 		new[] { "--interval", "\u00b2" },
-		// float() strips the whitespace str.strip() strips, which U+001C to U+001F and U+200B are not.
+		// float() strips U+0085, U+2028 and U+3000, as string.Trim() does, but refuses U+001C to U+001F, which str.strip() would strip,
+		// and U+200B.
 		new[] { "--interval", "\u001c5" },
 		new[] { "--interval", "5\u001f" },
 		new[] { "--interval", "\u00855" },

@@ -97,7 +97,7 @@ public class LandPortTests
 		Assert.Equal(1, polls);
 	}
 
-	// Not a moved test: the wait between polls is time.sleep's: a negative or NaN length, or one past long.MaxValue nanoseconds, throws
+	// Not a moved test: the wait between polls is time.sleep's: a negative or NaN length, or one of 2^63 nanoseconds or more, throws
 	// rather than reach Thread.Sleep, which reads -1 ms as forever, and a wait past Thread.Sleep's int.MaxValue ms is slept in steps.
 	[Fact]
 	public void The_wait_between_polls_refuses_what_time_sleep_refuses_and_steps_a_long_one()

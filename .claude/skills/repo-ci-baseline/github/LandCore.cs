@@ -37,9 +37,9 @@
 //
 // It prints only changes: one line per PR whose state or action changed (status.sh's line), the calls it made under it, and nothing
 // when nothing changed. It exits 0 once every watched PR is merged or closed, or after one pass with --once, and 1 at the time limit,
-// when a repo can't be read on the last pass, when a repos.txt name isn't owner/repo (before any call), or when it first has to wait
-// a --interval time.sleep refuses (negative, NaN, or past about 292 years: Land.Sleep; --once never waits). --dry-run prints the calls
-// instead of making them; a usage error exits 2.
+// when a --once pass can't read a repo, when a repos.txt name isn't owner/repo (before any call), or when it first has to wait a
+// --interval Land.Sleep refuses, as time.sleep did (negative, NaN, or 2^63 ns, about 292 years, or more; --once never waits).
+// --dry-run prints the calls instead of making them; a usage error exits 2.
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
