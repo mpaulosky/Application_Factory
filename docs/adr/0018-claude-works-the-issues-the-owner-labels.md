@@ -58,3 +58,19 @@ the issue, a failed exchange, or a push refused because a token without the work
 the run's `claude-branch` artifact, which the Finish step's comment names. Claude can change the checkout's git config and hooks and the global git and gh config, so the fresh token is
 used only in a new repository fetched from a bundle of the branch, with no global, system or hook config, and by `gh` run outside the checkout with an empty config directory.
 The exchange from a plain step is the one the action makes, so the first long run after this change is the one to watch.
+
+## Update: up to three issues at once
+
+The Factory's issues are now split small, with "blocked by" links that keep dependent ones apart, so several are unblocked at once and the queue worked one by one took a day. The owner
+chose to work up to three at once (`CLAUDE_ISSUES_CAP` in the pick step). This replaces the Decision's "One issue is worked at a time" and the Consequence that issues are worked one
+after another.
+
+- A short pick job holds the `claude-issues` concurrency group, so two runs never pick the same issue. It counts the issues labelled `claude:working` whose run, the one its "Claude
+  started" comment names, is still going, picks the oldest unblocked issues up to the free slots, and labels them `claude:working` before it ends. A `claude:working` label left by a run
+  that has ended is taken off and the issue queued again; one whose run can't be read keeps its slot.
+- The work job is a matrix over the picks, each on its own runner and checkout of `main`, so the issues worked at once share nothing but the repository. Each one starts the next run as it
+  ends, which fills the slot it freed.
+- Issues worked at once can still change the same files. Each run comments on its pull request naming the open pull requests that change the same files, and the order to merge them:
+  the oldest first, merging `main` into each before it lands. The pull requests stay drafts, so the owner still reads and lands each one on its own.
+- Three runs of up to five and a half hours each draw on the owner's Claude usage at once, so a usage limit can end a run early, as `claude:needs-human`. Runner minutes are free on the
+  public repository, and each run makes a few dozen GitHub API calls.

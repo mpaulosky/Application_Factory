@@ -1022,6 +1022,73 @@ check "a push refused three times fails the Publish step and saves the branch as
 PUB_EXCHANGE=fail publish_case feature/7-port "abc123"
 check "a failed token exchange fails the Publish step without a push, saving the branch as a bundle" \
   "$([[ $publish_rc == 1 && ! -e $publish/push && ! -e $publish/pr ]] && grep -qF 'bundle=' "$publish/output" && echo 0 || echo 1)"
+# The pick job takes up to CLAUDE_ISSUES_CAP issues at once, less the ones a run still going is working. Its script runs here with a stub gh that answers
+# each API path from the queue in $PICK_QUEUE (number, labels and author, split by the unit separator): an issue's "Claude started" comment names run
+# 100+<number>, whose status is $PICK_STATUS_<number> (a failed call when it's "fail"), and nothing blocks any issue. It records each change it is asked for.
+pick="$work/pick"
+mkdir -p "$pick/bin"
+sed -n '/^      - name: Pick the next issues$/,/^  work:$/p' "$issues_wf" | sed -n '/^        run: |$/,$p' | sed '1d;$d' | sed 's/^          //' > "$pick/run.sh"
+cat > "$pick/bin/gh" << 'STUBGH'
+#!/usr/bin/env bash
+[[ $1 == api ]] || { printf '%s\n' "$*" >> "$PICK_DIR/calls"; exit 0; }
+path=""
+for arg in "$@"; do [[ $arg != repos/* ]] || { path="$arg"; break; }; done
+[[ " $* " != *" -X "* ]] || { printf '%s\n' "$*" >> "$PICK_DIR/calls"; exit 0; }
+case "$path" in
+  */pulls\?*) ;;
+  */issues\?*) printf '%b' "$PICK_QUEUE" ;;
+  */comments\?*) n="${path#*/issues/}"; echo "Claude started on this issue: https://github.com/o/r/actions/runs/$((100 + ${n%%/*}))" ;;
+  */actions/runs/*) var="PICK_STATUS_$((${path##*/} - 100))"; [[ ${!var:-} != fail ]] || exit 1; echo "${!var:-completed}" ;;
+  */events\?*) echo o ;;
+  */dependencies/*) ;;
+esac
+STUBGH
+chmod +x "$pick/bin/gh"
+pick_case() { # pick_case <cap>: runs the pick step, leaving its picks in $pick/output and the changes it made in $pick/calls
+  rm -f "$pick/output" "$pick/calls"
+  env PICK_DIR="$pick" PATH="$pick/bin:$PATH" GH_TOKEN=x GH_REPO=o/r CLAUDE_ISSUES_CAP="$1" GITHUB_OUTPUT="$pick/output" GITHUB_REPOSITORY_OWNER=o \
+    GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=o/r GITHUB_RUN_ID=1 bash "$pick/run.sh" > "$pick/log" 2>&1
+}
+PICK_QUEUE='1\x1fclaude,claude:working\x1fo\n2\x1fclaude,claude:working\x1fo\n3\x1fclaude\x1fo\n4\x1fclaude\x1fo\n' PICK_STATUS_1=in_progress pick_case 3
+check "the pick step fills the free slots under the cap, queuing again an issue whose run has ended and skipping one still being worked" \
+  "$(grep -qxF 'issues=[2,3]' "$pick/output" && grep -qF 'issues/2/labels/claude:working' "$pick/calls" \
+    && ! grep -qF 'issues/1/labels/claude:working' "$pick/calls" && grep -qF 'issue comment 3 ' "$pick/calls" && echo 0 || echo 1)"
+PICK_QUEUE='1\x1fclaude,claude:working\x1fo\n2\x1fclaude\x1fo\n' PICK_STATUS_1=fail pick_case 1
+check "an issue whose run can't be read keeps its slot, so a full cap picks nothing" \
+  "$(grep -qxF 'issues=[]' "$pick/output" && ! grep -qE 'labels/claude:working|labels\[\]=claude:working' "$pick/calls" && echo 0 || echo 1)"
+# The merge order comment on the run's pull request names the open pull requests that change the same files, oldest first. The stub gh lists the open
+# pull requests in $ORDER_OPEN, each one's files from $ORDER_FILES_<number>, the existing comment's id from $ORDER_COMMENT, and records each write.
+order="$work/order"
+mkdir -p "$order/bin"
+sed -n '/^      - name: Note the merge order$/,/^      - name: /p' "$issues_wf" | sed -n '/^        run: |$/,$p' | sed '1d;$d' | sed 's/^          //' > "$order/run.sh"
+cat > "$order/bin/gh" << 'STUBGH'
+#!/usr/bin/env bash
+path=""
+for arg in "$@"; do [[ $arg != repos/* ]] || { path="$arg"; break; }; done
+[[ " $* " != *" -X "* ]] || { printf '%s\n' "$*" >> "$ORDER_DIR/calls"; exit 0; }
+case "$path" in
+  */pulls\?*) printf '%b' "$ORDER_OPEN" ;;
+  */files\?*) n="${path#*/pulls/}"; var="ORDER_FILES_${n%%/*}"; printf '%b' "${!var:-}" ;;
+  */comments\?*) [[ -z ${ORDER_COMMENT:-} ]] || echo "$ORDER_COMMENT" ;;
+esac
+STUBGH
+chmod +x "$order/bin/gh"
+order_case() { # order_case: runs the step for issue 7, leaving its writes in $order/calls
+  rm -f "$order/calls"
+  env ORDER_DIR="$order" PATH="$order/bin:$PATH" GH_TOKEN=x GH_REPO=o/r ISSUE=7 bash "$order/run.sh" > "$order/log" 2>&1
+}
+export ORDER_FILES_10='a.sh\nb.sh\n' ORDER_FILES_8='b.sh\n' ORDER_FILES_12='c.sh\n'
+ORDER_OPEN='10 feature/7-port\n8 fix/5-x\n12 feature/9-y\n' order_case
+check "the merge order comment names the pull requests that change the same files, oldest first, and leaves out the rest" \
+  "$(grep -qF 'issues/10/comments' "$order/calls" && grep -qF 'Merge them oldest first' "$order/calls" && grep -qF '#8, #10 (this one).' "$order/calls" \
+    && grep -qF "#8 also changes \`b.sh\`" "$order/calls" && ! grep -qF '#12' "$order/calls" && echo 0 || echo 1)"
+ORDER_COMMENT=55 ORDER_OPEN='10 feature/7-port\n8 fix/5-x\n' order_case
+check "a later run updates the merge order comment it left instead of adding another" \
+  "$(grep -qF -- '-X PATCH repos/o/r/issues/comments/55' "$order/calls" && ! grep -qF -- '-X POST' "$order/calls" && echo 0 || echo 1)"
+ORDER_OPEN='10 feature/7-port\n12 feature/9-y\n' order_case
+check "with no other pull request changing the same files, no merge order comment is left" "$([[ ! -e $order/calls ]] && echo 0 || echo 1)"
+ORDER_OPEN='8 fix/5-x\n' order_case
+check "with no pull request for the issue, no merge order comment is left" "$([[ ! -e $order/calls ]] && echo 0 || echo 1)"
 
 # The local review check (ADR 0010). The stub review.sh stands for scripts/review.sh; GATE_SKIP_REVIEW=1 skips it, anything else doesn't.
 repo="$(new_repo review-skipped)"
