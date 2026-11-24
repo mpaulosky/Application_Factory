@@ -725,6 +725,11 @@ quick_rc=0
 grep -rqE -e '--(quick|sync)' "$here/.github/hooks" "$here/.github/workflows" 2> /dev/null && quick_rc=0 || quick_rc=$?
 check "no hook or workflow passes --quick or --sync" "$([[ -d $here/.github/hooks && -d $here/.github/workflows && $quick_rc == 1 ]] && echo 0 || echo 1)"
 check "the Factory's CI runs the gate with no argument" "$(grep -E 'run: bash "scripts/gate\.sh"$' "$here/.github/workflows/template-tests.yml" > /dev/null && echo 0 || echo 1)"
+# The issue worker's Claude runs headless, where ending a turn ends the run: its settings turn background tasks off, so it can't start the gate in the
+# background and end the run waiting for it. The settings are the one JSON line after `settings: |`.
+issues_settings="$(sed -n '/^ *settings: |$/{n;p;}' "$here/.github/workflows/claude-issues.yml")"
+check "the issue worker's Claude runs with background tasks off and room for a long foreground command" \
+  "$(jq -e '.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS == "1" and (.env.BASH_MAX_TIMEOUT_MS | tonumber) >= 1800000' <<< "${issues_settings:-null}" > /dev/null 2>&1 && echo 0 || echo 1)"
 
 # The local review check (ADR 0010). The stub review.sh stands for scripts/review.sh; GATE_SKIP_REVIEW=1 skips it, anything else doesn't.
 repo="$(new_repo review-skipped)"
