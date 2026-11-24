@@ -184,6 +184,37 @@ The first increment brings the .NET SDK into the Factory, with no script ported 
   and CA2266 stays visible as a warning. Checked on SDK 11.0.100: `TreatWarningsAsErrors` alone makes CA2266 an error (exit 1), with `WarningsNotAsErrors=CA2266` the build
   exits 0, and `dotnet build app.cs -warnaserror` isn't accepted for a file-based app (MSB4025). The other two ways were turned down: a shebang fails
   `dotnet format whitespace --verify-no-changes` (exit 2, the `# !` rewrite above), and an entry file with no `#:include` would undo the thin-entry-file rule.
+  (The Update for mpaulosky/Application_Factory#145 below adds NU1900 to `WarningsNotAsErrors`.)
+
+## Update (mpaulosky/Application_Factory#145): the C# step and the test project are hardened
+
+- **NU1900 stays a warning too.** The gate builds each script with `-p:WarningsNotAsErrors=CA2266%3BNU1900` (`%3B` is MSBuild's escaped `;`), and `Scripts.Tests.csproj`
+  adds NU1900 to its `WarningsNotAsErrors`. NU1900 says the vulnerability data couldn't be fetched, a feed outage, which says nothing of a package, so it no longer fails
+  every run while nuget.org is unreachable. The test project names its audit source, nuget.org alone (its `NuGet.config` clears `auditSources`, so a config above it
+  can't point the audit at a feed that reports nothing), and then an outage is also NU1905, "the audit source gave no data", which it allows for the same reason.
+  NuGetAudit's NU1901 to NU1904, a vulnerable package, stay errors.
+- **Each build is its own.** The gate builds each entry file with `--no-incremental`, so a build cached without these properties can't hide a warning; into a `gate-cs.*`
+  folder of the run's own (`--artifacts-path`), which the EXIT trap removes however the gate ends; and with `--disable-build-servers`. A TERM mid-build ends the build (a TERM,
+  then a KILL after 5 s) and waits for it before the folder is removed; while it ends the build it ignores INT, TERM and HUP, so a second signal (a cancel sent twice,
+  Ctrl-C pressed twice) can't cut the KILL, the wait or the removal short. TMPDIR is made absolute first: dotnet fails on a relative one.
+- **`test.sh` runs the test project with no build server** (`MSBUILDDISABLENODEREUSE=1`, `DOTNET_CLI_USE_MSBUILD_SERVER=0`, `-p:UseSharedCompilation=false`: `dotnet test`
+  passes `--disable-build-servers` on to the test app). It runs `dotnet test` whether or not the project holds a test, and accepts exit 8, "no test ran", only while the project
+  holds no `.cs` source. It checks that the project targets `net<major>.0` of the SDK `global.json` names, that each of the six shield files is `<Project />` (the target
+  framework and shield checks, the reading of the major from `global.json` and the `auditSources` check below, which ignores XML comments, are each also tried on files they
+  must pass and refuse), and that a copy
+  passes, NU1900 and NU1905 warnings, with its feed unreachable and hostile `Directory.*` files above it. It hands dotnet an absolute output folder and TMPDIR, since the run
+  starts in the project's folder, and sets no build server, no node reuse and no first-run setup whatever the caller set; a stub dotnet checks both. `test.sh`'s
+  own temp folders are made absolute by prefixing the working folder, not by `cd`, which a caller's `CDPATH` makes print the folder, and a run under a relative
+  TMPDIR with `CDPATH=.` checks that its trap leaves nothing behind. The trap is set before the first `mktemp`, over empty names, and a run whose second `mktemp` is a stub that
+  fails checks that the first folder is still removed. `test.sh` finds its own folder with `CDPATH` cleared and stops (exit 2) when that folder holds no `test.sh`; a run by a
+  relative path under `CDPATH=.` must reach the shard check, and a run from a process substitution must stop at that guard.
+- **The audit reads nuget.org alone.** The project's `NuGet.config` clears `auditSources` and adds nuget.org, which `test.sh` checks.
+- **The test project's restore is pinned.** Its own `NuGet.config` clears every source and mapping and restores from nuget.org alone, and `packages.lock.json` pins
+  every package by hash; `test.sh` restores in locked mode, so a version moved without the lock file fails with NU1004, and checks both on a copy under a `NuGet.config`
+  that adds another feed. Dependabot's NuGet updater restores after a bump, so it rewrites the lock file with the version.
+- **The template-tools action's `setup-dotnet` pin** is the Template ci.yml's, which `test.sh` checks, and Dependabot's `github-actions` entry lists the action's folder.
+- **dotnet runs with telemetry off and no first-run setup**, as in the Template's ci.yml, **and no logo** (`DOTNET_NOLOGO`, the Factory's own addition) in
+  the gate, `test.sh` and the workflow.
 
 ## Update (mpaulosky/Application_Factory#124): retired Owned files
 

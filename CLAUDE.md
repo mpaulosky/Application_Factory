@@ -11,7 +11,8 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   `template/seed/` (written only if missing) hold the Template's files; `references/` and its own `docs/adr/` describe the parts;
   `github/repos.txt` is the Fleet registry; `apply.sh`, `reapply.sh`, `rollout.sh`, `status.sh`, `land.sh` and `github-settings.sh` are the scripts;
   `test.sh` and `tests/` test all of it. `tests/Scripts.Tests/` is the xUnit v3 project for the C# scripts (ADR 0017); it and `github/` each hold three empty shield
-  files (`Directory.Build.props`, `Directory.Build.targets`, `Directory.Packages.props`), which are not Owned.
+  files (`Directory.Build.props`, `Directory.Build.targets`, `Directory.Packages.props`), which are not Owned. The test project also holds its own `NuGet.config`
+  (nuget.org alone) and `packages.lock.json`, which `test.sh` restores against in locked mode (ADR 0017's Update on hardening the C# step).
 - `.claude/skills/`: also the shared skills (`build-repair`, `dotnet-*`, `remove-squad`, `review-changes`), and `starting-points/`: the optional app-stack files
   (`.aspire/`, `.github/instructions/`, the `beast` agent, the `code-review` skill) that `docs/Instructions.md` Part C says to copy into an Application. ADR 0007.
 - `.claude/rules/sandcastle.md`: the rules for writing the Template's Sandcastle code (loaded when you edit `template/**/.sandcastle/**`). The tests about the Template itself
