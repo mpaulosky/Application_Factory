@@ -1,0 +1,3 @@
+── rollout: TicketManager
+reapply.sh: working on TicketManager
+rollout: TicketManager's re-Apply worktree has commits main lacks, but its newest PR shown, #12, has merged: GitHub's list may not show the new one yet; run rollout.sh again; held: Alpha, Zed

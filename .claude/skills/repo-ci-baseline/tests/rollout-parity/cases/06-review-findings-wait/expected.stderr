@@ -1,0 +1,1 @@
+^rollout\.sh: reapply failed on TicketManager: review findings wait for you: fix them with /pre-push-review in its re-Apply worktree, or accept them with scripts/review\.sh accept-open there, then run this again$

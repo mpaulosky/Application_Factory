@@ -1,0 +1,7 @@
+# The rollout parity suite's github/repos.txt, the same in every case: TicketManager isn't first, so the order shows it is
+# moved to the front, and the factory and repo-settings-only repos are never rolled out to.
+mpaulosky/Alpha
+mpaulosky/Application_Factory factory  # the Factory itself
+mpaulosky/TicketManager
+mpaulosky/Settings repo-settings-only
+mpaulosky/Zed

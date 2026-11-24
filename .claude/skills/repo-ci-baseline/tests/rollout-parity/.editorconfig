@@ -1,0 +1,7 @@
+# A case's files are compared byte for byte, so an editor must leave them as they are. Not root: everything else comes from
+# the repository's own .editorconfig, and .gitattributes here does the same for git.
+[cases/**]
+charset = unset
+end_of_line = unset
+trim_trailing_whitespace = false
+insert_final_newline = unset
