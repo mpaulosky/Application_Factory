@@ -19,8 +19,9 @@ github-settings.sh --json …                  # the same report, machine-readab
 ```
 
 **Exit codes.** 0 when every repo is at the standard (or `--suspend` ran). 1 for any DRIFT, MANUAL or LEGACY, a `gh` call that failed with a status
-the check doesn't read as an answer (its error on stderr), a per-repo file that would loosen the standard, or a `repos.txt` line that isn't
-`owner/repo`. 2 for a usage error, an argument that isn't `owner/repo` included. 127 when `github-settings.sh` finds no `dotnet`.
+the check doesn't read as an answer (its error on stderr), a per-repo file that would loosen the standard, a `repos.txt` line that isn't
+`owner/repo`, or any other error, such as a name GitHub answered with that is an empty, `.` or `..` path segment (the error and its stack on stderr;
+an `--all` run stops there). 2 for a usage error, an argument that isn't `owner/repo` included. 127 when `github-settings.sh` finds no `dotnet`.
 
 It runs as you, through `gh api`, and needs admin rights on the repo. It's never run from a workflow: an admin token stored in every repo
 would let a repo's own PRs change the rules that gate them.

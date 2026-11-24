@@ -591,10 +591,10 @@ static class Settings
 		{
 			var name = J.Req(summary, "name");
 			if (Py.Eq(name, mainName))
-				main = gh("GET", $"repos/{repo}/rulesets/{Quote(Py.Str(J.Req(summary, "id")))}");
+				main = gh("GET", $"repos/{repo}/rulesets/{Segment(Py.Str(J.Req(summary, "id")))}");
 			else if (Py.Items(J.Req(std.Legacy, "rulesets")).Any(legacy => Py.Eq(legacy, name)))
 			{
-				var id = Quote(Py.Str(J.Req(summary, "id")));
+				var id = Segment(Py.Str(J.Req(summary, "id")));
 				findings.Add(new($"ruleset {Py.Str(name)}", Legacy, "legacy ruleset; --remove-legacy deletes it",
 						removeLegacy ? () => gh("DELETE", $"repos/{repo}/rulesets/{id}") : null));
 			}
@@ -620,7 +620,7 @@ static class Settings
 				diffs.Insert(0, $"SUSPENDED (enforcement {Py.Str(Py.Get(main, "enforcement"))}); --fix restores it");
 			if (diffs.Count > 0)
 			{
-				var id = Quote(Py.Str(J.Req(main, "id")));
+				var id = Segment(Py.Str(J.Req(main, "id")));
 				findings.Insert(0, new("ruleset main-rules", Drift, string.Join("; ", diffs), () => gh("PUT", $"repos/{repo}/rulesets/{id}", want)));
 			}
 			else
@@ -665,7 +665,7 @@ static class Settings
 	{
 		var prefixes = Py.Items(std.Setting("removed_label_prefixes")).Select(Py.Text).ToList();
 		return [.. live.Keys.Order(Py.CodePoints).Where(name => prefixes.Any(prefix => name.StartsWith(prefix, StringComparison.Ordinal)))
-				.Select(name => new Finding($"label {name}", Drift, "retired label → deleted", () => gh("DELETE", $"repos/{repo}/labels/{Quote(name)}")))];
+				.Select(name => new Finding($"label {name}", Drift, "retired label → deleted", () => gh("DELETE", $"repos/{repo}/labels/{Segment(name)}")))];
 	}
 
 	public static List<Finding> CheckLabels(Api gh, string repo, Standard std, OrderedDictionary<string, JsonNode?> live)
@@ -681,7 +681,7 @@ static class Settings
 					|| !Py.Eq(J.B(Py.Get(current, "description")) ? Py.Get(current, "description") : (JsonNode)"", J.Req(want, "description")))
 			{
 				var body = new JsonObject { ["color"] = J.Copy(J.Req(want, "color")), ["description"] = J.Copy(J.Req(want, "description")) };
-				findings.Add(new($"label {name}", Drift, "color or description → the standard's", () => gh("PATCH", $"repos/{repo}/labels/{Quote(name)}", body)));
+				findings.Add(new($"label {name}", Drift, "color or description → the standard's", () => gh("PATCH", $"repos/{repo}/labels/{Segment(name)}", body)));
 			}
 			else
 				findings.Add(new($"label {name}", OK, "present"));
@@ -689,14 +689,28 @@ static class Settings
 		return findings;
 	}
 
-	// A label name as one path segment: every byte but the unreserved ones percent-encoded, as quote(name, safe="") does.
+	// A value for a query (a ref=): every byte but the unreserved ones percent-encoded, as quote(name, safe="") does.
 	public static string Quote(string name) => Uri.EscapeDataString(name);
 
-	// A path GitHub answered with (a workflow's, a branch name) as path segments: each segment encoded as Quote encodes it, the slashes
-	// kept, so a ?, # or % in it can't change the call. A . or .. segment would step out of the REST path, so it is refused.
-	public static string Segments(string path) => string.Join('/', path.Split('/').Select(segment => segment is "." or ".."
-			? throw new ArgumentException($"a path GitHub answered with has a {segment} segment: {path}", nameof(path))
-			: Quote(segment)));
+	// A name GitHub answered with (a ruleset id, a label name) as one path segment, encoded as Quote encodes it. An empty, . or ..
+	// segment would name another REST path (the list, or a step out of it), and Quote leaves them as they are, so it is refused.
+	public static string Segment(string name) => name is "" or "." or ".."
+			? throw new ArgumentException($"a name GitHub answered with is an empty, . or .. path segment: '{name}'", nameof(name))
+			: Quote(name);
+
+	// A path GitHub answered with (a workflow's, a branch name) as path segments: each segment encoded as Segment encodes it, the slashes
+	// kept, so a ?, # or % in it can't change the call, and an empty, . or .. segment is refused.
+	public static string Segments(string path)
+	{
+		try
+		{
+			return string.Join('/', path.Split('/').Select(Segment));
+		}
+		catch (ArgumentException)
+		{
+			throw new ArgumentException($"a path GitHub answered with has an empty, . or .. segment: {path}", nameof(path));
+		}
+	}
 
 	// const COPILOT_REVIEW_CAP = <digits>;, a digit being any Unicode decimal digit as Python's \d reads it, one outside the BMP too
 	// (the pair is matched here, and Cap checks it is a digit).
@@ -757,7 +771,7 @@ static class Settings
 		{
 			if (J.S(J.Req(summary, "name")) != "main-rules")
 				continue;
-			var id = Quote(Py.Str(J.Req(summary, "id")));
+			var id = Segment(Py.Str(J.Req(summary, "id")));
 			var live = gh("GET", $"repos/{repo}/rulesets/{id}");
 			var body = new JsonObject();
 			foreach (var key in new[] { "name", "target", "conditions", "bypass_actors", "rules" })

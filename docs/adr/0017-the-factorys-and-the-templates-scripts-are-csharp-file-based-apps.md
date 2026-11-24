@@ -313,7 +313,8 @@ under the import rule above they port together (mpaulosky/Application_Factory#12
 - **What the port changes on purpose.** A repo that isn't `owner/repo` is refused before any call: a usage error (exit 2) for an argument, exit 1 for a `repos.txt`
   line, as `status.sh` refuses one. The Python sent it to `gh` as it was, where `..` would step out of the REST path a write goes to. The names GitHub answers with
   that go into a path or a query (a workflow's path, the default branch, a ruleset's id) are percent-encoded, a segment at a time with the slashes kept
-  (`Settings.Segments`), and a `.` or `..` segment is refused, so a `?`, `#` or `%` in one can't change the call; the Python spliced them in as they were. Plain
+  (`Settings.Segment` and `Settings.Segments`), and an empty, `.` or `..` segment is refused (exit 1, the error on stderr), so a `?`, `#` or `%` in one can't
+  change the call; the Python spliced them in as they were. Plain
   names are sent as before, so the parity cases are unchanged. `Gh.Process` ignores a broken pipe on gh's stdin, as Python's `communicate()` did, so a `gh` that
   fails before it reads its body still reports its own exit code and error.
 - **The wrapper's build leaves CA2266 out.** `dotnet run` prints its build's warnings on stdout, so the first run after a change would start its report, or its

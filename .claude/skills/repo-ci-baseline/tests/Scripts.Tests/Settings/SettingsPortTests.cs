@@ -121,6 +121,45 @@ public partial class SettingsTests
 		Assert.Throws<ArgumentException>(() => Settings.ReadWorkflows(Answer, "o/app", "main"));
 	}
 
+	// A name GitHub answers with that goes into a path as one segment (a ruleset's id) is refused when it is empty, . or .., which
+	// Quote leaves as they are: rulesets/.. would be the repo itself. Nothing is sent with it.
+	[Theory]
+	[InlineData("..")]
+	[InlineData(".")]
+	[InlineData("")]
+	public void A_ruleset_id_that_is_a_dot_segment_is_refused(string name)
+	{
+		List<string> calls = [];
+		var std = Settings.Load(Github, "o/app");
+		var legacy = (string)std.Legacy["rulesets"]![0]!;
+		JsonNode? Answer(string method, string path, JsonNode? body = null)
+		{
+			calls.Add($"{method} {path}");
+			return path == "repos/o/app/rulesets?includes_parents=false" ? new JsonArray(new JsonObject { ["id"] = name, ["name"] = "main-rules" }) : new JsonObject();
+		}
+		JsonNode? Legacy(string method, string path, JsonNode? body = null)
+		{
+			calls.Add($"{method} {path}");
+			return path == "repos/o/app/rulesets?includes_parents=false" ? new JsonArray(new JsonObject { ["id"] = name, ["name"] = legacy }) : new JsonObject();
+		}
+
+		Assert.Throws<ArgumentException>(() => Settings.CheckRulesets(Answer, "o/app", std, [], "main", removeLegacy: false));
+		Assert.Throws<ArgumentException>(() => Settings.CheckRulesets(Legacy, "o/app", std, [], "main", removeLegacy: true));
+		Assert.Throws<ArgumentException>(() => Settings.Suspend(Answer, "o/app"));
+		JsonNode? Fetched(string method, string path, JsonNode? body = null)
+		{
+			calls.Add($"{method} {path}");
+			return path == "repos/o/app/rulesets?includes_parents=false" ? new JsonArray(new JsonObject { ["id"] = 1, ["name"] = "main-rules" })
+					: path == "repos/o/app/rulesets/1" ? new JsonObject { ["id"] = name, ["enforcement"] = "disabled", ["rules"] = new JsonArray() }
+					: new JsonObject();
+		}
+		Assert.Throws<ArgumentException>(() => Settings.CheckRulesets(Fetched, "o/app", std, [], "main", removeLegacy: false));
+		Assert.Throws<ArgumentException>(() => Settings.Segment(name));
+		Assert.Throws<ArgumentException>(() => Settings.Segments($".github/workflows/{name}/x.yml"));
+		Assert.Equal("..x", Settings.Segment("..x"));
+		Assert.DoesNotContain(calls, call => call is not ("GET repos/o/app/rulesets?includes_parents=false" or "GET repos/o/app/rulesets/1"));
+	}
+
 	// Each read that GitHub may refuse is read as an answer for the statuses settings.py caught there, and any other failure stops the
 	// check as an ApiError (exit 1): 404 alone where a missing thing is the answer, 403 or 404 where a plan may not offer the feature.
 	[Theory]
