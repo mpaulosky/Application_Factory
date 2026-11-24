@@ -34,6 +34,7 @@ reads the checker's folder through `/proc`, so those cases need Linux.
 
 - A file or folder the checker can't read (exit 2): the runner runs as whoever runs `test.sh`, root in some containers, who reads every file.
 - shfmt missing from `PATH`, or hanging: the runner looks `python3` up on the same `PATH`, so a case can't take shfmt away alone. The shim's own test covers the shim.
+- A script holding a NUL byte: the local review can't read a fixture git shows as binary, so `032` stands for the one such input the selection picked.
 - The Owned files `--repo` skips: their names end in `.sh`, which the gate would lint as fixtures.
 - Four of the 67 mutations in `tests/gh_repo/mutations.json`, which no command line tells from the original: none of the 964 captured inputs does, run in-process against
   each mutant. The pytest suite catches them only from inside:
