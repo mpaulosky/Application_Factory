@@ -14,6 +14,7 @@
 #   gh pr edit <n> -R <owner/repo> --add-reviewer|--add-label <value>
 #   gh pr merge <n> -R <owner/repo> [--auto] [--squash] [--match-head-commit <sha>]...
 #   gh pr view <n> -R <owner/repo> --json <fields> --jq <expression>
+#   gh pr list -R <owner/repo> [--head <branch>] [--state <state>] [--limit <n>] --json <fields> --jq <expression>
 #
 # A GraphQL call is told apart by its query with all whitespace removed, so spacing and line breaks don't matter:
 #
@@ -23,6 +24,7 @@
 #   threads.<id>                  a query holding reviewThreads( and comments(first: (a PR's threads with their comments)
 #   rest.<path>                   gh api <path>, with or without --paginate and --jq (the path's query string is in it)
 #   pr.<sub>.<owner>.<name>.<n>   gh pr <sub> (a view's key ends .<fields> too: pr.view.<owner>.<name>.<n>.<fields>)
+#   pr.list.<owner>.<name>        gh pr list, which takes no PR number
 #
 # A cursor given but empty is part of the key too (comments.<id>.), so it never passes for a first page. A cursor of digits
 # alone is unmatched: <key>.<digits> names the nth call's fixture below, so comments.<id>.1.json would answer both the page
@@ -30,7 +32,7 @@
 # each / replaced by _, so a value can't name a file outside FAKE_GH_DIR. The nth call with a key is answered from
 # FAKE_GH_DIR/<key>.<n>.json or .fail when there is one, else from <key>.json or <key>.fail, so a looping run can see a
 # repo change between polls: a .json is printed on stdout (exit 0), a .fail on stderr (exit 1: a GitHub failure). For a
-# `gh pr view`, the .json holds what its --jq would print: the fake runs no jq there, and the expression is in the logged
+# `gh pr view` or `gh pr list`, the .json holds what its --jq would print: the fake runs no jq there, and the expression is in the logged
 # argv, which a port must send unchanged. For a REST call, the .json holds the API's response, and with --jq the fake runs
 # real jq over it and prints each result as gh does (a string raw, null as an empty line, anything else as compact JSON
 # with sorted keys and Go's escapes; see the jq call for the one exception), so the calls that read one path through different
@@ -88,7 +90,7 @@ if [[ "${1:-}" == pr ]]; then
   shift
   sub="${1:-}"
   case "$sub" in
-    ready | update-branch | comment | edit | merge | view) shift ;;
+    ready | update-branch | comment | edit | merge | view | list) shift ;;
     *) unmatched "gh $all" ;;
   esac
   number="" repo="" fields="" jq=""
@@ -102,20 +104,21 @@ if [[ "${1:-}" == pr ]]; then
       --add-reviewer | --add-label) [[ $sub == edit && $# -ge 2 ]] || unmatched "gh $all" ;;
       --match-head-commit) [[ $sub == merge && $# -ge 2 ]] || unmatched "gh $all" ;;
       --json)
-        [[ $sub == view && $# -ge 2 ]] || unmatched "gh $all"
+        [[ ($sub == view || $sub == list) && $# -ge 2 ]] || unmatched "gh $all"
         fields="$2"
         ;;
       --jq)
-        [[ $sub == view && $# -ge 2 ]] || unmatched "gh $all"
+        [[ ($sub == view || $sub == list) && $# -ge 2 ]] || unmatched "gh $all"
         jq=1
         ;;
+      --head | --state | --limit) [[ $sub == list && $# -ge 2 ]] || unmatched "gh $all" ;;
       --auto | --squash)
         [[ $sub == merge ]] || unmatched "gh $all"
         shift
         continue
         ;;
       *)
-        [[ -z "$number" && "$1" =~ ^[1-9][0-9]*$ ]] || unmatched "gh $all"
+        [[ $sub != list && -z "$number" && "$1" =~ ^[1-9][0-9]*$ ]] || unmatched "gh $all"
         number="$1"
         shift
         continue
@@ -123,9 +126,13 @@ if [[ "${1:-}" == pr ]]; then
     esac
     shift 2
   done
-  [[ -n "$number" && "$repo" == ?*/?* ]] || unmatched "gh $all"
-  [[ $sub != view || (-n "$fields" && -n "$jq") ]] || unmatched "gh $all"
-  key="pr.$sub.$(part "${repo%%/*}").$(part "${repo#*/}").$number${fields:+.$(part "$fields")}"
+  [[ (-n "$number" || $sub == list) && "$repo" == ?*/?* ]] || unmatched "gh $all"
+  [[ ($sub != view && $sub != list) || (-n "$fields" && -n "$jq") ]] || unmatched "gh $all"
+  if [[ $sub == list ]]; then
+    key="pr.list.$(part "${repo%%/*}").$(part "${repo#*/}")"
+  else
+    key="pr.$sub.$(part "${repo%%/*}").$(part "${repo#*/}").$number${fields:+.$(part "$fields")}"
+  fi
   entry="$key gh"
   for arg in "${argv[@]}"; do
     entry+=" $(encode "$arg")"

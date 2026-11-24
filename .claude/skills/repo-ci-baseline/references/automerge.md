@@ -344,6 +344,10 @@ The status and land cases were recorded from the Python, which the C# replaced o
 `test.sh` runs every suite against its reference: the `.py` where one is left, else the `.cs` that replaced it, built once
 (`status` and `land` now), and `tests/parity-runner.test.sh` and `tests/shfmt-shim.test.sh`, the tests of the runner, the fake and the shim themselves.
 `PARITY_RECORD=1 tests/parity.test.sh <suite>` records a suite's cases from that reference only; the runner's header says what a case holds.
+`rollout.sh`'s suite has a runner of its own, `tests/rollout-parity.test.sh [command...]`, with its cases in `tests/rollout-parity/cases/`: rollout calls
+`reapply.sh` and `land.sh` beside itself and keeps its state under `~`, so each run is of a temporary copy of the skill folder, with stubs for those two and a
+fixed `repos.txt`, and a HOME of its own, and `git` and `claude` are fakes too (`tests/rollout-parity/fake-tool.sh`). It shares the fake `gh` and the stderr
+match (`tests/parity/stderr.sh`); `tests/rollout-parity-runner.test.sh` tests it.
 
 ```bash
 status.sh                     # one line per open PR in every repo in github/repos.txt
