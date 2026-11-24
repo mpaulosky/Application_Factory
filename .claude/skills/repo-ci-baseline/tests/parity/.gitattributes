@@ -1,0 +1,2 @@
+# A case's files are bytes, compared byte for byte: a CRLF case must reach a clone with its CRs, whatever core.autocrlf says.
+*/cases/** -text

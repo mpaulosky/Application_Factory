@@ -2,15 +2,18 @@
 # Tests for the parity suites' shared parts: the runner (tests/parity.test.sh) and the fake gh (tests/parity/fake-gh.sh).
 # A suite itself only shows the runner passes against the implementation it was recorded from; this shows it fails, and
 # how, against one that differs (its stdout, exit code, stderr, the gh calls it makes, the argv of a call that writes,
-# their order), and that the fake answers what its header says.
+# their order, the files it leaves), that a case's stdin, env, tree/ and setup.sh reach the run, and that the fake answers
+# what its header says.
 #
 #   tests/parity-runner.test.sh
 #
 # Copies both into a throwaway skill folder with a suite of its own (stub, one case) and runs them against a stub
-# implementation, so no real case is run or written. A last section checks the committed cases: each has a file git tracks in gh/ (the folder a
-# fresh clone needs) and no fixture its expected.calls doesn't read. It first tries that check on cases made to be wrong,
-# in a git repo of its own and in a folder git treats as outside any repo. Needs what the suite needs (bash 4.4,
-# coreutils, diff, grep, sed), python3 for the stub reference record mode runs, and git.
+# implementation, so no real case is run or written. A last section checks the committed cases: each has a file git tracks
+# in gh/ (the folder a fresh clone needs) and no fixture its expected.calls doesn't read, git stores every case file as it
+# is (tests/parity/.gitattributes), and the blank-key cases' env files still hold their blanks (tests/parity/.editorconfig).
+# It first tries the first three checks on cases made to be wrong, in git repos of their own and in a folder git treats
+# as outside any repo. Needs what the suite needs (bash 4.4, coreutils, findutils, diff, grep, sed), python3 for the stub
+# reference record mode runs, git 2.32 or later, and jq 1.6 or later for the fake's --jq.
 set -euo pipefail
 # A hook, or git rebase --exec, may have set these; the throwaway repo below must not be the caller's.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR
@@ -57,7 +60,23 @@ for repo in "$@"; do
     token) [[ -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}" && -d "$GH_CONFIG_DIR" && -z "$(ls -A "$GH_CONFIG_DIR")" ]] && echo "$repo ok" ;;
     terminal) [[ -z "${FORCE_COLOR:-}${CLICOLOR_FORCE:-}${PYTHON_COLORS:-}${COLUMNS:-}${LINES:-}" && "${NO_COLOR:-}" == 1 && "${TERM:-}" == dumb ]] && echo "$repo ok" ;;
     stdin) if read -r line; then echo "$repo read $line"; else echo "$repo ok"; fi ;;
+    crlf) printf '%s ok\r\n' "$repo" ;;
+    vars) echo "$repo ${PYTHONDONTWRITEBYTECODE-unset} ${GIT_TERMINAL_PROMPT-unset} ${GIT_OBJECT_DIRECTORY-unset} ${GIT_ALTERNATE_OBJECT_DIRECTORIES-unset} ${GIT_NAMESPACE-unset} ${GIT_CONFIG-unset}" ;;
+    ceiling) if git rev-parse --show-toplevel > /dev/null 2>&1; then echo "$repo in a repo"; else echo "$repo ok"; fi ;;
+    emptydir) mkdir -p left/inner && echo "$repo ok" ;;
     litter) [[ -z "$(ls -A .)" && -z "$(ls -A "$GH_CONFIG_DIR")" ]] && echo "$repo ok" && : > left-here && : > "$GH_CONFIG_DIR/left-here" ;;
+    env) echo "$repo ${CASE_VAR-unset} ${REPOSITORY-unset} ${GITHUB_REPOSITORY-unset} ${ANTHROPIC_API_KEY-unset} ${ANTHROPIC_MODEL-unset}" ;;
+    write | write-other)
+      [[ ! -e in.txt ]] || cp in.txt copied.txt
+      [[ $mode == write ]] && echo "$repo" > out.txt || echo "elsewhere" > out.txt
+      echo "$repo ok"
+      ;;
+    git)
+      git fetch -q origin main
+      where=elsewhere
+      [[ "$(git rev-parse --show-toplevel)" != "$(pwd -P)" ]] || where=here
+      echo "$repo $(git log -1 --format=%s) $(git rev-parse HEAD) $where $(git branch -r --format='%(refname:short)') ${GIT_DIR-unset}"
+      ;;
     *) echo "$repo ok" ;;
   esac
   case "$mode" in
@@ -139,11 +158,13 @@ suite 0 "a word that only happens to name a folder stays as it is, and an --opti
   -- ./launch.sh run --file=stub.sh || true
 (cd "$work" && STUB_MODE=stdin bash "$runner" stub ./stub.sh <<< "typed" > "$work/out" 2>&1) || fail "the implementation reads the caller's stdin: $(cat "$work/out")"
 (cd "$skill" && CDPATH="$skill" bash tests/parity.test.sh stub "$work/stub.sh" > "$work/out" 2>&1) || fail "CDPATH breaks the runner: $(cat "$work/out")"
-# Each case starts with an empty folder and GH_CONFIG_DIR: a stub that passes only on empty ones, and leaves a file in each, passes two cases.
+# Each case starts with an empty folder and GH_CONFIG_DIR: a stub that passes only on empty ones, and leaves a file in each, passes two cases
+# (each case's expected.tree/ holds the file it leaves in its folder).
 new_case c2
+for c in c1 c2; do mkdir "$cases/$c/expected.tree" && : > "$cases/$c/expected.tree/left-here"; done
 suite 0 "each case runs in an empty folder with an empty GH_CONFIG_DIR, whatever the case before left" STUB_MODE=litter -- ./stub.sh \
   && says "each case runs in empty folders" "2 case(s) pass against"
-rm -rf -- "$cases/c2"
+rm -rf -- "$cases/c2" "$cases/c1/expected.tree"
 
 for difference in "stdout:stdout differs:" "code:exit 3, expected 0" "extra:gh calls differ:" \
   "argv:-$comment_call" "order:gh calls differ:" \
@@ -193,6 +214,14 @@ runner() {
 runner 2 "no suite named" "name a suite"
 runner 2 "a suite that doesn't exist" "no suite 'other'" other ./stub.sh
 runner 2 "a suite name that could name a path" "'../stub' is not a suite name" ../stub ./stub.sh
+# A suite's reference is github/<suite>.py, else the Template's .github/scripts/<suite>.py.
+mkdir -p "$skill/tests/parity/tpl/cases" "$skill/template/owned/.github/scripts"
+new_case c1
+cp -R "$cases/c1" "$skill/tests/parity/tpl/cases/"
+runner 2 "a suite with no script" "no script for suite 'tpl': neither github/tpl.py nor template/owned/.github/scripts/tpl.py is a file." tpl
+cp "$skill/github/stub.py" "$skill/template/owned/.github/scripts/tpl.py"
+runner 0 "a suite whose script is the Template's" "tpl: 1 case(s) pass against: python3 $skill/template/owned/.github/scripts/tpl.py" tpl
+rm -rf "$skill/tests/parity/tpl" "$skill/template" "$cases/c1"
 chmod -x "$fake"
 suite 2 "a fake gh that isn't executable" -- ./stub.sh || true
 chmod +x "$fake"
@@ -213,6 +242,14 @@ broken "an expected.code that isn't one" "c1/expected.code is not an exit code" 
 broken "a blank stderr pattern" "c1/expected.stderr line 1 is blank" eval "echo > '$cases/c1/expected.stderr'"
 broken "an invalid stderr pattern" "c1/expected.stderr line 1 is not a valid ERE" eval "echo '^note: (' > '$cases/c1/expected.stderr'"
 broken "a carriage return in args" "c1/args holds a carriage return" eval "printf 'o/app\r\n' > '$cases/c1/args'"
+broken "a carriage return in env" "c1/env holds a carriage return" eval "printf 'A=b\r\n' > '$cases/c1/env'"
+broken "a carriage return in expected.calls" "c1/expected.calls holds a carriage return" eval "printf 'x\r\n' > '$cases/c1/expected.calls'"
+broken "an env line that isn't NAME=value" "c1/env line 2 is not NAME=value: -u A" eval "printf 'A=b\n-u A\n' > '$cases/c1/env'"
+broken "a tree/ that isn't a folder" "c1/tree is not a folder" touch "$cases/c1/tree"
+broken "an expected.tree/ that isn't a folder" "c1/expected.tree is not a folder" touch "$cases/c1/expected.tree"
+broken "a stdin that isn't a file" "c1/stdin is not a file" mkdir "$cases/c1/stdin"
+broken "a setup.sh that isn't a file" "c1/setup.sh is not a file" mkdir "$cases/c1/setup.sh"
+broken "a setup with no .sh" "c1/setup is not read: a case's setup script is setup.sh." touch "$cases/c1/setup"
 rm -rf "$cases/c1"
 suite 2 "no cases" -- ./stub.sh && says "no cases" "no cases under"
 
@@ -236,6 +273,125 @@ rm "$cases/c1"/expected.*
 suite 1 "record mode refuses a case with an unmatched call" PARITY_RECORD=1 STUB_MODE=unmatched \
   && says "an unmatched call in record mode" "FAIL c1: not recorded"
 [[ ! -e "$cases/c1/expected.stdout" ]] || fail "record mode wrote a case with an unmatched call"
+rm -rf "$cases/c1"
+
+# --- A case's stdin, env, tree/, setup.sh and expected.tree/ ---
+
+new_case c1
+printf 'typed\nmore\n' > "$cases/c1/stdin"
+echo "o/app read typed" > "$cases/c1/expected.stdout"
+suite 0 "the case's stdin is the implementation's" STUB_MODE=stdin -- ./stub.sh || true
+
+# expected.stdout may hold a CR, and is compared byte for byte: CRLF output passes it, LF output doesn't.
+new_case c1
+printf 'o/app ok\r\n' > "$cases/c1/expected.stdout"
+suite 0 "a CR in expected.stdout is matched" STUB_MODE=crlf -- ./stub.sh || true
+suite 1 "LF output against a CR in expected.stdout fails" -- ./stub.sh && says "LF output against a CR" "stdout differs:"
+
+new_case c1
+printf '%s\n' "CASE_VAR=a value=with=signs" "" > "$cases/c1/env"
+echo "o/app a value=with=signs unset unset unset unset" > "$cases/c1/expected.stdout"
+suite 0 "the case's env is set, and a caller's repository and Anthropic key and model are not passed on" STUB_MODE=env \
+  REPOSITORY=caller/repo GITHUB_REPOSITORY=caller/repo ANTHROPIC_API_KEY=secret ANTHROPIC_MODEL=model -- ./stub.sh || true
+
+# The rest of what the runner sets and unsets for a run, each against a caller's value that would show.
+new_case c1
+echo "o/app 1 0 unset unset unset unset" > "$cases/c1/expected.stdout"
+suite 0 "a caller's git object store, namespace and config file are not passed on, and Python writes no bytecode" STUB_MODE=vars \
+  PYTHONDONTWRITEBYTECODE= GIT_TERMINAL_PROMPT=1 GIT_OBJECT_DIRECTORY=/nowhere GIT_ALTERNATE_OBJECT_DIRECTORIES=/nowhere \
+  GIT_NAMESPACE=caller GIT_CONFIG=/nowhere -- ./stub.sh || true
+# A temporary folder inside a git repository: the run must not find that repository above its own folder.
+new_case c1
+env -u GIT_DIR -u GIT_WORK_TREE GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init -q "$work/above"
+suite 0 "a run under a temporary folder inside a git repository finds no repository" STUB_MODE=ceiling TMPDIR="$work/above" \
+  -- ./stub.sh || true
+# git stores no empty folder, so record mode refuses a run that leaves one, and leaves the case's files as they were.
+new_case c1
+echo "an older recording" > "$cases/c1/expected.stdout"
+echo 7 > "$cases/c1/expected.code"
+echo "older calls" > "$cases/c1/expected.calls"
+suite 1 "record mode refuses a run that leaves an empty folder" PARITY_RECORD=1 STUB_MODE=emptydir \
+  && says "record mode refuses an empty folder" "the run left an empty folder, which git can't store:" \
+  && says "record mode names the empty folder" "     ./left/inner"
+[[ ! -e "$cases/c1/expected.tree" ]] || fail "record mode wrote an expected.tree/ holding an empty folder"
+[[ "$(cat "$cases/c1/expected.stdout" "$cases/c1/expected.code" "$cases/c1/expected.calls")" == $'an older recording\n7\nolder calls' ]] \
+  || fail "record mode refused a case but rewrote its files: $(cat "$cases/c1/expected.stdout" "$cases/c1/expected.code" "$cases/c1/expected.calls")"
+
+# write_case <name>: a case whose tree holds in.txt, which the stub copies, and whose expected.tree/ holds what it writes.
+write_case() {
+  new_case "$1"
+  mkdir -p "$cases/$1/tree" "$cases/$1/expected.tree"
+  echo "input" > "$cases/$1/tree/in.txt"
+  cp "$cases/$1/tree/in.txt" "$cases/$1/expected.tree/in.txt"
+  cp "$cases/$1/tree/in.txt" "$cases/$1/expected.tree/copied.txt"
+  echo "o/app" > "$cases/$1/expected.tree/out.txt"
+}
+write_case c1
+suite 0 "a run that leaves its expected.tree/" STUB_MODE=write -- ./stub.sh || true
+suite 1 "a run that writes other bytes" STUB_MODE=write-other -- ./stub.sh && says "a file that differs" "the files differ:"
+rm "$cases/c1/expected.tree/copied.txt"
+suite 1 "a run that writes a file expected.tree/ hasn't" STUB_MODE=write -- ./stub.sh && says "an extra file" "Only in"
+new_case c1
+suite 1 "a run that writes a file with no expected.tree/" STUB_MODE=write -- ./stub.sh \
+  && says "a file with no expected.tree/" "the run left files, and the case has no expected.tree/:"$'\n'"./out.txt"
+# Each case runs in a folder of its own: c2 would see c1's files in a shared one.
+write_case c1
+new_case c2
+mkdir "$cases/c2/expected.tree"
+echo "o/app" > "$cases/c2/expected.tree/out.txt"
+suite 0 "each case starts from its own folder" STUB_MODE=write -- ./stub.sh || true
+rm -rf "$cases/c2"
+
+write_case c1
+rm -rf "$cases/c1/expected.tree" "$cases/c1/expected.stdout"
+suite 0 "record mode writes expected.tree/" PARITY_RECORD=1 STUB_MODE=write || true
+[[ "$(cd "$cases/c1/expected.tree" && find . -type f | sort | tr '\n' ' ')" == "./copied.txt ./in.txt ./out.txt " ]] \
+  || fail "record mode wrote the wrong expected.tree/: $(cd "$cases/c1/expected.tree" && find . | sort)"
+rm -rf "$cases/c1/tree"
+suite 0 "record mode removes expected.tree/ when the run leaves no file" PARITY_RECORD=1 || true
+[[ ! -e "$cases/c1/expected.tree" ]] || fail "record mode kept an expected.tree/ the run no longer leaves"
+
+# setup.sh builds a git repo in the run's folder, with a local origin under PARITY_SCRATCH; the run sees it, not a caller's.
+new_case c1
+cat > "$cases/c1/setup.sh" << 'EOF'
+set -euo pipefail
+[[ -d "$PARITY_SCRATCH" && "$PARITY_SCRATCH" != "$PWD"/* ]]
+git init -q -b main .
+git commit -q --allow-empty -m "the setup's commit"
+git init -q --bare -b main "$PARITY_SCRATCH/origin.git"
+git remote add origin "$PARITY_SCRATCH/origin.git"
+git push -q origin main
+EOF
+rm "$cases/c1/expected.stdout"
+suite 0 "record mode runs the setup" PARITY_RECORD=1 STUB_MODE=git || true
+# The fixed identity and dates give this hash on every machine, which is what lets a gh fixture name a setup's commit.
+[[ "$(cat "$cases/c1/expected.stdout")" == "o/app the setup's commit d2acfaa173b3254e8fa804e9d51a9444485f29b3 here origin/main unset" ]] \
+  || fail "the run didn't see the setup's repo, its origin and its fixed hash: $(cat "$cases/c1/expected.stdout")"
+[[ ! -e "$cases/c1/expected.tree" ]] || fail "record mode wrote an expected.tree/ for a run that left only .git"
+# Again with a caller's GIT_DIR, git config, hash format and template folder set: they reach neither the setup nor the
+# run. Each config adds a fetch refspec, so one that leaked would show as another remote branch, SHA-256 would change the
+# setup's hash, and the template's pre-commit hook would fail the setup's commit.
+printf '[remote "origin"]\n\tfetch = +refs/heads/*:refs/remotes/global/*\n' > "$work/caller.gitconfig"
+mkdir -p "$work/caller-template/hooks"
+printf '#!/bin/sh\necho the caller template hook ran >&2\nexit 1\n' > "$work/caller-template/hooks/pre-commit"
+chmod +x "$work/caller-template/hooks/pre-commit"
+suite 0 "a caller's GIT_DIR, git config, hash format and template folder reach no case" STUB_MODE=git GIT_DIR="$work/nowhere" \
+  GIT_CONFIG_GLOBAL="$work/caller.gitconfig" GIT_CONFIG_PARAMETERS="'remote.origin.fetch'='+refs/heads/*:refs/remotes/param/*'" \
+  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.fetch GIT_CONFIG_VALUE_0='+refs/heads/*:refs/remotes/count/*' \
+  GIT_DEFAULT_HASH=sha256 GIT_TEMPLATE_DIR="$work/caller-template" -- ./stub.sh || true
+# Again under a temporary folder reached through a symlink, as macOS's is: git names the run's folder by its real path.
+mkdir "$work/real-tmp"
+ln -s "$work/real-tmp" "$work/linked-tmp"
+suite 0 "a run under a temporary folder reached through a symlink sees its own repo" STUB_MODE=git TMPDIR="$work/linked-tmp" \
+  -- ./stub.sh || true
+# A run that leaves a file beside its .git: record mode keeps the file and drops the .git.
+echo 'echo kept > kept.txt' >> "$cases/c1/setup.sh"
+suite 0 "record mode with a file beside the .git" PARITY_RECORD=1 STUB_MODE=git || true
+[[ "$(cd "$cases/c1/expected.tree" && find . | sort | tr '\n' ' ')" == ". ./kept.txt " ]] \
+  || fail "record mode's expected.tree/ isn't the run's files without its .git: $(cd "$cases/c1/expected.tree" && find . | sort)"
+new_case c1
+echo 'echo the setup broke; exit 3' > "$cases/c1/setup.sh"
+suite 2 "a setup that fails" -- ./stub.sh && says "a setup that fails" "c1/setup.sh failed:"$'\n'"the setup broke"
 rm -rf "$cases/c1"
 
 # --- The fake gh on its own ---
@@ -301,6 +457,49 @@ fake 97 '' "an unknown variable" api graphql -f query="$repo_q" -F owner=o -F na
 fake 97 '' "a flag with no value" api graphql -f
 fake 97 '' "a command other than api" pr list && logged "a command other than api" "UNMATCHED gh pr list"
 fake 97 '' "a REST call with more arguments" api repos/o/app --method POST
+
+# A REST call with --paginate and --jq: real jq over the fixture, each result printed as gh prints it, and the whole argv logged.
+printf '%s\n' '[{"n":1,"draft":false,"t":"a\u2028b"},{"n":2,"draft":true,"t":"c"}]' > "$gh_dir/rest.repos_o_app_releases?per_page=100.json"
+rel="repos/o/app/releases?per_page=100"
+fake 0 "$(printf '%s\n' '[{"n":1,"draft":false,"t":"a\u2028b"},{"n":2,"draft":true,"t":"c"}]')" "--paginate alone" api "$rel" --paginate
+logged "--paginate alone" "rest.repos_o_app_releases?per_page=100 gh api \"$rel\" --paginate"
+fake 0 $'{"n":1,"draft":false,"t":"a\u2028b"}' "--jq, with --paginate" api "$rel" --paginate --jq '.[] | select(.draft | not) | @json'
+logged "--jq, with --paginate" "rest.repos_o_app_releases?per_page=100 gh api \"$rel\" --paginate --jq \".[] | select(.draft | not) | @json\""
+fake 0 $'a\u2028b\nc' "a string result is printed raw" api "$rel" --jq '.[].t'
+fake 0 '' "a result of nothing prints nothing" api "$rel" --jq '.[] | select(.n > 5)'
+[[ ! -s "$work/fout" ]] || fail "fake gh: a --jq with no result printed '$(cat "$work/fout")'"
+# Anything but a string is printed as gh prints it: null as an empty line, the rest as compact JSON with sorted keys and
+# Go's escapes.
+fake 0 '{"draft":false,"n":1,"t":"a\u2028b"}' "an object result is compact, sorted and escaped" api "$rel" --jq '.[0] | {t, n, draft}'
+fake 0 '["\u003c\u0026\u003e\u2029"]' "<, &, > and U+2029 in a JSON result are escaped" api "$rel" --jq '["<&>\u2029"]'
+fake 0 $'1\nfalse' "a number and a boolean" api "$rel" --jq '.[0].n, .[0].draft'
+fake 0 - "null is an empty line" api "$rel" --jq '.[0].missing'
+[[ "$(od -An -c "$work/fout" | tr -d ' ')" == '\n' ]] || fail "fake gh: null printed $(od -An -c "$work/fout")"
+fake 0 '"rest.repos_o_app"' "a plain REST call is still logged as its key" api repos/o/app && logged "a plain REST call" rest.repos_o_app
+fake 97 '' "an expression jq can't run" api "$rel" --jq '.[] | nope('
+logged "an expression jq can't run" "UNMATCHED rest.repos_o_app_releases?per_page=100 (jq can't run .[] | nope( over its fixture rest.repos_o_app_releases?per_page=100.json)"
+fake 97 '' "--jq twice" api "$rel" --jq . --jq .
+fake 97 '' "--jq with no expression" api "$rel" --jq
+fake 97 '' "an empty --jq" api "$rel" --jq ''
+fake 97 '' "--paginate twice" api "$rel" --paginate --paginate
+echo 'HTTP 502: Bad Gateway' > "$gh_dir/rest.repos_o_down.fail"
+fake 1 '' "a .fail fixture for a call with --jq" api repos/o/down --paginate --jq .title
+logged "a .fail fixture for a call with --jq" 'rest.repos_o_down gh api repos/o/down --paginate --jq .title'
+# jq missing from PATH: the call is unmatched, not answered with the raw fixture.
+mkdir "$work/nojq"
+for tool in bash cat mktemp rm; do ln -s "$(command -v "$tool")" "$work/nojq/$tool"; done
+code=0
+PATH="$work/nojq" FAKE_GH_DIR="$gh_dir" FAKE_GH_LOG="$gh_log" "$work/nojq/bash" "$fake" api "$rel" --jq . > "$work/fout" 2>&1 || code=$?
+[[ $code -eq 97 && "$(tail -1 "$gh_log")" == *"jq, which a call with --jq needs, is not on PATH"* ]] \
+  || fail "fake gh: jq missing gives exit $code and logged $(tail -1 "$gh_log")"
+# A jq that refuses -- ahead of its program, as jq 1.6 does, still answers: the fake hands it the program in a file.
+mkdir "$work/oldjq"
+# shellcheck disable=SC2016 # the wrapper's own $@ and $a, expanded when it runs
+printf '#!/usr/bin/env bash\nfor a in "$@"; do [[ "$a" != -- ]] || { echo "usage" >&2; exit 2; }; done\nexec %q "$@"\n' "$(command -v jq)" > "$work/oldjq/jq"
+chmod +x "$work/oldjq/jq"
+code=0
+PATH="$work/oldjq:$PATH" FAKE_GH_DIR="$gh_dir" FAKE_GH_LOG="$gh_log" "$fake" api "$rel" --jq '.[].n' > "$work/fout" 2>&1 || code=$?
+[[ $code -eq 0 && "$(cat "$work/fout")" == $'1\n2' ]] || fail "fake gh: a jq that refuses -- gives exit $code and '$(cat "$work/fout")'"
 fake 97 '' "an unreadable fixture" api graphql -f query="$threads_q" -f id=dir.key
 logged "an unreadable fixture is logged as unmatched, not as answered" \
   "UNMATCHED threads.dir.key (its fixture threads.dir.key.json is not a readable file)"
@@ -436,6 +635,79 @@ for suite_dir in "$here"/parity/*/; do
   got="$(case_problems "$suite_dir/cases")"
   [[ -z "$got" ]] || fail "the committed cases of ${suite_dir%/}:"$'\n'"$got"
 done
+# A case's files are compared byte for byte, so git must store them as they are: with text conversion on, a CRLF case
+# would reach a clone (or a commit, under core.autocrlf=input) as LF and pin nothing. tests/parity/.gitattributes turns it
+# off. converted_cases <repo folder> <pathspec>: one line per tracked file the pathspec matches that git would convert, or
+# a line saying git couldn't list or read them, or listed none; nothing when every one is stored as it is. git runs without
+# the caller's GIT_DIR and the rest, as in case_problems, and reads only the repository's own config and attributes: a
+# global or system attributes file (a `* text=auto`) or excludes file would change what the probe below sees. Without
+# the global config there is no safe.directory either, which git reads only from there, the system's or the command line:
+# so it is given on the command line, or a checkout another user owns (a container's bind mount) would be refused.
+own_git=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR GIT_CONFIG_GLOBAL=/dev/null
+  GIT_CONFIG_NOSYSTEM=1 GIT_ATTR_NOSYSTEM=1 git -c core.attributesFile=/dev/null -c core.excludesFile=/dev/null
+  -c safe.directory='*')
+converted_cases() {
+  local -a clean_git=("${own_git[@]}" -C "$1")
+  local list="$work/case-files" attrs="$work/case-attrs"
+  "${clean_git[@]}" ls-files -z -- "$2" > "$list" || {
+    echo "git can't list the files $2 matches in $1"
+    return
+  }
+  [[ -s "$list" ]] || {
+    echo "git tracks no file $2 matches in $1"
+    return
+  }
+  "${clean_git[@]}" check-attr -z --stdin text < "$list" > "$attrs" || {
+    echo "git can't read the text attribute of the files $2 matches in $1"
+    return
+  }
+  # -z gives path, attribute and value, each ended by a NUL.
+  xargs -0 -n 3 printf '%s: %s: %s\n' < "$attrs" | grep -v ': text: unset$' || true
+}
+# Tried first on a probe: a case file git converts is named, the attribute file silences it, and a pathspec that
+# matches nothing is a failure, not a pass.
+attr_probe="$work/attr-probe"
+mkdir -p "$work/hostile-xdg/git"
+printf '%s\n' '* text=auto' stdin > "$work/hostile-xdg/git/attributes"
+printf '%s\n' stdin > "$work/hostile-xdg/git/ignore"
+mkdir -p "$attr_probe/parity/s/cases/c"
+printf 'a\r\n' > "$attr_probe/parity/s/cases/c/stdin"
+git init -q "$attr_probe"
+XDG_CONFIG_HOME="$work/hostile-xdg" "${own_git[@]}" -C "$attr_probe" -c core.safecrlf=false add parity
+got="$(converted_cases "$attr_probe" 'parity/*/cases/*')"
+[[ "$got" == "parity/s/cases/c/stdin: text: unspecified" ]] || fail "the line-ending check missed a converted case file: '$got'"
+# A machine's own attributes and excludes (the global `* text=auto` and ignored stdin made above) change neither answer.
+got="$(XDG_CONFIG_HOME="$work/hostile-xdg" converted_cases "$attr_probe" 'parity/*/cases/*')"
+[[ "$got" == "parity/s/cases/c/stdin: text: unspecified" ]] || fail "the line-ending check read the machine's own attributes: '$got'"
+printf '%s\n' '*/cases/** -text' > "$attr_probe/parity/.gitattributes"
+got="$(converted_cases "$attr_probe" 'parity/*/cases/*')"
+[[ -z "$got" ]] || fail "the line-ending check named a case file stored as it is: '$got'"
+got="$(converted_cases "$attr_probe" 'nowhere/*/cases/*')"
+[[ "$got" == "git tracks no file nowhere/*/cases/* matches in $attr_probe" ]] || fail "the line-ending check passed on no file: '$got'"
+got="$(GIT_DIR="$work/nowhere" GIT_WORK_TREE="$work" converted_cases "$attr_probe" 'parity/*/cases/*')"
+[[ -z "$got" ]] || fail "the line-ending check follows the caller's GIT_DIR: '$got'"
+# A checkout another user owns (git's own test switch stands in for one) is still read.
+got="$(GIT_TEST_ASSUME_DIFFERENT_OWNER=1 converted_cases "$attr_probe" 'parity/*/cases/*')"
+[[ -z "$got" ]] || fail "the line-ending check refuses a checkout another user owns: '$got'"
+
+# The blank-key cases pin that a value of only blanks counts as unset, which an empty value (what a trimming editor would
+# leave, and tests/parity/.editorconfig forbids) can't show: both env files must still hold blanks.
+blank_envs=0
+for env_file in "$here"/parity/*/cases/*-a-blank-anthropic-key-and-model-mean-no-summary/env; do
+  [[ -f "$env_file" ]] || continue
+  blank_envs=$((blank_envs + 1))
+  if ! grep -Eq '^ANTHROPIC_API_KEY=[[:blank:]]+$' "$env_file" || ! grep -Eq '^ANTHROPIC_MODEL=[[:blank:]]+$' "$env_file"; then
+    fail "$env_file no longer holds a key and a model of only blanks"
+  fi
+done
+[[ $blank_envs -eq 2 ]] || fail "expected the 2 blank-key cases (release_post, backfill_blog_posts), found $blank_envs"
+
+# The committed cases, when this copy is in a git work tree (a copy of the skill outside one, such as an unpacked archive,
+# has no index to ask).
+if [[ "$("${own_git[@]}" -C "$here" rev-parse --is-inside-work-tree 2> /dev/null)" == true ]]; then
+  got="$(converted_cases "$here" 'parity/*/cases/*')"
+  [[ -z "$got" ]] || fail "git converts the line endings of these case files (tests/parity/.gitattributes):"$'\n'"$got"
+fi
 
 if [[ $failures -ne 0 ]]; then
   echo "parity-runner: $failures check(s) failed." >&2

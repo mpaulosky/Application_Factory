@@ -1,0 +1,13 @@
+{
+  "number": 40,
+  "title": "feat: Big",
+  "body": "",
+  "merged_at": "2026-03-01T10:00:00Z",
+  "html_url": "https://github.com/o/app/pull/40",
+  "user": {
+    "login": "alice"
+  },
+  "base": {
+    "ref": "main"
+  }
+}

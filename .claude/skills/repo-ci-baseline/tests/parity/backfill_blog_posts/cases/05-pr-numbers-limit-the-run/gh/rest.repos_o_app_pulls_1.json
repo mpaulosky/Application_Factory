@@ -1,0 +1,13 @@
+{
+  "number": 1,
+  "title": "feat: One",
+  "body": "",
+  "merged_at": "2026-02-01T10:00:00Z",
+  "html_url": "https://github.com/o/app/pull/1",
+  "user": {
+    "login": "alice"
+  },
+  "base": {
+    "ref": "main"
+  }
+}

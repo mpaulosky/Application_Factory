@@ -134,6 +134,15 @@ Every commit must stay visible, with no stray backslash, and every `docs/README.
 directory up, with the text unchanged. Add a shape to its grid whenever a review finds one. Run against the
 `release_post.py` from before #80 and #79, it fails 110 and 130 cases.
 
+**Parity suites.** `tests/parity.test.sh <suite> [command...]` (in the skill, not the Template) runs `release_queue`, `draft_release`,
+`release_post` and `backfill_blog_posts` through their command lines only, so the same cases judge a port of them (ADR 0017)
+against the Python. A case holds the arguments, stdin, environment, the files the run starts with and the fake `gh`'s
+fixtures, and for `release_queue` a `setup.sh` that builds main's history with a local origin. The case then checks stdout, the exit code,
+the shape of stderr, the `gh` calls, and every file the run leaves (`expected.tree/`), byte for byte. The fake runs real jq over the fixture for
+a REST call's `--jq` and prints each result as gh does. A case with a `setup.sh` needs git 2.32 or later. `test.sh` runs them against the Python.
+Each suite's `tests/parity/<suite>/README.md` says what its cases leave out:
+the Anthropic call, the half-minute `--wait-for-prs` limit and the "today" fallback for a PR with no merge time are left to unit tests.
+
 **Permissions:** workflow-level `permissions: {}`, with each job granting only what it needs. The docs and release
 checkouts use `RELEASE_PR_PAT`, falling back to `GITHUB_TOKEN`, so the blog PR's own checks start without a manual
 approval. The blog PR's lookups and its `docs-only` label use `GITHUB_TOKEN`, which has an allowance of its own

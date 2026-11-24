@@ -1,0 +1,30 @@
+[
+  {
+    "number": 22,
+    "title": "feat: Change 22",
+    "state": "closed",
+    "merged_at": "2026-03-03T10:00:00Z",
+    "updated_at": "2026-03-03T10:00:00Z",
+    "merge_commit_sha": "c30b503b1df9841279fa7bbc4c739054ce157788",
+    "user": {
+      "login": "alice"
+    },
+    "base": {
+      "ref": "main"
+    }
+  },
+  {
+    "number": 20,
+    "title": "feat: Change 20",
+    "state": "closed",
+    "merged_at": "2026-03-01T10:00:00Z",
+    "updated_at": "2026-02-28T10:00:00Z",
+    "merge_commit_sha": "d600a0301390942f3a33b71ebf0c247e9ea32c2a",
+    "user": {
+      "login": "alice"
+    },
+    "base": {
+      "ref": "main"
+    }
+  }
+]

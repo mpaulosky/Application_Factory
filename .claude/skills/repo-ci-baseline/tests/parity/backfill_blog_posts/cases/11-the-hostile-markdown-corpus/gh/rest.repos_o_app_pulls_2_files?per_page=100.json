@@ -1,0 +1,68 @@
+[
+  {
+    "filename": "src/Ünïcode.cs",
+    "additions": 2,
+    "deletions": 1,
+    "patch": "@@ -1 +1 @@\n-a\n+b"
+  },
+  {
+    "filename": "src/with space.cs",
+    "additions": 1,
+    "deletions": 0,
+    "patch": "@@ -1 +1 @@\n-a\n+b"
+  },
+  {
+    "filename": "src/back`tick.cs",
+    "additions": 1,
+    "deletions": 0,
+    "patch": "@@ -1 +1 @@\n-a\n+b"
+  },
+  {
+    "filename": " leading space.txt",
+    "additions": 1,
+    "deletions": 0,
+    "patch": "@@ -1 +1 @@\n-a\n+b"
+  },
+  {
+    "filename": ".github/workflows/ci.yml",
+    "additions": 5,
+    "deletions": 0,
+    "patch": "@@ -1 +1 @@\n-a\n+b"
+  },
+  {
+    "filename": "docs/blogs/old.md",
+    "additions": 0,
+    "deletions": 9,
+    "patch": "@@ -1 +1 @@\n-a\n+b"
+  },
+  {
+    "filename": "package-lock.json",
+    "additions": 900,
+    "deletions": 800,
+    "patch": "@@ -1 +1 @@\n-a\n+b"
+  },
+  {
+    "filename": "tests/a-b/x.cs",
+    "additions": 1,
+    "deletions": 0,
+    "patch": "@@ -1 +1 @@\n-a\n+b"
+  },
+  {
+    "filename": "tests/a/x.cs",
+    "additions": 1,
+    "deletions": 0,
+    "patch": "@@ -1 +1 @@\n-a\n+b"
+  },
+  {
+    "filename": "other/<b>.txt",
+    "additions": 1,
+    "deletions": 0,
+    "patch": "@@ -1 +1 @@\n-a\n+b"
+  },
+  {
+    "filename": ".sandcastle/run.mts",
+    "additions": 1,
+    "deletions": 1,
+    "patch": "@@ -1 +1 @@\n-a\n+b"
+  }
+]

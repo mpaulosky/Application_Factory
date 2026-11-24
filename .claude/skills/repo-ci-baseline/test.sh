@@ -711,9 +711,11 @@ if in_shard scripts; then
   step "GitHub scripts tests (settings, landing decision, status, land, rollout)"
   (cd "$skill_dir" && "${pytest_cmd[@]}" -q -p no:cacheprovider github/tests) || fail "github scripts pytest"
 
-  step "Parity suites (status.py and land.py through their command lines, against a fake gh) and their runner's tests"
+  step "Parity suites (status.py, land.py and the release scripts through their command lines, against a fake gh) and their runner's tests"
+  # The fake gh runs jq for a REST call's --jq, which the release scripts' suites make.
+  need jq
   # Every suite is run: each folder under tests/parity/ with a cases/ folder, so a suite added later can't be left out. Each needs its README.md
-  # (what its cases cover and leave out), and there are at least the two suites this was written with, so a glob that matched nothing can't pass.
+  # (what its cases cover and leave out), and there are at least the six suites this was written with, so a glob that matched nothing can't pass.
   parity_suites=()
   for suite_dir in "$skill_dir"/tests/parity/*/; do
     [[ -d "$suite_dir/cases" ]] || continue
@@ -721,7 +723,7 @@ if in_shard scripts; then
     parity_suites+=("$suite")
     [[ -f "$suite_dir/README.md" ]] || fail "tests/parity/$suite has cases but no README.md saying what they cover and leave out"
   done
-  ((${#parity_suites[@]} >= 2)) || fail "found ${#parity_suites[@]} parity suite(s) under tests/parity/, expected status and land at least"
+  ((${#parity_suites[@]} >= 6)) || fail "found ${#parity_suites[@]} parity suite(s) under tests/parity/, expected status, land and the four release scripts' at least"
   for suite in "${parity_suites[@]}"; do
     bash "$skill_dir/tests/parity.test.sh" "$suite" || fail "parity.test.sh $suite"
   done

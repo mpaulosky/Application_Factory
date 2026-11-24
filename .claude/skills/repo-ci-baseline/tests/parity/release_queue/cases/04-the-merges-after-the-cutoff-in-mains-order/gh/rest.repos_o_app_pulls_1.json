@@ -1,0 +1,14 @@
+{
+  "number": 1,
+  "title": "feat: Change 1",
+  "state": "closed",
+  "merged_at": "2026-03-01T10:00:00Z",
+  "updated_at": "2026-03-01T10:00:00Z",
+  "merge_commit_sha": "7832f8b2fca38bb7f767691e9cc107d397a9926e",
+  "user": {
+    "login": "alice"
+  },
+  "base": {
+    "ref": "main"
+  }
+}

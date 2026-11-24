@@ -8,7 +8,7 @@
 # What an implementation must send, so the fake can tell its calls apart:
 #
 #   gh api graphql -f query=<query> [-f|-F <variable>=<value>]...   variables: owner, name, id, cursor
-#   gh api <path>                                                   a REST GET
+#   gh api <path> [--paginate] [--jq <expression>]                  a REST GET
 #   gh pr ready|update-branch <n> -R <owner/repo>
 #   gh pr comment <n> -R <owner/repo> --body <text>
 #   gh pr edit <n> -R <owner/repo> --add-reviewer|--add-label <value>
@@ -21,7 +21,7 @@
 #   events.<id>[.<cursor>]        a query holding timelineItems( (a PR's label and review-request events)
 #   comments.<id>[.<cursor>]      a query holding comments(last: (a PR's comments, paged backwards)
 #   threads.<id>                  a query holding reviewThreads( and comments(first: (a PR's threads with their comments)
-#   rest.<path>                   gh api <path>
+#   rest.<path>                   gh api <path>, with or without --paginate and --jq (the path's query string is in it)
 #   pr.<sub>.<owner>.<name>.<n>   gh pr <sub> (a view's key ends .<fields> too: pr.view.<owner>.<name>.<n>.<fields>)
 #
 # A cursor given but empty is part of the key too (comments.<id>.), so it never passes for a first page. A cursor of digits
@@ -29,11 +29,15 @@
 # after cursor 1 and the first un-paged call, and a case would pass on the wrong answer. Every key part has
 # each / replaced by _, so a value can't name a file outside FAKE_GH_DIR. The nth call with a key is answered from
 # FAKE_GH_DIR/<key>.<n>.json or .fail when there is one, else from <key>.json or <key>.fail, so a looping run can see a
-# repo change between polls: a .json is printed on stdout (exit 0; for a call with --jq it holds what jq would print), a
-# .fail on stderr (exit 1: a GitHub failure). The fake runs no jq: the --jq expression is in the logged argv, which a
-# port must send unchanged.
+# repo change between polls: a .json is printed on stdout (exit 0), a .fail on stderr (exit 1: a GitHub failure). For a
+# `gh pr view`, the .json holds what its --jq would print: the fake runs no jq there, and the expression is in the logged
+# argv, which a port must send unchanged. For a REST call, the .json holds the API's response, and with --jq the fake runs
+# real jq over it and prints each result as gh does (a string raw, null as an empty line, anything else as compact JSON
+# with sorted keys and Go's escapes; see the jq call for the one exception), so the calls that read one path through different
+# expressions share its fixture; --paginate is taken as given, the fixture being every page at once.
 #
-# Each call is logged as its key; a `gh pr` call as its key, a space and its whole argv, each argument as it is or, when it
+# Each call is logged as its key; a `gh pr` call, and a REST call with --paginate or --jq, as its key, a space and its whole
+# argv, each argument as it is or, when it
 # holds anything but letters, digits and _ . / : @ , + = # -, in double quotes with \ " and line breaks, tabs and carriage
 # returns written \\ \" \n \t \r, so a line holds one call and the body a comment carries is compared too.
 #
@@ -131,8 +135,31 @@ else
   shift
 
   if [[ "${1:-}" != graphql ]]; then
-    [[ $# -eq 1 && -n "$1" && "$1" != -* ]] || unmatched "gh api $*"
+    [[ $# -ge 1 && -n "$1" && "$1" != -* ]] || unmatched "gh api $*"
     key="rest.$(part "$1")"
+    shift
+    paginate="" jq="" has_jq=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --paginate)
+          [[ -z "$paginate" ]] || unmatched "gh $all"
+          paginate=1
+          shift
+          ;;
+        --jq)
+          [[ $# -ge 2 && -z "$has_jq" && -n "$2" ]] || unmatched "gh $all"
+          jq="$2" has_jq=1
+          shift 2
+          ;;
+        *) unmatched "gh $all" ;;
+      esac
+    done
+    if [[ -n "$paginate$has_jq" ]]; then
+      entry="$key gh"
+      for arg in "${argv[@]}"; do
+        entry+=" $(encode "$arg")"
+      done
+    fi
   else
     shift
     query="" owner="" name="" id="" cursor="" has_cursor=""
@@ -160,7 +187,7 @@ else
       *) unmatched "gh api graphql with a query the fake doesn't know: ${q:0:80}" ;;
     esac
   fi
-  entry="$key"
+  entry="${entry:-$key}"
 fi
 
 # This is the nth call with the key: one more than the calls with it logged already.
@@ -175,6 +202,32 @@ for fixture in "$key.$n.json" "$key.$n.fail" "$key.json" "$key.fail"; do
   file="$FAKE_GH_DIR/$fixture"
   [[ -e "$file" ]] || continue
   [[ -f "$file" && -r "$file" ]] || unmatched "$key (its fixture $fixture is not a readable file)"
+  if [[ "$fixture" == *.json && -n "${has_jq:-}" ]]; then
+    # gh runs the expression over the response and prints each result as gh does: a string raw, null as an empty line,
+    # and anything else as compact JSON with its keys sorted at every level and <, >, &, U+2028 and U+2029 escaped (Go's
+    # encoder). A number that isn't an integer is the one result printed otherwise (gh writes 1.5 as 1.50).
+    command -v jq > /dev/null || unmatched "$key (jq, which a call with --jq needs, is not on PATH)"
+    # jq reads the program from a file (-f): jq before 1.7 refuses -- ahead of a program given as an argument, and without
+    # -- a program that starts with - (such as -.n) would be read as an option.
+    answer="$(mktemp)" || unmatched "$key (no temporary file for jq's answer)"
+    program="$(mktemp)" || {
+      rm -f "$answer"
+      unmatched "$key (no temporary file for jq's program)"
+    }
+    trap 'rm -f "$answer" "$program"' EXIT
+    {
+      printf '%s\n' 'def gh_escape(from; to): split(from) | join(to);'
+      printf '%s\n' 'def gh_print: if type == "string" then . elif . == null then "" else'
+      printf '%s\n' '  walk(if type == "object" then to_entries | sort_by(.key) | from_entries else . end) | tojson'
+      printf '%s\n' '  | gh_escape("<"; "\\u003c") | gh_escape(">"; "\\u003e") | gh_escape("&"; "\\u0026")'
+      printf '%s\n' '  | gh_escape("\u2028"; "\\u2028") | gh_escape("\u2029"; "\\u2029") end;'
+      printf '(\n%s\n) | gh_print\n' "$jq"
+    } > "$program" || unmatched "$key (can't write jq's program)"
+    jq -r -f "$program" < "$file" > "$answer" 2> /dev/null || unmatched "$key (jq can't run $jq over its fixture $fixture)"
+    printf '%s\n' "$entry" >> "$FAKE_GH_LOG"
+    cat -- "$answer"
+    exit 0
+  fi
   printf '%s\n' "$entry" >> "$FAKE_GH_LOG"
   if [[ "$fixture" == *.json ]]; then
     cat -- "$file"

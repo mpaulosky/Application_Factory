@@ -1,0 +1,13 @@
+{
+  "number": 7,
+  "title": "  ",
+  "body": "",
+  "merged_at": "2026-03-01T10:00:00Z",
+  "html_url": "https://github.com/o/app/pull/7",
+  "user": {
+    "login": "dependabot[bot]"
+  },
+  "base": {
+    "ref": "main"
+  }
+}

@@ -1,0 +1,14 @@
+[
+  {
+    "filename": "src/App.cs",
+    "additions": 3,
+    "deletions": 1,
+    "patch": "@@ -1 +1 @@\n-a\n+b"
+  },
+  {
+    "filename": "README.md",
+    "additions": 1,
+    "deletions": 0,
+    "patch": "@@ -1 +1 @@\n-a\n+b"
+  }
+]

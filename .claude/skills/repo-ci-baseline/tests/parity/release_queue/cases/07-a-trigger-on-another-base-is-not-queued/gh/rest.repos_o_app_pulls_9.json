@@ -1,0 +1,14 @@
+{
+  "number": 9,
+  "title": "feat: Change 9",
+  "state": "closed",
+  "merged_at": "2026-03-02T10:00:00Z",
+  "updated_at": "2026-03-02T10:00:00Z",
+  "merge_commit_sha": "54fdd993f3b193ec3a09d6ba0586f0d9d8186ffc",
+  "user": {
+    "login": "alice"
+  },
+  "base": {
+    "ref": "release/1.x"
+  }
+}

@@ -1,0 +1,4 @@
+^usage: 
+^ +\[--pr-numbers PR_NUMBERS\]$
+^ +\[--wait-for-prs WAIT_FOR_PRS\] \[--repo REPO\]$
+error: .*--bogus

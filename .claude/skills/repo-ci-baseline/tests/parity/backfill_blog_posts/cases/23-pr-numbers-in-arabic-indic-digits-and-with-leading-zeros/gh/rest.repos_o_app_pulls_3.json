@@ -1,0 +1,13 @@
+{
+  "number": 3,
+  "title": "feat: Three",
+  "body": "Three's description.",
+  "merged_at": "2026-02-03T10:00:00Z",
+  "html_url": "https://github.com/o/app/pull/3",
+  "user": {
+    "login": "alice"
+  },
+  "base": {
+    "ref": "main"
+  }
+}
