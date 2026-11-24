@@ -105,11 +105,11 @@ if [[ -d /proc/self ]]; then
   out="$(from_checker "$work/version-fails" "" --version)"
   check "the caller's .shfmt-version-exit makes --version fail with its code" '[[ "$out" == "|shfmt-shim: --version fails, as .shfmt-version-exit says|5" ]]'
   out="$(from_checker "$work/version-fails" $'a  b\n' -)"
-  check "but not any other call" '[[ "$out" == "a b"$'"'"'\n'"'"'"||0" ]]'
+  check "but not any other call: .shfmt-version-exit leaves a parse alone" '[[ "$out" == "a b"$'"'"'\n'"'"'"||0" ]]'
   out="$(from_checker "$work/parse" "" --version)"
   check "but not --version" '[[ "$out" == "$("$real" --version)"$'"'"'\n'"'"'"||0" ]]'
 else
-  echo "skip - .shfmt-version and .shfmt-parse: no /proc here"
+  echo "skip - .shfmt-version, .shfmt-version-exit and .shfmt-parse: no /proc here"
 fi
 
 status=0

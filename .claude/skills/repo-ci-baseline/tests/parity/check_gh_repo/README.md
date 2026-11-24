@@ -15,7 +15,8 @@ PATH="$shim:$PATH" .claude/skills/repo-ci-baseline/tests/parity.test.sh check_gh
 `shfmt-shim.sh` hands each call to the real shfmt (v3.14 or a later v3, the next one on `PATH`), after checking that the checker runs it from an empty folder with nothing but
 `PATH` in its environment. A case whose folder holds `.shfmt-version` gets that file's first line as shfmt's `--version`, so the suite can stand for an older or malformed
 release (or `.shfmt-version-exit`, whose first line `--version` exits with), and one whose folder holds `.shfmt-parse` gets every other call answered from it
-(its first line the exit code, the rest the output), so it can stand for a shfmt that fails or prints no syntax tree. The shim reads the checker's folder through `/proc`, so those cases need Linux; `tests/shfmt-shim.test.sh` tests the shim itself.
+(its first line the exit code, the rest the output), so it can stand for a shfmt that fails or prints no syntax tree.
+The shim reads the checker's folder through `/proc`, so those cases need Linux; `tests/shfmt-shim.test.sh` tests the shim itself.
 
 ## Where the cases come from
 
