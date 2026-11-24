@@ -184,6 +184,7 @@ The first increment brings the .NET SDK into the Factory, with no script ported 
   and CA2266 stays visible as a warning. Checked on SDK 11.0.100: `TreatWarningsAsErrors` alone makes CA2266 an error (exit 1), with `WarningsNotAsErrors=CA2266` the build
   exits 0, and `dotnet build app.cs -warnaserror` isn't accepted for a file-based app (MSB4025). The other two ways were turned down: a shebang fails
   `dotnet format whitespace --verify-no-changes` (exit 2, the `# !` rewrite above), and an entry file with no `#:include` would undo the thin-entry-file rule.
+  (The Update for mpaulosky/Application_Factory#145 below adds NU1900 to `WarningsNotAsErrors`.)
 
 ## Update (mpaulosky/Application_Factory#145): the C# step and the test project are hardened
 

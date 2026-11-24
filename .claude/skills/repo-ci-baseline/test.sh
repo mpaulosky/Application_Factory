@@ -31,13 +31,12 @@ export PYTHONDONTWRITEBYTECODE=1
 # The tests build throwaway repos. A global init.templateDir would install this
 # machine's own hooks into each of them and block their commits.
 # Both folders are made absolute, so a relative TMPDIR still names them from the folders the steps cd into. Each mktemp is its own assignment, so a failed
-# one stops the run under set -e: a cd -- "$(mktemp -d)" would turn it into the current folder on a bash whose cd takes an empty operand, and the trap
-# below would remove that folder.
+# one stops the run under set -e, and each is made absolute by prefixing $PWD rather than by cd, which a caller's CDPATH would make print the folder too.
 GIT_TEMPLATE_DIR="$(mktemp -d)"
-GIT_TEMPLATE_DIR="$(cd -- "$GIT_TEMPLATE_DIR" && pwd)"
+[[ "$GIT_TEMPLATE_DIR" == /* ]] || GIT_TEMPLATE_DIR="$PWD/$GIT_TEMPLATE_DIR"
 export GIT_TEMPLATE_DIR
 md_tmp="$(mktemp -d)"
-md_tmp="$(cd -- "$md_tmp" && pwd)"
+[[ "$md_tmp" == /* ]] || md_tmp="$PWD/$md_tmp"
 trap 'command rm -rf "$GIT_TEMPLATE_DIR" "$md_tmp"' EXIT
 
 failures=0
@@ -773,13 +772,23 @@ if in_shard scripts; then
   # test.sh stood, not folders inside the project.
   mkdir -p "$st/stub" "$st/proj" "$st/cwd/rel-tmp"
   # shellcheck disable=SC2016 # the stub's own $PWD, $TMPDIR and $@, expanded when it runs
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$PWD" "$TMPDIR" "$@" > "%s"\n' "$st/stub.log" > "$st/stub/dotnet"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$PWD" "$TMPDIR" "$@" "MSBUILDDISABLENODEREUSE=$MSBUILDDISABLENODEREUSE" "DOTNET_CLI_USE_MSBUILD_SERVER=$DOTNET_CLI_USE_MSBUILD_SERVER" "DOTNET_CLI_TELEMETRY_OPTOUT=$DOTNET_CLI_TELEMETRY_OPTOUT" "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=$DOTNET_SKIP_FIRST_TIME_EXPERIENCE" "DOTNET_NOLOGO=$DOTNET_NOLOGO" > "%s"\n' "$st/stub.log" > "$st/stub/dotnet"
   chmod +x "$st/stub/dotnet"
-  (cd "$st/cwd" && PATH="$st/stub:$PATH" TMPDIR=rel-tmp scripts_tests_run "$st/proj" rel-out) || fail "scripts_tests_run fails with a stub dotnet"
+  # The caller's values are the opposite ones, so the check shows the function sets its own: no build server or node reuse is left running.
+  (cd "$st/cwd" && PATH="$st/stub:$PATH" TMPDIR=rel-tmp MSBUILDDISABLENODEREUSE=0 DOTNET_CLI_USE_MSBUILD_SERVER=1 DOTNET_CLI_TELEMETRY_OPTOUT=0 \
+    DOTNET_SKIP_FIRST_TIME_EXPERIENCE=0 DOTNET_NOLOGO=0 scripts_tests_run "$st/proj" rel-out) || fail "scripts_tests_run fails with a stub dotnet"
   stub_log="$(cat "$st/stub.log" 2> /dev/null)"
-  for want in "$st/proj" "$st/cwd/rel-tmp" "$st/cwd/rel-out" "$st/cwd/rel-out/results" "-p:RestoreLockedMode=true"; do
+  for want in "$st/proj" "$st/cwd/rel-tmp" "$st/cwd/rel-out" "$st/cwd/rel-out/results" "-p:RestoreLockedMode=true" "-p:UseSharedCompilation=false" \
+    MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1; do
     grep -qxF -- "$want" <<< "$stub_log" || fail "scripts_tests_run doesn't pass dotnet $want (it got: ${stub_log//$'\n'/ })"
   done
+  # test.sh's own temp folders, under a relative TMPDIR and a CDPATH that holds ., are removed by its EXIT trap: an unknown shard ends the run just
+  # after they are made, so nothing may be left under that TMPDIR.
+  cdp="$md_tmp/cdpath"
+  mkdir -p "$cdp/rel"
+  ! (cd "$cdp" && TMPDIR=rel CDPATH=. TEST_SH_SHARD=no-such-shard bash "$skill_dir/test.sh" > "$cdp/out" 2>&1) \
+    || fail "test.sh passed with an unknown TEST_SH_SHARD: $(cat "$cdp/out")"
+  [[ -z "$(ls -A "$cdp/rel")" ]] || fail "test.sh left its temp folders under a relative TMPDIR with CDPATH=.: $(ls -A "$cdp/rel")"
   # The audit reads advisories from nuget.org alone too: a NuGet.config above the folder can't point it at a feed that reports none.
   audit="$(tr -d '\n\t' < "$scripts_tests/NuGet.config" | grep -oE '<auditSources>.*</auditSources>' || true)"
   [[ "$audit" =~ ^\<auditSources\>[[:space:]]*\<clear[[:space:]]*/\>[[:space:]]*\<add[[:space:]]+key=\"nuget\.org\"[[:space:]]+value=\"https://api\.nuget\.org/v3/index\.json\"[^/]*/\>[[:space:]]*\</auditSources\>$ ]] \
@@ -806,7 +815,7 @@ if in_shard scripts; then
   printf '<configuration><packageSources><add key="other" value="https://other.invalid/v3/index.json" /></packageSources></configuration>\n' > "$pinned/NuGet.config"
   cp -R "$scripts_tests" "$pinned/Scripts.Tests"
   rm -rf "$pinned/Scripts.Tests/bin" "$pinned/Scripts.Tests/obj" "$pinned/Scripts.Tests/TestResults"
-  sources="$(cd "$pinned/Scripts.Tests" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 dotnet nuget list source --format short)" \
+  sources="$(cd "$pinned/Scripts.Tests" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 dotnet nuget list source --format short)" \
     || fail "dotnet nuget list source failed in the copy of Scripts.Tests"
   [[ "$sources" == "E https://api.nuget.org/v3/index.json" ]] \
     || fail "Scripts.Tests must restore from nuget.org alone, whatever a NuGet.config above says; it sees: ${sources//$'\n'/ | }"
