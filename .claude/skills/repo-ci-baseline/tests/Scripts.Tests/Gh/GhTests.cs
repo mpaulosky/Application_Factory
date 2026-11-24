@@ -25,7 +25,7 @@ public class GhTests
 		""";
 
 	static Arguments LandParser() => new Arguments("land", "[options] [prs ...]", "land")
-			.Flag("--ready", "").Flag("--once", "").Flag("--dry-run", "").Option("--interval", "").Option("--timeout", "").Option("--blog-wait", "");
+			.Flag("--ready", "").Flag("--once", "").Flag("--dry-run", "").FloatOption("--interval", "").FloatOption("--timeout", "").FloatOption("--blog-wait", "");
 
 	// (exit code, what it parsed as JSON or "") from argparse, run by python3.
 	static (int Code, string Parsed) Argparse(string program, string[] args)
@@ -38,7 +38,7 @@ public class GhTests
 		var output = run.StandardOutput.ReadToEnd();
 		run.WaitForExit();
 		_ = err.Result;
-		return (run.ExitCode, run.ExitCode == 0 ? output.Trim() : "");
+		return (run.ExitCode, run.ExitCode != 0 ? "" : output.StartsWith("usage: ", StringComparison.Ordinal) ? "help" : output.Trim());
 	}
 
 	// The same from Arguments, with land's defaults, and the error line it wrote.
@@ -48,7 +48,7 @@ public class GhTests
 		var err = new StringWriter();
 		var code = parser.Parse(args, new StringWriter(), err);
 		if (code is int exit)
-			return (exit, "", err.ToString());
+			return (exit, exit == 0 ? "help" : "", err.ToString());
 		try
 		{
 			var parsed = new JsonArray(new JsonArray([.. parser.Positional.Select(p => (JsonNode?)p)]), parser.Has("--ready"), parser.Has("--once"),
@@ -97,6 +97,33 @@ public class GhTests
 		new[] { "o/app", "--once", "--", "o/lib" },
 		new[] { "--", "o/app", "--once" },
 		new[] { "--once", "--", "o/app", "o/lib" },
+		// --help is one of the options a prefix can name, and -h with more after it is -h.
+		new[] { "--h" },
+		new[] { "--he" },
+		new[] { "--hel" },
+		new[] { "--help" },
+		new[] { "--he=1" },
+		new[] { "--help=1" },
+		new[] { "-h=1" },
+		new[] { "--bogus", "-h" },
+		new[] { "--interval", "-h" },
+		new[] { "--interval", "--h" },
+		// A float option's value is read when the option is met, so a bad one ends the parse before a later -h.
+		new[] { "--interval", "x", "-h" },
+		new[] { "-h", "--interval", "x" },
+		new[] { "--interval=x", "--bogus" },
+		// One sign at most, and inf or nan behind a - is an option, not a negative number.
+		new[] { "--interval=--inf" },
+		new[] { "--interval", "+-nan" },
+		new[] { "--interval", "-Infinity" },
+		new[] { "--interval", "-NaN" },
+		new[] { "--interval=-inf" },
+		new[] { "--interval", "-.5" },
+		new[] { "--interval", "-0" },
+		// An argument with a space that names no option is positional.
+		new[] { "-x y" },
+		new[] { "--interval", "-x y" },
+		new[] { "--onc e" },
 	};
 
 	[Theory]
@@ -107,10 +134,43 @@ public class GhTests
 		var (wantCode, wantParsed) = Argparse(ArgparseLand, args);
 
 		Assert.Equal(wantCode, code);
-		if (wantCode == 0)
+		if (wantParsed == "help" || parsed == "help")
+			Assert.Equal(wantParsed, parsed);
+		else if (wantCode == 0)
 			Assert.True(JsonNode.DeepEquals(JsonNode.Parse(wantParsed), JsonNode.Parse(parsed)), $"argparse: {wantParsed}, Arguments: {parsed}");
 		else
 			Assert.Matches(@"\Ausage: land .*\nland: error: .+\n\z", error);
+	}
+
+	// Not a moved test: gh is found in PATH's absolute folders only, never in the current folder or the program's, which .NET's own
+	// lookup tries first.
+	[Fact]
+	public void Gh_is_found_on_paths_absolute_folders_only()
+	{
+		if (OperatingSystem.IsWindows())
+			return; // the scripts run on Linux and macOS
+		var root = Directory.CreateTempSubdirectory("which.");
+		try
+		{
+			var found = Directory.CreateDirectory(Path.Combine(root.FullName, "found")).FullName;
+			var plain = Directory.CreateDirectory(Path.Combine(root.FullName, "plain")).FullName;
+			var empty = Directory.CreateDirectory(Path.Combine(root.FullName, "empty")).FullName;
+			File.WriteAllText(Path.Combine(found, "gh"), "#!/bin/sh\n");
+			File.SetUnixFileMode(Path.Combine(found, "gh"), UnixFileMode.UserRead | UnixFileMode.UserExecute);
+			File.WriteAllText(Path.Combine(plain, "gh"), "not executable\n");
+
+			Assert.Equal(Path.Combine(found, "gh"), Gh.Which("gh", $"{empty}:{plain}:{found}"));
+			// A relative folder, an empty entry (execvp's current folder) and . are skipped, even when they hold a gh.
+			var relative = Path.GetRelativePath(Environment.CurrentDirectory, found);
+			Assert.Throws<FileNotFoundException>(() => Gh.Which("gh", $"{relative}::.:{empty}"));
+			Assert.Throws<FileNotFoundException>(() => Gh.Which("gh", plain));
+			Assert.Throws<FileNotFoundException>(() => Gh.Which("gh", ""));
+			Assert.Throws<FileNotFoundException>(() => Gh.Which("gh", null));
+		}
+		finally
+		{
+			root.Delete(true);
+		}
 	}
 
 	[Fact]

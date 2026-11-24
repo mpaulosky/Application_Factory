@@ -17,6 +17,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 using static Landing;
 
@@ -156,7 +157,10 @@ sealed class StatusReader
 		{
 			try
 			{
-				writer = J.S(J.Get(Rest($"repos/{owner}/{name}/collaborators/{login}/permission"), "permission")) is "admin" or "write";
+				// An answer that isn't an object is unreadable (the Python's .get raised on it), not a definite no.
+				writer = Rest($"repos/{owner}/{name}/collaborators/{login}/permission") is JsonObject answer
+						? J.S(J.Get(answer, "permission")) is "admin" or "write"
+						: throw new GhException("the permission answer isn't a JSON object");
 			}
 			catch (NotFound)
 			{
@@ -234,7 +238,7 @@ static class Status
 		  repository(owner: $owner, name: $name) {
 		    pullRequests(states: OPEN, first: 50, orderBy: {field: CREATED_AT, direction: ASC}) {
 		      nodes {
-		        id number title state isDraft headRefName headRefOid mergeStateStatus
+		        id number title state isDraft isCrossRepository headRefName headRefOid mergeStateStatus
 		        autoMergeRequest { enabledAt }
 		        labels(first: 20) { nodes { name } }
 		        reviewRequests(first: 20) { nodes { requestedReviewer {
@@ -556,7 +560,10 @@ static class Status
 			AutoMergeArmed = J.Req(node, "autoMergeRequest") is not null,
 			WantReady = wantReady,
 			MergedByWorkflow = mergedByWorkflow,
-			ReleaseBlog = J.S(J.Get(node, "headRefName")) is { } branch && ReleaseBlogBranches.Contains(branch),
+			// A fork's PR can have a branch of any name, so only a branch in the repo itself (isCrossRepository false, read as false: a
+			// missing value is a fork's) is a release-blog PR, which land.cs arms with no review.
+			ReleaseBlog = J.S(J.Get(node, "headRefName")) is { } branch && ReleaseBlogBranches.Contains(branch)
+					&& J.Get(node, "isCrossRepository") is JsonValue fork && fork.TryGetValue<bool>(out var crossRepository) && !crossRepository,
 		};
 	}
 
@@ -576,7 +583,8 @@ static class Status
 		var decision = Decide(pr);
 		var name = repo.Split('/')[^1];
 		var notice = UnrepliedNotice(pr);
-		var title = Shorten(J.Fmt(J.Req(node, "title")));
+		// The title is PR-controlled, so it is printable before it is cut: a control character can't reach the terminal.
+		var title = Shorten(Printable(J.Fmt(J.Req(node, "title"))));
 		title += new string(' ', Math.Max(0, TitleWidth - CodePoints(title).Count));
 		return $"{name}#{J.Fmt(J.Req(node, "number"))} {title} {(pr.Head.Length > 7 ? pr.Head[..7] : pr.Head)}"
 				+ $" {(pr.Draft ? "draft" : "ready")} {pr.MergeState}"
@@ -596,6 +604,9 @@ static class Status
 		fetch ??= new StatusReader(err: err).Fetch;
 		var listed = (readRepoList ?? (() => Repos.Read()))();
 		var repos = parser.Positional.Count > 0 ? parser.Positional : [.. listed.Keys];
+		// A name gh would read otherwise (-F reads a value starting with @ from a file) is refused before any call.
+		if (repos.FirstOrDefault(repo => !RepoName.IsMatch(repo)) is { } bad)
+			return parser.Error($"not owner/repo: {bad}", err);
 
 		List<string> lines = [];
 		var status = 0;
@@ -624,11 +635,14 @@ static class Status
 		return status;
 	}
 
-	// owner/name split at its first /; a repo with none throws, as the Python's unpacking did.
+	// owner/repo: letters, digits, _, . and - on each side of one / (a trailing line break too is refused).
+	public static readonly Regex RepoName = new(@"\A[\w.-]+/[\w.-]+\z", RegexOptions.CultureInvariant);
+
+	// owner/name split at its /; anything but owner/repo throws.
 	public static (string Owner, string Name) SplitRepo(string repo)
 	{
 		var slash = repo.IndexOf('/');
-		if (slash < 0)
+		if (!RepoName.IsMatch(repo))
 			throw new ArgumentException($"not owner/repo: {repo}");
 		return (repo[..slash], repo[(slash + 1)..]);
 	}

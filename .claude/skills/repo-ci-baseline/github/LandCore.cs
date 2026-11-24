@@ -66,8 +66,7 @@ static class Land
 				var repo = match.Groups[1].Value;
 				if (!targets.TryGetValue(repo, out var numbers))
 					targets[repo] = numbers = [];
-				// \d is any Unicode digit, as int() reads it.
-				numbers?.Add(match.Groups[2].Value.Aggregate(0L, (number, digit) => number * 10 + (long)char.GetNumericValue(digit)));
+				numbers?.Add(PrNumber(match.Groups[2].Value, arg));
 			}
 			else if (RepoRef.IsMatch(arg))
 				targets[arg] = null;
@@ -75,6 +74,42 @@ static class Land
 				throw new ArgumentException($"not owner/repo or owner/repo#n: {arg}");
 		}
 		return targets;
+	}
+
+	// A PR number's digits (\d is any Unicode digit, as int() reads it) as a long. A number past long's range throws ArgumentException,
+	// so it is a usage error rather than another PR's number wrapped around.
+	public static long PrNumber(string digits, string arg)
+	{
+		long number = 0;
+		foreach (var digit in digits)
+		{
+			try
+			{
+				number = checked(number * 10 + (long)char.GetNumericValue(digit));
+			}
+			catch (OverflowException)
+			{
+				throw new ArgumentException($"not owner/repo or owner/repo#n: {arg}");
+			}
+		}
+		return number;
+	}
+
+	// Waits seconds, as time.sleep does: a negative, NaN or infinite length throws ArgumentOutOfRangeException (exit 1, as time.sleep's
+	// error was) rather than reach Thread.Sleep, which reads -1 ms as forever and refuses more than int.MaxValue ms; a long wait is
+	// slept in steps of at most that. wait is Thread.Sleep by default.
+	public static void Sleep(double seconds, Action<TimeSpan>? wait = null)
+	{
+		if (!double.IsFinite(seconds) || seconds < 0)
+			throw new ArgumentOutOfRangeException(nameof(seconds), seconds, "sleep length must be a finite number of seconds, 0 or more");
+		wait ??= System.Threading.Thread.Sleep;
+		const double most = int.MaxValue / 1000.0;
+		while (seconds > 0)
+		{
+			var step = Math.Min(seconds, most);
+			wait(TimeSpan.FromSeconds(step));
+			seconds -= step;
+		}
 	}
 
 	// The gh calls that carry out one decision's action; none for the rest.
@@ -133,9 +168,9 @@ static class Land
 				.Flag("--ready", "mark watched drafts ready (otherwise a draft waits)")
 				.Flag("--once", "one pass, then exit")
 				.Flag("--dry-run", "print the gh calls instead of making them")
-				.Option("--interval", "seconds between polls (default 60)")
-				.Option("--timeout", "minutes before giving up (default 180)")
-				.Option("--blog-wait", "minutes to wait for a release-blog PR after a Baseline PR merges (default 15)");
+				.FloatOption("--interval", "seconds between polls (default 60)")
+				.FloatOption("--timeout", "minutes before giving up (default 180)")
+				.FloatOption("--blog-wait", "minutes to wait for a release-blog PR after a Baseline PR merges (default 15)");
 		if (parser.Parse(args, output, err) is int exit)
 			return exit;
 		double interval, timeout, blogWait;
@@ -165,7 +200,7 @@ static class Land
 		lander.WantReady = parser.Has("--ready");
 		lander.DryRun = parser.Has("--dry-run");
 		lander.BlogWait = blogWait * 60;
-		sleep ??= seconds => System.Threading.Thread.Sleep(TimeSpan.FromSeconds(seconds));
+		sleep ??= seconds => Sleep(seconds);
 
 		var deadline = lander.Clock() + timeout * 60;
 		while (true)

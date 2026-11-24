@@ -88,6 +88,7 @@ public partial class StatusTests
 			["title"] = title,
 			["state"] = "OPEN",
 			["isDraft"] = draft,
+			["isCrossRepository"] = false,
 			["headRefOid"] = Head,
 			["mergeStateStatus"] = mergeState,
 			["autoMergeRequest"] = armed ? new JsonObject { ["enabledAt"] = "2026-10-07T10:00:00Z" } : null,

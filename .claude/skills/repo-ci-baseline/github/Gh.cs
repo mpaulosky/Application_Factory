@@ -25,7 +25,7 @@ sealed class Gh(Func<IReadOnlyList<string>, GhRun>? runner = null)
 
 	public static GhRun Process(IReadOnlyList<string> argv)
 	{
-		var start = new ProcessStartInfo("gh")
+		var start = new ProcessStartInfo(Which("gh", Environment.GetEnvironmentVariable("PATH")))
 		{
 			RedirectStandardOutput = true,
 			RedirectStandardError = true,
@@ -40,6 +40,22 @@ sealed class Gh(Func<IReadOnlyList<string>, GhRun>? runner = null)
 		var output = run.StandardOutput.ReadToEnd();
 		run.WaitForExit();
 		return new GhRun(run.ExitCode, output, err.Result);
+	}
+
+	// The first executable file called name in a folder of path (PATH's form), as execvp finds it but for the folders that aren't
+	// absolute, which are skipped: .NET's own lookup tries the program's folder and the current one before PATH, so a gh there would run
+	// with the owner's token. None found throws FileNotFoundException, as starting a missing program did.
+	public static string Which(string name, string? path)
+	{
+		foreach (var folder in (path ?? "").Split(':'))
+		{
+			if (!Path.IsPathRooted(folder))
+				continue;
+			var candidate = Path.Combine(folder, name);
+			if (File.Exists(candidate) && (OperatingSystem.IsWindows() || (File.GetUnixFileMode(candidate) & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0))
+				return candidate;
+		}
+		throw new FileNotFoundException($"{name} isn't on PATH (only its absolute folders are searched)", name);
 	}
 
 	// The call's stderr, else its stdout, trimmed: what a failure says.
@@ -117,12 +133,15 @@ static class J
 	public static JsonNode? Copy(JsonNode? n) => n?.DeepClone();
 }
 
-// argparse's part the scripts use: positional arguments, flags, options with one value (--name value or --name=value), a long
-// option given by any unique prefix of its name, -h and --help, and -- ending the options. A usage error exits 2 with the usage and
-// the error on stderr, as argparse does.
+// argparse's part the scripts use: positional arguments, flags, options with one value (--name value or --name=value), a float option
+// whose value is read when it is met, a long option given by any unique prefix of its name (--help's too), -h and --help, and -- ending
+// the options. An argument that matches no option is positional when it looks like a negative number (argparse's -\.?\d) or holds a
+// space. A usage error exits 2 with the usage and the error on stderr, as argparse does.
 sealed class Arguments(string prog, string usage, string description)
 {
+	const string HelpName = "--help";
 	readonly List<(string Name, bool TakesValue, string Help)> options = [];
+	readonly HashSet<string> floats = [];
 	public readonly Dictionary<string, string?> Values = [];
 	public readonly List<string> Positional = [];
 
@@ -136,6 +155,13 @@ sealed class Arguments(string prog, string usage, string description)
 	{
 		options.Add((name, true, help));
 		return this;
+	}
+
+	// An option whose value is a float, refused as a usage error when it is met, as argparse's type=float is.
+	public Arguments FloatOption(string name, string help)
+	{
+		floats.Add(name);
+		return Option(name, help);
 	}
 
 	public string Usage => $"usage: {prog} {usage}\n";
@@ -164,25 +190,26 @@ sealed class Arguments(string prog, string usage, string description)
 				continue;
 			}
 			taken |= Positional.Count > 0;
-			if (arg is "-h" or "--help")
-			{
-				output.Write(Help());
-				return 0;
-			}
 			var (name, value) = arg.IndexOf('=') is var eq and > 0 ? (arg[..eq], arg[(eq + 1)..]) : (arg, null);
-			var matches = name.StartsWith("--", StringComparison.Ordinal)
-					? options.Where(o => o.Name == name || o.Name.StartsWith(name, StringComparison.Ordinal)).ToList()
-					: [];
-			if (matches.Count > 1 && matches.Find(o => o.Name == name) is { Name: not null } exact)
-				matches = [exact];
+			// -h with more after it: -h=x is -h given a value, and anything else is -h and further short flags, -h first.
+			if (!arg.StartsWith("--", StringComparison.Ordinal) && arg.StartsWith("-h", StringComparison.Ordinal))
+				name = "-h";
+			var matches = Matches(name);
 			if (matches.Count > 1)
 				return Error($"ambiguous option: {name} could match {string.Join(", ", matches.Select(o => o.Name))}", err);
 			if (matches.Count == 0)
 			{
-				unknown.Add(arg);
+				(arg.Contains(' ') ? taken ? unknown : Positional : unknown).Add(arg);
 				continue;
 			}
 			var option = matches[0];
+			if (option.Name == HelpName)
+			{
+				if (value is not null)
+					return Error($"argument -h/--help: ignored explicit argument '{value}'", err);
+				output.Write(Help());
+				return 0;
+			}
 			if (!option.TakesValue)
 			{
 				if (value is not null)
@@ -192,9 +219,20 @@ sealed class Arguments(string prog, string usage, string description)
 			}
 			if (value is null)
 			{
-				if (i + 1 >= rest.Count || (LooksLikeOption(rest[i + 1]) && !IsNegativeNumber(rest[i + 1])))
+				if (i + 1 >= rest.Count || LooksLikeOption(rest[i + 1]))
 					return Error($"argument {option.Name}: expected one argument", err);
 				value = rest[++i];
+			}
+			if (floats.Contains(option.Name))
+			{
+				try
+				{
+					ParseFloat(option.Name, value);
+				}
+				catch (ArgumentError error)
+				{
+					return Error(error.Message, err);
+				}
 			}
 			Values[option.Name] = value;
 		}
@@ -210,9 +248,15 @@ sealed class Arguments(string prog, string usage, string description)
 	{
 		if (!Values.TryGetValue(name, out var text) || text is null)
 			return fallback;
+		return ParseFloat(name, text);
+	}
+
+	static double ParseFloat(string name, string text)
+	{
 		var trimmed = text.Trim();
 		var sign = trimmed.StartsWith('-') ? -1 : 1;
-		var bare = trimmed.TrimStart('+', '-').ToLowerInvariant();
+		// One sign at most: float() refuses "--inf".
+		var bare = (trimmed.StartsWith('-') || trimmed.StartsWith('+') ? trimmed[1..] : trimmed).ToLowerInvariant();
 		if (bare is "inf" or "infinity")
 			return sign * double.PositiveInfinity;
 		if (bare == "nan")
@@ -239,10 +283,36 @@ sealed class Arguments(string prog, string usage, string description)
 		return text.ToString();
 	}
 
-	static bool LooksLikeOption(string arg) => arg.Length > 1 && arg[0] == '-' && !IsNegativeNumber(arg);
+	// The options a name (before any =) names: itself, else every one it is a prefix of, --help among them; a name that doesn't start
+	// with -- names only itself (-h is --help).
+	List<(string Name, bool TakesValue, string Help)> Matches(string name)
+	{
+		List<(string Name, bool TakesValue, string Help)> all = [.. options, (HelpName, false, "")];
+		if (name == "-h")
+			return [all[^1]];
+		if (all.Find(o => o.Name == name) is { Name: not null } exact)
+			return [exact];
+		return name.StartsWith("--", StringComparison.Ordinal) && name.Length > 2 ? all.Where(o => o.Name.StartsWith(name, StringComparison.Ordinal)).ToList() : [];
+	}
 
-	static bool IsNegativeNumber(string arg) =>
-			arg.Length > 1 && arg[0] == '-' && double.TryParse(arg, NumberStyles.Float, CultureInfo.InvariantCulture, out _);
+	// Whether argparse reads arg as an option (O) rather than a value (A): a - and more, unless it names no option and looks like a
+	// negative number or holds a space.
+	bool LooksLikeOption(string arg)
+	{
+		if (arg.Length < 2 || arg[0] != '-')
+			return false;
+		if (arg == "--")
+			return true;
+		var name = arg.IndexOf('=') is var eq and > 0 ? arg[..eq] : arg;
+		if (!arg.StartsWith("--", StringComparison.Ordinal) && arg.StartsWith("-h", StringComparison.Ordinal))
+			return true;
+		if (Matches(name).Count > 0)
+			return true;
+		return !(NegativeNumber.IsMatch(arg) || arg.Contains(' '));
+	}
+
+	// argparse's _negative_number_matcher: a - then a digit, or a . and a digit.
+	static readonly Regex NegativeNumber = new(@"\A-\.?\d", RegexOptions.CultureInvariant);
 }
 
 // A usage error found after the arguments parsed (a bad value); the caller hands it to Arguments.Error.
