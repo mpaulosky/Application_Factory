@@ -46,10 +46,18 @@ sealed class Gh(Func<IReadOnlyList<string>, GhRun>? runner = null)
 		if (input is not null)
 		{
 			// Written beside the reads above and below, so a gh that answers before it has read all of a long body can't block on a full pipe.
+			// A gh that exits without reading it (not logged in, say) closes the pipe: the broken pipe is ignored, as Python's communicate()
+			// ignores it, so gh's own exit code and stderr say what went wrong.
 			var write = Task.Run(() =>
 			{
-				run.StandardInput.Write(input);
-				run.StandardInput.Close();
+				try
+				{
+					run.StandardInput.Write(input);
+					run.StandardInput.Close();
+				}
+				catch (IOException)
+				{
+				}
 			});
 			var answer = run.StandardOutput.ReadToEnd();
 			run.WaitForExit();

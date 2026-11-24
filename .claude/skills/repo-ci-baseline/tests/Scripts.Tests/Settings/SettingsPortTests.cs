@@ -254,4 +254,38 @@ public class GhInputTests
 			root.Delete(true);
 		}
 	}
+
+	// A gh that fails before it reads its body (not logged in, say) closes the pipe: its exit code and stderr still come back, as
+	// settings.py's communicate() gave them, so GhApi raises ApiError with gh's message rather than a broken pipe escaping.
+	[Theory]
+	[InlineData(0)]
+	[InlineData(10)]
+	[InlineData(200_000)]
+	public void Process_returns_ghs_failure_when_gh_exits_without_reading_its_input(int length)
+	{
+		if (OperatingSystem.IsWindows())
+			return; // the scripts run on Linux and macOS
+		var root = Directory.CreateTempSubdirectory("gh-input.");
+		var path = Environment.GetEnvironmentVariable("PATH");
+		try
+		{
+			File.WriteAllText(Path.Combine(root.FullName, "gh"), "#!/bin/sh\nexec 0<&-\necho 'gh: Bad credentials (HTTP 401)' >&2\nexit 4\n");
+			File.SetUnixFileMode(Path.Combine(root.FullName, "gh"), UnixFileMode.UserRead | UnixFileMode.UserExecute);
+			Environment.SetEnvironmentVariable("PATH", $"{root.FullName}:/usr/bin:/bin");
+
+			for (var attempt = 0; attempt < 5; attempt++)
+			{
+				var run = Gh.Process(["api"], new string('x', length));
+				Assert.Equal(4, run.Code);
+				Assert.Equal("gh: Bad credentials (HTTP 401)\n", run.Stderr);
+			}
+			var error = Assert.Throws<ApiError>(() => Settings.GhApi()("PATCH", "repos/o/app", new JsonObject { ["a"] = new string('x', length) }));
+			Assert.Equal(401, error.Status);
+		}
+		finally
+		{
+			Environment.SetEnvironmentVariable("PATH", path);
+			root.Delete(true);
+		}
+	}
 }
