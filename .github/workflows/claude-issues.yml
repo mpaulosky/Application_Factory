@@ -18,7 +18,8 @@ name: Claude Issues
 #   claude              queued for Claude (the owner adds it; the run removes it when it finishes)
 #   claude:working      a run is working the issue now
 #   claude:blocked      queued, but waiting on the issues it is blocked by
-#   claude:needs-human  the run ended without a pull request; Claude's comment on the issue says why
+#   claude:needs-human  the run ended without a pull request; Claude's comment on the issue says why, or, when it
+#                       left none, its last message in the run's log
 #
 # The run authenticates to Claude with CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`, the owner's Claude
 # subscription; the secret Claude Review uses) or ANTHROPIC_API_KEY, whichever is set, and to GitHub as the Claude
@@ -305,16 +306,20 @@ jobs:
           # still be read. A deliberate trade against the transcript being hidden: up to 4000 bytes of Claude's own
           # text reach this public log, where GitHub masks only the registered secrets and the App token. The
           # message is printed between stop-commands markers, so a `::` line in it is text, not a workflow command.
+          # The group is printed on every run, saying so when the work step left no execution file (it failed before
+          # Claude ran, or its timeout stopped it), since the comment below sends the owner to it.
+          echo "::group::Claude's last message"
           if [ -n "${EXECUTION_FILE:-}" ] && [ -f "$EXECUTION_FILE" ]; then
-            echo "::group::Claude's last message"
             stop="$(cat /proc/sys/kernel/random/uuid)"
             echo "::stop-commands::$stop"
             jq -r '[.[] | select(.type == "result")] | last | "turns: \(.num_turns), subtype: \(.subtype)\n\(.result // "")"' \
               "$EXECUTION_FILE" | head -c 4000 || true
             echo
             echo "::$stop::"
-            echo "::endgroup::"
+          else
+            echo "None: the work step ($OUTCOME) left no execution file, so Claude didn't run or was stopped before it finished."
           fi
+          echo "::endgroup::"
           gh api --silent -X DELETE "repos/$GH_REPO/issues/$ISSUE/labels/claude:working" || true
           gh api --silent -X DELETE "repos/$GH_REPO/issues/$ISSUE/labels/claude" || true
           pr="$(gh api --paginate "repos/$GH_REPO/pulls?state=open&per_page=100" \
@@ -323,8 +328,9 @@ jobs:
             echo "#$ISSUE has the pull request $pr."
           else
             gh api --silent -X POST "repos/$GH_REPO/issues/$ISSUE/labels" -f "labels[]=claude:needs-human" || true
-            msg="Claude's run ended ($OUTCOME) without opening a pull request. Its comments above say why, if it got that far;"
-            msg+=" the run is ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. Add the \`claude\` label again to retry."
+            msg="Claude's run ended ($OUTCOME) without opening a pull request. Its comment above says why, if it left one; if not, the"
+            msg+=" Finish step of the run's log shows its last message, or that it left none, under \"Claude's last message\":"
+            msg+=" ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. Add the \`claude\` label again to retry."
             gh issue comment "$ISSUE" --body "$msg" || true
           fi
 
