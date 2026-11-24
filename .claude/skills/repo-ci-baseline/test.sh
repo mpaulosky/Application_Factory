@@ -102,10 +102,11 @@ setup_dotnet_pins_are() {
   [[ "$1" =~ ^[0-9a-f]{40}$ && "$pins" == "actions/setup-dotnet@$1" ]]
 }
 # Whether a NuGet.config (argument 1) clears its auditSources and adds nuget.org alone, so a NuGet.config above it can't point the audit at a feed that
-# reports no advisories. Prints the auditSources element it found, its lines joined.
+# reports no advisories. Prints the auditSources element it found, its lines joined. Line breaks and tabs become spaces, so attributes on lines of their
+# own stay apart, and XML comments are dropped first, so a commented-out element counts for nothing.
 audit_sources_nuget_only() {
   local audit
-  audit="$(tr -d '\n\t' 2> /dev/null < "$1" | grep -oE '<auditSources>.*</auditSources>' || true)"
+  audit="$(tr '\n\t\r' '   ' 2> /dev/null < "$1" | sed -E 's/<!--([^-]|-[^-])*-->//g' | grep -oE '<auditSources>.*</auditSources>' || true)"
   printf '%s\n' "$audit"
   [[ "$audit" =~ ^\<auditSources\>[[:space:]]*\<clear[[:space:]]*/\>[[:space:]]*\<add[[:space:]]+key=\"nuget\.org\"[[:space:]]+value=\"https://api\.nuget\.org/v3/index\.json\"[^/]*/\>[[:space:]]*\</auditSources\>$ ]]
 }
@@ -116,6 +117,13 @@ targets_net_major() {
   tfms="$(sed -n -E 's#^[[:space:]]*<TargetFrameworks?>([^<]*)</TargetFrameworks?>[[:space:]]*$#\1#p' "$1" 2> /dev/null || true)"
   printf '%s\n' "$tfms"
   [[ -n "$2" && "$tfms" == "net$2.0" ]]
+}
+# The major version of the SDK a global.json (argument 1) names, printed. Fails when the file isn't readable JSON or its sdk.version doesn't start with one.
+sdk_major_of() {
+  local version
+  version="$(jq -r '.sdk.version // empty' "$1" 2> /dev/null)" || return 1
+  [[ "$version" =~ ^([0-9]+)\. ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[1]}"
 }
 # Whether a file (argument 1) is the empty shield (ADR 0017), <Project />.
 is_empty_shield() { [[ "$(cat "$1" 2> /dev/null)" == "<Project />" ]]; }
@@ -829,6 +837,13 @@ if in_shard scripts; then
   if [[ "$cdp_code" != 2 ]] || ! grep -qF "TEST_SH_SHARD must be one of" "$cdp/out-rel"; then
     fail "test.sh run by a relative path with CDPATH=. didn't reach its shard check (exit $cdp_code): $(cat "$cdp/out-rel")"
   fi
+  # A skill_dir that holds no test.sh stops the run with exit 2 before the shard check: run from a process substitution, test.sh's BASH_SOURCE is
+  # /dev/fd/N, whose folder holds no test.sh.
+  guard_code=0
+  (cd "$md_tmp" && TMPDIR="$md_tmp" TEST_SH_SHARD=no-such-shard bash <(cat "$skill_dir/test.sh") > "$cdp/out-guard" 2>&1) || guard_code=$?
+  if [[ "$guard_code" != 2 ]] || ! grep -qF "can't find its own folder" "$cdp/out-guard" || grep -qF "TEST_SH_SHARD must be one of" "$cdp/out-guard"; then
+    fail "test.sh whose own folder holds no test.sh didn't stop before its shard check (exit $guard_code): $(cat "$cdp/out-guard")"
+  fi
   # A second mktemp that fails ends the run before the shard check, and the first folder is still removed: a stub mktemp makes the first folder (and
   # notes it) and fails the second time. The run must have made that folder and stopped before the shard check, so it can't pass by making none.
   half="$md_tmp/half-mktemp"
@@ -856,7 +871,11 @@ HALF
   nuget_org='<add key="nuget.org" value="https://api.nuget.org/v3/index.json"'
   printf '<configuration>\n  <auditSources>\n    <clear />\n    %s protocolVersion="3" />\n  </auditSources>\n</configuration>\n' "$nuget_org" > "$md_tmp/audit.config"
   audit_sources_nuget_only "$md_tmp/audit.config" > /dev/null || fail "the auditSources check refuses a config that clears them and adds nuget.org alone"
+  printf '<configuration>\n\t<auditSources>\n\t\t<clear />\n\t\t<add key="nuget.org"\n\t\t\tvalue="https://api.nuget.org/v3/index.json" />\n\t</auditSources>\n</configuration>\n' \
+    > "$md_tmp/audit.config"
+  audit_sources_nuget_only "$md_tmp/audit.config" > /dev/null || fail "the auditSources check refuses a tab-indented config with the add's attributes on two lines"
   for wrong in \
+    "<!-- <auditSources><clear />$nuget_org /></auditSources> -->" \
     "<auditSources><clear />$nuget_org /><add key=\"other\" value=\"https://other.example/v3/index.json\" /></auditSources>" \
     "<auditSources>$nuget_org /></auditSources>" \
     '<auditSources><clear /><add key="nuget.org" value="https://other.example/v3/index.json" /></auditSources>' \
@@ -867,9 +886,15 @@ HALF
   done
   ! audit_sources_nuget_only "$md_tmp/no-such.config" > /dev/null || fail "the auditSources check passes a NuGet.config that isn't there"
   # It targets the runtime of the SDK global.json names, so it runs where only that SDK is installed (a net10.0 build wouldn't start on runtime 11 alone).
-  # An unreadable or malformed global.json fails here with a message and leaves the major empty, which the check below refuses.
-  sdk_major="$(jq -r '.sdk.version // empty' "$skill_dir/../../../global.json")" || fail "global.json must be readable JSON with sdk.version"
-  sdk_major="${sdk_major%%.*}"
+  # A global.json that isn't readable JSON naming sdk.version fails here with a message and leaves the major empty, which the check below refuses.
+  sdk_major="$(sdk_major_of "$skill_dir/../../../global.json")" || fail "global.json must be readable JSON whose sdk.version names a major version"
+  printf '{"sdk": {"version": "11.0.100"}}\n' > "$md_tmp/global.json"
+  [[ "$(sdk_major_of "$md_tmp/global.json")" == 11 ]] || fail "the SDK major of a global.json naming 11.0.100 isn't 11"
+  for wrong in '{"sdk": {"version": "11.0.100"' '{"sdk": {}}' '{"sdk": {"version": "latest"}}'; do
+    printf '%s\n' "$wrong" > "$md_tmp/global.json"
+    ! sdk_major_of "$md_tmp/global.json" > /dev/null || fail "the SDK major check passes the global.json: $wrong"
+  done
+  ! sdk_major_of "$md_tmp/no-such-global.json" > /dev/null || fail "the SDK major check passes a global.json that isn't there"
   tfms="$(targets_net_major "$scripts_tests/Scripts.Tests.csproj" "$sdk_major")" \
     || fail "tests/Scripts.Tests must target net$sdk_major.0, the runtime of the SDK global.json names (it targets: ${tfms:-nothing})"
   printf '<Project>\n  <PropertyGroup>\n    <TargetFramework>net11.0</TargetFramework>\n  </PropertyGroup>\n</Project>\n' > "$md_tmp/tfm.csproj"
