@@ -411,7 +411,7 @@ sources. Then have them critique each other's conclusions before you summarize.
 [`CLAUDE.md`](../CLAUDE.md) holds this repo's rules, in its "Git workflow" and "Working on the Template" sections, and it wins wherever this
 section differs. What they mean for a team:
 
-- **Enable teams in your own settings only**: `~/.claude/settings.json` or the git-ignored `.claude/settings.local.json`, never the checked-in
+- **Enable teams in your own settings only**: `~/.claude/settings.json` or `.claude/settings.local.json` (never commit it), never the checked-in
   `.claude/settings.json`. While teams are on, any named Agent call can launch a teammate, the reviewers `pre-push-review` starts included, so
   turning it on for every contributor changes how those skills run. The issue worker (`claude-issues.yml`, ADR 0018) runs non-interactively,
   so it never spawns teammates.
