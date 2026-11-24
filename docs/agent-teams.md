@@ -429,7 +429,8 @@ section differs. What they mean for a team:
   `scripts/gate.sh --sync` in its own worktree.
 - **Done means the quick gate passed.** `scripts/gate.sh --quick` takes about a minute and checks the tree it runs in, so make it the done check
   each spawn prompt names, run by the teammate in its own worktree before it marks a task complete. Keep a `TaskCompleted` hook to a narrow,
-  fast check that first changes to the hook input's `cwd`, and register it in your user settings like the switch above. Adding a team hook to the
+  fast check that first changes to the hook input's `cwd` and exits 0 at once when that tree has no `scripts/gate.sh`, since a hook in your user
+  settings (where it goes, like the switch above) fires in every project. Adding a team hook to the
   checked-in `.claude/settings.json`, which holds only the edit-time lint hook (ADR 0011), is a decision for its own pull request.
 - **Markdown and YAML with Write and Edit only**, so the edit-time lint hook sees them. Put this in every spawn prompt for a writing teammate.
 - **Review lenses map well to a review team**: the `pre-push-review` skill already splits review into lenses; a team version gives each lens a
