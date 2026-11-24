@@ -161,3 +161,25 @@ Until the Factory has its own `global.json`, the `dotnet-sdk` entry lists only `
 (mpaulosky/Application_Factory#117) adds the root to it. The Seed Dockerfile can't read `global.json`, since Sandcastle builds the image with `.sandcastle/` as its context,
 so it installs the pin's feature band (`DOTNET_CHANNEL=11.0.1xx`), whose newest patch `rollForward: latestPatch` accepts, and `test.sh` holds the channel to the pin's
 band. A Dependabot PR that moves the band fails `test.sh` until a commit on its branch changes the channel.
+
+## Update (mpaulosky/Application_Factory#117): the Factory carries the SDK, and the gate lints the C# files
+
+The first increment brings the .NET SDK into the Factory, with no script ported yet:
+
+- **The SDK.** The Factory's `global.json` is a copy of the Template's, in `scripts/gate.sh`'s list of copies, so `--sync` keeps it equal and the drift check fails it otherwise.
+  The `dotnet-sdk` Dependabot entry lists `/` beside `template/owned/`, under its one group. `.github/actions/template-tools/` runs `setup-dotnet` with `global-json-file: global.json`,
+  so every part of the gate has the SDK. The gate's cache key is the tree and then the SDK: the release `dotnet --version` answers from the root and the version `global.json` names.
+- **The tests.** `tests/Scripts.Tests/` is an xUnit v3 project (`net11.0`, `xunit.v3.mtp-v2`, warnings as errors), shielded by its own three empty files, as is the skill's `github/`.
+  It targets `net11.0`, not the Applications' `net10.0`: a file-based script builds for the SDK's own framework, so the tests run on the runtime the scripts do, and the pinned SDK
+  alone runs them, with no .NET 10 runtime installed beside it.
+  `test.sh` runs it in the `scripts` shard, built into a temp folder so the skill's tree stays clean. Until it holds a test it is only built: Microsoft Testing Platform fails
+  a run in which no test ran (exit 8).
+- **What lints C#: the gate and CI, not the edit-time hook** (Still open: what replaces ruff). The `static` part, and so `--quick` and CI, runs
+  `dotnet format whitespace . --folder --verify-no-changes` over every C# file, in folder mode, which reads no project and runs no MSBuild; then it builds every script entry file
+  with warnings as errors. An entry file is a `.cs` in no project's folder that no `.cs` in its folder pulls in with `#:include`. A project's own files are built by the test that
+  runs it. The hook doesn't lint `.cs` files: a `dotnet format` run takes 1 to 2 s, too slow for every edit ([ADR 0011](0011-markdown-and-yaml-are-linted-as-they-are-written.md),
+  Update: C# files). With no `.cs` file the step checks nothing and needs no SDK, which `scripts/tests/gate.test.sh` checks on a fixture.
+- **CA2266: a warning, not an error.** The gate builds each script with `-p:TreatWarningsAsErrors=true -p:WarningsNotAsErrors=CA2266`, so every other warning fails the build
+  and CA2266 stays visible as a warning. Checked on SDK 11.0.100: `TreatWarningsAsErrors` alone makes CA2266 an error (exit 1), with `WarningsNotAsErrors=CA2266` the build
+  exits 0, and `dotnet build app.cs -warnaserror` isn't accepted for a file-based app (MSB4025). The other two ways were turned down: a shebang fails
+  `dotnet format whitespace --verify-no-changes` (exit 2, the `# !` rewrite above), and an entry file with no `#:include` would undo the thin-entry-file rule.

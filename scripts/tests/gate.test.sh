@@ -12,6 +12,9 @@
 # file; a file shfmt can't parse fails with its error; a shfmt that exits with a status other than 0 or 1 fails the step as a failed shfmt, with no shfmt -w advice; git failing fails the step; no temp file is left; and shfmt is refused when missing or outside test.sh's version rule, which is the same.
 # It also checks GATE_PART (ADR 0012) and TEST_SH_SHARD (ADR 0013, only the template part runs a shard; test.sh's steps each sit in one shard; the workflow's matrix lists them all): each part runs alone, a bad value, or --quick or --sync with a part, is refused, the Sandcastle check runs in a full gate only when the branch changed
 # a file it reads (and is remembered per clean tree), and the CI workflow has one job per part and a Template tests job that needs them all.
+# It also checks the C# step (ADR 0017): with no .cs file it passes without an SDK; otherwise it needs dotnet, format-checks every .cs in one folder-mode run, builds only the
+# entry files (no #:include'd file, no project's file) from their own folders with warnings as errors but CA2266, and tells a finding from a failed dotnet; and that a pass is
+# remembered per .NET SDK as well as per tree.
 #
 #   scripts/tests/gate.test.sh
 set -euo pipefail
@@ -36,7 +39,7 @@ check() { # check <description> <condition: 0 for ok>
 }
 
 skill=".claude/skills/repo-ci-baseline"
-copies=(.github/hooks/pre-commit .github/hooks/pre-push .github/hooks/post-checkout scripts/check-branch-name.sh .github/workflows/claude-review.yml .github/workflows/pr-automerge.yml .github/workflows/pr-review-submitted.yml .github/scripts/post_claude_review.py .github/ISSUE_TEMPLATE/bug_report.md .github/ISSUE_TEMPLATE/feature_request.md .github/ISSUE_TEMPLATE/config.yml .github/pull_request_template.md .github/workflows/pr-title.yml scripts/check-pr-title.sh .github/workflows/lint-markdown.yml .github/workflows/lint-yaml.yml .github/workflows/lint-actions.yml scripts/review.sh scripts/lint-edited-file.sh .sandcastle/lib/review-ledger.mts .sandcastle/lib/security-record.mts .sandcastle/lib/errors.mts .sandcastle/lib/host-limit.mts .sandcastle/lib/plain-text.mts .sandcastle/lib/review-ledger.test.mts .sandcastle/lib/security-record.test.mts .sandcastle/lib/plain-text.test.mts .claude/skills/pre-push-review/SKILL.md .claude/skills/pre-push-review/lenses.md .claude/skills/pre-push-review/review-bar.md .claude/agents/pre-push-reviewer.md .security/README.md .editorconfig .claude/rules/script-edits.md)
+copies=(.github/hooks/pre-commit .github/hooks/pre-push .github/hooks/post-checkout scripts/check-branch-name.sh .github/workflows/claude-review.yml .github/workflows/pr-automerge.yml .github/workflows/pr-review-submitted.yml .github/scripts/post_claude_review.py .github/ISSUE_TEMPLATE/bug_report.md .github/ISSUE_TEMPLATE/feature_request.md .github/ISSUE_TEMPLATE/config.yml .github/pull_request_template.md .github/workflows/pr-title.yml scripts/check-pr-title.sh .github/workflows/lint-markdown.yml .github/workflows/lint-yaml.yml .github/workflows/lint-actions.yml scripts/review.sh scripts/lint-edited-file.sh .sandcastle/lib/review-ledger.mts .sandcastle/lib/security-record.mts .sandcastle/lib/errors.mts .sandcastle/lib/host-limit.mts .sandcastle/lib/plain-text.mts .sandcastle/lib/review-ledger.test.mts .sandcastle/lib/security-record.test.mts .sandcastle/lib/plain-text.test.mts .claude/skills/pre-push-review/SKILL.md .claude/skills/pre-push-review/lenses.md .claude/skills/pre-push-review/review-bar.md .claude/agents/pre-push-reviewer.md .security/README.md .editorconfig .claude/rules/script-edits.md global.json)
 
 # A repo shaped like the Factory: gate.sh, the Template's Owned originals, matching copies, and a stub test.sh that records
 # that it ran and exits with $STUB_EXIT.
@@ -522,6 +525,11 @@ ruff_lines() { grep -E '^ *(RUFF_VERSION|RUFF_RELEASE|RUFF_ARGS)=' "$1" | sed 's
 check "the gate's ruff release, rule and flags are the Template gate's" \
   "$([[ "$(ruff_lines "$here/scripts/gate.sh" | wc -l)" -eq 3 && "$(ruff_lines "$here/scripts/gate.sh")" == "$(ruff_lines "$here/$skill/template/owned/scripts/gate.sh")" ]] && echo 0 || echo 1)"
 
+# gate_key <repo>: the key the gate's cache names its files by, the tree HEAD points at and then the SDK part, from gate.sh's own sdk_key run in the repo.
+eval "$(sed -n '/^sdk_key() {$/,/^}$/p' "$here/scripts/gate.sh")"
+check "gate.sh has an sdk_key for the tests to name the cache files by" "$(declare -F sdk_key > /dev/null && echo 0 || echo 1)"
+gate_key() { printf '%s.%s' "$(git -C "$1" rev-parse 'HEAD^{tree}')" "$(cd "$1" && sdk_key)"; }
+
 # test.sh's pass is remembered for a clean tree: the same tree is not tested twice; a new commit, an uncommitted or untracked file, GATE_NO_CACHE=1 and a failure all run it.
 repo9="$(new_repo cache)"
 printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo9/.git/info/exclude"
@@ -549,6 +557,89 @@ printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo10/.git/info/exclude"
 run "$repo10"
 run "$repo10"
 check "a repo with no commit has no tree to remember, so test.sh runs every time" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
+
+# The pass is remembered per .NET SDK too (ADR 0017): the release dotnet --version answers, given by a stub, and the version global.json names.
+repoK="$(new_repo cache-sdk)"
+printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoK/.git/info/exclude"
+commit_all "$repoK" base
+mkdir -p "$work/sdkstub"
+# shellcheck disable=SC2016 # the stub's own code, written as it is
+printf '#!/usr/bin/env bash\n[[ "${1:-}" == --version ]] && printf "%%s\\n" "$STUB_SDK"\n' > "$work/sdkstub/dotnet"
+chmod +x "$work/sdkstub/dotnet"
+STUB_SDK=11.0.100 PATH="$work/sdkstub:$PATH" run "$repoK"
+STUB_SDK=11.0.100 PATH="$work/sdkstub:$PATH" run "$repoK"
+check "the same tree on the same SDK is skipped the second time" "$([[ $status == 0 && $ran == no ]] && echo 0 || echo 1)"
+STUB_SDK=11.0.101 PATH="$work/sdkstub:$PATH" run "$repoK"
+check "another SDK release on the same tree runs test.sh again" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
+STUB_SDK=11.0.100 PATH="$work/sdkstub:$PATH" run "$repoK"
+check "and the first SDK's pass is still remembered" "$([[ $status == 0 && $ran == no ]] && echo 0 || echo 1)"
+check "the key names the SDK release and global.json's version, a byte outside letters, digits and dots as _" \
+  "$([[ "$(cd "$repoK" && STUB_SDK='11.0.100-rc 1/x' PATH="$work/sdkstub:$PATH" sdk_key)" == "sdk_11.0.100_rc_1_x_global_$(jq -r .sdk.version "$repoK/global.json")" ]] && echo 0 || echo 1)"
+check "an SDK and a global.json that can't be read are each none in the key" \
+  "$([[ "$(cd "$work" && PATH="$work/noruff" sdk_key)" == sdk_none_global_none ]] && echo 0 || echo 1)"
+
+# The C# step (ADR 0017): every C# file passes dotnet format whitespace, and every script entry file builds with warnings as errors but CA2266.
+# With no .cs file, as in the Factory before its first port, the step checks nothing and needs no SDK.
+repoC="$(new_repo csharp)"
+mkdir -p "$work/nodotnet" "$work/stubdotnet"
+for tool in bash git python3 markdownlint-cli2 yamllint shellcheck shfmt ruff node pnpm env sh cat grep sed awk sort dirname basename mktemp rm cp mv ls tr head tail wc cmp mkdir touch uname date find jq; do
+  tool_path="$(command -v "$tool" 2> /dev/null || true)"
+  [[ -z $tool_path ]] || ln -sf "$tool_path" "$work/nodotnet/$tool"
+  [[ -z $tool_path ]] || ln -sf "$tool_path" "$work/stubdotnet/$tool"
+done
+run_csharp() { # run_csharp <PATH> [<gate argument>]: the gate on repoC with that PATH alone
+  status=0
+  (cd "$repoC" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 STUB_EXIT=0 PATH="$1" bash scripts/gate.sh ${2:+"$2"} > "$repoC/out" 2>&1) || status=$?
+  [[ -e "$repoC/$skill/ran" ]] && ran=yes || ran=no
+  rm -f "$repoC/$skill/ran"
+}
+run_csharp "$work/nodotnet" --quick
+check "with no C# file the step passes without an SDK, checking nothing" \
+  "$([[ $status == 0 ]] && grep -qx '0 C# file(s) format-checked, 0 script(s) built.' "$repoC/out" && echo 0 || echo 1)"
+mkdir -p "$repoC/scripts" "$repoC/proj/sub" "$repoC/-x"
+printf '#:property PublishAot=false\n#:include Lib.cs\nreturn Lib.Run();\n' > "$repoC/scripts/tool.cs"
+printf 'internal static class Lib\n{\n\tpublic static int Run() => 0;\n}\n' > "$repoC/scripts/Lib.cs"
+printf '#:property PublishAot=false\r\n#:include ./RootLib.cs \r\nreturn RootLib.Run();\r\n' > "$repoC/root.cs"
+printf 'internal static class RootLib\n{\n\tpublic static int Run() => 0;\n}\n' > "$repoC/RootLib.cs"
+printf '<Project Sdk="Microsoft.NET.Sdk" />\n' > "$repoC/proj/Proj.csproj"
+printf 'internal static class InProject\n{\n}\n' > "$repoC/proj/sub/InProject.cs"
+printf '#:property PublishAot=false\nreturn 0;\n' > "$repoC/-x/-dash.cs"
+run_csharp "$work/nodotnet" --quick
+check "a C# file without an SDK fails the step, saying so" "$([[ $status == 1 ]] && grep -q 'dotnet not found: the gate needs the .NET SDK' "$repoC/out" && echo 0 || echo 1)"
+# A dotnet that logs each call (its folder and arguments) and exits with $STUB_FORMAT_EXIT for format and $STUB_BUILD_EXIT for build.
+# shellcheck disable=SC2016 # the stub's own code, written as it is
+printf '#!/usr/bin/env bash\n[[ "${1:-}" != --version ]] || { echo 11.0.100; exit 0; }\nprintf "%%s|%%s\\n" "$PWD" "$*" >> %q\n[[ "$1" == format ]] && exit "${STUB_FORMAT_EXIT:-0}"\nexit "${STUB_BUILD_EXIT:-0}"\n' \
+  "$work/dotnet-log" > "$work/stubdotnet/dotnet"
+chmod +x "$work/stubdotnet/dotnet"
+rm -f "$work/dotnet-log"
+run_csharp "$work/stubdotnet" --quick
+want_format="$repoC|format whitespace . --folder --verify-no-changes --include $(cd "$repoC" && git ls-files --others --exclude-standard -- '*.cs' | sort | sed 's|^|./|' | tr '\n' ' ' | sed 's/ $//')"
+check "every C# file is format-checked in one folder-mode run, each name after ./" \
+  "$([[ $status == 0 ]] && [[ "$(grep '|format ' "$work/dotnet-log" | tr ' ' '\n' | sort | tr '\n' ' ')" == "$(printf '%s' "$want_format" | tr ' ' '\n' | sort | tr '\n' ' ')" ]] && echo 0 || echo 1)"
+want_builds="$(printf '%s|build %s -p:TreatWarningsAsErrors=true -p:WarningsNotAsErrors=CA2266\n' "$repoC/-x" "$repoC/-x/-dash.cs" "$repoC" "$repoC/root.cs" "$repoC/scripts" "$repoC/scripts/tool.cs" | sort)"
+check "only the entry files are built, each from its own folder, with warnings as errors but CA2266: no included file (a CRLF and a ./ in the #:include too) and no project's file" \
+  "$([[ "$(grep '|build ' "$work/dotnet-log" | sort)" == "$want_builds" ]] && grep -qx '6 C# file(s) format-checked, 3 script(s) built.' "$repoC/out" && echo 0 || echo 1)"
+STUB_FORMAT_EXIT=2 run_csharp "$work/stubdotnet" --quick
+check "a format finding (exit 2) fails the step, saying how to fix it" "$([[ $status == 1 ]] && grep -q '❌ dotnet format: run dotnet format whitespace' "$repoC/out" && echo 0 || echo 1)"
+STUB_FORMAT_EXIT=1 run_csharp "$work/stubdotnet" --quick
+check "a dotnet format that exits 1 fails the step as a failed dotnet format, not a finding" \
+  "$([[ $status == 1 ]] && grep -q 'dotnet format failed (exit 1) without checking the format' "$repoC/out" && ! grep -q '❌ dotnet format: run' "$repoC/out" && echo 0 || echo 1)"
+STUB_BUILD_EXIT=1 run_csharp "$work/stubdotnet"
+check "a script that fails to build fails the full gate, naming it, before test.sh" \
+  "$([[ $status == 1 && $ran == no ]] && grep -q '❌ dotnet build -x/-dash.cs' "$repoC/out" && echo 0 || echo 1)"
+# The real SDK on real files: a script with an #:include builds though CA2266 warns; a whitespace finding and any other warning fail.
+rm -r "${repoC:?}/-x" "$repoC/root.cs" "$repoC/RootLib.cs" "$repoC/proj"
+for f in Directory.Build.props Directory.Build.targets Directory.Packages.props; do printf '<Project />\n' > "$repoC/scripts/$f"; done
+GATE_ARGS=--quick run "$repoC"
+check "with the SDK, a script that #:includes a file builds, CA2266 a warning only" \
+  "$([[ $status == 0 ]] && grep -q 'warning CA2266' "$repoC/out" && grep -qx '2 C# file(s) format-checked, 1 script(s) built.' "$repoC/out" && echo 0 || echo 1)"
+printf 'internal static class Lib\n{\n  public static int Run() => 0;\n}\n' > "$repoC/scripts/Lib.cs"
+GATE_ARGS=--quick run "$repoC"
+check "with the SDK, an indent of spaces where .editorconfig gives a tab fails the format check" \
+  "$([[ $status == 1 ]] && grep -q 'scripts/Lib.cs(3,1): error WHITESPACE' "$repoC/out" && echo 0 || echo 1)"
+printf 'internal static class Lib\n{\n\tpublic static int Run()\n\t{\n\t\tint unused = 0;\n\t\treturn 0;\n\t}\n}\n' > "$repoC/scripts/Lib.cs"
+GATE_ARGS=--quick run "$repoC"
+check "with the SDK, any other warning fails the build" "$([[ $status == 1 ]] && grep -q 'error CS0219' "$repoC/out" && grep -q '❌ dotnet build scripts/tool.cs' "$repoC/out" && echo 0 || echo 1)"
 
 # A bare git status --porcelain in an Owned script fails the full gate and --quick, before test.sh.
 repo11="$(new_repo git-status)"
@@ -988,7 +1079,7 @@ fi
 repoT="$(new_repo cache-token)"
 printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoT/.git/info/exclude"
 commit_all "$repoT" base
-treeT="$(git -C "$repoT" rev-parse 'HEAD^{tree}')"
+treeT="$(gate_key "$repoT")"
 run "$repoT"
 run "$repoT"
 check "a pass holding the token in its stamp is trusted" "$([[ $ran == no ]] && grep -q "test.sh already passed" "$repoT/out" && echo 0 || echo 1)"
@@ -1015,7 +1106,7 @@ if [[ "$(id -u)" != 0 ]]; then
 fi
 # The whole run writes its own stamp before it lists the shard stamps: listed first, a shard run stamping in between would be missed, and the whole run's stamp, written
 # after the shard's, would leave both passes trusted though each run may fail.
-own_first="$(awk '/^run_cached\(\) \{/ { f = 1 } f && /stamp_write "\$label" "\$dir\/started\.\$name-\$tree"/ && !o { o = NR } f && /for s in "\$dir\/started\.\$whole\."\*/ && !g { g = NR } f && /^\}/ { f = 0 } END { print (o && g && o < g) ? 0 : 1 }' "$here/scripts/gate.sh")"
+own_first="$(awk '/^run_cached\(\) \{/ { f = 1 } f && /stamp_write "\$label" "\$dir\/started\.\$name-\$key"/ && !o { o = NR } f && /for s in "\$dir\/started\.\$whole\."\*/ && !g { g = NR } f && /^\}/ { f = 0 } END { print (o && g && o < g) ? 0 : 1 }' "$here/scripts/gate.sh")"
 check "run_cached writes a run's own stamp before it lists the shard stamps" "$own_first"
 RUN_PART=template RUN_SHARD=hooks run "$repoT"
 run "$repoT"
@@ -1047,7 +1138,7 @@ fi
 repoL="$(new_repo cache-lock)"
 printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoL/.git/info/exclude"
 commit_all "$repoL" base
-treeL="$(git -C "$repoL" rev-parse 'HEAD^{tree}')"
+treeL="$(gate_key "$repoL")"
 cacheL="$repoL/.git/gate-cache"
 lock_held() { grep -q "the cache lock .*lock-$treeL has been held for over 2 seconds" "$1/out" && grep -q "could not record the test.sh\( (hooks shard)\)\? pass" "$1/out"; }
 run "$repoL"
@@ -1296,7 +1387,7 @@ mkdir -p "$cacheL/started.test-sh-$treeL/stuck"
 RUN_PART=template run "$repoL"
 check "a run whose start stamp is stuck fails the gate and leaves no cache lock" "$([[ $status == 1 && $ran == no && ! -e $cacheL/lock-$treeL ]] && grep -q "could not write or remove the test.sh start stamp" "$repoL/out" && echo 0 || echo 1)"
 command rm -rf "$cacheL/started.test-sh-$treeL"
-locked_order="$(awk '/^run_cached\(\) \{/ { f = 1 } f && /cache_lock "\$dir\/lock-\$tree"/ && !l { l = NR } f && /\[\[ -n "\$cache_locked" && -f "\$cache"/ && !h { h = NR } f && /stamp_write "\$label"/ { w = NR } f && /^    cache_unlock$/ && !u { u = NR } f && /^  "\$@"$/ && !r { r = NR } f && /^\}/ { f = 0 } END { print (l && h && w && u && r && l < h && h < w && w < u && u < r) ? 0 : 1 }' "$here/scripts/gate.sh")"
+locked_order="$(awk '/^run_cached\(\) \{/ { f = 1 } f && /cache_lock "\$dir\/lock-\$key"/ && !l { l = NR } f && /\[\[ -n "\$cache_locked" && -f "\$cache"/ && !h { h = NR } f && /stamp_write "\$label"/ { w = NR } f && /^    cache_unlock$/ && !u { u = NR } f && /^  "\$@"$/ && !r { r = NR } f && /^\}/ { f = 0 } END { print (l && h && w && u && r && l < h && h < w && w < u && u < r) ? 0 : 1 }' "$here/scripts/gate.sh")"
 check "run_cached takes the lock before the hit check, which needs it, and releases it after the last stamp write and before the command runs" "$locked_order"
 if [[ "$(id -u)" != 0 ]]; then
   # A start stamp that can be neither written nor removed fails the gate before test.sh: an earlier run could otherwise keep its token and a pass this run disproves.
@@ -1304,7 +1395,7 @@ if [[ "$(id -u)" != 0 ]]; then
   printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoW/.git/info/exclude"
   commit_all "$repoW" base
   mkdir -p "$repoW/.git/gate-cache"
-  echo earlier > "$repoW/.git/gate-cache/started.test-sh-$(git -C "$repoW" rev-parse 'HEAD^{tree}')"
+  echo earlier > "$repoW/.git/gate-cache/started.test-sh-$(gate_key "$repoW")"
   chmod 444 "$repoW/.git/gate-cache/"started.*
   chmod 555 "$repoW/.git/gate-cache"
   RUN_PART=template run "$repoW"

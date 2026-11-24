@@ -1,7 +1,7 @@
 ---
 name: Template tools
 description: >
-  The tools the Factory's gate needs (Python, pnpm, Node, the linters, and shfmt for the gate's format check and the Template's gh check), at the versions
+  The tools the Factory's gate needs (the .NET SDK global.json names, Python, pnpm, Node, the linters, and shfmt for the gate's format check and the Template's gh check), at the versions
   scripts/gate.sh in the Template pins, shfmt at the version the Template's ci.yml pins, and pytest, PyYAML and ruff (for the gate's
   Python lint) from the Template's hashed .github/scripts/requirements-tests.txt, as an Application's python-tests job installs them.
   Used by every job of the repo-ci-baseline Template workflow (ADR 0012). It belongs to the Application Factory; it isn't part of the Template.
@@ -13,6 +13,13 @@ runs:
       uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
       with:
         python-version: "3.12"
+
+    # The SDK the Factory's global.json names (a copy of the Template's, ADR 0017): the gate builds and format-checks the C# scripts, and
+    # test.sh builds and runs tests/Scripts.Tests.
+    - name: Setup .NET
+      uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+      with:
+        global-json-file: global.json
 
     # The Template's repos use pnpm, never npm, so markdownlint-cli2 comes from pnpm too.
     # The version is given here, the one package.json and the Template's Seed package.json pin.
