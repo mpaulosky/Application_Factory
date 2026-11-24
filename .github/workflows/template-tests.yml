@@ -74,7 +74,7 @@ jobs:
         uses: ./.github/actions/template-tools
 
       # The Factory's copies of Template files, the issue-reference and git status checks, the Markdown and YAML lint, shellcheck of the shell files,
-      # shfmt of every shell file (ADR 0015), ruff of every Python file (ADR 0011, Update: Python).
+      # shfmt of every shell file (ADR 0015), ruff of every Python file (ADR 0011, Update: Python), and the C# step: dotnet format and a build of each script (ADR 0017).
       - name: Run the gate part
         env:
           GATE_PART: static

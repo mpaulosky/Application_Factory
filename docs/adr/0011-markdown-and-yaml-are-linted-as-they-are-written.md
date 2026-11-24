@@ -3,7 +3,7 @@ status: accepted
 ---
 # Markdown, YAML, shell and Python are linted as they are written
 
-The file keeps its first name, so links to it still work; the Updates at the end added shell files, then Python files.
+The file keeps its first name, so links to it still work; the Updates at the end added shell files, then Python files, and left C# files to the gate.
 
 A lint failure in a Markdown or YAML file used to surface late: at the commit (the `pre-commit` hook lints staged Markdown only), at the push (the Factory's gate runs `markdownlint-cli2` and
 `yamllint` over the whole repo), in CI (`lint-markdown`, `lint-yaml`, `lint-actions`), or in a review, where it costs a re-review cycle. This ADR builds on ADR 0006 and ADR 0010.
@@ -137,3 +137,10 @@ re-Apply rewrites them with no such review (the re-Apply PR's own CI runs them).
 `Dockerfile`'s ruff never reaches an Application that has one; it adds the `RUFF_VERSION` `ARG` and the pip package by hand, or its sandbox's gate fails on a branch that
 changes a Python file. The Seed `dependabot.yml`'s ruff `ignore` doesn't reach one either: an Application adds it to its pip entry by hand, or Dependabot there can bump
 ruff in `requirements-tests.txt` and CI lints with another release line than the gate's, until the next Rollout puts the Template's pin back.
+
+## Update: C# files
+
+[ADR 0017](0017-the-factorys-and-the-templates-scripts-are-csharp-file-based-apps.md) (Update, mpaulosky/Application_Factory#117) brings C# into the Factory. The edit-time hook
+doesn't lint `.cs` files: a `dotnet format whitespace` run takes 1 to 2 s, too slow for a hook that runs on every edit, and a build is slower still. The Factory's gate lints them
+instead, in its `static` part and so in `--quick` and CI: `dotnet format whitespace --verify-no-changes` over every C# file and a build of every C# script with warnings as errors.
+`scripts/lint-edited-file.sh` is unchanged; a `.cs` file it is given is one it doesn't lint, as for any other kind it doesn't know.
