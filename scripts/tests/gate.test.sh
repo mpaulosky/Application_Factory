@@ -1275,6 +1275,10 @@ check "with an issue queued that no run is working, the next run is started" "$(
 # `claude:working`, so the issue is never queued with no slot held.
 check "each issue's unpushed work is kept as an artifact named for the issue" \
   "$(sed -n '/^      - name: Keep the unpushed work$/,/^      - name: /p' "$issues_wf" | grep -qxF "          name: claude-branch-\${{ matrix.issue }}" && echo 0 || echo 1)"
+# The work job runs Claude with unrestricted Bash, so its token stays read-only for pull requests: the merge order comment goes through the issues API.
+work_perms="$(sed -n '/^  work:$/,/^    steps:$/p' "$issues_wf" | sed -n '/^    permissions:$/,/^    [a-z]/p')"
+check "the work job's token can read pull requests but not write them" \
+  "$(grep -qxF '      pull-requests: read' <<< "$work_perms" && ! grep -qF 'pull-requests: write' <<< "$work_perms" && echo 0 || echo 1)"
 finish_claude="$(grep -nF 'labels/claude" || true' "$finish/run.sh" | cut -d: -f1)"
 finish_working="$(grep -nF 'labels/claude:working" || true' "$finish/run.sh" | cut -d: -f1)"
 check "the Finish step takes \`claude\` off before \`claude:working\`" \
