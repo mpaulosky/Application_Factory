@@ -53,14 +53,11 @@ public class CopilotNoReviewTests
 		return match.Groups[1].Value.Replace("'\"'\"'", "'", StringComparison.Ordinal);
 	}
 
+	// Every body's name, so a body added to Bodies is checked too.
+	public static TheoryData<string> BodyNames => new(Bodies.Select(b => b.Name));
+
 	[Theory]
-	[InlineData("the quota note")]
-	[InlineData("the note after leading whitespace")]
-	[InlineData("the no-reviewable-files note")]
-	[InlineData("a real review")]
-	[InlineData("a real review that quotes the note on a later line")]
-	[InlineData("an empty body")]
-	[InlineData("the note after a no-break space")]
+	[MemberData(nameof(BodyNames))]
 	public void Landing_and_pr_automerge_agree(string name)
 	{
 		var (_, body, isNote) = Bodies.Single(b => b.Name == name);
@@ -120,7 +117,12 @@ public class CopilotNoReviewTests
 			Review("someone", Note, "not copilot"),
 			.. Bodies.Select(b => Review(Login, b.Body, b.Name)),
 		];
-		var lines = RunLines(Which("jq")!, ["-r", NotedProgram()], Pages(reviews));
+		if (Which("jq") is not { } jq)
+		{
+			Assert.Fail("jq isn't installed, so claude-review.yml's filter can't be checked");
+			return;
+		}
+		var lines = RunLines(jq, ["-r", NotedProgram()], Pages(reviews));
 		// Every spelling of the note agrees on the shared bodies, so a drifted pattern here fails too.
 		Assert.Equal(Sorted(Bodies.Where(b => b.IsNote).Select(b => b.Name)), Sorted(lines));
 	}

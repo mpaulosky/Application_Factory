@@ -102,7 +102,8 @@ Each of these is decided in its increment, and recorded as an Update below:
 
 - What replaces ruff in the edit-time lint, the gate and CI. `dotnet format whitespace --verify-no-changes` takes 1 to 2 s a run (mpaulosky/Application_Factory#97), too slow
   for a hook that runs on every edit, and the replacement must run no code from the tree.
-- The white-box tests in xUnit v3: when each pytest suite is replaced, where the test projects live, and which package reads YAML for the tests that check workflows, since the BCL
+- The white-box tests in xUnit v3: when each pytest suite is replaced, where the test projects live (both decided for the skill's `github/` scripts in the
+  Update for mpaulosky/Application_Factory#119; where the Template's own scripts' tests go is still open), and which package reads YAML for the tests that check workflows, since the BCL
   has none. The Factory's Python test helpers move with them: `tests/check-issue-refs.py` and `tests/check-git-status.py` (which the gate and `test.sh` run),
   `tests/mutations/check-spec.py` and `tests/render_oracle/`.
 - The checkers' cut-over: how the workflow steps build them in a temp folder with the base's `global.json`, where the `OWNED` list lives once `check_owned_files` can't import
@@ -244,13 +245,22 @@ The first ported scripts, Factory-only, so the `.py` files are deleted in the PR
   differently.
 - **`Gh.cs`'s argument parser is held to argparse.** An xUnit test runs Python's argparse and the parser on the same arguments, land's among them. It keeps argparse's
   limits as well as its forms: a long option by any unique prefix, `--name=value`, `float()`'s spellings and argparse's exit 2, and one run of positional
-  arguments, so `land.sh o/app --once o/lib#7` is refused, as `land.py` refused it.
+  arguments, so `land.sh o/app --once o/lib#7` is refused, as `land.py` refused it. `--help` counts among the options a prefix can name, a float option's
+  value is read when the option is met, and an argument that names no option is positional when it looks like a negative number (argparse's `-\.?\d`) or
+  holds a space.
+- **What the port changes on purpose.** The pre-push review of the port found weaknesses the Python had too, and the C# closes them rather than carry them
+  over: `gh` is found in `PATH`'s absolute folders only (.NET's own lookup tries the program's folder and the current one first); a release-blog branch
+  counts only on a PR from the repo itself (`isCrossRepository` false), so a fork's PR on `docs/release-notes` isn't armed; a PR's title is made printable
+  before it is printed; `status.sh` refuses a repo that isn't `owner/repo` before any call; a permission answer that isn't an object is unread rather than
+  no write access; and `land.sh` refuses a PR number past a 64-bit integer, and a negative, NaN or infinite `--interval` ends it with exit 1, as
+  `time.sleep` did, rather than hang. The parity suites' fixtures carry `isCrossRepository` where a case needs a release-blog PR.
 - **The wrappers.** `status.sh` and `land.sh` change to `github/` and run `dotnet run --file` with the script's absolute path, so the Factory's `global.json` picks the SDK.
+  The build leaves no MSBuild node, MSBuild server or compiler server behind, and a missing `dotnet` exits 127 with a message.
   `test.sh` runs the status suite against `status.sh`, and `land.sh --help`, under a `global.json` that pins an SDK nobody has installed.
   `rollout.sh --auto` lists `dotnet` among the tools it wants, since `land.sh` runs on it.
 - **The parity suites' reference.** A suite's reference is `github/<suite>.py`, else `github/<suite>.cs`, else the Template's `.py`. The runner builds a `.cs`
-  reference once, from its own folder, before the first case, and record mode records from it, since the Python it was recorded from is gone. A `.py` beside its
-  `.cs` stays the reference until its port is judged.
+  reference once, from its own folder, before the first case, and runs each case from that folder too, since dotnet picks the SDK by the folder it runs in;
+  record mode records from it, since the Python it was recorded from is gone. A `.py` beside its `.cs` stays the reference until its port is judged.
 - **When a pytest suite is replaced.** With the `.py` it tests: in the PR that deletes a Factory-only `.py`, and for an Owned script in the Rollout that drops its
   `.py`, since until then the `.py` is what a revert runs. Its tests move to xUnit as one test method each, under the pytest name without `test_` and with
   its first letter capitalised, with the same cases and assertions, so the count can be checked against the pytest file's. A test that compared two

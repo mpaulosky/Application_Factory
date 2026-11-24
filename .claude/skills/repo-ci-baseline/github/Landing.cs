@@ -35,7 +35,7 @@
 // - where the repo requires no checks (dotfiles), auto-merge wouldn't wait for CI, so the checks must finish green first;
 // - in a Baseline repo, its own PR Auto-Merge workflow merges a reviewed PR through the API once its checks pass (and at an exhausted
 //   review loop), and it never arms native auto-merge: so the PR is left to it, never armed around it;
-// - a release-blog PR (release.yml's or backfill-blog-posts.yml's branch) is armed as soon as it is open and not blocked, without
+// - a release-blog PR (release.yml's or backfill-blog-posts.yml's branch, in the repo itself: a fork's PR is never one) is armed as soon as it is open and not blocked, without
 //   Copilot's review, as those workflows arm it themselves; one they armed needs nothing.
 //
 // A cancelled check run is superseded when a newer run of the same check name on the same head exists: CI's concurrency cancels runs,

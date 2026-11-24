@@ -363,7 +363,8 @@ and the status parity suite (case `10-the-unreplied-thread-notice`).
 `Landing.Decide(PrState)` returns one action, the rules PRs are landed by:
 nothing for a merged, closed or already-armed PR; **report blocker** for a failed check, a cancelled check nothing newer replaced, or a conflict;
 **mark ready** for a draft only when the caller says it should be (otherwise wait);
-**arm auto-merge** for a release-blog PR its workflow didn't arm (branch `docs/release-notes` or `docs/backfill-blog-posts`, no review needed, as `release.yml` arms it);
+**arm auto-merge** for a release-blog PR its workflow didn't arm (branch `docs/release-notes` or `docs/backfill-blog-posts` in the repo itself, not a fork's,
+no review needed, as `release.yml` arms it);
 **update branch** when it's `BEHIND` (nobody is asked to review the new head: Copilot is asked once per PR); **wait** until Copilot, or Claude (a marked `github-actions[bot]` review,
 backing a quota note or a request that didn't register on the same head), reviewed the current head and no thread is open.
 A head with neither review waits while Copilot is requested or `review:claude` is on; otherwise, for a PR with no record of an ask, **request Copilot**:

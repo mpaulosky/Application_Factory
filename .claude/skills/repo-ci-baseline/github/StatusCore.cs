@@ -325,11 +325,11 @@ static class Status
 
 	public const int TitleWidth = 40;
 
-	// The (login, oid, body) of each of QUERY's reviews.
+	// The (login, oid, body) of each of Status.Query's reviews.
 	static (string? Login, string? Oid, string? Body)[] Reviews(JsonNode node) =>
 			[.. J.Nodes(J.Req(node, "reviews")).Select(r => (J.S(J.Get(J.Get(r, "author"), "login")), J.S(J.Get(J.Get(r, "commit"), "oid")), J.S(J.Get(r, "body"))))];
 
-	// Whether Copilot or Claude Review ever reviewed this PR, from QUERY's reviews.
+	// Whether Copilot or Claude Review ever reviewed this PR, from Status.Query's reviews.
 	public static bool BotReviewed(JsonNode node) =>
 			J.Nodes(J.Req(node, "reviews")).Any(r => Copilot.IsMatch(J.Login(r)) || IsClaudeReview(J.S(J.Get(J.Get(r, "author"), "login")), "-", J.S(J.Get(r, "body"))));
 
@@ -477,7 +477,7 @@ static class Status
 		return found;
 	}
 
-	// The reviews of QUERY's node as ReviewRounds() reads them: (login, oid, body, submittedAt, inline thread count, is a merge).
+	// The reviews of Status.Query's node as ReviewRounds() reads them: (login, oid, body, submittedAt, inline thread count, is a merge).
 	static (string?, string?, string?, string?, long, bool)[] ReviewRecords(JsonNode node) =>
 			[.. J.Nodes(J.Req(node, "reviews")).Select(r => (J.S(J.Get(J.Get(r, "author"), "login")), J.S(J.Get(J.Get(r, "commit"), "oid")), J.S(J.Get(r, "body")),
 						J.S(J.Get(r, "submittedAt")), J.Int(J.Get(J.Get(r, "comments"), "totalCount")) ?? 0,
@@ -517,7 +517,7 @@ static class Status
 		return (walk.Rounds, walk.Hit is double hit && markers.Any(m => m >= hit), false);
 	}
 
-	// A PrState from one pullRequests node of QUERY, as Fetch() left it. owner is the repository's owner, who with github-actions may
+	// A PrState from one pullRequests node of Status.Query, as Fetch() left it. owner is the repository's owner, who with github-actions may
 	// write the record that Copilot was asked; now is epoch seconds (default: the clock), which the record's 30 seconds are counted to.
 	public static PrState ToState(JsonNode node, bool checksRequired = true, bool mergedByWorkflow = false, bool wantReady = false, string owner = "",
 			double? now = null)

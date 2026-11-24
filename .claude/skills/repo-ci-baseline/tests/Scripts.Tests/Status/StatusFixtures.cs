@@ -40,7 +40,7 @@ public partial class StatusTests
 	// An ISO-8601 time `seconds` ago, as GraphQL reports createdAt.
 	static string Ago(double seconds) => Iso(DateTimeOffset.UtcNow.AddSeconds(-seconds));
 
-	// The comment that records Copilot was asked (mpaulosky/dotfiles#360), as COMMENTS_QUERY reports it.
+	// The comment that records Copilot was asked (mpaulosky/dotfiles#360), as Status.CommentsQuery reports it.
 	static JsonObject Asked(double age = 3600, string login = "github-actions") => new()
 	{
 		["author"] = new JsonObject { ["login"] = login },
@@ -81,7 +81,7 @@ public partial class StatusTests
 		{
 			["id"] = $"PR_{number}",
 			["comments"] = Attach(commentsNode),
-			// The PR's review:claude label events, all of them oldest first, as gh_graphql reads them (EVENTS_QUERY, paged)
+			// The PR's review:claude label events, all of them oldest first, as StatusReader.Fetch reads them (Status.EventsQuery, paged)
 			// and resolves the actor's write access: [{createdAt, writer}]; None is a read that failed (mpaulosky/dotfiles#378).
 			["labelEvents"] = eventsList is null ? null : new JsonArray([.. eventsList.Select(Attach)]),
 			["number"] = (long)number,
@@ -238,7 +238,7 @@ public partial class StatusTests
 
 	const string ExhaustedBody = "**PR Auto-Merge: the review loop is exhausted.**\n\nNothing is left open.\n\n<!-- pr-automerge:review-loop-exhausted " + Head + " -->";
 
-	// PR Auto-Merge's comment on an exhausted loop, as COMMENTS_QUERY reports it.
+	// PR Auto-Merge's comment on an exhausted loop, as Status.CommentsQuery reports it.
 	static JsonObject MarkerComment(string at = "2026-01-02T01:00:00Z", string login = "github-actions", string body = ExhaustedBody) => new()
 	{
 		["author"] = new JsonObject { ["login"] = login },
