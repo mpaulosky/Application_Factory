@@ -83,6 +83,11 @@ you changed anything it applies or tests (`template/`, `apply.sh`, `SKILL.md`, `
 Branches are `feature/{issue}-{slug}`, `fix/{issue}-{slug}`, `hotfix/{issue}-{slug}` or `chore/{slug}`. Commit subjects are
 `<type>(<scope>): <Summary>`, with the scope `baseline` for the Template.
 
+Size each issue so its pull request stays small: 30 files and 3,000 changed lines at most, tests included (the line the pre-push review warns at), and at
+most one open decision, as the feature request template says. Claude Review reads only a diff's first 8 pieces (about 300 KB), so it reads a bigger pull
+request only in part, and each review round over it takes longer. Split a bigger issue into smaller ones before work starts, ordered with "blocked by"
+links, rather than opening one large pull request.
+
 Commit in a linked worktree under `../Application_Factory-worktrees/`: `pre-commit` refuses a commit in the primary checkout, and `pre-push` refuses a push
 to `main`, a bad branch name, a dirty tree or a branch behind `origin/main`. In each clone, turn the hooks on once with `git config core.hooksPath .github/hooks`.
 Start a branch with `git worktree add --no-track -b <branch> ../Application_Factory-worktrees/<folder> origin/main`, where `<folder>` is the branch with `/` as `-`.
