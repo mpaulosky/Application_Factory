@@ -56,5 +56,5 @@ fresh token, pushes the branch, also after a timeout, and opens the draft pull r
 The runner and its commits are gone when the job ends, so each of the step's network calls is retried, and work it doesn't push (a commit that fails, commits on a branch not named for
 the issue, a failed exchange, or a push refused because a token without the workflows permission won't take a branch that edits `.github/workflows/`) fails the step and is uploaded as
 the run's `claude-branch` artifact, which the Finish step's comment names. Claude can change the checkout's git config and hooks and the global git and gh config, so the fresh token is
-used only in a new repository fetched from a bundle of the branch, with no global, system or hook config, and by `gh` run outside the checkout with an empty config directory. The exchange from a plain step is the one the
-action makes, so the first long run after this change is the one to watch.
+used only in a new repository fetched from a bundle of the branch, with no global, system or hook config, and by `gh` run outside the checkout with an empty config directory.
+The exchange from a plain step is the one the action makes, so the first long run after this change is the one to watch.
