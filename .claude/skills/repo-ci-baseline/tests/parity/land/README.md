@@ -8,8 +8,8 @@ The cases cover each action `commands()` carries out, live and under `--dry-run`
 a bad target and a bad `--interval` (exit 2), and the PR URL form.
 They pin land.py's orderings too: repos are polled in the order given, a repo's watched PRs by number (9 before 10), and the time limit's "still open" list
 as text (`app#3, zed#10, zed#9`). An action runs once per PR head: a changed line with the same action and head prints again without running it, and a new
-head runs it again. A repo's error prints again only when its text changes, and a PR gone from the open list is read until it answers merged or closed:
-a failed read prints once and is tried again, and an `OPEN` answer (the list lagged) waits.
+head runs it again. A repo's error prints again when its text changes or after a good read, and a PR gone from the open list is read until it answers
+merged or closed: a failed read prints once per error text and is tried again, and an `OPEN` answer (the list lagged) waits.
 A looping case answers each poll from its own fixtures (`repo.<owner>.<name>.<n>.json`, see `tests/parity/fake-gh.sh`), so it ends after a fixed number of polls.
 
 Not covered, on purpose:

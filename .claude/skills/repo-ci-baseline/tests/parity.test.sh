@@ -31,8 +31,8 @@
 # one holds that loosening, so it is kept, and the run fails when it no longer fits. A case whose run makes a gh call the
 # fake can't answer, or times out, is never recorded.
 #
-# The implementation runs from an empty temporary folder, with stdin from /dev/null, the fake gh first on PATH, no GitHub
-# token in its environment and GH_CONFIG_DIR an empty folder, no colour or terminal width the caller set (NO_COLOR=1,
+# Each case's run starts in a new empty temporary folder, with stdin from /dev/null, the fake gh first on PATH, no GitHub
+# token in its environment and GH_CONFIG_DIR a new empty folder (nothing an earlier case wrote is left), no colour or terminal width the caller set (NO_COLOR=1,
 # TERM=dumb), LC_ALL=C.UTF-8 (best-effort: macOS has no such locale, so PYTHONUTF8=1 is set too), TZ=UTC, and
 # PARITY_TIMEOUT seconds (default 60) before it counts as hung. A command word that looks like a path (it holds a
 # /, or after the first word a .) and names an existing file or folder is made absolute first, as is the value of a later
