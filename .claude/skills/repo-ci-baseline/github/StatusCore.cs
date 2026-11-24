@@ -482,8 +482,8 @@ static class Status
 		return found;
 	}
 
-	// Its strict read can't fail first: every caller reads the same list through Reviews() before it.
 	// The reviews of Status.Query's node as ReviewRounds() reads them: (login, oid, body, submittedAt, inline thread count, is a merge).
+	// Its strict read can't fail first: every caller reads the same list through Reviews() before it.
 	static (string?, string?, string?, string?, long, bool)[] ReviewRecords(JsonNode node) =>
 			[.. J.NodesOf(J.Req(node, "reviews")).Select(r => (J.S(J.Get(J.Get(r, "author"), "login")), J.S(J.Get(J.Get(r, "commit"), "oid")), J.S(J.Get(r, "body")),
 						J.S(J.Get(r, "submittedAt")), J.Int(J.Get(J.Get(r, "comments"), "totalCount")) ?? 0,
