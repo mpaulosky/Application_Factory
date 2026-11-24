@@ -1,0 +1,13 @@
+{
+  "number": 7,
+  "title": "feat: Add a thing",
+  "body": "It adds a thing.",
+  "merged_at": "2026-03-01T10:00:00Z",
+  "html_url": "https://github.com/o/app/pull/7",
+  "user": {
+    "login": "alice"
+  },
+  "base": {
+    "ref": "main"
+  }
+}

@@ -1,0 +1,86 @@
+[
+  {
+    "number": 25,
+    "title": "feat: Change 25",
+    "state": "closed",
+    "merged_at": "2026-03-06T14:00:00Z",
+    "updated_at": "2026-03-06T14:00:00Z",
+    "merge_commit_sha": "d743bd81107812ae159757285885676052bacdc3",
+    "user": {
+      "login": "alice"
+    },
+    "base": {
+      "ref": "main"
+    }
+  },
+  {
+    "number": 24,
+    "title": "docs: Typo [skip-release]",
+    "state": "closed",
+    "merged_at": "2026-03-06T13:00:00Z",
+    "updated_at": "2026-03-06T13:00:00Z",
+    "merge_commit_sha": null,
+    "user": {
+      "login": "alice"
+    },
+    "base": {
+      "ref": "main"
+    }
+  },
+  {
+    "number": 23,
+    "title": "feat: Change 23",
+    "state": "closed",
+    "merged_at": "2026-03-06T12:00:00Z",
+    "updated_at": "2026-03-06T12:00:00Z",
+    "merge_commit_sha": "9a58ec58745eb02c20aeaa33c7a60025041d3c55",
+    "user": {
+      "login": "alice"
+    },
+    "base": {
+      "ref": "main"
+    }
+  },
+  {
+    "number": 22,
+    "title": "feat: Change 22",
+    "state": "closed",
+    "merged_at": "2026-03-06T11:00:00Z",
+    "updated_at": "2026-03-06T11:00:00Z",
+    "merge_commit_sha": "c30b503b1df9841279fa7bbc4c739054ce157788",
+    "user": {
+      "login": "dependabot[bot]"
+    },
+    "base": {
+      "ref": "main"
+    }
+  },
+  {
+    "number": 20,
+    "title": "feat: Change 20",
+    "state": "closed",
+    "merged_at": "2026-03-06T10:00:00Z",
+    "updated_at": "2026-03-06T10:00:00Z",
+    "merge_commit_sha": "d600a0301390942f3a33b71ebf0c247e9ea32c2a",
+    "user": {
+      "login": "alice"
+    },
+    "base": {
+      "ref": "main"
+    }
+  },
+  {
+    "number": 21,
+    "title": "feat: Change 21",
+    "state": "closed",
+    "merged_at": "2026-03-05T10:00:00Z",
+    "updated_at": "2026-03-05T09:00:00Z",
+    "merge_commit_sha": "3951d4c7c3213b94898fc005ce669b965f048fe9",
+    "user": {
+      "login": "alice"
+    },
+    "base": {
+      "ref": "main"
+    }
+  }
+]

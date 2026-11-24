@@ -1,0 +1,26 @@
+# App
+
+![logo](logo.png) See [the guide](guide.md), [the blog](blogs/README.md) and [the site](https://example.com).
+
+## Releases
+
+<!-- RELEASES_START -->
+
+| Version | Date | Title | Blog post |
+| ------- | ---- | ----- | --------- |
+| [v1.0.0](https://github.com/o/app/releases/tag/v1.0.0) | 2026-02-20 | feat: Earlier, renamed | [Post](https://github.com/o/app/blob/main/docs/blogs/2026-02-20-pr-3-feat-earlier-renamed.md) |
+| [v0.9.0](https://github.com/o/app/releases/tag/v0.9.0) | 2026-02-10 | fix: Older | — |
+
+<!-- RELEASES_END -->
+
+[All releases →](https://github.com/o/app/releases)
+
+## Contributing
+
+See [CONTRIBUTING](../CONTRIBUTING.md) and <a href="../SECURITY.md">SECURITY</a>.
+
+```text
+[kept](as/is.md)
+
+
+```

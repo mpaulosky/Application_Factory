@@ -1,0 +1,12 @@
+rest.repos_o_app_pulls_40 gh api repos/o/app/pulls/40 --paginate
+rest.repos_o_app_pulls_40_commits?per_page=100 gh api "repos/o/app/pulls/40/commits?per_page=100" --paginate --jq ".[] | @json"
+rest.repos_o_app_pulls_40_files?per_page=100 gh api "repos/o/app/pulls/40/files?per_page=100" --paginate --jq ".[] | @json"
+rest.repos_o_app_releases?per_page=100 gh api "repos/o/app/releases?per_page=100" --paginate --jq ".[] | select(.draft | not) | @json"
+rest.repos_o_app_pulls_31 gh api repos/o/app/pulls/31 --paginate --jq .title
+rest.repos_o_app_pulls_30 gh api repos/o/app/pulls/30 --paginate --jq .title
+rest.repos_o_app_pulls_29 gh api repos/o/app/pulls/29 --paginate --jq .title
+rest.repos_o_app_pulls_28 gh api repos/o/app/pulls/28 --paginate --jq .title
+rest.repos_o_app_pulls_27 gh api repos/o/app/pulls/27 --paginate --jq .title
+rest.repos_o_app_pulls_26 gh api repos/o/app/pulls/26 --paginate --jq .title
+rest.repos_o_app_pulls_25 gh api repos/o/app/pulls/25 --paginate --jq .title
+rest.repos_o_app_pulls_24 gh api repos/o/app/pulls/24 --paginate --jq .title

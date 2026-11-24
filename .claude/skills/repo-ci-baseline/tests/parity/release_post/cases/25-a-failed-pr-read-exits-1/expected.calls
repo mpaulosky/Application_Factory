@@ -1,0 +1,1 @@
+rest.repos_o_app_pulls_7 gh api repos/o/app/pulls/7 --paginate

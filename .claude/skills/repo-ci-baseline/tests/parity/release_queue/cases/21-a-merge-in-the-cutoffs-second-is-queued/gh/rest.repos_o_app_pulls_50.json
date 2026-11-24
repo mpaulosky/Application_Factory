@@ -1,0 +1,14 @@
+{
+  "number": 50,
+  "title": "feat: Change 50",
+  "state": "closed",
+  "merged_at": "2026-03-05T10:00:00Z",
+  "updated_at": "2026-03-05T10:00:00Z",
+  "merge_commit_sha": "130cbce73ecf877d054e4544e04e966e22b66d14",
+  "user": {
+    "login": "alice"
+  },
+  "base": {
+    "ref": "main"
+  }
+}

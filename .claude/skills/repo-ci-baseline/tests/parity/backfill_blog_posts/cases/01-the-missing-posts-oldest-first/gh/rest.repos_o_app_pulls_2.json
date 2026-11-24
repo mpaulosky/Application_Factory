@@ -1,0 +1,13 @@
+{
+  "number": 2,
+  "title": "fix: Two",
+  "body": "Two's description.\n\nFixes #16.",
+  "merged_at": "2026-02-02T10:00:00Z",
+  "html_url": "https://github.com/o/app/pull/2",
+  "user": {
+    "login": "alice"
+  },
+  "base": {
+    "ref": "main"
+  }
+}

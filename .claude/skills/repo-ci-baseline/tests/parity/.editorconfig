@@ -1,0 +1,8 @@
+# A case's files are compared byte for byte, so an editor must leave them as they are: an env value of only blanks, a CRLF
+# tree, a draft with no final newline. Not root: everything else comes from the repository's own .editorconfig, and
+# .gitattributes here does the same for git.
+[*/cases/**]
+charset = unset
+end_of_line = unset
+trim_trailing_whitespace = false
+insert_final_newline = unset

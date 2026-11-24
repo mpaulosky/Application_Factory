@@ -1,0 +1,93 @@
+[
+  {
+    "tag_name": "v1.0.0",
+    "name": "Release v1.0.0",
+    "draft": false,
+    "published_at": "2026-02-10T12:00:00Z",
+    "body": "## What's changed\n\nSource PR: #20\n"
+  },
+  {
+    "tag_name": "v1.1.0",
+    "name": "Release v1.1.0",
+    "draft": false,
+    "published_at": "2026-02-11T12:00:00Z",
+    "body": "## What's changed\n\nSource PR: #21\n"
+  },
+  {
+    "tag_name": "v1.2.0",
+    "name": "Release v1.2.0",
+    "draft": false,
+    "published_at": "2026-02-12T12:00:00Z",
+    "body": "## What's changed\n\nSource PR: #22\n"
+  },
+  {
+    "tag_name": "v1.3.0",
+    "name": "Release v1.3.0",
+    "draft": false,
+    "published_at": "2026-02-13T12:00:00Z",
+    "body": "## What's changed\n\nSource PR: #23\n"
+  },
+  {
+    "tag_name": "v1.4.0",
+    "name": "Release v1.4.0",
+    "draft": false,
+    "published_at": "2026-02-14T12:00:00Z",
+    "body": "## What's changed\n\nSource PR: #24\n"
+  },
+  {
+    "tag_name": "v1.5.0",
+    "name": "Release v1.5.0",
+    "draft": false,
+    "published_at": "2026-02-15T12:00:00Z",
+    "body": "## What's changed\n\nSource PR: #25\n"
+  },
+  {
+    "tag_name": "v1.6.0",
+    "name": "Release v1.6.0",
+    "draft": false,
+    "published_at": "2026-02-16T12:00:00Z",
+    "body": "## What's changed\n\nSource PR: #26\n"
+  },
+  {
+    "tag_name": "v1.7.0",
+    "name": "Release v1.7.0",
+    "draft": false,
+    "published_at": "2026-02-17T12:00:00Z",
+    "body": "## What's changed\n\nSource PR: #27\n"
+  },
+  {
+    "tag_name": "v1.8.0",
+    "name": "Release v1.8.0",
+    "draft": false,
+    "published_at": "2026-02-18T12:00:00Z",
+    "body": "## What's changed\n\nSource PR: #28\n"
+  },
+  {
+    "tag_name": "v1.9.0",
+    "name": "Release v1.9.0",
+    "draft": false,
+    "published_at": "2026-02-19T12:00:00Z",
+    "body": "## What's changed\n\nSource PR: #29\n"
+  },
+  {
+    "tag_name": "v1.10.0",
+    "name": "Release v1.10.0",
+    "draft": false,
+    "published_at": "2026-02-20T12:00:00Z",
+    "body": "## What's changed\n\nSource PR: #30\n"
+  },
+  {
+    "tag_name": "v1.11.0",
+    "name": "Release v1.11.0",
+    "draft": false,
+    "published_at": "2026-02-21T12:00:00Z",
+    "body": "## What's changed\n\nSource PR: #31\n"
+  },
+  {
+    "tag_name": "v1.12.0",
+    "name": "",
+    "draft": false,
+    "published_at": "2026-02-21T12:00:00Z",
+    "body": "No marker."
+  }
+]

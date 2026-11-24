@@ -1,0 +1,4 @@
+rest.repos_o_app_releases?per_page=100 gh api "repos/o/app/releases?per_page=100" --paginate --jq ".[] | select(.draft | not) | @json"
+rest.repos_o_app_pulls_20 gh api repos/o/app/pulls/20 --paginate
+rest.repos_o_app_pulls?state=closed&base=main&sort=updated&direction=desc&per_page=100&page=1
+rest.repos_o_app_pulls_21 gh api repos/o/app/pulls/21 --paginate

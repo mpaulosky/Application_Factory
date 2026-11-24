@@ -1,0 +1,13 @@
+{
+  "number": 7,
+  "title": "feat: Onetwo\u001cthree",
+  "body": "First a\u000b- b\f- c- d\u001c- e\u001d- f\u001e- g end.",
+  "merged_at": "2026-03-01T10:00:00Z",
+  "html_url": "https://github.com/o/app/pull/7",
+  "user": {
+    "login": "alice"
+  },
+  "base": {
+    "ref": "main"
+  }
+}

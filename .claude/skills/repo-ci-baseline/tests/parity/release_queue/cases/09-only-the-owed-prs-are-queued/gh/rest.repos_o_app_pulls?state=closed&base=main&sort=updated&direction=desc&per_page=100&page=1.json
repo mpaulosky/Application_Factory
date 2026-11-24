@@ -1,0 +1,86 @@
+[
+  {
+    "number": 15,
+    "title": "feat: Change 15",
+    "state": "closed",
+    "merged_at": "2026-03-06T10:00:00Z",
+    "updated_at": "2026-03-06T10:00:00Z",
+    "merge_commit_sha": "5ed5eed0824a74ab2a3ce2a4b347a1bcb525ae80",
+    "user": {
+      "login": "alice"
+    },
+    "base": {
+      "ref": "main"
+    }
+  },
+  {
+    "number": 14,
+    "title": "docs: README [skip-release]",
+    "state": "closed",
+    "merged_at": "2026-03-06T09:00:00Z",
+    "updated_at": "2026-03-06T09:00:00Z",
+    "merge_commit_sha": "4d50328872866b1d57d2eec0c3442c14f35045a1",
+    "user": {
+      "login": "alice"
+    },
+    "base": {
+      "ref": "main"
+    }
+  },
+  {
+    "number": 10,
+    "title": "feat: Change 10",
+    "state": "closed",
+    "merged_at": "2026-03-06T08:00:00Z",
+    "updated_at": "2026-03-06T08:00:00Z",
+    "merge_commit_sha": "0e1794fd4ea4c625c7b23e908590e68c4761e1a4",
+    "user": {
+      "login": "dependabot[bot]"
+    },
+    "base": {
+      "ref": "main"
+    }
+  },
+  {
+    "number": 11,
+    "title": "feat: Change 11",
+    "state": "closed",
+    "merged_at": "2026-03-06T07:00:00Z",
+    "updated_at": "2026-03-06T07:00:00Z",
+    "merge_commit_sha": "e744f64dc916cf5517f8887c92af7fa6ff168e9a",
+    "user": {
+      "login": "alice"
+    },
+    "base": {
+      "ref": "main"
+    }
+  },
+  {
+    "number": 12,
+    "title": "feat: Change 12",
+    "state": "closed",
+    "merged_at": "2026-03-06T06:00:00Z",
+    "updated_at": "2026-03-06T06:00:00Z",
+    "merge_commit_sha": "74924db87cbeabbe26e6074dc128bf6d2ad2ca60",
+    "user": {
+      "login": "alice"
+    },
+    "base": {
+      "ref": "main"
+    }
+  },
+  {
+    "number": 13,
+    "title": "feat: Change 13",
+    "state": "closed",
+    "merged_at": "2026-03-05T10:00:00Z",
+    "updated_at": "2026-03-05T09:00:00Z",
+    "merge_commit_sha": "ccb217949b3083f014401d460dcfb66dc9f211b2",
+    "user": {
+      "login": "alice"
+    },
+    "base": {
+      "ref": "main"
+    }
+  }
+]

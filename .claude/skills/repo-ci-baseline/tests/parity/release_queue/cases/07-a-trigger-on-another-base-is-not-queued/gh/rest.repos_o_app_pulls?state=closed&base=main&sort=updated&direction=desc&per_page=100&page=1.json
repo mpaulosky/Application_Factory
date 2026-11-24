@@ -1,0 +1,72 @@
+[
+  {
+    "number": 4,
+    "title": "feat: Change 4",
+    "state": "closed",
+    "merged_at": "2026-03-02T10:00:00Z",
+    "updated_at": "2026-03-04T00:00:00Z",
+    "merge_commit_sha": "54fdd993f3b193ec3a09d6ba0586f0d9d8186ffc",
+    "user": {
+      "login": "alice"
+    },
+    "base": {
+      "ref": "main"
+    }
+  },
+  {
+    "number": 2,
+    "title": "feat: Change 2",
+    "state": "closed",
+    "merged_at": "2026-03-02T10:00:00Z",
+    "updated_at": "2026-03-03T00:00:00Z",
+    "merge_commit_sha": "ae290e1f3cd4ee50ef754dc7ef6239b5c37934d0",
+    "user": {
+      "login": "alice"
+    },
+    "base": {
+      "ref": "main"
+    }
+  },
+  {
+    "number": 3,
+    "title": "feat: Change 3",
+    "state": "closed",
+    "merged_at": "2026-03-02T10:00:00Z",
+    "updated_at": "2026-03-02T11:00:00Z",
+    "merge_commit_sha": "60dd0dd0be7edd187fdd3e6408204620479bf9d9",
+    "user": {
+      "login": "alice"
+    },
+    "base": {
+      "ref": "main"
+    }
+  },
+  {
+    "number": 1,
+    "title": "feat: Change 1",
+    "state": "closed",
+    "merged_at": "2026-03-01T10:00:00Z",
+    "updated_at": "2026-03-01T10:00:00Z",
+    "merge_commit_sha": "7832f8b2fca38bb7f767691e9cc107d397a9926e",
+    "user": {
+      "login": "alice"
+    },
+    "base": {
+      "ref": "main"
+    }
+  },
+  {
+    "number": 6,
+    "title": "feat: Change 6",
+    "state": "closed",
+    "merged_at": null,
+    "updated_at": "2026-03-01T09:00:00Z",
+    "merge_commit_sha": null,
+    "user": {
+      "login": "alice"
+    },
+    "base": {
+      "ref": "main"
+    }
+  }
+]

@@ -1,0 +1,8 @@
+[
+  {
+    "filename": "src/App.cs",
+    "additions": 1,
+    "deletions": 0,
+    "patch": "@@ -1 +1 @@\n-a\n+b"
+  }
+]

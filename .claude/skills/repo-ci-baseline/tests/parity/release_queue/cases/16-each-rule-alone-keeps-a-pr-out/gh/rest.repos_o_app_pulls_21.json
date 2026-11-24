@@ -1,0 +1,14 @@
+{
+  "number": 21,
+  "title": "feat: Change 21",
+  "state": "closed",
+  "merged_at": "2026-03-05T10:00:00Z",
+  "updated_at": "2026-03-05T10:00:00Z",
+  "merge_commit_sha": "3951d4c7c3213b94898fc005ce669b965f048fe9",
+  "user": {
+    "login": "alice"
+  },
+  "base": {
+    "ref": "main"
+  }
+}
