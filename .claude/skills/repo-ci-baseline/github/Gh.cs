@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 // A gh call that failed: its stderr, else its stdout, trimmed.
 class GhException(string message) : Exception(message);
@@ -144,20 +145,25 @@ sealed class Arguments(string prog, string usage, string description)
 	{
 		var rest = args.ToList();
 		List<string> unknown = [];
-		var positional = false;
+		// positional: past a --, where nothing is an option; taken: the positional arguments were read in one run, and an option followed
+		// them, so any later one is refused, as argparse refuses a second run of a nargs="*" positional.
+		bool positional = false, taken = false;
 		for (var i = 0; i < rest.Count; i++)
 		{
 			var arg = rest[i];
 			if (positional || !LooksLikeOption(arg))
 			{
-				Positional.Add(arg);
+				(taken ? unknown : Positional).Add(arg);
 				continue;
 			}
 			if (arg == "--")
 			{
 				positional = true;
+				if (taken)
+					unknown.Add(arg);
 				continue;
 			}
+			taken |= Positional.Count > 0;
 			if (arg is "-h" or "--help")
 			{
 				output.Write(Help());
@@ -204,14 +210,16 @@ sealed class Arguments(string prog, string usage, string description)
 	{
 		if (!Values.TryGetValue(name, out var text) || text is null)
 			return fallback;
-		var trimmed = text.Trim().Replace("_", "", StringComparison.Ordinal);
+		var trimmed = text.Trim();
 		var sign = trimmed.StartsWith('-') ? -1 : 1;
 		var bare = trimmed.TrimStart('+', '-').ToLowerInvariant();
 		if (bare is "inf" or "infinity")
 			return sign * double.PositiveInfinity;
 		if (bare == "nan")
 			return double.NaN;
-		if (text.Contains("__", StringComparison.Ordinal) || !double.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out var number))
+		// An underscore only between two digits, as float() takes it.
+		if (Regex.IsMatch(trimmed, @"(?<![0-9])_|_(?![0-9])")
+				|| !double.TryParse(trimmed.Replace("_", "", StringComparison.Ordinal), NumberStyles.Float, CultureInfo.InvariantCulture, out var number))
 			throw new ArgumentError($"argument {name}: invalid float value: '{text}'");
 		return number;
 	}
@@ -243,10 +251,13 @@ sealed class ArgumentError(string message) : Exception(message);
 static class Script
 {
 	// The script's exit code; an uncaught exception is a message on stderr and exit 1, as a Python traceback was.
-	public static int Run(Func<TextWriter, TextWriter, int> main)
+	public static int Run(Func<TextWriter, TextWriter, int> main) =>
+			Run(main, new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true },
+					new StreamWriter(Console.OpenStandardError(), new UTF8Encoding(false)) { AutoFlush = true });
+
+	// The same, on the writers given (UTF-8 stdout and stderr above).
+	public static int Run(Func<TextWriter, TextWriter, int> main, TextWriter stdout, TextWriter stderr)
 	{
-		var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true };
-		var stderr = new StreamWriter(Console.OpenStandardError(), new UTF8Encoding(false)) { AutoFlush = true };
 		try
 		{
 			return main(stdout, stderr);
