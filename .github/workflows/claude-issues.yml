@@ -13,7 +13,9 @@ name: Claude Issues
 # blocker closed since. Only a `claude` label the owner added (or this workflow, for the owner's comment) counts.
 #
 # Issues worked at once can change the same files, so each run comments on its pull request naming the open pull
-# requests that change the same files, and the order to merge them in: the oldest pull request first.
+# requests from this repository's branches that change the same files, and the order to merge them in: the oldest pull
+# request first. The comment is written when the run ends, so an older pull request's comment doesn't learn of one
+# opened later, and two runs ending together may each miss the other's.
 #
 # An issue is blocked while GitHub's issue dependencies list an open issue it is blocked by, or while it carries the
 # `blocked` label. A blocked issue keeps its `claude` label and gets `claude:blocked` and one comment naming its
@@ -135,19 +137,30 @@ jobs:
           queue="$(gh api --paginate "repos/$GH_REPO/issues?state=open&labels=claude&sort=created&direction=asc&per_page=100" \
             --jq '.[] | select(.pull_request == null) | "\(.number)\u001f\([.labels[].name] | join(","))\u001f\(.user.login)"')"
           owner="${GITHUB_REPOSITORY_OWNER}"
-          # An issue labelled `claude:working` holds a slot while the run named in its latest "Claude started" comment
-          # is still going. A run that died before its Finish step left the label behind: it is taken off, and the issue
-          # is queued like any other. When the run's status can't be read, the issue keeps its slot, to be safe.
+          # An open issue labelled `claude:working` holds a slot while the run named in its latest "Claude started"
+          # comment is still going, whether or not it still carries `claude`. A run that died before its Finish step left
+          # the label behind: when its run has ended, was deleted (HTTP 404), or no "Claude started" comment names one, the
+          # label is taken off and the issue is queued like any other. When the comments or the run's status can't be
+          # read, the issue keeps its slot, to be safe. Read in full first, like the queue.
+          working_issues="$(gh api --paginate "repos/$GH_REPO/issues?state=open&labels=claude:working&per_page=100" \
+            --jq '.[] | select(.pull_request == null) | .number')"
           busy=0
           declare -A working=()
-          while IFS=$'\x1f' read -r number labels _; do
-            [ -n "$number" ] && [[ ",$labels," == *",claude:working,"* ]] || continue
-            run_id="$(gh api --paginate "repos/$GH_REPO/issues/$number/comments?per_page=100" \
-              --jq '.[] | select(.user.login == "github-actions[bot]") | .body' |
-              grep -oE '^Claude started on this issue: .*/actions/runs/[0-9]+' | tail -n 1 | grep -oE '[0-9]+$' || true)"
+          while read -r number; do
+            [ -n "$number" ] || continue
+            comments="$(gh api --paginate "repos/$GH_REPO/issues/$number/comments?per_page=100" \
+              --jq '.[] | select(.user.login == "github-actions[bot]") | .body')" || {
+              echo "::warning::Couldn't read the comments on #$number; it keeps its slot this run."
+              working[$number]=1
+              busy=$((busy + 1))
+              continue
+            }
+            run_id="$(grep -oE '^Claude started on this issue: .*/actions/runs/[0-9]+' <<<"$comments" | tail -n 1 | grep -oE '[0-9]+$' || true)"
             status="completed"
             if [ -n "$run_id" ]; then
-              status="$(gh api "repos/$GH_REPO/actions/runs/$run_id" --jq '.status')" || status="unknown"
+              status="$(gh api "repos/$GH_REPO/actions/runs/$run_id" --jq '.status' 2>"$RUNNER_TEMP/run-status.err")" || {
+                if grep -qF 'HTTP 404' "$RUNNER_TEMP/run-status.err"; then status="completed"; else status="unknown"; fi
+              }
             fi
             if [ "$status" = "completed" ]; then
               echo "#$number was left claude:working by a run that has ended; queuing it again."
@@ -157,7 +170,7 @@ jobs:
               working[$number]=1
               busy=$((busy + 1))
             fi
-          done <<<"$queue"
+          done <<<"$working_issues"
           slots=$((CLAUDE_ISSUES_CAP - busy))
           echo "$busy of $CLAUDE_ISSUES_CAP slots are taken."
           picked=()
@@ -225,18 +238,28 @@ jobs:
             picked+=("$number")
           done <<<"$queue"
 
-          if [ "${#picked[@]}" -eq 0 ]; then
+          # Labelled and commented before this job ends, so the next run's pick counts them as taken. An issue whose label
+          # or comment fails is left out (its label taken off again) and waits for the next run, and the rest are worked.
+          started=()
+          for number in "${picked[@]}"; do
+            if ! gh api --silent -X POST "repos/$GH_REPO/issues/$number/labels" -f "labels[]=claude:working"; then
+              echo "::warning::Couldn't label #$number claude:working; leaving it for the next run."
+              continue
+            fi
+            if ! gh issue comment "$number" --body "Claude started on this issue: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"; then
+              echo "::warning::Couldn't comment on #$number; leaving it for the next run."
+              gh api --silent -X DELETE "repos/$GH_REPO/issues/$number/labels/claude:working" || true
+              continue
+            fi
+            echo "Working #$number."
+            started+=("$number")
+          done
+          if [ "${#started[@]}" -eq 0 ]; then
             echo "No unblocked issue is queued for Claude, or every slot is taken."
             echo "issues=[]" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Labelled before this job ends, so the next run's pick counts them as taken.
-          for number in "${picked[@]}"; do
-            echo "Working #$number."
-            gh api --silent -X POST "repos/$GH_REPO/issues/$number/labels" -f "labels[]=claude:working"
-            gh issue comment "$number" --body "Claude started on this issue: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          done
-          echo "issues=$(printf '%s\n' "${picked[@]}" | jq -sc '.')" >> "$GITHUB_OUTPUT"
+          echo "issues=$(printf '%s\n' "${started[@]}" | jq -sc '.')" >> "$GITHUB_OUTPUT"
 
   work:
     name: Work issue ${{ matrix.issue }}
@@ -255,8 +278,9 @@ jobs:
       contents: read
       # The labels and the comments on the issue.
       issues: write
-      # Reading which pull requests are open, and the comment naming the ones that change the same files.
-      pull-requests: write
+      # Reading which pull requests are open and the files they change. The comment naming the ones that change the same
+      # files goes through the issues API, which `issues: write` covers.
+      pull-requests: read
       # Starting the next run when the queue isn't empty.
       actions: write
       # The action's exchange of the workflow's OIDC token for the Claude GitHub App's.
@@ -370,7 +394,8 @@ jobs:
       # request when Claude wrote its title and body. The runner and its commits are gone once the job ends, so each
       # network call is retried, and whenever the work isn't pushed (a failed commit, an unexpected branch, a failed
       # exchange, a refused push: a token without the workflows permission refuses one that edits .github/workflows),
-      # the step fails and the next one uploads the bundle as the run's `claude-branch` artifact.
+      # the step fails and the next one uploads the bundle as the run's `claude-branch-<issue>` artifact (one per issue,
+      # since an artifact's name is unique in a run and a run works up to three issues).
       # Claude could have changed the checkout's git config and hooks, and the global git and gh config, so the fresh
       # token is never used there: the push runs in a new repository fetched from the bundle, with no global or system
       # config and no hooks, and gh runs outside the checkout with an empty config directory.
@@ -396,7 +421,7 @@ jobs:
           save() { # save <why>: keeps the work as an artifact of the run when it can't be pushed, and fails the step
             if [ -s "$bundle" ] || g bundle create "$bundle" HEAD; then
               echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
-              echo "::error::$1 The work is saved as the run's claude-branch artifact (a git bundle of HEAD)."
+              echo "::error::$1 The work is saved as the run's claude-branch-$ISSUE artifact (a git bundle of HEAD)."
             else
               echo "::error::$1 Bundling the work failed too, so nothing of it is kept."
             fi
@@ -411,7 +436,7 @@ jobs:
             if ! commit && ! { rm -f .git/index.lock && commit; }; then
               tar -czf "$TASK_DIR/worktree.tar.gz" --exclude=.git . 2>/dev/null &&
                 echo "bundle=$TASK_DIR/worktree.tar.gz" >> "$GITHUB_OUTPUT"
-              echo "::error::Committing the work Claude left uncommitted failed; the tree is saved as the run's claude-branch artifact."
+              echo "::error::Committing the work Claude left uncommitted failed; the tree is saved as the run's claude-branch-$ISSUE artifact."
               exit 1
             fi
             echo "Committed the work Claude left uncommitted."
@@ -469,7 +494,7 @@ jobs:
         if: always() && steps.publish.outputs.bundle != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: claude-branch
+          name: claude-branch-${{ matrix.issue }}
           path: ${{ steps.publish.outputs.bundle }}
           retention-days: 14
 
@@ -503,8 +528,11 @@ jobs:
             echo "None: the work step ($OUTCOME) left no execution file, so Claude didn't run or was stopped before it finished."
           fi
           echo "::endgroup::"
-          gh api --silent -X DELETE "repos/$GH_REPO/issues/$ISSUE/labels/claude:working" || true
+          # `claude` first: an issue left with `claude` alone, even for a moment, is in the queue with no slot, and another
+          # run's pick could take it again. One left with `claude:working` alone is in no queue, and holds its slot only
+          # until this run ends.
           gh api --silent -X DELETE "repos/$GH_REPO/issues/$ISSUE/labels/claude" || true
+          gh api --silent -X DELETE "repos/$GH_REPO/issues/$ISSUE/labels/claude:working" || true
           pr="$(gh api --paginate "repos/$GH_REPO/pulls?state=open&per_page=100" \
             --jq ".[] | select(.head.ref | test(\"^(feature|fix|hotfix)/${ISSUE}-\")) | .html_url" | head -n 1)"
           if [ -n "$pr" ]; then
@@ -517,7 +545,7 @@ jobs:
             msg+=" the next run continues from the branch the Publish step pushed, if it pushed one."
             if [ -n "${SAVED:-}" ]; then
               msg+=" The Publish step couldn't push Claude's work: its error in the log says why, and the work is the run's"
-              msg+=" \`claude-branch\` artifact."
+              msg+=" \`claude-branch-$ISSUE\` artifact."
             elif [ "${PUBLISH:-}" = "failure" ]; then
               msg+=" The Publish step pushed the branch but failed after it: its error in the log says why."
             fi
@@ -526,7 +554,11 @@ jobs:
 
       # Issues worked at once can change the same files. The comment names the open pull requests that change files this
       # one changes, in the order to merge them: the oldest first, merging `main` into each before it lands. It is kept
-      # up to date on a later run for the same issue; an older pull request's comment doesn't learn of a newer one.
+      # up to date on a later run for the same issue; an older pull request's comment doesn't learn of a newer one, and
+      # two runs ending together may each list the open pull requests before the other's is opened. Only pull requests
+      # from this repository's own branches count, which only people with write access can push: a fork's branch can
+      # take any name. A file is named only when its name is plain (letters, digits and `._/+-`), and at most five are
+      # named per pull request. Every failure warns and leaves the comment as it was; it never fails the job.
       - name: Note the merge order
         if: always()
         env:
@@ -536,7 +568,8 @@ jobs:
         run: |
           set -uo pipefail
           marker="<!-- claude-issues-merge-order -->"
-          open="$(gh api --paginate "repos/$GH_REPO/pulls?state=open&per_page=100" --jq '.[] | "\(.number) \(.head.ref)"')" || {
+          open="$(gh api --paginate "repos/$GH_REPO/pulls?state=open&per_page=100" \
+            --jq ".[] | select(.head.repo.full_name == \"$GH_REPO\") | \"\(.number) \(.head.ref)\"")" || {
             echo "::warning::Couldn't list the open pull requests, so no merge order is noted."
             exit 0
           }
@@ -545,12 +578,21 @@ jobs:
             echo "#$ISSUE has no open pull request, so no merge order is noted."
             exit 0
           fi
-          files() { gh api --paginate "repos/$GH_REPO/pulls/$1/files?per_page=100" --jq '.[].filename' | sort -u; }
-          mine="$(files "$pr")" || exit 0
+          files() { gh api --paginate "repos/$GH_REPO/pulls/$1/files?per_page=100" --jq '.[].filename'; }
+          mine="$(files "$pr")" || {
+            echo "::warning::Couldn't list the files #$pr changes, so no merge order is noted."
+            exit 0
+          }
+          mine="$(LC_ALL=C sort -u <<<"$mine")"
           lines=""
           while read -r other _; do
             [ -n "$other" ] && [ "$other" != "$pr" ] || continue
-            shared="$(comm -12 <(printf '%s\n' "$mine") <(files "$other" || true) | head -n 5 | sed "s/.*/\`&\`/" | paste -sd, - | sed 's/,/, /g')"
+            theirs="$(files "$other")" || {
+              echo "::warning::Couldn't list the files #$other changes; leaving it out of the merge order."
+              continue
+            }
+            shared="$(LC_ALL=C comm -12 <(printf '%s\n' "$mine") <(LC_ALL=C sort -u <<<"$theirs") |
+              LC_ALL=C grep -E '^[A-Za-z0-9._/+-]+$' | head -n 5 | awk 'NR > 1 { printf ", " } { printf "`%s`", $0 }')"
             [ -z "$shared" ] || lines+="#$other $shared"$'\n'
           done <<<"$open"
           if [ -z "$lines" ]; then
@@ -562,13 +604,21 @@ jobs:
           body="$marker"$'\n'"Other open pull requests change files this one changes. Merge them oldest first, merging \`main\` into each before it lands: $order."
           body+=$'\n\n'"$(printf '%s' "$lines" | sed 's/^\(#[0-9]*\) /- \1 also changes /')"
           existing="$(gh api --paginate "repos/$GH_REPO/issues/$pr/comments?per_page=100" \
-            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" | tail -n 1)" || existing=""
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id")" || {
+            echo "::warning::Couldn't read the comments on #$pr, so no merge order is noted."
+            exit 0
+          }
+          existing="$(tail -n 1 <<<"$existing")"
           if [ -n "$existing" ]; then
-            gh api --silent -X PATCH "repos/$GH_REPO/issues/comments/$existing" -f "body=$body" || true
+            written() { gh api --silent -X PATCH "repos/$GH_REPO/issues/comments/$existing" -f "body=$body"; }
           else
-            gh api --silent -X POST "repos/$GH_REPO/issues/$pr/comments" -f "body=$body" || true
+            written() { gh api --silent -X POST "repos/$GH_REPO/issues/$pr/comments" -f "body=$body"; }
           fi
-          echo "Noted the merge order on #$pr: $order."
+          if written; then
+            echo "Noted the merge order on #$pr: $order."
+          else
+            echo "::warning::Couldn't write the merge order comment on #$pr."
+          fi
 
       - name: Start the next run
         if: always()
