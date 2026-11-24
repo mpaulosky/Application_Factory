@@ -761,7 +761,7 @@ if in_shard scripts; then
   need jq
   need dotnet
   # Every suite is run: each folder under tests/parity/ with a cases/ folder, so a suite added later can't be left out. Each needs its README.md
-  # (what its cases cover and leave out), and there are at least the seven suites there are now, so a glob that matched nothing can't pass.
+  # (what its cases cover and leave out), and there are at least the eight suites there are now, so a glob that matched nothing can't pass.
   parity_suites=()
   for suite_dir in "$skill_dir"/tests/parity/*/; do
     [[ -d "$suite_dir/cases" ]] || continue

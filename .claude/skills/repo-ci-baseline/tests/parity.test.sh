@@ -39,8 +39,8 @@
 #                    A line that is exactly ... stands for any number of lines, none included, so a usage block whose
 #                    wrapping is the argument parser's own is matched by its first line and ... alone
 #   expected.calls   the fake's log of the `gh` calls made, in order: each call's fixture key, and for a `gh pr` call or a
-#                    REST call with --paginate or --jq the key and the call's whole argv; the queries a run costs, and
-#                    what it writes, are behaviour too
+#                    REST call with --paginate, --jq, -X, -H or --input the key and the call's whole argv, then for --input
+#                    ` <<< ` and its body as canonical JSON; the queries a run costs, and what it writes, are behaviour too
 #
 # and, when the script reads more than its arguments and gh, any of:
 #
@@ -85,7 +85,7 @@
 # Exit 0 when every case passes, 1 when one fails, 2 on a usage or setup error (a case missing a file or holding a bad
 # one, a command that can't be run, a temporary folder that can't be made). Needs bash 4.4 or later, coreutils (mktemp,
 # mkdir, rm, ln, cp, cat, head, sort, env, basename, dirname, timeout), findutils (find), a diff with --no-dereference (GNU diffutils 3.3 or later), grep and sed, and git 2.32 or later
-# (GIT_CONFIG_GLOBAL) for a case with a setup.sh; the fake gh needs bash and cat, and mktemp, rm and jq 1.6 or later (for walk) for a REST call with --jq.
+# (GIT_CONFIG_GLOBAL) for a case with a setup.sh; the fake gh needs bash and cat, and mktemp, rm and jq 1.6 or later (for walk) for a REST call with --jq or --input.
 set -euo pipefail
 
 setup_error() {

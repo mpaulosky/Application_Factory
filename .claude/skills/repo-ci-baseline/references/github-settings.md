@@ -18,6 +18,10 @@ github-settings.sh --suspend mpaulosky/<repo> # emergency: main-rules disabled u
 github-settings.sh --json …                  # the same report, machine-readable
 ```
 
+**Exit codes.** 0 when every repo is at the standard (or `--suspend` ran). 1 for any DRIFT, MANUAL or LEGACY, a `gh` call that failed with a status
+the check doesn't read as an answer (its error on stderr), a per-repo file that would loosen the standard, or a `repos.txt` line that isn't
+`owner/repo`. 2 for a usage error, an argument that isn't `owner/repo` included. 127 when `github-settings.sh` finds no `dotnet`.
+
 It runs as you, through `gh api`, and needs admin rights on the repo. It's never run from a workflow: an admin token stored in every repo
 would let a repo's own PRs change the rules that gate them.
 
@@ -87,7 +91,9 @@ pinning only when all workflows are pinned, scope and per-repo additions, a per-
 The fake rejects a partial ruleset update, as GitHub may. Mutation-check the safety rules: breaking each one (kept checks, unreported checks,
 the app comparison, the active guard, the pinning guard, the legacy flag, the suspended check, the additive-only rule) must fail a test.
 
-`SettingsPortTests.cs` holds what the port adds: a repo that isn't `owner/repo` refused before any call, the `gh api` call's argv and body, and the
+`SettingsPortTests.cs` holds what the port adds: a repo that isn't `owner/repo` refused before any call, the names GitHub answers with percent-encoded
+in the paths they go into, which statuses each refused read takes as an answer, `--fix` with `--json`, a failed write and `--all`, a `gh` that exits
+before reading its body, the `gh api` call's argv and body, and the
 Python readings the output depends on (`repr`, `str`, `json.dumps`, `sorted`, `==`, `splitlines`, `strip`, `b64decode` and the workflow and branch
 readers), each checked against `settings.py` run by `python3` while it is left. The `settings` parity suite (`tests/parity/settings/`) runs the
 command line against a fake `gh`, on the suite's own standard: the Python is its reference, and `test.sh` runs it against `github-settings.sh` too.

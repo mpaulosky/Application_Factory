@@ -144,8 +144,8 @@ the increments change what their text describes, and the increment that does add
   its scripts once before it runs them.
 - [ADR 0016](0016-a-rollout-runs-each-applications-review-headless-and-sandboxed-in-its-worktree.md): its preflight's check for ruff 0.17 or uv goes with ruff, and the increment
   that retires ruff adds the Update. It already checks for the SDK `global.json` names.
-- The skill's [ADR 0003](../../.claude/skills/repo-ci-baseline/docs/adr/0003-github-settings-as-code.md) is unchanged: the settings stay data in the skill, read by `Settings.cs`
-  once `settings.py` goes.
+- The skill's [ADR 0003](../../.claude/skills/repo-ci-baseline/docs/adr/0003-github-settings-as-code.md) is unchanged: the settings stay data in the skill, read by `SettingsCore.cs`
+  (`settings.cs`) since mpaulosky/Application_Factory#120.
 - The skill's [ADR 0011](../../.claude/skills/repo-ci-baseline/docs/adr/0011-the-gh-repo-check-parses-shell-with-shfmt.md) is unchanged in what it decides. The C# `check_gh_repo`
   still reads each script's syntax tree from `shfmt -ln bash --to-json`, run in an empty folder. Its text names `check_gh_repo.py`, `python3 -I` and Python's recursion limit, so
   the increment that ports the checker adds an Update there for those.
@@ -319,5 +319,5 @@ under the import rule above they port together (mpaulosky/Application_Factory#12
 - **The wrapper's build leaves CA2266 out.** `dotnet run` prints its build's warnings on stdout, so the first run after a change would start its report, or its
   `--json`, with the CA2266 line. `github-settings.sh` passes `-p:NoWarn=CA2266` to that build alone; the gate's build of every script still shows it.
   `status.sh` and `land.sh` print it too on a first run, which this Update leaves for their own change.
-- **The pytest suite.** `github/tests/test_settings.py` is deleted, its 34 tests moved to `tests/Scripts.Tests/Settings/SettingsTests.cs` under the rule above. It held
-  no `read_repo_list` test: `ReposTests.cs` already holds `Repos.cs` to it.
+- **The pytest suite.** `github/tests/test_settings.py` is deleted, its 34 tests moved to `tests/Scripts.Tests/Settings/SettingsTests.cs` under the rule above, a
+  `Settings/` folder beside the ones the #119 Update lists. It held no `read_repo_list` test: `ReposTests.cs` already holds `Repos.cs` to it.
