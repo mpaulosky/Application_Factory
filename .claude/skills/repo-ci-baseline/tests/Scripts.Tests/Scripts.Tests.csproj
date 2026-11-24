@@ -1,6 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- The xUnit v3 tests of the Factory's C# scripts (ADR 0017), run by test.sh in its scripts shard. Shielded: the three empty
-       Directory.* files beside it stop any of the repo's own from reaching it, so its versions are written here. -->
+       Directory.* files beside it stop any of the repo's own from reaching it, so its versions are written here. It targets net11.0, the
+       runtime of the SDK global.json names, so it runs where only that SDK is installed (test.sh checks it). Warnings are errors, NuGetAudit's
+       NU1901 to NU1904 among them, but not NU1900 and NU1905: they say the vulnerability data couldn't be fetched (a feed outage; NU1905 when
+       the audit source, nuget.org alone in NuGet.config, gave none), not that a package is vulnerable (mpaulosky/Application_Factory#145). -->
   <PropertyGroup>
     <TargetFramework>net11.0</TargetFramework>
     <Nullable>enable</Nullable>
@@ -9,6 +12,11 @@
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1900;NU1905</WarningsNotAsErrors>
+    <!-- The NuGet.config beside it restores from nuget.org alone, and packages.lock.json pins every package, direct and transitive, by hash:
+         test.sh restores in locked mode, so a version moved here without the lock file fails with NU1004 (dotnet restore rewrites it, as
+         Dependabot's NuGet updater does after a bump). -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="xunit.v3.mtp-v2" Version="4.0.3" />

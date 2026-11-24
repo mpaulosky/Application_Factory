@@ -97,7 +97,8 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   `origin/main` with no conflict when the rebased tree is the one that merge gives (`isReviewedCode`; one that isn't needs a new review); a new commit, a conflict
   resolution or a `main` change inside one of the branch's hunks needs a new one. A re-Apply on `chore/reapply-baseline` passes without one only when every
   change is a regular Owned file added or modified, as Apply writes them (`OWNED_PATHS` in the ledger lists them, and a dotfiles test keeps it equal to
-  `template/owned/`). A deleted Owned file, a symlink, a submodule, a file of the repo's own, a Seed file the re-Apply writes because the repo lacked it, or one of
+  `template/owned/`), or a retired Owned file deleted where `main` had a regular file (`RETIRED_PATHS`, which `test.sh` keeps equal to the Factory's `retired.txt`;
+  [apply.md](apply.md#retired-owned-files)). Any other deleted Owned file, a symlink, a submodule, a file of the repo's own, a Seed file the re-Apply writes because the repo lacked it, or one of
   the Owned files that carry behaviour (`REVIEWED_ON_REAPPLY`: `.github/ci/coverage-threshold`, which ci.yml enforces at any value,
   `.claude/rules/sandcastle-hand-off.md` and `.claude/rules/markdown-and-yaml-edits.md`, which load into every session, `.claude/rules/script-edits.md`, which loads into every session
   that works on a script, the three `.github/ISSUE_TEMPLATE/` files, whose front matter sets labels and assignees,

@@ -212,6 +212,12 @@ export const REVIEWED_ON_REAPPLY: ReadonlySet<string> = new Set([
   ".sandcastle/status.mts",
 ]);
 
+// The Owned files the Template retired, which Apply deletes when the repository's copy is identical to a version it
+// shipped (the Factory's retired.txt, which test.sh holds this list to). A re-Apply that deletes one of them, a regular
+// file the repository doesn't list as its own, passes without a review, as one that writes an Owned file does: the
+// Template's own review covered the retirement.
+export const RETIRED_PATHS: ReadonlySet<string> = new Set<string>([]);
+
 // The files under an Owned pattern that the Template doesn't supply: its Seed
 // repo-config.mts, and the files the repository lists in repo-config.mts's
 // NOT_OWNED_BASELINE_PATHS (its own workflows, scripts and Sandcastle tests).
@@ -1528,8 +1534,8 @@ export type ReviewCheck = { ok: boolean; message: string };
 // The gate's review check: HEAD's diff has a recorded review with no open
 // Critical or Warning finding. Three things pass without one: `GATE_SKIP_REVIEW=1` (that value
 // only), a branch with no changes against the base, and a Baseline re-Apply
-// on REAPPLY_BRANCH that changes only Owned files, REVIEWED_ON_REAPPLY apart.
-export function checkReview(cwd: string, base: string, env: NodeJS.ProcessEnv = process.env): ReviewCheck {
+// on REAPPLY_BRANCH that changes only Owned files (or deletes a retired one), REVIEWED_ON_REAPPLY apart.
+export function checkReview(cwd: string, base: string, env: NodeJS.ProcessEnv = process.env, retired: ReadonlySet<string> = RETIRED_PATHS): ReviewCheck {
   if (env[SKIP_REVIEW_ENV] === "1") {
     return { ok: true, message: `Review check skipped (${SKIP_REVIEW_ENV}=1).` };
   }
@@ -1541,20 +1547,22 @@ export function checkReview(cwd: string, base: string, env: NodeJS.ProcessEnv = 
     // The key's own pins: no renames (a file moved into an Owned folder is
     // still a change elsewhere), no ignored submodules, no relative paths, and
     // no trimming, so a name starting with a space keeps it. The raw form, not
-    // just the names, because Apply only adds or overwrites regular files and
-    // never deletes: a deleted Owned file, a symlink or a submodule under an
-    // Owned path is not what a re-Apply writes, and is reviewed.
+    // just the names, because Apply only adds or overwrites regular files, and
+    // deletes only a retired one: any other deleted Owned file, a symlink or a
+    // submodule under an Owned path is not what a re-Apply writes, and is reviewed.
     const raw = gitBytes(cwd, ["-c", "diff.relative=false", "diff", "--raw", "--no-renames", "--ignore-submodules=none", "-z", base, head])
       .toString("utf8")
       .split("\0")
       .filter((entry) => entry !== "");
-    const changes: { status: string; mode: string; path: string }[] = [];
+    const changes: { status: string; oldMode: string; mode: string; path: string }[] = [];
     for (let index = 0; index + 1 < raw.length; index += 2) {
-      const [, mode = "", , , status = ""] = raw[index]!.split(" ");
-      changes.push({ status, mode, path: raw[index + 1]! });
+      const [oldMode = "", mode = "", , , status = ""] = raw[index]!.split(" ");
+      changes.push({ status, oldMode: oldMode.replace(/^:/, ""), mode, path: raw[index + 1]! });
     }
-    const writtenByApply = (change: { status: string; mode: string; path: string }) =>
-      (change.status === "A" || change.status === "M") && (change.mode === "100644" || change.mode === "100755") && isOwnedPath(change.path) && !REVIEWED_ON_REAPPLY.has(change.path);
+    const regular = (mode: string) => mode === "100644" || mode === "100755";
+    const writtenByApply = (change: { status: string; oldMode: string; mode: string; path: string }) =>
+      ((change.status === "A" || change.status === "M") && regular(change.mode) && isOwnedPath(change.path) && !REVIEWED_ON_REAPPLY.has(change.path)) ||
+      (change.status === "D" && regular(change.oldMode) && retired.has(change.path) && !NOT_OWNED.has(change.path));
     withheld = changes.filter((change) => REVIEWED_ON_REAPPLY.has(change.path)).map((change) => change.path);
     if (changes.length > 0 && changes.every(writtenByApply)) {
       return { ok: true, message: "A Baseline re-Apply that changes only Owned files: the Template's own review covers them." };

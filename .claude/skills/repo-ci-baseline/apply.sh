@@ -7,7 +7,11 @@
 # .sandcastle/check.sh, which is kept and reported as a conflict. Seed files
 # (template/seed) are written only where the repo has none, with {{OWNER}},
 # {{REPO}}, {{SOLUTION}} and {{YEAR}} (this year) filled in. Then core.hooksPath is pointed at
-# .github/hooks. Nothing is ever deleted. Sandcastle's files (.sandcastle/, its
+# .github/hooks. The one thing Apply deletes is a retired Owned file (retired.txt beside this script: the SHA-256 of
+# every version the Template shipped, then the path), and only when the repo's copy is a regular file byte-identical
+# to one of those versions; a changed copy, a symlink or a folder there is kept and reported. A retired path still in
+# the Template, or one that is absolute, names `.`, `..` or `.git`, or has an empty part, stops Apply before it writes
+# anything. Sandcastle's files (.sandcastle/, its
 # workflow and the Seed skills list the workflow reads, the hand-off rules
 # .claude/rules/sandcastle-hand-off.md, and the package.json and
 # pnpm-workspace.yaml it runs with) go only into a repo with a .sandcastle/
@@ -49,6 +53,40 @@ done
 skill_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 owned_dir="$skill_dir/template/owned"
 seed_dir="$skill_dir/template/seed"
+retired_file="$skill_dir/retired.txt"
+
+# ── Retired Owned files ─────────────────────────────────────────────────────
+# retired.txt holds `<sha256>  <path>` lines, as sha256sum prints them, one for each version of a retired Owned file the
+# Template shipped; `#` lines and blank lines are skipped. A path that is still in the Template, or one that could reach
+# outside the repo or into .git, is refused here, before anything is written.
+declare -A retired_hashes=()
+retired_paths=()
+if [[ -f "$retired_file" ]]; then
+  line_no=0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line_no=$((line_no + 1))
+    line="${line%$'\r'}"
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    if [[ ! "$line" =~ ^([0-9a-f]{64})\ \ (.+)$ ]]; then
+      echo "apply.sh: retired.txt line $line_no isn't '<sha256>  <path>'" >&2
+      exit 1
+    fi
+    hash="${BASH_REMATCH[1]}"
+    rel="${BASH_REMATCH[2]}"
+    case "/$rel/" in
+      //* | *//* | */./* | */../* | */.git/*)
+        echo "apply.sh: retired.txt line $line_no: '$rel' must be a path inside the repo, relative, with no empty, '.', '..' or '.git' part" >&2
+        exit 1
+        ;;
+    esac
+    if [[ -e "$owned_dir/$rel" || -L "$owned_dir/$rel" || -e "$seed_dir/$rel" || -L "$seed_dir/$rel" ]]; then
+      echo "apply.sh: retired.txt line $line_no: '$rel' is retired but still in the Template; remove one or the other" >&2
+      exit 1
+    fi
+    [[ -n "${retired_hashes[$rel]+x}" ]] || retired_paths+=("$rel")
+    retired_hashes["$rel"]+=" $hash "
+  done < "$retired_file"
+fi
 
 if ! git -C "$target" rev-parse --is-inside-work-tree &> /dev/null; then
   echo "apply.sh: '$target' is not a git work tree" >&2
@@ -239,6 +277,34 @@ while IFS= read -r rel; do
   fi
 done < <(list_files "$seed_dir")
 
+# ── Retired: removed when identical to a shipped version, otherwise kept ────
+# Only a regular file whose folder resolves inside the repo is compared: a symlink (to anywhere), a folder, or a file
+# reached through a symlinked folder is kept and reported, never followed. A path already gone is not mentioned.
+retired_removed=()
+retired_kept=()
+target_real="$(cd "$target" && pwd -P)"
+for rel in "${retired_paths[@]}"; do
+  dst="$target/$rel"
+  [[ -e "$dst" || -L "$dst" ]] || continue
+  parent=""
+  [[ -d "$(dirname "$dst")" ]] && parent="$(cd "$(dirname "$dst")" && pwd -P)"
+  if [[ -L "$dst" || ! -f "$dst" || -z "$parent" || ("$parent" != "$target_real" && "$parent" != "$target_real"/*) ]]; then
+    retired_kept+=("$rel (not a regular file in the repo)")
+    continue
+  fi
+  sum="$(sha256sum < "$dst")" || {
+    echo "apply.sh: can't read $rel to compare it with the retired versions" >&2
+    exit 1
+  }
+  sum="${sum%% *}"
+  if [[ "${retired_hashes[$rel]}" == *" $sum "* ]]; then
+    retired_removed+=("$rel")
+    $dry_run || command rm -f -- "$dst"
+  else
+    retired_kept+=("$rel")
+  fi
+done
+
 if ! $dry_run; then
   git -C "$target" config core.hooksPath .github/hooks
 fi
@@ -253,7 +319,8 @@ leftovers=()
 for dir in .github/workflows .github/hooks .github/scripts; do
   [[ -d "$target/$dir" ]] || continue
   while IFS= read -r rel; do
-    [[ -n "${in_template[$rel]:-}" ]] || leftovers+=("$rel")
+    # A retired file is reported once, in its own section.
+    [[ -n "${in_template[$rel]:-}" || -n "${retired_hashes[$rel]+x}" ]] || leftovers+=("$rel")
   done < <(list_files "$target/$dir" | sed "s|^|$dir/|")
 done
 
@@ -295,6 +362,8 @@ section "Owned files that $verb overwritten (drift: drop it, or move a local fix
 echo
 echo "Owned files already identical: $owned_same"
 echo "Sandcastle files left out (the repo has no .sandcastle/; create it and Apply again to add them): ${#sandcastle_left[@]}"
+section "Retired Owned files that $verb removed" "${retired_removed[@]}"
+section "Retired Owned files kept because they differ from every version the Template shipped (delete, or keep as repo-specific)" "${retired_kept[@]}"
 section "Seed files that $verb written" "${seed_written[@]}"
 section "Seed files skipped because the repo has its own (review against the Template in Adapt)" "${seed_skipped[@]}"
 section "Seed files with unfilled placeholders" "${unfilled[@]}"

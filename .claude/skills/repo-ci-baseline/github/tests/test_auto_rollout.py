@@ -533,6 +533,22 @@ def test_owned_changes_lists_only_the_owned_files_the_branch_changes(tmp_path):
         auto.owned_changes("/w", run=lambda command, **kwargs: (128, "", "bad"), owned=str(owned))
 
 
+def test_owned_changes_lists_a_retired_file_the_re_apply_deletes(tmp_path):
+    owned = tmp_path / "owned"
+    owned.mkdir()
+    run = lambda command, **kwargs: (0, ".github/scripts/old.py\0src/App.cs\0", "")  # noqa: E731 - a stub
+    assert auto.owned_changes("/w", run=run, owned=str(owned), retired={".github/scripts/old.py"}) == [".github/scripts/old.py"]
+    assert auto.owned_changes("/w", run=run, owned=str(owned), retired=set()) == []
+
+
+def test_retired_paths_reads_the_paths_of_retired_txt(tmp_path):
+    retired = tmp_path / "retired.txt"
+    digest = "a" * 64
+    retired.write_text(f"# note\n\n{digest}  old.py\r\n{digest}  old.py\n{digest}  a b.yml\n", encoding="utf-8")
+    assert auto.retired_paths(str(retired)) == {"old.py", "a b.yml"}
+    assert auto.retired_paths(str(tmp_path / "none.txt")) == set()
+
+
 # ── The review session ──────────────────────────────────────────────────────
 
 class FakeSession:

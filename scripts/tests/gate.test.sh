@@ -13,8 +13,10 @@
 # It also checks GATE_PART (ADR 0012) and TEST_SH_SHARD (ADR 0013, only the template part runs a shard; test.sh's steps each sit in one shard; the workflow's matrix lists them all): each part runs alone, a bad value, or --quick or --sync with a part, is refused, the Sandcastle check runs in a full gate only when the branch changed
 # a file it reads (and is remembered per clean tree), and the CI workflow has one job per part and a Template tests job that needs them all.
 # It also checks the C# step (ADR 0017): with no .cs file it passes without an SDK; otherwise it needs dotnet, format-checks every .cs in one folder-mode run, builds only the
-# entry files (no #:include'd file, no project's file) from their own folders with warnings as errors but CA2266, and tells a finding from a failed dotnet; and that a pass is
-# remembered per .NET SDK as well as per tree.
+# entry files (no #:include'd file, no project's file) from their own folders with warnings as errors but CA2266 and NU1900, from scratch into a gate-cs.* folder of its own with
+# no build server, and tells a finding from a failed dotnet; that the build folder is gone after a pass, a failing build, a TERM mid-build (the build ended and waited for
+# first, and one that ignores the TERM killed), a TERM between the build's fork and cs_pid=$! (sent there by a DEBUG trap BASH_ENV sets) and with a relative TMPDIR, and a mktemp that can't make it fails the step; that the gate and the CI workflow run dotnet with
+# telemetry off, no first-run setup and no logo; and that a pass is remembered per .NET SDK as well as per tree.
 #
 #   scripts/tests/gate.test.sh
 set -euo pipefail
@@ -578,7 +580,7 @@ check "the key names the SDK release and global.json's version, a byte outside l
 check "an SDK and a global.json that can't be read are each none in the key" \
   "$([[ "$(cd "$work" && PATH="$work/noruff" sdk_key)" == sdk_none_global_none ]] && echo 0 || echo 1)"
 
-# The C# step (ADR 0017): every C# file passes dotnet format whitespace, and every script entry file builds with warnings as errors but CA2266.
+# The C# step (ADR 0017): every C# file passes dotnet format whitespace, and every script entry file builds with warnings as errors but CA2266 and NU1900.
 # With no .cs file, as in the Factory before its first port, the step checks nothing and needs no SDK.
 repoC="$(new_repo csharp)"
 mkdir -p "$work/nodotnet" "$work/stubdotnet"
@@ -616,9 +618,9 @@ run_csharp "$work/stubdotnet" --quick
 want_format="$repoC|format whitespace . --folder --verify-no-changes --include $(cd "$repoC" && git ls-files --others --exclude-standard -- '*.cs' | sort | sed 's|^|./|' | tr '\n' ' ' | sed 's/ $//')"
 check "every C# file is format-checked in one folder-mode run, each name after ./" \
   "$([[ $status == 0 ]] && [[ "$(grep '|format ' "$work/dotnet-log" | tr ' ' '\n' | sort | tr '\n' ' ')" == "$(printf '%s' "$want_format" | tr ' ' '\n' | sort | tr '\n' ' ')" ]] && echo 0 || echo 1)"
-want_builds="$(printf '%s|build %s -p:TreatWarningsAsErrors=true -p:WarningsNotAsErrors=CA2266\n' "$repoC/-x" "$repoC/-x/-dash.cs" "$repoC" "$repoC/root.cs" "$repoC/scripts" "$repoC/scripts/tool.cs" | sort)"
-check "only the entry files are built, each from its own folder, with warnings as errors but CA2266: no included file (a CRLF and a ./ in the #:include too) and no project's file" \
-  "$([[ "$(grep '|build ' "$work/dotnet-log" | sort)" == "$want_builds" ]] && grep -qx '6 C# file(s) format-checked, 3 script(s) built.' "$repoC/out" && echo 0 || echo 1)"
+want_builds="$(printf '%s|build %s --no-incremental --disable-build-servers --artifacts-path <out> -p:TreatWarningsAsErrors=true -p:WarningsNotAsErrors=CA2266%%3BNU1900\n' "$repoC/-x" "$repoC/-x/-dash.cs" "$repoC" "$repoC/root.cs" "$repoC/scripts" "$repoC/scripts/tool.cs" | sort)"
+check "only the entry files are built, each from its own folder, from scratch into the run's own folder with no build server, with warnings as errors but CA2266 and NU1900: no included file (a CRLF and a ./ in the #:include too) and no project's file" \
+  "$([[ "$(grep '|build ' "$work/dotnet-log" | sed 's|--artifacts-path [^ ]* |--artifacts-path <out> |' | sort)" == "$want_builds" ]] && grep -qx '6 C# file(s) format-checked, 3 script(s) built.' "$repoC/out" && echo 0 || echo 1)"
 STUB_FORMAT_EXIT=2 run_csharp "$work/stubdotnet" --quick
 check "a format finding (exit 2) fails the step, saying how to fix it" "$([[ $status == 1 ]] && grep -q '❌ dotnet format: run dotnet format whitespace' "$repoC/out" && echo 0 || echo 1)"
 STUB_FORMAT_EXIT=1 run_csharp "$work/stubdotnet" --quick
@@ -640,6 +642,130 @@ check "with the SDK, an indent of spaces where .editorconfig gives a tab fails t
 printf 'internal static class Lib\n{\n\tpublic static int Run()\n\t{\n\t\tint unused = 0;\n\t\treturn 0;\n\t}\n}\n' > "$repoC/scripts/Lib.cs"
 GATE_ARGS=--quick run "$repoC"
 check "with the SDK, any other warning fails the build" "$([[ $status == 1 ]] && grep -q 'error CS0219' "$repoC/out" && grep -q '❌ dotnet build scripts/tool.cs' "$repoC/out" && echo 0 || echo 1)"
+# The builds go to a temporary folder of the run's own, which the gate removes after a pass, after a failing build, and when a signal ends it mid-build.
+# The gate names its folder gate-cs.*; dotnet's own folders in TMPDIR (NuGetScratch<user>, and others by SDK and OS) aren't the gate's to remove.
+cs_tmp="$work/cs tmp"
+mkdir -p "$cs_tmp"
+cs_tmp_left() { find "$cs_tmp" -mindepth 1 -maxdepth 1 -name 'gate-cs.*' -print; }
+status=0
+(cd "$repoC" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 TMPDIR="$cs_tmp" bash scripts/gate.sh --quick > "$repoC/out" 2>&1) || status=$?
+check "a failing build leaves nothing in TMPDIR either" "$([[ $status == 1 && -z "$(cs_tmp_left)" ]] && grep -q 'CS0219' "$repoC/out" && echo 0 || echo 1)"
+printf 'internal static class Lib\n{\n\tpublic static int Run() => 0;\n}\n' > "$repoC/scripts/Lib.cs"
+status=0
+(cd "$repoC" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 TMPDIR="$cs_tmp" bash scripts/gate.sh --quick > "$repoC/out" 2>&1) || status=$?
+check "a passing C# step leaves nothing in TMPDIR, and the builds nothing in the tree" "$([[ $status == 0 && -z "$(cs_tmp_left)" && -z "$(find "$repoC" -path "$repoC/.git" -prune -o \( -name bin -o -name obj -o -name artifacts \) -print)" ]] && echo 0 || echo 1)"
+# A dotnet that records the DOTNET_ settings it sees and, on a build, its arguments and --artifacts-path, then waits and writes into that folder: the gate
+# must hand it the three over the caller's 0s, build into a gate-cs.* folder in TMPDIR, and, when a TERM ends it mid-build, end the build and wait for it
+# before it removes that folder, so nothing writes into it after. Like a real dotnet, the stub outlives the TERM a moment: its TERM trap writes into the
+# folder a second later, so a gate that removed the folder without waiting would find it back. The stub renames the file into place whole, and the wait is
+# for its content, so the TERM never comes between the file's creation and its path.
+mkdir -p "$work/slowdotnet"
+cat > "$work/slowdotnet/dotnet" << SLOW
+#!/usr/bin/env bash
+printf 'optout=%s first=%s nologo=%s\\n' "\${DOTNET_CLI_TELEMETRY_OPTOUT:-}" "\${DOTNET_SKIP_FIRST_TIME_EXPERIENCE:-}" "\${DOTNET_NOLOGO:-}" >> "$work/slowdotnet/env"
+if [[ "\$1" == build ]]; then
+  printf '%s\\n' "\$@" > "$work/slowdotnet/args"
+  while [[ \$# -gt 0 && "\$1" != --artifacts-path ]]; do shift; done
+  printf '%s\\n' "\${2:-}" > "$work/slowdotnet/building.tmp"
+  trap 'sleep 1; [[ -z "\${2:-}" ]] || mkdir -p "\$2/late"; exit 0' TERM
+  mv "$work/slowdotnet/building.tmp" "$work/slowdotnet/building"
+  sleep 3 &
+  wait "\$!"
+  [[ -z "\${2:-}" ]] || mkdir -p "\$2/late"
+fi
+exit 0
+SLOW
+chmod +x "$work/slowdotnet/dotnet"
+rm -f "$work/slowdotnet/env" "$work/slowdotnet/args" "$work/slowdotnet/building" "$work/slowdotnet/building.tmp"
+# shellcheck disable=SC2016 # $1 is the inner bash's argument, the repo
+env -u GATE_SKIP_REVIEW DOTNET_CLI_TELEMETRY_OPTOUT=0 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=0 DOTNET_NOLOGO=0 GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 TMPDIR="$cs_tmp" \
+  PATH="$work/slowdotnet:$PATH" bash -c 'cd "$1" && exec bash scripts/gate.sh --quick' _ "$repoC" > "$repoC/out" 2>&1 &
+slow_gate=$!
+for _ in $(seq 1 600); do
+  [[ ! -s "$work/slowdotnet/building" ]] || break
+  sleep 0.1
+done
+kill -TERM "$slow_gate" 2> /dev/null || true
+wait "$slow_gate" 2> /dev/null || true
+slow_out="$(cat "$work/slowdotnet/building" 2> /dev/null || true)"
+# A build left running would write its late folder 3 seconds after it started: wait past that before looking.
+sleep 3.5
+check "a TERM while a script builds ends the build and waits for it, then removes the build folder, a gate-cs.* folder in TMPDIR" \
+  "$([[ "$slow_out" == "$cs_tmp"/gate-cs.* && ! -e "$slow_out" && -z "$(cs_tmp_left)" ]] && echo 0 || echo 1)"
+# A TERM between the build's fork and cs_pid=$! (a DEBUG trap, from BASH_ENV, sends it there) still ends the build: cs_stop finds it as $!. A build
+# left running would write its late file 3 seconds after it started.
+mkdir -p "$work/forkdotnet"
+cat > "$work/forkdotnet/dotnet" << FORK
+#!/usr/bin/env bash
+if [[ "\$1" == build ]]; then
+  sleep 3 &
+  wait "\$!"
+  : > "$work/forkdotnet/late"
+fi
+exit 0
+FORK
+chmod +x "$work/forkdotnet/dotnet"
+# shellcheck disable=SC2016 # the trap's $BASH_COMMAND and $BASHPID are the gate's, when it runs
+printf '%s\n' 'set -T' "trap '[[ \$BASH_COMMAND != \"cs_pid=\\\$!\" ]] || { : > \"$work/forkdotnet/signalled\"; kill -TERM \$BASHPID; }' DEBUG" \
+  > "$work/forkdotnet/env.sh"
+rm -f "$work/forkdotnet/late" "$work/forkdotnet/signalled"
+# shellcheck disable=SC2016 # $1 is the inner bash's argument, the repo
+env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 TMPDIR="$cs_tmp" PATH="$work/forkdotnet:$PATH" BASH_ENV="$work/forkdotnet/env.sh" \
+  bash -c 'cd "$1" && exec bash scripts/gate.sh --quick' _ "$repoC" > "$repoC/out" 2>&1 || true
+sleep 3.5
+check "a TERM between the build's fork and cs_pid=\$! still ends the build, and the gate leaves no build folder" \
+  "$([[ -e "$work/forkdotnet/signalled" && ! -e "$work/forkdotnet/late" && -z "$(cs_tmp_left)" ]] && echo 0 || echo 1)"
+# A build that ignores the TERM is killed after 5 seconds: the gate still ends, and still removes the folder.
+mkdir -p "$work/stubborndotnet"
+cat > "$work/stubborndotnet/dotnet" << STUBBORN
+#!/usr/bin/env bash
+if [[ "\$1" == build ]]; then
+  trap '' TERM
+  : > "$work/stubborndotnet/building"
+  exec sleep 30
+fi
+exit 0
+STUBBORN
+chmod +x "$work/stubborndotnet/dotnet"
+rm -f "$work/stubborndotnet/building"
+# shellcheck disable=SC2016 # $1 is the inner bash's argument, the repo
+env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 TMPDIR="$cs_tmp" PATH="$work/stubborndotnet:$PATH" \
+  bash -c 'cd "$1" && exec bash scripts/gate.sh --quick' _ "$repoC" > "$repoC/out" 2>&1 &
+stubborn_gate=$!
+for _ in $(seq 1 600); do
+  [[ ! -e "$work/stubborndotnet/building" ]] || break
+  sleep 0.1
+done
+stubborn_start=$SECONDS
+kill -TERM "$stubborn_gate" 2> /dev/null || true
+wait "$stubborn_gate" 2> /dev/null || true
+stubborn_took=$((SECONDS - stubborn_start))
+check "a build that ignores the TERM is killed: the gate ends within 5 to 10 seconds and leaves no build folder" \
+  "$([[ -e "$work/stubborndotnet/building" ]] && ((stubborn_took >= 4 && stubborn_took <= 10)) && [[ -z "$(cs_tmp_left)" ]] && echo 0 || echo 1)"
+check "the gate runs dotnet with telemetry off, no first-run setup and no logo, over a caller's 0s" \
+  "$([[ -s "$work/slowdotnet/env" ]] && ! grep -vqx 'optout=1 first=1 nologo=1' "$work/slowdotnet/env" && echo 0 || echo 1)"
+check "the build's warnings as errors leave CA2266 and NU1900 (a vulnerability feed that can't be reached) warnings, and nothing else" \
+  "$(grep -qx -- '-p:TreatWarningsAsErrors=true' "$work/slowdotnet/args" && grep -qx -- '-p:WarningsNotAsErrors=CA2266%3BNU1900' "$work/slowdotnet/args" \
+    && [[ "$(grep -c -- '^-p:' "$work/slowdotnet/args")" == 2 ]] && echo 0 || echo 1)"
+# A relative TMPDIR names a folder from where the gate runs, not from each script's folder: the build lands in the gate's own gate-cs.* folder there, and
+# nothing is left behind, in the tree or in TMPDIR.
+mkdir -p "$repoC/../rel tmp"
+status=0
+(cd "$repoC" && env -u GATE_SKIP_REVIEW GATE_SKIP_REVIEW=1 GATE_SKIP_SELF_TEST=1 TMPDIR="../rel tmp" bash scripts/gate.sh --quick > "$repoC/out" 2>&1) || status=$?
+check "a relative TMPDIR builds into the gate's own folder and leaves no gate-cs.* folder in the tree or in TMPDIR" \
+  "$([[ $status == 0 && -z "$(find "$repoC" "$repoC/../rel tmp" -name 'gate-cs.*' -print)" ]] && echo 0 || echo 1)"
+# A mktemp that can't make the build folder (the gate's other mktemp calls still work) fails the step with its own message, before any build.
+mkdir -p "$work/failmktemp"
+cat > "$work/failmktemp/mktemp" << FAILMK
+#!/usr/bin/env bash
+for arg in "\$@"; do [[ "\$arg" != *gate-cs.* ]] || exit 1; done
+exec "$(command -v mktemp)" "\$@"
+FAILMK
+chmod +x "$work/failmktemp/mktemp"
+run_csharp "$work/failmktemp:$PATH"
+check "a mktemp that fails for the build folder fails the step, saying so, and builds nothing" \
+  "$([[ $status == 1 ]] && grep -q '❌ could not make a temporary folder for the C# builds' "$repoC/out" && ! grep -q 'script(s) built.' "$repoC/out" \
+    && ! grep -q "doesn't build" "$repoC/out" && echo 0 || echo 1)"
 
 # A bare git status --porcelain in an Owned script fails the full gate and --quick, before test.sh.
 repo11="$(new_repo git-status)"
@@ -1659,6 +1785,13 @@ aggregator_ok() { # aggregator_ok <workflow file>: 0 when the Template tests ste
 wf="$here/.github/workflows/template-tests.yml"
 check "the CI workflow has one job per GATE_PART, run through gate.sh, and a Template tests job that always runs and needs them all" "$(workflow_ok "$wf" "$here/scripts/gate.sh" "$here/$skill/test.sh" && echo 0 || echo 1)"
 check "the Template tests step passes for five successes and fails for a failed, cancelled or skipped part, a missing part and no parts" "$(aggregator_ok "$wf" && echo 0 || echo 1)"
+check "the CI workflow runs dotnet with telemetry off, no first-run setup and no logo, for every job" "$(
+  "${yaml_py[@]}" - "$wf" << 'PY_ENV' && echo 0 || echo 1
+import sys, yaml
+env = yaml.safe_load(open(sys.argv[1])).get("env") or {}
+sys.exit(0 if all(env.get(k) is True for k in ("DOTNET_CLI_TELEMETRY_OPTOUT", "DOTNET_SKIP_FIRST_TIME_EXPERIENCE", "DOTNET_NOLOGO")) else 1)
+PY_ENV
+)"
 mkdir -p "$work/wf"
 mutate_wf() { # mutate_wf <name> <python statement on the loaded workflow `wf`>: writes $work/wf/<name>.yml
   "${yaml_py[@]}" - "$wf" "$work/wf/$1.yml" "$2" << 'PY'
