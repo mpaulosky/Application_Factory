@@ -204,9 +204,15 @@ for fixture in "$key.$n.json" "$key.$n.fail" "$key.json" "$key.fail"; do
   if [[ "$fixture" == *.json && -n "${has_jq:-}" ]]; then
     # gh runs the expression over the response and prints a string result raw, as jq -r does.
     command -v jq > /dev/null || unmatched "$key (jq, which a call with --jq needs, is not on PATH)"
+    # The program goes in a file: jq before 1.7 refuses -- ahead of the program, and -f reads one that starts with - as a program too.
     answer="$(mktemp)" || unmatched "$key (no temporary file for jq's answer)"
-    trap 'rm -f "$answer"' EXIT
-    jq -r -- "$jq" < "$file" > "$answer" 2> /dev/null || unmatched "$key (jq can't run $jq over its fixture $fixture)"
+    program="$(mktemp)" || {
+      rm -f "$answer"
+      unmatched "$key (no temporary file for jq's program)"
+    }
+    trap 'rm -f "$answer" "$program"' EXIT
+    printf '%s\n' "$jq" > "$program" || unmatched "$key (can't write jq's program)"
+    jq -r -f "$program" < "$file" > "$answer" 2> /dev/null || unmatched "$key (jq can't run $jq over its fixture $fixture)"
     printf '%s\n' "$entry" >> "$FAKE_GH_LOG"
     cat -- "$answer"
     exit 0

@@ -1,0 +1,13 @@
+{
+  "number": 2,
+  "title": "feat: Two",
+  "body": "It adds a thing.",
+  "merged_at": "2026-02-01T11:00:00Z",
+  "html_url": "https://github.com/o/app/pull/2",
+  "user": {
+    "login": "alice"
+  },
+  "base": {
+    "ref": "main"
+  }
+}

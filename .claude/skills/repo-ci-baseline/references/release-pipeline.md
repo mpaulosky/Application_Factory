@@ -137,9 +137,9 @@ directory up, with the text unchanged. Add a shape to its grid whenever a review
 **Parity suites.** `tests/parity.test.sh <suite> [command...]` (in the skill, not the Template) runs `release_queue`, `draft_release`,
 `release_post` and `backfill_blog_posts` through their command lines only, so the same cases judge a port of them (ADR 0017)
 against the Python. A case holds the arguments, stdin, environment, the files the run starts with and the fake `gh`'s
-fixtures, and for `release_queue` a `setup` that builds main's history with a local origin. The case then checks stdout, the exit code,
-the shape of stderr, the `gh` calls, and every file the run leaves (`expected.tree/`), byte for byte. The fake runs real jq for a call's
-`--jq`. `test.sh` runs them against the Python. Each suite's `tests/parity/<suite>/README.md` says what its cases leave out:
+fixtures, and for `release_queue` a `setup.sh` that builds main's history with a local origin. The case then checks stdout, the exit code,
+the shape of stderr, the `gh` calls, and every file the run leaves (`expected.tree/`), byte for byte. The fake runs real jq over the fixture for
+a REST call's `--jq`. `test.sh` runs them against the Python. Each suite's `tests/parity/<suite>/README.md` says what its cases leave out:
 the Anthropic call, the half-minute `--wait-for-prs` limit and the "today" fallback for a PR with no merge time are left to unit tests.
 
 **Permissions:** workflow-level `permissions: {}`, with each job granting only what it needs. The docs and release

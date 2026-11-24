@@ -1,0 +1,14 @@
+{
+  "number": 32,
+  "title": "feat: Change 32",
+  "state": "closed",
+  "merged_at": null,
+  "updated_at": "2026-03-06T11:00:00Z",
+  "merge_commit_sha": null,
+  "user": {
+    "login": "alice"
+  },
+  "base": {
+    "ref": "main"
+  }
+}

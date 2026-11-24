@@ -2,7 +2,7 @@
 # Tests for the parity suites' shared parts: the runner (tests/parity.test.sh) and the fake gh (tests/parity/fake-gh.sh).
 # A suite itself only shows the runner passes against the implementation it was recorded from; this shows it fails, and
 # how, against one that differs (its stdout, exit code, stderr, the gh calls it makes, the argv of a call that writes,
-# their order, the files it leaves), that a case's stdin, env, tree/ and setup reach the run, and that the fake answers
+# their order, the files it leaves), that a case's stdin, env, tree/ and setup.sh reach the run, and that the fake answers
 # what its header says.
 #
 #   tests/parity-runner.test.sh
@@ -241,7 +241,8 @@ broken "an env line that isn't NAME=value" "c1/env line 2 is not NAME=value: -u 
 broken "a tree/ that isn't a folder" "c1/tree is not a folder" touch "$cases/c1/tree"
 broken "an expected.tree/ that isn't a folder" "c1/expected.tree is not a folder" touch "$cases/c1/expected.tree"
 broken "a stdin that isn't a file" "c1/stdin is not a file" mkdir "$cases/c1/stdin"
-broken "a setup that isn't a file" "c1/setup is not a file" mkdir "$cases/c1/setup"
+broken "a setup.sh that isn't a file" "c1/setup.sh is not a file" mkdir "$cases/c1/setup.sh"
+broken "a setup with no .sh" "c1/setup is not read: a case's setup script is setup.sh." touch "$cases/c1/setup"
 rm -rf "$cases/c1"
 suite 2 "no cases" -- ./stub.sh && says "no cases" "no cases under"
 
@@ -267,7 +268,7 @@ suite 1 "record mode refuses a case with an unmatched call" PARITY_RECORD=1 STUB
 [[ ! -e "$cases/c1/expected.stdout" ]] || fail "record mode wrote a case with an unmatched call"
 rm -rf "$cases/c1"
 
-# --- A case's stdin, env, tree/, setup and expected.tree/ ---
+# --- A case's stdin, env, tree/, setup.sh and expected.tree/ ---
 
 new_case c1
 printf 'typed\nmore\n' > "$cases/c1/stdin"
@@ -314,9 +315,9 @@ rm -rf "$cases/c1/tree"
 suite 0 "record mode removes expected.tree/ when the run leaves no file" PARITY_RECORD=1 || true
 [[ ! -e "$cases/c1/expected.tree" ]] || fail "record mode kept an expected.tree/ the run no longer leaves"
 
-# setup builds a git repo in the run's folder, with a local origin under PARITY_SCRATCH; the run sees it, not a caller's.
+# setup.sh builds a git repo in the run's folder, with a local origin under PARITY_SCRATCH; the run sees it, not a caller's.
 new_case c1
-cat > "$cases/c1/setup" << 'EOF'
+cat > "$cases/c1/setup.sh" << 'EOF'
 set -euo pipefail
 [[ -d "$PARITY_SCRATCH" && "$PARITY_SCRATCH" != "$PWD"/* ]]
 git init -q -b main .
@@ -331,17 +332,21 @@ suite 0 "record mode runs the setup" PARITY_RECORD=1 STUB_MODE=git || true
 [[ "$(cat "$cases/c1/expected.stdout")" == "o/app the setup's commit d2acfaa173b3254e8fa804e9d51a9444485f29b3 here origin/main unset" ]] \
   || fail "the run didn't see the setup's repo, its origin and its fixed hash: $(cat "$cases/c1/expected.stdout")"
 [[ ! -e "$cases/c1/expected.tree" ]] || fail "record mode wrote an expected.tree/ for a run that left only .git"
-# Again with a caller's GIT_DIR and git config set: they reach neither the setup nor the run.
-suite 0 "a caller's GIT_DIR and git config reach no case" STUB_MODE=git GIT_DIR="$work/nowhere" \
-  GIT_CONFIG_GLOBAL="$work/nowhere.gitconfig" -- ./stub.sh || true
+# Again with a caller's GIT_DIR, git config and hash format set: they reach neither the setup nor the run. Each config adds
+# a fetch refspec, so one that leaked would show as another remote branch, and SHA-256 would change the setup's hash.
+printf '[remote "origin"]\n\tfetch = +refs/heads/*:refs/remotes/global/*\n' > "$work/caller.gitconfig"
+suite 0 "a caller's GIT_DIR, git config and hash format reach no case" STUB_MODE=git GIT_DIR="$work/nowhere" \
+  GIT_CONFIG_GLOBAL="$work/caller.gitconfig" GIT_CONFIG_PARAMETERS="'remote.origin.fetch'='+refs/heads/*:refs/remotes/param/*'" \
+  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.fetch GIT_CONFIG_VALUE_0='+refs/heads/*:refs/remotes/count/*' \
+  GIT_DEFAULT_HASH=sha256 -- ./stub.sh || true
 # A run that leaves a file beside its .git: record mode keeps the file and drops the .git.
-echo 'echo kept > kept.txt' >> "$cases/c1/setup"
+echo 'echo kept > kept.txt' >> "$cases/c1/setup.sh"
 suite 0 "record mode with a file beside the .git" PARITY_RECORD=1 STUB_MODE=git || true
 [[ "$(cd "$cases/c1/expected.tree" && find . | sort | tr '\n' ' ')" == ". ./kept.txt " ]] \
   || fail "record mode's expected.tree/ isn't the run's files without its .git: $(cd "$cases/c1/expected.tree" && find . | sort)"
 new_case c1
-echo 'echo the setup broke; exit 3' > "$cases/c1/setup"
-suite 2 "a setup that fails" -- ./stub.sh && says "a setup that fails" "c1/setup failed:"$'\n'"the setup broke"
+echo 'echo the setup broke; exit 3' > "$cases/c1/setup.sh"
+suite 2 "a setup that fails" -- ./stub.sh && says "a setup that fails" "c1/setup.sh failed:"$'\n'"the setup broke"
 rm -rf "$cases/c1"
 
 # --- The fake gh on its own ---
@@ -435,6 +440,14 @@ code=0
 PATH="$work/nojq" FAKE_GH_DIR="$gh_dir" FAKE_GH_LOG="$gh_log" "$work/nojq/bash" "$fake" api "$rel" --jq . > "$work/fout" 2>&1 || code=$?
 [[ $code -eq 97 && "$(tail -1 "$gh_log")" == *"jq, which a call with --jq needs, is not on PATH"* ]] \
   || fail "fake gh: jq missing gives exit $code and logged $(tail -1 "$gh_log")"
+# A jq that refuses -- ahead of its program, as jq 1.6 does, still answers: the fake hands it the program in a file.
+mkdir "$work/oldjq"
+# shellcheck disable=SC2016 # the wrapper's own $@ and $a, expanded when it runs
+printf '#!/usr/bin/env bash\nfor a in "$@"; do [[ "$a" != -- ]] || { echo "usage" >&2; exit 2; }; done\nexec %q "$@"\n' "$(command -v jq)" > "$work/oldjq/jq"
+chmod +x "$work/oldjq/jq"
+code=0
+PATH="$work/oldjq:$PATH" FAKE_GH_DIR="$gh_dir" FAKE_GH_LOG="$gh_log" "$fake" api "$rel" --jq '.[].n' > "$work/fout" 2>&1 || code=$?
+[[ $code -eq 0 && "$(cat "$work/fout")" == $'1\n2' ]] || fail "fake gh: a jq that refuses -- gives exit $code and '$(cat "$work/fout")'"
 fake 97 '' "an unreadable fixture" api graphql -f query="$threads_q" -f id=dir.key
 logged "an unreadable fixture is logged as unmatched, not as answered" \
   "UNMATCHED threads.dir.key (its fixture threads.dir.key.json is not a readable file)"
@@ -570,6 +583,12 @@ for suite_dir in "$here"/parity/*/; do
   got="$(case_problems "$suite_dir/cases")"
   [[ -z "$got" ]] || fail "the committed cases of ${suite_dir%/}:"$'\n'"$got"
 done
+# A case's files are compared byte for byte, so git must store them as they are: with text conversion on, a CRLF case
+# would reach a clone (or a commit, under core.autocrlf=input) as LF and pin nothing. tests/parity/.gitattributes turns it off.
+if git -C "$here" rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+  converted="$(cd "$here" && git ls-files -z -- 'parity/*/cases/*' | xargs -0 -r git check-attr text -- | grep -v ': text: unset$' || true)"
+  [[ -z "$converted" ]] || fail "git converts the line endings of these case files (tests/parity/.gitattributes):"$'\n'"$converted"
+fi
 
 if [[ $failures -ne 0 ]]; then
   echo "parity-runner: $failures check(s) failed." >&2

@@ -1,0 +1,32 @@
+[
+  {
+    "filename": "src/😀.cs",
+    "additions": 1,
+    "deletions": 0,
+    "patch": "@@ -1 +1 @@\n-a\n+b"
+  },
+  {
+    "filename": "src/～.cs",
+    "additions": 1,
+    "deletions": 0,
+    "patch": "@@ -1 +1 @@\n-a\n+b"
+  },
+  {
+    "filename": "src/�.cs",
+    "additions": 1,
+    "deletions": 0,
+    "patch": "@@ -1 +1 @@\n-a\n+b"
+  },
+  {
+    "filename": "src/a.cs",
+    "additions": 1,
+    "deletions": 0,
+    "patch": "@@ -1 +1 @@\n-a\n+b"
+  },
+  {
+    "filename": "src/é.cs",
+    "additions": 1,
+    "deletions": 0,
+    "patch": "@@ -1 +1 @@\n-a\n+b"
+  }
+]

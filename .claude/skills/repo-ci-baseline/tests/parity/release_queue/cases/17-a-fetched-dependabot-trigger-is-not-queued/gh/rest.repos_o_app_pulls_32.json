@@ -1,0 +1,14 @@
+{
+  "number": 32,
+  "title": "feat: Change 32",
+  "state": "closed",
+  "merged_at": "2026-03-06T11:00:00Z",
+  "updated_at": "2026-03-06T11:00:00Z",
+  "merge_commit_sha": "6574846d1a07053cec9eabc19022ede9c0ade5e0",
+  "user": {
+    "login": "dependabot[bot]"
+  },
+  "base": {
+    "ref": "main"
+  }
+}

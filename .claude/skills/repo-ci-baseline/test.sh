@@ -593,6 +593,8 @@ if in_shard scripts; then
   (cd "$skill_dir" && "${pytest_cmd[@]}" -q -p no:cacheprovider github/tests) || fail "github scripts pytest"
 
   step "Parity suites (status.py, land.py and the release scripts through their command lines, against a fake gh) and their runner's tests"
+  # The fake gh runs jq for a REST call's --jq, which the release scripts' suites make.
+  need jq
   # Every suite is run: each folder under tests/parity/ with a cases/ folder, so a suite added later can't be left out. Each needs its README.md
   # (what its cases cover and leave out), and there are at least the six suites this was written with, so a glob that matched nothing can't pass.
   parity_suites=()

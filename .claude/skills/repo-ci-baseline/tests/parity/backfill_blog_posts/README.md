@@ -9,6 +9,13 @@ The cases cover the missing posts written oldest first, every release with a pos
 second listing (one 2-second wait, from the numbered fixtures `rest.<path>.1.json` and `.2.json`), an empty repo with the repo from `GITHUB_REPOSITORY`, no
 Release at all with `--repo` over `REPOSITORY`, the hostile Markdown corpus of the `release_post` suite, and the usage errors (exit 2).
 
+Cases 16 to 20 add:
+
+- 16: the posts written in version order. v1.2.0, v1.9.0, then v1.10.0, which is neither the listing's order, the PRs' numbers nor the tags' string order.
+- 17: CRLF and a UTF-8 BOM in the docs the tables rewrite. They come out with LF line endings and keep the BOM.
+- 18 and 19: `REPOSITORY` over `GITHUB_REPOSITORY`, and an empty `REPOSITORY` falling back to it.
+- 20: an `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` of only blanks count as unset.
+
 Not covered, on purpose:
 
 - A wait that runs out: 15 listings 2 seconds apart take half a minute of real time. The unit tests cover it with the sleep stubbed.

@@ -5,7 +5,8 @@ case holds. Each case gives the draft's body on stdin and the release notes in i
 
 The cases cover a marker on a line of its own (with spaces and tabs around it, or twice), no marker, an empty draft, a marker inside a longer line, a draft with
 no final newline, notes that lose only their trailing newlines, a draft naming another PR (a longer number, or another PR beside this one; with and without
-`--tag`), a draft whose bytes pass through untouched (astral characters, named entities, non-ASCII case, U+2028 and U+2029, and a byte that isn't UTF-8),
+`--tag`), a marker whose number is this PR's only as a number (`#042`, or Arabic-Indic digits: not another PR, but not this one's marker either, so the notes are
+added) and Arabic-Indic digits for another PR (exit 1), a draft whose bytes pass through untouched (astral characters, named entities, non-ASCII case, U+2028 and U+2029, and a byte that isn't UTF-8),
 and the usage errors (exit 2).
 
 Not covered, on purpose:

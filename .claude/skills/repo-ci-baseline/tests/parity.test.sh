@@ -32,20 +32,21 @@
 #   stdin            the implementation's stdin, byte for byte (missing: /dev/null)
 #   env              NAME=value lines, set for the run on top of the fixed environment below (a blank line is ignored)
 #   tree/            files copied into the folder the implementation runs from (missing: it starts empty)
-#   setup            a bash script run in that folder before the implementation, to build what a file can't hold (a git
+#   setup.sh         a bash script run in that folder before the implementation (a .sh, so the gate's shellcheck and shfmt read it), to build what a file can't hold (a git
 #                    repo with a local origin); it runs with PARITY_SCRATCH, a folder outside the run's for what the
 #                    run mustn't see as its own (the bare origin), and the git identity and dates fixed, so its commits
 #                    get the same hashes everywhere and the gh fixtures can name them
 #   expected.tree/   the run's folder afterwards, every file byte for byte (a .git anywhere is left out); missing: the run
 #                    must leave the folder holding nothing but a .git, so a script that writes no file is held to that
 #
-# Neither args, env nor an expected.* file may hold a carriage return (a setup error); stdin and a tree may. Record mode writes
+# Neither args, env nor an expected.* file may hold a carriage return (a setup error); stdin and a tree may, and
+# tests/parity/.gitattributes stores every case file as it is, so a clone keeps them. Record mode writes
 # expected.stdout, expected.code, expected.calls and expected.tree/ (removed when the run leaves no file). It writes a
 # new case's expected.stderr with each line matched literally, for someone to loosen to the shape that matters; an existing
 # one holds that loosening, so it is kept, and the run fails when it no longer fits. A case whose run makes a gh call the
 # fake can't answer, or times out, is never recorded.
 #
-# Each case's run starts in a new temporary folder of its own (empty, or the case's tree/ and setup), with
+# Each case's run starts in a new temporary folder of its own (empty, or the case's tree/ and setup.sh), with
 # stdin from /dev/null or the case's stdin, the fake gh first on PATH, no GitHub token in its environment and GH_CONFIG_DIR
 # a new empty folder (nothing an earlier case wrote is left), no repository, Anthropic key or model the caller set (REPOSITORY, GITHUB_REPOSITORY, ANTHROPIC_API_KEY,
 # ANTHROPIC_MODEL: a case's env sets them), no git repository or config the caller set (GIT_DIR and the rest unset,
@@ -59,8 +60,8 @@
 #
 # Exit 0 when every case passes, 1 when one fails, 2 on a usage or setup error (a case missing a file or holding a bad
 # one, a command that can't be run, a temporary folder that can't be made). Needs bash 4.4 or later, coreutils (mktemp,
-# ln, cp, cat, timeout, find), diff, grep and sed, and git for a case with a setup; the fake gh needs bash and cat, and jq for
-# a REST call with --jq.
+# ln, cp, cat, sort, timeout), findutils (find), diff, grep and sed, and git for a case with a setup.sh; the fake gh needs
+# bash and cat, and mktemp, rm and jq (any version) for a REST call with --jq.
 set -euo pipefail
 
 setup_error() {
@@ -139,9 +140,10 @@ check_case() {
   for file in tree expected.tree; do
     [[ ! -e "$dir/$file" || -d "$dir/$file" ]] || setup_error "$name/$file is not a folder."
   done
-  for file in stdin env setup; do
+  for file in stdin env setup.sh; do
     [[ ! -e "$dir/$file" || -f "$dir/$file" ]] || setup_error "$name/$file is not a file."
   done
+  [[ ! -e "$dir/setup" ]] || setup_error "$name/setup is not read: a case's setup script is setup.sh."
   if [[ -f "$dir/env" ]]; then
     n=0
     while IFS= read -r pattern || [[ -n "$pattern" ]]; do
@@ -227,11 +229,13 @@ tree_problems() {
 }
 
 # What git sees in the case's setup and in the run: no repository, config or object store the caller set (a hook sets
-# GIT_DIR and the rest), and no repository above the run's folder. Every -u comes before the first NAME=value, as env
-# reads its options before its assignments.
+# GIT_DIR and the rest), no repository above the run's folder, and SHA-1 object names whatever the caller or git's own
+# default asks for, since the gh fixtures name the setup's commits by hash. Every -u comes before the first NAME=value,
+# as env reads its options before its assignments.
 git_env=(-u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY
-  -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_NAMESPACE -u GIT_CONFIG -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_COUNT
-  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_CEILING_DIRECTORIES="$tmp/run" GIT_TERMINAL_PROMPT=0)
+  -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_NAMESPACE -u GIT_CONFIG -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_COUNT -u GIT_TEMPLATE_DIR
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_CEILING_DIRECTORIES="$tmp/run" GIT_TERMINAL_PROMPT=0
+  GIT_DEFAULT_HASH=sha1)
 # The setup's commits: the same identity and dates everywhere, so their hashes are too.
 git_identity=(GIT_AUTHOR_NAME=Parity GIT_AUTHOR_EMAIL=parity@example.com GIT_AUTHOR_DATE='2026-01-01T00:00:00Z'
   GIT_COMMITTER_NAME=Parity GIT_COMMITTER_EMAIL=parity@example.com GIT_COMMITTER_DATE='2026-01-01T00:00:00Z')
@@ -259,10 +263,10 @@ for case_dir in "${cases[@]}"; do
   if [[ -d "$case_dir/tree" ]]; then
     cp -R "$case_dir/tree/." "$run/" || setup_error "can't copy $name/tree into the run's folder."
   fi
-  if [[ -f "$case_dir/setup" ]]; then
+  if [[ -f "$case_dir/setup.sh" ]]; then
     (cd "$run" && env "${git_env[@]}" "${git_identity[@]}" PARITY_SCRATCH="$tmp/run/scratch" \
-      bash "$case_dir/setup" < /dev/null > "$tmp/setup.log" 2>&1) \
-      || setup_error "$name/setup failed:"$'\n'"$(cat "$tmp/setup.log")"
+      bash "$case_dir/setup.sh" < /dev/null > "$tmp/setup.log" 2>&1) \
+      || setup_error "$name/setup.sh failed:"$'\n'"$(cat "$tmp/setup.log")"
   fi
   : > "$tmp/calls"
   # Each case starts with an empty GH_CONFIG_DIR, whatever an earlier case's run left in it (its folder is new above).
