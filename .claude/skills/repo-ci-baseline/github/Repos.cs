@@ -1,8 +1,13 @@
 // The Fleet registry, github/repos.txt, as settings.py's read_repo_list() reads it (a test holds the two equal while settings.py is left).
 using System.Text;
+using System.Text.RegularExpressions;
 
 static class Repos
 {
+	// owner/repo: ASCII letters and digits, _, . and - on each side of one /, as GitHub names are, and neither side . or .. (a path
+	// step in the REST calls); a trailing line break too is refused. status.cs, land.cs and settings.cs refuse any other name before a call.
+	public static readonly Regex Name = new(@"\A(?!\.\.?/)[A-Za-z0-9_.-]+/(?!\.\.?\z)[A-Za-z0-9_.-]+\z", RegexOptions.CultureInvariant);
+
 	// The line breaks str.splitlines() splits on, and the extra whitespace str.split() splits on that char.IsWhiteSpace doesn't know.
 	static readonly char[] LineBreaks = ['\n', '\r', '\v', '\f', '\x1c', '\x1d', '\x1e', '\x85', '\u2028', '\u2029'];
 

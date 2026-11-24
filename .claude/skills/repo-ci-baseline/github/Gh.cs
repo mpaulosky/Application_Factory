@@ -23,20 +23,39 @@ sealed class Gh(Func<IReadOnlyList<string>, GhRun>? runner = null)
 	// One gh call, argv without the "gh".
 	public GhRun Run(IReadOnlyList<string> argv) => runner(argv);
 
-	public static GhRun Process(IReadOnlyList<string> argv)
+	public static GhRun Process(IReadOnlyList<string> argv) => Process(argv, null);
+
+	// One gh call with input written to its stdin and then closed; with none, gh reads the caller's stdin, as a call without input did.
+	public static GhRun Process(IReadOnlyList<string> argv, string? input)
 	{
 		var start = new ProcessStartInfo(Which("gh", Environment.GetEnvironmentVariable("PATH")))
 		{
+			RedirectStandardInput = input is not null,
 			RedirectStandardOutput = true,
 			RedirectStandardError = true,
 			UseShellExecute = false,
 			StandardOutputEncoding = Encoding.UTF8,
 			StandardErrorEncoding = Encoding.UTF8,
 		};
+		if (input is not null)
+			start.StandardInputEncoding = new UTF8Encoding(false);
 		foreach (var arg in argv)
 			start.ArgumentList.Add(arg);
 		using var run = System.Diagnostics.Process.Start(start)!;
 		var err = run.StandardError.ReadToEndAsync();
+		if (input is not null)
+		{
+			// Written beside the reads above and below, so a gh that answers before it has read all of a long body can't block on a full pipe.
+			var write = Task.Run(() =>
+			{
+				run.StandardInput.Write(input);
+				run.StandardInput.Close();
+			});
+			var answer = run.StandardOutput.ReadToEnd();
+			run.WaitForExit();
+			write.Wait();
+			return new GhRun(run.ExitCode, answer, err.Result);
+		}
 		var output = run.StandardOutput.ReadToEnd();
 		run.WaitForExit();
 		return new GhRun(run.ExitCode, output, err.Result);
