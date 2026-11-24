@@ -32,10 +32,11 @@
 #   stdin            the implementation's stdin, byte for byte (missing: /dev/null)
 #   env              NAME=value lines, set for the run on top of the fixed environment below (a blank line is ignored)
 #   tree/            files copied into the folder the implementation runs from (missing: it starts empty)
-#   setup.sh         a bash script run in that folder before the implementation (a .sh, so the gate's shellcheck and shfmt read it), to build what a file can't hold (a git
-#                    repo with a local origin); it runs with PARITY_SCRATCH, a folder outside the run's for what the
-#                    run mustn't see as its own (the bare origin), and the git identity and dates fixed, so its commits
-#                    get the same hashes everywhere and the gh fixtures can name them
+#   setup.sh         a bash script run in that folder before the implementation, to build what a file can't hold (a git
+#                    repo with a local origin); a .sh, so the gate's shellcheck and shfmt read it. It runs with
+#                    PARITY_SCRATCH, a folder outside the run's for what the run mustn't see as its own (the bare
+#                    origin), and the git identity and dates fixed, so its commits get the same hashes everywhere and
+#                    the gh fixtures can name them
 #   expected.tree/   the run's folder afterwards, every file byte for byte (a .git anywhere is left out); missing: the run
 #                    must leave the folder holding nothing but a .git, so a script that writes no file is held to that
 #
@@ -60,8 +61,8 @@
 #
 # Exit 0 when every case passes, 1 when one fails, 2 on a usage or setup error (a case missing a file or holding a bad
 # one, a command that can't be run, a temporary folder that can't be made). Needs bash 4.4 or later, coreutils (mktemp,
-# ln, cp, cat, sort, timeout), findutils (find), diff, grep and sed, and git for a case with a setup.sh; the fake gh needs
-# bash and cat, and mktemp, rm and jq (any version) for a REST call with --jq.
+# mkdir, rm, ln, cp, cat, head, sort, env, basename, dirname, timeout), findutils (find), diff, grep and sed, and git for a
+# case with a setup.sh; the fake gh needs bash and cat, and mktemp, rm and jq (any version) for a REST call with --jq.
 set -euo pipefail
 
 setup_error() {

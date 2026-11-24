@@ -18,7 +18,8 @@ Cases 17 to 24 pin what a port is likely to get wrong:
 
 - 17: `\v`, `\f`, U+0085 and U+001C to U+001E in a title, a commit subject and the PR description stay in the text: Markdown breaks lines only at CR and LF.
   The card's excerpt, read back with `splitlines()`, does split there, so the list markers after each separator are dropped.
-- 18: card excerpts of 199 and 200 characters are kept whole. Excerpts of 201 are cut to 199 characters at the last space, with trailing `,` trimmed, and get a `…`.
+- 18: card excerpts of 199 and 200 characters are kept whole. Excerpts of 201 are cut to 199 characters at the last space, with trailing `,` trimmed, and get a `…`. Of the
+  characters the cut trims (spaces and `,;:.-–—`), only the comma is pinned.
   An excerpt with no space keeps all 199. One with an astral character at the cut keeps it whole: lengths count code points.
 - 19: 15 posts give the ten newest as cards. Three posts on one day go in version order, v1.10.0 before v1.9.0 before v1.2.0.
 - 20: the file list in code point order: `é`, U+FF5E and U+FFFD before an astral name, which a UTF-16 order would put first.

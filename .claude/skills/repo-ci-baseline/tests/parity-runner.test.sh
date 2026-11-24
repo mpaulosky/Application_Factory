@@ -332,13 +332,17 @@ suite 0 "record mode runs the setup" PARITY_RECORD=1 STUB_MODE=git || true
 [[ "$(cat "$cases/c1/expected.stdout")" == "o/app the setup's commit d2acfaa173b3254e8fa804e9d51a9444485f29b3 here origin/main unset" ]] \
   || fail "the run didn't see the setup's repo, its origin and its fixed hash: $(cat "$cases/c1/expected.stdout")"
 [[ ! -e "$cases/c1/expected.tree" ]] || fail "record mode wrote an expected.tree/ for a run that left only .git"
-# Again with a caller's GIT_DIR, git config and hash format set: they reach neither the setup nor the run. Each config adds
-# a fetch refspec, so one that leaked would show as another remote branch, and SHA-256 would change the setup's hash.
+# Again with a caller's GIT_DIR, git config, hash format and template folder set: they reach neither the setup nor the
+# run. Each config adds a fetch refspec, so one that leaked would show as another remote branch, SHA-256 would change the
+# setup's hash, and the template's pre-commit hook would fail the setup's commit.
 printf '[remote "origin"]\n\tfetch = +refs/heads/*:refs/remotes/global/*\n' > "$work/caller.gitconfig"
-suite 0 "a caller's GIT_DIR, git config and hash format reach no case" STUB_MODE=git GIT_DIR="$work/nowhere" \
+mkdir -p "$work/caller-template/hooks"
+printf '#!/bin/sh\necho the caller template hook ran >&2\nexit 1\n' > "$work/caller-template/hooks/pre-commit"
+chmod +x "$work/caller-template/hooks/pre-commit"
+suite 0 "a caller's GIT_DIR, git config, hash format and template folder reach no case" STUB_MODE=git GIT_DIR="$work/nowhere" \
   GIT_CONFIG_GLOBAL="$work/caller.gitconfig" GIT_CONFIG_PARAMETERS="'remote.origin.fetch'='+refs/heads/*:refs/remotes/param/*'" \
   GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.fetch GIT_CONFIG_VALUE_0='+refs/heads/*:refs/remotes/count/*' \
-  GIT_DEFAULT_HASH=sha256 -- ./stub.sh || true
+  GIT_DEFAULT_HASH=sha256 GIT_TEMPLATE_DIR="$work/caller-template" -- ./stub.sh || true
 # A run that leaves a file beside its .git: record mode keeps the file and drops the .git.
 echo 'echo kept > kept.txt' >> "$cases/c1/setup.sh"
 suite 0 "record mode with a file beside the .git" PARITY_RECORD=1 STUB_MODE=git || true
@@ -584,10 +588,61 @@ for suite_dir in "$here"/parity/*/; do
   [[ -z "$got" ]] || fail "the committed cases of ${suite_dir%/}:"$'\n'"$got"
 done
 # A case's files are compared byte for byte, so git must store them as they are: with text conversion on, a CRLF case
-# would reach a clone (or a commit, under core.autocrlf=input) as LF and pin nothing. tests/parity/.gitattributes turns it off.
-if git -C "$here" rev-parse --is-inside-work-tree > /dev/null 2>&1; then
-  converted="$(cd "$here" && git ls-files -z -- 'parity/*/cases/*' | xargs -0 -r git check-attr text -- | grep -v ': text: unset$' || true)"
-  [[ -z "$converted" ]] || fail "git converts the line endings of these case files (tests/parity/.gitattributes):"$'\n'"$converted"
+# would reach a clone (or a commit, under core.autocrlf=input) as LF and pin nothing. tests/parity/.gitattributes turns it
+# off. converted_cases <repo folder> <pathspec>: one line per tracked file the pathspec matches that git would convert, or
+# a line saying git couldn't list or read them, or listed none; nothing when every one is stored as it is. git runs without
+# the caller's GIT_DIR and the rest, as in case_problems.
+converted_cases() {
+  local -a clean_git=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR git -C "$1")
+  local list="$work/case-files" attrs="$work/case-attrs"
+  "${clean_git[@]}" ls-files -z -- "$2" > "$list" || {
+    echo "git can't list the files $2 matches in $1"
+    return
+  }
+  [[ -s "$list" ]] || {
+    echo "git tracks no file $2 matches in $1"
+    return
+  }
+  "${clean_git[@]}" check-attr -z --stdin text < "$list" > "$attrs" || {
+    echo "git can't read the text attribute of the files $2 matches in $1"
+    return
+  }
+  # -z gives path, attribute and value, each ended by a NUL.
+  xargs -0 -n 3 printf '%s: %s: %s\n' < "$attrs" | grep -v ': text: unset$' || true
+}
+# Tried first on a probe: a case file git converts is named, the attribute file silences it, and a pathspec that
+# matches nothing is a failure, not a pass.
+attr_probe="$work/attr-probe"
+mkdir -p "$attr_probe/parity/s/cases/c"
+printf 'a\r\n' > "$attr_probe/parity/s/cases/c/stdin"
+git init -q "$attr_probe"
+env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$attr_probe" -c core.safecrlf=false add parity
+got="$(converted_cases "$attr_probe" 'parity/*/cases/*')"
+[[ "$got" == "parity/s/cases/c/stdin: text: unspecified" ]] || fail "the line-ending check missed a converted case file: '$got'"
+printf '%s\n' '*/cases/** -text' > "$attr_probe/parity/.gitattributes"
+got="$(converted_cases "$attr_probe" 'parity/*/cases/*')"
+[[ -z "$got" ]] || fail "the line-ending check named a case file stored as it is: '$got'"
+got="$(converted_cases "$attr_probe" 'nowhere/*/cases/*')"
+[[ "$got" == "git tracks no file nowhere/*/cases/* matches in $attr_probe" ]] || fail "the line-ending check passed on no file: '$got'"
+got="$(GIT_DIR="$work/nowhere" GIT_WORK_TREE="$work" converted_cases "$attr_probe" 'parity/*/cases/*')"
+[[ -z "$got" ]] || fail "the line-ending check follows the caller's GIT_DIR: '$got'"
+
+# The blank-key cases pin that a value of only blanks counts as unset, which an empty value (what a trimming editor would
+# leave, and tests/parity/.editorconfig forbids) can't show: both env files must still hold blanks.
+blank_envs=0
+for env_file in "$here"/parity/*/cases/*-a-blank-anthropic-key-and-model-mean-no-summary/env; do
+  [[ -f "$env_file" ]] || continue
+  blank_envs=$((blank_envs + 1))
+  if ! grep -Eq '^ANTHROPIC_API_KEY=[[:blank:]]+$' "$env_file" || ! grep -Eq '^ANTHROPIC_MODEL=[[:blank:]]+$' "$env_file"; then
+    fail "$env_file no longer holds a key and a model of only blanks"
+  fi
+done
+[[ $blank_envs -eq 2 ]] || fail "expected the 2 blank-key cases (release_post, backfill_blog_posts), found $blank_envs"
+
+# The committed cases, when this copy is in a git work tree (test.sh also runs it from a folder outside any).
+if [[ "$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR git -C "$here" rev-parse --is-inside-work-tree 2> /dev/null)" == true ]]; then
+  got="$(converted_cases "$here" 'parity/*/cases/*')"
+  [[ -z "$got" ]] || fail "git converts the line endings of these case files (tests/parity/.gitattributes):"$'\n'"$got"
 fi
 
 if [[ $failures -ne 0 ]]; then
