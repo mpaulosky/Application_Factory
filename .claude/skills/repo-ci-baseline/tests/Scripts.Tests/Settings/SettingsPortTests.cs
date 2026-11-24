@@ -154,6 +154,59 @@ public partial class SettingsTests
 			Assert.Equal(status, Assert.Throws<ApiError>(() => Settings.Check(fake.Api, Github, RepoName)).Status);
 	}
 
+	// --fix --json prints the JSON of the check after the fixes and nothing else: no report before them, no applying lines.
+	[Fact]
+	public void Fix_with_json_prints_only_the_json_of_the_second_check()
+	{
+		var fake = new FakeGitHub { Alerts = false, Repo = RepoWith(("allow_auto_merge", false)) };
+		using var output = new StringWriter();
+		using var err = new StringWriter();
+
+		Assert.Equal(0, Settings.Run(["--fix", "--json", RepoName], output, err, fake.Api, Github));
+
+		Assert.Equal("", err.ToString());
+		var findings = (JsonArray)JsonNode.Parse(output.ToString())![RepoName]!;
+		Assert.Equal(["OK"], findings.Where(f => (string)f!["area"]! is "repo settings" or "Dependabot alerts").Select(f => (string)f!["status"]!).Distinct());
+		Assert.Equal(2, fake.Writes.Count);
+		Assert.Equal(output.ToString().TrimStart(), output.ToString());
+	}
+
+	// A --fix write GitHub refuses stops the run there, as settings.py's uncaught ApiError did: the writes after it aren't made.
+	[Fact]
+	public void A_fix_write_that_fails_stops_the_run_before_the_next_write()
+	{
+		var fake = new FakeGitHub { Alerts = false, Repo = RepoWith(("allow_auto_merge", false)) };
+		fake.Fails[("PATCH", "")] = 422;
+		using var output = new StringWriter();
+
+		var error = Assert.Throws<ApiError>(() => Settings.Run(["--fix", RepoName], output, new StringWriter(), fake.Api, Github));
+
+		Assert.Equal(422, error.Status);
+		Assert.Equal([("PATCH", $"repos/{RepoName}")], fake.Writes.Select(write => (write.Method, write.Path)));
+		Assert.Contains("  applying 2 change(s)\n", output.ToString(), StringComparison.Ordinal);
+		Assert.DoesNotContain("applied", output.ToString(), StringComparison.Ordinal);
+	}
+
+	// --all --fix stops at a repo whose per-repo file would loosen the standard: exit 1 with its message, the repos before it fixed
+	// and reported, and none after it read.
+	[Fact]
+	public void All_with_fix_stops_at_a_per_repo_file_that_loosens_the_standard()
+	{
+		var folder = CopyGithub();
+		File.WriteAllText(Path.Combine(folder, "repos.txt"), $"{RepoName}\nowner/lib\nowner/never\n");
+		File.WriteAllText(Path.Combine(folder, "repos", "lib.json"), """{"repo": {"allow_merge_commit": true}}""");
+		var fake = new FakeGitHub { Repo = RepoWith(("allow_auto_merge", false)) };
+		using var output = new StringWriter();
+		using var err = new StringWriter();
+
+		Assert.Equal(1, Settings.Run(["--all", "--fix"], output, err, fake.Api, folder));
+
+		Assert.Contains("only required_checks and labels", err.ToString(), StringComparison.Ordinal);
+		Assert.Contains("  applied     repo settings\n", output.ToString(), StringComparison.Ordinal);
+		Assert.DoesNotContain("owner/never", output.ToString(), StringComparison.Ordinal);
+		Assert.Equal([("PATCH", $"repos/{RepoName}")], fake.Writes.Select(write => (write.Method, write.Path)));
+	}
+
 	[Fact]
 	public void Gh_api_sends_the_method_path_and_accept_header_and_a_body_on_stdin()
 	{
