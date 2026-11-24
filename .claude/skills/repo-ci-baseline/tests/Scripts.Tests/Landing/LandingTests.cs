@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 
-// Tests for github/Landing.cs (ported from github/tests/test_landing.py): fixture PR states in, one action out. No GitHub.
+// Tests for github/Landing.cs: fixture PR states in, one action out. No GitHub.
 public class LandingTests
 {
 	static readonly string Head = new('a', 40);
@@ -709,7 +709,7 @@ public class LandingTests
 	}
 
 	// reapply.sh posts the same record when a re-Apply PR's request doesn't register (mpaulosky/dotfiles#384): its asked_marker and
-	// asked_comment, as bash reads the two lines, word for word. (Not a moved test: reapply.test.sh held them equal while landing.py was here.)
+	// asked_comment, as bash reads the two lines, word for word. (Not a moved test: reapply.test.sh held them equal before the port.)
 	[Fact]
 	public async Task Reapply_sh_posts_the_same_ask_comment()
 	{
@@ -839,7 +839,7 @@ public class LandingTests
 	[Fact]
 	public void Claude_is_not_called_in_before_the_record_settles_even_for_a_request_read_back_as_dropped()
 	{
-		// PR Auto-Merge takes review:claude off an ask younger than 30 seconds, so land.py waits it out too (mpaulosky/dotfiles#378).
+		// PR Auto-Merge takes review:claude off an ask younger than 30 seconds, so land.cs waits it out too (mpaulosky/dotfiles#378).
 		var decision = Landing.Decide(Asked);
 		Assert.Equal(Landing.Wait, decision.Action);
 		Assert.Contains("Copilot was asked", decision.Reason);

@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-// The spellings of "Copilot's note isn't a review" agree (ported from github/tests/test_copilot_no_review.py).
+// The spellings of "Copilot's note isn't a review" agree.
 //
 // PR Auto-Merge (JS), claude-review.yml (two jq filters) and the landing scripts (C#, as the Python before them) each decide whether a
 // Copilot review is its quota note. If they disagreed, one would count a commit as reviewed that another doesn't: Claude Review would

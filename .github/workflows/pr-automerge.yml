@@ -94,7 +94,7 @@ name: PR Auto-Merge
 # make, is waited for while it shows (mpaulosky/dotfiles#360, which replaces the
 # grace of mpaulosky/dotfiles#318). The run then calls in Claude
 # Review by adding review:claude (mpaulosky/dotfiles#190), on the terms land.sh uses
-# (github/landing.py): every other check on the head passed, the loop isn't
+# (github/Landing.cs): every other check on the head passed, the loop isn't
 # exhausted, no person took the label off, and no exhaustion comment is the
 # newest word on the PR. It adds the label for every new non-merge head nobody
 # has reviewed, even if an earlier removal took it off (the loop, not the label,
@@ -302,10 +302,10 @@ jobs:
             // Claude's together, after which the review loop is exhausted
             // (mpaulosky/dotfiles#375). 3, so a fix for a second round's
             // findings is reviewed too (mpaulosky/dotfiles#193).
-            // github/landing.py's MAX_CLAUDE_ROUNDS must match.
+            // github/Landing.cs's MaxClaudeRounds must match.
             const MAX_CLAUDE_ROUNDS = 3;
             // Claude Review's own checks (claude-review.yml's job names): they
-            // don't gate calling it in. github/landing.py's CLAUDE_CHECKS must match.
+            // don't gate calling it in. github/Landing.cs's ClaudeChecks must match.
             const CLAUDE_CHECKS = ["Check for a merge from main", "Review with Claude", "Post Claude's review"];
             // Claude Review posts as github-actions[bot]; the marker tells its
             // reviews apart from anything else posted under that login.
@@ -333,17 +333,17 @@ jobs:
             // still posts a review of each head, whose body says it reviewed
             // nothing. It covers no commit and counts toward no review round;
             // claude-review.yml and the landing scripts skip it the same way
-            // (the start of the body, after any whitespace; github/tests/
-            // test_copilot_no_review.py holds the three together). Copilot's
+            // (the start of the body, after any whitespace; tests/Scripts.Tests/
+            // Landing/CopilotNoReviewTests.cs holds the three together). Copilot's
             // "wasn't able to review any files" (every file excluded) still counts.
             const COPILOT_NO_REVIEW = /^[ \t\r\n]*Copilot was unable to review/;
             // The record that Copilot was asked to review the PR: a comment
             // holding this marker, posted before the request so that a crash
-            // can't make a second ask (mpaulosky/dotfiles#360). github/landing.py
+            // can't make a second ask (mpaulosky/dotfiles#360). github/Landing.cs
             // has the same marker (a test holds them equal), and land.sh writes it too.
             const COPILOT_ASKED_MARKER = "<!-- pr-automerge:copilot-asked -->";
             // Starts the marker that ends the comment documenting an exhausted
-            // review loop, followed by the head and " -->". github/landing.py
+            // review loop, followed by the head and " -->". github/Landing.cs
             // has the same prefix (a test holds them equal).
             const EXHAUSTED_MARKER = "<!-- pr-automerge:review-loop-exhausted";
             const exhaustedMarker = (head) => `${EXHAUSTED_MARKER} ${head} -->`;
@@ -354,8 +354,8 @@ jobs:
             // A PR whose record is this old, and whose head has no Copilot
             // review and no pending Copilot request, had its request dropped
             // (GitHub drops it once the Copilot code review budget is used up,
-            // with no note), so Claude is called in. github/landing.py's
-            // COPILOT_ASK_SETTLE_SECONDS must match.
+            // with no note), so Claude is called in. github/Landing.cs's
+            // CopilotAskSettleSeconds must match.
             const COPILOT_ASK_SETTLE_MS = 30 * 1000;
             // How long this run reads its own request back, for it to show as
             // pending (GitHub registers a request within seconds), and the pause
@@ -1469,7 +1469,7 @@ jobs:
             // run is held for approval (heldForApproval), nothing will start
             // this workflow again until someone acts, so the owner is told.
             async function checksBeforeClaude(pullNumber, pr) {
-              // A conflict is landing.decide's blocker: the head has to change,
+              // A conflict is Landing.Decide's blocker: the head has to change,
               // and its resolution needs a fresh review anyway.
               if (pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY") {
                 return { waiting: "it has a merge conflict with main", noneRequired: false };

@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-// test_status.py's fixture builders, for StatusTests: the GraphQL fetch replaced by fixtures. No GitHub.
+// StatusTests' fixture builders: the GraphQL fetch replaced by fixtures. No GitHub.
 public partial class StatusTests
 {
 	const string Head = "1234567" + "000000000000000000000000000000000";

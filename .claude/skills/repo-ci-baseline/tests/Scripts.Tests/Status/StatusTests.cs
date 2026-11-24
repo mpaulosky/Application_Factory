@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-// test_status.py's tests, for StatusCore.cs: the GraphQL fetch replaced by fixtures (StatusFixtures.cs). No GitHub.
+// Tests for github/StatusCore.cs (moved from the pytest suite it replaced): the GraphQL fetch replaced by fixtures (StatusFixtures.cs). No GitHub.
 public partial class StatusTests
 {
 	[Fact]

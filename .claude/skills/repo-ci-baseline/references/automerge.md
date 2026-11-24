@@ -42,15 +42,15 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
   The ask settles 30 seconds after its record, or at once for the run that asked and read the request back. A Claude review of an earlier commit with no note covers
   nothing, label or not (so `land.sh` and the workflow agree on that).
   A head with no check besides Claude's and the workflow's own gets no label from the run: it logs a notice to review and merge it by hand.
-  `land.sh` and the workflow use one rule (`landing.copilot_gone`), and `land.sh` waits out the 30 seconds too, even for a request it read back as dropped:
+  `land.sh` and the workflow use one rule (`PrState.CopilotGone` in `github/Landing.cs`), and `land.sh` waits out the 30 seconds too, even for a request it read back as dropped:
   PR Auto-Merge takes `review:claude` off an ask younger than that and `land.sh` would not add it again (mpaulosky/dotfiles#378).
   Neither counts Claude's review of a head Copilot's request is still pending for (unless the note is on it), since that review may be merely late and counting Claude's would let the PR merge before Copilot's
   findings arrive (`pr-automerge.test.mjs` pins each case).
   A Copilot review counts only when it reviewed something. Once the account's Copilot code review quota is used up, Copilot still posts a review
   of each head whose body starts "Copilot was unable to review" (`COPILOT_NO_REVIEW`). It covers no commit and counts toward no round.
-  `claude-review.yml`'s reviewed list and the landing scripts (`landing.COPILOT_NO_REVIEW`) skip it the same way: the start of the body, after any
+  `claude-review.yml`'s reviewed list and the landing scripts (`Landing.CopilotNoReview`) skip it the same way: the start of the body, after any
   whitespace. Copilot's "wasn't able to review any files" note (every changed file is one it excludes) still counts, as before.
-  `github/tests/test_copilot_no_review.py` runs the JS, jq and Python patterns on the same bodies.
+  `tests/Scripts.Tests/Landing/CopilotNoReviewTests.cs` runs the JS, jq and C# patterns on the same bodies.
   `claude-review.yml`'s reviewed list holds a Claude review of a commit with Copilot's note and of the PR's current head (whatever Copilot's request or the ask's state, so a head isn't reviewed twice),
   and none of an earlier commit without a note,
   so a clean merge of main into an earlier commit Claude reviewed under a dropped request gets a review of its own when its push starts a run, instead of waiting for a person.
@@ -71,7 +71,7 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
   `copilot-pull-request-reviewer` or by `github-actions` in a review starting with `CLAUDE_MARKER` (the rule `claude-review.yml` reads threads by),
   and no later comment is by another login. The reply's text isn't read, so Sandcastle's reply (a reason, not a commit) and a session's reply count;
   a person's thread, another bot's and a thread with more comments than the 10 read don't. To make it a hold, return from `mergeIfReady`
-  after the notice and have `decide()` return `WAIT` for `unreplied_threads`. The notice repeats on each evaluation of a PR that waits on something else.
+  after the notice and have `Landing.Decide()` return a wait for `PrState.UnrepliedThreads`. The notice repeats on each evaluation of a PR that waits on something else.
 - **The review loop (mpaulosky/dotfiles#375, replacing the review cap of #119).** Each reviewer re-reviews every push and can raise something new each time,
   so a PR could chase its reviews forever. One loop bounds both reviewers, counted in dirty rounds in a row:
   - A **round** is a review of a non-merge commit, Copilot's or Claude's (Claude's counts where Copilot can't review the PR: its quota note is on that commit or on the head,
@@ -106,7 +106,7 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
     **A recognised restart stays recognised** (mpaulosky/dotfiles#381): an add counts unless PR Auto-Merge (`github-actions`) removed the label after it
     and before the next round, with no request for Copilot's review between the add and the removal (a removal after such a request was made because Copilot can
     review again, not for the add): that is what an add made while Copilot can review leaves behind. Whether Copilot can review now doesn't decide it,
-    so Copilot reviewing a later head, or a request going pending, doesn't undo a restart. `landing.py` and `status.py` read the label's `unlabeled` events the same way.
+    so Copilot reviewing a later head, or a request going pending, doesn't undo a restart. `Landing.cs` and `StatusCore.cs` read the label's `unlabeled` events the same way.
     The first add, not the latest: PR Auto-Merge's PAT adds the label for later heads in the new loop, and a restart at that add would make it endless.
     Reading the label events fails closed too. PR Auto-Merge never adds `review:claude` while the comment is the newest word on the PR.
   - **Claude reviews only where Copilot can't** (mpaulosky/dotfiles#378). Copilot can't review the PR when its quota note is on the head, or it is gone (asked, the ask settled, no request pending,
@@ -134,7 +134,7 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
   because the record is long settled. A request that registers (the ruleset's own per push, or a budget that came back) is waited for, and a real Copilot review of the head
   takes the label off (#270). `land.sh` writes the same record (a comment as the owner) and makes the same request, so the two agree.
   A PR runs its **base branch's** workflows, so a repo's first re-Apply PR has the previous PR Auto-Merge, which never posts the record, and Claude Review skips `review:claude`
-  until the PR carries it ("Copilot hasn't been asked to review yet"). `reapply.sh` posts the ask record (a comment as the owner, the same `landing.COPILOT_ASKED_COMMENT`) when its
+  until the PR carries it ("Copilot hasn't been asked to review yet"). `reapply.sh` posts the ask record (a comment as the owner, the same `Landing.CopilotAskedComment`) when its
   `--add-reviewer @copilot` request doesn't register, unless the PR already has one by `github-actions` or the owner; a request that registers needs none, and a re-run finds the record, so
   it is posted once (mpaulosky/dotfiles#384). `land.sh` then adds `review:claude` as usual. Every later PR gets the record from PR Auto-Merge.
   Claude Review matches Copilot by its exact login, as this workflow counts its reviews: a review or quota note by `copilot-pull-request-reviewer[bot]`, a pending request for that login
@@ -142,7 +142,7 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
 - **Calling in Claude (#190, #318, #360).** When Copilot's quota note is the only review of the head, or Copilot was asked and the ask has settled
   (30 seconds after the record, `COPILOT_ASK_SETTLE_MS`, or in the run that asked and read the request back) and it has no review of the head and no request
   pending, and no review covers it while the loop isn't exhausted,
-  the run adds `review:claude` on much the terms `land.sh` uses (`landing.review_needed`), whose constants a test holds in step:
+  the run adds `review:claude` on much the terms `land.sh` uses (`Landing.ReviewNeeded`), whose constants a test holds in step:
   no merge conflict, the required checks passed (one with no run yet is pending) and no check failed but Claude Review's own,
   the label isn't on, no person took it off and no exhaustion comment is the newest word (the owner adds the label to start a new loop).
   A check that isn't required and is still running doesn't hold it, as it doesn't hold an update: unlike `land.sh`, which polls,
@@ -327,17 +327,22 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
 
 ## Status and the landing decision
 
-Skill files (not copied into repos): `status.sh`, which runs `github/status.py`, `land.sh`, which runs `github/land.py`,
-and the decision both act on, `github/landing.py`.
-Tests: `github/tests/test_landing.py`, `test_status.py` and `test_land.py`, run by `test.sh`; none calls GitHub.
-The parity suites run `status.py` and `land.py` through their command lines only, against a fake `gh` (`tests/parity/fake-gh.sh`) that answers
+Skill files (not copied into repos): `status.sh`, which runs `github/status.cs`, `land.sh`, which runs `github/land.cs`,
+and the decision both act on, `github/Landing.cs`. They are C# file-based apps ([the Factory's ADR 0017](../../../../docs/adr/0017-the-factorys-and-the-templates-scripts-are-csharp-file-based-apps.md)):
+each entry file pulls in its logic with `#:include` (`StatusCore.cs`, `LandCore.cs`, `Landing.cs`, `Repos.cs`, which reads `github/repos.txt`, and `Gh.cs`,
+the `gh` runner, JSON helpers and argument parser they share), and the wrapper runs it with `dotnet run --file` from `github/`, so the Factory's `global.json`
+picks the SDK; the first run after a change builds it.
+Tests: `tests/Scripts.Tests/Landing/`, `Status/` and `Land/` (xUnit), run by `test.sh`; none calls GitHub.
+The parity suites run `status.cs` and `land.cs` through their command lines only, against a fake `gh` (`tests/parity/fake-gh.sh`) that answers
 from fixture files, so the same cases can judge another implementation: `tests/parity.test.sh <suite> <command> [arg]...`, where the suite is `status` or
 `land` (or one of the release scripts, [release-pipeline.md](release-pipeline.md), or `check_gh_repo`, run with
 `tests/parity/check_gh_repo/shfmt-shim.sh` first on `PATH` as `shfmt`, as that suite's `README.md` says), with its cases in `tests/parity/<suite>/cases/`
 and its gaps in that folder's `README.md`. The fake logs each `gh pr` call, and each REST call with `--paginate` or `--jq`, with its whole argv
-(the body `land.py`'s Copilot comment carries among it), and answers the nth call with a key from its own fixture, so a case can loop through several polls.
-`test.sh` runs every suite against the Python, and `tests/parity-runner.test.sh` and `tests/shfmt-shim.test.sh`, the tests of the runner, the fake and the shim themselves.
-`PARITY_RECORD=1 tests/parity.test.sh <suite>` records a suite's cases from the Python only; the runner's header says what a case holds.
+(the body `land.cs`'s Copilot comment carries among it), and answers the nth call with a key from its own fixture, so a case can loop through several polls.
+The status and land cases were recorded from the Python, which the C# replaced once it passed every one.
+`test.sh` runs every suite against its reference: the `.py` where one is left, else the `.cs` that replaced it, built once
+(`status` and `land` now), and `tests/parity-runner.test.sh` and `tests/shfmt-shim.test.sh`, the tests of the runner, the fake and the shim themselves.
+`PARITY_RECORD=1 tests/parity.test.sh <suite>` records a suite's cases from that reference only; the runner's header says what a case holds.
 
 ```bash
 status.sh                     # one line per open PR in every repo in github/repos.txt
@@ -349,38 +354,38 @@ running, failed and cancelled checks, and the next action. It costs one GraphQL 
 (one line when no PR is open), so it's the status check to run while PRs land, instead of hand-written queries.
 
 A line ends with `notice: resolved without a reply: path:line, ...` (3 named, then `and N more`) when resolved Copilot or Claude Review threads
-got no reply, by the rule above. `decide()` ignores it (`PrState.unreplied_threads`), and `land.sh` prints the line again when the notice changes.
-A failed or empty `THREADS_QUERY` for one PR keeps that PR's comment-less threads (no notice) and is reported once on stderr; it never
+got no reply, by the rule above. `Decide()` ignores it (`PrState.UnrepliedThreads`), and `land.sh` prints the line again when the notice changes.
+A failed or empty `Status.ThreadsQuery` for one PR keeps that PR's comment-less threads (no notice) and is reported once on stderr; it never
 makes the repo unreadable.
-Tests: `test_landing.py` (the rule and the notice text), `test_status.py` (the line and the query), `test_land.py`, `pr-automerge.test.mjs`
+Tests: `LandingTests` (the rule and the notice text), `StatusTests` (the line and the query), `LandTests`, `pr-automerge.test.mjs`
 and the status parity suite (case `10-the-unreplied-thread-notice`).
 
-`landing.decide(PrState)` returns one action, the rules PRs are landed by:
+`Landing.Decide(PrState)` returns one action, the rules PRs are landed by:
 nothing for a merged, closed or already-armed PR; **report blocker** for a failed check, a cancelled check nothing newer replaced, or a conflict;
 **mark ready** for a draft only when the caller says it should be (otherwise wait);
 **arm auto-merge** for a release-blog PR its workflow didn't arm (branch `docs/release-notes` or `docs/backfill-blog-posts`, no review needed, as `release.yml` arms it);
 **update branch** when it's `BEHIND` (nobody is asked to review the new head: Copilot is asked once per PR); **wait** until Copilot, or Claude (a marked `github-actions[bot]` review,
 backing a quota note or a request that didn't register on the same head), reviewed the current head and no thread is open.
 A head with neither review waits while Copilot is requested or `review:claude` is on; otherwise, for a PR with no record of an ask, **request Copilot**:
-a comment holding the marker (`landing.COPILOT_ASKED_COMMENT`), then the request, read back. With a record that hasn't settled (under 30 seconds) it **waits**.
+a comment holding the marker (`Landing.CopilotAskedComment`), then the request, read back. With a record that hasn't settled (under 30 seconds) it **waits**.
 On a repo's first re-Apply PR the record is usually there already: `reapply.sh` posts the ask record when its request didn't register.
-Only once Copilot can't review the head (`PrState.copilot_gone`), because it answered with its quota note (`copilot_declined`), its request didn't register
-(`copilot_dropped`: `land.sh` remembers it per head within a watching process), or it was asked (`copilot_asked`, from the record that `landing.copilot_ask` reads
-from the PR's last 100 comments; unreadable counts as asked) and the record is 30 seconds old (`copilot_ask_settled`) with no request pending,
+Only once Copilot can't review the head (`PrState.CopilotGone`), because it answered with its quota note (`CopilotDeclined`), or its request didn't register:
+it was asked (`CopilotAsked`, from the record that `Landing.CopilotAsk` reads from the PR's last 100 comments; unreadable counts as asked) and the record
+is 30 seconds old (`CopilotAskSettled`) with no request pending (`land.sh` remembers no drop it read back, so a `--once` run decides the same),
 does it **add review:claude**.
 `status.sh` reads the comments of only the PRs that need the record, or whose loop could be exhausted
 (three dirty rounds in a row, before any restart; 1 GraphQL point each, plus a page per 100 comments back to the exhaustion comment), every `review:claude` label event of such a PR (paged),
-the permission of each login that added one (REST, once per login) and the authors of its open threads, which `landing.py` splits into a person's and the bots'.
+the permission of each login that added one (REST, once per login) and the authors of its open threads, which `Landing.cs` splits into a person's and the bots'.
 It needs no memory, and neither does a `land.sh --once` run.
 A loop whose comments, label events or permissions can't be read is never shown as exhausted, and gets no `review:claude`.
-With Copilot available (`claude_requested` and not `copilot_gone` or `copilot_declined`) the label is ignored: it asks for Copilot, not Claude.
+With Copilot available (`ClaudeRequested` and not `CopilotGone` or `CopilotDeclined`) the label is ignored: it asks for Copilot, not Claude.
 It adds it once the head has at least one check other than Claude Review's own and every such check is green
 (Claude Review's own don't count: a run cancelled when the label came off needs no rerun), never while one runs or is queued, and never while an exhaustion comment is the newest word.
-When PR Auto-Merge's review loop is exhausted (`PrState.loop_exhausted`: `MAX_CLAUDE_ROUNDS` dirty rounds in a row in `PrState.rounds`,
-re-Apply PRs included; `REVIEW_CAP` must still match `COPILOT_REVIEW_CAP`) it asks for neither reviewer,
+When PR Auto-Merge's review loop is exhausted (`PrState.LoopExhausted`: `MaxClaudeRounds` dirty rounds in a row in `PrState.Rounds`,
+re-Apply PRs included; `ReviewCap` must still match `COPILOT_REVIEW_CAP`) it asks for neither reviewer,
 and goes on to the checks as PR Auto-Merge does: the bots' threads and off-diff findings still open no longer hold it, a person's thread does (the line reads `wait`, naming the person's threads),
 and otherwise the line reads `review loop exhausted (3 rounds with findings in a row), ready to merge, N thread(s) left open`.
-While PR Auto-Merge's exhaustion comment is the newest word (no `review:claude` added since, `PrState.exhaustion_marker_newest`) it asks for no review either: the owner adds the label to start a new loop;
+While PR Auto-Merge's exhaustion comment is the newest word (no `review:claude` added since, `PrState.ExhaustionMarkerNewest`) it asks for no review either: the owner adds the label to start a new loop;
 then **leave to PR Auto-Merge** in a Baseline repo, whose workflow merges it (it never arms native auto-merge, so neither does anything going around it),
 or **arm auto-merge** where there is no such workflow. A repo with no required checks waits for its checks to finish green first,
 since auto-merge alone wouldn't wait for CI.
@@ -397,9 +402,9 @@ land.sh --once --dry-run      # one pass over every open PR in github/repos.txt,
 land.sh mpaulosky/<repo>#<n>  # watch these PRs (or owner/repo for all its open PRs) until they land
 ```
 
-`land.sh` polls the PRs (default every 60 s, one GraphQL query per repo) and does what `decide()` says, once per head:
-`gh pr update-branch` then `gh pr edit --add-reviewer @copilot` (warning when the request is dropped or refused),
-`gh pr edit --add-reviewer @copilot` again for an unreviewed head, `gh pr edit --add-label review:claude` once `decide()` says so, `gh pr ready` only with `--ready`,
+`land.sh` polls the PRs (default every 60 s, one GraphQL query per repo) and does what `Decide()` says, once per head:
+`gh pr update-branch` (asking nobody to review the new head), the ask record and `gh pr edit --add-reviewer @copilot` once per PR for an unreviewed head
+(warning when the request is dropped or refused), `gh pr edit --add-label review:claude` once `Decide()` says so, `gh pr ready` only with `--ready`,
 and `gh pr merge --auto --squash --match-head-commit <head>`. It has no rules of its own.
 It also watches each release-blog PR that opens in a watched repo, and after a watched Baseline PR merges it waits `--blog-wait` (15) minutes for one.
 It prints status.sh's line only for a PR whose state or action changed (one line when no PR is open, then it exits),

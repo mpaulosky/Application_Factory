@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
 
-// Tests for github/LandCore.cs (land.py's port): fixture polls in, gh calls and printed changes out. No GitHub.
+// Tests for github/LandCore.cs: fixture polls in, gh calls and printed changes out. No GitHub.
 public class LandTests
 {
 	static readonly string HEAD = "1234567" + new string('0', 33);
@@ -270,7 +270,7 @@ public class LandTests
 				+ "is used up); review:claude backs Copilot up for this PR", text);
 		Assert.DoesNotContain("  failed:", text);
 		// The same run polls again: the record is on the PR now, 2 s old. PR Auto-Merge takes review:claude off an ask that
-		// young, so land.py waits out the 30 seconds too instead of adding a label that is removed and never added again.
+		// young, so land.cs waits out the 30 seconds too instead of adding a label that is removed and never added again.
 		fake.Open["o/app"] = Prs(Node(reviews: OLDER, contexts: GREEN, comments: [Record(2)]));
 		lander.Poll();
 		Assert.DoesNotContain("-> add review:claude", Printed(output));

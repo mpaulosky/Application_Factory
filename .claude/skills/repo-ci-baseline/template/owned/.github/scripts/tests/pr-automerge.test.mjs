@@ -1403,7 +1403,7 @@ test("with no required check, doesn't log the notice when a person took review:c
   assert.ok(!logs.some((line) => line.includes("called in")), logs.join("\n"));
 });
 
-test("doesn't call in Claude for a head with a merge conflict, as landing.decide blocks on it", async () => {
+test("doesn't call in Claude for a head with a merge conflict, as Landing.Decide blocks on it", async () => {
   for (const conflict of [{ mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" }, { mergeable: "UNKNOWN", mergeStateStatus: "DIRTY" }]) {
     const { addedLabels, logs } = await evaluate(readyPr({ copilotReviews: DECLINED, ...conflict }));
     assert.deepEqual(addedLabels, []);
@@ -2872,7 +2872,7 @@ test("the review loop's constants: COPILOT_REVIEW_CAP stays for github-settings.
 
   assert.match(code, /const COPILOT_REVIEW_CAP = 3;/);
   assert.match(code, /const MAX_CLAUDE_ROUNDS = 3;/);
-  // github/landing.py's EXHAUSTED_MARKER must equal this one (a test there holds the two together).
+  // github/Landing.cs's ExhaustedMarker must equal this one (a test there holds the two together).
   assert.match(code, /const EXHAUSTED_MARKER = "<!-- pr-automerge:review-loop-exhausted";/);
 });
 

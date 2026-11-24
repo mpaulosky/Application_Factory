@@ -8,7 +8,7 @@ public class GhTests
 {
 	// -- The argument parser --
 
-	// land's options, as land.py declared them to argparse and LandCore.cs declares them to Arguments.
+	// land's options, as the Python declared them to argparse and LandCore.cs declares them to Arguments.
 	const string ArgparseLand = """
 		import argparse, json, sys
 		parser = argparse.ArgumentParser(prog="land")
