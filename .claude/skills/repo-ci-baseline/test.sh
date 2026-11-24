@@ -6,7 +6,7 @@
 #
 # Runs the Template's own tests (hook suites, auto-merge script tests,
 # the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle and the GitHub scripts' pytest
-# (rollout) with the parity suites (status, land, settings, check_gh_repo and the release scripts), the Claude Review
+# (rollout) with the parity suites (status, land, settings, check_gh_repo, the release scripts and rollout), the Claude Review
 # benchmark's tests and the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land, settings and what they share), lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
 # Owned files carry no {{PLACEHOLDER}} and that the Owned scripts, and this repo's own
@@ -753,7 +753,7 @@ if in_shard scripts; then
   step "GitHub scripts tests (rollout)"
   (cd "$skill_dir" && "${pytest_cmd[@]}" -q -p no:cacheprovider github/tests) || fail "github scripts pytest"
 
-  step "Parity suites (status.cs, land.cs, settings.py and settings.cs, check_gh_repo.py and the release scripts through their command lines, against a fake gh) and their runner's tests"
+  step "Parity suites (status.cs, land.cs, settings.py and settings.cs, check_gh_repo.py, the release scripts and rollout.sh through their command lines, against a fake gh) and their runners' tests"
   # The fake gh runs jq for a REST call's --jq, which the release scripts' suites make, and for a REST call's --input body, which the
   # settings suite's make. The status and land suites' reference is the C# (github/status.cs, github/land.cs), which the runner builds once
   # before its cases (ADR 0017). The settings suite's is settings.py, which stays for rollout.py, and it runs against github-settings.sh
@@ -824,6 +824,11 @@ if in_shard scripts; then
   GIT_DIR="$decoy/.git" GIT_WORK_TREE="$decoy" GIT_INDEX_FILE="$decoy/.git/index" \
     bash "$skill_dir/tests/parity-runner.test.sh" > /dev/null || fail "parity-runner.test.sh with a hook's GIT_DIR set"
   [[ -z "$("${decoy_git[@]}" -C "$decoy" ls-files)" && ! -e "$decoy/cases" ]] || fail "parity-runner.test.sh staged files in the caller's repository"
+  # The rollout suite has a runner of its own (a temporary copy of the skill folder with stub reapply.sh and land.sh, and a HOME per case):
+  # its cases against rollout.sh, then the runner's own tests.
+  [[ -f "$skill_dir/tests/rollout-parity/README.md" ]] || fail "tests/rollout-parity has no README.md saying what its cases cover and leave out"
+  bash "$skill_dir/tests/rollout-parity.test.sh" || fail "rollout-parity.test.sh"
+  bash "$skill_dir/tests/rollout-parity-runner.test.sh" || fail "rollout-parity-runner.test.sh"
 
   step "Claude Review benchmark tests (scoring, arguments, config swap, the workflow it reads)"
   # PyYAML lets the test that reads the Template's claude-review.yml run instead of skipping.
@@ -1042,7 +1047,8 @@ if in_shard checks; then
     "$skill_dir/tests/seed-dockerfile.test.sh" "$skill_dir/tests/doc-single-source.test.sh" "$skill_dir/tests/no-dotfiles-dependency.test.sh"
     "$skill_dir/tests/owned-gate-files.test.sh"
     "$skill_dir/tests/sandcastle-check.test.sh" "$skill_dir/tests/repos-scope.test.sh"
-    "$skill_dir/tests/parity.test.sh" "$skill_dir/tests/parity/fake-gh.sh" "$skill_dir/tests/parity-runner.test.sh"
+    "$skill_dir/tests/parity.test.sh" "$skill_dir/tests/parity/fake-gh.sh" "$skill_dir/tests/parity/stderr.sh" "$skill_dir/tests/parity-runner.test.sh"
+    "$skill_dir/tests/rollout-parity.test.sh" "$skill_dir/tests/rollout-parity/fake-tool.sh" "$skill_dir/tests/rollout-parity-runner.test.sh"
     "$skill_dir/tests/parity/check_gh_repo/shfmt-shim.sh" "$skill_dir/tests/shfmt-shim.test.sh"
     "$skill_dir/tests/check-git-status.sh" "$skill_dir/tests/check-git-status.test.sh" "$skill_dir/tests/mutations/check-spec.test.sh"
     "$owned/scripts/gate.sh" "$owned/scripts/check-branch-name.sh" "$owned/scripts/tests/check-branch-name.test.sh"

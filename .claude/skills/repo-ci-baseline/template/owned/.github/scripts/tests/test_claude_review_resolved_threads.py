@@ -332,7 +332,10 @@ def test_the_step_fits_in_the_review_jobs_time_with_the_review_step():
     job = timeout_after(text, "  review:")
     resolved = timeout_after(text, "        id: resolved")
     notes = timeout_after(text, "        id: notes")
-    review = timeout_after(text, "        id: claude")
+    # One Review step per batch of diff pieces, run one after another, so the job's limit covers every one of them.
+    batches = int(re.search(r"MAX_BATCHES = (\d+)", text)[1])
+    assert re.findall(r"(?m)^        id: claude_(\d+)$", text) == [str(n) for n in range(1, batches + 1)]
+    review = sum(timeout_after(text, f"        id: claude_{n}") for n in range(1, batches + 1))
     grep = -(-int(re.search(r"USERS_TIMEOUT = (\d+)", text)[1]) // 60)  # the diff step's grep, in whole minutes
     # The rest (job setup, the checkout, the diff step's other git calls and the answer check) has no limit of its
     # own; the step's comment assumes it fits in what's left.

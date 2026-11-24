@@ -1,0 +1,4 @@
+would run: reapply.sh --brings '#80,#81' ~/github/TicketManager
+then, if that leaves TicketManager with no new re-Apply PR (its Apply is already on main):
+would run: reapply.sh --brings '#80,#81' ~/github/Alpha
+would run: reapply.sh --brings '#80,#81' ~/github/Zed

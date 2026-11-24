@@ -31,7 +31,7 @@ fail() {
 skill="$work/skill"
 mkdir -p "$skill/tests/parity/stub/cases" "$skill/github"
 cp "$here/parity.test.sh" "$skill/tests/"
-cp "$here/parity/fake-gh.sh" "$skill/tests/parity/"
+cp "$here/parity/fake-gh.sh" "$here/parity/stderr.sh" "$skill/tests/parity/"
 runner="$skill/tests/parity.test.sh"
 fake="$skill/tests/parity/fake-gh.sh"
 cases="$skill/tests/parity/stub/cases"
@@ -669,6 +669,14 @@ fake 97 '' "two PR numbers" pr ready 7 8 -R o/app
 fake 97 '' "no repo" pr ready 7
 fake 97 '' "a repo with no /" pr ready 7 -R app
 fake 97 '' "a view without --jq" pr view 7 -R o/app --json state
+# gh pr list takes no PR number; its key is the repo's, and its fixture holds what its --jq prints, as a view's does.
+echo '12 MERGED abc' > "$gh_dir/pr.list.o.app.json"
+fake 0 '12 MERGED abc' "gh pr list" pr list -R o/app --head chore/x --state all --limit 100 --json number,state --jq '.[0]'
+logged "gh pr list, its --jq quoted" 'pr.list.o.app gh pr list -R o/app --head chore/x --state all --limit 100 --json number,state --jq ".[0]"'
+fake 97 '' "a list with a PR number" pr list 7 -R o/app --json number --jq .
+fake 97 '' "a list without --jq" pr list -R o/app --json number
+fake 97 '' "a list's flag on another subcommand" pr view 7 -R o/app --head x --json state --jq .state
+fake 97 '' "a list with --head and no value" pr list -R o/app --json number --jq . --head
 fake 97 '' "a call with no fixture" pr ready 8 -R o/app && logged "a gh pr call with no fixture" "UNMATCHED pr.ready.o.app.8"
 
 # The nth call with a key gets <key>.<n>.json or .fail when there is one, else <key>.json or .fail.
@@ -765,10 +773,21 @@ got="$(GIT_DIR="$work/nowhere" GIT_WORK_TREE="$work" case_problems "$probe/cases
 got="$(GIT_CEILING_DIRECTORIES="$probe/plain" case_problems "$probe/plain/cases")"
 [[ "$got" == "$want_stray" ]] || fail "the committed-cases check outside a git work tree said: $got"
 
-for suite_dir in "$here"/parity/*/; do
+# The rollout suite's cases (tests/rollout-parity.test.sh) need the same, and a tracked file in fakes/ too: its runner exits
+# 2 when a case has no fakes/ folder.
+for suite_dir in "$here"/parity/*/ "$here"/rollout-parity/; do
   got="$(case_problems "$suite_dir/cases")"
   [[ -z "$got" ]] || fail "the committed cases of ${suite_dir%/}:"$'\n'"$got"
 done
+rollout_git=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR git -C "$here/rollout-parity/cases")
+if [[ "$("${rollout_git[@]}" rev-parse --is-inside-work-tree 2> /dev/null)" == true ]]; then
+  rollout_tracked=$'\n'"$("${rollout_git[@]}" ls-files -- .)"
+  for dir in "$here"/rollout-parity/cases/*/; do
+    dir="${dir%/}"
+    [[ "$rollout_tracked" == *$'\n'"${dir##*/}/fakes/"* ]] \
+      || fail "case ${dir##*/} of rollout-parity has no file in fakes/ that git tracks, so a fresh clone has no fakes/ folder: add fakes/.gitkeep"
+  done
+fi
 # A case's files are compared byte for byte, so git must store them as they are: with text conversion on, a CRLF case
 # would reach a clone (or a commit, under core.autocrlf=input) as LF and pin nothing. tests/parity/.gitattributes turns it
 # off. converted_cases <repo folder> <pathspec>: one line per tracked file the pathspec matches that git would convert, or
@@ -841,6 +860,8 @@ done
 if [[ "$("${own_git[@]}" -C "$here" rev-parse --is-inside-work-tree 2> /dev/null)" == true ]]; then
   got="$(converted_cases "$here" 'parity/*/cases/*')"
   [[ -z "$got" ]] || fail "git converts the line endings of these case files (tests/parity/.gitattributes):"$'\n'"$got"
+  got="$(converted_cases "$here" 'rollout-parity/cases/*')"
+  [[ -z "$got" ]] || fail "git converts the line endings of these case files (tests/rollout-parity/.gitattributes):"$'\n'"$got"
 fi
 
 if [[ $failures -ne 0 ]]; then

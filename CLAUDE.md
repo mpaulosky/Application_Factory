@@ -89,8 +89,9 @@ Branches are `feature/{issue}-{slug}`, `fix/{issue}-{slug}`, `hotfix/{issue}-{sl
 `<type>(<scope>): <Summary>`, with the scope `baseline` for the Template.
 
 Size each issue so its pull request stays small: 30 files and 3,000 changed lines at most, tests included (the line the pre-push review warns at), and at
-most one open decision, as the feature request template says. Claude Review reads only a diff's first 8 pieces (about 300 KB), so it reads a bigger pull
-request only in part, and each review round over it takes longer. Split a bigger issue into smaller ones before work starts, ordered with "blocked by"
+most one open decision, as the feature request template says. Claude Review reads a big diff in up to four batches of 8 pieces (about 300 KB each), a review
+each, so a bigger pull request costs a review per batch and each review round over it takes longer; only pieces past the fourth batch go unread, and they
+hold the merge. Split a bigger issue into smaller ones before work starts, ordered with "blocked by"
 links, rather than opening one large pull request.
 
 Commit in a linked worktree under `../Application_Factory-worktrees/`: `pre-commit` refuses a commit in the primary checkout, and `pre-push` refuses a push

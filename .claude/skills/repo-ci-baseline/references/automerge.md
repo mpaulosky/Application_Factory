@@ -249,12 +249,15 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
   It skips drafts, Dependabot and events a bot started (the action refuses a bot actor, `Copilot` included, which has no `[bot]` suffix),
   and logs a notice and succeeds without the `CLAUDE_CODE_OAUTH_TOKEN` secret.
   It must not fail on its own: it isn't a required check, so a failed run leaves the PR `UNSTABLE`, which this workflow never merges.
-  So a Review step that fails, times out or hits the usage limit warns and posts nothing (`continue-on-error`), and the PR waits for a review of its head:
-  Copilot's, or Claude's on a rerun. The one deliberate failure is a review the post step had to redact a credential from.
+  So a Review step that fails, times out or hits the usage limit warns (`continue-on-error`). When no batch answered, nothing is posted and the PR waits for a
+  review of its head: Copilot's, or Claude's on a rerun.
+  When another batch answered, its answers are posted and the unanswered batch's pieces hold the merge. The one deliberate failure is a review the post step had to redact a credential from.
   Claude (`anthropics/claude-code-action`; model, effort and prompt in [ADR 0004](../docs/adr/0004-claude-review-as-copilots-backup.md#model-effort-and-prompt-117))
   never holds a write token: its job has read-only permissions,
   gets the diff against the base in pieces, with context pieces of whole files around the change and the pinned actions' gatekeeping source
-  ([ADR 0004](../docs/adr/0004-claude-review-as-copilots-backup.md#context-pieces-117)), all read in one turn,
+  ([ADR 0004](../docs/adr/0004-claude-review-as-copilots-backup.md#context-pieces-117)), all read in one turn;
+  a diff too big for one review is read in up to four batches, a review each, posted as one review
+  ([ADR 0004](../docs/adr/0004-claude-review-as-copilots-backup.md#a-big-diff-is-read-in-batches-174)),
   leaving out a root copy of an Owned file when the PR changes the Template's file to the same bytes (INDEX lists it as an identical copy; a copy that differs
   from the Template's file, or whose Template file isn't in the PR, is still read, so drift reaches the review),
   and reads only the checkout, the diff and the runner's `_actions`, with no tool granted outright
@@ -344,6 +347,10 @@ The status and land cases were recorded from the Python, which the C# replaced o
 `test.sh` runs every suite against its reference: the `.py` where one is left, else the `.cs` that replaced it, built once
 (`status` and `land` now), and `tests/parity-runner.test.sh` and `tests/shfmt-shim.test.sh`, the tests of the runner, the fake and the shim themselves.
 `PARITY_RECORD=1 tests/parity.test.sh <suite>` records a suite's cases from that reference only; the runner's header says what a case holds.
+`rollout.sh`'s suite has a runner of its own, `tests/rollout-parity.test.sh [command...]`, with its cases in `tests/rollout-parity/cases/`: rollout calls
+`reapply.sh` and `land.sh` beside itself and keeps its state under `~`, so each run is of a temporary copy of the skill folder, with stubs for those two and a
+fixed `repos.txt`, and a HOME of its own, and `git` and `claude` are fakes too (`tests/rollout-parity/fake-tool.sh`). It shares the fake `gh` and the stderr
+match (`tests/parity/stderr.sh`); `tests/rollout-parity-runner.test.sh` tests it.
 
 ```bash
 status.sh                     # one line per open PR in every repo in github/repos.txt
