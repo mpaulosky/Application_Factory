@@ -9,3 +9,7 @@ repo.owner.app
 pr.view.owner.app.5.state gh pr view 5 -R owner/app --json state --jq .state
 repo.owner.app
 pr.view.owner.app.5.state gh pr view 5 -R owner/app --json state --jq .state
+repo.owner.app
+pr.view.owner.app.5.state gh pr view 5 -R owner/app --json state --jq .state
+repo.owner.app
+pr.view.owner.app.5.state gh pr view 5 -R owner/app --json state --jq .state
