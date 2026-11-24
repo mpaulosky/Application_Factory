@@ -43,3 +43,12 @@ copies gains `global.json`. Its `static` part, in `--quick` too, checks every C#
 (and NU1900, ADR 0017's Update for mpaulosky/Application_Factory#145).
 `test.sh` builds `tests/Scripts.Tests` and runs its tests, and the pass `run_cached` remembers is for the tree and the SDK, so an SDK change runs `test.sh` again. A push now needs the
 SDK `global.json` names.
+
+## Update (mpaulosky/Application_Factory#123): the gate's two checkers are C#
+
+What this ADR decides is unchanged. The bare-`#N` check and the `git status --porcelain` guard check, which the `static` part runs (so `--quick` too), are C# file-based apps
+([ADR 0017](0017-the-factorys-and-the-templates-scripts-are-csharp-file-based-apps.md)'s Update for mpaulosky/Application_Factory#123): the gate runs
+`tests/check-issue-refs.sh` where it ran `python3 -I tests/check-issue-refs.py`, and `tests/check-git-status.sh` as before. The `static` part needs the SDK even in a tree
+with no other C#, and no longer needs `python3` for this step (ruff still does). The gate doesn't look for `dotnet` itself: each wrapper exits 2 without it, saying so, which
+the gate reads as a check that failed without checking. Each runs once in the part and builds on that run, about a second in a fresh worktree, so the part needs no build step
+of its own. `scripts/tests/gate.test.sh` builds both once and gives each throwaway repo wrappers that run the built dlls, so its gate runs hold no C# of their own.
