@@ -88,6 +88,9 @@ setup_error() {
 here="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 skill_dir="$(dirname -- "$here")"
 fake="$here/parity/fake-gh.sh"
+[[ -f "$here/parity/stderr.sh" ]] || setup_error "$here/parity/stderr.sh is missing."
+# shellcheck source=/dev/null # tests/parity/stderr.sh, which shellcheck reads on its own
+. "$here/parity/stderr.sh"
 
 [[ $# -gt 0 ]] || setup_error "name a suite: tests/parity.test.sh <suite> [command [arg]...]."
 suite="$1"
@@ -210,52 +213,6 @@ check_case() {
     grep -qE -- "$pattern" < /dev/null 2> /dev/null || status=$?
     [[ $status -ne 2 ]] || setup_error "$name/expected.stderr line $n is not a valid ERE: $pattern"
   done < "$dir/expected.stderr"
-}
-
-# stderr_fits <patterns file> <stderr file>: whether stderr fits patterns that hold a ... line, which matches any number of lines
-# (none included). Glob matching with one backtrack point: a pattern line matches one line, and on a mismatch the last ...
-# takes one more line.
-stderr_fits() {
-  local -a patterns=() lines=()
-  local p=0 l=0 star=-1 mark=0
-  mapfile -t patterns < "$1"
-  mapfile -t lines < "$2"
-  while ((l < ${#lines[@]})); do
-    if ((p < ${#patterns[@]})) && [[ "${patterns[p]}" == ... ]]; then
-      star=$p mark=$l p=$((p + 1))
-    elif ((p < ${#patterns[@]})) && grep -qE -- "${patterns[p]}" <<< "${lines[l]}"; then
-      p=$((p + 1)) l=$((l + 1))
-    elif ((star >= 0)); then
-      mark=$((mark + 1)) p=$((star + 1)) l=$mark
-    else
-      return 1
-    fi
-  done
-  while ((p < ${#patterns[@]})) && [[ "${patterns[p]}" == ... ]]; do p=$((p + 1)); done
-  ((p == ${#patterns[@]}))
-}
-
-# stderr_problems <patterns file> <stderr file>: prints the ways stderr doesn't fit its patterns, nothing when it does.
-stderr_problems() {
-  local -a patterns=() lines=()
-  local i
-  mapfile -t patterns < "$1"
-  mapfile -t lines < "$2"
-  if grep -qx -- '\.\.\.' "$1"; then
-    if ! stderr_fits "$1" "$2"; then
-      echo "stderr doesn't fit its patterns (a ... line stands for any number of lines):"
-      cat -- "$2"
-    fi
-    return
-  fi
-  if [[ ${#lines[@]} -ne ${#patterns[@]} ]]; then
-    echo "${#lines[@]} stderr line(s), expected ${#patterns[@]}:"
-    cat -- "$2"
-    return
-  fi
-  for ((i = 0; i < ${#patterns[@]}; i++)); do
-    grep -qE -- "${patterns[i]}" <<< "${lines[i]}" || echo "stderr line $((i + 1)) '${lines[i]}' doesn't match '${patterns[i]}'"
-  done
 }
 
 # tree_problems <case folder> <run folder>: prints how the run's folder differs from the case's expected.tree/ (or, with
