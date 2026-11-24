@@ -260,7 +260,8 @@ The first ported scripts, Factory-only, so the `.py` files are deleted in the PR
   or listed in another case rather than ask Copilot again on every run (`github-actions` is still matched exactly). `Landing.Epoch` reads only the
   extended ISO-8601 form `datetime.fromisoformat()` read, and takes a time with no offset as UTC where the Python took the machine's zone (GitHub's times
   carry `Z`). A list the Python indexed (`["nodes"]`) that's missing, null, or a non-empty object or string still fails the read, as it did
-  (at its first item), and so does an empty object or string, which the Python read as an empty list. The parity suites' fixtures carry `isCrossRepository` where a case needs a release-blog PR.
+  (at its first item), and so does an empty object or string, which the Python read as an empty list, and a null commits list, which it read
+  as no commits. The parity suites' fixtures carry `isCrossRepository` where a case needs a release-blog PR.
 - **The wrappers.** `status.sh` and `land.sh` change to `github/` and run `dotnet run --file` with the script's absolute path, so the Factory's `global.json` picks the SDK.
   The build leaves no MSBuild node, MSBuild server or compiler server behind, and a missing `dotnet` exits 127 with a message.
   `test.sh` runs the status suite against `status.sh`, and `land.sh --help`, under a `global.json` that pins an SDK nobody has installed.

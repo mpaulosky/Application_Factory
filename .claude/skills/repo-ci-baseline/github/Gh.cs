@@ -128,8 +128,8 @@ static class J
 
 	// n["nodes"], iterated: a missing key, a parent that isn't an object, or a value that isn't a list throws, so an answer that lacks a
 	// list is unread rather than read as empty. The Python's KeyError or TypeError did the same for a missing key, null, or a non-empty
-	// object or string (at its first item); it read an empty object or string as an empty list, which this refuses on purpose (GitHub
-	// sends neither).
+	// object or string (at its first item); it read an empty object or string as an empty list, and a PR's commits list read as no
+	// commits when null too (its `if commits`). This refuses those on purpose: GitHub sends none of them.
 	public static JsonArray NodesOf(JsonNode? n) =>
 			Req(n, "nodes") as JsonArray ?? throw new InvalidOperationException("'nodes' is not a list");
 
