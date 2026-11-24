@@ -726,10 +726,38 @@ grep -rqE -e '--(quick|sync)' "$here/.github/hooks" "$here/.github/workflows" 2>
 check "no hook or workflow passes --quick or --sync" "$([[ -d $here/.github/hooks && -d $here/.github/workflows && $quick_rc == 1 ]] && echo 0 || echo 1)"
 check "the Factory's CI runs the gate with no argument" "$(grep -E 'run: bash "scripts/gate\.sh"$' "$here/.github/workflows/template-tests.yml" > /dev/null && echo 0 || echo 1)"
 # The issue worker's Claude runs headless, where ending a turn ends the run: its settings turn background tasks off, so it can't start the gate in the
-# background and end the run waiting for it. The settings are the one JSON line after `settings: |`.
-issues_settings="$(sed -n '/^ *settings: |$/{n;p;}' "$here/.github/workflows/claude-issues.yml")"
-check "the issue worker's Claude runs with background tasks off and room for a long foreground command" \
-  "$(jq -e '.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS == "1" and (.env.BASH_MAX_TIMEOUT_MS | tonumber) >= 1800000' <<< "${issues_settings:-null}" > /dev/null 2>&1 && echo 0 || echo 1)"
+# background and end the run waiting for it, and a command has the 20 minutes (60 when it asks) that ADR 0018 gives it. The settings are the JSON line after
+# `settings: |` in the "Work the issue" step, the one step that runs Claude.
+issues_wf="$here/.github/workflows/claude-issues.yml"
+issues_settings="$(sed -n '/^      - name: Work the issue$/,/^      - name: /p' "$issues_wf" | sed -n '/^          settings: |$/{n;p;}')"
+check "the issue worker's Claude runs with background tasks off, a 20-minute default and a 60-minute limit for a foreground command" \
+  "$(jq -e '.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS == "1" and .env.BASH_DEFAULT_TIMEOUT_MS == "1200000" and .env.BASH_MAX_TIMEOUT_MS == "3600000"' \
+    <<< "${issues_settings:-null}" > /dev/null 2>&1 && echo 0 || echo 1)"
+# The comment on a run with no pull request sends the owner to the Finish step's "Claude's last message" group, so the step prints that group whether or not
+# the work step left an execution file. The step's script runs here with a stub gh that finds no pull request and keeps the comment's body.
+finish="$work/finish"
+mkdir -p "$finish/bin"
+sed -n '/^      - name: Finish$/,/^      - name: /p' "$issues_wf" | sed -n '/^        run: |$/,$p' | sed '1d;$d' | sed 's/^          //' > "$finish/run.sh"
+cat > "$finish/bin/gh" << 'STUBGH'
+#!/usr/bin/env bash
+[[ "$1 $2" != "issue comment" ]] || printf '%s\n' "$5" > "$FINISH_DIR/comment"
+exit 0
+STUBGH
+chmod +x "$finish/bin/gh"
+printf '[{"type": "result", "num_turns": 3, "subtype": "success", "result": "waiting for the gate"}]\n' > "$finish/execution.json"
+finish_case() { # finish_case <execution file or empty>: runs the Finish step, leaving its log in $finish/log and its comment in $finish/comment
+  rm -f "$finish/comment"
+  env FINISH_DIR="$finish" PATH="$finish/bin:$PATH" GH_TOKEN=x GH_REPO=o/r ISSUE=7 OUTCOME=failure EXECUTION_FILE="$1" \
+    GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=o/r GITHUB_RUN_ID=1 bash "$finish/run.sh" > "$finish/log" 2>&1
+}
+finish_case "$finish/execution.json"
+check "the Finish step prints Claude's last message from the execution file, under the group its comment names" \
+  "$(grep -qxF "::group::Claude's last message" "$finish/log" && grep -qxF 'waiting for the gate' "$finish/log" \
+    && grep -qF "under \"Claude's last message\"" "$finish/comment" && echo 0 || echo 1)"
+finish_case ""
+check "with no execution file the Finish step still prints that group, saying Claude left no message" \
+  "$(grep -qxF "::group::Claude's last message" "$finish/log" && grep -qF 'left no execution file' "$finish/log" \
+    && grep -qF "under \"Claude's last message\"" "$finish/comment" && echo 0 || echo 1)"
 
 # The local review check (ADR 0010). The stub review.sh stands for scripts/review.sh; GATE_SKIP_REVIEW=1 skips it, anything else doesn't.
 repo="$(new_repo review-skipped)"

@@ -244,10 +244,11 @@ jobs:
           allowed_bots: "github-actions[bot]"
           # A headless run ends when Claude ends its turn, so a command Claude starts in the background and waits for
           # ends the run with no branch, pull request or comment: the gate, waited on that way, ended four runs (#124,
-          # #130, #136). Background tasks are off, so every command runs in the foreground, and a command may run for
-          # up to 60 minutes (Claude Code's own limit is 10), so the gate's longer steps and mutate.py fit in one call.
+          # #130, #136). Background tasks are off, so every command runs in the foreground; a command given no timeout may
+          # run for 20 minutes (Claude Code's own default is 2), and one given a timeout for up to 60 (its own limit is
+          # 10), so the gate's longer steps and mutate.py fit in one call.
           settings: |
-            {"env": {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1", "BASH_MAX_TIMEOUT_MS": "3600000"}}
+            {"env": {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1", "BASH_DEFAULT_TIMEOUT_MS": "1200000", "BASH_MAX_TIMEOUT_MS": "3600000"}}
           prompt: |
             You are working issue #${{ steps.pick.outputs.issue }} of ${{ github.repository }}, which its owner,
             mpaulosky, queued for you. Your job is to resolve it and open a draft pull request.
@@ -307,16 +308,20 @@ jobs:
           # still be read. A deliberate trade against the transcript being hidden: up to 4000 bytes of Claude's own
           # text reach this public log, where GitHub masks only the registered secrets and the App token. The
           # message is printed between stop-commands markers, so a `::` line in it is text, not a workflow command.
+          # The group is printed on every run, saying so when the work step left no execution file (it failed before
+          # Claude ran, or its timeout stopped it), since the comment below sends the owner to it.
+          echo "::group::Claude's last message"
           if [ -n "${EXECUTION_FILE:-}" ] && [ -f "$EXECUTION_FILE" ]; then
-            echo "::group::Claude's last message"
             stop="$(cat /proc/sys/kernel/random/uuid)"
             echo "::stop-commands::$stop"
             jq -r '[.[] | select(.type == "result")] | last | "turns: \(.num_turns), subtype: \(.subtype)\n\(.result // "")"' \
               "$EXECUTION_FILE" | head -c 4000 || true
             echo
             echo "::$stop::"
-            echo "::endgroup::"
+          else
+            echo "None: the work step ($OUTCOME) left no execution file, so Claude didn't run or was stopped before it finished."
           fi
+          echo "::endgroup::"
           gh api --silent -X DELETE "repos/$GH_REPO/issues/$ISSUE/labels/claude:working" || true
           gh api --silent -X DELETE "repos/$GH_REPO/issues/$ISSUE/labels/claude" || true
           pr="$(gh api --paginate "repos/$GH_REPO/pulls?state=open&per_page=100" \
@@ -325,8 +330,8 @@ jobs:
             echo "#$ISSUE has the pull request $pr."
           else
             gh api --silent -X POST "repos/$GH_REPO/issues/$ISSUE/labels" -f "labels[]=claude:needs-human" || true
-            msg="Claude's run ended ($OUTCOME) without opening a pull request. Its comment above says why, if it left one; if not, its last"
-            msg+=" message is in the Finish step of the run's log, under \"Claude's last message\":"
+            msg="Claude's run ended ($OUTCOME) without opening a pull request. Its comment above says why, if it left one; if not, the"
+            msg+=" Finish step of the run's log shows its last message, or that it left none, under \"Claude's last message\":"
             msg+=" ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. Add the \`claude\` label again to retry."
             gh issue comment "$ISSUE" --body "$msg" || true
           fi
