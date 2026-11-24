@@ -967,10 +967,10 @@ printf '#!/usr/bin/env bash\n' > "$publish/bin/sleep"
 chmod +x "$publish/bin/git" "$publish/bin/curl" "$publish/bin/gh" "$publish/bin/sleep"
 publish_case() { # publish_case <branch> <commits>: runs the Publish step, leaving its exit status in $publish_rc and what it did in $publish
   rm -f "$publish"/{push,pr,comment,commit,bundle,fetch,output,gh-env,commit.count,push.count} "$publish/task/branch.bundle" "$publish/task/worktree.tar.gz"
+  publish_rc=0
   (cd "$publish/ws" && env PUB_DIR="$publish" PUB_BRANCH="$1" PUB_COMMITS="$2" PATH="$publish/bin:$PATH" GH_REPO=o/r ISSUE=7 \
     TASK_DIR="$publish/task" GITHUB_OUTPUT="$publish/output" GITHUB_REPOSITORY_OWNER=o ACTIONS_ID_TOKEN_REQUEST_TOKEN=x \
-    ACTIONS_ID_TOKEN_REQUEST_URL='https://example.test/oidc?v=1' bash "$publish/run.sh" > "$publish/log" 2>&1)
-  publish_rc=$?
+    ACTIONS_ID_TOKEN_REQUEST_URL='https://example.test/oidc?v=1' bash "$publish/run.sh" > "$publish/log" 2>&1) || publish_rc=$?
 }
 publish_case main ""
 check "the Publish step pushes nothing when HEAD has no commits beyond main" \
