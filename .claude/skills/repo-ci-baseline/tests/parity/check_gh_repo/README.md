@@ -35,3 +35,8 @@ reads the checker's folder through `/proc`, so those cases need Linux.
 - A file or folder the checker can't read (exit 2): the runner runs as whoever runs `test.sh`, root in some containers, who reads every file.
 - shfmt missing from `PATH`, or hanging: the runner looks `python3` up on the same `PATH`, so a case can't take shfmt away alone. The shim's own test covers the shim.
 - The Owned files `--repo` skips: their names end in `.sh`, which the gate would lint as fixtures.
+- Four of the 67 mutations in `tests/gh_repo/mutations.json`, which no command line tells from the original: none of the 964 captured inputs does, run in-process against
+  each mutant. The pytest suite catches them only from inside:
+  - "an elif or an else is read as a statement" and "a backslash on a line with no # is blanked too": by calling `is_statement` and `backslash_runs` on their own;
+  - "a run both a comment's and no comment's is blanked again and again" and "a blank put back for being in no comment is read as one put back for a break": by
+    replacing shfmt with trees that change from one parse of the same text to the next, which a real shfmt doesn't give.
