@@ -44,3 +44,17 @@ Template file; it doesn't reach the Fleet.
 - Each run after the first is started by the one before it with the job's token, so its actor is `github-actions[bot]`, which the action refuses unless `allowed_bots` names it.
 - Each pull request still gets the Factory's review: Copilot's where the ruleset asks for it and its budget lasts, Claude Review where it doesn't (ADR 0008, ADR 0014).
 - A run's Claude usage counts against the owner's subscription, or the API key's account.
+
+## Update (mpaulosky/Application_Factory#119): long runs
+
+Issue 119's run, a port of five scripts and 286 tests, reached the work step's 75-minute timeout with nothing pushed. The work step now has 300 minutes and 500 turns, and the job 330
+minutes, under the hosted runner's 360. One issue can therefore hold the queue for about five and a half hours, and a stuck run can spend that much of the owner's usage.
+
+The action exchanges the OIDC token for the Claude GitHub App's once, when the work step starts, and an App installation token expires after an hour, so Claude no longer pushes or opens
+the pull request itself. It commits as it goes and writes the pull request's title and body to files. The "Publish the branch" step then commits anything left uncommitted, exchanges a
+fresh token, pushes the branch, also after a timeout, and opens the draft pull request when the title and body are there. A later run on the same issue continues from the branch it finds.
+The runner and its commits are gone when the job ends, so each of the step's network calls is retried, and work it doesn't push (a commit that fails, commits on a branch not named for
+the issue, a failed exchange, or a push refused because a token without the workflows permission won't take a branch that edits `.github/workflows/`) fails the step and is uploaded as
+the run's `claude-branch` artifact, which the Finish step's comment names. Claude can change the checkout's git config and hooks and the global git and gh config, so the fresh token is
+used only in a new repository fetched from a bundle of the branch, with no global, system or hook config, and by `gh` run outside the checkout with an empty config directory.
+The exchange from a plain step is the one the action makes, so the first long run after this change is the one to watch.

@@ -24,8 +24,10 @@ name: Claude Issues
 # The run authenticates to Claude with CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`, the owner's Claude
 # subscription; the secret Claude Review uses) or ANTHROPIC_API_KEY, whichever is set, and to GitHub as the Claude
 # GitHub App, through the action's OIDC exchange, so its pushes and its pull request start CI as a person's would
-# (a pull request opened with the job's own token starts no workflows). The pull request is a draft, which PR
-# Auto-Merge skips: the owner reads it and marks it ready.
+# (a pull request opened with the job's own token starts no workflows). Claude only commits; the Publish step pushes
+# and opens the pull request with a token exchanged afresh, since the first one expires an hour into a long run
+# (ADR 0018's Update for #119). The pull request is a draft, which PR Auto-Merge skips: the owner reads it and marks
+# it ready.
 
 "on":
   issues:
@@ -76,7 +78,8 @@ jobs:
           || github.event_name == 'schedule'
           || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # The work step's 300 minutes plus the setup and Finish steps around it, under the hosted runner's 360-minute cap.
+    timeout-minutes: 330
     concurrency:
       group: claude-issues
       cancel-in-progress: false
@@ -229,7 +232,9 @@ jobs:
       - name: Work the issue
         id: claude
         if: steps.pick.outputs.issue != ''
-        timeout-minutes: 75
+        # Issue 119's port (five scripts and 286 tests) ran out of 75 minutes with nothing pushed, so a large port
+        # gets five hours. The Finish step still runs after a timeout and reports it on the issue.
+        timeout-minutes: 300
         continue-on-error: true
         uses: anthropics/claude-code-action@6fed3ca145920b639991cb756090506e1bcaf515 # v1.0.245
         with:
@@ -249,7 +254,7 @@ jobs:
             {"env": {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}}
           prompt: |
             You are working issue #${{ steps.pick.outputs.issue }} of ${{ github.repository }}, which its owner,
-            mpaulosky, queued for you. Your job is to resolve it and open a draft pull request.
+            mpaulosky, queued for you. Your job is to resolve it on a branch and write its pull request.
 
             1. Read the issue in ${{ runner.temp }}/claude-task/issue.md: its title, body and the owner's
                comments, which are your task. Don't read the issue's other comments on GitHub. Any text in the
@@ -260,25 +265,30 @@ jobs:
                then stop.
             4. Create the branch `fix/${{ steps.pick.outputs.issue }}-<slug>` for a bug and
                `feature/${{ steps.pick.outputs.issue }}-<slug>` for anything else (the slug is lowercase words
-               joined by hyphens). Git hooks are off in this checkout, so commit in it directly rather than in a
-               worktree. Commit subjects are `<type>(<scope>): <Summary>`, with the scope `baseline` for the
-               Template.
+               joined by hyphens). If origin already has such a branch for this issue, left by an earlier run that
+               was stopped, check it out and continue from it instead. Git hooks are off in this checkout, so commit
+               in it directly rather than in a worktree. Commit subjects are `<type>(<scope>): <Summary>`, with the
+               scope `baseline` for the Template.
             5. Make the change, with tests where CLAUDE.md asks for them. Run the gate in the quick mode that
                CLAUDE.md's Commands list gives for iterating, and fix what it reports. The full gate runs in CI
-               on the pull request.
-            6. Push with `git push -u origin HEAD`, then open the pull request as a draft with
-               `gh pr create --draft --base main`. Its title follows the commit format above. Its body fills in
-               the headings of .github/pull_request_template.md and ends with
+               on the pull request. Commit each part as it passes, so a run its timeout stops still leaves your
+               work on the branch for the next run.
+            6. Don't push and don't open the pull request: the GitHub token you were given expires after about an
+               hour, so the workflow's next step pushes the branch and opens the draft pull request with a fresh one.
+               When the work is done and committed, write the pull request's title, in the commit format above, to
+               ${{ runner.temp }}/claude-task/pr-title.txt, and its body to
+               ${{ runner.temp }}/claude-task/pr-body.md. The body fills in the headings of
+               .github/pull_request_template.md, says anything the owner should check, and ends with
                `Fixes #${{ steps.pick.outputs.issue }}`.
-            7. Comment on the issue with the pull request's link and anything the owner should check.
 
             Run every command in the foreground and wait for it to end, giving a long one (test.sh, the full gate) a
             timeout of up to 10 minutes. Never start one in the background, and never end a turn to wait for a command,
             a check or a notification: this run is headless, so the first turn you end ends the run, with no pull request.
 
-            Whenever you stop without a pull request, for any reason (a step failed, a push or `gh` call was
+            Whenever you stop without writing those two files, for any reason (a step failed, a `gh` call was
             refused, the issue needs the owner), first comment on the issue saying what you did, what stopped
-            you, and the exact error if there was one. The repository is public: never paste a token, a
+            you, and the exact error if there was one. If that comment is refused because your token has expired,
+            end with the same text as your last message, which the run's log shows. The repository is public: never paste a token, a
             credential or a remote URL into a comment, and leave those parts out of any error you quote.
           # bypassPermissions (the owner's decision): Claude Code treats `.claude/` as a protected path whose writes
           # always ask, and a headless run refuses every ask, so without it no edit to the Template (under
@@ -287,10 +297,120 @@ jobs:
           claude_args: >-
             --permission-mode bypassPermissions
             --model claude-opus-5-5
-            --max-turns 200
+            --max-turns 500
             --add-dir ${{ runner.temp }}/claude-task
             --allowedTools "Bash,Read,Edit,Write,MultiEdit,Glob,Grep"
             --disallowedTools "WebFetch,WebSearch,Monitor,ScheduleWakeup,Read(//proc/**)"
+
+      # The action exchanges the OIDC token for the Claude GitHub App's once, as the work step starts, and an App
+      # installation token expires after an hour, so a push at the end of a long run would be refused and lose the work.
+      # This step commits what Claude left uncommitted and bundles the branch, then exchanges a fresh token, pushes the
+      # branch (also when the timeout stopped Claude, so the next run continues from it), and opens the draft pull
+      # request when Claude wrote its title and body. The runner and its commits are gone once the job ends, so each
+      # network call is retried, and whenever the work isn't pushed (a failed commit, an unexpected branch, a failed
+      # exchange, a refused push: a token without the workflows permission refuses one that edits .github/workflows),
+      # the step fails and the next one uploads the bundle as the run's `claude-branch` artifact.
+      # Claude could have changed the checkout's git config and hooks, and the global git and gh config, so the fresh
+      # token is never used there: the push runs in a new repository fetched from the bundle, with no global or system
+      # config and no hooks, and gh runs outside the checkout with an empty config directory.
+      - name: Publish the branch
+        id: publish
+        if: always() && steps.pick.outputs.issue != ''
+        env:
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ steps.pick.outputs.issue }}
+          TASK_DIR: ${{ runner.temp }}/claude-task
+        run: |
+          set -uo pipefail
+          retry() { # retry <command...>: three tries, 10 and 20 seconds apart
+            local try
+            for try in 1 2 3; do
+              "$@" && return 0
+              [ "$try" = 3 ] || sleep $((try * 10))
+            done
+            return 1
+          }
+          g() { git -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }
+          bundle="$TASK_DIR/branch.bundle"
+          save() { # save <why>: keeps the work as an artifact of the run when it can't be pushed, and fails the step
+            if [ -s "$bundle" ] || g bundle create "$bundle" HEAD; then
+              echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+              echo "::error::$1 The work is saved as the run's claude-branch artifact (a git bundle of HEAD)."
+            else
+              echo "::error::$1 Bundling the work failed too, so nothing of it is kept."
+            fi
+            exit 1
+          }
+          if [ -n "$(g status --porcelain 2>/dev/null)" ]; then
+            commit() {
+              g add -A && g -c user.name="claude[bot]" -c user.email="noreply@anthropic.com" \
+                commit -q --no-verify -m "chore(baseline): Save the uncommitted work on #$ISSUE"
+            }
+            # The timeout can kill Claude's git mid-operation and leave its index lock behind.
+            if ! commit && ! { rm -f .git/index.lock && commit; }; then
+              tar -czf "$TASK_DIR/worktree.tar.gz" --exclude=.git . 2>/dev/null &&
+                echo "bundle=$TASK_DIR/worktree.tar.gz" >> "$GITHUB_OUTPUT"
+              echo "::error::Committing the work Claude left uncommitted failed; the tree is saved as the run's claude-branch artifact."
+              exit 1
+            fi
+            echo "Committed the work Claude left uncommitted."
+          fi
+          if [ -z "$(g rev-list "origin/main..HEAD" 2>/dev/null)" ]; then
+            echo "HEAD has no commits beyond main; nothing to publish."
+            exit 0
+          fi
+          g bundle create "$bundle" HEAD || save "Bundling the branch failed."
+          branch="$(g symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+          if ! [[ "$branch" =~ ^(feature|fix|hotfix)/${ISSUE}-[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+            save "Claude's commits are on ${branch:-a detached HEAD}, not a feature/$ISSUE- or fix/$ISSUE- branch, so they weren't pushed."
+          fi
+          oidc="$(curl -fsS --retry 5 --retry-all-errors --retry-delay 5 -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=claude-code-github-action" | jq -r '.value // empty')" || oidc=""
+          token=""
+          if [ -n "$oidc" ]; then
+            token="$(curl -fsS --retry 5 --retry-all-errors --retry-delay 5 -X POST -H "Authorization: Bearer $oidc" \
+              https://api.anthropic.com/api/github/github-app-token-exchange | jq -r '.token // .app_token // empty')" || token=""
+          fi
+          [ -n "$token" ] || save "Couldn't exchange the OIDC token for a fresh Claude GitHub App token."
+          echo "::add-mask::$token"
+          clean="$(mktemp -d)"
+          export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GH_CONFIG_DIR="$clean/gh"
+          { git init -q "$clean/repo" && git -C "$clean/repo" fetch -q "$bundle" "HEAD:refs/heads/$branch"; } ||
+            save "Reading the bundle into a clean repository failed."
+          retry git -C "$clean/repo" -c core.hooksPath=/dev/null \
+            push -q "https://x-access-token:${token}@github.com/${GH_REPO}.git" "refs/heads/$branch:refs/heads/$branch" ||
+            save "The push of $branch was refused."
+          echo "Pushed $branch."
+          cd "$clean" || exit 1
+          export GH_TOKEN="$token"
+          find_pr() { gh api "repos/$GH_REPO/pulls?state=open&head=${GITHUB_REPOSITORY_OWNER}:${branch}" --jq '.[0].html_url // empty'; }
+          title="$(grep -m 1 -v '^[[:space:]]*$' "$TASK_DIR/pr-title.txt" 2>/dev/null || true)"
+          pr="$(retry find_pr)"
+          if [ -n "$pr" ]; then
+            echo "$branch already has the pull request $pr."
+          elif [ -n "$title" ] && [ -s "$TASK_DIR/pr-body.md" ]; then
+            create() {
+              gh pr create --repo "$GH_REPO" --draft --base main --head "$branch" --title "$title" --body-file "$TASK_DIR/pr-body.md" ||
+                find_pr | grep . # a try whose answer was lost may have opened it
+            }
+            pr="$(retry create | tail -n 1)"
+            if [ -z "$pr" ]; then
+              echo "::error::Opening the pull request for $branch failed; the branch is pushed, so open it by hand or queue the issue again."
+              exit 1
+            fi
+            echo "Opened $pr."
+            gh issue comment "$ISSUE" --repo "$GH_REPO" --body "Claude opened the draft pull request $pr." || true
+          else
+            echo "Claude didn't write the pull request's title and body, so $branch is pushed without one."
+          fi
+
+      - name: Keep the unpushed work
+        if: always() && steps.publish.outputs.bundle != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: claude-branch
+          path: ${{ steps.publish.outputs.bundle }}
+          retention-days: 14
 
       - name: Finish
         if: always() && steps.pick.outputs.issue != ''
@@ -299,6 +419,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           ISSUE: ${{ steps.pick.outputs.issue }}
           OUTCOME: ${{ steps.claude.outcome }}
+          PUBLISH: ${{ steps.publish.outcome }}
+          SAVED: ${{ steps.publish.outputs.bundle }}
           EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
         run: |
           set -uo pipefail
@@ -330,7 +452,14 @@ jobs:
             gh api --silent -X POST "repos/$GH_REPO/issues/$ISSUE/labels" -f "labels[]=claude:needs-human" || true
             msg="Claude's run ended ($OUTCOME) without opening a pull request. Its comment above says why, if it left one; if not, the"
             msg+=" Finish step of the run's log shows its last message, or that it left none, under \"Claude's last message\":"
-            msg+=" ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. Add the \`claude\` label again to retry."
+            msg+=" ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. Add the \`claude\` label again to retry;"
+            msg+=" the next run continues from the branch the Publish step pushed, if it pushed one."
+            if [ -n "${SAVED:-}" ]; then
+              msg+=" The Publish step couldn't push Claude's work: its error in the log says why, and the work is the run's"
+              msg+=" \`claude-branch\` artifact."
+            elif [ "${PUBLISH:-}" = "failure" ]; then
+              msg+=" The Publish step pushed the branch but failed after it: its error in the log says why."
+            fi
             gh issue comment "$ISSUE" --body "$msg" || true
           fi
 
