@@ -154,6 +154,22 @@ public class LandPortTests
 		Assert.Equal((false, false), Landing.CopilotAsk([Record("GitHub-Actions")], "o", now));
 	}
 
+	// Not a moved test: gh can write a warning to stderr on a call that succeeded (a deprecation or scope notice, GH_DEBUG); a read takes
+	// its answer from stdout, and only a failure's message is read from stderr.
+	[Fact]
+	public void A_gh_read_that_succeeded_is_answered_by_its_stdout_whatever_its_stderr_says()
+	{
+		List<string[]> calls = [];
+		Func<IReadOnlyList<string>, GhRun> Gh(int code, string stdout, string stderr) => argv => { calls.Add([.. argv]); return new(code, stdout, stderr); };
+
+		Assert.Equal("MERGED", Land.GhPrState("o/app", 7, Gh(0, "MERGED\n", "warning: a newer gh is out\n")));
+		Assert.Equal(["pr", "view", "7", "-R", "o/app", "--json", "state", "--jq", ".state"], calls[^1]);
+		Assert.True(Land.GhCopilotRequested("o/app", 7, Gh(0, "1\n", "warning: token lacks read:org\n")));
+		Assert.False(Land.GhCopilotRequested("o/app", 7, Gh(0, "0\n", "")));
+		Assert.Equal("a b", Assert.Throws<GhException>(() => Land.GhPrState("o/app", 7, Gh(1, "partial", "a\nb\n"))).Message);
+		Assert.Equal("HTTP 502", Assert.Throws<GhException>(() => Land.GhCopilotRequested("o/app", 7, Gh(1, "HTTP 502\n", ""))).Message);
+	}
+
 	// Not a moved test: the times that decide whether the ask has settled and where a review round sits are read as
 	// datetime.fromisoformat() read them, with a time with no offset taken as UTC, and nothing DateTimeOffset.TryParse would guess at.
 	[Theory]
@@ -192,5 +208,34 @@ public class LandPortTests
 		Assert.Equal(1, Land.Run(["--once", "o/app"], output, err, lander: lander, readRepoList: () => new()));
 		Assert.Contains("o/app: ", err.ToString(), StringComparison.Ordinal);
 		Assert.DoesNotContain("No open PRs", output.ToString(), StringComparison.Ordinal);
+	}
+}
+
+// Not moved tests, in LandTests for its fake GitHub.
+public partial class LandTests
+{
+	// Not a moved test: a PR state that isn't MERGED, CLOSED or OPEN (a warning, an empty answer) is unread, so the PR stays watched
+	// and the read is reported, rather than called gone and the run ended as if every PR had landed.
+	[Theory]
+	[InlineData("warning: \u001b[31mupgrade gh")]
+	[InlineData("")]
+	[InlineData("merged")]
+	public void A_pr_state_that_isnt_one_keeps_the_pr_watched(string answer)
+	{
+		var fake = MakeFake(new() { ["o/app"] = Prs(Node()) });
+		var (lander, output, err) = Start(fake, new() { ["o/app"] = [7] });
+		lander.Poll();
+		Printed(output);
+
+		fake.Open["o/app"] = Prs();
+		fake.Final[("o/app", 7)] = answer;
+		Assert.False(lander.Poll().Done);
+		Assert.DoesNotContain("app#7 ", Printed(output), StringComparison.Ordinal);
+		Assert.Contains("o/app#7: not a PR state: ", err.ToString(), StringComparison.Ordinal);
+		Assert.DoesNotContain("\u001b", err.ToString(), StringComparison.Ordinal);
+
+		fake.Final[("o/app", 7)] = "CLOSED";
+		Assert.True(lander.Poll().Done);
+		Assert.Contains("app#7 closed", Printed(output), StringComparison.Ordinal);
 	}
 }

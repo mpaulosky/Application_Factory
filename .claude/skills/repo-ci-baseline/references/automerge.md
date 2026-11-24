@@ -410,7 +410,8 @@ land.sh mpaulosky/<repo>#<n>  # watch these PRs (or owner/repo for all its open 
 and `gh pr merge --auto --squash --match-head-commit <head>`. It has no rules of its own.
 It also watches each release-blog PR that opens in a watched repo, and after a watched Baseline PR merges it waits `--blog-wait` (15) minutes for one.
 It prints status.sh's line only for a PR whose state or action changed (one line when no PR is open, then it exits),
-and exits 0 once every watched PR is merged or closed (or after one pass with `--once`). It exits 1 at `--timeout` (180 minutes), when a `--once` pass can't
+and exits 0 once every watched PR is merged or closed (or after one pass with `--once`); a PR that leaves the open list is gone only when `gh pr view`'s
+stdout says MERGED or CLOSED (a warning gh writes to stderr isn't read), and any other answer is reported and read again next poll. It exits 1 at `--timeout` (180 minutes), when a `--once` pass can't
 read a repo, when a `repos.txt` name isn't `owner/repo` (before any call), or when it first waits a `--interval` `Land.Sleep` refuses, as `time.sleep` did. A usage error, a
 target that isn't `owner/repo`, `owner/repo#n` or a PR's URL among them, exits 2.
 A quiet round costs one GraphQL query per repo (about 3 points, plus 1 for each PR whose threads are all resolved and that a bot reviewed),

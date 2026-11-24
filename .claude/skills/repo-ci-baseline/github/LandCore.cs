@@ -150,28 +150,32 @@ static class Land
 		return (run.Code == 0, Gh.Message(run).Replace("\n", " ", StringComparison.Ordinal));
 	}
 
+	// Runs one gh call that reads an answer (argv starts with "gh"): its stdout, trimmed, when it succeeded, whatever it wrote to stderr
+	// (a deprecation or scope warning isn't the answer); a failure throws GhException with RunGh's message. process runs gh (Gh.Process).
+	public static string ReadGh(IReadOnlyList<string> argv, Func<IReadOnlyList<string>, GhRun>? process = null)
+	{
+		var run = (process ?? Gh.Process)([.. argv.Skip(1)]);
+		if (run.Code != 0)
+			throw new GhException(Gh.Message(run).Replace("\n", " ", StringComparison.Ordinal));
+		return run.Stdout.Trim();
+	}
+
 	// How many of the PR's review requests and reviews of its head are Copilot's. Copilot's quota note counts here: Copilot was asked
 	// about the head and answered, so asking again only brings another note (Decide() calls in Claude).
 	public const string CopilotJq = ".headRefOid as $h | [(.reviewRequests[] | .login // .name // \"\"), "
 			+ "(.reviews[] | select(.commit.oid == $h) | .author.login)] | map(select(test(\"copilot\"; \"i\"))) | length";
 
 	// Whether Copilot's review is requested on the PR, or Copilot has reviewed its head.
-	public static bool GhCopilotRequested(string repo, long number)
+	public static bool GhCopilotRequested(string repo, long number, Func<IReadOnlyList<string>, GhRun>? process = null)
 	{
-		var (ok, message) = RunGh(["gh", "pr", "view", number.ToString(CultureInfo.InvariantCulture), "-R", repo, "--json", "headRefOid,reviewRequests,reviews", "--jq", CopilotJq]);
-		if (!ok)
-			throw new GhException(message);
-		return int.Parse(message, NumberStyles.AllowLeadingSign | NumberStyles.AllowLeadingWhite | NumberStyles.AllowTrailingWhite, CultureInfo.InvariantCulture) > 0;
+		var answer = ReadGh(["gh", "pr", "view", number.ToString(CultureInfo.InvariantCulture), "-R", repo, "--json", "headRefOid,reviewRequests,reviews", "--jq", CopilotJq],
+				process);
+		return int.Parse(answer, NumberStyles.AllowLeadingSign | NumberStyles.AllowLeadingWhite | NumberStyles.AllowTrailingWhite, CultureInfo.InvariantCulture) > 0;
 	}
 
 	// MERGED or CLOSED (or OPEN) for a PR that left the open list.
-	public static string GhPrState(string repo, long number)
-	{
-		var (ok, message) = RunGh(["gh", "pr", "view", number.ToString(CultureInfo.InvariantCulture), "-R", repo, "--json", "state", "--jq", ".state"]);
-		if (!ok)
-			throw new GhException(message);
-		return message;
-	}
+	public static string GhPrState(string repo, long number, Func<IReadOnlyList<string>, GhRun>? process = null) =>
+			ReadGh(["gh", "pr", "view", number.ToString(CultureInfo.InvariantCulture), "-R", repo, "--json", "state", "--jq", ".state"], process);
 
 	// land.cs's command line. lander is the watch loop (a new Lander over the targets by default), sleep waits between polls and
 	// readRepoList reads the Fleet (Repos.Read).
@@ -271,8 +275,8 @@ sealed class Lander
 	public bool DryRun;
 	public double BlogWait = Land.DefaultBlogWait * 60;
 	public Func<string, string, JsonNode> Fetch;
-	public Func<string, long, string> PrState = Land.GhPrState;
-	public Func<string, long, bool> CopilotRequested = Land.GhCopilotRequested;
+	public Func<string, long, string> PrState = (repo, number) => Land.GhPrState(repo, number);
+	public Func<string, long, bool> CopilotRequested = (repo, number) => Land.GhCopilotRequested(repo, number);
 	public Func<IReadOnlyList<string>, (bool Ok, string Message)> Run = Land.RunGh;
 	public Func<double> Clock = () => Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
 	public readonly TextWriter Out;
@@ -429,6 +433,9 @@ sealed class Lander
 		try
 		{
 			final = PrState(repo, number);
+			// Only MERGED and CLOSED end the watch: any other answer is unread, so a PR that may still be open isn't called gone.
+			if (final is not ("MERGED" or "CLOSED" or "OPEN"))
+				throw new GhException($"not a PR state: {Status.Printable(final)}");
 		}
 		catch (Exception error) // reported, and tried again next poll
 		{

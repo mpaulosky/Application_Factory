@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Text.Json.Nodes;
 
 // Tests for github/LandCore.cs: fixture polls in, gh calls and printed changes out. No GitHub.
-public class LandTests
+public partial class LandTests
 {
 	static readonly string HEAD = "1234567" + new string('0', 33);
 	static readonly string NEW = "abcdef0" + new string('0', 33);
