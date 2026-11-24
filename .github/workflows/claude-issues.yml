@@ -132,16 +132,14 @@ jobs:
           ensure_label claude:blocked d93f0b "Queued for Claude, waiting on the issues it is blocked by"
           ensure_label claude:needs-human b60205 "Claude's run ended without a pull request"
 
-          open_prs="$(gh api --paginate "repos/$GH_REPO/pulls?state=open&per_page=100" --jq '.[].head.ref')"
-          # Read in full first, so a failed call fails the run instead of looking like an empty queue.
-          queue="$(gh api --paginate "repos/$GH_REPO/issues?state=open&labels=claude&sort=created&direction=asc&per_page=100" \
-            --jq '.[] | select(.pull_request == null) | "\(.number)\u001f\([.labels[].name] | join(","))\u001f\(.user.login)"')"
           owner="${GITHUB_REPOSITORY_OWNER}"
           # An open issue labelled `claude:working` holds a slot while the run named in its latest "Claude started"
           # comment is still going, whether or not it still carries `claude`. A run that died before its Finish step left
           # the label behind: when its run has ended, was deleted (HTTP 404), or no "Claude started" comment names one, the
-          # label is taken off and the issue is queued like any other. When the comments or the run's status can't be
-          # read, the issue keeps its slot, to be safe. Read in full first, like the queue.
+          # label is taken off, and the issue is queued again if it still carries `claude`. When the comments or the run's
+          # status can't be read, the issue keeps its slot, to be safe. Read in full first, so a failed call fails the run
+          # instead of freeing every slot. The slots are counted before the queue is read: the Finish step takes `claude`
+          # off before `claude:working`, so an issue a run finishes in between is either counted here or not queued.
           working_issues="$(gh api --paginate "repos/$GH_REPO/issues?state=open&labels=claude:working&per_page=100" \
             --jq '.[] | select(.pull_request == null) | .number')"
           busy=0
@@ -159,7 +157,12 @@ jobs:
             status="completed"
             if [ -n "$run_id" ]; then
               status="$(gh api "repos/$GH_REPO/actions/runs/$run_id" --jq '.status' 2>"$RUNNER_TEMP/run-status.err")" || {
-                if grep -qF 'HTTP 404' "$RUNNER_TEMP/run-status.err"; then status="completed"; else status="unknown"; fi
+                if grep -qF 'HTTP 404' "$RUNNER_TEMP/run-status.err"; then
+                  status="completed"
+                else
+                  echo "::warning::Couldn't read run $run_id of #$number: $(head -c 300 "$RUNNER_TEMP/run-status.err")"
+                  status="unknown"
+                fi
               }
             fi
             if [ "$status" = "completed" ]; then
@@ -173,6 +176,12 @@ jobs:
           done <<<"$working_issues"
           slots=$((CLAUDE_ISSUES_CAP - busy))
           echo "$busy of $CLAUDE_ISSUES_CAP slots are taken."
+          # Only this repository's branches: a fork's pull request can take any branch name.
+          open_prs="$(gh api --paginate "repos/$GH_REPO/pulls?state=open&per_page=100" \
+            --jq ".[] | select(.head.repo.full_name == \"$GH_REPO\") | .head.ref")"
+          # Read in full first, so a failed call fails the run instead of looking like an empty queue.
+          queue="$(gh api --paginate "repos/$GH_REPO/issues?state=open&labels=claude&sort=created&direction=asc&per_page=100" \
+            --jq '.[] | select(.pull_request == null) | "\(.number)\u001f\([.labels[].name] | join(","))\u001f\(.user.login)"')"
           picked=()
           # One issue's failed call skips that issue (and is logged), so it can't hold up the rest of the queue.
           # Fields are split on the unit separator, not a tab: read collapses runs of a whitespace IFS, so an issue
@@ -534,7 +543,7 @@ jobs:
           gh api --silent -X DELETE "repos/$GH_REPO/issues/$ISSUE/labels/claude" || true
           gh api --silent -X DELETE "repos/$GH_REPO/issues/$ISSUE/labels/claude:working" || true
           pr="$(gh api --paginate "repos/$GH_REPO/pulls?state=open&per_page=100" \
-            --jq ".[] | select(.head.ref | test(\"^(feature|fix|hotfix)/${ISSUE}-\")) | .html_url" | head -n 1)"
+            --jq ".[] | select(.head.repo.full_name == \"$GH_REPO\" and (.head.ref | test(\"^(feature|fix|hotfix)/${ISSUE}-\"))) | .html_url" | head -n 1)"
           if [ -n "$pr" ]; then
             echo "#$ISSUE has the pull request $pr."
           else
@@ -558,7 +567,8 @@ jobs:
       # two runs ending together may each list the open pull requests before the other's is opened. Only pull requests
       # from this repository's own branches count, which only people with write access can push: a fork's branch can
       # take any name. A file is named only when its name is plain (letters, digits and `._/+-`), and at most five are
-      # named per pull request. Every failure warns and leaves the comment as it was; it never fails the job.
+      # named per pull request; one whose shared files all have other names is listed without them. Every failure warns
+      # and leaves the comment as it was; it never fails the job.
       - name: Note the merge order
         if: always()
         env:
@@ -591,9 +601,12 @@ jobs:
               echo "::warning::Couldn't list the files #$other changes; leaving it out of the merge order."
               continue
             }
-            shared="$(LC_ALL=C comm -12 <(printf '%s\n' "$mine") <(LC_ALL=C sort -u <<<"$theirs") |
-              LC_ALL=C grep -E '^[A-Za-z0-9._/+-]+$' | head -n 5 | awk 'NR > 1 { printf ", " } { printf "`%s`", $0 }')"
-            [ -z "$shared" ] || lines+="#$other $shared"$'\n'
+            common="$(LC_ALL=C comm -12 <(printf '%s\n' "$mine") <(LC_ALL=C sort -u <<<"$theirs") | sed '/^$/d')"
+            [ -n "$common" ] || continue
+            shared="$(LC_ALL=C grep -E '^[A-Za-z0-9._/+-]+$' <<<"$common" | head -n 5 |
+              awk 'NR > 1 { printf ", " } { printf "`%s`", $0 }')"
+            # Every shared file has a name that isn't plain: the pull request is still listed, without the names.
+            lines+="#$other ${shared:-files with other names}"$'\n'
           done <<<"$open"
           if [ -z "$lines" ]; then
             echo "No other open pull request changes the files #$pr changes."
