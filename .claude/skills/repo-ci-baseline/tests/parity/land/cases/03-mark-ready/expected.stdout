@@ -1,0 +1,2 @@
+app#7 feat: Something                          1234567 draft CLEAN review:copilot threads:0 automerge:off running:0 failed:0 cancelled:0 -> mark ready (draft)
+  ran: gh pr ready 7 -R owner/app

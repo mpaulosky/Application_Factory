@@ -1,0 +1,66 @@
+{
+ "data": {
+  "repository": {
+   "pullRequests": {
+    "nodes": [
+     {
+      "id": "PR_6",
+      "number": 6,
+      "title": "[skip-release] docs: Release notes",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefName": "docs/release-notes",
+      "headRefOid": "1234567000000000000000000000000000000000",
+      "mergeStateStatus": "CLEAN",
+      "autoMergeRequest": {
+       "enabledAt": "2026-10-07T10:00:00Z"
+      },
+      "labels": {
+       "nodes": []
+      },
+      "reviewRequests": {
+       "nodes": []
+      },
+      "reviews": {
+       "nodes": [
+        {
+         "author": {
+          "login": "copilot-pull-request-reviewer"
+         },
+         "commit": {
+          "oid": "1234567000000000000000000000000000000000"
+         },
+         "body": ""
+        }
+       ]
+      },
+      "reviewThreads": {
+       "nodes": []
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "statusCheckRollup": {
+           "contexts": {
+            "nodes": [
+             {
+              "__typename": "CheckRun",
+              "name": "Test Suite",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-07T10:00:00Z"
+             }
+            ]
+           }
+          }
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ }
+}

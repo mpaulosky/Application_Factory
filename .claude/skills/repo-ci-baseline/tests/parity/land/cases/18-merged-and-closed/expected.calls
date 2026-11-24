@@ -1,0 +1,3 @@
+repo.owner.app
+pr.view.owner.app.1.state gh pr view 1 -R owner/app --json state --jq .state
+pr.view.owner.app.2.state gh pr view 2 -R owner/app --json state --jq .state

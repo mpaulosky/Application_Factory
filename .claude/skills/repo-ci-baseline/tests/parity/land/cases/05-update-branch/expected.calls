@@ -1,0 +1,2 @@
+repo.owner.app
+pr.update-branch.owner.app.7 gh pr update-branch 7 -R owner/app

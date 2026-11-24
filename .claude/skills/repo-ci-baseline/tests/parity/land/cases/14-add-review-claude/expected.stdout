@@ -1,0 +1,2 @@
+app#7 feat: Something                          1234567 ready CLEAN review:no threads:0 automerge:off running:0 failed:0 cancelled:0 -> add review:claude (no Copilot or Claude review of 1234567 yet; Copilot couldn't review (its request was dropped or its quota is used up), checks green)
+  ran: gh pr edit 7 -R owner/app --add-label review:claude

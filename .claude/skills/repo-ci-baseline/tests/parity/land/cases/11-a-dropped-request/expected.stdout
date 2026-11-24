@@ -1,0 +1,6 @@
+app#7 feat: Something                          1234567 ready CLEAN review:no threads:0 automerge:off running:0 failed:0 cancelled:0 -> request Copilot (no Copilot or Claude review of 1234567 yet; Copilot not asked yet)
+  ran: gh pr comment 7 -R owner/app --body Copilot's review was requested for this PR. It is asked once per PR; if GitHub drops the request, review:claude calls in Claude instead. mpaulosky/dotfiles#360
+
+<!-- pr-automerge:copilot-asked -->
+  ran: gh pr edit 7 -R owner/app --add-reviewer @copilot
+  warning: Copilot's review request didn't register on #7 (GitHub drops it once the Copilot code review budget is used up); review:claude backs Copilot up for this PR once the request has been missing for 30 seconds and its checks are green

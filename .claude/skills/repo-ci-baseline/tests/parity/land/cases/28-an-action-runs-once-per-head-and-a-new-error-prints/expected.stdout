@@ -1,0 +1,7 @@
+app#2 feat: Something                          1234567 ready BEHIND review:copilot threads:0 automerge:off running:0 failed:0 cancelled:0 -> update branch (behind main)
+  ran: gh pr update-branch 2 -R owner/app
+app#2 feat: Something                          1234567 ready BEHIND review:no threads:0 automerge:off running:0 failed:0 cancelled:0 -> update branch (behind main)
+app#2 feat: Something                          89abcde ready BEHIND review:no threads:0 automerge:off running:0 failed:0 cancelled:0 -> update branch (behind main)
+  ran: gh pr update-branch 2 -R owner/app
+app#2 closed
+All 1 watched PR(s) merged or closed.

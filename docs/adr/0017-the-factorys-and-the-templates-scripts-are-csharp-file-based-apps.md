@@ -82,7 +82,8 @@ So the scripts move, on these rules:
   stays beside its `.cs`, kept in step by that script's parity suite. `status`, `landing` and `land` move as one increment; `settings.py` stays until `rollout.py` is ported;
   `release_post` moves with `backfill_blog_posts` and `release_queue`.
 - **Each port is judged by a parity suite** (mpaulosky/Application_Factory#96). It is a black-box suite at the command line, with a fake `gh` on `PATH`, that asserts stdout, the
-  exit code and the `gh` calls, and runs against the Python and the C# alike (`tests/status-parity.test.sh <command...>`). It needed no change to judge the trial's port.
+  exit code and the `gh` calls, and runs against the Python and the C# alike (then `tests/status-parity.test.sh <command...>`; one runner now serves every suite,
+  `tests/parity.test.sh <suite> <command...>`, mpaulosky/Application_Factory#118). It needed no change to judge the trial's port.
 - **When each `.py` goes.**
   - A Factory-only script's `.py` is deleted in the PR that ports it, once its parity suite passes against the C#; a revert rolls it back.
   - An Owned script ships as C#, the file the workflows run, keeps its `.py` beside it for one Rollout, and loses it in the next; changing one workflow line rolls it back.
