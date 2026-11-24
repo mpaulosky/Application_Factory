@@ -111,6 +111,7 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
   and as wheels only (`--only-binary=:all:`): Dependabot's `pip` entry in the Factory bumps the Template's copy,
   all but ruff's pin, which moves by hand with the gate's release rule, and the file's header says how
   to regenerate it by hand); the few that need the Factory (`OWNED` against the Template's folders, this page) are in `tests/gh_repo/`.
+  The parity suite `tests/parity/check_gh_repo/` judges it through its command line alone, the test a port of it runs.
 
   More rules of a script, which this page holds in full (the checker's docstring only points here):
 

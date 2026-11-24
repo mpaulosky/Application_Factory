@@ -1,0 +1,1 @@
+^check_gh_repo[^:]*: shfmt printed no syntax tree \(not a JSON object\)$

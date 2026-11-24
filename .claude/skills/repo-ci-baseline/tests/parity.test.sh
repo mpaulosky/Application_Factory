@@ -2,7 +2,8 @@
 # The parity suites: a script's behaviour through its command line only, so the same cases judge any implementation of it
 # (its C# port, ADR 0017) against the Python. One runner and one fake gh serve every suite; a suite is a folder
 # tests/parity/<suite>/, named for the script it was recorded from (github/<suite>.py, else the Template's
-# template/owned/.github/scripts/<suite>.py), and its README.md says what its cases cover and what they leave out on purpose.
+# template/owned/.github/scripts/<suite>.py), and its README.md says what its cases cover and what they leave out on purpose, and
+# anything a run of it needs besides (check_gh_repo's runs with its shfmt shim first on PATH).
 #
 #   tests/parity.test.sh <suite>                    run the suite's cases against python3 <that script>
 #   tests/parity.test.sh <suite> <command> [arg]... run them against another implementation
