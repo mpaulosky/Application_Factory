@@ -1127,9 +1127,10 @@ def test_a_batchs_summary_is_cut_to_its_share_with_a_note_and_only_past_it(tmp_p
     if extra <= 0:
         assert sections[1] == long
     else:
-        assert len(sections[1]) == share and "was cut" in sections[1]
-        note = sections[1].lstrip("x")
-        assert sections[1] == long[:share - len(note)] + note and note.startswith("\n\n")
+        # One line longer than the share: its start, quoted, room left only for a comment's closer.
+        part = quoted_part(sections[1])
+        assert part.startswith("> x") and set(part[2:]) == {"x"} and "was cut" in sections[1]
+        assert len(sections[1]) == share - len(" -->")
 
 
 def test_the_joined_summary_leaves_room_for_the_findings_under_githubs_limit(tmp_path):
@@ -1143,6 +1144,14 @@ def test_the_joined_summary_leaves_room_for_the_findings_under_githubs_limit(tmp
     assert code == 0 and len(answer["summary"]) <= 4 * summary_share() + 200 <= 65_536 - 20_000
 
 
+CUT = "\n\n_This batch"
+
+
+def quoted_part(section):
+    """A cut section's summary part, before its note."""
+    return section[:section.index(CUT)]
+
+
 def cut(tmp_path, summary):
     """The first section of a two-batch review whose first batch answered summary, checked for its share and note."""
     answers = [{"summary": summary, "findings": []}, {"summary": "second", "findings": []}]
@@ -1151,72 +1160,61 @@ def cut(tmp_path, summary):
     code, answer, _ = batched(tmp_path, answers, listed, reads)
     assert code == 0
     sections = batch_sections(answer["summary"], 2)
-    assert sections[2] == "second" and len(sections[1]) <= summary_share() and "was cut" in sections[1]
+    assert sections[2] == "second" and "was cut" in sections[1]
+    # Room is kept for a comment's closer, so a section without one is that much shorter.
+    closed = quoted_part(sections[1]).endswith(" -->")
+    assert len(sections[1]) <= summary_share() - (0 if closed else len(" -->"))
     return sections[1]
-
-
-def fence_lines(text):
-    return [line for line in text.split("\n") if re.match(r" {0,3}(`{3,}|~{3,})", line)]
 
 
 @pytest.mark.parametrize("line", ["abc def gh", "abc def g", "abcdefghijklm"])
 def test_a_cut_ends_at_a_lines_end(tmp_path, line):
     # Lines of several lengths, so the share falls inside one.
     section = cut(tmp_path, f"{line}\n" * 2_000)
-    body = section[:section.index("\n\n_This batch")]
-    assert set(body.split("\n")) == {line}
+    assert set(quoted_part(section).split("\n")) == {f"> {line}"}
 
 
-@pytest.mark.parametrize("fence", ["```", "~~~~"])
-def test_a_cut_inside_a_code_fence_closes_it_before_the_note(tmp_path, fence):
-    section = cut(tmp_path, f"Intro.\n\n{fence}python\n" + "code = 1\n" * 2_000 + f"{fence}\n\nAfter.")
-    assert fence_lines(section) == [f"{fence}python", fence]
-    assert section.index(f"\n{fence}\n") < section.index("_This batch")
+def test_a_long_line_after_the_first_is_left_out_whole(tmp_path):
+    assert quoted_part(cut(tmp_path, "short\n" + "y" * 20_000)) == "> short"
 
 
-@pytest.mark.parametrize("opener, inside", [("````", "```"), ("````", "```` not a close"), ("~~~", "```")])
-def test_only_a_bare_fence_of_the_same_kind_and_as_long_closes_one(tmp_path, opener, inside):
-    section = cut(tmp_path, f"{opener}\n{inside}\n" + "x\n" * 6_000)
-    assert fence_lines(section) == [opener, inside, opener]
+def test_a_cut_summary_is_quoted_line_by_line_blank_lines_too(tmp_path):
+    # Markdown ends a code fence with the quote holding it, however the fence is indented, and the HTML parser a
+    # <details> at the quote's end, so whatever the cut leaves open ends before the note.
+    section = cut(tmp_path, "One.\n\n    - item\n\n      ```python\n" + "code = 1\n" * 3_000)
+    lines = quoted_part(section).split("\n")
+    assert lines[:6] == ["> One.", ">", ">     - item", ">", ">       ```python", "> code = 1"]
+    assert all(line.startswith(">") for line in lines)
+    # A blank line ends the quote, and the note is a paragraph of its own after it.
+    assert section[len(quoted_part(section)):].startswith(CUT)
 
 
-def test_a_stray_closing_details_doesnt_cancel_a_later_one(tmp_path):
-    section = cut(tmp_path, "</details>\n<details>\n\n" + "line\n" * 2_000)
-    assert section.count("</details>") == 2
+def test_a_line_that_would_pass_the_budget_only_by_its_newline_is_left_out(tmp_path):
+    share = summary_share()
+    one_line = cut(tmp_path, "x" * (share + 1))
+    budget = len(quoted_part(one_line))  # what one line longer than the share keeps
+    # The first line and 2,000 quoted "a" lines (4 characters with the newline before each) leave 3 characters of the
+    # budget, which the next "a" line fits only without its newline.
+    first = budget - len("> ") - 4 * 2_000 - 3
+    part = quoted_part(cut(tmp_path, "b" * first + "\na" * 5_000))
+    assert part.count("\n") == 2_000 and len(part) == budget - 3
 
 
-def test_a_fence_closed_before_the_cut_gets_no_closer(tmp_path):
-    section = cut(tmp_path, "```\nx = 1\n```\n" + "plain\n" * 2_000)
-    assert fence_lines(section) == ["```", "```"]
+def test_quoting_counts_toward_the_share(tmp_path):
+    # Short lines nearly double when quoted; cut() checks the share holds, this that it is filled.
+    section = cut(tmp_path, "a\n" * 6_000)
+    assert len(section) > summary_share() - len(" -->") - len("\n> a")
 
 
 def test_a_cut_inside_an_html_comment_closes_it_before_the_note(tmp_path):
-    section = cut(tmp_path, "Seen.\n<!-- hidden\n" + "still hidden\n" * 1_000)
-    assert section.rfind("-->") > section.rfind("<!--") and section.rfind("-->") < section.index("_This batch")
+    part = quoted_part(cut(tmp_path, "Seen.\n<!-- hidden\n" + "still hidden\n" * 1_000))
+    assert part.endswith(" -->") and part.count("-->") == 1
 
 
-def test_a_comment_closed_on_its_line_and_a_fence_inside_a_comment_open_nothing(tmp_path):
-    section = cut(tmp_path, "<!-- a -->\n<!--\n```\n-->\n" + "plain\n" * 2_000)
-    assert section.count("-->") == 2 and fence_lines(section) == ["```"]
-
-
-def test_a_cut_inside_details_closes_each_open_one(tmp_path):
-    section = cut(tmp_path, "<details><summary>a</summary>\n\n<DETAILS>\n</details>\n<details>\n\n" + "line\n" * 2_000)
-    assert section.lower().count("</details>") == 3 and section.rindex("</details>") < section.index("_This batch")
-
-
-def test_details_inside_a_comment_or_a_fence_opens_nothing(tmp_path):
-    section = cut(tmp_path, "<!-- <details> -->\n```\n<details>\n```\n" + "line\n" * 2_000)
-    assert section.lower().count("</details>") == 0
-
-
-def test_closers_that_wouldnt_fit_drop_lines_until_they_do(tmp_path):
-    share = summary_share()
-    # A fence opened on the cut's last line, its closer as long as it: dropping lines drops the fence's line.
-    opener = "`" * 200
-    summary = "a\n" * ((share - 300) // 2) + opener + "\n" + "b" * share
-    section = cut(tmp_path, summary)
-    assert opener not in section and len(section) <= share
+@pytest.mark.parametrize("comment", ["<!-- a -->", "<!-->"])
+def test_a_comment_closed_before_the_cut_gets_no_closer(tmp_path, comment):
+    part = quoted_part(cut(tmp_path, f"{comment}\n" + "plain\n" * 3_000))
+    assert part.count("-->") == 1 and not part.endswith(" -->")
 
 
 def review_steps():

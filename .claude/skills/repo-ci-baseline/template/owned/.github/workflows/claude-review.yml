@@ -2471,53 +2471,35 @@ jobs:
           else:
               # GitHub refuses a review body over 65,536 characters, and the findings outside the diff go in it
               # after the summary, whole. So each batch's summary keeps at most its quarter of 40,000 characters,
-              # and a longer one is cut, saying so. The cut is at a line's end, and closes a code fence, an
-              # HTML comment or a <details> it leaves open, so the note and the later sections don't render
-              # as code or go unseen.
+              # and a longer one is cut, saying so. A cut can leave a code fence, a <details> or an HTML comment
+              # open, which would turn the note and the later sections into code or hide them. So the part kept
+              # is posted as a quote: Markdown ends a fence (however indented, in a list or not) with the quote
+              # that holds it, and the HTML parser ends a <details> at the quote's end tag. A comment hides
+              # everything up to its end, so one the part leaves open is closed. The cut is at a line's end,
+              # except in a first line longer than the share.
               MAX_SUMMARY_CHARS = 10_000
               CUT_NOTE = ("\n\n_This batch's summary was cut here to fit GitHub's limit on a review's length; "
                           "its findings are whole._")
-              FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")
-
-              def left_open(text):
-                  """What closes the fence, comment and <details> blocks text leaves open, in order."""
-                  fence, details, comment = None, 0, False
-                  for line in text.split("\n"):
-                      found = FENCE.fullmatch(line)
-                      if fence is not None:
-                          if found and found[1][0] == fence[0] and len(found[1]) >= len(fence) and not found[2].strip():
-                              fence = None
-                          continue
-                      if found and not comment and not (found[1][0] == "`" and "`" in found[2]):
-                          fence = found[1]
-                          continue
-                      rest = line
-                      while rest:
-                          if comment:
-                              end = rest.find("-->")
-                              comment, rest = (True, "") if end < 0 else (False, rest[end + 3:])
-                              continue
-                          start = rest.find("<!--")
-                          before = rest if start < 0 else rest[:start]
-                          details += len(re.findall(r"<details\b", before, re.I))
-                          details -= len(re.findall(r"</details\s*>", before, re.I))
-                          details = max(details, 0)
-                          comment, rest = (start >= 0, "" if start < 0 else rest[start + 4:])
-                  return ((f"\n{fence}" if fence else "") + (" -->" if comment else "")
-                          + "\n\n</details>" * details)
+              CLOSE_COMMENT = " -->"
 
               def within_share(summary):
                   if len(summary) <= MAX_SUMMARY_CHARS:
                       return summary
-                  kept = summary[:MAX_SUMMARY_CHARS - len(CUT_NOTE)]
-                  kept = kept.rsplit("\n", 1)[0] if "\n" in kept else kept
-                  # Dropping lines until the closers fit drops, at worst, the line that opened them.
-                  while len(kept) + len(left_open(kept)) + len(CUT_NOTE) > MAX_SUMMARY_CHARS and "\n" in kept:
-                      kept = kept.rsplit("\n", 1)[0]
-                  closers = left_open(kept)
-                  if len(kept) + len(closers) + len(CUT_NOTE) > MAX_SUMMARY_CHARS:
-                      kept, closers = "", ""
-                  return kept + closers + CUT_NOTE
+                  budget = MAX_SUMMARY_CHARS - len(CUT_NOTE) - len(CLOSE_COMMENT)
+                  quoted, size = [], 0
+                  # Quoting only adds characters, so the summary's lines run past the budget before they end.
+                  for line in summary.split("\n"):
+                      line = f"> {line}" if line else ">"
+                      if size + len(line) + bool(quoted) > budget:
+                          if not quoted:
+                              quoted.append(line[:budget])
+                          break
+                      size += len(line) + bool(quoted)
+                      quoted.append(line)
+                  kept = "\n".join(quoted)
+                  if kept.rfind("<!--") > kept.rfind("-->"):
+                      kept += CLOSE_COMMENT
+                  return kept + CUT_NOTE
 
               sections = [f"### Batch {number} of {count}\n\n" + (
                   within_share(fields[number]["summary"]) if number in fields
