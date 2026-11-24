@@ -1,0 +1,2 @@
+app#7 [skip-release] docs: Release notes       1234567 ready CLEAN review:copilot threads:0 automerge:off running:0 failed:0 cancelled:0 -> arm auto-merge (release-blog PR, not armed by its workflow)
+  ran: gh pr merge 7 -R owner/app --auto --squash --match-head-commit 1234567000000000000000000000000000000000

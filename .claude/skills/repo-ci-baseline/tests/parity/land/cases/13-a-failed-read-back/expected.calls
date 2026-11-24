@@ -1,0 +1,5 @@
+repo.owner.app
+comments.PR_7
+pr.comment.owner.app.7 gh pr comment 7 -R owner/app --body "Copilot's review was requested for this PR. It is asked once per PR; if GitHub drops the request, review:claude calls in Claude instead. mpaulosky/dotfiles#360\n\n<!-- pr-automerge:copilot-asked -->"
+pr.edit.owner.app.7 gh pr edit 7 -R owner/app --add-reviewer @copilot
+pr.view.owner.app.7.headRefOid,reviewRequests,reviews gh pr view 7 -R owner/app --json headRefOid,reviewRequests,reviews --jq ".headRefOid as $h | [(.reviewRequests[] | .login // .name // \"\"), (.reviews[] | select(.commit.oid == $h) | .author.login)] | map(select(test(\"copilot\"; \"i\"))) | length"

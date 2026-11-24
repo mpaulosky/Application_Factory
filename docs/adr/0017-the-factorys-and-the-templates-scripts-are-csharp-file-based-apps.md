@@ -161,3 +161,12 @@ Until the Factory has its own `global.json`, the `dotnet-sdk` entry lists only `
 (mpaulosky/Application_Factory#117) adds the root to it. The Seed Dockerfile can't read `global.json`, since Sandcastle builds the image with `.sandcastle/` as its context,
 so it installs the pin's feature band (`DOTNET_CHANNEL=11.0.1xx`), whose newest patch `rollForward: latestPatch` accepts, and `test.sh` holds the channel to the pin's
 band. A Dependabot PR that moves the band fails `test.sh` until a commit on its branch changes the channel.
+
+## Update (mpaulosky/Application_Factory#118): every parity suite shares one runner and one fake gh
+
+The status suite's runner and fake `gh` were generalised rather than copied, so each script's suite is only its cases. The runner is
+`tests/parity.test.sh <suite> [command...]` (it was `tests/status-parity.test.sh <command...>`); a suite is a folder `tests/parity/<suite>/` with its cases and a
+`README.md` of its gaps, recorded from `github/<suite>.py`. The fake (`tests/parity/fake-gh.sh`) answers `gh pr` calls as well as `gh api`, logs a `gh pr` call
+with its whole argv, and answers the nth call with a key from `<key>.<n>.json` when there is one, for a run that polls. The status cases moved unchanged. The suites
+that follow (mpaulosky/Application_Factory#120, mpaulosky/Application_Factory#121, mpaulosky/Application_Factory#127 and mpaulosky/Application_Factory#130)
+add what their scripts send to this fake, with its tests in `tests/parity-runner.test.sh`.
