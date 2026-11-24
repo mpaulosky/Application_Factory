@@ -1143,6 +1143,82 @@ def test_the_joined_summary_leaves_room_for_the_findings_under_githubs_limit(tmp
     assert code == 0 and len(answer["summary"]) <= 4 * summary_share() + 200 <= 65_536 - 20_000
 
 
+def cut(tmp_path, summary):
+    """The first section of a two-batch review whose first batch answered summary, checked for its share and note."""
+    answers = [{"summary": summary, "findings": []}, {"summary": "second", "findings": []}]
+    listed = ["001.diff", "002.diff"]
+    reads = {1: read_whole_of(tmp_path, listed[0], "a"), 2: read_whole_of(tmp_path, listed[1], "b")}
+    code, answer, _ = batched(tmp_path, answers, listed, reads)
+    assert code == 0
+    sections = batch_sections(answer["summary"], 2)
+    assert sections[2] == "second" and len(sections[1]) <= summary_share() and "was cut" in sections[1]
+    return sections[1]
+
+
+def fence_lines(text):
+    return [line for line in text.split("\n") if re.match(r" {0,3}(`{3,}|~{3,})", line)]
+
+
+@pytest.mark.parametrize("line", ["abc def gh", "abc def g", "abcdefghijklm"])
+def test_a_cut_ends_at_a_lines_end(tmp_path, line):
+    # Lines of several lengths, so the share falls inside one.
+    section = cut(tmp_path, f"{line}\n" * 2_000)
+    body = section[:section.index("\n\n_This batch")]
+    assert set(body.split("\n")) == {line}
+
+
+@pytest.mark.parametrize("fence", ["```", "~~~~"])
+def test_a_cut_inside_a_code_fence_closes_it_before_the_note(tmp_path, fence):
+    section = cut(tmp_path, f"Intro.\n\n{fence}python\n" + "code = 1\n" * 2_000 + f"{fence}\n\nAfter.")
+    assert fence_lines(section) == [f"{fence}python", fence]
+    assert section.index(f"\n{fence}\n") < section.index("_This batch")
+
+
+@pytest.mark.parametrize("opener, inside", [("````", "```"), ("````", "```` not a close"), ("~~~", "```")])
+def test_only_a_bare_fence_of_the_same_kind_and_as_long_closes_one(tmp_path, opener, inside):
+    section = cut(tmp_path, f"{opener}\n{inside}\n" + "x\n" * 6_000)
+    assert fence_lines(section) == [opener, inside, opener]
+
+
+def test_a_stray_closing_details_doesnt_cancel_a_later_one(tmp_path):
+    section = cut(tmp_path, "</details>\n<details>\n\n" + "line\n" * 2_000)
+    assert section.count("</details>") == 2
+
+
+def test_a_fence_closed_before_the_cut_gets_no_closer(tmp_path):
+    section = cut(tmp_path, "```\nx = 1\n```\n" + "plain\n" * 2_000)
+    assert fence_lines(section) == ["```", "```"]
+
+
+def test_a_cut_inside_an_html_comment_closes_it_before_the_note(tmp_path):
+    section = cut(tmp_path, "Seen.\n<!-- hidden\n" + "still hidden\n" * 1_000)
+    assert section.rfind("-->") > section.rfind("<!--") and section.rfind("-->") < section.index("_This batch")
+
+
+def test_a_comment_closed_on_its_line_and_a_fence_inside_a_comment_open_nothing(tmp_path):
+    section = cut(tmp_path, "<!-- a -->\n<!--\n```\n-->\n" + "plain\n" * 2_000)
+    assert section.count("-->") == 2 and fence_lines(section) == ["```"]
+
+
+def test_a_cut_inside_details_closes_each_open_one(tmp_path):
+    section = cut(tmp_path, "<details><summary>a</summary>\n\n<DETAILS>\n</details>\n<details>\n\n" + "line\n" * 2_000)
+    assert section.lower().count("</details>") == 3 and section.rindex("</details>") < section.index("_This batch")
+
+
+def test_details_inside_a_comment_or_a_fence_opens_nothing(tmp_path):
+    section = cut(tmp_path, "<!-- <details> -->\n```\n<details>\n```\n" + "line\n" * 2_000)
+    assert section.lower().count("</details>") == 0
+
+
+def test_closers_that_wouldnt_fit_drop_lines_until_they_do(tmp_path):
+    share = summary_share()
+    # A fence opened on the cut's last line, its closer as long as it: dropping lines drops the fence's line.
+    opener = "`" * 200
+    summary = "a\n" * ((share - 300) // 2) + opener + "\n" + "b" * share
+    section = cut(tmp_path, summary)
+    assert opener not in section and len(section) <= share
+
+
 def review_steps():
     """[(name, id, if, the env's REVIEW_PIECES and REVIEW_BATCH)] for each claude-code-action step, in order."""
     yaml = pytest.importorskip("yaml")
@@ -1212,18 +1288,19 @@ def test_each_batchs_transcript_is_moved_to_a_file_of_its_own_straight_after_its
     assert sorted(kept) == list(range(1, len(review_steps()) + 1))
     for number, step in kept.items():
         assert step["id"] == f"kept_{number}"
-        # Whatever the Review step's outcome, and only when it named a file.
-        assert step["if"] == f"always() && steps.claude_{number}.outputs.execution_file != ''"
+        # Whatever the Review step's outcome, even when it named no file, and never failing the job.
+        assert step["if"] == f"always() && steps.claude_{number}.outcome != 'skipped'"
+        assert step["continue-on-error"] is True
         assert step["env"] == {"EXECUTION_FILE": f"${{{{ steps.claude_{number}.outputs.execution_file }}}}",
                                "BATCH": str(number)}
         assert step["run"] == kept[1]["run"]
         # Nothing else reads the Review step's own execution_file: the answer check and the warning read the kept one.
-        assert script.count(f"steps.claude_{number}.outputs.execution_file") == 2
+        assert script.count(f"steps.claude_{number}.outputs.execution_file") == 1
 
 
-def keep(tmp_path, batch, content=None):
-    """Run the keep step's script for batch, the action having written content to its fixed path (none when None).
-    Returns the execution_file output it wrote, or None."""
+def keep(tmp_path, batch, content=None, named=True, code=0, path=None):
+    """Run the keep step's script for batch, the action having written content to its fixed path (none when None)
+    and named it as the step's execution_file when named. Returns the execution_file output it wrote, or None."""
     temp = tmp_path / "runner"
     temp.mkdir(exist_ok=True)
     fixed = temp / "claude-execution-output.json"
@@ -1232,9 +1309,9 @@ def keep(tmp_path, batch, content=None):
     output = temp / f"output{batch}"
     output.write_text("")
     done = subprocess.run(["bash", "-e", "-c", keep_steps()[1]["run"]], capture_output=True, text=True, env={
-        "PATH": os.environ["PATH"], "RUNNER_TEMP": str(temp), "GITHUB_OUTPUT": str(output),
-        "EXECUTION_FILE": str(fixed), "BATCH": str(batch)})
-    assert done.returncode == 0, done.stderr
+        "PATH": path or os.environ["PATH"], "RUNNER_TEMP": str(temp), "GITHUB_OUTPUT": str(output),
+        "EXECUTION_FILE": str(fixed) if named and content is not None else "", "BATCH": str(batch)})
+    assert done.returncode == code, done.stderr
     found = re.fullmatch(r"execution_file=(.*)\n", output.read_text())
     return found[1] if found else None
 
@@ -1247,6 +1324,25 @@ def test_each_batchs_transcript_survives_the_next_batch(tmp_path):
     assert not (tmp_path / "runner" / "claude-execution-output.json").exists()
     # Outside the folder the reviews can read.
     assert all(Path(path).parent == tmp_path / "runner" for path in (first, second))
+
+
+def test_a_transcript_its_review_step_didnt_name_is_still_kept_as_that_batchs(tmp_path):
+    # The step failed after the action wrote the file but before it named it: the next batch mustn't find it.
+    first = keep(tmp_path, 1, "batch 1", named=False)
+    assert first is not None and Path(first).read_text() == "batch 1"
+    assert keep(tmp_path, 2) is None
+
+
+def test_a_transcript_that_cant_be_moved_is_deleted_so_no_later_batch_takes_it(tmp_path):
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    (tools / "mv").write_text("#!/bin/sh\nexit 1\n")
+    (tools / "mv").chmod(0o755)
+
+    kept = keep(tmp_path, 1, "batch 1", code=1, path=f"{tools}:{os.environ['PATH']}")
+
+    assert kept is None and not (tmp_path / "runner" / "claude-execution-output.json").exists()
+    assert keep(tmp_path, 2) is None
 
 
 # The "Warn when Claude didn't review" step
