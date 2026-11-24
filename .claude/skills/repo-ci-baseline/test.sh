@@ -6,7 +6,7 @@
 #
 # Runs the Template's own tests (hook suites, auto-merge script tests,
 # the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle and the GitHub scripts' tests
-# (settings, the landing decision, status, land and rollout) with the parity suites (status, land), the Claude Review
+# (settings, the landing decision, status, land and rollout) with the parity suites (status, land and the release scripts), the Claude Review
 # benchmark's tests and the C# scripts' xUnit tests (tests/Scripts.Tests), lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
 # Owned files carry no {{PLACEHOLDER}} and that the Owned scripts, and this repo's own
@@ -22,7 +22,13 @@ set -euo pipefail
 # The step headers carry SECONDS: count from here, whatever SECONDS a caller exported (mpaulosky/dotfiles#417).
 SECONDS=0
 
-skill_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# CDPATH is cleared for the cd: a caller's CDPATH that holds . would make it print the folder, and skill_dir would hold the path twice when test.sh is
+# run by a relative path. A skill_dir that doesn't hold test.sh stops the run before anything uses it.
+skill_dir="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [[ ! -f "$skill_dir/test.sh" ]]; then
+  echo "test.sh: can't find its own folder (got '$skill_dir')." >&2
+  exit 2
+fi
 owned="$skill_dir/template/owned"
 seed="$skill_dir/template/seed"
 
@@ -32,12 +38,14 @@ export PYTHONDONTWRITEBYTECODE=1
 # machine's own hooks into each of them and block their commits.
 # Both folders are made absolute, so a relative TMPDIR still names them from the folders the steps cd into. Each mktemp is its own assignment, so a failed
 # one stops the run under set -e, and each is made absolute by prefixing $PWD rather than by cd, which a caller's CDPATH would make print the folder too.
+# The trap comes first, over empty names, so a second mktemp that fails still removes the first folder.
+GIT_TEMPLATE_DIR="" md_tmp=""
+trap 'command rm -rf ${GIT_TEMPLATE_DIR:+"$GIT_TEMPLATE_DIR"} ${md_tmp:+"$md_tmp"}' EXIT
 GIT_TEMPLATE_DIR="$(mktemp -d)"
 [[ "$GIT_TEMPLATE_DIR" == /* ]] || GIT_TEMPLATE_DIR="$PWD/$GIT_TEMPLATE_DIR"
 export GIT_TEMPLATE_DIR
 md_tmp="$(mktemp -d)"
 [[ "$md_tmp" == /* ]] || md_tmp="$PWD/$md_tmp"
-trap 'command rm -rf "$GIT_TEMPLATE_DIR" "$md_tmp"' EXIT
 
 failures=0
 # Each header carries the seconds since test.sh started (bash's SECONDS, reset at the top), so a log shows which step ran long
@@ -93,6 +101,32 @@ setup_dotnet_pins_are() {
   printf '%s\n' "$pins"
   [[ "$1" =~ ^[0-9a-f]{40}$ && "$pins" == "actions/setup-dotnet@$1" ]]
 }
+# Whether a NuGet.config (argument 1) clears its auditSources and adds nuget.org alone, so a NuGet.config above it can't point the audit at a feed that
+# reports no advisories. Prints the auditSources element it found, its lines joined. Line breaks and tabs become spaces, so attributes on lines of their
+# own stay apart, and XML comments are dropped first, so a commented-out element counts for nothing.
+audit_sources_nuget_only() {
+  local audit
+  audit="$(tr '\n\t\r' '   ' 2> /dev/null < "$1" | sed -E 's/<!--([^-]|-[^-])*-->//g' | grep -oE '<auditSources>.*</auditSources>' || true)"
+  printf '%s\n' "$audit"
+  [[ "$audit" =~ ^\<auditSources\>[[:space:]]*\<clear[[:space:]]*/\>[[:space:]]*\<add[[:space:]]+key=\"nuget\.org\"[[:space:]]+value=\"https://api\.nuget\.org/v3/index\.json\"[^/]*/\>[[:space:]]*\</auditSources\>$ ]]
+}
+# Whether a project file (argument 1) targets net<argument 2>.0 and nothing else: one TargetFramework or TargetFrameworks line, naming that one framework.
+# Prints the frameworks it found, one line per element.
+targets_net_major() {
+  local tfms
+  tfms="$(sed -n -E 's#^[[:space:]]*<TargetFrameworks?>([^<]*)</TargetFrameworks?>[[:space:]]*$#\1#p' "$1" 2> /dev/null || true)"
+  printf '%s\n' "$tfms"
+  [[ -n "$2" && "$tfms" == "net$2.0" ]]
+}
+# The major version of the SDK a global.json (argument 1) names, printed. Fails when the file isn't readable JSON or its sdk.version doesn't start with one.
+sdk_major_of() {
+  local version
+  version="$(jq -r '.sdk.version // empty' "$1" 2> /dev/null)" || return 1
+  [[ "$version" =~ ^([0-9]+)\. ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[1]}"
+}
+# Whether a file (argument 1) is the empty shield (ADR 0017), <Project />.
+is_empty_shield() { [[ "$(cat "$1" 2> /dev/null)" == "<Project />" ]]; }
 # Whether a dotnet test run of the C# scripts' test project (argument 2) passes, given its exit (argument 1): 0 passes; 8, "no test ran", passes only
 # while the project holds no .cs source of its own, so a suite that loses its tests fails. What a build writes under the project (bin/, obj/, TestResults/:
 # an IDE's build leaves generated .cs files in obj/) isn't a source. A find that fails passes nothing.
@@ -796,23 +830,99 @@ if in_shard scripts; then
     fail "test.sh under a relative TMPDIR with CDPATH=. didn't end at its shard check (exit $cdp_code): $(cat "$cdp/out")"
   fi
   [[ -z "$(ls -A "$cdp/rel")" ]] || fail "test.sh left its temp folders under a relative TMPDIR with CDPATH=.: $(ls -A "$cdp/rel")"
+  # Run by a relative path under CDPATH=., as CLAUDE.md's commands run it from the repo root, it still finds its own folder and reaches the shard check.
+  # Its TMPDIR is absolute, so a relative one this run was started with can't name a folder under the repo root instead.
+  cdp_code=0
+  (cd "$skill_dir/../../.." && TMPDIR="$md_tmp" CDPATH=. TEST_SH_SHARD=no-such-shard bash .claude/skills/repo-ci-baseline/test.sh > "$cdp/out-rel" 2>&1) || cdp_code=$?
+  if [[ "$cdp_code" != 2 ]] || ! grep -qF "TEST_SH_SHARD must be one of" "$cdp/out-rel"; then
+    fail "test.sh run by a relative path with CDPATH=. didn't reach its shard check (exit $cdp_code): $(cat "$cdp/out-rel")"
+  fi
+  # A skill_dir that holds no test.sh stops the run with exit 2 before the shard check: run from a process substitution, test.sh's BASH_SOURCE is
+  # /dev/fd/N, whose folder holds no test.sh.
+  guard_code=0
+  (cd "$md_tmp" && TMPDIR="$md_tmp" TEST_SH_SHARD=no-such-shard bash <(cat "$skill_dir/test.sh") > "$cdp/out-guard" 2>&1) || guard_code=$?
+  if [[ "$guard_code" != 2 ]] || ! grep -qF "can't find its own folder" "$cdp/out-guard" || grep -qF "TEST_SH_SHARD must be one of" "$cdp/out-guard"; then
+    fail "test.sh whose own folder holds no test.sh didn't stop before its shard check (exit $guard_code): $(cat "$cdp/out-guard")"
+  fi
+  # A second mktemp that fails ends the run before the shard check, and the first folder is still removed: a stub mktemp makes the first folder (and
+  # notes it) and fails the second time. The run must have made that folder and stopped before the shard check, so it can't pass by making none.
+  half="$md_tmp/half-mktemp"
+  mkdir -p "$half/bin" "$half/tmp"
+  real_mktemp="$(command -v mktemp)"
+  cat > "$half/bin/mktemp" << HALF
+#!/usr/bin/env bash
+if [[ -e "$half/made" ]]; then exit 1; fi
+dir="\$("$real_mktemp" "\$@")" || exit 1
+printf '%s\n' "\$dir" > "$half/made"
+printf '%s\n' "\$dir"
+HALF
+  chmod +x "$half/bin/mktemp"
+  half_code=0
+  TMPDIR="$half/tmp" PATH="$half/bin:$PATH" TEST_SH_SHARD=no-such-shard bash "$skill_dir/test.sh" > "$half/out" 2>&1 || half_code=$?
+  half_made="$(cat "$half/made" 2> /dev/null || true)"
+  if [[ -z "$half_made" || "$half_code" == 0 || "$half_code" == 2 ]] || grep -qF "TEST_SH_SHARD must be one of" "$half/out"; then
+    fail "test.sh with a second mktemp that fails didn't stop at it (exit $half_code, first folder: ${half_made:-none}): $(cat "$half/out")"
+  fi
+  [[ -z "$(ls -A "$half/tmp")" ]] || fail "test.sh left its first temp folder when the second mktemp failed: $(ls -A "$half/tmp")"
   # The audit reads advisories from nuget.org alone too: a NuGet.config above the folder can't point it at a feed that reports none.
-  audit="$(tr -d '\n\t' < "$scripts_tests/NuGet.config" | grep -oE '<auditSources>.*</auditSources>' || true)"
-  [[ "$audit" =~ ^\<auditSources\>[[:space:]]*\<clear[[:space:]]*/\>[[:space:]]*\<add[[:space:]]+key=\"nuget\.org\"[[:space:]]+value=\"https://api\.nuget\.org/v3/index\.json\"[^/]*/\>[[:space:]]*\</auditSources\>$ ]] \
+  audit="$(audit_sources_nuget_only "$scripts_tests/NuGet.config")" \
     || fail "tests/Scripts.Tests/NuGet.config must clear its auditSources and add nuget.org alone (found: ${audit:-none})"
+  # The check on configs it must pass (spread over lines, with an attribute after the URL) and ones it must refuse.
+  nuget_org='<add key="nuget.org" value="https://api.nuget.org/v3/index.json"'
+  printf '<configuration>\n  <auditSources>\n    <clear />\n    %s protocolVersion="3" />\n  </auditSources>\n</configuration>\n' "$nuget_org" > "$md_tmp/audit.config"
+  audit_sources_nuget_only "$md_tmp/audit.config" > /dev/null || fail "the auditSources check refuses a config that clears them and adds nuget.org alone"
+  printf '<configuration>\n\t<auditSources>\n\t\t<clear />\n\t\t<add key="nuget.org"\n\t\t\tvalue="https://api.nuget.org/v3/index.json" />\n\t</auditSources>\n</configuration>\n' \
+    > "$md_tmp/audit.config"
+  audit_sources_nuget_only "$md_tmp/audit.config" > /dev/null || fail "the auditSources check refuses a tab-indented config with the add's attributes on two lines"
+  # Comments inside the element, one with hyphens in it and one hiding a second feed, are dropped, so the element still passes.
+  printf '<configuration><auditSources><clear /><!-- nuget-only: audit -->%s /><!-- <add key="other" value="https://other.example/v3/index.json" /> --></auditSources></configuration>\n' \
+    "$nuget_org" > "$md_tmp/audit.config"
+  audit_sources_nuget_only "$md_tmp/audit.config" > /dev/null || fail "the auditSources check refuses a config with comments, one hyphenated, inside the element"
+  for wrong in \
+    "<!-- <auditSources><clear />$nuget_org /></auditSources> -->" \
+    "<auditSources><clear />$nuget_org /><add key=\"other\" value=\"https://other.example/v3/index.json\" /></auditSources>" \
+    "<auditSources>$nuget_org /></auditSources>" \
+    '<auditSources><clear /><add key="nuget.org" value="https://other.example/v3/index.json" /></auditSources>' \
+    '<auditSources><clear /></auditSources>' \
+    '<packageSources><clear /></packageSources>'; do
+    printf '<configuration>%s</configuration>\n' "$wrong" > "$md_tmp/audit.config"
+    ! audit_sources_nuget_only "$md_tmp/audit.config" > /dev/null || fail "the auditSources check passes: $wrong"
+  done
+  ! audit_sources_nuget_only "$md_tmp/no-such.config" > /dev/null || fail "the auditSources check passes a NuGet.config that isn't there"
   # It targets the runtime of the SDK global.json names, so it runs where only that SDK is installed (a net10.0 build wouldn't start on runtime 11 alone).
-  sdk_major="$(jq -r '.sdk.version // empty' "$skill_dir/../../../global.json")"
-  sdk_major="${sdk_major%%.*}"
-  tfms="$(sed -n -E 's#^[[:space:]]*<TargetFrameworks?>([^<]*)</TargetFrameworks?>[[:space:]]*$#\1#p' "$scripts_tests/Scripts.Tests.csproj")"
-  [[ -n "$sdk_major" && "$tfms" == "net$sdk_major.0" ]] \
+  # A global.json that isn't readable JSON naming sdk.version fails here with a message and leaves the major empty, which the check below refuses.
+  sdk_major="$(sdk_major_of "$skill_dir/../../../global.json")" || fail "global.json must be readable JSON whose sdk.version names a major version"
+  printf '{"sdk": {"version": "11.0.100"}}\n' > "$md_tmp/global.json"
+  [[ "$(sdk_major_of "$md_tmp/global.json")" == 11 ]] || fail "the SDK major of a global.json naming 11.0.100 isn't 11"
+  for wrong in '{"sdk": {"version": "11.0.100"' '{"sdk": {}}' '{"sdk": {"version": "latest"}}'; do
+    printf '%s\n' "$wrong" > "$md_tmp/global.json"
+    ! sdk_major_of "$md_tmp/global.json" > /dev/null || fail "the SDK major check passes the global.json: $wrong"
+  done
+  ! sdk_major_of "$md_tmp/no-such-global.json" > /dev/null || fail "the SDK major check passes a global.json that isn't there"
+  tfms="$(targets_net_major "$scripts_tests/Scripts.Tests.csproj" "$sdk_major")" \
     || fail "tests/Scripts.Tests must target net$sdk_major.0, the runtime of the SDK global.json names (it targets: ${tfms:-nothing})"
+  printf '<Project>\n  <PropertyGroup>\n    <TargetFramework>net11.0</TargetFramework>\n  </PropertyGroup>\n</Project>\n' > "$md_tmp/tfm.csproj"
+  targets_net_major "$md_tmp/tfm.csproj" 11 > /dev/null || fail "the target framework check refuses a project that targets net11.0 for SDK 11"
+  ! targets_net_major "$md_tmp/tfm.csproj" "" > /dev/null || fail "the target framework check passes when global.json names no SDK"
+  for wrong in '<TargetFramework>net10.0</TargetFramework>' '<TargetFrameworks>net11.0;net10.0</TargetFrameworks>' \
+    $'<TargetFramework>net11.0</TargetFramework>\n<TargetFramework>net10.0</TargetFramework>' '<OutputType>Exe</OutputType>'; do
+    printf '<Project>\n<PropertyGroup>\n%s\n</PropertyGroup>\n</Project>\n' "$wrong" > "$md_tmp/tfm.csproj"
+    ! targets_net_major "$md_tmp/tfm.csproj" 11 > /dev/null || fail "the target framework check passes for SDK 11: $wrong"
+  done
   # The shields (ADR 0017): an empty Directory.Build.props, Directory.Build.targets and Directory.Packages.props in github/ and in the test project, so the
   # files of those names above them never reach their builds.
   for shielded in github tests/Scripts.Tests; do
     for shield in Directory.Build.props Directory.Build.targets Directory.Packages.props; do
-      [[ "$(cat "$skill_dir/$shielded/$shield" 2> /dev/null)" == "<Project />" ]] || fail "$shielded/$shield must be the empty shield, <Project />"
+      is_empty_shield "$skill_dir/$shielded/$shield" || fail "$shielded/$shield must be the empty shield, <Project />"
     done
   done
+  printf '<Project />\n' > "$md_tmp/shield.props"
+  is_empty_shield "$md_tmp/shield.props" || fail "the shield check refuses <Project />"
+  for wrong in '<Project></Project>' '<Project><Import Project="../x.props" /></Project>' ''; do
+    printf '%s\n' "$wrong" > "$md_tmp/shield.props"
+    ! is_empty_shield "$md_tmp/shield.props" || fail "the shield check passes: ${wrong:-an empty file}"
+  done
+  ! is_empty_shield "$md_tmp/no-such.props" || fail "the shield check passes a shield that isn't there"
   # The restore is pinned, on a copy of the project under a folder whose NuGet.config adds another feed: the project's own NuGet.config leaves
   # nuget.org alone, and a version moved in the project file but not in packages.lock.json fails the run with NU1004.
   [[ -s "$scripts_tests/packages.lock.json" ]] || fail "tests/Scripts.Tests/packages.lock.json is missing: run dotnet restore in that folder and commit it"
