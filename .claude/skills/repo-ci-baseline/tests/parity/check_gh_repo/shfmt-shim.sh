@@ -30,7 +30,7 @@ fi
 extra=""
 while IFS= read -r line; do
   case "${line%%=*}" in
-    "" | PATH | PWD | OLDPWD | SHLVL | _) ;;
+    PATH | PWD | OLDPWD | SHLVL | _) ;;
     *) extra+="${line%%=*} " ;;
   esac
 done <<< "$environment"
@@ -45,7 +45,6 @@ if [[ -n "$parent_cwd" && "${1:-}" == --version && -f "$parent_cwd/.shfmt-versio
   exit 0
 fi
 if [[ -n "$parent_cwd" && "${1:-}" != --version && -f "$parent_cwd/.shfmt-parse" ]]; then
-  cat > /dev/null
   code="$(head -n 1 "$parent_cwd/.shfmt-parse")"
   if [[ "$code" == 0 ]]; then
     tail -n +2 "$parent_cwd/.shfmt-parse"

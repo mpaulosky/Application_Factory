@@ -38,8 +38,9 @@ mkdir -p "$work/shim" "$work/shim2" "$work/empty" "$work/full" "$work/dotonly" "
 ln -s "$shim_file" "$work/shim/shfmt"
 ln -s "$shim_file" "$work/shim2/shfmt"
 touch "$work/full/file" "$work/dotonly/.hidden"
-# The tools the shim itself runs, and no shfmt: for the case with no real shfmt after the shim. Each of the next two leaves one out.
-tools=(bash env ls readlink head tail cat)
+# The tools the shim itself runs, and no shfmt: for the case with no real shfmt after the shim. Each of the next two leaves one out,
+# and is the whole PATH after the shim, so the tool left out is found nowhere else, wherever the real shfmt is installed.
+tools=(bash env ls readlink head tail)
 for leave_out in none ls env; do
   mkdir -p "$work/tools-$leave_out"
   for tool in "${tools[@]}"; do
@@ -76,7 +77,7 @@ status=0
 out="$(shim "$work/dotonly" --version 2>&1)" || status=$?
 check "a folder that holds only a dotfile isn't empty either" '[[ $status -eq 97 && "$out" == *"isn'"'"'t empty"* ]]'
 status=0
-out="$(cd "$work/empty" && env -i PATH="$work/shim:$work/tools-ls:$real_dir" shfmt --version 2>&1)" || status=$?
+out="$(cd "$work/empty" && env -i PATH="$work/shim:$work/tools-ls" shfmt --version 2>&1)" || status=$?
 check "no ls to list the folder with: exit 97, saying so" '[[ $status -eq 97 && "$out" == *"can'"'"'t list the folder"* ]]'
 
 status=0
@@ -86,7 +87,7 @@ status=0
 out="$(cd "$work/empty" && env -i PATH="$path" OLDPWD=/ shfmt --version 2>&1)" || status=$?
 check "OLDPWD, which bash may export itself, isn't counted" '[[ $status -eq 0 && "$out" == "$("$real" --version)" ]]'
 status=0
-out="$(cd "$work/empty" && env -i PATH="$work/shim:$work/tools-env:$real_dir" shfmt --version 2>&1)" || status=$?
+out="$(cd "$work/empty" && env -i PATH="$work/shim:$work/tools-env" shfmt --version 2>&1)" || status=$?
 check "no env to list the environment with: exit 97, saying so" '[[ $status -eq 97 && "$out" == *"can'"'"'t list its environment"* ]]'
 
 if [[ -d /proc/self ]]; then

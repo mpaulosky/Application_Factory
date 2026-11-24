@@ -4,7 +4,8 @@
 (`tests/parity.test.sh`) says what a case holds. It stands in for the white-box pytest tests (`template/owned/.github/scripts/tests/test_check_gh_repo.py`), which a port can't run.
 
 Run it, against the Python or a port, and record it (`PARITY_RECORD=1`) with the shim first on `PATH`, under the name `shfmt`, as `test.sh` does; without it the
-cases that stand for another shfmt (`013` to `016` and `060` to `063`) fail, and nothing checks how the checker runs shfmt:
+cases that stand for a shfmt the checker refuses (`013` to `015` and `061` to `063`) fail, the ones that stand for a release it accepts (`016`, `060`) pass without
+testing anything, and nothing checks how the checker runs shfmt:
 
 ```bash
 shim="$(mktemp -d)" && ln -s "$PWD/.claude/skills/repo-ci-baseline/tests/parity/check_gh_repo/shfmt-shim.sh" "$shim/shfmt"
