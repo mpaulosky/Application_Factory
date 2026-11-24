@@ -126,6 +126,11 @@ static class J
 	// (n.get("nodes") or []).
 	public static IEnumerable<JsonNode?> Nodes(JsonNode? n) => Get(n, "nodes") is JsonArray a ? a : [];
 
+	// n["nodes"], iterated: a missing key, a parent that isn't an object, or a value that isn't a list throws, as the Python's KeyError or
+	// TypeError did, so an answer that lacks a list is unread rather than read as empty.
+	public static JsonArray NodesOf(JsonNode? n) =>
+			Req(n, "nodes") as JsonArray ?? throw new InvalidOperationException("'nodes' is not a list");
+
 	// (n.get("author") or {}).get("login") or "".
 	public static string Login(JsonNode? n) => Str(Get(n, "author"), "login");
 

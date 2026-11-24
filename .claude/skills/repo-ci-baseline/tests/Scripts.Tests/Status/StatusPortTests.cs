@@ -2,7 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 
 // What the port changes on purpose (ADR 0017's Update for mpaulosky/Application_Factory#119): not moved tests, so StatusTests.cs keeps
-// test_status.py's and its count can be checked against that file's.
+// the moved pytest suite's, and its count can be checked against that suite's in git history.
 public partial class StatusTests
 {
 	// Not a moved test: a fork's PR names its own branch, so a release-blog branch counts only on a PR from the repo itself.
@@ -108,5 +108,74 @@ public partial class StatusTests
 		Assert.True(reader.WriterAccess("owner", "app", User) is null && gh.Calls == 2);
 		// An object without the key is still a definite no.
 		Assert.True(LookupWith(new FakeGh(stdout: "{}", code: 0)).WriterAccess("owner", "app", User) is false);
+	}
+
+	// Not a moved test: a list the Python indexed (["nodes"]) that's missing, null or not a list fails the read, as its KeyError or
+	// TypeError did, rather than read as empty: no open PRs, no checks, no reviews or no open threads on an answer that held none.
+	[Theory]
+	[InlineData("{}")]
+	[InlineData("""{"nodes": null}""")]
+	[InlineData("""{"nodes": {}}""")]
+	public void A_repo_answer_without_its_pr_list_makes_the_repo_unreadable(string pullRequests)
+	{
+		var reader = new StatusReader(err: new StringWriter()) { Graphql = (_, _, _) => P($$$"""{"repository": {"pullRequests": {{{pullRequests}}}}}""") };
+		using var output = new StringWriter();
+		using var err = new StringWriter();
+
+		Assert.Equal(1, Status.Run(["owner/app"], output, err, reader.Fetch, FleetList));
+		Assert.StartsWith("owner/app: ", err.ToString(), StringComparison.Ordinal);
+		Assert.Equal("", output.ToString());
+	}
+
+	[Theory]
+	[InlineData("commits", "{}")]
+	[InlineData("commits", """{"nodes": null}""")]
+	[InlineData("reviews", """{"nodes": null}""")]
+	[InlineData("reviewThreads", "{}")]
+	[InlineData("reviewThreads", """{"nodes": "x"}""")]
+	public void A_pr_whose_list_is_missing_isnt_decided_on(string key, string value)
+	{
+		var node = PrNode(contexts: Green);
+		node[key] = P(value);
+
+		Assert.ThrowsAny<Exception>(() => StateOf(node));
+		Assert.ThrowsAny<Exception>(() => Run(["owner/app"], new() { ["owner/app"] = Repo(node) }));
+	}
+
+	[Fact]
+	public void A_check_rollup_without_its_contexts_list_isnt_decided_on()
+	{
+		var node = PrNode(contexts: Green);
+		((JsonObject)J.Get(J.Get(J.NodesOf(J.Req(node, "commits"))[0], "commit"), "statusCheckRollup")!)["contexts"] = new JsonObject();
+
+		Assert.ThrowsAny<Exception>(() => StateOf(node));
+	}
+
+	[Fact]
+	public void A_reader_with_an_unlisted_thread_list_makes_the_repo_unreadable()
+	{
+		var node = PrNode();
+		node["reviewThreads"] = new JsonObject { ["nodes"] = null };
+		var reader = new StatusReader(err: new StringWriter()) { Graphql = (_, _, _) => Repo(node) };
+
+		Assert.ThrowsAny<Exception>(() => reader.Fetch("owner", "app"));
+	}
+
+	// Not a moved test: a check's name is the PR's (a fork's workflow names its jobs) or a writer's (a status context), so what the
+	// terminal would act on is escaped in every reason that names it.
+	[Fact]
+	public void A_checks_control_and_format_characters_are_escaped()
+	{
+		var named = "a\u001b[31mb\u202ec";
+		var failed = P($$"""{"__typename": "CheckRun", "name": {{JsonSerializer.Serialize(named)}}, "status": "COMPLETED", "conclusion": "FAILURE", "startedAt": "2026-10-07T10:00:00Z"}""");
+		var context = P($$"""{"__typename": "StatusContext", "context": {{JsonSerializer.Serialize(named)}}, "state": "PENDING", "createdAt": "2026-10-07T10:00:00Z"}""");
+		Assert.Equal("a\\x1b[31mb\\u202ec", Status.ToCheck(failed).Name);
+		Assert.Equal("a\\x1b[31mb\\u202ec", Status.ToCheck(context).Name);
+
+		var (code, output, _) = Run(["owner/app"], new() { ["owner/app"] = Repo(PrNode(contexts: [failed])) });
+		Assert.Equal(0, code);
+		In("failed: a\\x1b[31mb\\u202ec", output);
+		NotIn("\u001b", output);
+		NotIn("\u202e", output);
 	}
 }

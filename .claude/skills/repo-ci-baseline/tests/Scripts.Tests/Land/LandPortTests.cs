@@ -1,7 +1,7 @@
 using System.Globalization;
 
 // What the port changes on purpose in land (ADR 0017's Update for mpaulosky/Application_Factory#119): not moved tests, so LandTests
-// keeps test_land.py's and its count can be checked against that file's.
+// keeps the moved pytest suite's, and its count can be checked against that suite's in git history.
 public class LandPortTests
 {
 	// Not a moved test: a PR number past long's range is a usage error, not another PR's number wrapped around.
@@ -140,7 +140,7 @@ public class LandPortTests
 	}
 
 	// Not a moved test: GitHub logins ignore case, and land's owner is the target as typed (land.sh MPaulosky/app#5) or as repos.txt spells
-	// it, while the record's author is GitHub's spelling; landing.py compared them exactly, so land asked Copilot again on every run.
+	// it, while the record's author is GitHub's spelling; the Python compared them exactly, so land asked Copilot again on every run.
 	// A record by github-actions is still matched exactly.
 	[Fact]
 	public void The_owners_ask_record_counts_whatever_the_case_the_owner_was_given_in()
@@ -150,8 +150,47 @@ public class LandPortTests
 		(string?, string?, string?) Record(string login) => (login, $"Asked Copilot.\n\n{Landing.CopilotAskedMarker}", written);
 		Assert.Equal((true, true), Landing.CopilotAsk([Record("mpaulosky")], "MPaulosky", now));
 		Assert.Equal((true, true), Landing.CopilotAsk([Record("MPaulosky")], "mpaulosky", now));
-		Assert.Equal((true, true), Landing.CopilotAsk([Record("MPaulosky[bot]")], "mpaulosky", now));
 		Assert.Equal((false, false), Landing.CopilotAsk([Record("mpaulosky-other")], "MPaulosky", now));
 		Assert.Equal((false, false), Landing.CopilotAsk([Record("GitHub-Actions")], "o", now));
+	}
+
+	// Not a moved test: the times that decide whether the ask has settled and where a review round sits are read as
+	// datetime.fromisoformat() read them, with a time with no offset taken as UTC, and nothing DateTimeOffset.TryParse would guess at.
+	[Theory]
+	[InlineData("2026-01-05T10:00:00Z", 1767607200.0)]
+	[InlineData("2026-01-05T10:00:00+00:00", 1767607200.0)]
+	[InlineData("2026-01-05T10:00:00", 1767607200.0)]
+	[InlineData("2026-01-05 10:00:00Z", 1767607200.0)]
+	[InlineData("2026-01-05T12:00:00+02:00", 1767607200.0)]
+	[InlineData("2026-01-05T10:00:00.5Z", 1767607200.5)]
+	[InlineData("2026-01-05T10:00Z", 1767607200.0)]
+	[InlineData("2026-01-05", 1767571200.0)]
+	[InlineData(null, null)]
+	[InlineData("", null)]
+	[InlineData("not a date", null)]
+	[InlineData("Jan 5 2026", null)]
+	[InlineData("1/2/2026", null)]
+	[InlineData("2026", null)]
+	[InlineData("2026-01-05T10:00:00Z ", null)]
+	[InlineData("2026-13-05T10:00:00Z", null)]
+	[InlineData("\u0662026-01-05T10:00:00Z", null)]
+	public void A_time_is_read_as_fromisoformat_read_it(string? text, double? epoch) => Assert.Equal(epoch, Landing.Epoch(text));
+
+	// Not a moved test: a repo answer without its PR list is a repo land can't read, not one with no open PRs.
+	[Theory]
+	[InlineData("{}")]
+	[InlineData("""{"nodes": null}""")]
+	public void A_repo_answer_without_its_pr_list_is_a_repo_land_cant_read(string pullRequests)
+	{
+		using var err = new StringWriter();
+		using var output = new StringWriter();
+		var lander = new Lander(Land.ParseTargets(["o/app"]), new Dictionary<string, string>(), output, err)
+		{
+			Fetch = (_, _) => System.Text.Json.Nodes.JsonNode.Parse($$$"""{"repository": {"pullRequests": {{{pullRequests}}}}}""")!,
+		};
+
+		Assert.Equal(1, Land.Run(["--once", "o/app"], output, err, lander: lander, readRepoList: () => new()));
+		Assert.Contains("o/app: ", err.ToString(), StringComparison.Ordinal);
+		Assert.DoesNotContain("No open PRs", output.ToString(), StringComparison.Ordinal);
 	}
 }

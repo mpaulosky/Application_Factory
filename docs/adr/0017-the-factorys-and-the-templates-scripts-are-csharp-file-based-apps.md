@@ -251,13 +251,15 @@ The first ported scripts, Factory-only, so the `.py` files are deleted in the PR
   Where Python 3.12 and 3.14 differ (a negative number with more after it, `-5x`), the parser reads as 3.14 does, and a test holds that reading.
 - **What the port changes on purpose.** The pre-push review of the port found weaknesses the Python had too, and the C# closes them rather than carry them
   over: `gh` is found in `PATH`'s absolute folders only (.NET's own lookup tries the program's folder and the current one first); a release-blog branch
-  counts only on a PR from the repo itself (`isCrossRepository` false), so a fork's PR on `docs/release-notes` isn't armed; a PR's title is made printable
-  before it is printed; `status.sh` and `land.sh` refuse a repo that isn't `owner/repo` before any call, the whole argument (a trailing line break too), in
+  counts only on a PR from the repo itself (`isCrossRepository` false), so a fork's PR on `docs/release-notes` isn't armed; a PR's title and a check's name
+  or status context are made printable before they are printed; `status.sh` and `land.sh` refuse a repo that isn't `owner/repo` before any call, the whole argument (a trailing line break too), in
   GitHub's ASCII characters, with neither side `.` or `..` (a usage error for an argument, exit 1 for a `repos.txt` line); a permission answer that isn't an
   object is unread rather than no write access; and `land.sh` refuses a PR number past a 64-bit integer whatever came before it, and a `--interval`
   `time.sleep` refuses (negative, NaN, or from 2^63 nanoseconds, about 292 years, up, infinity among them) ends it with exit 1 when it first waits, as `time.sleep` did,
   rather than hang. The owner's Copilot ask record is matched ignoring case, as GitHub matches logins, so `land.sh` finds its own record for an owner typed
-  or listed in another case rather than ask Copilot again on every run (`github-actions` is still matched exactly). The parity suites' fixtures carry
+  or listed in another case rather than ask Copilot again on every run (`github-actions` is still matched exactly). `Landing.Epoch` reads only the
+  extended ISO-8601 form `datetime.fromisoformat()` read, and takes a time with no offset as UTC where the Python took the machine's zone (GitHub's times
+  carry `Z`). A list the Python indexed (`["nodes"]`) that's missing or not a list still fails the read, as it did. The parity suites' fixtures carry
   `isCrossRepository` where a case needs a release-blog PR.
 - **The wrappers.** `status.sh` and `land.sh` change to `github/` and run `dotnet run --file` with the script's absolute path, so the Factory's `global.json` picks the SDK.
   The build leaves no MSBuild node, MSBuild server or compiler server behind, and a missing `dotnet` exits 127 with a message.

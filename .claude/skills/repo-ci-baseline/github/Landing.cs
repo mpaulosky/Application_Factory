@@ -90,11 +90,18 @@ static class Landing
 
 	public static string NoBot(string s) => s.EndsWith("[bot]", StringComparison.Ordinal) ? s[..^5] : s;
 
-	// An ISO-8601 time as epoch seconds, or null when it is missing or unreadable. A time with no offset is UTC.
+	// An ISO-8601 time as epoch seconds, or null when it is missing or unreadable. Only the extended form datetime.fromisoformat() read is
+	// taken (a date, then T or a space and a time to the second or its fraction, then an offset), never the other forms
+	// DateTimeOffset.TryParse would guess at ("Jan 5 2026", "1/2/2026"); Python's basic and week forms aren't read either, and GitHub sends
+	// neither. A time with no offset is UTC, where the Python took the machine's zone: GitHub's times carry Z, and the runners are on UTC.
+	static readonly Regex IsoTime = new(
+			@"\A[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9]{2}(?::[0-9]{2}(?::[0-9]{2}(?:\.[0-9]{1,6})?)?)?(?:[+-][0-9]{2}:[0-9]{2})?)?\z", RegexOptions.CultureInvariant);
+
 	public static double? Epoch(string? text)
 	{
-		if (text is null || !DateTimeOffset.TryParse(text.Replace("Z", "+00:00", StringComparison.Ordinal), CultureInfo.InvariantCulture,
-				DateTimeStyles.AssumeUniversal, out var at))
+		text = text?.Replace("Z", "+00:00", StringComparison.Ordinal);
+		if (text is null || !IsoTime.IsMatch(text)
+				|| !DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var at))
 			return null;
 		return (at.UtcTicks - DateTimeOffset.UnixEpoch.UtcTicks) / (double)TimeSpan.TicksPerSecond;
 	}
@@ -274,7 +281,7 @@ static class Landing
 	// asked but not settled: nothing asks, and nothing is called dropped, on a record nobody can see. Only github-actions (PR Auto-Merge)
 	// or the repository owner (land.cs) can write the record: anyone can comment the marker. The first record decides; it settles
 	// CopilotAskSettleSeconds after it was written, and one with an unreadable time never settles. now is epoch seconds. The owner is
-	// matched ignoring case, as GitHub matches logins: land's owner is the target as typed or as repos.txt spells it (landing.py compared
+	// matched ignoring case, as GitHub matches logins: land's owner is the target as typed or as repos.txt spells it (the Python compared
 	// exactly, so land asked again on every run for an owner in another case). github-actions is matched exactly.
 	public static (bool Asked, bool Settled) CopilotAsk(IEnumerable<(string? Login, string? Body, string? CreatedAt)>? comments, string owner, double now)
 	{

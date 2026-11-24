@@ -64,7 +64,7 @@ sealed class StatusReader
 	public JsonNode Fetch(string owner, string name)
 	{
 		var data = Graphql(Status.Query, [$"owner={owner}", $"name={name}"], [])!;
-		foreach (var node in J.Nodes(J.Req(J.Req(data, "repository"), "pullRequests")).OfType<JsonObject>())
+		foreach (var node in J.NodesOf(J.Req(J.Req(data, "repository"), "pullRequests")).OfType<JsonObject>())
 		{
 			var label = $"{owner}/{name}#{J.Fmt(J.Get(node, "number"))}";
 			// The id is read only for a query that needs it, so a node without one is read as far as the Python read it.
@@ -94,7 +94,7 @@ sealed class StatusReader
 					ReportOnce(("events", Id()), $"{label}: label events unreadable, its review loop not called exhausted: {Repr(error)}\n");
 				}
 			}
-			var threads = J.Nodes(J.Req(node, "reviewThreads")).ToList();
+			var threads = J.NodesOf(J.Req(node, "reviewThreads")).ToList();
 			var allResolved = threads.All(t => J.B(J.Req(t, "isResolved")));
 			var resolved = threads.Count > 0 && allResolved && Status.BotReviewed(node);
 			var authors = candidate && !allResolved;
@@ -327,11 +327,11 @@ static class Status
 
 	// The (login, oid, body) of each of Status.Query's reviews.
 	static (string? Login, string? Oid, string? Body)[] Reviews(JsonNode node) =>
-			[.. J.Nodes(J.Req(node, "reviews")).Select(r => (J.S(J.Get(J.Get(r, "author"), "login")), J.S(J.Get(J.Get(r, "commit"), "oid")), J.S(J.Get(r, "body"))))];
+			[.. J.NodesOf(J.Req(node, "reviews")).Select(r => (J.S(J.Get(J.Get(r, "author"), "login")), J.S(J.Get(J.Get(r, "commit"), "oid")), J.S(J.Get(r, "body"))))];
 
 	// Whether Copilot or Claude Review ever reviewed this PR, from Status.Query's reviews.
 	public static bool BotReviewed(JsonNode node) =>
-			J.Nodes(J.Req(node, "reviews")).Any(r => Copilot.IsMatch(J.Login(r)) || IsClaudeReview(J.S(J.Get(J.Get(r, "author"), "login")), "-", J.S(J.Get(r, "body"))));
+			J.NodesOf(J.Req(node, "reviews")).Any(r => Copilot.IsMatch(J.Login(r)) || IsClaudeReview(J.S(J.Get(J.Get(r, "author"), "login")), "-", J.S(J.Get(r, "body"))));
 
 	// A requested reviewer's name: a Bot or a User has a login, a team a name.
 	public static string ReviewerName(JsonNode? reviewer) => J.S(J.Get(reviewer, "login")) is { Length: > 0 } login ? login : J.Str(reviewer, "name");
@@ -372,17 +372,19 @@ static class Status
 	public static List<JsonNode?> ExhaustionMarkers(IEnumerable<JsonNode?> nodes) =>
 			[.. nodes.Where(c => NoBot(J.Login(c)) == GithubActions && J.Str(c, "body").Contains(ExhaustedMarker, StringComparison.Ordinal))];
 
+	// A check's name or context is made printable here, so every reason and line that names it is: a fork's workflow names its jobs, and
+	// anyone with write access names a status context. A name already printable is unchanged, so ClaudeChecks still matches it.
 	public static Check ToCheck(JsonNode node)
 	{
 		if (J.S(J.Get(node, "__typename")) == "StatusContext")
 		{
 			var state = J.S(J.Get(node, "state"));
-			var context = J.S(J.Req(node, "context")) ?? "";
+			var context = Printable(J.S(J.Req(node, "context")) ?? "");
 			return state is "PENDING" or "EXPECTED"
 					? new Check(context, "PENDING", null, J.Str(node, "createdAt"))
 					: new Check(context, "COMPLETED", state, J.Str(node, "createdAt"));
 		}
-		return new Check(J.S(J.Req(node, "name")) ?? "", J.S(J.Req(node, "status")) ?? "", J.S(J.Get(node, "conclusion")), J.Str(node, "startedAt"),
+		return new Check(Printable(J.S(J.Req(node, "name")) ?? ""), J.S(J.Req(node, "status")) ?? "", J.S(J.Get(node, "conclusion")), J.Str(node, "startedAt"),
 				J.Int(J.Get(node, "databaseId")) ?? 0);
 	}
 
@@ -479,7 +481,7 @@ static class Status
 
 	// The reviews of Status.Query's node as ReviewRounds() reads them: (login, oid, body, submittedAt, inline thread count, is a merge).
 	static (string?, string?, string?, string?, long, bool)[] ReviewRecords(JsonNode node) =>
-			[.. J.Nodes(J.Req(node, "reviews")).Select(r => (J.S(J.Get(J.Get(r, "author"), "login")), J.S(J.Get(J.Get(r, "commit"), "oid")), J.S(J.Get(r, "body")),
+			[.. J.NodesOf(J.Req(node, "reviews")).Select(r => (J.S(J.Get(J.Get(r, "author"), "login")), J.S(J.Get(J.Get(r, "commit"), "oid")), J.S(J.Get(r, "body")),
 						J.S(J.Get(r, "submittedAt")), J.Int(J.Get(J.Get(r, "comments"), "totalCount")) ?? 0,
 						(J.Int(J.Get(J.Get(J.Get(r, "commit"), "parents"), "totalCount")) ?? 1) > 1))];
 
@@ -523,9 +525,9 @@ static class Status
 			double? now = null)
 	{
 		var (asked, settled) = AskedCopilot(node, owner, now ?? Now());
-		var commits = J.Nodes(J.Req(node, "commits")).ToList();
+		var commits = J.NodesOf(J.Req(node, "commits")).ToList();
 		var rollup = commits.Count > 0 ? J.Req(J.Req(commits[0], "commit"), "statusCheckRollup") : null;
-		var contexts = J.B(rollup) ? J.Nodes(J.Req(rollup, "contexts")) : [];
+		var contexts = J.B(rollup) ? J.NodesOf(J.Req(rollup, "contexts")) : [];
 		var reviews = Reviews(node);
 		var copilotIsRequested = CopilotIsRequested(node);
 		var labels = J.Nodes(J.Get(node, "labels")).Where(J.B).Select(l => J.S(J.Req(l, "name"))).ToHashSet();
@@ -534,7 +536,7 @@ static class Status
 		// Copilot can't review the PR (PrState.ClaudeBacked): Claude's review of any commit then counts as a round.
 		var gone = (asked && settled && !copilotIsRequested) || declined.Contains(head);
 		var (rounds, markerNewest, unread) = ReviewLoop(node, ReviewRounds(ReviewRecords(node), declined, gone));
-		var threads = J.Nodes(J.Req(node, "reviewThreads")).Select(t => (Resolved: J.B(J.Req(t, "isResolved")), Thread: ToThread(t))).ToList();
+		var threads = J.NodesOf(J.Req(node, "reviewThreads")).Select(t => (Resolved: J.B(J.Req(t, "isResolved")), Thread: ToThread(t))).ToList();
 		return new PrState
 		{
 			State = J.S(J.Req(node, "state")) ?? "",
@@ -631,7 +633,7 @@ static class Status
 				continue;
 			}
 			var (checksRequired, mergedByWorkflow) = RepoFlags(listed.GetValueOrDefault(repo, "full"));
-			foreach (var node in J.Nodes(J.Req(J.Req(data, "repository"), "pullRequests")))
+			foreach (var node in J.NodesOf(J.Req(J.Req(data, "repository"), "pullRequests")))
 				lines.Add(Line(repo, node!, ToState(node!, checksRequired, mergedByWorkflow, owner: owner)));
 		}
 		if (lines.Count > 0)

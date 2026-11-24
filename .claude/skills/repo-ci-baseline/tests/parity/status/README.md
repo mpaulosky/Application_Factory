@@ -8,4 +8,5 @@ Not covered, on purpose:
 - The run with no repo arguments: it reads the Fleet's `github/repos.txt`, and a flag to point it elsewhere would change `status.cs` for a test.
   `status.cs` reads `repos.txt` on every run (the cases' repos aren't in it, so nothing it holds changes their output today).
 - A Copilot ask record younger than the 30 seconds it takes to settle: the clock isn't fixed, and every record in the fixtures is long settled.
-- A repo argument with no `/`: the script fails with an uncaught exception (a traceback in the Python), which is no contract a port should copy.
+- A repo argument that isn't `owner/repo`: the Python failed with a traceback, and `status.cs` refuses it as a usage error (exit 2) before any call (ADR 0017's
+  Update), which `StatusPortTests.cs` holds; argparse's usage text isn't a contract the suite should hold either.

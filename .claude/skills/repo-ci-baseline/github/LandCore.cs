@@ -313,7 +313,7 @@ sealed class Lander
 		List<JsonNode> nodes;
 		try
 		{
-			nodes = [.. J.Nodes(J.Req(J.Req(Fetch(owner, name), "repository"), "pullRequests")).Select(n => n!)];
+			nodes = [.. J.NodesOf(J.Req(J.Req(Fetch(owner, name), "repository"), "pullRequests")).Select(n => n!)];
 		}
 		catch (Exception error) // one unreadable repo mustn't stop the rest
 		{

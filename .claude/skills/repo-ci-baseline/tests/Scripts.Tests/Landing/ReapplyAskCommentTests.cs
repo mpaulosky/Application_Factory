@@ -1,5 +1,5 @@
 // reapply.sh's ask comment against Landing.cs's. Not a moved test: reapply.test.sh held the two equal before the port, so LandingTests
-// keeps only test_landing.py's tests and its count can be checked against that file's.
+// keeps only the moved pytest suite's tests, and its count can be checked against that suite's in git history.
 public class ReapplyAskCommentTests
 {
 	// reapply.sh posts the same record when a re-Apply PR's request doesn't register (mpaulosky/dotfiles#384): its asked_marker and
