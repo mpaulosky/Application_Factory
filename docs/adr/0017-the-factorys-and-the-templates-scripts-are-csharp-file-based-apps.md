@@ -102,7 +102,8 @@ Each of these is decided in its increment, and recorded as an Update below:
 
 - What replaces ruff in the edit-time lint, the gate and CI. `dotnet format whitespace --verify-no-changes` takes 1 to 2 s a run (mpaulosky/Application_Factory#97), too slow
   for a hook that runs on every edit, and the replacement must run no code from the tree.
-- The white-box tests in xUnit v3: when each pytest suite is replaced, where the test projects live, and which package reads YAML for the tests that check workflows, since the BCL
+- The white-box tests in xUnit v3: when each pytest suite is replaced, where the test projects live (both decided for the skill's `github/` scripts in the
+  Update for mpaulosky/Application_Factory#119; where the Template's own scripts' tests go is still open), and which package reads YAML for the tests that check workflows, since the BCL
   has none. The Factory's Python test helpers move with them: `tests/check-issue-refs.py` and `tests/check-git-status.py` (which the gate and `test.sh` run),
   `tests/mutations/check-spec.py` and `tests/render_oracle/`.
 - The checkers' cut-over: how the workflow steps build them in a temp folder with the base's `global.json`, where the `OWNED` list lives once `check_owned_files` can't import
@@ -232,3 +233,51 @@ Apply can now remove an Owned file the Template retired, so the increments that 
 - **The Factory's copies.** A retired file the Factory copies leaves `scripts/gate.sh`'s copies list, and the Factory's copy is deleted, in the PR that retires it; `--sync`
   doesn't delete a copy.
 - **Status.** `status.sh` prints no per-file Drift, so it gains no retired line: a retired file still present shows in the next Apply's report.
+
+## Update (mpaulosky/Application_Factory#119): status, landing and land are C#, and where a replaced pytest suite's tests go
+
+The first ported scripts, Factory-only, so the `.py` files are deleted in the PR that ports them:
+
+- **The files.** `github/status.cs` and `github/land.cs` are the entry files. They pull in `Landing.cs` (the landing decision), `StatusCore.cs` (the status
+  line and the GitHub reads `land.cs` shares), `LandCore.cs` (the watch loop), `Repos.cs` (the `repos.txt` reader, here rather than with `settings.py`'s port,
+  mpaulosky/Application_Factory#120) and `Gh.cs`. `status.py`, `landing.py` and `land.py` are gone, and both parity suites pass against the C#.
+  `settings.py` stays for `rollout.py`, so an xUnit test holds `Repos.cs` to its `read_repo_list()`, on `repos.txt` and on files with the edge cases either could read
+  differently.
+- **`Gh.cs`'s argument parser is held to argparse.** An xUnit test runs Python's argparse and the parser on the same arguments, land's among them. It keeps argparse's
+  limits as well as its forms: a long option by any unique prefix, `--name=value`, `float()`'s spellings and argparse's exit 2, and one run of positional
+  arguments, so `land.sh o/app --once o/lib#7` is refused, as `land.py` refused it. `--help` counts among the options a prefix can name, a float option's
+  value is read when the option is met, and an argument that names no option is positional when it looks like a negative number (argparse's `-\.?\d`) or
+  holds a space. `-h` with more after it is help unless a `=` or `-` follows it, and `float()` and `\d` read any Unicode decimal digit, astral ones too.
+  Where Python 3.12 and 3.14 differ (a negative number with more after it, `-5x`), the parser reads as 3.14 does, and a test holds that reading.
+- **What the port changes on purpose.** The pre-push review of the port found weaknesses the Python had too, and the C# closes them rather than carry them
+  over: `gh` is found in `PATH`'s absolute folders only (.NET's own lookup tries the program's folder and the current one first); a release-blog branch
+  counts only on a PR from the repo itself (`isCrossRepository` false), so a fork's PR on `docs/release-notes` isn't armed; a PR's title and a check's name
+  or status context are made printable before they are printed; `status.sh` and `land.sh` refuse a repo that isn't `owner/repo` before any call, the whole argument (a trailing line break too), in
+  GitHub's ASCII characters, with neither side `.` or `..` (a usage error for an argument, exit 1 for a `repos.txt` line); a permission answer that isn't an
+  object is unread rather than no write access; and `land.sh` refuses a PR number past a 64-bit integer whatever came before it, and a `--interval`
+  `time.sleep` refuses (negative, NaN, or from 2^63 nanoseconds, about 292 years, up, infinity among them) ends it with exit 1 when it first waits, as `time.sleep` did,
+  rather than hang. The owner's Copilot ask record is matched ignoring case, as GitHub matches logins, so `land.sh` finds its own record for an owner typed
+  or listed in another case rather than ask Copilot again on every run (`github-actions` is still matched exactly). `Landing.Epoch` reads only the
+  extended ISO-8601 form `datetime.fromisoformat()` read, and takes a time with no offset as UTC where the Python took the machine's zone (GitHub's times
+  carry `Z`). A list the Python indexed (`["nodes"]`) that's missing, null, or a non-empty object or string still fails the read, as it did
+  (at its first item), and so does an empty object or string, which the Python read as an empty list, and a null commits list, which it read
+  as no commits. `land.cs` reads a PR's state and Copilot's request from `gh pr view`'s stdout, where the Python read its stderr first and took a warning
+  gh printed on a call that succeeded for the answer, and only MERGED or CLOSED ends a PR's watch. The parity suites' fixtures carry `isCrossRepository` where a case needs a release-blog PR.
+- **The wrappers.** `status.sh` and `land.sh` change to `github/` and run `dotnet run --file` with the script's absolute path, so the Factory's `global.json` picks the SDK.
+  The build leaves no MSBuild node, MSBuild server or compiler server behind, and a missing `dotnet` exits 127 with a message.
+  `test.sh` runs the status suite against `status.sh`, and `land.sh --help`, under a `global.json` that pins an SDK nobody has installed.
+  `rollout.sh --auto` lists `dotnet` among the tools it wants, since `land.sh` runs on it.
+- **The parity suites' reference.** A suite's reference is `github/<suite>.py`, else `github/<suite>.cs`, else the Template's `.py`. The runner builds a `.cs`
+  reference once, from its own folder, before the first case, and runs each case from that folder too, since dotnet picks the SDK by the folder it runs in;
+  record mode records from it, since the Python it was recorded from is gone. A `.py` beside its `.cs` stays the reference until its port is judged.
+- **When a pytest suite is replaced.** With the `.py` it tests: in the PR that deletes a Factory-only `.py`, and for an Owned script in the Rollout that drops its
+  `.py`, since until then the `.py` is what a revert runs. Its tests move to xUnit as one test method each, under the pytest name without `test_` and with
+  its first letter capitalised, with the same cases and assertions, so the count can be checked against the pytest file's. A test that compared two
+  implementations by text (`reapply.sh`'s ask comment against `landing.py`'s, which `reapply.test.sh` checked) moves to xUnit too.
+- **Where its xUnit tests live.** The tests of a script in the skill's `github/` folder go in `tests/Scripts.Tests/`, one folder per script or class (`Status/`,
+  `Landing/`, `Land/`, `Repos/`, `Gh/`). The project compiles every `.cs` in `github/` but the entry files, which hold top-level statements, and finds the
+  files its tests read (`repos.txt`, the Template's workflows, the references) through the skill folder in its `SkillDir` assembly metadata. So `test.sh`'s
+  copies of the project, for the locked restore and the unreachable feed, carry the skill beside them. Where the Template's own scripts' tests go is still
+  open, decided with the first Owned script's port.
+- **The Owned files.** The comments in the Template's `pr-automerge.yml` and `pr-automerge.test.mjs` that named `github/landing.py` name `github/Landing.cs`.
+  The change is comments only, so it rides the next Rollout rather than calling one of its own.

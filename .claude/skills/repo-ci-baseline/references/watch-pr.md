@@ -130,7 +130,7 @@ as MEMBER, not OWNER, so the session's own replies wouldn't count as its own the
 | PR Auto-Merge | The workflow | Lands a ready PR once its gates pass. |
 | Sandcastle's sweep ([sandcastle.md](sandcastle.md)) | The host | Answers threads and red checks on its own PRs and those the owner handed over. |
 
-They share no code. `land.sh` and `status.sh` are the skill's Python and don't ship to repos; the watcher is an Owned script that does, and
+They share no code. `land.sh` and `status.sh` run the skill's C# file-based apps (`github/land.cs`, `github/status.cs`, ADR 0017) and don't ship to repos; the watcher is an Owned script that does, and
 it reads only what the session needs (behind, checks, threads, people's words), not Copilot, `review:claude` or the landing decision.
 A test holds that it makes no call but `gh api graphql` and no write.
 

@@ -8,7 +8,7 @@
    with no settings file; a cloud's sign-in isn't asked), a system other than
    Linux, a sandbox bubblewrap can't make, gh signed out, and the .NET SDK the Template's global.json
    names (an Owned file, so Apply writes it into every re-Apply worktree and the
-   gate builds with it), a sign-in secret in the environment the review
+   gate builds with it; the Factory's copy is the SDK land.sh's C# runs on), a sign-in secret in the environment the review
    session would inherit, and an endpoint, cloud or proxy variable holding a
    URL with a sign-in, which the session would run without. One problem stops the round before anything runs. A
    second --auto run while the lock is held stops too, since both would work
@@ -181,9 +181,9 @@ REVIEW_TIMEOUT_MINUTES = 180
 # Reads of a PR that doesn't yet show the worktree's head, and the seconds between them.
 LOOKUP_TRIES = 5
 LOOKUP_WAIT_SECONDS = 10
-# What --auto needs on PATH: reapply.sh and land.sh (git, gh), the gate (python3, node, pnpm, shfmt) and the review
-# session (claude). dotnet is needed only when the Template carries a global.json.
-TOOLS = ("git", "gh", "python3", "node", "pnpm", "shfmt", "claude")
+# What --auto needs on PATH: reapply.sh and land.sh (git, gh, and dotnet, which runs land.sh's github/land.cs: ADR 0017),
+# the gate (python3, node, pnpm, shfmt) and the review session (claude).
+TOOLS = ("git", "gh", "dotnet", "python3", "node", "pnpm", "shfmt", "claude")
 # (SANDBOX_TOOLS, below, are checked too, and the gate's Python lint: ruff 0.17 or uv.)
 # check_gh_repo.py's SHFMT_RELEASE and SHFMT_OLDEST_MINOR (a test holds them equal): a v3 release from v3.14 on.
 SHFMT_RELEASE = re.compile(r"v3\.(0|[1-9][0-9]*)\.[0-9]+")
@@ -543,8 +543,8 @@ def sdk_problems(global_json, which, run):
     except OSError as error:
         return [f"can't read the Template's global.json: {error}"]
     named = f".NET SDK {version}" if version else "the .NET SDK it names"
-    if which("dotnet") is None:
-        return [f"the Template's global.json names {named}, and dotnet isn't on PATH"]
+    if which("dotnet") is None:  # TOOLS has dotnet, so it is named once, there
+        return []
     try:
         with tempfile.TemporaryDirectory(prefix="rollout-sdk.") as folder:
             shutil.copyfile(global_json, os.path.join(folder, "global.json"))
