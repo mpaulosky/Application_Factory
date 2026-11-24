@@ -26,8 +26,8 @@ name: Claude Issues
 # GitHub App, through the action's OIDC exchange, so its pushes and its pull request start CI as a person's would
 # (a pull request opened with the job's own token starts no workflows). Claude only commits; the Publish step pushes
 # and opens the pull request with a token exchanged afresh, since the first one expires an hour into a long run
-# (ADR 0018's Update for #119). The pull request is a draft, which PR
-# Auto-Merge skips: the owner reads it and marks it ready.
+# (ADR 0018's Update for #119). The pull request is a draft, which PR Auto-Merge skips: the owner reads it and marks
+# it ready.
 
 "on":
   issues:
@@ -304,11 +304,15 @@ jobs:
 
       # The action exchanges the OIDC token for the Claude GitHub App's once, as the work step starts, and an App
       # installation token expires after an hour, so a push at the end of a long run would be refused and lose the work.
-      # This step commits what Claude left uncommitted, exchanges a fresh token, pushes the branch (also when the timeout
-      # stopped Claude, so the next run continues from it), and opens the draft pull request when Claude wrote its title
-      # and body. Each network call is retried, since the runner and its commits are gone once the job ends. When the
-      # push still fails (a token without the workflows permission refuses a branch that edits .github/workflows), the
-      # branch is saved as a git bundle, which the next step uploads as an artifact of the run.
+      # This step commits what Claude left uncommitted and bundles the branch, then exchanges a fresh token, pushes the
+      # branch (also when the timeout stopped Claude, so the next run continues from it), and opens the draft pull
+      # request when Claude wrote its title and body. The runner and its commits are gone once the job ends, so each
+      # network call is retried, and whenever the work isn't pushed (a failed commit, an unexpected branch, a failed
+      # exchange, a refused push: a token without the workflows permission refuses one that edits .github/workflows),
+      # the step fails and the next one uploads the bundle as the run's `claude-branch` artifact.
+      # Claude could have changed the checkout's git config and hooks, and the global git and gh config, so the fresh
+      # token is never used there: the push runs in a new repository fetched from the bundle, with no global or system
+      # config and no hooks, and gh runs outside the checkout with an empty config directory.
       - name: Publish the branch
         id: publish
         if: always() && steps.pick.outputs.issue != ''
@@ -326,26 +330,40 @@ jobs:
             done
             return 1
           }
-          branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-          if ! [[ "$branch" =~ ^(feature|fix)/${ISSUE}-[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
-            echo "Claude left no branch for #$ISSUE (the checkout is on ${branch:-nothing}); nothing to publish."
-            exit 0
-          fi
-          if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-            git add -A && git -c user.name="claude[bot]" -c user.email="noreply@anthropic.com" \
-              commit -q -m "chore(baseline): Save the uncommitted work on #$ISSUE" &&
-              echo "Committed the work Claude left uncommitted."
-          fi
-          if [ -z "$(git rev-list "origin/main..HEAD" 2>/dev/null)" ]; then
-            echo "$branch has no commits beyond main; nothing to publish."
-            exit 0
-          fi
-          save() { # keeps the branch as an artifact of the run when it can't be pushed
-            git bundle create "$TASK_DIR/branch.bundle" "origin/main..HEAD" &&
-              echo "bundle=$TASK_DIR/branch.bundle" >> "$GITHUB_OUTPUT" &&
-              echo "::error::$1 $branch is saved as the run's claude-branch artifact (a git bundle)."
+          g() { git -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }
+          bundle="$TASK_DIR/branch.bundle"
+          save() { # save <why>: keeps the work as an artifact of the run when it can't be pushed, and fails the step
+            if [ -s "$bundle" ] || g bundle create "$bundle" HEAD; then
+              echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+              echo "::error::$1 The work is saved as the run's claude-branch artifact (a git bundle of HEAD)."
+            else
+              echo "::error::$1 Bundling the work failed too, so nothing of it is kept."
+            fi
             exit 1
           }
+          if [ -n "$(g status --porcelain 2>/dev/null)" ]; then
+            commit() {
+              g add -A && g -c user.name="claude[bot]" -c user.email="noreply@anthropic.com" \
+                commit -q --no-verify -m "chore(baseline): Save the uncommitted work on #$ISSUE"
+            }
+            # The timeout can kill Claude's git mid-operation and leave its index lock behind.
+            if ! commit && ! { rm -f .git/index.lock && commit; }; then
+              tar -czf "$TASK_DIR/worktree.tar.gz" --exclude=.git . 2>/dev/null &&
+                echo "bundle=$TASK_DIR/worktree.tar.gz" >> "$GITHUB_OUTPUT"
+              echo "::error::Committing the work Claude left uncommitted failed; the tree is saved as the run's claude-branch artifact."
+              exit 1
+            fi
+            echo "Committed the work Claude left uncommitted."
+          fi
+          if [ -z "$(g rev-list "origin/main..HEAD" 2>/dev/null)" ]; then
+            echo "HEAD has no commits beyond main; nothing to publish."
+            exit 0
+          fi
+          g bundle create "$bundle" HEAD || save "Bundling the branch failed."
+          branch="$(g symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+          if ! [[ "$branch" =~ ^(feature|fix|hotfix)/${ISSUE}-[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+            save "Claude's commits are on ${branch:-a detached HEAD}, not a feature/$ISSUE- or fix/$ISSUE- branch, so they weren't pushed."
+          fi
           oidc="$(curl -fsS --retry 5 --retry-all-errors --retry-delay 5 -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=claude-code-github-action" | jq -r '.value // empty')" || oidc=""
           token=""
@@ -355,28 +373,38 @@ jobs:
           fi
           [ -n "$token" ] || save "Couldn't exchange the OIDC token for a fresh Claude GitHub App token."
           echo "::add-mask::$token"
-          # The empty extraheader drops any Authorization header the action configured with its expired token.
-          retry git -c http.extraheader= -c "http.https://github.com/.extraheader=" \
-            push "https://x-access-token:${token}@github.com/${GH_REPO}.git" "HEAD:refs/heads/$branch" ||
-            save "The push was refused."
+          clean="$(mktemp -d)"
+          export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GH_CONFIG_DIR="$clean/gh"
+          { git init -q "$clean/repo" && git -C "$clean/repo" fetch -q "$bundle" "HEAD:refs/heads/$branch"; } ||
+            save "Reading the bundle into a clean repository failed."
+          retry git -C "$clean/repo" -c core.hooksPath=/dev/null \
+            push -q "https://x-access-token:${token}@github.com/${GH_REPO}.git" "refs/heads/$branch:refs/heads/$branch" ||
+            save "The push of $branch was refused."
           echo "Pushed $branch."
+          cd "$clean" || exit 1
           export GH_TOKEN="$token"
-          pr="$(retry gh api "repos/$GH_REPO/pulls?state=open&head=${GITHUB_REPOSITORY_OWNER}:${branch}" --jq '.[0].html_url // empty')"
+          find_pr() { gh api "repos/$GH_REPO/pulls?state=open&head=${GITHUB_REPOSITORY_OWNER}:${branch}" --jq '.[0].html_url // empty'; }
+          title="$(grep -m 1 -v '^[[:space:]]*$' "$TASK_DIR/pr-title.txt" 2>/dev/null || true)"
+          pr="$(retry find_pr)"
           if [ -n "$pr" ]; then
             echo "$branch already has the pull request $pr."
-          elif [ -s "$TASK_DIR/pr-title.txt" ] && [ -s "$TASK_DIR/pr-body.md" ]; then
-            pr="$(retry gh pr create --draft --base main --head "$branch" \
-              --title "$(head -n 1 "$TASK_DIR/pr-title.txt")" --body-file "$TASK_DIR/pr-body.md")" || {
-              echo "::error::Opening the pull request for $branch failed; the branch is pushed."
-              exit 1
+          elif [ -n "$title" ] && [ -s "$TASK_DIR/pr-body.md" ]; then
+            create() {
+              gh pr create --repo "$GH_REPO" --draft --base main --head "$branch" --title "$title" --body-file "$TASK_DIR/pr-body.md" ||
+                find_pr | grep . # a try whose answer was lost may have opened it
             }
+            pr="$(retry create | tail -n 1)"
+            if [ -z "$pr" ]; then
+              echo "::error::Opening the pull request for $branch failed; the branch is pushed, so open it by hand or queue the issue again."
+              exit 1
+            fi
             echo "Opened $pr."
-            gh issue comment "$ISSUE" --body "Claude opened the draft pull request $pr." || true
+            gh issue comment "$ISSUE" --repo "$GH_REPO" --body "Claude opened the draft pull request $pr." || true
           else
             echo "Claude didn't write the pull request's title and body, so $branch is pushed without one."
           fi
 
-      - name: Keep the unpushed branch
+      - name: Keep the unpushed work
         if: always() && steps.publish.outputs.bundle != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -392,6 +420,7 @@ jobs:
           ISSUE: ${{ steps.pick.outputs.issue }}
           OUTCOME: ${{ steps.claude.outcome }}
           PUBLISH: ${{ steps.publish.outcome }}
+          SAVED: ${{ steps.publish.outputs.bundle }}
           EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
         run: |
           set -uo pipefail
@@ -425,9 +454,11 @@ jobs:
             msg+=" Finish step of the run's log shows its last message, or that it left none, under \"Claude's last message\":"
             msg+=" ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. Add the \`claude\` label again to retry;"
             msg+=" the next run continues from the branch the Publish step pushed, if it pushed one."
-            if [ "${PUBLISH:-}" = "failure" ]; then
-              msg+=" The Publish step failed: its error in the log says why, and a branch it couldn't push is the run's"
-              msg+=" \`claude-branch\` artifact, a git bundle."
+            if [ -n "${SAVED:-}" ]; then
+              msg+=" The Publish step couldn't push Claude's work: its error in the log says why, and the work is the run's"
+              msg+=" \`claude-branch\` artifact."
+            elif [ "${PUBLISH:-}" = "failure" ]; then
+              msg+=" The Publish step pushed the branch but failed after it: its error in the log says why."
             fi
             gh issue comment "$ISSUE" --body "$msg" || true
           fi

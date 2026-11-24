@@ -917,24 +917,28 @@ check "with no execution file the Finish step still prints that group, saying Cl
   "$(grep -qxF "::group::Claude's last message" "$finish/log" && grep -qF 'left no execution file' "$finish/log" \
     && grep -qF "under \"Claude's last message\"" "$finish/comment" && echo 0 || echo 1)"
 # The Claude GitHub App token the work step gets expires after an hour, so the Publish step exchanges a fresh one and pushes and opens the pull request
-# with it, retrying each call. Its script runs here with stub git, curl, gh and sleep. git reports $PUB_BRANCH, $PUB_COMMITS and a dirty tree with
-# PUB_DIRTY=1, records a commit, a bundle and each push, and refuses the first $PUB_PUSH_FAILS pushes. curl answers the OIDC request and the exchange
-# (or fails it with PUB_EXCHANGE=fail). gh answers the open pull request search with $PUB_EXISTING_PR and records `pr create` and the issue comment.
+# with it, from a clean repository fetched from a bundle, retrying each call. Its script runs here in a scratch directory with stub git, curl, gh and
+# sleep. git drops its -c and -C options, reports $PUB_BRANCH (a detached HEAD when it's empty), $PUB_COMMITS and a dirty tree with PUB_DIRTY=1, fails
+# the first $PUB_COMMIT_FAILS commits and the first $PUB_PUSH_FAILS pushes, and records each commit, bundle and push. curl answers the OIDC request and
+# the exchange (or fails it with PUB_EXCHANGE=fail). gh answers the open pull request search with $PUB_EXISTING_PR, records `pr create` (failing it
+# with PUB_PR_FAIL=1) and the issue comment, and records the config directory it was given.
 publish="$work/publish"
-mkdir -p "$publish/bin" "$publish/task"
+mkdir -p "$publish/bin" "$publish/task" "$publish/ws"
 sed -n '/^      - name: Publish the branch$/,/^      - name: /p' "$issues_wf" | sed -n '/^        run: |$/,$p' | sed '1d;$d' | sed 's/^          //' > "$publish/run.sh"
 cat > "$publish/bin/git" << 'STUBGIT'
 #!/usr/bin/env bash
+while [[ $1 == -c || $1 == -C ]]; do shift 2; done
+count() { echo x >> "$PUB_DIR/$1.count"; [[ $(wc -l < "$PUB_DIR/$1.count") -gt $2 ]]; }
 case "$*" in
-  "rev-parse --abbrev-ref HEAD") echo "$PUB_BRANCH" ;;
-  rev-list*) [[ -z $PUB_COMMITS ]] || echo "$PUB_COMMITS" ;;
   "status --porcelain") [[ ${PUB_DIRTY:-} != 1 ]] || echo " M file" ;;
   "add -A") ;;
-  *" commit "*) printf '%s\n' "$*" > "$PUB_DIR/commit" ;;
-  "bundle create "*) printf '%s\n' "$*" > "$PUB_DIR/bundle"; : > "$3" ;;
-  *" push "*)
-    printf '%s\n' "$*" >> "$PUB_DIR/push"
-    [[ $(wc -l < "$PUB_DIR/push") -gt ${PUB_PUSH_FAILS:-0} ]] ;;
+  commit*) count commit "${PUB_COMMIT_FAILS:-0}" && printf '%s\n' "$*" > "$PUB_DIR/commit" ;;
+  rev-list*) [[ -z $PUB_COMMITS ]] || echo "$PUB_COMMITS" ;;
+  "bundle create "*) printf '%s\n' "$*" > "$PUB_DIR/bundle"; echo bundle > "$3" ;;
+  "symbolic-ref --quiet --short HEAD") [[ -n $PUB_BRANCH ]] && echo "$PUB_BRANCH" ;;
+  "init -q "*) mkdir -p "$3" ;;
+  fetch*) printf '%s\n' "$*" > "$PUB_DIR/fetch" ;;
+  push*) printf '%s\n' "$*" >> "$PUB_DIR/push"; count push "${PUB_PUSH_FAILS:-0}" ;;
 esac
 STUBGIT
 cat > "$publish/bin/curl" << 'STUBCURL'
@@ -948,52 +952,73 @@ fi
 STUBCURL
 cat > "$publish/bin/gh" << 'STUBGH'
 #!/usr/bin/env bash
+printf '%s %s\n' "$GH_CONFIG_DIR" "$PWD" > "$PUB_DIR/gh-env"
 case "$1 $2" in
   "api "*) [[ -z ${PUB_EXISTING_PR:-} ]] || echo "$PUB_EXISTING_PR" ;;
-  "pr create") printf '%s\n' "$GH_TOKEN $*" > "$PUB_DIR/pr"; echo "https://github.com/o/r/pull/9" ;;
-  "issue comment") printf '%s\n' "$5" > "$PUB_DIR/comment" ;;
+  "pr create")
+    printf '%s\n' "$GH_TOKEN $*" >> "$PUB_DIR/pr"
+    [[ ${PUB_PR_FAIL:-} != 1 ]] || exit 1
+    echo "https://github.com/o/r/pull/9" ;;
+  "issue comment") printf '%s\n' "$*" > "$PUB_DIR/comment" ;;
 esac
 exit 0
 STUBGH
 printf '#!/usr/bin/env bash\n' > "$publish/bin/sleep"
 chmod +x "$publish/bin/git" "$publish/bin/curl" "$publish/bin/gh" "$publish/bin/sleep"
 publish_case() { # publish_case <branch> <commits>: runs the Publish step, leaving its exit status in $publish_rc and what it did in $publish
-  rm -f "$publish/push" "$publish/pr" "$publish/comment" "$publish/commit" "$publish/bundle" "$publish/output" "$publish/task/branch.bundle"
-  env PUB_DIR="$publish" PUB_BRANCH="$1" PUB_COMMITS="$2" PATH="$publish/bin:$PATH" GH_REPO=o/r ISSUE=7 TASK_DIR="$publish/task" \
-    GITHUB_OUTPUT="$publish/output" GITHUB_REPOSITORY_OWNER=o ACTIONS_ID_TOKEN_REQUEST_TOKEN=x \
-    ACTIONS_ID_TOKEN_REQUEST_URL='https://example.test/oidc?v=1' bash "$publish/run.sh" > "$publish/log" 2>&1
+  rm -f "$publish"/{push,pr,comment,commit,bundle,fetch,output,gh-env,commit.count,push.count} "$publish/task/branch.bundle" "$publish/task/worktree.tar.gz"
+  (cd "$publish/ws" && env PUB_DIR="$publish" PUB_BRANCH="$1" PUB_COMMITS="$2" PATH="$publish/bin:$PATH" GH_REPO=o/r ISSUE=7 \
+    TASK_DIR="$publish/task" GITHUB_OUTPUT="$publish/output" GITHUB_REPOSITORY_OWNER=o ACTIONS_ID_TOKEN_REQUEST_TOKEN=x \
+    ACTIONS_ID_TOKEN_REQUEST_URL='https://example.test/oidc?v=1' bash "$publish/run.sh" > "$publish/log" 2>&1)
   publish_rc=$?
 }
 publish_case main ""
-check "the Publish step pushes nothing when Claude left no branch for the issue" \
-  "$([[ $publish_rc == 0 && ! -e $publish/push ]] && grep -qF 'nothing to publish' "$publish/log" && echo 0 || echo 1)"
-publish_case feature/7-port ""
-check "the Publish step pushes nothing when the branch has no commits beyond main" \
-  "$([[ $publish_rc == 0 && ! -e $publish/push ]] && grep -qF 'no commits beyond main' "$publish/log" && echo 0 || echo 1)"
+check "the Publish step pushes nothing when HEAD has no commits beyond main" \
+  "$([[ $publish_rc == 0 && ! -e $publish/push && ! -e $publish/bundle ]] && grep -qF 'nothing to publish' "$publish/log" && echo 0 || echo 1)"
 PUB_DIRTY=1 publish_case feature/7-port "abc123"
-check "the Publish step commits the work Claude left uncommitted before it pushes" \
-  "$([[ $publish_rc == 0 && -e $publish/push ]] && grep -qF 'Save the uncommitted work on #7' "$publish/commit" && echo 0 || echo 1)"
+check "the Publish step commits the work Claude left uncommitted, with hooks off, before it pushes" \
+  "$([[ $publish_rc == 0 && -e $publish/push ]] && grep -qF -- '--no-verify -m chore(baseline): Save the uncommitted work on #7' "$publish/commit" \
+    && echo 0 || echo 1)"
+PUB_DIRTY=1 PUB_COMMIT_FAILS=1 publish_case feature/7-port "abc123"
+check "a commit that fails once is retried after clearing a stale index lock" \
+  "$([[ $publish_rc == 0 && -e $publish/commit && -e $publish/push ]] && echo 0 || echo 1)"
+PUB_DIRTY=1 PUB_COMMIT_FAILS=2 publish_case feature/7-port "abc123"
+check "a commit that keeps failing fails the Publish step, saves the tree for the artifact step and pushes nothing" \
+  "$([[ $publish_rc == 1 && ! -e $publish/push && -s $publish/task/worktree.tar.gz ]] && grep -qF 'bundle=' "$publish/output" \
+    && grep -qF '::error::Committing' "$publish/log" && echo 0 || echo 1)"
+for odd in feature/7-port_scripts hotfix/8-port main ""; do
+  publish_case "$odd" "abc123"
+  check "commits on ${odd:-a detached HEAD} fail the Publish step and are saved as a bundle, with no token exchanged or push" \
+    "$([[ $publish_rc == 1 && ! -e $publish/push ]] && grep -qF 'bundle=' "$publish/output" && grep -qF 'weren'"'"'t pushed' "$publish/log" \
+      && echo 0 || echo 1)"
+done
 publish_case feature/7-port "abc123"
-check "without the pull request's title and body the Publish step pushes the branch with a fresh token but opens no pull request" \
-  "$([[ $publish_rc == 0 && ! -e $publish/pr && ! -e $publish/commit ]] \
-    && grep -qF 'x-access-token:fresh-app-token@github.com/o/r.git HEAD:refs/heads/feature/7-port' "$publish/push" \
-    && grep -qF 'http.extraheader=' "$publish/push" && echo 0 || echo 1)"
-printf 'feat(baseline): Port it\n' > "$publish/task/pr-title.txt"
+check "without the pull request's title and body the Publish step pushes the branch from a clean repository with a fresh token" \
+  "$([[ $publish_rc == 0 && ! -e $publish/pr && ! -e $publish/commit ]] && grep -qF 'branch.bundle HEAD:refs/heads/feature/7-port' "$publish/fetch" \
+    && grep -qF 'x-access-token:fresh-app-token@github.com/o/r.git refs/heads/feature/7-port:refs/heads/feature/7-port' "$publish/push" \
+    && echo 0 || echo 1)"
+check "the Publish step runs gh outside the checkout with an empty config directory" \
+  "$(read -r ghdir ghpwd < "$publish/gh-env" && [[ $ghdir == */gh && $ghpwd != "$publish/ws" ]] && echo 0 || echo 1)"
+printf '\n\nfeat(baseline): Port it\n' > "$publish/task/pr-title.txt"
 printf 'Fixes #7\n' > "$publish/task/pr-body.md"
 publish_case feature/7-port "abc123"
-check "with the title and body the Publish step opens a draft pull request with the fresh token and links it on the issue" \
-  "$([[ $publish_rc == 0 ]] && grep -qF 'fresh-app-token pr create --draft --base main --head feature/7-port --title feat(baseline): Port it' "$publish/pr" \
+check "with the title and body the Publish step opens a draft pull request with the first non-blank title line and links it on the issue" \
+  "$([[ $publish_rc == 0 ]] && grep -qF 'fresh-app-token pr create --repo o/r --draft --base main --head feature/7-port --title feat(baseline): Port it' "$publish/pr" \
     && grep -qF 'pull/9' "$publish/comment" && echo 0 || echo 1)"
 PUB_EXISTING_PR=https://github.com/o/r/pull/8 publish_case feature/7-port "abc123"
 check "the Publish step opens no second pull request when the branch already has one" \
   "$([[ $publish_rc == 0 && -e $publish/push && ! -e $publish/pr ]] && grep -qF 'already has the pull request' "$publish/log" && echo 0 || echo 1)"
+PUB_PR_FAIL=1 publish_case feature/7-port "abc123"
+check "a pull request that can't be opened fails the Publish step after the push, with no artifact" \
+  "$([[ $publish_rc == 1 && -e $publish/push && $(wc -l < "$publish/pr") == 3 ]] && ! grep -qF 'bundle=' "$publish/output" 2> /dev/null \
+    && grep -qF 'the branch is pushed' "$publish/log" && echo 0 || echo 1)"
 PUB_PUSH_FAILS=2 publish_case feature/7-port "abc123"
 check "the Publish step retries a refused push" \
   "$([[ $publish_rc == 0 && $(wc -l < "$publish/push") == 3 && -e $publish/pr ]] && echo 0 || echo 1)"
 PUB_PUSH_FAILS=3 publish_case feature/7-port "abc123"
 check "a push refused three times fails the Publish step and saves the branch as a bundle for the artifact step" \
-  "$([[ $publish_rc == 1 && ! -e $publish/pr && -e $publish/task/branch.bundle ]] \
-    && grep -qxF "bundle=$publish/task/branch.bundle" "$publish/output" && grep -qF 'origin/main..HEAD' "$publish/bundle" && echo 0 || echo 1)"
+  "$([[ $publish_rc == 1 && ! -e $publish/pr && -s $publish/task/branch.bundle ]] \
+    && grep -qxF "bundle=$publish/task/branch.bundle" "$publish/output" && echo 0 || echo 1)"
 PUB_EXCHANGE=fail publish_case feature/7-port "abc123"
 check "a failed token exchange fails the Publish step without a push, saving the branch as a bundle" \
   "$([[ $publish_rc == 1 && ! -e $publish/push && ! -e $publish/pr ]] && grep -qF 'bundle=' "$publish/output" && echo 0 || echo 1)"
