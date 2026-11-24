@@ -309,6 +309,31 @@ runner 0 "a command naming a skill wrapper runs the copy's" "ov: 1 case(s) pass 
 rm "$work/global.json"
 echo 'overlay False no global.json False' > "$ov_case/expected.stdout"
 runner 0 "with no global.json above github/, the copy has none" "ov: 1 case(s) pass against" ov
+# The value of a later --option=value word naming a skill file the copy holds is made to name the copy's too.
+# shellcheck disable=SC2016 # the launcher's own $1, expanded when it runs
+printf '#!/usr/bin/env bash\n[[ "$1" == --run=/* ]] || exit 64\nexec "${1#--run=}"\n' > "$work/option-launch.sh"
+chmod +x "$work/option-launch.sh"
+runner 0 "an --option=value word naming a skill wrapper runs the copy's" "ov: 1 case(s) pass against: $work/option-launch.sh --run=$skill/ov.sh" \
+  ov "$work/option-launch.sh" "--run=$skill/ov.sh"
+rm "$work/option-launch.sh"
+# A C# reference of a suite with github/ is built and run from the copy, so it reads the overlay, never the skill's own github/.
+mkdir -p "$skill/tests/parity/ovcs/github" "$skill/tests/parity/ovcs/cases"
+echo overlay > "$skill/tests/parity/ovcs/github/data.txt"
+: > "$skill/github/ovcs.cs"
+new_case c1
+cp -R "$cases/c1" "$skill/tests/parity/ovcs/cases/c1"
+: > "$work/dotnet.log"
+PATH="$work/dotnet-stub:$PATH" runner 0 "a C# reference of a suite with github/" \
+  "ovcs: 1 case(s) pass against: dotnet run --no-build --file $skill/github/ovcs.cs --" ovcs
+built="$(grep '|build ' "$work/dotnet.log" || true)"
+if [[ "$(wc -l <<< "$built" | tr -d ' ')" != 1 || "$built" != */skill/github\|build\ */skill/github/ovcs.cs || "$built" == "$skill/"* || "$built" == *"|build $skill/"* ]]; then
+  fail "a C# reference of a suite with github/ wasn't built once from the copy: $(cat "$work/dotnet.log")"
+fi
+ran="$(grep '|run ' "$work/dotnet.log" || true)"
+if [[ "$(wc -l <<< "$ran" | tr -d ' ')" != 1 || "$ran" != "${built%%|*}|run --no-build --file ${built##* } -- "* ]]; then
+  fail "a C# reference of a suite with github/ didn't run the copy's .cs from the copy: $(cat "$work/dotnet.log")"
+fi
+rm -rf "$skill/tests/parity/ovcs" "$skill/github/ovcs.cs" "$cases/c1"
 rm -rf "$skill/tests/parity/ov/github"
 : > "$skill/tests/parity/ov/github"
 runner 2 "a suite's github/ that isn't a folder" "$skill/tests/parity/ov/github is not a folder." ov
