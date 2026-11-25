@@ -195,9 +195,22 @@ public partial class BenchTests
 	[InlineData("cr\r", "cr\\x0d")]
 	[InlineData("rtl\u202egnp.exe", "rtl\\u202egnp.exe")]
 	[InlineData("a\u2028b\u2029c\u200bd", "a\\u2028b\\u2029c\\u200bd")]
+	[InlineData("tag\U000E0041\U000E007F", "tag\\U000e0041\\U000e007f")]
+	[InlineData("music\U0001D173", "music\\U0001d173")]
+	[InlineData("soft\u00adhyphen", "soft\\xadhyphen")]
+	[InlineData("emoji \U0001F600 kept", "emoji \U0001F600 kept")]
 	public void Text_from_the_model_is_shown_with_its_control_characters_escaped(string text, string shown)
 	{
 		Assert.Equal(shown, Bench.Shown(text));
+	}
+
+	[Fact]
+	public void A_lone_surrogate_is_shown_as_its_code_unit()
+	{
+		// Not InlineData: an attribute's string is stored as UTF-8, which turns a lone surrogate into U+FFFD.
+		Assert.Equal("lone \\ud800 and \\udc00", Bench.Shown("lone \ud800 and \udc00"));
+		Assert.Equal("low then high \\udc00\\ud800!", Bench.Shown("low then high \udc00\ud800!"));
+		Assert.Equal("end \\ud83d", Bench.Shown("end \ud83d"));
 	}
 
 	[Theory]

@@ -511,21 +511,29 @@ static class Bench
 		return bad;
 	}
 
-	// Text from the model or a call, shown with each control character but a tab or newline, and each format or line or paragraph
-	// separator character (a bidi override, U+2028), written in repr()'s \xNN or \uNNNN form, so an escape sequence or a reordering a
-	// head led the review to write can't reach the terminal. The Python printed them as they were.
+	// Text from the model or a call, shown with each control character but a tab or newline, each format or line or paragraph separator
+	// character (a bidi override, U+2028, a tag character past U+FFFF) and each lone surrogate written in repr()'s \xNN, \uNNNN or
+	// \UNNNNNNNN form, so an escape sequence, a reordering or hidden text a head led the review to write can't reach the terminal. It reads
+	// by code point, as a char alone can't name a character past U+FFFF. The Python printed them as they were.
 	public static string Shown(string text)
 	{
-		if (!text.Any(Hidden))
-			return text;
 		var shown = new StringBuilder(text.Length + 8);
-		foreach (var c in text)
-			shown.Append(!Hidden(c) ? c.ToString() : c <= '\u00ff' ? $"\\x{(int)c:x2}" : $"\\u{(int)c:x4}");
+		for (var at = 0; at < text.Length;)
+		{
+			// A lone surrogate decodes as invalid: it is written as its own code unit, as repr() writes it.
+			var valid = Rune.DecodeFromUtf16(text.AsSpan(at), out var rune, out var used) == System.Buffers.OperationStatus.Done;
+			var point = valid ? rune.Value : text[at];
+			if (valid && !Hidden(rune))
+				shown.Append(text, at, used);
+			else
+				shown.Append(point <= 0xff ? $"\\x{point:x2}" : point <= 0xffff ? $"\\u{point:x4}" : $"\\U{point:x8}");
+			at += valid ? used : 1;
+		}
 		return shown.ToString();
 	}
 
-	static bool Hidden(char c) =>
-		c is not '\t' and not '\n' && char.GetUnicodeCategory(c) is UnicodeCategory.Control or UnicodeCategory.Format
+	static bool Hidden(Rune rune) =>
+		rune.Value is not '\t' and not '\n' && Rune.GetUnicodeCategory(rune) is UnicodeCategory.Control or UnicodeCategory.Format
 			or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator;
 
 	public static void Report(JsonNode spec, JsonNode @case, JsonNode outcome, OrderedDictionary<string, bool> hits, TextWriter output)
@@ -803,8 +811,13 @@ static class Bench
 		// left bounds them too, as Python's communicate(timeout=) did.
 		if (limit == Timeout.InfiniteTimeSpan)
 			Task.WaitAll(write, stdout, stderr);
-		else if (!Task.WaitAll([write, stdout, stderr], TimeSpan.Zero > limit - clock.Elapsed ? TimeSpan.Zero : limit - clock.Elapsed))
-			throw new TimeoutException();
+		else
+		{
+			// Elapsed is read once: a second read could be later, and WaitAll throws for a span below -1 ms and waits forever at -1 ms.
+			var left = limit - clock.Elapsed;
+			if (!Task.WaitAll([write, stdout, stderr], left < TimeSpan.Zero ? TimeSpan.Zero : left))
+				throw new TimeoutException();
+		}
 		return new Ran(process.ExitCode, stdout.Result, stderr.Result);
 	}
 

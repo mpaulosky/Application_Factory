@@ -467,8 +467,9 @@ A Factory-only port, as the ones above are, so `bench/claude-review-bench.py` an
   which no catch stops), and checks an alias against the depth and charges it the whole size of the node it names before copying it, where PyYAML shared the one
   object, so an alias bomb is refused before it grows. An int is read as its digits, not through `BigInteger`, and an anchor names a node in its own
   document only, as in PyYAML. A float past a double's range, such as `1.0e+999`, is read as its string, where PyYAML read `inf`: no pinned action is a float.
-  Each case's report, in a run and in `--rescore`, shows a control character (but a tab or a newline) and a format or line or paragraph separator
-  character in its error, its seconds, turns and cost, a finding's path, line and body, and the bad lines as `\xNN` or `\uNNNN`, where the Python
+  Each case's report, in a run and in `--rescore`, shows a control character (but a tab or a newline), a format or line or paragraph separator
+  character and a lone surrogate in its error, its seconds, turns and cost, a finding's path, line and body, and the bad lines as `\xNN`, `\uNNNN` or
+  `\UNNNNNNNN`, read by code point, where the Python
   printed it raw to the terminal. A call that exits within its timeout but leaves a child holding its pipes ends in a timeout, and the child runs on.
   Claude's `stream-json` output is split at `\n` alone, where the Python's
   `splitlines()` also broke at the U+2028, U+2029 and U+0085 that JSON writes raw inside a string and so lost such a review. A `--prompt-file` reads `\r\n` and
