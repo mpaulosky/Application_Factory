@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
 
 // Tests for github/AutoRolloutReview.cs, xUnit copies of github/tests/test_auto_rollout.py's tests of how a review session ends (its settings
@@ -24,15 +23,11 @@ public sealed class ReviewSessionEndTests : IDisposable
 
 	string P(params string[] parts) => Path.Combine([tmp, .. parts]);
 
-	[DllImport("libc", EntryPoint = "kill", SetLastError = true)]
-	static extern int Kill(int pid, int sig);
-
-	// os.kill(os.getpid(), SIGINT), a SIGHUP here, while a hold is registered: its handler runs on another thread, so this waits for it to
-	// record the signal.
+	// os.kill(os.getpid(), SIGINT), a SIGHUP here, while a hold is registered: its handler runs on another thread, so this waits until it
+	// has handled the signal.
 	static void Interrupt()
 	{
-		Assert.Equal(0, Kill(Environment.ProcessId, Signals.SigHup));
-		Thread.Sleep(200);
+		SignalSender.Send(Signals.SigHup);
 	}
 
 	// A SIGHUP the test host's caller ignores (nohup's) isn't held, so it can't be sent here.

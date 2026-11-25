@@ -238,8 +238,7 @@ public sealed class GroupsTests : IDisposable
 		IGroupChild Popen(IReadOnlyList<string> command, Spawning how)
 		{
 			// RunInGroup holds the signals while it starts the command, so the signal is only recorded; its handler runs on another thread.
-			Assert.Equal(0, Kill(Environment.ProcessId, Signals.SigHup));
-			Thread.Sleep(200);
+			SignalSender.Send(Signals.SigHup);
 			return new FakeSession(code: 0, pid: NoSuchPid);
 		}
 		// A SIGHUP stands in for the pytest's SIGINT: .NET runs every registration for a signal, the test runner's Console.CancelKeyPress

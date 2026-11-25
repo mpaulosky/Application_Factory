@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json.Nodes;
 
@@ -43,19 +42,15 @@ public sealed class ReviewSessionTests : IDisposable
 	// Python's ValueError, so a message that names the error's type reads as the original's.
 	sealed class ValueError(string message) : Exception(message);
 
-	[DllImport("libc", EntryPoint = "kill", SetLastError = true)]
-	static extern int Kill(int pid, int signum);
-
 	// A test host whose caller ignores SIGTERM holds none, so a test that sends one is skipped there, before RunReview (whose record
 	// would take a skip thrown inside it for a failed record).
 	static void NeedsHeld() => Assert.SkipUnless(Signals.Held(Signals.SigTerm), "the test host ignores SIGTERM");
 
-	// interrupt(): a SIGTERM (for the pytest's SIGINT) to the test process, and time for the hold's handler, which runs on another thread,
-	// to record it.
+	// interrupt(): a SIGTERM (for the pytest's SIGINT) to the test process, and a wait until the hold's handler, which runs on another
+	// thread, has handled it.
 	static void Interrupt()
 	{
-		Assert.Equal(0, Kill(Environment.ProcessId, Signals.SigTerm));
-		Thread.Sleep(200);
+		SignalSender.Send(Signals.SigTerm);
 	}
 
 	// head_guard: the fake guard, its worktree's HEAD Head.

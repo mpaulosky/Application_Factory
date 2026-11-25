@@ -47,13 +47,12 @@ public sealed class SessionGroupTests : IDisposable
 		return (nint)BitConverter.ToInt64(now, 0);
 	}
 
-	// The test process sends itself signum and waits for the handler, which runs on another thread. Call it only while a hold for signum is
-	// registered.
+	// The test process sends itself signum and waits until a handler has handled it, on the runtime's signal thread. Call it only while a
+	// hold for signum is registered.
 	static void Send(int signum)
 	{
 		Assert.NotEqual(Signals.SigInt, signum); // the runner's Console.CancelKeyPress would cancel the run
-		Assert.Equal(0, Kill(Environment.ProcessId, signum));
-		Thread.Sleep(200);
+		SignalSender.Send(signum);
 	}
 
 	// A signal the test host's caller ignores (nohup's SIGHUP, a background job's SIGINT) isn't held, so it can't be tested here.
@@ -367,7 +366,9 @@ public sealed class SessionGroupTests : IDisposable
 			{
 				Assert.Equal(SigIgn, Disposition(Signals.SigHup));
 				Assert.False(Signals.Held(Signals.SigHup));
-				Send(Signals.SigHup); // ignored, so safe with nothing registered for it
+				// Ignored, so safe with nothing registered for it; no handler runs, so there is nothing to wait for but the time one would take.
+				Assert.Equal(0, Kill(Environment.ProcessId, Signals.SigHup));
+				Thread.Sleep(200);
 			}
 			Assert.Equal(SigIgn, Disposition(Signals.SigHup));
 			Assert.Empty(round);

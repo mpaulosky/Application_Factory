@@ -69,6 +69,11 @@ static class Signals
 	static readonly Lock Gate = new();
 	static readonly Dictionary<int, List<Action<int>>> Handlers = [];
 	static readonly Dictionary<int, PosixSignalRegistration> Registrations = [];
+	static long dispatched;
+
+	// How many signals have been handed to a handler here and handled, so a caller (the tests) that sends one can wait until it has been,
+	// since the handler runs on the runtime's signal thread.
+	public static long Dispatched => Interlocked.Read(ref dispatched);
 
 	// Put SIGTERM back to ignored when rollout.sh's caller ignored it (nohup's SIGHUP and a background job's SIGINT stay ignored by
 	// themselves): SIG_IGN through libc, so the round holds nothing for it and its children inherit it, as Python's do.
@@ -142,7 +147,14 @@ static class Signals
 			if (!Handlers.TryGetValue(signum, out var stack) || stack.Count == 0)
 				return;
 			context.Cancel = true;
-			stack[^1](signum);
+			try
+			{
+				stack[^1](signum);
+			}
+			finally
+			{
+				Interlocked.Increment(ref dispatched);
+			}
 		}
 	}
 
