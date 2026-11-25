@@ -321,10 +321,11 @@ pytest (`tests/issue_refs/`) are gone. They are Factory-only, so there is no Rol
 
 ## Update (mpaulosky/Application_Factory#120): settings is C#, and settings.py stays for rollout.py
 
-The second Factory-only port. `rollout` isn't part of it: `rollout.py` imports `auto_rollout` in plain mode too, and `test_auto_rollout.py` imports `rollout`, so
-under the import rule above they port together (mpaulosky/Application_Factory#122).
+A Factory-only port, as the mpaulosky/Application_Factory#119 and mpaulosky/Application_Factory#123 ones are. `rollout` isn't part of it: `rollout.py`
+imports `auto_rollout` in plain mode too, and `test_auto_rollout.py` imports `rollout`, so under the import rule above they port together
+(mpaulosky/Application_Factory#122).
 
-- **The files.** `github/settings.cs` is the entry file; it pulls in `SettingsCore.cs` (the logic; the `Settings.cs` the Consequences name would clash with
+- **The files.** `github/settings.cs` is the entry file; it pulls in `SettingsCore.cs` (the logic; a `Settings.cs` would clash with
   `settings.cs` where case is ignored), `Repos.cs` and `Gh.cs`. `github-settings.sh` changes to `github/` and runs it, as `status.sh` does. `Gh.Process` gains an overload
   that writes a body to gh's stdin, and the `owner/repo` pattern moves from `StatusCore.cs` to `Repos.cs` (`Repos.Name`), so `settings.cs` needs no `StatusCore.cs`.
 - **settings.py stays.** `rollout.py` imports its `read_repo_list`, so it is deleted with `rollout.py`; nothing runs it as a command now. While it is left it is the
@@ -349,4 +350,4 @@ under the import rule above they port together (mpaulosky/Application_Factory#12
   `--json`, with the CA2266 line. `github-settings.sh` passes `-p:NoWarn=CA2266` to that build alone; the gate's build of every script still shows it.
   `status.sh` and `land.sh` print it too on a first run, which this Update leaves for their own change.
 - **The pytest suite.** `github/tests/test_settings.py` is deleted, its 34 tests moved to `tests/Scripts.Tests/Settings/SettingsTests.cs` under the rule above, a
-  `Settings/` folder beside the ones the #119 Update lists. It held no `read_repo_list` test: `ReposTests.cs` already holds `Repos.cs` to it.
+  `Settings/` folder beside the ones the mpaulosky/Application_Factory#119 Update lists. It held no `read_repo_list` test: `ReposTests.cs` already holds `Repos.cs` to it.

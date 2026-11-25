@@ -164,9 +164,12 @@ if [[ -e "$overlay" ]]; then
   [[ -d "$overlay" ]] || setup_error "$overlay is not a folder."
   copy="$tmp/skill"
   {
-    mkdir "$copy" && cp -R "$skill_dir/github" "$copy/github" && rm -rf "$copy/github/tests" \
-      && for wrapper in "$skill_dir"/*.sh; do [[ ! -f "$wrapper" ]] || cp "$wrapper" "$copy/"; done && cp -R "$overlay/." "$copy/github/"
+    mkdir "$copy" && cp -R "$skill_dir/github" "$copy/github" && rm -rf "$copy/github/tests" && cp -R "$overlay/." "$copy/github/"
   } || setup_error "can't copy the skill's github/ and lay $overlay over it."
+  # Each wrapper's copy is checked on its own: a loop's status is only its last iteration's.
+  for wrapper in "$skill_dir"/*.sh; do
+    [[ ! -f "$wrapper" ]] || cp "$wrapper" "$copy/" || setup_error "can't copy $wrapper beside the copy of github/."
+  done
   folder="$(CDPATH='' cd -- "$skill_dir/github" && pwd -P)"
   while [[ ! -f "$folder/global.json" && "$folder" != / ]]; do folder="$(dirname -- "$folder")"; done
   if [[ -f "$folder/global.json" ]]; then

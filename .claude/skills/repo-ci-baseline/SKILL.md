@@ -95,7 +95,8 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
 2. Run `test.sh`: the hook suites, the auto-merge script tests, the Owned `.github/scripts` tests (release scripts, Claude Review, the gh check
    and the Owned files check), the hardening review script tests, the renderer oracle, the GitHub scripts' pytest
    (rollout), the parity suites (status, land, settings, check_gh_repo, the release scripts and rollout) and their runners' tests,
-   the Claude Review benchmark's tests, the C# scripts' xUnit tests (`tests/Scripts.Tests`: the landing decision, status, land, settings), actionlint, zizmor,
+   the Claude Review benchmark's tests, the C# scripts' xUnit tests (`tests/Scripts.Tests`: the landing decision, status, land, settings, what they share,
+   and the two checkers in `tests/`), actionlint, zizmor,
    yamllint, shellcheck, markdownlint, the no-placeholders-in-Owned check, the check that the Owned scripts' `gh` commands are told their repository,
    the Sandcastle copy and Seed checks, and the `apply.sh` and `reapply.sh` tests. It needs those tools, the .NET SDK the Factory's `global.json` names
    (for the C# scripts and their tests), and shfmt v3.14 or a later v3 for the gh check's tests and its parity suite (ADR 0011); the Factory's CI runs the same script.

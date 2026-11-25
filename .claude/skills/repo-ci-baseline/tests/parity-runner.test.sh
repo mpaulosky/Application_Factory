@@ -334,6 +334,13 @@ if [[ "$(wc -l <<< "$ran" | tr -d ' ')" != 1 || "$ran" != "${built%%|build *}|ru
   fail "a C# reference of a suite with github/ didn't run the copy's .cs from the copy: $(cat "$work/dotnet.log")"
 fi
 rm -rf "$skill/tests/parity/ovcs" "$skill/github/ovcs.cs" "$cases/c1"
+# A wrapper that can't be copied, ahead of the last in the glob, stops the run as a setup error rather than leaving it out of the copy.
+if [[ $EUID -ne 0 ]]; then
+  : > "$skill/aa.sh"
+  chmod 000 "$skill/aa.sh"
+  runner 2 "a skill wrapper that can't be copied" "can't copy $skill/aa.sh beside the copy of github/." ov
+  rm -f "$skill/aa.sh"
+fi
 rm -rf "$skill/tests/parity/ov/github"
 : > "$skill/tests/parity/ov/github"
 runner 2 "a suite's github/ that isn't a folder" "$skill/tests/parity/ov/github is not a folder." ov
