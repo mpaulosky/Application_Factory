@@ -5336,6 +5336,50 @@ describe("prepare's size warning", () => {
   });
 });
 
+describe("size, the gate's size warning", () => {
+  it("prints nothing at 30 changed files and prepare's warning on stdout at 31, exiting 0 both times", () => {
+    for (let index = 0; index < REVIEW_SIZE_MAX_FILES - 1; index++) commit(repo, `many${index}.cs`, "x\n", `add ${index}`);
+    assert.deepEqual(cli(["size"]), { code: 0, out: "", err: "" });
+
+    commit(repo, "one-more.cs", "x\n", "one more");
+    const loud = cli(["size"]);
+
+    assert.match(loud.out, /^⚠ this branch changes 31 files and 32 lines, past 30 files or 3,000 lines .*Consider splitting the branch before pushing it\.\n$/);
+    assert.equal(loud.err, "");
+    assert.equal(loud.code, 0);
+  });
+
+  it("warns past 3,000 lines, and not at 3,000", () => {
+    commit(repo, "big.cs", "x\n".repeat(REVIEW_SIZE_MAX_LINES - 2), "big");
+    assert.equal(cli(["size"]).out, "", "app.cs's 2 lines and 2,998 more are 3,000");
+
+    commit(repo, "big.cs", "x\n".repeat(REVIEW_SIZE_MAX_LINES - 1), "bigger");
+    assert.match(cli(["size"]).out, /changes 2 files and 3,001 lines/);
+  });
+
+  it("measures from the base it is given", () => {
+    for (let index = 0; index <= REVIEW_SIZE_MAX_FILES; index++) commit(repo, `many${index}.cs`, "x\n", `add ${index}`);
+    const base = run(repo, "rev-parse", "HEAD~1");
+
+    assert.deepEqual(cli(["size", base]), { code: 0, out: "", err: "" });
+  });
+
+  it("fails, and says why, with no origin/main to measure from", () => {
+    run(repo, "update-ref", "-d", "refs/remotes/origin/main");
+    const result = cli(["size"]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /can't find where this branch left origin\/main/);
+  });
+
+  it("refuses a second argument", () => {
+    const result = cli(["size", "HEAD", "HEAD"]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /^Usage: scripts\/review\.sh/);
+  });
+});
+
 describe("the Factory's Template mirrors", () => {
   const file = (path: string, line: string, blob = "a".repeat(40)) =>
     `diff --git a/${path} b/${path}\nnew file mode 100644\nindex ${"0".repeat(40)}..${blob}\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1 @@\n+${line}\n`;

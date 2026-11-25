@@ -1854,6 +1854,8 @@ const USAGE = `Usage: scripts/review.sh <command>
                          the key of the whole diff, then HEAD
   key                    print the ledger key of HEAD's diff against origin/main
   check [<base>]         the gate's check: exit 1 unless HEAD's diff was reviewed clean
+  size [<base>]          print the warning prepare gives for a branch past 30 files or 3,000 lines (a file and its Template mirror count once), for
+                         HEAD's diff against <base> (its merge base with origin/main by default), or nothing; exits 0 either way
   stage <absolute dir> [<file>|-]
                          add the findings in the JSON array in <file> (stdin by default, or -) to <dir>/findings.json, a finding with an id already there replacing
                          it, so a round's triage survives a long session; prints how many are staged
@@ -2055,6 +2057,14 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         const size = since === undefined ? sizeWarning(round.patch) : undefined;
         if (size !== undefined) process.stderr.write(`⚠ ${size}\n`);
         out(`${round.key}\n${round.head}`);
+        return 0;
+      }
+      case "size": {
+        // The gate's warning: the same one prepare gives in round 1, for HEAD's diff against <base> (its merge base with origin/main by default). It only advises, so a
+        // branch past the line still exits 0; nothing is printed for one under it.
+        if (rest.length > 1) return fail(USAGE);
+        const size = sizeWarning(reviewPatch(cwd, rest[0] || mergeBase(cwd)));
+        if (size !== undefined) out(`⚠ ${size}`);
         return 0;
       }
       case "check": {
