@@ -41,7 +41,7 @@ static class ReviewRecord
 	public const string KeptHeadFile = "HEAD";
 
 	// How a review-only session may stage a finding.
-	static readonly string[] StagedStatuses = ["open", "dismissed"];
+	public static readonly IReadOnlyList<string> StagedStatuses = ["open", "dismissed"];
 
 	// The agent the review is recorded under: the one the session ran.
 	public const string ReviewerAgent = "pre-push-reviewer";

@@ -6,7 +6,13 @@ using System.Text;
 // Tests for github/AutoRolloutGuard.cs, xUnit copies of github/tests/test_auto_rollout.py's tests of session_guard, broken_rules and
 // the snapshots they compare (ADR 0017's Update for mpaulosky/Application_Factory#157): one method each, the same cases and assertions.
 // The pytest originals stay, and auto_rollout.py is still what runs, until the cut-over (mpaulosky/Application_Factory#122).
+// The tests that lower SessionGuard.RecordLimit, as the pytest monkeypatched RECORD_BYTES, and those that read it: one collection, so they
+// run one at a time.
+[CollectionDefinition(nameof(SessionGuardTests))]
+public sealed class SessionGuardCollection;
+
 // --auto is Linux only (ADR 0016), and so is what these read: modes, inodes, FIFOs.
+[Collection(nameof(SessionGuardTests))]
 [System.Runtime.Versioning.SupportedOSPlatform("linux")]
 public sealed class SessionGuardTests : IDisposable
 {
