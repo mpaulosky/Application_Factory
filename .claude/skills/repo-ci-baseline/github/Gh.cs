@@ -167,16 +167,20 @@ static class J
 	public static JsonNode? Copy(JsonNode? n) => n?.DeepClone();
 }
 
-// argparse's part the scripts use: positional arguments, flags, options with one value (--name value or --name=value), a float option
-// whose value is read when it is met, a long option given by any unique prefix of its name (--help's too), -h and --help, and -- ending
-// the options. An argument that matches no option is positional when it looks like a negative number (argparse's -\.?\d) or holds a
+// argparse's part the scripts use: positional arguments, flags, options with one value (--name value or --name=value), a float or int
+// option whose value is read when it is met, an option taking one value or more (nargs="+"), a long option given by any unique prefix of
+// its name (--help's too), -h and --help, and -- ending the options. An argument that matches no option is positional when it looks like a negative number (argparse's -\.?\d) or holds a
 // space. A usage error exits 2 with the usage and the error on stderr, as argparse does.
 sealed class Arguments(string prog, string usage, string description)
 {
 	const string HelpName = "--help";
 	readonly List<(string Name, bool TakesValue, string Help)> options = [];
 	readonly HashSet<string> floats = [];
+	readonly HashSet<string> ints = [];
+	readonly HashSet<string> many = [];
 	public readonly Dictionary<string, string?> Values = [];
+	// The values of each option taking one or more, from the last time it was given, as argparse keeps them.
+	public readonly Dictionary<string, List<string>> Lists = [];
 	public readonly List<string> Positional = [];
 
 	public Arguments Flag(string name, string help)
@@ -195,6 +199,21 @@ sealed class Arguments(string prog, string usage, string description)
 	public Arguments FloatOption(string name, string help)
 	{
 		floats.Add(name);
+		return Option(name, help);
+	}
+
+	// An option whose value is an int, refused as a usage error when it is met, as argparse's type=int is.
+	public Arguments IntOption(string name, string help)
+	{
+		ints.Add(name);
+		return Option(name, help);
+	}
+
+	// An option taking one value or more, as argparse's nargs="+" does: --name=value is one, and --name takes every argument after it up to
+	// the next that looks like an option.
+	public Arguments ManyOption(string name, string help)
+	{
+		many.Add(name);
 		return Option(name, help);
 	}
 
@@ -253,17 +272,31 @@ sealed class Arguments(string prog, string usage, string description)
 				Values[option.Name] = null;
 				continue;
 			}
+			if (many.Contains(option.Name))
+			{
+				List<string> values = value is null ? [] : [value];
+				while (value is null && i + 1 < rest.Count && !LooksLikeOption(rest[i + 1]))
+					values.Add(rest[++i]);
+				if (values.Count == 0)
+					return Error($"argument {option.Name}: expected at least one argument", err);
+				Values[option.Name] = values[^1];
+				Lists[option.Name] = values;
+				continue;
+			}
 			if (value is null)
 			{
 				if (i + 1 >= rest.Count || LooksLikeOption(rest[i + 1]))
 					return Error($"argument {option.Name}: expected one argument", err);
 				value = rest[++i];
 			}
-			if (floats.Contains(option.Name))
+			if (floats.Contains(option.Name) || ints.Contains(option.Name))
 			{
 				try
 				{
-					ParseFloat(option.Name, value);
+					if (floats.Contains(option.Name))
+						ParseFloat(option.Name, value);
+					else
+						ParseInt(option.Name, value);
 				}
 				catch (ArgumentError error)
 				{
@@ -285,6 +318,25 @@ sealed class Arguments(string prog, string usage, string description)
 		if (!Values.TryGetValue(name, out var text) || text is null)
 			return fallback;
 		return ParseFloat(name, text);
+	}
+
+	// An int option's value as Python's int() reads it, else its default; a usage error is thrown as ArgumentError.
+	public long Int(string name, long fallback)
+	{
+		if (!Values.TryGetValue(name, out var text) || text is null)
+			return fallback;
+		return ParseInt(name, text);
+	}
+
+	// int(text): a sign, decimal digits (any Unicode decimal digit) with an underscore only between two, and space around, which it strips as
+	// float() does. A value past a long, which Python would take, is refused as an invalid one.
+	static long ParseInt(string name, string text)
+	{
+		var trimmed = AsciiDigits(text).Trim();
+		if (!Regex.IsMatch(trimmed, @"\A[-+]?[0-9]+(?:_[0-9]+)*\z", RegexOptions.CultureInvariant)
+				|| !long.TryParse(trimmed.Replace("_", "", StringComparison.Ordinal), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var number))
+			throw new ArgumentError($"argument {name}: invalid int value: '{text}'");
+		return number;
 	}
 
 	static double ParseFloat(string name, string text)
@@ -315,7 +367,10 @@ sealed class Arguments(string prog, string usage, string description)
 	{
 		var text = new StringBuilder($"{Usage}\n{description}\n\noptions:\n  -h, --help            show this help message and exit\n");
 		foreach (var (name, takesValue, help) in options)
-			text.Append($"  {(takesValue ? $"{name} {name.TrimStart('-').ToUpperInvariant().Replace('-', '_')}" : name),-22}{help}\n");
+		{
+			var metavar = name.TrimStart('-').ToUpperInvariant().Replace('-', '_');
+			text.Append($"  {(!takesValue ? name : many.Contains(name) ? $"{name} {metavar} [{metavar} ...]" : $"{name} {metavar}"),-22}{help}\n");
+		}
 		return text.ToString();
 	}
 

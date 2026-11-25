@@ -7,7 +7,8 @@
 # Runs the Template's own tests (hook suites, auto-merge script tests,
 # the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle and the GitHub scripts' pytest
 # (rollout) with the parity suites (status, land, settings, check_gh_repo, the release scripts and rollout), the Claude Review
-# benchmark's tests and the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land, settings, what they share, and the two checkers in tests/), lints its workflows, YAML, shell
+# benchmark's --rescore parity suite and the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land, settings, what they share, the two checkers in
+# tests/ and the benchmark), lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
 # Owned files carry no {{PLACEHOLDER}} and that the Owned scripts, and this repo's own
 # scripts and skills, tell every gh command its repository, checks the Seed Sandcastle files, and smoke-tests apply.sh and
@@ -830,15 +831,22 @@ if in_shard scripts; then
   bash "$skill_dir/tests/rollout-parity.test.sh" || fail "rollout-parity.test.sh"
   bash "$skill_dir/tests/rollout-parity-runner.test.sh" || fail "rollout-parity-runner.test.sh"
 
-  step "Claude Review benchmark tests (scoring, arguments, config swap, the workflow it reads)"
-  # PyYAML lets the test that reads the Template's claude-review.yml run instead of skipping.
-  if python3 -c 'import pytest, yaml' &> /dev/null; then
-    bench_cmd=(python3 -m pytest)
-  else
-    need uvx
-    bench_cmd=(uvx --with pyyaml pytest)
-  fi
-  (cd "$skill_dir" && "${bench_cmd[@]}" -q -p no:cacheprovider -rs bench/tests) || fail "benchmark pytest"
+  step "Claude Review benchmark tests (its --rescore parity suite; its scoring, arguments, config swap and the workflow it reads are in tests/Scripts.Tests/Bench)"
+  # The bench is a C# file-based app (ADR 0017, Update for mpaulosky/Application_Factory#161): the suite builds it once and holds what --rescore prints and
+  # writes back to what the Python did. Its one package, YamlDotNet, restores from nuget.org alone (its own NuGet.config), against its lock file.
+  need dotnet
+  need git
+  bash "$skill_dir/bench/tests/rescore.test.sh" || fail "bench/tests/rescore.test.sh"
+  # On a copy of bench/ under a folder whose NuGet.config adds another feed, which the bench's own must clear.
+  mkdir -p "$md_tmp/bench-sources"
+  printf '<configuration><packageSources><add key="other" value="https://other.invalid/v3/index.json" /></packageSources></configuration>\n' > "$md_tmp/bench-sources/NuGet.config"
+  cp -R "$skill_dir/bench" "$md_tmp/bench-sources/bench" || fail "can't copy bench/ under $md_tmp/bench-sources"
+  bench_sources="$(cd "$md_tmp/bench-sources/bench" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 dotnet nuget list source --format short)" \
+    || fail "dotnet nuget list source failed in the copy of bench/"
+  [[ "$bench_sources" == "E https://api.nuget.org/v3/index.json" ]] \
+    || fail "the bench must restore from nuget.org alone, whatever a NuGet.config above says; it sees: ${bench_sources//$'\n'/ | }"
+  audit="$(audit_sources_nuget_only "$skill_dir/bench/NuGet.config")" \
+    || fail "bench/NuGet.config must clear its auditSources and add nuget.org alone (found: ${audit:-none})"
 
   step "C# script tests (tests/Scripts.Tests, xUnit v3)"
   # The white-box tests of the C# scripts (ADR 0017), on Microsoft Testing Platform (the Factory's global.json). The build output and results go to md_tmp,
@@ -967,9 +975,9 @@ HALF
     printf '<Project>\n<PropertyGroup>\n%s\n</PropertyGroup>\n</Project>\n' "$wrong" > "$md_tmp/tfm.csproj"
     ! targets_net_major "$md_tmp/tfm.csproj" 11 > /dev/null || fail "the target framework check passes for SDK 11: $wrong"
   done
-  # The shields (ADR 0017): an empty Directory.Build.props, Directory.Build.targets and Directory.Packages.props in github/, in tests/ (the two checkers) and
-  # in the test project, so the files of those names above them never reach their builds.
-  for shielded in github tests tests/Scripts.Tests; do
+  # The shields (ADR 0017): an empty Directory.Build.props, Directory.Build.targets and Directory.Packages.props in github/, in tests/ (the two checkers), in
+  # bench/ and in the test project, so the files of those names above them never reach their builds.
+  for shielded in github tests bench tests/Scripts.Tests; do
     for shield in Directory.Build.props Directory.Build.targets Directory.Packages.props; do
       is_empty_shield "$skill_dir/$shielded/$shield" || fail "$shielded/$shield must be the empty shield, <Project />"
     done
