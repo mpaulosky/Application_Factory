@@ -22,6 +22,15 @@ Keep the change small enough for one pull request that one review can read in fu
 the pre-push review warns at), and at most one open decision. Split a bigger change into smaller issues before work starts, ordered with GitHub's
 "blocked by" links, so each one merges on its own.
 
+Expected size: about N files and N changed lines, tests included.
+
+## Split into
+
+Only for a change past 30 files or 3,000 lines: the pull requests it becomes, in merge order, one issue each with its own acceptance criteria. Each stays under the
+line and leaves the tree working (a shim the next one still needs stays until the last one removes it). Delete this section for a change under the line.
+
+1. ...
+
 ## Describe alternatives you've considered
 
 A clear and concise description of any alternative solutions or features you've considered.

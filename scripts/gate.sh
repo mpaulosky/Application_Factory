@@ -76,6 +76,7 @@ copies=(
   .github/scripts/post_claude_review.py
   .github/ISSUE_TEMPLATE/bug_report.md
   .github/ISSUE_TEMPLATE/feature_request.md
+  .github/ISSUE_TEMPLATE/chore_request.md
   .github/ISSUE_TEMPLATE/config.yml
   .github/pull_request_template.md
   .github/workflows/pr-title.yml
