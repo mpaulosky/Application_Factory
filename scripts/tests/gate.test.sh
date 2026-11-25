@@ -17,6 +17,9 @@
 # no build server, and tells a finding from a failed dotnet; that the build folder is gone after a pass, a failing build, a TERM mid-build (the build ended and waited for
 # first, and one that ignores the TERM killed), a TERM between the build's fork and cs_pid=$! (sent there by a DEBUG trap BASH_ENV sets) and with a relative TMPDIR, and a mktemp that can't make it fails the step; that the gate and the CI workflow run dotnet with
 # telemetry off, no first-run setup and no logo; and that a pass is remembered per .NET SDK as well as per tree.
+# It also checks the issue worker's workflow: its Claude runs with background tasks off, and every job in it with needs: names always(), !cancelled() or failure()
+# in its if:, so a skipped queue job doesn't skip the jobs below it (#185), with fixtures for the check itself (success() alone, no if:, no job with needs:, an unreadable
+# file, a failed awk, quoted and commented status functions, a commented job key, a later top-level key, a blank line in a folded if: and CRLF).
 #
 #   scripts/tests/gate.test.sh
 set -euo pipefail
@@ -916,6 +919,78 @@ issues_wf="$here/.github/workflows/claude-issues.yml"
 issues_settings="$(sed -n '/^      - name: Work the issue$/,/^      - name: /p' "$issues_wf" | sed -n '/^          settings: |$/{n;p;}')"
 check "the issue worker's Claude runs with background tasks off" \
   "$(jq -e '.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS == "1"' <<< "${issues_settings:-null}" > /dev/null 2>&1 && echo 0 || echo 1)"
+# A job's `if:` with no status function gets GitHub's implicit `success()`, which counts every job upstream: the queue job is skipped on every event but the
+# owner's `@claude` comment, so a job below it without one is skipped too (#185). An explicit `success()` does the same, so only a call to `always()`,
+# `cancelled()` or `failure()` counts, negated or not. unguarded_jobs prints each job under `jobs:` with `needs:` whose `if:` names none of them, outside quoted
+# strings and comments: bare() takes both off each line of the `if:`, the strings first so a `#` inside one isn't read as a comment. It prints
+# `(no job with needs:)` when it finds none, so the check can't pass on a file it no longer reads, and fails, saying so, on a file it can't read or an awk that
+# fails. guard_case runs it and adds `rc=<status>` on a failure, so a check sees both.
+guard_awk="$(
+  cat << 'AWK'
+function bare(l) { gsub(/'[^']*'/, "", l); gsub(/"[^"]*"/, "", l); sub(/(^|[ ])#.*$/, "", l); return l }
+function flush() {
+  if (job == "" || !needs) return
+  n++
+  if (cond !~ /(always|cancelled|failure)\(\)/) print job
+}
+{ sub(/\r$/, "") }
+/^jobs:[ ]*(#.*)?$/ { in_jobs = 1; next }
+in_jobs && /^[^ #]/ { flush(); in_jobs = 0; job = "" }
+in_jobs && /^  [A-Za-z0-9_-]+:[ ]*(#.*)?$/ { flush(); job = $1; sub(/:.*$/, "", job); needs = 0; cond = ""; in_cond = 0; next }
+in_jobs && job != "" {
+  if ($0 ~ /^[ ]*(#.*)?$/) next
+  if ($0 ~ /^    needs:/) needs = 1
+  if ($0 ~ /^    if:/) { l = $0; sub(/^    if:/, "", l); cond = bare(l); in_cond = 1; next }
+  if (in_cond && $0 ~ /^      /) { cond = cond " " bare($0); next }
+  in_cond = 0
+}
+END { flush(); if (!n) print "(no job with needs:)" }
+AWK
+)"
+unguarded_jobs() { # unguarded_jobs <workflow>
+  [[ -f $1 && -r $1 ]] || {
+    echo "(unreadable: $1)"
+    return 1
+  }
+  awk "$guard_awk" "$1"
+}
+guard_case() { unguarded_jobs "$1" 2>&1 || echo "rc=$?"; } # guard_case <workflow>: its output, then rc=<status> when it failed
+check "every issue worker job below another checks a status function, so a skipped queue job doesn't skip it" \
+  "$([[ -z $(guard_case "$issues_wf") ]] && echo 0 || echo 1)"
+guards="$work/guards"
+mkdir -p "$guards/badawk"
+# One job per status function, each with only that one, and needs: as a list, a scalar and a block list, with if: before needs: in one: none is flagged.
+printf '%s\n' 'jobs:' '  a:' '    runs-on: x' '  b:' '    needs: [a]' '    if: always()' '  c:' '    if: >-' '      !cancelled()' '      && true' \
+  '    needs: a' '  d:' '    needs:' '      - a' '    if: failure()' > "$guards/each.yml"
+check "the status-function check takes always(), !cancelled() and failure() as guards, whatever the needs: shape or key order" \
+  "$([[ -z $(guard_case "$guards/each.yml") ]] && echo 0 || echo 1)"
+# d, with no needs:, follows a job with one, so a needs: isn't carried over to the next job.
+printf '%s\n' 'jobs:' '  a:' '    runs-on: x' '  b:' '    needs: [a]' '    if: success() && true' '  c:' '    needs: [a]' '    runs-on: x' '  d:' '    runs-on: x' \
+  > "$guards/success.yml"
+check "the status-function check flags an if: with only success(), and a job with needs: and no if:, and not a job after it with no needs:" \
+  "$([[ $(guard_case "$guards/success.yml") == $'b\nc' ]] && echo 0 || echo 1)"
+printf '%s\n' 'jobs:' '  a:' '    runs-on: x' > "$guards/none.yml"
+check "the status-function check says so when it finds no job with needs:" "$([[ $(guard_case "$guards/none.yml") == '(no job with needs:)' ]] && echo 0 || echo 1)"
+check "the status-function check fails on a missing workflow" \
+  "$([[ $(guard_case "$guards/missing.yml") == "(unreadable: $guards/missing.yml)"$'\nrc=1' ]] && echo 0 || echo 1)"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 2' > "$guards/badawk/awk"
+chmod +x "$guards/badawk/awk"
+check "the status-function check fails when awk fails" "$([[ $(PATH="$guards/badawk:$PATH" guard_case "$guards/each.yml") == rc=2 ]] && echo 0 || echo 1)"
+# A top-level key after jobs: ends it: a job-shaped block under it isn't read. A jobs: or job key with a comment is read as that key, not skipped or read as
+# part of the job before.
+printf '%s\n' 'jobs: # every job' '  a:' '    runs-on: x' '  b:' '    needs: [a]' '    if: always()' '  c: # a note' '    needs: [a]' 'other:' '  d:' '    needs: [a]' > "$guards/keys.yml"
+check "the status-function check reads a job key with a comment, and stops at the next top-level key" \
+  "$([[ $(guard_case "$guards/keys.yml") == c ]] && echo 0 || echo 1)"
+# A status function inside a quoted string or a comment, the comment at the end of the if: line or of a later one, or on a line of its own, isn't a guard;
+# a # inside a quoted string doesn't start a comment, so a guard after it on the line still counts (f).
+printf '%s\n' 'jobs:' '  a:' '    runs-on: x' '  b:' '    needs: [a]' "    if: contains(github.event.comment.body, 'always()') # cancelled()" \
+  '  c:' '    needs: [a]' '    # failure()' '    if: >-' '      true' '      # !cancelled()' '      && contains("x", "failure()")' \
+  '  e:' '    needs: [a]' '    if: >-' '      true' '      && true # always()' '  f:' '    needs: [a]' "    if: contains(x, 'a # b') && always()" > "$guards/quoted.yml"
+check "the status-function check doesn't take a status function in a quoted string or a comment as a guard" \
+  "$([[ $(guard_case "$guards/quoted.yml") == $'b\nc\ne' ]] && echo 0 || echo 1)"
+# A blank line inside a folded if: doesn't end it, and CRLF line endings read the same as LF.
+printf '%s\r\n' 'jobs:' '  a:' '    runs-on: x' '  b:' '    needs: [a]' '    if: >-' '      true' '' '      && !cancelled()' > "$guards/crlf.yml"
+check "the status-function check reads a folded if: past a blank line, with CRLF line endings" "$([[ -z $(guard_case "$guards/crlf.yml") ]] && echo 0 || echo 1)"
 # The comment on a run with no pull request sends the owner to the Finish step's "Claude's last message" group, so the step prints that group whether or not
 # the work step left an execution file. The step's script runs here with a stub gh that finds no pull request and keeps the comment's body.
 finish="$work/finish"
