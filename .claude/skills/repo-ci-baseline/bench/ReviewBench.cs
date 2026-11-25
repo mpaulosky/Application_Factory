@@ -304,16 +304,25 @@ static class Bench
 				var cache = Path.Combine(source.Cache, owner, repo);
 				if (!Path.Exists(cache))
 				{
+					// Cloned beside the cache under a name of this call's own and moved into place whole, so a clone stopped part way never
+					// reads as cached, and two runs filling the same cache never remove each other's: the one that moves second drops its own.
+					Directory.CreateDirectory(Path.GetDirectoryName(cache)!);
+					var fresh = $"{cache}.{Guid.NewGuid():N}.tmp";
 					try
 					{
-						Checked([.. Git, "clone", "-q", "--bare", "--filter=blob:none", $"{source.Remote}/{owner}/{repo}.git", cache]);
+						Checked([.. Git, "clone", "-q", "--bare", "--filter=blob:none", $"{source.Remote}/{owner}/{repo}.git", fresh]);
+						try
+						{
+							Directory.Move(fresh, cache);
+						}
+						catch (IOException) when (Path.Exists(cache))
+						{
+						}
 					}
-					catch
+					finally
 					{
-						// A clone stopped part way would read as cached on the next run.
-						if (Directory.Exists(cache))
-							Directory.Delete(cache, recursive: true);
-						throw;
+						if (Directory.Exists(fresh))
+							Directory.Delete(fresh, recursive: true);
 					}
 				}
 				if (Run([.. Git, "-C", cache, "cat-file", "-e", $"{@ref}^{{commit}}"]).Code != 0)
@@ -943,6 +952,9 @@ static class Bench
 		}
 		finally
 		{
+			// A child that let go of the pipes is still in the group, outside the terminal's and past the signal handlers once it leaves
+			// Live, so it ends with the call. A group whose processes have all ended is no error.
+			Groups.Kill(group);
 			Groups.Live.TryRemove(group, out var _);
 		}
 	}

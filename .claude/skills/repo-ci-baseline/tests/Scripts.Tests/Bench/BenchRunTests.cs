@@ -149,6 +149,20 @@ public partial class BenchTests
 	}
 
 	[Fact]
+	public void A_child_that_lets_go_of_the_pipes_is_killed_with_its_group_when_the_call_exits()
+	{
+		var pid = Path.Combine(temp, "pid");
+
+		// The child holds none of the call's pipes, so the call returns at its exit; its group, outside the terminal's, must not outlive it.
+		Assert.Equal(0, Bench.Exec(["sh", "-c", "sleep 30 </dev/null >/dev/null 2>&1 & echo $! > \"$0\"; exit 0", pid], timeout: 20).Code);
+
+		var started = System.Diagnostics.Stopwatch.StartNew();
+		while (!Ended(File.ReadAllText(pid).Trim()) && started.Elapsed < TimeSpan.FromSeconds(10))
+			Thread.Sleep(100);
+		Assert.True(Ended(File.ReadAllText(pid).Trim()), "the child runs on");
+	}
+
+	[Fact]
 	public void A_stdout_past_its_bytes_stops_the_call_and_one_at_them_is_read_whole()
 	{
 		var error = Assert.Throws<OutputPastLimit>(() => Bench.Exec(["head", "-c", "1000001", "/dev/zero"], maxOutput: 1_000_000));

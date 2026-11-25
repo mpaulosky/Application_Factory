@@ -496,13 +496,15 @@ A Factory-only port, as the ones above are, so `bench/claude-review-bench.py` an
   - **The action clones are bounded.** `CopyActions` runs each `git` and `tar` call through `Exec` with a time limit (600 s), with `GIT_TERMINAL_PROMPT=0` and an empty
     `GIT_ASKPASS`, so a repo that wants credentials fails its case rather than waiting at a prompt. `Exec` takes the most bytes of stdout a call may give and stops it
     there: 4 MiB of the head's workflow (four bytes for each character `Yaml.Load` takes; past it the head pins no action) and 128 MiB of an action's archive (past it
-    the case fails). A call past its time is the case's error, and a clone it stopped is removed, so the next run doesn't read it as cached.
+    the case fails). A call past its time is the case's error. A clone goes to a folder of its own beside the cache and is moved into place whole, so one stopped
+    part way never reads as cached, and a run whose clone fails never removes the cache another run filled meanwhile.
   - **A head's nested Claude Code config is removed.** Every `.claude` folder, `CLAUDE.md` and `CLAUDE.local.md` below the root of a case's tree, in any case, is
     removed before `claude` runs, where they came from the head before. The root's stay the base's; `.git` is skipped, and a link is removed itself, never followed.
   - **A call's leftover children end.** Each call starts in a session of its own (`ProcessStartInfo.StartDetached`, `setsid()`), so its process group holds what it
-    starts after the call has exited. A call past its time, or one that exits but leaves a child holding its pipes when its time is up, has its group killed, where
-    the child ran on before (the Python waited for it instead). The terminal's Ctrl-C no longer reaches a call in its own session, so the bench kills every live group
-    on SIGINT, SIGTERM, SIGHUP and SIGQUIT before it ends as the signal would end it.
+    starts after the call has exited. A call past its time, or one that exits but leaves a child holding its pipes when its time is up, has its group killed, and so
+    does every call as it returns, so a child that let go of the pipes ends with it too, where the child ran on before (the Python waited for it instead). The
+    terminal's Ctrl-C no longer reaches a call in its own session, so the bench kills every live group on SIGINT, SIGTERM, SIGHUP and SIGQUIT before it ends as the
+    signal would end it.
 
 ## Update (mpaulosky/Application_Factory#158): the first AutoRollout library, the preflight, sign-in and lock
 

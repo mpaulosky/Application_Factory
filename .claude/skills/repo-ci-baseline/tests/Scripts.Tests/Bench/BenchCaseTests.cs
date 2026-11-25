@@ -133,13 +133,19 @@ public sealed partial class BenchPathTests
 		Assert.Equal("""{"w":true}""", entry["caught"]!.ToJsonString());
 
 		// claude ran in the case's worktree of the head, in a temporary folder of its own, with the workflow's prompt and arguments.
+		// The fake records its folder with pwd -P, symlinks resolved, while the prompt names the case's folder as the bench made it, under a
+		// TMPDIR that may be a link (macOS's /var/folders is /private/var/folders): so the prompt's folder is the one the rest compares with.
 		var cwd = Call(0, "cwd").TrimEnd('\n');
-		var caseTemp = Path.GetDirectoryName(cwd)!;
 		Assert.Equal("tree", Path.GetFileName(cwd));
 		Assert.Equal("one\n", Call(0, "head"));
 		var argv = Call(0, "argv").Split('\0')[..^1];
 		Assert.Equal("-p", argv[0]);
-		Assert.Contains($"{caseTemp}/claude-review/diff/001.diff", argv[1], StringComparison.Ordinal);
+		var named = System.Text.RegularExpressions.Regex.Match(argv[1], @"(/\S+)/claude-review/diff/001\.diff");
+		Assert.True(named.Success, "the prompt names no diff file");
+		var caseTemp = named.Groups[1].Value;
+		// The case's folder is removed by now, so its parent, which stays, is the part resolved.
+		var resolved = Path.Combine(Bench.Check(["realpath", Path.GetDirectoryName(caseTemp)!]).Text.Trim(), Path.GetFileName(caseTemp));
+		Assert.Equal(Path.GetDirectoryName(cwd), resolved);
 		Assert.DoesNotContain("${{", argv[1], StringComparison.Ordinal);
 		var args = Bench.Override(Bench.Override(Bench.ShlexSplit(Bench.Render(claudeArgs, "7", caseTemp)), "low", null, null), null, null, null, settingSources: "");
 		Assert.Equal([.. args, "--output-format", "stream-json", "--verbose", "--strict-mcp-config", "--no-session-persistence"], argv[2..]);
@@ -286,7 +292,8 @@ public sealed partial class BenchPathTests
 		if (OperatingSystem.IsWindows())
 			return;
 		var (tree, source, actions) = ActionFixture();
-		GitWrapper("*clone*", $"mkdir -p '{Path.Combine(temp, "cache", "owner", "act")}'; sleep 30");
+		// The clone's folder, its last argument, exists part way when the time runs out.
+		GitWrapper("*clone*", "eval last=\\${$#}; mkdir -p \"$last\"; sleep 30");
 		var started = System.Diagnostics.Stopwatch.StartNew();
 
 		var error = Assert.Throws<CaseError>(() => Bench.CopyActions(tree, "HEAD", actions, source with { Timeout = 1 }));
@@ -294,6 +301,23 @@ public sealed partial class BenchPathTests
 		Assert.True(started.Elapsed < TimeSpan.FromSeconds(20), $"took {started.Elapsed}");
 		Assert.Matches(@"\ACommand \['git', .*'clone', .*\] timed out after 1 seconds\z", error.Message);
 		Assert.False(Directory.Exists(Path.Combine(temp, "cache", "owner", "act")));
+		Assert.Empty(Directory.GetFileSystemEntries(Path.Combine(temp, "cache", "owner")));
+	}
+
+	[Fact]
+	public void A_failed_clone_leaves_the_cache_another_run_made_meanwhile()
+	{
+		if (OperatingSystem.IsWindows())
+			return;
+		var (tree, source, actions) = ActionFixture();
+		var theirs = Path.Combine(temp, "cache", "owner", "act");
+		// Another run fills the cache while this one's clone runs, and this one's fails.
+		GitWrapper("*clone*", $"mkdir -p '{theirs}'; touch '{theirs}/HEAD'; exit 1");
+
+		Assert.ThrowsAny<Exception>(() => Bench.CopyActions(tree, "HEAD", actions, source));
+
+		Assert.True(File.Exists(Path.Combine(theirs, "HEAD")), "the other run's cache is removed");
+		Assert.Equal([theirs], Directory.GetFileSystemEntries(Path.Combine(temp, "cache", "owner")));
 	}
 
 	[Fact]
