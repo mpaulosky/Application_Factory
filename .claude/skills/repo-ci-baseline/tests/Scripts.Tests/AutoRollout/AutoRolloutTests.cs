@@ -1,8 +1,7 @@
 using System.Diagnostics;
 
 // Tests for github/AutoRollout.cs: copies of github/tests/test_auto_rollout.py's tests of the worktree, the lock, the Owned files and the skill's
-// text (ADR 0017's Update for mpaulosky/Application_Factory#157), with the same cases and assertions, and the lock's tests the Update names. The
-// pytest originals stay until the cut-over.
+// text (ADR 0017's Update for mpaulosky/Application_Factory#157), with the same cases and assertions, and the lock's tests the Update names.
 public class AutoRolloutTests : IDisposable
 {
 	readonly string tmp = AutoRollout.RealPath(Directory.CreateTempSubdirectory("auto-rollout-test.").FullName);

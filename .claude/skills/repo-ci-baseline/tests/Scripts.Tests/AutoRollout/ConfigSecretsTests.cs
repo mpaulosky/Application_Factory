@@ -1,7 +1,7 @@
 using static SandboxFixtures;
 
 // Tests for github/AutoRolloutSandbox.cs's read of the clone's git config for sign-in secrets (ConfigFiles, ConfigSecrets, Redacted),
-// copied from github/tests/test_auto_rollout.py, which stays until the cut-over (mpaulosky/Application_Factory#122). git runs for real,
+// copied from github/tests/test_auto_rollout.py, deleted with the cut-over (mpaulosky/Application_Factory#122). git runs for real,
 // with no global or system config.
 public class ConfigSecretsTests
 {

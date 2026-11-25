@@ -1,7 +1,7 @@
-// auto_rollout.py's logic as a library of rollout.cs, ported a part at a time (ADR 0017's Update for mpaulosky/Application_Factory#157): nothing runs
-// it yet, and auto_rollout.py stays what rollout.sh --auto runs until the cut-over. This part is auto_rollout.py's short_name to read_skill: where the
-// round's files are (Folders), the lock, the Owned files a re-Apply changes, and the skill's text; AutoRolloutPreflight.cs holds the preflight and the
-// sign-in checks. A change to those functions in auto_rollout.py changes this file and its xUnit copy (tests/Scripts.Tests/AutoRollout/) too.
+// rollout.sh --auto's C# (ADR 0016), a library of rollout.cs ported from auto_rollout.py a part at a time and run since its cut-over (ADR 0017's
+// Updates for mpaulosky/Application_Factory#157 and #122); AutoRolloutRound.cs's header is the round's contract. This part is auto_rollout.py's
+// short_name to read_skill and agent_definition: where the round's files are (Folders), the lock, the Owned files a re-Apply changes, and the
+// skill's and the reviewer agent's text; AutoRolloutPreflight.cs holds the preflight and the sign-in checks. Its tests are in tests/Scripts.Tests/AutoRollout/.
 //
 // Python's readings are kept where .NET's differ: a line ends where str.splitlines() ends one, space is str.isspace(), a text file is read as
 // Python's text mode reads it (strict UTF-8, \r\n and \r as \n), and paths sort by code point, as sorted() sorts them.

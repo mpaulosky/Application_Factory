@@ -1,7 +1,7 @@
 using static SandboxFixtures;
 
 // Tests for github/AutoRolloutSandbox.cs's settings and denials: what the review session's Bash and file tools may read, write and run
-// (copied from github/tests/test_auto_rollout.py, which stays until the cut-over, mpaulosky/Application_Factory#122).
+// (copied from github/tests/test_auto_rollout.py, deleted with the cut-over, mpaulosky/Application_Factory#122).
 public class SandboxTests
 {
 	static readonly Dictionary<string, string[]> Root = new()
@@ -535,8 +535,8 @@ public class SandboxTests
 		Assert.Equal("/a/~b", AutoRollout.ExpandHome("/a/~b", "/h"));
 	}
 
-	// The assertions of test_the_sandbox_and_session_lists_word_for_word on this part's lists; the rest of that test's lists port with
-	// theirs (mpaulosky/Application_Factory#158 and #160).
+	// The assertions of test_the_sandbox_and_session_lists_word_for_word on this part's lists; ReviewRecordTests and RoundConstantsTests hold
+	// the rest of that test's lists.
 	[Fact]
 	public void The_sandbox_and_session_lists_word_for_word()
 	{

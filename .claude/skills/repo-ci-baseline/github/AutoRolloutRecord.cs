@@ -1,7 +1,7 @@
 // How the round records the review a session staged (auto_rollout.py's staged_findings to record_review, ADR 0016), as a library of
-// rollout.cs that nothing runs yet (ADR 0017's Update for mpaulosky/Application_Factory#157), kept in step with the Python until the
-// cut-over (mpaulosky/Application_Factory#122). The process group a bounded command runs in, and how it is waited on and killed, are the
-// cut-over's (ADR 0017's "How rollout's C# runs its children"): RunBounded and RecordReview take them as parameters.
+// rollout.cs (ADR 0017's Update for mpaulosky/Application_Factory#157). The process group a bounded command runs in, and how it is waited on
+// and killed, are AutoRolloutGroups.cs's (ADR 0017's "How rollout's C# runs its children"): RunBounded and RecordReview take them as
+// parameters, and ReviewSession's record gives them Groups.SpawnBounded and Groups.EndGroup.
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -235,7 +235,7 @@ static class ReviewRecord
 	// Record the findings the session staged in run, as the review's record: scripts/review.sh prepare in a folder of the round's own
 	// gives the key and HEAD of the code, and scripts/review.sh record takes them, with the staged findings copied there 0600 (record reads
 	// only a file of the person's own). Both are the worktree's, its Owned copies the Template's, and run as the gate on the push runs
-	// them, outside the sandbox (bounded: RunBounded with the cut-over's group); unseen() is asked once more just before record runs
+	// them, outside the sandbox (bounded: RunBounded with Groups.SpawnBounded's group); unseen() is asked once more just before record runs
 	// (SessionGuard.UnseenChanges). head is the HEAD the guard read before the session: a prepare at another one means something committed
 	// there since, and nothing is recorded. A finding's repeats is dropped (and said in the log): it would tie the finding to a .security
 	// entry, which the person's accept of the finding then accepts too, and the session could name any entry, an open one of another

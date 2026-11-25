@@ -1,8 +1,7 @@
 using System.Text.RegularExpressions;
 
 // Tests for github/AutoRolloutPreflight.cs: copies of github/tests/test_auto_rollout.py's tests of the preflight (ADR 0017's Update for
-// mpaulosky/Application_Factory#157), with the same cases and assertions. The pytest originals stay until the cut-over. Where an original also
-// checks session_env, which isn't ported yet, that part joins its copy with session_env's port.
+// mpaulosky/Application_Factory#157), with the same cases and assertions, its session_env halves among them (SessionEnv).
 public class PreflightTests : IDisposable
 {
 	readonly string tmp = Directory.CreateTempSubdirectory("preflight-test.").FullName;
@@ -168,12 +167,16 @@ public class PreflightTests : IDisposable
 	[MemberData(nameof(SignInUrls))]
 	public void Preflight_refuses_an_endpoint_or_proxy_whose_url_holds_a_sign_in(string[] environ, string[] refused)
 	{
-		// session_env would leave each out, so the session's claude would run without its endpoint or proxy (that half of the original joins this
-		// copy with session_env's port).
+		// SessionEnv would leave each out, so the session's claude would run without its endpoint or proxy.
 		var (problems, _) = FakePreflight(environ: WithPath(environ));
 		Assert.Equal(refused.Select(UrlSignIn), problems);
 		var all = string.Join("\n", problems);
 		Assert.True(!Env(environ).Values.Any(value => value.Contains('@') && all.Contains(value)), "never the value");
+		var env = AutoRollout.SessionEnv(WithPath(environ), tmp);
+		Assert.Empty(refused.Where(env.ContainsKey));
+		// A value with no scheme is a sign-in only in a proxy variable: MIRROR=u:p@mirror:1 is no URL, and is kept.
+		Assert.All(Env(environ).Where(pair => !refused.Contains(pair.Key) && !pair.Value.Contains("://", StringComparison.Ordinal)),
+				pair => Assert.True(env.ContainsKey(pair.Key), pair.Key));
 	}
 
 	[Fact]
@@ -193,9 +196,10 @@ public class PreflightTests : IDisposable
 	[InlineData("AWS_Region", false), InlineData("AWS_KEY_ID", false)]
 	public void A_cloud_secret_is_refused_and_dropped_and_the_rest_kept(string name, bool secret)
 	{
-		// The original also holds session_env to the same reading; that half joins this copy with session_env's port.
-		var (problems, _) = FakePreflight(environ: Env("PATH=/bin", "CLAUDE_CODE_USE_BEDROCK=1", $"{name}=v"));
+		var environ = Env("PATH=/bin", "CLAUDE_CODE_USE_BEDROCK=1", $"{name}=v");
+		var (problems, _) = FakePreflight(environ: environ);
 		Assert.Equal(secret ? [SignedIn(name)] : [], problems);
+		Assert.Equal(!secret, AutoRollout.SessionEnv(environ, tmp).ContainsKey(name));
 	}
 
 	[Fact]

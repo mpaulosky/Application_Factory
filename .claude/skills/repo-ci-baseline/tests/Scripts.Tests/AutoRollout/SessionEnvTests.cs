@@ -1,7 +1,7 @@
 using static SandboxFixtures;
 
 // Tests for github/AutoRolloutSandbox.cs's review-session environment (SessionEnv) and the sweeps of what killed runs left, copied from
-// github/tests/test_auto_rollout.py, which stays until the cut-over (mpaulosky/Application_Factory#122).
+// github/tests/test_auto_rollout.py, deleted with the cut-over (mpaulosky/Application_Factory#122).
 public class SessionEnvTests
 {
 	[Fact]
