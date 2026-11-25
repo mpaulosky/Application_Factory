@@ -8,3 +8,8 @@
 #   p=.claude/skills/repo-ci-baseline/template/owned/<path>
 #   git log --diff-filter=AM --format=%H -- "$p" | while read -r c; do git show "$c:$p" | sha256sum | sed "s|-\$|<path>|"; done | sort -u
 # (--diff-filter=AM: only the commits that wrote the file, so the one that deleted it adds no empty version.)
+# The skill sat at the repo root before it moved under .claude/skills/, so a file that old has versions at template/owned/<path> too: list
+# them with p=template/owned/<path> the same way, from the commit before the move (git log --follow on the current path names them).
+4d276b70d8b861f26625619a24cd223d0e2864f6d77fca3a231009fe214c7dc2  .github/scripts/tests/test_detect_changes.py
+7314754e10e989ecbfb57b2ee8641b02ee570ba2f09f032dcb8887e93c337fa4  .github/scripts/tests/test_detect_changes.py
+8265e2a7a38e733662a60afcff672ddfbfa4694e8461f24547be97cad80dec09  .github/scripts/tests/test_detect_changes.py

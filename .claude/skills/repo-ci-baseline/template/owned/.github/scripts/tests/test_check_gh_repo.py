@@ -495,12 +495,17 @@ def test_check_repo_checks_what_isnt_an_owned_baseline_file(tmp_path, name):
     assert [line.split(":")[0] for line in found] == [name]
 
 
-def test_owned_names_files_and_folders_under_scripts_the_skills_readme_the_review_skills_and_global_json_only():
-    # Arrange, Act, Assert: global.json is the one root file, the SDK pin (mpaulosky/Application_Factory#103).
+SHIELDS = (".github/scripts/Directory.Build.props", ".github/scripts/Directory.Build.targets", ".github/scripts/Directory.Packages.props")
+
+
+def test_owned_names_files_and_folders_under_scripts_the_skills_readme_the_review_skills_global_json_and_the_shields_only():
+    # Arrange, Act, Assert: global.json is the one root file, the SDK pin (mpaulosky/Application_Factory#103), and the C# scripts'
+    # three shields the only files in .github/scripts/ (mpaulosky/Application_Factory#125).
     assert check_gh_repo.OWNED
     assert "global.json" in check_gh_repo.OWNED
-    assert all(entry == "global.json" or entry.startswith(("scripts/", ".claude/skills/README.md", ".claude/skills/pre-push-review/",
-                                                           ".claude/skills/hardening-review/"))
+    assert all(shield in check_gh_repo.OWNED for shield in SHIELDS)
+    assert all(entry in ("global.json", *SHIELDS)
+               or entry.startswith(("scripts/", ".claude/skills/README.md", ".claude/skills/pre-push-review/", ".claude/skills/hardening-review/"))
                for entry in check_gh_repo.OWNED)
 
 

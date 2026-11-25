@@ -6,7 +6,7 @@
 #
 # Runs the Template's own tests (hook suites, auto-merge script tests,
 # the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle, the parity suites
-# (status, land, settings, check_gh_repo, the release scripts and rollout), the Claude Review benchmark's --rescore parity suite and
+# (status, land, settings, check_gh_repo, the release scripts, detect_changes and rollout), the Claude Review benchmark's --rescore parity suite and
 # the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land, settings, rollout and its AutoRollout libraries,
 # what they share, the two checkers in tests/ and the benchmark), lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
@@ -755,7 +755,7 @@ if in_shard scripts; then
   fi
   (cd "$skill_dir/tests/render_oracle" && "${oracle_cmd[@]}" -q -p no:cacheprovider .) || fail "renderer oracle"
 
-  step "Parity suites (status.cs, land.cs, settings.cs, check_gh_repo.py, the release scripts and rollout.sh through their command lines, against a fake gh) and their runners' tests"
+  step "Parity suites (status.cs, land.cs, settings.cs, check_gh_repo.py, the release scripts, detect_changes.py and .cs, and rollout.sh through their command lines, against a fake gh) and their runners' tests"
   # The fake gh runs jq for a REST call's --jq, which the release scripts' suites make, and for a REST call's --input body, which the
   # settings suite's make. The status, land and settings suites' reference is the C# (github/status.cs, github/land.cs, github/settings.cs),
   # which the runner builds once before its cases (ADR 0017); the settings suite runs against github-settings.sh below too.
@@ -783,6 +783,24 @@ if in_shard scripts; then
       bash "$skill_dir/tests/parity.test.sh" "$suite" || fail "parity.test.sh $suite"
     fi
   done
+  # An Owned script's C# ships beside its .py for one Rollout (ADR 0017), and the .py stays its suite's reference until then, so each Owned
+  # entry file (a .cs in .github/scripts/ whose first line is a #: directive) is run against its suite too: built once from the Template's
+  # folder, whose global.json picks the SDK, then run as ci.yml runs it, with dotnet run --no-build --file. An entry file with no suite fails.
+  owned_entries=0
+  for owned_cs in "$owned"/.github/scripts/*.cs; do
+    [[ -f "$owned_cs" ]] && IFS= read -r first_line < "$owned_cs" && [[ "$first_line" == '#:'* ]] || continue
+    owned_entries=$((owned_entries + 1))
+    suite="$(basename -- "$owned_cs" .cs)"
+    if [[ ! -d "$skill_dir/tests/parity/$suite/cases" ]]; then
+      fail "template/owned/.github/scripts/$suite.cs is an Owned script with no parity suite (tests/parity/$suite/)"
+      continue
+    fi
+    (cd "$owned" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 \
+      UseSharedCompilation=false dotnet build "$owned_cs" < /dev/null > "$md_tmp/owned-cs-build.log" 2>&1) \
+      || fail "dotnet build template/owned/.github/scripts/$suite.cs failed: $(tail -5 "$md_tmp/owned-cs-build.log")"
+    bash "$skill_dir/tests/parity.test.sh" "$suite" dotnet run --no-build --file "$owned_cs" -- || fail "parity.test.sh $suite against $suite.cs"
+  done
+  ((owned_entries >= 1)) || fail "found no Owned C# script in template/owned/.github/scripts/, expected detect_changes.cs at least"
   # status.sh and land.sh run their C# from its own folder, so a global.json in the caller's folder that pins an SDK nobody has installed
   # changes nothing: the status suite passes against status.sh with one above every case's folder (the runner's TMPDIR), and land.sh
   # answers --help from such a folder. dotnet itself fails there, which shows the global.json is read.
@@ -1068,8 +1086,8 @@ HALF
     ! targets_net_major "$md_tmp/tfm.csproj" 11 > /dev/null || fail "the target framework check passes for SDK 11: $wrong"
   done
   # The shields (ADR 0017): an empty Directory.Build.props, Directory.Build.targets and Directory.Packages.props in github/, in tests/ (the two checkers), in
-  # bench/ and in the test project, so the files of those names above them never reach their builds.
-  for shielded in github tests bench tests/Scripts.Tests; do
+  # bench/, in the test project and beside the Template's C# scripts, so the files of those names above them never reach their builds.
+  for shielded in github tests bench tests/Scripts.Tests template/owned/.github/scripts; do
     for shield in Directory.Build.props Directory.Build.targets Directory.Packages.props; do
       is_empty_shield "$skill_dir/$shielded/$shield" || fail "$shielded/$shield must be the empty shield, <Project />"
     done
@@ -1202,6 +1220,27 @@ if in_shard checks; then
     grep -qxF 'assignees: mpaulosky' "$owned/.github/ISSUE_TEMPLATE/$template" \
       || fail "the Owned $template must carry 'assignees: mpaulosky': an Owned file has no {{OWNER}} to fill"
   done
+
+  step "The Owned files check covers what builds the C# scripts in .github/scripts/"
+  # check_gh_repo.py's OWNED is the list owned-files.yml's check holds a PR to, and it names .github/scripts/ files one by one: each shield there
+  # (a Directory.* file, which every build of a script reads) must be in it, so a PR can't make a script's build read the repo's own files
+  # unseen, and each .github/scripts/ entry must be a file the Template ships (mpaulosky/Application_Factory#125).
+  owned_scripts_list="$(python3 -I -c 'import ast, sys
+tree = ast.parse(open(sys.argv[1], encoding="utf-8").read())
+owned = next(ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign) and [getattr(t, "id", "") for t in node.targets] == ["OWNED"])
+print("\n".join(entry for entry in owned if entry.startswith(".github/scripts/")))' "$owned/.github/scripts/check_gh_repo.py")" \
+    || fail "can't read OWNED from template/owned/.github/scripts/check_gh_repo.py"
+  owned_shields=0
+  for shield in "$owned"/.github/scripts/Directory.*; do
+    [[ -f "$shield" ]] || continue
+    owned_shields=$((owned_shields + 1))
+    grep -qxF ".github/scripts/${shield##*/}" <<< "$owned_scripts_list" \
+      || fail "template/owned/.github/scripts/${shield##*/} is a shield of the C# scripts, so it must be in check_gh_repo.py's OWNED"
+  done
+  ((owned_shields == 3)) || fail "found $owned_shields Directory.* shield(s) in template/owned/.github/scripts/, expected Directory.Build.props, Directory.Build.targets and Directory.Packages.props"
+  while IFS= read -r entry; do
+    [[ -z "$entry" || -f "$owned/$entry" ]] || fail "check_gh_repo.py's OWNED names $entry, which the Template doesn't ship"
+  done <<< "$owned_scripts_list"
 
   step "Issue references in Owned files name their repo"
   # Applied into a repo, a bare #N reads as that repo's own issue or PR

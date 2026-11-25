@@ -2,12 +2,15 @@
 # Tests for .github/hooks/pre-push.
 # Each case runs the hook in a throwaway repo, holding copies of
 # scripts/gate.sh, scripts/check-branch-name.sh,
-# .github/scripts/discover_tests.py, .github/scripts/check_gh_repo.py and .github/scripts/check_central_pins.py, with the refs git would
-# pass on stdin. Stub `dotnet`, `pnpm`, `markdownlint-cli2`, `yamllint`,
+# .github/scripts/discover_tests.py, .github/scripts/check_gh_repo.py and .github/scripts/check_central_pins.py, and the C# scripts in
+# .github/scripts/ with their shields and global.json, with the refs git would pass on stdin. Stub `dotnet`, `pnpm`, `markdownlint-cli2`, `yamllint`,
 # `actionlint`, `zizmor`, `shellcheck` and `ruff` binaries log each call, and fail when the call matches the FAIL glob, so no
 # real build or network access is needed (the ruff stub answers --version with a 0.17 release, the one the gate's Python lint step accepts:
 # the repo tracks three Python files, which the gate lints when there is no origin/main to diff against, and CI's hook-tests job has no ruff or uv). check_gh_repo.py and the Shell format step run the real shfmt (v3.14 or a later v3), which must be on PATH;
-# the repo gets the Template's .editorconfig, so the scripts it is given are written in that style. The case run by hand from a terminal
+# the repo gets the Template's .editorconfig, so the scripts it is given are written in that style. The dotnet stub hands the gate's C#
+# scripts step (dotnet format whitespace, and dotnet build of a .cs) to the real dotnet when it runs the SDK global.json names, so those
+# cases check that the Owned scripts pass the step as the gate runs it; without one the stub logs them as it logs the rest, and the cases
+# that need a real build are skipped, saying so (CI's hook-tests job sets the SDK up). The case run by hand from a terminal
 # needs python3 (its pty module), and is skipped, saying so, without it.
 # Usage: .github/hooks/tests/pre-push.test.sh
 set -uo pipefail
@@ -17,6 +20,7 @@ SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/scripts"
 DISCOVER="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/discover_tests.py"
 CHECK_GH_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/check_gh_repo.py"
 CHECK_CENTRAL_PINS="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/check_central_pins.py"
+OWNED_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts"
 ZERO="0000000000000000000000000000000000000000"
 SHA="1111111111111111111111111111111111111111"
 
@@ -27,7 +31,14 @@ REPO="$WORK/repo"
 STUBS="$WORK/bin"
 LOG="$WORK/gates.log"
 
-# make_stub <dir> <tool>: a stub that logs its call and fails on a FAIL match.
+# The real dotnet, when it runs the SDK the Template's global.json names (checked from the Template's root, where that file is); else empty.
+REAL_DOTNET="$(command -v dotnet 2> /dev/null || true)"
+if [[ -n "$REAL_DOTNET" ]] && ! (cd "$SCRIPTS/.." && "$REAL_DOTNET" --version) > /dev/null 2>&1; then
+  REAL_DOTNET=""
+fi
+
+# make_stub <dir> <tool>: a stub that logs its call and fails on a FAIL match. The dotnet stub then hands dotnet format whitespace and
+# dotnet build of a .cs (the gate's C# scripts step) to REAL_DOTNET, when there is one.
 make_stub() {
   cat > "$1/$2" << EOF
 #!/usr/bin/env bash
@@ -35,8 +46,13 @@ call="$2 \$*"
 echo "\$call" >> "$LOG"
 [[ -z "\${GIT_DIR:-}" ]] || echo "GIT_DIR=\$GIT_DIR" >> "$LOG"
 [[ -z "\${GIT_INDEX_FILE:-}" ]] || echo "GIT_INDEX_FILE=\$GIT_INDEX_FILE" >> "$LOG"
-[[ -z "\${FAIL:-}" || "\$call" != \$FAIL ]]
+[[ -z "\${FAIL:-}" || "\$call" != \$FAIL ]] || exit 1
 EOF
+  if [[ "$2" == dotnet && -n "$REAL_DOTNET" ]]; then
+    cat >> "$1/$2" << EOF
+[[ "\$1 \${2:-}" != 'format whitespace' && ( "\$1" != build || "\${2:-}" != *.cs ) ]] || exec $(printf '%q' "$REAL_DOTNET") "\$@"
+EOF
+  fi
   chmod +x "$1/$2"
 }
 
@@ -64,6 +80,9 @@ mkdir -p "$REPO/tests/Fake.Support"
 echo '<Project />' > "$REPO/tests/Fake.Support/Fake.Support.csproj"
 cp "$SCRIPTS/gate.sh" "$SCRIPTS/check-branch-name.sh" "$REPO/scripts/"
 cp "$DISCOVER" "$CHECK_GH_REPO" "$CHECK_CENTRAL_PINS" "$REPO/.github/scripts/"
+# The C# scripts, their shields and the SDK pin, as an Application has them: the gate's C# scripts step checks them when a branch changes one.
+cp "$OWNED_SCRIPTS"/*.cs "$OWNED_SCRIPTS"/Directory.Build.props "$OWNED_SCRIPTS"/Directory.Build.targets "$OWNED_SCRIPTS"/Directory.Packages.props "$REPO/.github/scripts/"
+cp "$SCRIPTS/../global.json" "$REPO/global.json"
 # The Template's .editorconfig, as every repo it is Applied to has: the gate's Shell format step reads its shell style, so the fixture scripts below are written in it.
 cp "$SCRIPTS/../.editorconfig" "$REPO/.editorconfig"
 git -C "$REPO" add .
@@ -321,6 +340,44 @@ expect_log "without markdownlint-cli2 or pnpm, the gate never runs npx" not-ran 
 FAIL='dotnet build*' run_hook feature/1-x "refs/heads/feature/1-x @HEAD@ refs/heads/feature/1-x $ZERO"
 expect "a failing build refuses the push" refused any
 
+# The C# scripts step runs only when the branch changes a .cs in .github/scripts/: it checks the folder's format, and builds each script
+# there (a .cs no other .cs there includes) with warnings as errors, before the solution's build.
+run_hook feature/1-x "$(push_stdin feature/1-x)"
+expect_log "a push with no C# script change skips the C# scripts step" not-ran 'dotnet format*'
+git -C "$REPO" switch -q -c feature/13-cs-script origin/main
+printf '// A change.\n' >> "$REPO/.github/scripts/DetectChanges.cs"
+git -C "$REPO" commit -q -am "change a C# script"
+run_hook feature/13-cs-script "$(push_stdin feature/13-cs-script)"
+expect "a change to a C# script runs the gate" allowed tests-ran "C# script(s) built."
+expect_log "the C# scripts step checks the scripts folder's format" ran 'dotnet format whitespace .github/scripts --folder --verify-no-changes'
+expect_log "the C# scripts step builds the script that includes the changed file, with warnings as errors but CA2266 and NU1900" \
+  ran 'dotnet build .github/scripts/detect_changes.cs --no-incremental --disable-build-servers --artifacts-path * -p:TreatWarningsAsErrors=true -p:WarningsNotAsErrors=CA2266%3BNU1900'
+expect_log "the C# scripts step doesn't build an included file on its own" not-ran 'dotnet build .github/scripts/DetectChanges.cs*'
+expect_log "the C# scripts step doesn't build Gh.cs on its own" not-ran 'dotnet build .github/scripts/Gh.cs*'
+FAIL='dotnet build .github/scripts/*' run_hook feature/13-cs-script "$(push_stdin feature/13-cs-script)"
+expect "a C# script that fails its build refuses the push" refused any "dotnet build .github/scripts/detect_changes.cs: fix each warning or error"
+expect_log "a C# script that fails its build stops the gate before the solution's build" not-ran 'dotnet build *--configuration Release*'
+FAIL='dotnet format*' run_hook feature/13-cs-script "$(push_stdin feature/13-cs-script)"
+expect "a C# format failure that isn't a format problem refuses the push" refused any "dotnet format failed (exit 1) without checking the format"
+if [[ -n "$REAL_DOTNET" ]]; then
+  # A warning is an error: an unused local variable (CS0168).
+  git -C "$REPO" switch -q -c feature/14-cs-warning origin/main
+  printf '\nstatic class Unused\n{\n\tstatic void M()\n\t{\n\t\tint x;\n\t}\n}\n' >> "$REPO/.github/scripts/DetectChanges.cs"
+  git -C "$REPO" commit -q -am "a C# warning"
+  run_hook feature/14-cs-warning "$(push_stdin feature/14-cs-warning)"
+  expect "a C# script with a warning refuses the push" refused any "dotnet build .github/scripts/detect_changes.cs: fix each warning or error"
+  expect_log "a C# script with a warning stops the gate before the solution's build" not-ran 'dotnet build *--configuration Release*'
+  # A line indented with spaces, where the Template's .editorconfig gives C# tabs.
+  git -C "$REPO" switch -q -c feature/15-cs-format origin/main
+  printf '\nstatic class Spaced\n{\n    static void M()\n    {\n    }\n}\n' >> "$REPO/.github/scripts/DetectChanges.cs"
+  git -C "$REPO" commit -q -am "a C# format problem"
+  run_hook feature/15-cs-format "$(push_stdin feature/15-cs-format)"
+  expect "a C# script that isn't formatted refuses the push" refused any "dotnet format: run dotnet format whitespace .github/scripts --folder"
+  expect_log "a C# script that isn't formatted is never built" not-ran 'dotnet build*'
+else
+  skip "a C# script with a warning or a format problem refuses the push" "no dotnet runs the SDK the Template's global.json names"
+fi
+
 # Workflow and shell linters run only when their files change.
 run_hook feature/1-x "$(push_stdin feature/1-x)"
 expect_log "a push with no workflow or shell changes skips actionlint" not-ran 'actionlint*'
@@ -445,7 +502,7 @@ expect "the gate runs .github/ci/gate-checks.sh" allowed tests-ran
 expect_log "gate-checks.sh gets the merge base" ran "repo-check base=$(git -C "$REPO" rev-parse origin/main)"
 FAIL_REPO_CHECK=1 run_hook feature/9-repo-checks "$(push_stdin feature/9-repo-checks)"
 expect "a failing gate-checks.sh refuses the push" refused any
-expect_log "a failing gate-checks.sh stops the gate before the build" not-ran 'dotnet build*'
+expect_log "a failing gate-checks.sh stops the gate before the build" not-ran 'dotnet build *--configuration Release*'
 git -C "$REPO" switch -q feature/1-x
 
 # The local review (scripts/gate.sh's "Local review" step) runs where the repo has
@@ -469,7 +526,7 @@ expect "a passing review check lets the push through to the tests" allowed tests
 expect_log "the review check gets the merge base" ran "review.sh check $(git -C "$REPO" rev-parse origin/main)"
 FAIL_REVIEW=1 run_hook feature/12-local-review "$(push_stdin feature/12-local-review)"
 expect "a failing review check refuses the push" refused any
-expect_log "a failing review check stops the gate before the build" not-ran 'dotnet build*'
+expect_log "a failing review check stops the gate before the build" not-ran 'dotnet build *--configuration Release*'
 GATE_SKIP_REVIEW=1 FAIL_REVIEW=1 run_hook feature/12-local-review "$(push_stdin feature/12-local-review)"
 expect "a push ignores GATE_SKIP_REVIEW=1, so the review check still refuses it" refused any
 expect_log "a push with GATE_SKIP_REVIEW=1 still calls review.sh" ran "review.sh check $(git -C "$REPO" rev-parse origin/main)"
@@ -542,7 +599,7 @@ git -C "$REPO" switch -q feature/1-x
 commit_on feature/14-gh-untold scripts/foo.sh 'gh pr view 1'
 run_hook feature/14-gh-untold "$(push_stdin feature/14-gh-untold)"
 expect "a script with a gh command not told its repository refuses the push" refused any "scripts/foo.sh:1: gh pr view 1"
-expect_log "an untold gh command stops the gate before the build" not-ran 'dotnet build*'
+expect_log "an untold gh command stops the gate before the build" not-ran 'dotnet build *--configuration Release*'
 GATE_SKIP_REVIEW=1 run_gate feature/14-gh-untold
 expect "a gate run with GATE_SKIP_REVIEW=1 still checks the gh commands" refused any "scripts/foo.sh:1: gh pr view 1"
 git -C "$REPO" switch -q feature/1-x
@@ -553,7 +610,7 @@ git -C "$REPO" switch -q feature/1-x
 commit_on feature/16-gh-skill .claude/skills/mine/SKILL.md $'Look at it with `gh pr list`.'
 run_hook feature/16-gh-skill "$(push_stdin feature/16-gh-skill)"
 expect "a skill with a gh command not told its repository refuses the push" refused any ".claude/skills/mine/SKILL.md:1:"
-expect_log "an untold gh command in a skill stops the gate before the build" not-ran 'dotnet build*'
+expect_log "an untold gh command in a skill stops the gate before the build" not-ran 'dotnet build *--configuration Release*'
 git -C "$REPO" switch -q feature/1-x
 commit_on feature/17-gh-skill-told .claude/skills/mine/SKILL.md $'Look at it with `gh pr list --repo o/r`.'
 run_hook feature/17-gh-skill-told "$(push_stdin feature/17-gh-skill-told)"
@@ -565,7 +622,7 @@ git -C "$REPO" switch -q feature/1-x
 commit_on feature/18-unreferenced-pin Directory.Packages.props '<Project><PropertyGroup><CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled></PropertyGroup><ItemGroup><PackageVersion Include="Orphan.Package" Version="1.0.0" /></ItemGroup></Project>'
 run_hook feature/18-unreferenced-pin "$(push_stdin feature/18-unreferenced-pin)"
 expect "an unreferenced central pin refuses the push" refused any "Orphan.Package is pinned in Directory.Packages.props but no project references it"
-expect_log "an unreferenced central pin stops the gate before the build" not-ran 'dotnet build*'
+expect_log "an unreferenced central pin stops the gate before the build" not-ran 'dotnet build *--configuration Release*'
 git -C "$REPO" switch -q feature/1-x
 
 # The old sandcastle.gatedHead marker no longer skips the gate: a Sandcastle

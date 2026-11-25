@@ -24,7 +24,7 @@
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
     <Using Include="Xunit" />
   </ItemGroup>
-  <!-- The skill's github/ scripts, the two checkers in tests/ and the bench in bench/ (ADR 0017): every file an entry file pulls in with #:include is compiled here, so the tests call its
+  <!-- The skill's github/ scripts, the two checkers in tests/, the bench in bench/ and the Template's scripts (ADR 0017): every file an entry file pulls in with #:include is compiled here, so the tests call its
        classes. The entry files are left out: each holds top-level statements, which a project with an entry point of its own can't. The
        skill's folder is the assembly's SkillDir metadata, so a test finds the files it reads (repos.txt, the Template's workflows) beside
        whichever copy of the project it was built from. -->
@@ -32,6 +32,9 @@
     <Compile Include="../../github/*.cs" Exclude="../../github/status.cs;../../github/land.cs;../../github/settings.cs;../../github/rollout.cs" Link="github/%(Filename)%(Extension)" />
     <Compile Include="../*.cs" Exclude="../check-issue-refs.cs;../check-git-status.cs" Link="tests/%(Filename)%(Extension)" />
     <Compile Include="../../bench/*.cs" Exclude="../../bench/claude-review-bench.cs" Link="bench/%(Filename)%(Extension)" />
+    <!-- The Template's Owned scripts in .github/scripts/ (ADR 0017's Update for mpaulosky/Application_Factory#125): in the namespace Baseline, so
+         their Gh.cs doesn't clash with github/'s, and tested from Template/ in that namespace. Its entry files are left out, as above. -->
+    <Compile Include="../../template/owned/.github/scripts/*.cs" Exclude="../../template/owned/.github/scripts/detect_changes.cs" Link="template/%(Filename)%(Extension)" />
     <AssemblyMetadata Include="SkillDir" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))" />
   </ItemGroup>
 </Project>

@@ -287,10 +287,16 @@ const EXEMPT_GLOBS_AUDITED: Readonly<Record<string, GlobEntry>> = {
       ".github/hooks/tests/pre-push.test.sh",
     ], why: "the bash hook tests and shellcheck run over them; they run on the host, so a new hook is a decision" },
   ".github/scripts/**": { files: [
+      ".github/scripts/DetectChanges.cs",
+      ".github/scripts/Directory.Build.props",
+      ".github/scripts/Directory.Build.targets",
+      ".github/scripts/Directory.Packages.props",
+      ".github/scripts/Gh.cs",
       ".github/scripts/backfill_blog_posts.py",
       ".github/scripts/check_central_pins.py",
       ".github/scripts/check_gh_repo.py",
       ".github/scripts/check_owned_files.py",
+      ".github/scripts/detect_changes.cs",
       ".github/scripts/detect_changes.py",
       ".github/scripts/discover_tests.py",
       ".github/scripts/draft_release.py",
@@ -311,7 +317,6 @@ const EXEMPT_GLOBS_AUDITED: Readonly<Record<string, GlobEntry>> = {
       ".github/scripts/tests/test_claude_review_resolved_threads.py",
       ".github/scripts/tests/test_claude_review_review_notes.py",
       ".github/scripts/tests/test_claude_review_split_diff.py",
-      ".github/scripts/tests/test_detect_changes.py",
       ".github/scripts/tests/test_discover_tests.py",
       ".github/scripts/tests/test_draft_release.py",
       ".github/scripts/tests/test_load_test_env.py",
@@ -320,8 +325,9 @@ const EXEMPT_GLOBS_AUDITED: Readonly<Record<string, GlobEntry>> = {
       ".github/scripts/tests/test_pr_automerge_triggers.py",
       ".github/scripts/tests/test_release_post.py",
       ".github/scripts/tests/test_release_queue.py",
-    ], why: "pytest and node --test run over them; they run in CI with tokens, so a new script is a decision. requirements-tests.txt runs nothing: " +
-      "it is the python-tests job's pin list, which test.sh holds to exact, hashed pins installed as wheels only" },
+    ], why: "pytest, node --test and the Factory's parity suites and xUnit tests run over them; they run in CI with tokens, so a new script is a decision. " +
+      "requirements-tests.txt runs nothing: it is the python-tests job's pin list, which test.sh holds to exact, hashed pins installed as wheels only. " +
+      "The three Directory.* shields are empty, and the Owned files check holds them so: they keep the repo's own Directory.* files out of the C# scripts' build" },
   ".github/instructions/*.md": {
     files: [".github/instructions/blog.instructions.md", ".github/instructions/git-commit-instructions.md", ".github/instructions/markdown.instructions.md"],
     why: "steer Copilot's review and commit messages, linted by markdownlint; they widen no tool and run no code, so a wrong instruction can only shape advice",
