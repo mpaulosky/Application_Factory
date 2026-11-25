@@ -90,7 +90,7 @@ pr_title="chore: Re-apply the repo-ci-baseline Template"
 footer="🤖 Generated with [Claude Code](https://claude.com/claude-code)"
 # The gate's step the local review check runs under (gate.sh's step name), the texts scripts/review.sh check prints when
 # it refuses a head (review-ledger.mts's checkReview, word for word), and the exit codes they map to, which
-# github/auto_rollout.py's REVIEW_NEEDED and FINDINGS_WAIT equal: github/tests/test_auto_rollout.py holds all of them equal.
+# github/AutoRolloutRound.cs's ReviewNeeded and FindingsWait equal: tests/Scripts.Tests/AutoRollout/ holds all of them equal.
 review_step="Local review (scripts/review.sh check)"
 no_review_text="No review is recorded for this diff."
 findings_wait_text="review finding(s) wait for a person."

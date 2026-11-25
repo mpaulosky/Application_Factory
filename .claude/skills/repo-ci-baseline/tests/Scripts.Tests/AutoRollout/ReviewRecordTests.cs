@@ -4,10 +4,9 @@ using System.Text.Json.Nodes;
 
 // Tests for github/AutoRolloutRecord.cs, xUnit copies of github/tests/test_auto_rollout.py's tests of staged_findings, record_review,
 // record_command, write_staged, kept_head and run_bounded (ADR 0017's Update for mpaulosky/Application_Factory#157): one method each, the
-// same cases and assertions. Two of them run a real command in a process group of its own
+// same cases and assertions. The two that run a real command in a process group of its own
 // (test_the_record_runs_a_real_review_script_in_a_group_of_its_own_and_logs_both_its_streams and
-// test_a_bounded_command_past_its_time_is_stopped_with_its_group), which needs the spawner the cut-over brings
-// (mpaulosky/Application_Factory#122), so they move with it. The pytest originals stay until then.
+// test_a_bounded_command_past_its_time_is_stopped_with_its_group) are in GroupsTests.cs, with the spawner's other tests.
 [Collection(nameof(SessionGuardTests))]
 [System.Runtime.Versioning.SupportedOSPlatform("linux")]
 public sealed class ReviewRecordTests : IDisposable
@@ -672,7 +671,7 @@ public sealed class ReviewRecordTests : IDisposable
 	[Fact]
 	public void A_bounded_command_runs_in_its_own_group_holding_the_lock_and_a_group_it_leaves_is_group_left()
 	{
-		// The group of its own and the lock's descriptor are the spawner's (the cut-over's posix_spawnp): what RunBounded hands it is the
+		// The group of its own and the lock's descriptor are the spawner's (Groups.SpawnBounded's posix_spawn): what RunBounded hands it is the
 		// command and where it runs.
 		List<(IReadOnlyList<string>, Bounded)> seen = [];
 		IGroupChild Spawn(IReadOnlyList<string> command, Bounded io)
@@ -708,7 +707,7 @@ public sealed class ReviewRecordTests : IDisposable
 		Assert.Equal($"name: {ReviewRecord.ReviewerAgent}", agent[1]);
 	}
 
-	// This part's lines of test_the_sandbox_and_session_lists_word_for_word; the other parts' lists join them as they are ported.
+	// This part's lines of test_the_sandbox_and_session_lists_word_for_word; SandboxTests and RoundConstantsTests hold the rest.
 	[Fact]
 	public void The_sandbox_and_session_lists_word_for_word()
 	{

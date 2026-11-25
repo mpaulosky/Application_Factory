@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The rollout parity suite: rollout.sh's behaviour through its command line only, so the same cases judge rollout.py with
-# auto_rollout.py and their C# port (ADR 0017). It has a runner of its own, beside tests/parity.test.sh's, because rollout
+# The rollout parity suite: rollout.sh's behaviour through its command line only, so the same cases that judged rollout.py with
+# auto_rollout.py judge their C# port, github/rollout.cs (ADR 0017). It has a runner of its own, beside tests/parity.test.sh's, because rollout
 # calls reapply.sh and land.sh by absolute path beside itself and keeps its lock, logs and sessions under ~: each run is of a
 # temporary copy of the skill folder, holding stubs for those two, with a HOME of its own. Its cases are in
 # tests/rollout-parity/cases/, and tests/rollout-parity/README.md says what they cover and leave out on purpose, --auto's
@@ -9,7 +9,7 @@
 #   tests/rollout-parity.test.sh                    run the cases against the copy's rollout.sh (the reference: whatever
 #                                                   the skill's rollout.sh runs)
 #   tests/rollout-parity.test.sh <command> [arg]... run them against another implementation; a word that names a file
-#                                                   in the skill folder (github/rollout.py, say) names the copy's, so it
+#                                                   in the skill folder (github/rollout.cs, say) names the copy's, so it
 #                                                   finds the stubs and the fixed repos.txt as the reference does
 #   PARITY_RECORD=1 tests/rollout-parity.test.sh   record the cases from the reference (no command is accepted, so a port
 #                                                   under test never records its own oracle); review the diff before
@@ -79,8 +79,14 @@
 # folder is made absolute first, as is the value of a later --option=value word; the first word is looked up on the
 # caller's PATH unless it holds a /, so a dotnet there isn't the fake one.
 #
+# The copy's rollout.sh builds the copy's github/rollout.cs and runs the dll it built (ADR 0017), with the run's dotnet, the
+# fake: so when the copy has that file the runner builds it once with the caller's dotnet before the first case, and the fake
+# dotnet hands those two calls alone (dotnet build of that file, dotnet of that dll) to the caller's, logging neither, the
+# build with the caller's HOME and a TMPDIR of the runner's own so it finds that build and writes nothing in the case's HOME.
+#
 # Exit 0 when every case passes, 1 when one fails, 2 on a usage or setup error (a case missing a file or holding a bad one,
-# a setup.sh that fails, a command that can't be run, a temporary folder that can't be made). Needs bash 4.4 or later,
+# a setup.sh that fails, a command that can't be run, a temporary folder that can't be made, a build of the copy's
+# github/rollout.cs that fails or with no dotnet on the caller's PATH). Needs bash 4.4 or later, the .NET SDK for the C#,
 # python3 (the launcher; the reference needs it too), coreutils (mktemp, mkdir, rm, ln, cp, mv, cat, tr, env, basename,
 # dirname, timeout, and GNU sort for -z), GNU findutils (find with -printf), a diff with --no-dereference (GNU
 # diffutils 3.3 or later), grep and sed; the cases' fixtures need jq, flock (util-linux) and Linux's /proc too.
@@ -155,6 +161,25 @@ for name in "${HOST_COMMANDS[@]}"; do
   found="$(type -P -- "$name")" || continue
   ln -s "$found" "$tmp/host/$name" || setup_error "can't link $found into $tmp/host."
 done
+
+# The copy's rollout.sh builds its github/rollout.cs and runs the built dll (ADR 0017), with the dotnet on the run's PATH, which is
+# the fake. So the copy's rollout.cs is built here once, before the first case, with the caller's dotnet, and the fake dotnet hands
+# exactly those two calls (dotnet build of that file, and dotnet of the dll it names) to the caller's dotnet, logging neither: they
+# are how rollout.sh runs, not calls the round makes. Every other dotnet call (the preflight's) is the fake's. The build runs with
+# the caller's HOME and a TMPDIR of the runner's own both times, so a case's build finds this one's output and leaves nothing in
+# the case's HOME; the dll runs with the case's environment.
+real_dotnet="" rollout_dll=""
+dotnet_build_env=(-u XDG_DATA_HOME -u XDG_CACHE_HOME HOME="$HOME" TMPDIR="$tmp/dotnet-tmp" DOTNET_CLI_TELEMETRY_OPTOUT=1
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 UseSharedCompilation=false)
+if [[ -f "$layout/github/rollout.cs" ]]; then
+  real_dotnet="$(type -P dotnet)" || setup_error "dotnet, which builds and runs the copy's github/rollout.cs, is not on PATH."
+  mkdir -p "$tmp/dotnet-tmp" || setup_error "can't make folders under $tmp."
+  rollout_dll="$(cd -- "$layout/github" && env "${dotnet_build_env[@]}" "$real_dotnet" build "$layout/github/rollout.cs" -t:Build \
+    -getProperty:TargetPath < /dev/null 2> "$tmp/build.log")" \
+    || setup_error "dotnet build of the copy's github/rollout.cs failed:"$'\n'"$(cat "$tmp/build.log")"
+  rollout_dll="${rollout_dll##*$'\n'}"
+  [[ "$rollout_dll" == /*.dll && -f "$rollout_dll" ]] || setup_error "dotnet build of the copy's github/rollout.cs named no dll: '$rollout_dll'"
+fi
 
 if [[ $# -gt 0 ]]; then
   impl=("$@")
@@ -351,8 +376,18 @@ make_bin() {
   [[ ! -s "$dir/missing" ]] || mapfile -t missing < "$dir/missing"
   for tool in "${PATH_FAKES[@]}"; do
     ! is_one_of "$tool" ${missing[@]+"${missing[@]}"} || continue
-    printf '#!%s\nexport FAKE_TOOL_NAME=%q FAKE_TOOL_DIR=%q FAKE_GH_LOG=%q FAKE_HOME=%q\nexec %q %q "$@"\n' "$BASH" "$tool" \
-      "$tmp/run/fakes" "$tmp/run/calls" "$home" "$BASH" "$fake_tool" > "$bin/$tool" || return 1
+    if [[ "$tool" == dotnet && -n "$rollout_dll" ]]; then
+      # The $# and $1 are the wrapper's own, written for it to read.
+      # shellcheck disable=SC2016
+      printf '#!%s\nif [[ $# -ge 2 && "$1" == build && "$2" == %q ]]; then\n  exec env' "$BASH" "$layout/github/rollout.cs" > "$bin/$tool" || return 1
+      printf ' %q' "${dotnet_build_env[@]}" "$real_dotnet" >> "$bin/$tool" || return 1
+      # shellcheck disable=SC2016
+      printf ' "$@"\nfi\nif [[ $# -ge 1 && "$1" == %q ]]; then\n  exec %q "$@"\nfi\n' "$rollout_dll" "$real_dotnet" >> "$bin/$tool" || return 1
+    else
+      printf '#!%s\n' "$BASH" > "$bin/$tool" || return 1
+    fi
+    printf 'export FAKE_TOOL_NAME=%q FAKE_TOOL_DIR=%q FAKE_GH_LOG=%q FAKE_HOME=%q\nexec %q %q "$@"\n' "$tool" \
+      "$tmp/run/fakes" "$tmp/run/calls" "$home" "$BASH" "$fake_tool" >> "$bin/$tool" || return 1
     chmod +x "$bin/$tool" || return 1
   done
   printf '#!%s\nexport FAKE_GH_DIR=%q FAKE_GH_LOG=%q\nexec %q %q "$@"\n' "$BASH" "$tmp/run/gh" "$tmp/run/calls" "$BASH" \

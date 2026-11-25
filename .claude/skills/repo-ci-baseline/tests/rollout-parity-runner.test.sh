@@ -354,6 +354,34 @@ run_runner 2 "a sort of HOME's listing that fails" PATH="$work/sortbin:$work/hos
 rm -rf "$cases/fresh"
 mv "$work/one" "$cases/one"
 
+# A copy holding github/rollout.cs: the runner builds it once before the first case, and the fake dotnet hands that build and a run of
+# the dll it named to the caller's dotnet, logging neither and writing nothing in HOME, while it answers every other dotnet call as a
+# fake. github/cs.sh stands in for rollout.sh: it builds and runs the C# as rollout.sh does, after one call the fake answers. A
+# rollout.cs that doesn't build is a setup error. Needs the .NET SDK, as the real suite does.
+if command -v dotnet > /dev/null; then
+  mv "$cases/one" "$work/one"
+  # shellcheck disable=SC2016 # the stand-in's own $0, $dir and $@, expanded when it runs
+  printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'dir="$(cd "$(dirname "$0")" && pwd)"' 'dotnet --version' \
+    'dll="$(cd "$dir" && dotnet build "$dir/rollout.cs" -t:Build -getProperty:TargetPath 2> /dev/null)"' 'exec dotnet "$dll" "$@"' > "$skill/github/cs.sh"
+  chmod +x "$skill/github/cs.sh"
+  printf '%s\n' 'Console.WriteLine($"cs {string.Join(" ", args)} home {Environment.GetEnvironmentVariable("HOME")}");' > "$skill/github/rollout.cs"
+  dir="$cases/dotnet"
+  mkdir -p "$dir/gh" "$dir/fakes"
+  printf '%s\n' '#80' > "$dir/args"
+  : > "$dir/gh/.gitkeep"
+  printf '#!/usr/bin/env bash\necho "fake dotnet $*"\n' > "$dir/fakes/dotnet.sh"
+  printf '%s\n' 'fake dotnet --version' 'cs #80 home ~' > "$dir/expected.stdout"
+  echo 0 > "$dir/expected.code"
+  : > "$dir/expected.stderr"
+  echo 'dotnet --version' > "$dir/expected.calls"
+  run_runner 0 "the copy's rollout.cs, built once and run through the fake dotnet" -- "$skill/github/cs.sh"
+  printf '%s\n' 'this is not C#' > "$skill/github/rollout.cs"
+  run_runner 2 "a copy whose rollout.cs doesn't build" -- "$skill/github/cs.sh" \
+    && said "a copy whose rollout.cs doesn't build" "dotnet build of the copy's github/rollout.cs failed"
+  rm -rf "$skill/github/rollout.cs" "$skill/github/cs.sh" "$dir"
+  mv "$work/one" "$cases/one"
+fi
+
 # The fake tool, called by its link's name: numbered fixtures, ~ for FAKE_HOME, quoting, and exit 97 for what it can't answer.
 fdir="$work/fakes" flog="$work/flog" fhome="$work/fhome"
 mkdir -p "$fdir" "$fhome" "$work/links"

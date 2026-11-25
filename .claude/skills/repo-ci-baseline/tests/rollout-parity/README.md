@@ -3,9 +3,11 @@
 `rollout.sh` through its command line: `tests/rollout-parity.test.sh [command...]`. The runner's header says what a case holds, and how each run gets a
 temporary copy of the skill folder (rollout calls `reapply.sh` and `land.sh` beside itself, so those two are stubs there), the fixed `repos.txt` beside this
 file, a stand-in Template (`template/`: the `global.json`, `pre-push-review` skill and `pre-push-reviewer` agent `--auto` reads), a HOME of its own, and a
-PATH of fakes and the host's own commands only. One suite judges `rollout.py` and `auto_rollout.py`: `auto_rollout.py` has no command line of its own, and
-`rollout.py` runs it for `--auto` and reads TicketManager's re-Apply PR and branch through it in plain mode too (ADR 0017; they are ported together).
-The cases were recorded from `rollout.sh`, which runs `rollout.py`.
+PATH of fakes and the host's own commands only. The cases were recorded from `rollout.sh` when it ran `rollout.py` and `auto_rollout.py`, and pass
+unchanged against it now that it runs their C# port, `github/rollout.cs` (ADR 0017, mpaulosky/Application_Factory#122). `rollout.sh` builds that file and
+runs the dll it builds with the `dotnet` on PATH, which in a run is the fake: so the runner builds the copy's `github/rollout.cs` once, before the first case,
+and the fake `dotnet` hands exactly those two calls (`dotnet build` of that file, and `dotnet` of that dll) to the caller's `dotnet`, logging neither, while
+it answers every other call (the preflight's `dotnet --version`) as a fake.
 
 The cases cover plain mode: `--dry-run` with TicketManager's PR merged (the rest's calls follow) and with none found (held, exit 1), and `--root` with a space in
 it (the calls quote it); a missing checkout, which stops the round before anything runs (exit 1); no `--brings` (exit 2); `reapply.sh` exiting 3 and 4 on
@@ -42,7 +44,7 @@ Not covered, on purpose:
 
 - The default `github/repos.txt` and a `repos.txt` without TicketManager: every case runs on the copy's fixed one.
 - `git` itself: it is a fake, so the cases pin rollout's calls to it, not what a real repository answers. A review session's after-session checks see an
-  unchanged worktree only; the rules a session can break (a moved HEAD, a changed file, a finding staged fixed) are left to `github/tests/test_auto_rollout.py`.
+  unchanged worktree only; the rules a session can break (a moved HEAD, a changed file, a finding staged fixed) are left to the xUnit tests in `tests/Scripts.Tests/AutoRollout/`.
 - `claude` itself: the review session is a fake that stages `[]`, so the sandbox and permissions the round hands it are pinned only as its command line has them.
 - A system other than Linux: the preflight reads the platform from Python itself, with no seam a case could set.
 - `--auto`'s waits, which take that long in real time and have no seam a case could shorten: a review session's 180 minutes, the 10 seconds a killed session's

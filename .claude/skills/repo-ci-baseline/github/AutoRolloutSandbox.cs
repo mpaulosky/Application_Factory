@@ -1,6 +1,5 @@
-// rollout.sh --auto's review-session sandbox, ported from auto_rollout.py (expand_home to session_env) as a library that nothing runs yet
-// (ADR 0017's Update for mpaulosky/Application_Factory#157, library first): auto_rollout.py is still what runs, and its docstring holds the
-// round's contract. This part says what the unattended review session may read, write and run: the session's reads and writes, what of
+// rollout.sh --auto's review-session sandbox, ported from auto_rollout.py (expand_home to session_env) as a library of rollout.cs (ADR 0017's
+// Update for mpaulosky/Application_Factory#157, library first); AutoRolloutRound.cs's header holds the round's contract. This part says what the unattended review session may read, write and run: the session's reads and writes, what of
 // / its Bash is denied (denied_around, read_denials), the tools' own installs (tool_reads), its settings file and command line, the
 // clone's git config read for sign-in secrets (config_secrets), the sweeps of what killed runs left, and its environment.
 //

@@ -1,7 +1,7 @@
-// auto_rollout.py's logic as a library of rollout.cs, ported a part at a time (ADR 0017's Update for mpaulosky/Application_Factory#157): nothing runs
-// it yet, and auto_rollout.py stays what rollout.sh --auto runs until the cut-over. This part is auto_rollout.py's short_name to read_skill: where the
-// round's files are (Folders), the lock, the Owned files a re-Apply changes, and the skill's text; AutoRolloutPreflight.cs holds the preflight and the
-// sign-in checks. A change to those functions in auto_rollout.py changes this file and its xUnit copy (tests/Scripts.Tests/AutoRollout/) too.
+// rollout.sh --auto's C# (ADR 0016), a library of rollout.cs ported from auto_rollout.py a part at a time and run since its cut-over (ADR 0017's
+// Updates for mpaulosky/Application_Factory#157 and #122); AutoRolloutRound.cs's header is the round's contract. This part is auto_rollout.py's
+// short_name to read_skill and agent_definition: where the round's files are (Folders), the lock, the Owned files a re-Apply changes, and the
+// skill's and the reviewer agent's text; AutoRolloutPreflight.cs holds the preflight and the sign-in checks. Its tests are in tests/Scripts.Tests/AutoRollout/.
 //
 // Python's readings are kept where .NET's differ: a line ends where str.splitlines() ends one, space is str.isspace(), a text file is read as
 // Python's text mode reads it (strict UTF-8, \r\n and \r as \n), and paths sort by code point, as sorted() sorts them.
@@ -352,6 +352,41 @@ static partial class AutoRollout
 		path ??= Folders.Default.SkillFile;
 		var text = ReadText(path);
 		return FrontMatter(text, path) is { } parts ? parts.Body.TrimStart('\n') : text;
+	}
+
+	// The reviewer agent, for --agents: {name: {description, prompt, tools, model}} from its file's front matter (a flat `key: value` list,
+	// with `>-`, `>` or `|` folding the lines indented under it) and body. Throws InvalidDataException when a part is missing.
+	public static System.Text.Json.Nodes.JsonObject AgentDefinition(string? path = null)
+	{
+		path ??= Folders.Default.AgentFile;
+		var text = ReadText(path);
+		var (head, body) = FrontMatter(text, path) ?? throw new InvalidDataException($"{path} has no front matter");
+		Dictionary<string, string> fields = [];
+		string? key = null;
+		foreach (var line in SplitLines(head.Trim('\n'), keepEnds: false))
+		{
+			if ((line.StartsWith(' ') || line.StartsWith('\t')) && key is not null)
+				fields[key] = PyStrip(fields[key] + " " + PyStrip(line));
+			else if (line.Contains(':'))
+			{
+				var cut = line.IndexOf(':');
+				(key, var value) = (PyStrip(line[..cut]), PyStrip(line[(cut + 1)..]));
+				fields[key] = value is ">-" or ">" or "|" ? "" : value;
+			}
+		}
+		foreach (var needed in new[] { "name", "description", "tools" })
+			if (fields.GetValueOrDefault(needed) is null or "")
+				throw new InvalidDataException($"{path} has no {needed}");
+		var definition = new System.Text.Json.Nodes.JsonObject
+		{
+			["description"] = fields["description"],
+			["prompt"] = body.TrimStart('\n'),
+			["tools"] = new System.Text.Json.Nodes.JsonArray([.. fields["tools"].Split(',').Select(PyStrip).Where(tool => tool.Length > 0)
+					.Select(tool => (System.Text.Json.Nodes.JsonNode?)tool)]),
+		};
+		if (fields.GetValueOrDefault("model") is { Length: > 0 } model)
+			definition["model"] = model;
+		return new System.Text.Json.Nodes.JsonObject { [fields["name"]] = definition };
 	}
 
 	// ── Python's readings ───────────────────────────────────────────────────

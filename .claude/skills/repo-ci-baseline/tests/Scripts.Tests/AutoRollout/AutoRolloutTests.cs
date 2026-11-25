@@ -1,8 +1,7 @@
 using System.Diagnostics;
 
 // Tests for github/AutoRollout.cs: copies of github/tests/test_auto_rollout.py's tests of the worktree, the lock, the Owned files and the skill's
-// text (ADR 0017's Update for mpaulosky/Application_Factory#157), with the same cases and assertions, and the lock's tests the Update names. The
-// pytest originals stay until the cut-over.
+// text (ADR 0017's Update for mpaulosky/Application_Factory#157), with the same cases and assertions, and the lock's tests the Update names.
 public class AutoRolloutTests : IDisposable
 {
 	readonly string tmp = AutoRollout.RealPath(Directory.CreateTempSubdirectory("auto-rollout-test.").FullName);
@@ -50,7 +49,7 @@ public class AutoRolloutTests : IDisposable
 	[Fact]
 	public void The_paths_it_runs_exist()
 	{
-		// The original's REAPPLY is rollout.py's, which joins this library with rollout's own port.
+		// The original's REAPPLY is rollout.py's: Rollout.RunReapply runs the same Folders.Reapply.
 		static bool Executable(string path) => !OperatingSystem.IsWindows() && File.Exists(path) && (File.GetUnixFileMode(path) & UnixFileMode.UserExecute) != 0;
 		var folders = new Folders(Skill.Dir);
 		Assert.True(Executable(folders.Land));
@@ -80,11 +79,15 @@ public class AutoRolloutTests : IDisposable
 	[Fact]
 	public void The_exit_codes_and_worktree_agree_with_reapply_sh()
 	{
-		// The original's part this library holds: the branch and the worktree's folder. The exit codes join it with the round's port.
 		var script = File.ReadAllLines(Skill.Path("reapply.sh"));
 		string Constant(string name) => script.First(line => line.StartsWith($"{name}=", StringComparison.Ordinal)).Split('=', 2)[1].Trim('"');
+		Assert.Equal(Constant("review_needed_exit"), AutoRound.ReviewNeeded.ToString(System.Globalization.CultureInfo.InvariantCulture));
+		Assert.Equal(Constant("findings_wait_exit"), AutoRound.FindingsWait.ToString(System.Globalization.CultureInfo.InvariantCulture));
 		Assert.Equal(AutoRollout.Worktree, Constant("worktree_name"));
 		Assert.Equal(AutoRollout.Branch, Constant("branch"));
+		Assert.Equal(AutoRollout.Branch, Rollout.Branch);
+		// rollout.sh's hints, by the same codes.
+		Assert.Equal([AutoRound.ReviewNeeded, AutoRound.FindingsWait], Rollout.ReapplyStops.Keys.Order());
 	}
 
 	// ── The worktree, the lock, the Owned files ─────────────────────────
@@ -129,7 +132,7 @@ public class AutoRolloutTests : IDisposable
 	public void A_second_run_cannot_take_the_lock()
 	{
 		// The original's second run is another python3; flock's lock is on the open file, so a second open in this process is refused as well,
-		// and a second run of auto_rollout.py is what the next test holds.
+		// and another process's flock is what the next test holds.
 		var path = Path.Combine(tmp, "sub", "lock");
 		var first = AutoRollout.TakeLock(path);
 		Assert.NotNull(first);
@@ -140,21 +143,18 @@ public class AutoRolloutTests : IDisposable
 	}
 
 	[Fact]
-	public void The_lock_is_flocks_own_so_the_python_round_and_flock_n_are_kept_out()
+	public void The_lock_is_flocks_own_so_flock_n_is_kept_out_both_ways()
 	{
 		// ADR 0017's Update for mpaulosky/Application_Factory#157: a FileStream with FileShare.None is flock(LOCK_EX | LOCK_NB), the call
-		// auto_rollout.py's take_lock makes, so a C# round and a Python round keep each other out while both exist.
+		// auto_rollout.py's take_lock made, so a round of the C# keeps out a round of an older checkout's Python too.
 		Assert.SkipUnless(OperatingSystem.IsLinux(), "--auto runs on Linux only");
 		var path = Path.Combine(tmp, "lock");
-		var python = $"import sys; sys.path.insert(0, sys.argv[1]); import auto_rollout as a; print(a.take_lock(sys.argv[2]) is None)";
 		using (var held = AutoRollout.TakeLock(path))
 		{
 			Assert.NotNull(held);
 			Assert.Equal(1, Start("flock", "-n", path, "true").Code);
-			Assert.Equal((0, "True\n"), Start("python3", "-I", "-c", python, Skill.Path("github"), path));
 		}
 		Assert.Equal(0, Start("flock", "-n", path, "true").Code);
-		Assert.Equal((0, "False\n"), Start("python3", "-I", "-c", python, Skill.Path("github"), path));
 		// And the other way: while flock(1) holds it, the C# can't take it.
 		// The holder waits for the lock (no -n), so a probe of the loop below that holds it for a moment doesn't make flock give up.
 		var start = new ProcessStartInfo("flock", [path, "sleep", "30"]) { UseShellExecute = false };

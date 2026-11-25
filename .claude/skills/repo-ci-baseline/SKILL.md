@@ -135,7 +135,7 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
      (at once when TicketManager already matches the Template, with nothing to push), and the rest's PRs together.
      Its lock keeps a second `--auto` run out, not a person: don't run `reapply.sh` or the review by hand in a re-Apply worktree while it runs. It stops only where a person decides
      (findings that wait for one, a PR that doesn't land or can't be read, a failed reapply or review session), printing the command that decides it and the one that resumes.
-     Fix a finding in an Owned file Template first, then add that PR to `--brings` and resume. `github/auto_rollout.py`'s header has the details.
+     Fix a finding in an Owned file Template first, then add that PR to `--brings` and resume. `github/AutoRolloutRound.cs`'s header has the details.
    - **One repo:** `reapply.sh --brings '#<n>,#<n>' <repo>` (what `rollout.sh` runs, and the way to retry a repo that failed)
      prepares the `chore/reapply-baseline` worktree, merges the remote branch and `main`, commits `apply.sh`'s output alone,
      pushes through the gate (which asks for a review when Apply writes the coverage threshold,

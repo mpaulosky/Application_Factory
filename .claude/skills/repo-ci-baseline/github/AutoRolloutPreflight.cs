@@ -1,5 +1,5 @@
-// auto_rollout.py's preflight and sign-in checks, as part of the AutoRollout library (AutoRollout.cs says what the library is and how it is kept in
-// step with the Python): what would stop a round partway through, asked before anything runs.
+// auto_rollout.py's preflight and sign-in checks, as part of the AutoRollout library (AutoRollout.cs says what the library is): what would stop
+// a round partway through, asked before anything runs.
 using System.Collections;
 using System.Numerics;
 using System.Text;

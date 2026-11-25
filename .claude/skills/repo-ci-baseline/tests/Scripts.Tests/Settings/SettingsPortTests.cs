@@ -4,11 +4,12 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 
 // What the port must hold beyond the moved tests (ADR 0017's Update for mpaulosky/Application_Factory#120): not moved tests, so
-// SettingsTests.cs keeps the moved pytest suite's, and its count can be checked against that suite's in git history. settings.py stays
-// beside the C# until rollout.py is ported, so the Python readings the output depends on are checked against it, run by python3.
+// SettingsTests.cs keeps the moved pytest suite's, and its count can be checked against that suite's in git history. The Python readings
+// the output depends on are checked against python3's own; what only settings.py read (its workflow readers and branch patterns) was
+// recorded from it before it was deleted with rollout.py (mpaulosky/Application_Factory#122).
 public partial class SettingsTests
 {
-	// What python3 prints for script, with input on its stdin: settings.py's folder is first on sys.path, so `import settings` reads it.
+	// What python3 prints for script, with input on its stdin.
 	static string Python(string script, string input)
 	{
 		var start = new ProcessStartInfo("python3")
@@ -19,8 +20,8 @@ public partial class SettingsTests
 			UseShellExecute = false,
 			StandardInputEncoding = new UTF8Encoding(false),
 		};
-		// -I ignores every PYTHON* variable, so UTF-8 mode and no bytecode (no __pycache__ in the skill's github/) are asked for by option.
-		foreach (var arg in new[] { "-I", "-B", "-X", "utf8", "-c", $"import sys; sys.path.insert(0, sys.argv[1])\n{script}", Github })
+		// -I ignores every PYTHON* variable, so UTF-8 mode and no bytecode are asked for by option.
+		foreach (var arg in new[] { "-I", "-B", "-X", "utf8", "-c", $"import sys\n{script}" })
 			start.ArgumentList.Add(arg);
 		using var run = Process.Start(start)!;
 		run.StandardInput.Write(input);
@@ -372,22 +373,29 @@ public partial class SettingsTests
 			"\"on\": [push, pull_request]\njobs:\n  a:\n    name: A\nother:\n  b:\n    name: B\njobs:\n  c:\n",
 			"on: pull_request # opened\njobs:\n  x-y_z:\n    runs-on: ubuntu\n    name: late\n      - uses: ./local\n      - uses: owner/repo/path@main\n"];
 
+	// What settings.py's workflow_facts and runs_on_every_pr (with no branch, "dev" and "feature/x") gave for each of WorkflowTexts, recorded
+	// from it before it was deleted (mpaulosky/Application_Factory#122), as json.dumps printed them.
+	static readonly string[] WorkflowReadings =
+	[
+		"""[["Build"], [], true, true, true]""",
+		"""[["A", "b"], ["x/y@v1"], true, true, true]""",
+		"""[["Quoted"], [], true, true, false]""",
+		"""[["c"], ["a/b@DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"], true, true, true]""",
+		"""[["a"], [], true, true, false]""",
+		"""[["A", "c"], [], true, true, true]""",
+		"""[["late"], ["owner/repo/path@main"], true, true, true]""",
+	];
+
 	[Fact]
 	public void The_workflow_readers_read_as_settings_py_reads()
 	{
-		var python = Python("""
-				import json, settings
-				for text in json.load(sys.stdin):
-				    names, unpinned = settings.workflow_facts(text)
-				    print(json.dumps([names, unpinned, settings.runs_on_every_pr(text), settings.runs_on_every_pr(text, "dev"),
-				                      settings.runs_on_every_pr(text, "feature/x")]))
-				""", JsonSerializer.Serialize(WorkflowTexts)).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+		Assert.Equal(WorkflowTexts.Length, WorkflowReadings.Length);
 		for (var i = 0; i < WorkflowTexts.Length; i++)
 		{
 			var (names, unpinned) = Settings.WorkflowFacts(WorkflowTexts[i]);
 			var mine = new JsonArray(new JsonArray([.. names.Select(n => (JsonNode)n)]), new JsonArray([.. unpinned.Select(u => (JsonNode)u)]),
 					Settings.RunsOnEveryPr(WorkflowTexts[i]), Settings.RunsOnEveryPr(WorkflowTexts[i], "dev"), Settings.RunsOnEveryPr(WorkflowTexts[i], "feature/x"));
-			Assert.Equal(python[i], Py.Dumps(mine));
+			Assert.Equal(WorkflowReadings[i], Py.Dumps(mine));
 		}
 	}
 
@@ -397,11 +405,9 @@ public partial class SettingsTests
 		string[][] cases = [["\ud83d\ude00?", ""], ["\ud83d\ude00?", "\ud83d\ude00"], ["a\ud83d\ude00+b", "a\ud83d\ude00\ud83d\ude00b"], ["\\\ud83d\ude00", "\ud83d\ude00"],
 				["[z-a]ain", "main"], ["a\\", "a\\"], ["a++", "a+"], ["a??", "a?"], ["**/x", "a/b/x"], ["*/x", "a/b/x"], ["(m)", "(m)"], ["m|n", "m"],
 				["{1}", "{1}"], ["a.b", "a.b"], ["[m-]ain", "-ain"], ["re lease", "re lease"], ["#x", "#x"], ["\\[m]", "[m]"]];
-		var python = Python("""
-				import json, settings
-				print(json.dumps([settings.branch_matches(p, b) for p, b in json.load(sys.stdin)]))
-				""", JsonSerializer.Serialize(cases));
-		Assert.Equal(python.Trim(), Py.Dumps(new JsonArray([.. cases.Select(c => (JsonNode)Settings.BranchMatches(c[0], c[1]))])));
+		// What settings.py's branch_matches gave for each case, recorded from it before it was deleted (mpaulosky/Application_Factory#122).
+		const string Python = "[true, true, true, true, false, true, true, true, true, false, true, false, true, true, true, true, true, true]";
+		Assert.Equal(Python, Py.Dumps(new JsonArray([.. cases.Select(c => (JsonNode)Settings.BranchMatches(c[0], c[1]))])));
 	}
 
 	[Fact]

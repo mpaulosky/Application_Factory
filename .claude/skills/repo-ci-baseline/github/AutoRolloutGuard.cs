@@ -1,7 +1,6 @@
-// What a review session may not change (auto_rollout.py's session_guard and broken_rules, ADR 0016), as a library of rollout.cs that
-// nothing runs yet (ADR 0017's Update for mpaulosky/Application_Factory#157): the Guard read before the session, the Rules it broke read
-// after, and the file and tree snapshots both compare. auto_rollout.py is still what runs, and this is kept in step with it until the
-// cut-over (mpaulosky/Application_Factory#122). --auto is Linux only, so the reads are glibc's on 64-bit Linux (Posix).
+// What a review session may not change (auto_rollout.py's session_guard and broken_rules, ADR 0016), as a library of rollout.cs (ADR 0017's
+// Update for mpaulosky/Application_Factory#157): the Guard read before the session, the Rules it broke read after, and the file and tree
+// snapshots both compare. --auto is Linux only, so the reads are glibc's on 64-bit Linux (Posix).
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
