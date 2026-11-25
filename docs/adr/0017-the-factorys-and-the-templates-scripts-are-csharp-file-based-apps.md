@@ -104,7 +104,8 @@ Each of these is decided in its increment, and recorded as an Update below:
   for a hook that runs on every edit, and the replacement must run no code from the tree.
 - The white-box tests in xUnit v3: when each pytest suite is replaced, where the test projects live (both decided for the skill's `github/` scripts in the
   Update for mpaulosky/Application_Factory#119; where the Template's own scripts' tests go is still open), and which package reads YAML for the tests that check workflows, since the BCL
-  has none. The Factory's Python test helpers move with them: `tests/check-issue-refs.py` and `tests/check-git-status.py` (which the gate and `test.sh` run; both C#
+  has none (YamlDotNet for the bench and `Scripts.Tests`, Update for mpaulosky/Application_Factory#161; a test the Template carries is still open).
+  The Factory's Python test helpers move with them: `tests/check-issue-refs.py` and `tests/check-git-status.py` (which the gate and `test.sh` run; both C#
   now, Update for mpaulosky/Application_Factory#123),
   `tests/mutations/check-spec.py` and `tests/render_oracle/`.
 - The checkers' cut-over: how the workflow steps build them in a temp folder with the base's `global.json`, where the `OWNED` list lives once `check_owned_files` can't import
@@ -351,3 +352,46 @@ imports `auto_rollout` in plain mode too, and `test_auto_rollout.py` imports `ro
   `status.sh` and `land.sh` print it too on a first run, which this Update leaves for their own change.
 - **The pytest suite.** `github/tests/test_settings.py` is deleted, its 34 tests moved to `tests/Scripts.Tests/Settings/SettingsTests.cs` under the rule above, a
   `Settings/` folder beside the ones the mpaulosky/Application_Factory#119 Update lists. It held no `read_repo_list` test: `ReposTests.cs` already holds `Repos.cs` to it.
+
+## Update (mpaulosky/Application_Factory#161): the bench is C#, and YamlDotNet reads its YAML
+
+A Factory-only port, as the ones above are, so `bench/claude-review-bench.py` and its pytest are deleted in the PR that ports it, and there is no Rollout.
+
+- **The files.** `bench/claude-review-bench.cs` is the entry file. It pulls in `ReviewBench.cs` (the logic), `Yaml.cs` (the YAML reader), and `Gh.cs` and `Py.cs` from
+  `github/` by relative path. `Py`, Python's readings of a JSON value, moves out of `SettingsCore.cs` into `github/Py.cs`, which `settings.cs` now includes, so the bench
+  takes it without the rest of settings. `Arguments` gains an int option and an option that takes one value or more (argparse's `nargs="+"`, for `--rescore`), held to
+  argparse by a test. `bench/` holds the three empty shields, which `test.sh` checks with the others. The bench has no wrapper: run it as
+  `dotnet run --file bench/claude-review-bench.cs -- <args>` from anywhere in the Factory, whose `global.json` picks the SDK. Its first run after a change prints CA2266
+  on stdout, as `status.sh` and `land.sh` do.
+- **The YAML package is YamlDotNet.** The rule above says a script that needs a package needs its own ADR first; this Update is that decision, for the bench and for
+  `Scripts.Tests`, whose tests read the Template's `claude-review.yml` too. The options:
+  - **YamlDotNet** (MIT, no dependencies, the most used YAML library for .NET). Chosen. Its representation model gives the node tree, and `Yaml.cs` turns that into the
+    `JsonNode` tree PyYAML's `safe_load()` gave, with the types PyYAML's YAML 1.1 resolvers gave a plain scalar (`on` and `yes` are true, `1.0` is a float, `1e3` is a
+    string), so the bench and its tests read the workflow as the Python did. What it reads differently is named in `Yaml.cs` and tested: a key given twice is refused
+    (GitHub refuses one in a workflow too) where PyYAML kept the last value, and an int in base 2, 8, 16 or 60, `.inf`, `.nan`, a timestamp and a merge key stay strings.
+  - **A YAML reader of our own, BCL only.** Rejected: the workflow has block scalars, flow collections, quoting and comments, and the reader would be a second YAML
+    implementation to keep right.
+  - **Regular expressions over the workflow's lines**, as `SettingsCore.cs` finds a workflow's jobs. Rejected: the bench needs the prompt, the arguments and the heredoc
+    whole, as YAML reads a block scalar, not a line at a time.
+  - **PyYAML or `yq` run as a program.** Rejected: it keeps the Python, or adds a tool, that the port removes.
+- **Its restore is pinned as the test project's is.** The entry file pins `#:package YamlDotNet@18.1.0` and sets `RestorePackagesWithLockFile` and `RestoreLockedMode`,
+  so `bench/packages.lock.json` pins the package by hash and a version moved without it fails with NU1004. `bench/NuGet.config` restores from nuget.org alone, as the
+  test project's does; `test.sh` checks it on a copy under a folder whose `NuGet.config` adds another feed. `Scripts.Tests` takes the same version, in its own lock file.
+  Dependabot's nuget block bumps the test project's, not a file-based app's, so `BenchPortTests` fails until the two versions and the two lock files' hashes match: a
+  bump's PR moves the bench's by hand (the version in the entry file, then `dotnet build bench/claude-review-bench.cs -p:RestoreLockedMode=false` rewrites its lock file).
+- **Offline.** A `#:package` needs nuget.org on its first restore, which a cold start offline can't do. The bench needs the network anyway (it fetches the actions a case
+  pins, and runs Claude), but the gate builds every script, so its first build of the bench on a machine needs nuget.org once; after that the package comes from the
+  NuGet cache. CI has the network.
+- **The heredoc stays Python.** The bench runs the workflow's "Write the PR's diff" heredoc with `python3 -I`, as the runner does, until the heredocs in `claude-review.yml`
+  are C# (Still open, above).
+- **Its output is Python's, byte for byte.** `--rescore` prints and writes back what the Python did: `repr()` and `str()` of a value, `json.dump(indent=2)` with every
+  character past ASCII escaped, and `str.split()` and slicing by code point. `bench/tests/rescore.test.sh` is its parity suite, which `test.sh` runs: it passed against the
+  Python and the C# before the `.py` went, and on the day of the port `--rescore` over a copy of every file in `bench/results/` gave the same stdout and bytes from both.
+  Its fixtures were recorded from the Python; when the cases file changes they are recorded again from the C# (`RESCORE_RECORD=1`), the reference now.
+- **What the port changes on purpose.** An action a case's head pins whose owner, repo or ref is `.` or `..`, or starts with `-`, is skipped, where the Python joined it
+  into the folder it copied the action to and passed it to `git` as it was. The programs the bench runs (`git`, `tar`, `python3`, `claude`) are found in `PATH`'s absolute
+  folders only, as `Gh.Which` finds `gh`. A linked `.claude`, `.mcp.json`, `CLAUDE.md` or `CLAUDE.local.md` in the head is removed itself, where the Python's `rmtree`
+  failed on a linked folder and left a dangling link in place. A failed call's error names the command and its exit status, as Python's `CalledProcessError` did, in
+  words of its own. The run mode, which runs Claude on the cases' clones, has no parity suite: `Scripts.Tests` tests its parts, and a run on the maintainer's machine the whole.
+- **The pytest suite.** `bench/tests/test_claude_review_bench.py` is deleted, its 26 tests moved to `tests/Scripts.Tests/Bench/BenchTests.cs` under the rule above, a
+  `Bench/` folder beside the others; `BenchPortTests.cs` holds the port's own. `Scripts.Tests` compiles every `.cs` in `bench/` but the entry file.

@@ -187,7 +187,7 @@ Copilot made five findings on Articles#298's three reviewed commits. Four were r
 On the same commits, Claude Review as first shipped (Sonnet 5.5, medium effort) found nothing and approved all three.
 A PR that landed on Claude's review alone would have merged all of them.
 
-`bench/claude-review-bench.py` replays the Review step with `claude -p` against those commits and scores what it catches (`bench/claude-review-cases.json`).
+`bench/claude-review-bench.py` (C# since mpaulosky/Application_Factory#161: `bench/claude-review-bench.cs`) replays the Review step with `claude -p` against those commits and scores what it catches (`bench/claude-review-cases.json`).
 It also replays three ordinary merged PRs to read for noise. Required findings caught, out of 7 (a finding counts once for each commit that still has the bug):
 
 | Variant | Caught | Per commit |
