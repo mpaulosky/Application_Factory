@@ -282,9 +282,7 @@ normalize() {
 # renamed after what is in it.
 normalize_home() {
   local path entry name new target n
-  while IFS= read -r -d '' path; do
-    normalize "$path"
-  done < <(find "$home" -name .git -prune -o -type f -print0)
+  # The names first: normalizing a file's content writes it, which would change the order they were written in.
   while IFS= read -r -d '' entry; do
     path="${entry#* * }"
     name="${path##*/}"
@@ -297,6 +295,9 @@ normalize_home() {
     done
     mv -- "$path" "$target"
   done < <(find "$home" -mindepth 1 -printf '%d %T@ %p\0' | sort -z -k1,1nr -k2,2n)
+  while IFS= read -r -d '' path; do
+    normalize "$path"
+  done < <(find "$home" -name .git -prune -o -type f -print0)
 }
 
 # home_problems <case folder>: prints how the run's HOME differs from the case's expected.home/ (or, with none, its home/),
