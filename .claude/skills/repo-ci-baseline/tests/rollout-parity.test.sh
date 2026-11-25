@@ -82,7 +82,7 @@
 # Exit 0 when every case passes, 1 when one fails, 2 on a usage or setup error (a case missing a file or holding a bad one,
 # a setup.sh that fails, a command that can't be run, a temporary folder that can't be made). Needs bash 4.4 or later,
 # python3 (the launcher; the reference needs it too), coreutils (mktemp, mkdir, rm, ln, cp, mv, cat, tr, env, basename,
-# dirname, timeout, and GNU sort for -z), GNU findutils (find with -printf and -quit), a diff with --no-dereference (GNU
+# dirname, timeout, and GNU sort for -z), GNU findutils (find with -printf), a diff with --no-dereference (GNU
 # diffutils 3.3 or later), grep and sed; the cases' fixtures need jq, flock (util-linux) and Linux's /proc too.
 set -euo pipefail
 
@@ -363,13 +363,17 @@ make_bin() {
 # form (a .json, a .fail, a numbered one): the fake gh prefers a .json to a .fail, so a case's auth.status.fail must hide
 # the default auth.status.json, not sit beside it.
 merge_gh() {
-  local file key
+  local file key own n hidden
   for file in "$defaults_dir/gh"/*; do
     key="$(basename -- "$file")"
     key="${key%.json}" key="${key%.fail}"
-    [[ -z "$(find "$1" -maxdepth 1 \( -name "$key.json" -o -name "$key.fail" -o -name "$key.*[0-9].json" -o -name "$key.*[0-9].fail" \) -print -quit)" ]] \
-      || continue
-    cp -- "$file" "$2/" || return 1
+    hidden=
+    # The forms the fake gh reads for the key: <key>.json, <key>.fail, and the nth call's <key>.<digits>.json or .fail, no other.
+    for own in "$1/$key".*; do
+      n="${own##*/}" n="${n#"$key".}"
+      [[ ! "$n" =~ ^([0-9]+\.)?(json|fail)$ ]] || hidden=1
+    done
+    [[ -n "$hidden" ]] || cp -- "$file" "$2/" || return 1
   done
   cp -R "$1/." "$2/"
 }

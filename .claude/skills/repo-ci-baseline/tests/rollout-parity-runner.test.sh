@@ -194,6 +194,12 @@ for fixture in auth.status.2.fail auth.status.2.json; do
   run_runner 1 "a case's $fixture over a default .json" -- && said "a case's $fixture over a default .json" "UNMATCHED"
   rm "$cases/one/gh/$fixture"
 done
+# A fixture of another key that starts the same way doesn't hide it.
+for fixture in auth.status.x1.json auth.status.2x.fail; do
+  echo 'other key' > "$cases/one/gh/$fixture"
+  run_runner 0 "a case's $fixture beside a default .json" --
+  rm "$cases/one/gh/$fixture"
+done
 # setup.sh runs in HOME before the run, and after.sh after it; one that fails is a setup error, the other a failed case.
 printf '#!/usr/bin/env bash\necho done > setup.txt\n' > "$cases/one/setup.sh"
 printf '#!/usr/bin/env bash\nrm setup.txt\n' > "$cases/one/after.sh"
@@ -220,7 +226,7 @@ rm -rf "$cases/one/expected.home" "$cases/one/env" "$cases/two"
 run_runner 2 "a command naming a skill file the copy lacks" -- bash not-copied.sh
 said "a command naming a skill file the copy lacks" "is in the skill folder but not in its copy"
 run_runner 2 "a command that can't be run" -- ./no-such-command
-run_runner 2 "a command that is no file on PATH" -- cd && said "a command that is no file on PATH" "the command 'cd' is not a file on PATH"
+run_runner 2 "a command that is no file on PATH" -- shopt && said "a command that is no file on PATH" "the command 'shopt' is not a file on PATH"
 # A PATH of the caller's commands but python3.
 mkdir -p "$work/nopython"
 IFS=: read -ra dirs <<< "$PATH"
@@ -242,14 +248,24 @@ for folder in fakes gh; do
   run_runner 2 "no defaults/$folder/" -- && said "no defaults/$folder/" "has no fakes/ and gh/ folders"
   mv "$work/moved" "$skill/tests/rollout-parity/defaults/$folder"
 done
-for file in setup.sh after.sh missing ignore; do
+# The case's own args moves aside while each of these, args too, is a folder, then while each holds a carriage return.
+mv "$cases/one/args" "$work/args"
+for file in args env setup.sh after.sh missing ignore; do
   mkdir "$cases/one/$file"
   run_runner 2 "a $file that is a folder" -- && said "a $file that is a folder" "one/$file is not a file"
   rmdir "$cases/one/$file"
 done
-printf 'pnpm\r\n' > "$cases/one/missing"
-run_runner 2 "a carriage return in missing" -- && said "a carriage return in missing" "missing holds a carriage return"
-rm "$cases/one/missing"
+for file in args env missing ignore; do
+  case "$file" in
+    args) printf '#80\r\n' ;;
+    env) printf 'A=b\r\n' ;;
+    missing) printf 'pnpm\r\n' ;;
+    ignore) printf 'HUP\r\n' ;;
+  esac > "$cases/one/$file"
+  run_runner 2 "a carriage return in $file" -- && said "a carriage return in $file" "one/$file holds a carriage return"
+  rm "$cases/one/$file"
+done
+mv "$work/args" "$cases/one/args"
 run_runner 2 "a bad PARITY_TIMEOUT" PARITY_TIMEOUT=0 --
 run_runner 2 "record mode with a command" PARITY_RECORD=1 -- bash github/alt.sh
 for file in gh fakes expected.calls; do
@@ -329,6 +345,12 @@ END
 chmod +x "$work/findbin/find"
 run_runner 2 "a listing of HOME that fails" PATH="$work/findbin:$work/hostbin:$PATH" STUB_MODE=names -- \
   && said "a listing of HOME that fails" "can't list the run's HOME"
+sed -i 's/!= -printf ]]/!= -print0 ]]/' "$work/findbin/find"
+run_runner 2 "a listing of HOME's files that fails" PATH="$work/findbin:$work/hostbin:$PATH" STUB_MODE=names -- \
+  && said "a listing of HOME's files that fails" "can't list the files in the run's HOME"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$work/sortbin/sort"
+run_runner 2 "a sort of HOME's listing that fails" PATH="$work/sortbin:$work/hostbin:$PATH" STUB_MODE=names -- \
+  && said "a sort of HOME's listing that fails" "can't list the run's HOME"
 rm -rf "$cases/fresh"
 mv "$work/one" "$cases/one"
 
