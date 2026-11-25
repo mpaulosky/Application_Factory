@@ -1,0 +1,3 @@
+^usage: detect_changes\.(py|cs) \[-h\] --base BASE 
+...
+^detect_changes\.(py|cs): error: ambiguous option: --he could match --help, --head, --head-ref$

@@ -1,0 +1,8 @@
+--bas
+base
+--out
+out
+--auth
+dependabot[bot]
+--head-r
+dependabot/github_actions/all-actions-1a2b3c
