@@ -414,3 +414,18 @@ it, and each part is shown in the note.
 
 What this leaves to F3a to F3c and the cut-over: the exact names, the tests that hold each part (a test of the lock against `flock -n`, a spawned child that holds it after
 the round's SIGKILL, a leader that stays a zombie until the kill, SIGHUP under `nohup`), and the parity cases for `--auto` (mpaulosky/Application_Factory#156).
+
+## Update (mpaulosky/Application_Factory#158): the first AutoRollout library, the preflight, sign-in and lock
+
+F3a, the first library under the library-first rule above. Nothing runs it: `rollout.sh` still runs `rollout.py`, and `auto_rollout.py` and its pytest are unchanged.
+
+- **The files.** `github/rollout.cs` is the entry file; until the cut-over it writes to stderr that `rollout.sh` still runs the Python, and exits 2. It includes `Gh.cs`,
+  `AutoRollout.cs` (where the round's files are, as a `Folders` record of the skill folder; `short_name`, `review_worktree`, `run_quiet`, the lock, `retired_paths`,
+  `owned_changes`, `front_matter`, `read_skill`, and the Python readings they need) and `AutoRolloutPreflight.cs` (the preflight and the sign-in checks).
+  `Scripts.Tests` leaves `rollout.cs` out of its `Compile` items, and its copies of the pytest tests are in `tests/Scripts.Tests/AutoRollout/`. A copy whose original also
+  checks `session_env`, which mpaulosky/Application_Factory#159 ports, keeps the preflight's assertions; the rest joins it with that port.
+- **The lock** is as the Update above decides. Held is an `IOException` of that exact type whose errno is EWOULDBLOCK (11 on Linux); any other error is "can't take it"
+  and propagates. Tests hold it against `flock -n` and `auto_rollout.py`'s own `take_lock`, both ways.
+- **What the port changes on purpose.** The preflight's `which` and `run_quiet` find a program in `PATH`'s absolute folders only, as `Gh.cs` finds `gh` (`shutil.which`
+  and `subprocess` took a relative folder too). `TakeLock` refuses to run when .NET's file locking is turned off (`DOTNET_SYSTEM_IO_DISABLEFILELOCKING`,
+  `System.IO.DisableFileLocking`), where a `FileStream` would take no lock and a second round would run beside the first.
