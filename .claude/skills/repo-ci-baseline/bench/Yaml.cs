@@ -22,27 +22,52 @@ static class Yaml
 	// A sign only before a digit: -.5 is a string, as it was to PyYAML.
 	static readonly Regex Float = new(@"\A(?:[-+]?[0-9][0-9_]*\.[0-9_]*(?:[eE][-+][0-9]+)?|\.[0-9_]+(?:[eE][-+][0-9]+)?)\z", RegexOptions.CultureInvariant);
 
-	// The first document's tree, null for a text with none (as safe_load("") is None). A text YAML can't parse throws YamlException.
-	public static JsonNode? Load(string text)
+	// The most nodes, and the deepest nesting, a text may hold once its aliases are read in. YamlDotNet hands back an alias as the node it names,
+	// so a node aliased many times is converted that many times: a few lines of aliases of aliases (an alias bomb) would otherwise grow without
+	// bound, where PyYAML shared the one object. A case's head is read through here too, so a workflow past either is refused, as one YAML can't parse.
+	// The Template's claude-review.yml holds a few thousand nodes, nested less than twenty deep.
+	public const int MaxNodes = 100_000;
+	public const int MaxDepth = 100;
+
+	// The first document's tree, null for a text with none (as safe_load("") is None). A text YAML can't parse, or one past MaxNodes or MaxDepth,
+	// throws YamlException.
+	public static JsonNode? Load(string text) => Load(text, MaxNodes, MaxDepth);
+
+	public static JsonNode? Load(string text, int maxNodes, int maxDepth)
 	{
 		var stream = new YamlStream();
 		stream.Load(new StringReader(text));
-		return stream.Documents.Count == 0 ? null : Node(stream.Documents[0].RootNode);
+		return stream.Documents.Count == 0 ? null : Node(stream.Documents[0].RootNode, new Budget(maxNodes, maxDepth), 1);
 	}
 
-	static JsonNode? Node(YamlNode node) => node switch
+	// What is left of a load's MaxNodes, and its MaxDepth.
+	sealed class Budget(int nodes, int depth)
 	{
-		YamlMappingNode mapping => Mapping(mapping),
-		YamlSequenceNode sequence => new JsonArray([.. sequence.Children.Select(Node)]),
-		YamlScalarNode scalar => Scalar(scalar),
-		_ => throw new YamlException($"a YAML node the bench doesn't read: {node.NodeType}"),
-	};
+		public readonly int Nodes = nodes;
+		public readonly int Depth = depth;
+		public int Used;
+	}
 
-	static JsonObject Mapping(YamlMappingNode mapping)
+	static JsonNode? Node(YamlNode node, Budget budget, int depth)
+	{
+		if (++budget.Used > budget.Nodes)
+			throw new YamlException($"more than {budget.Nodes} YAML nodes once its aliases are read in");
+		if (depth > budget.Depth)
+			throw new YamlException($"YAML nested more than {budget.Depth} deep");
+		return node switch
+		{
+			YamlMappingNode mapping => Mapping(mapping, budget, depth),
+			YamlSequenceNode sequence => new JsonArray([.. sequence.Children.Select(child => Node(child, budget, depth + 1))]),
+			YamlScalarNode scalar => Scalar(scalar),
+			_ => throw new YamlException($"a YAML node the bench doesn't read: {node.NodeType}"),
+		};
+	}
+
+	static JsonObject Mapping(YamlMappingNode mapping, Budget budget, int depth)
 	{
 		var result = new JsonObject();
 		foreach (var (key, value) in mapping.Children)
-			result[key is YamlScalarNode scalar ? scalar.Value ?? "" : throw new YamlException("a mapping key that isn't a scalar")] = Node(value);
+			result[key is YamlScalarNode scalar ? scalar.Value ?? "" : throw new YamlException("a mapping key that isn't a scalar")] = Node(value, budget, depth + 1);
 		return result;
 	}
 

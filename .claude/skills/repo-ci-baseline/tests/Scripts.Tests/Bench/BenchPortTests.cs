@@ -267,7 +267,7 @@ public partial class BenchTests
 	}
 
 	[Fact]
-	public void A_review_turn_count_over_max_turns_is_flagged_from_the_transcripts_numbers()
+	public void A_transcript_names_a_turn_with_no_id_by_its_number_and_a_call_with_no_file_by_its_tool()
 	{
 		var (result, reads) = Bench.Transcript("{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Glob\", \"input\": {\"pattern\": \"*.md\"}}]}}\n"
 				+ "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Grep\", \"input\": {}}]}}\n"

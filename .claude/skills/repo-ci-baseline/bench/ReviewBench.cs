@@ -31,6 +31,7 @@
 // Ported from claude-review-bench.py (ADR 0017's Update for mpaulosky/Application_Factory#161): --rescore prints and writes what the Python did,
 // byte for byte (bench/tests/rescore.test.sh), so Py (../github/Py.cs) holds Python's readings of the JSON it prints. An action a head
 // pins whose owner, repo or ref is . or .., or starts with -, is skipped rather than copied, where the Python passed it to git and into a path.
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
@@ -349,7 +350,13 @@ static class Bench
 				Exec([.. Git, "-C", repo, "worktree", "remove", "--force", tree], inherit: true);
 			Directory.Delete(temp, recursive: true);
 		}
-		var seconds = Seconds(started);
+		return Outcome(done, args, Seconds(started));
+	}
+
+	// What a finished claude call gave: the review with its cost, turns and reads, or the case's error. The shape post_claude_review.py accepts is
+	// the only review taken; anything else is this case's error, not the run's.
+	public static JsonObject Outcome(Ran done, IReadOnlyList<string> args, long seconds)
+	{
 		if (done.Code != 0)
 			return new() { ["error"] = Py.Tail(done.Stderr.Length > 0 ? done.Stderr : done.Text, 2000), ["seconds"] = seconds };
 		JsonNode? data, review;
@@ -365,7 +372,6 @@ static class Bench
 		{
 			return new() { ["error"] = $"no structured review ({error.Message}): {Py.Tail(done.Text, 2000)}", ["seconds"] = seconds };
 		}
-		// The shape post_claude_review.py accepts; anything else is this case's error, not the run's.
 		if (!(review is JsonObject && J.Get(review, "findings") is JsonArray findings && findings.All(f => f is JsonObject)))
 			return new() { ["error"] = $"review isn't an object with a list of findings: {Py.Head(Py.Str(review), 2000)}", ["seconds"] = seconds };
 		var outcome = new JsonObject
@@ -376,12 +382,19 @@ static class Bench
 			["turns"] = J.Copy(Py.Get(data, "num_turns")),
 			["reads"] = reads,
 		};
-		// claude-code-action rejects a result whose num_turns is over --max-turns, after it has run; Claude Code itself counts round-trips
-		// instead, so a review it lets finish can still be one the workflow would never post.
-		BigInteger? cap = args.IndexOf("--max-turns") is var at and >= 0 ? BigInteger.Parse(args[at + 1], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture) : null;
-		if (cap is not null && Py.Int(outcome["turns"]) is { } turns && turns > cap)
+		if (ActionRejects(outcome["turns"], args))
 			outcome["action_rejects"] = true;
 		return outcome;
+	}
+
+	// claude-code-action rejects a result whose num_turns is over --max-turns, after it has run; Claude Code itself counts round-trips
+	// instead, so a review it lets finish can still be one the workflow would never post. With no --max-turns, or a turn count that isn't an
+	// int, nothing is rejected.
+	public static bool ActionRejects(JsonNode? turns, IReadOnlyList<string> args)
+	{
+		var at = args.ToList().IndexOf("--max-turns");
+		BigInteger? cap = at >= 0 ? BigInteger.Parse(args[at + 1], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture) : null;
+		return cap is not null && Py.Int(turns) is { } count && count > cap;
 	}
 
 	// round(): to the nearest second, a half to the even one.
@@ -393,7 +406,9 @@ static class Bench
 	{
 		JsonNode? result = null;
 		OrderedDictionary<string, JsonArray> turns = [];
-		foreach (var line in Py.SplitLines(stream))
+		// JSON Lines: a line ends at \n alone. JSON.stringify writes U+2028, U+2029 and U+0085 raw inside a string, which str.splitlines() (the
+		// Python's split, and Py.SplitLines) also broke at, cutting such a review in half.
+		foreach (var line in stream.Split('\n'))
 		{
 			if (Py.Strip(line).Length == 0)
 				continue;
@@ -564,6 +579,10 @@ static class Bench
 	static string Name(string path) => Path.GetFileName(path.TrimEnd('/'));
 
 	// read_text(): UTF-8, a byte that isn't throwing.
+	// A prompt file's text with its line endings read as read_text() read them: \r\n and a lone \r are \n, so Render finds the workflow's lines
+	// in a prompt written on Windows.
+	public static string ReadPrompt(string path) => ReadText(path).Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+
 	static string ReadText(string path) => new UTF8Encoding(false, true).GetString(File.ReadAllBytes(path));
 
 	// -- The command --
@@ -627,7 +646,7 @@ static class Bench
 		var (prompt, claudeArgs) = ReviewStep(workflow);
 		var split = DiffStep(workflow);
 		if (parser.Values.GetValueOrDefault("--prompt-file") is { } promptFile)
-			prompt = ReadText(promptFile);
+			prompt = ReadPrompt(promptFile);
 		(string? Effort, string? Model, string? Tools) overrides =
 				(parser.Values.GetValueOrDefault("--effort"), parser.Values.GetValueOrDefault("--model"), parser.Values.GetValueOrDefault("--tools"));
 		var results = Path.Combine(here, "results");
@@ -681,7 +700,7 @@ static class Bench
 	// -- Processes --
 
 	// One finished call: its exit code, stdout as bytes and as UTF-8 text (a byte that isn't UTF-8 read as U+FFFD), and stderr.
-	readonly record struct Ran(int Code, byte[] Stdout, string Stderr)
+	public readonly record struct Ran(int Code, byte[] Stdout, string Stderr)
 	{
 		public string Text => Encoding.UTF8.GetString(Stdout);
 	}
@@ -701,8 +720,8 @@ static class Bench
 
 	// Runs argv (its program found by Which) in cwd, with env as its whole environment when given, input on its stdin, and its output
 	// captured unless inherit; past timeout seconds it is killed with its children and TimeoutException thrown. A program that isn't
-	// there throws CaseError.
-	static Ran Exec(IReadOnlyList<string> argv, string? cwd = null, Dictionary<string, string>? env = null, byte[]? input = null, long? timeout = null,
+	// there, or can't be run, throws CaseError.
+	public static Ran Exec(IReadOnlyList<string> argv, string? cwd = null, Dictionary<string, string>? env = null, byte[]? input = null, long? timeout = null,
 			bool inherit = false)
 	{
 		var start = new ProcessStartInfo(Which(argv[0]) ?? throw new CaseError($"{argv[0]} isn't on PATH (only its absolute folders are searched)"))
@@ -723,7 +742,17 @@ static class Bench
 		}
 		foreach (var arg in argv.Skip(1))
 			start.ArgumentList.Add(arg);
-		using var process = Process.Start(start)!;
+		Process process;
+		try
+		{
+			process = Process.Start(start)!;
+		}
+		catch (Win32Exception error)
+		{
+			// A file in PATH that can't be run (no #! line, a binary for another machine): this case's error, as the Python's OSError was.
+			throw new CaseError($"{argv[0]} couldn't be run: {error.Message}");
+		}
+		using var _ = process;
 		var write = Task.Run(() =>
 		{
 			try
@@ -756,7 +785,7 @@ static class Bench
 	}
 
 	// Run argv, failing the case when it exits other than 0, as check=True did.
-	static Ran Check(IReadOnlyList<string> argv) => Check(Exec(argv), argv);
+	public static Ran Check(IReadOnlyList<string> argv) => Check(Exec(argv), argv);
 
 	static Ran Check(Ran ran, IReadOnlyList<string> argv) => ran.Code == 0 ? ran
 			: throw new CaseError($"Command {Py.Repr(new JsonArray([.. argv.Select(a => (JsonNode?)a)]))} returned non-zero exit status {ran.Code}. {ran.Stderr}".Trim());

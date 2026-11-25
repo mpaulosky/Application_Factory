@@ -20,7 +20,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="xunit.v3.mtp-v2" Version="4.0.3" />
-    <!-- The YAML reader the bench takes (bench/Yaml.cs), at the version bench/claude-review-bench.cs pins with #:package; test.sh holds the two equal. -->
+    <!-- The YAML reader the bench takes (bench/Yaml.cs), at the version bench/claude-review-bench.cs pins with #:package; BenchPortTests fails until the two versions and lock hashes match. -->
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
     <Using Include="Xunit" />
   </ItemGroup>
