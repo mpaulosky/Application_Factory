@@ -454,6 +454,7 @@ A Factory-only port, as the ones above are, so `bench/claude-review-bench.py` an
 - **Its output is Python's, byte for byte.** `--rescore` prints and writes back what the Python did: `repr()` and `str()` of a value, `json.dump(indent=2)` with every
   character past ASCII escaped, and `str.split()` and slicing by code point. `bench/tests/rescore.test.sh` is its parity suite, which `test.sh` runs: it passed against the
   Python and the C# before the `.py` went, and on the day of the port `--rescore` over a copy of every file in `bench/results/` gave the same stdout and bytes from both.
+  The one exception is the report's escaping of control and format characters, below.
   Its fixtures were recorded from the Python; when the cases file changes they are recorded again from the C# (`RESCORE_RECORD=1`), the reference now.
 - **What the port changes on purpose.** An action a case's head pins whose owner, repo or ref is `.` or `..`, or starts with `-`, is skipped, where the Python joined it
   into the folder it copied the action to and passed it to `git` as it was. The programs the bench runs (`git`, `tar`, `python3`, `claude`) are found in `PATH`'s absolute
@@ -466,8 +467,10 @@ A Factory-only port, as the ones above are, so `bench/claude-review-bench.py` an
   which no catch stops), and checks an alias against the depth and charges it the whole size of the node it names before copying it, where PyYAML shared the one
   object, so an alias bomb is refused before it grows. An int is read as its digits, not through `BigInteger`, and an anchor names a node in its own
   document only, as in PyYAML. A float past a double's range, such as `1.0e+999`, is read as its string, where PyYAML read `inf`: no pinned action is a float.
-  A failed case's report shows a control character in its error, path or lines as `\xNN` (a tab and a newline as they are), where the Python printed it raw to the
-  terminal. Claude's `stream-json` output is split at `\n` alone, where the Python's
+  Each case's report, in a run and in `--rescore`, shows a control character (but a tab or a newline) and a format or line or paragraph separator
+  character in its error, its seconds, turns and cost, a finding's path, line and body, and the bad lines as `\xNN` or `\uNNNN`, where the Python
+  printed it raw to the terminal. A call that exits within its timeout but leaves a child holding its pipes ends in a timeout, and the child runs on.
+  Claude's `stream-json` output is split at `\n` alone, where the Python's
   `splitlines()` also broke at the U+2028, U+2029 and U+0085 that JSON writes raw inside a string and so lost such a review. A `--prompt-file` reads `\r\n` and
   `\r` as `\n`, as `read_text()` did. The run mode, which runs Claude on the cases' clones, has no parity suite: `Scripts.Tests` tests its parts (`BenchRunTests.cs`:
   each outcome a finished call gives, the `--max-turns` cap, the timeout, the YAML limits), and a run on the maintainer's machine the whole.

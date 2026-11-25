@@ -511,17 +511,22 @@ static class Bench
 		return bad;
 	}
 
-	// Text from the model or a call, shown with each control character but a tab or newline written \xNN, as repr() writes it, so an
-	// escape sequence a head led the review to write can't reach the terminal. The Python printed them as they were.
+	// Text from the model or a call, shown with each control character but a tab or newline, and each format or line or paragraph
+	// separator character (a bidi override, U+2028), written in repr()'s \xNN or \uNNNN form, so an escape sequence or a reordering a
+	// head led the review to write can't reach the terminal. The Python printed them as they were.
 	public static string Shown(string text)
 	{
-		if (!text.Any(c => char.IsControl(c) && c is not '\t' and not '\n'))
+		if (!text.Any(Hidden))
 			return text;
 		var shown = new StringBuilder(text.Length + 8);
 		foreach (var c in text)
-			shown.Append(char.IsControl(c) && c is not '\t' and not '\n' ? $"\\x{(int)c:x2}" : c.ToString());
+			shown.Append(!Hidden(c) ? c.ToString() : c <= '\u00ff' ? $"\\x{(int)c:x2}" : $"\\u{(int)c:x4}");
 		return shown.ToString();
 	}
+
+	static bool Hidden(char c) =>
+		c is not '\t' and not '\n' && char.GetUnicodeCategory(c) is UnicodeCategory.Control or UnicodeCategory.Format
+			or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator;
 
 	public static void Report(JsonNode spec, JsonNode @case, JsonNode outcome, OrderedDictionary<string, bool> hits, TextWriter output)
 	{
@@ -531,7 +536,7 @@ static class Bench
 		if (J.Has(outcome, "error"))
 			output.Write($"   error: {Shown(Py.Str(J.Req(outcome, "error")))}\n");
 		var copilot = J.Has(@case, "copilot_threads") ? $" (Copilot opened {Py.Str(J.Req(@case, "copilot_threads"))} thread(s))" : "";
-		output.Write($"   {Py.Str(J.Get(outcome, "seconds"))}s, {Py.Str(J.Get(outcome, "turns"))} turns, ${Py.Str(J.Get(outcome, "cost_usd"))}; "
+		output.Write($"   {Shown(Py.Str(J.Get(outcome, "seconds")))}s, {Shown(Py.Str(J.Get(outcome, "turns")))} turns, ${Shown(Py.Str(J.Get(outcome, "cost_usd")))}; "
 				+ $"{found.Count} finding(s){copilot}\n");
 		if (J.B(J.Get(outcome, "action_rejects")))
 			output.Write("   claude-code-action would reject this review: its num_turns is over --max-turns\n");
@@ -731,8 +736,9 @@ static class Bench
 	}
 
 	// Runs argv (its program found by Which) in cwd, with env as its whole environment when given, input on its stdin, and its output
-	// captured unless inherit; past timeout seconds it is killed with its children and TimeoutException thrown. A program that isn't
-	// there, or can't be run, throws CaseError.
+	// captured unless inherit; past timeout seconds it is killed with its children and TimeoutException thrown. One that exits within it
+	// but leaves a child holding its pipes throws TimeoutException once the time is up, and that child, no longer its child, runs on (as
+	// under the Python, where communicate() then waited for it). A program that isn't there, or can't be run, throws CaseError.
 	public static Ran Exec(IReadOnlyList<string> argv, string? cwd = null, Dictionary<string, string>? env = null, byte[]? input = null, long? timeout = null,
 			bool inherit = false)
 	{
@@ -795,8 +801,9 @@ static class Bench
 		process.WaitForExit();
 		// The pipes close when every process holding them has, so a child the call left running keeps them open past its exit: the time
 		// left bounds them too, as Python's communicate(timeout=) did.
-		var left = limit == Timeout.InfiniteTimeSpan ? limit : limit - clock.Elapsed;
-		if (!Task.WaitAll([write, stdout, stderr], left < TimeSpan.Zero ? TimeSpan.Zero : left))
+		if (limit == Timeout.InfiniteTimeSpan)
+			Task.WaitAll(write, stdout, stderr);
+		else if (!Task.WaitAll([write, stdout, stderr], TimeSpan.Zero > limit - clock.Elapsed ? TimeSpan.Zero : limit - clock.Elapsed))
 			throw new TimeoutException();
 		return new Ran(process.ExitCode, stdout.Result, stderr.Result);
 	}

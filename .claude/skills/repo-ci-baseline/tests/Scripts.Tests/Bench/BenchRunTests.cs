@@ -146,6 +146,15 @@ public partial class BenchTests
 		Assert.Equal(0, Bench.Exec(["true"], timeout: long.MaxValue).Code);
 	}
 
+	[Fact]
+	public void A_call_with_no_timeout_waits_for_all_its_output()
+	{
+		// The pipes can still be open, or draining, when a call exits, so a call with no timeout must wait for them, not time out.
+		Assert.Equal("late\n", Encoding.UTF8.GetString(Bench.Exec(["sh", "-c", "(sleep 1; echo late) & exit 0"]).Stdout));
+		for (var run = 0; run < 20; run++)
+			Assert.Equal(1_000_000, Bench.Exec(["head", "-c", "1000000", "/dev/zero"]).Stdout.Length);
+	}
+
 	// -- The workflow's steps --
 
 	[Theory]
@@ -182,9 +191,41 @@ public partial class BenchTests
 	[InlineData("a\tb\nc", "a\tb\nc")]
 	[InlineData("\u001b]52;c;x\u0007", "\\x1b]52;c;x\\x07")]
 	[InlineData("csi\u009b2J del\u007f", "csi\\x9b2J del\\x7f")]
+	[InlineData("\u001f \u0020\u00a0\u00e9", "\\x1f  \u00a0\u00e9")]
+	[InlineData("cr\r", "cr\\x0d")]
+	[InlineData("rtl\u202egnp.exe", "rtl\\u202egnp.exe")]
+	[InlineData("a\u2028b\u2029c\u200bd", "a\\u2028b\\u2029c\\u200bd")]
 	public void Text_from_the_model_is_shown_with_its_control_characters_escaped(string text, string shown)
 	{
 		Assert.Equal(shown, Bench.Shown(text));
+	}
+
+	[Theory]
+	[InlineData("error")]
+	[InlineData("path")]
+	[InlineData("line")]
+	[InlineData("body")]
+	[InlineData("bad_lines")]
+	[InlineData("seconds")]
+	[InlineData("turns")]
+	[InlineData("cost_usd")]
+	public void The_report_shows_each_field_from_the_model_or_a_call_escaped(string field)
+	{
+		const string escape = "x\u001b]52;c;y\u0007";
+		JsonObject finding = new() { ["path"] = "a.cs", ["line"] = 1, ["body"] = "ok" };
+		JsonObject outcome = new() { ["review"] = new JsonObject { ["findings"] = new JsonArray(finding) } };
+		if (field is "path" or "line" or "body")
+			finding[field] = escape;
+		else if (field == "bad_lines")
+			outcome[field] = new JsonArray(escape);
+		else
+			outcome[field] = escape;
+		using var output = new StringWriter();
+
+		Bench.Report(new JsonObject { ["findings"] = new JsonObject() }, new JsonObject { ["repo"] = "r", ["pr"] = 1, ["head"] = "h" }, outcome, new(), output);
+
+		Assert.Contains("x\\x1b]52;c;y\\x07", output.ToString(), StringComparison.Ordinal);
+		Assert.DoesNotContain('\u001b', output.ToString());
 	}
 
 	[Theory]
