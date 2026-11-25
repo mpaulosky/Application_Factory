@@ -920,16 +920,18 @@ issues_settings="$(sed -n '/^      - name: Work the issue$/,/^      - name: /p' 
 check "the issue worker's Claude runs with background tasks off" \
   "$(jq -e '.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS == "1"' <<< "${issues_settings:-null}" > /dev/null 2>&1 && echo 0 || echo 1)"
 # A job's `if:` with no status function gets GitHub's implicit `success()`, which counts every job upstream: the queue job is skipped on every event but the
-# owner's `@claude` comment, so a job below it without one is skipped too (#185). An explicit `success()` does the same, so only `always()`, `cancelled()`
-# (as `!cancelled()`) and `failure()` count. unguarded_jobs prints each job under `jobs:` with `needs:` whose `if:` names none of them, outside quoted strings
-# and comments; it prints `(no job with needs:)` when it finds none, so the check can't pass on a file it no longer reads, and fails, saying so, on a file it
-# can't read or an awk that fails. guard_case runs it and adds `rc=<status>` on a failure, so a check sees both.
+# owner's `@claude` comment, so a job below it without one is skipped too (#185). An explicit `success()` does the same, so only a call to `always()`,
+# `cancelled()` or `failure()` counts, negated or not. unguarded_jobs prints each job under `jobs:` with `needs:` whose `if:` names none of them, outside quoted
+# strings and comments: bare() takes both off each line of the `if:`, the strings first so a `#` inside one isn't read as a comment. It prints
+# `(no job with needs:)` when it finds none, so the check can't pass on a file it no longer reads, and fails, saying so, on a file it can't read or an awk that
+# fails. guard_case runs it and adds `rc=<status>` on a failure, so a check sees both.
 guard_awk="$(
   cat << 'AWK'
-function flush(c) {
+function bare(l) { gsub(/'[^']*'/, "", l); gsub(/"[^"]*"/, "", l); sub(/(^|[ ])#.*$/, "", l); return l }
+function flush() {
   if (job == "" || !needs) return
-  n++; c = cond; gsub(/'[^']*'/, "", c); gsub(/"[^"]*"/, "", c)
-  if (c !~ /(always|cancelled|failure)\(\)/) print job
+  n++
+  if (cond !~ /(always|cancelled|failure)\(\)/) print job
 }
 { sub(/\r$/, "") }
 /^jobs:[ ]*(#.*)?$/ { in_jobs = 1; next }
@@ -938,8 +940,8 @@ in_jobs && /^  [A-Za-z0-9_-]+:[ ]*(#.*)?$/ { flush(); job = $1; sub(/:.*$/, "", 
 in_jobs && job != "" {
   if ($0 ~ /^[ ]*(#.*)?$/) next
   if ($0 ~ /^    needs:/) needs = 1
-  if ($0 ~ /^    if:/) { cond = $0; sub(/^    if:/, "", cond); sub(/[ ]#.*$/, "", cond); in_cond = 1; next }
-  if (in_cond && $0 ~ /^      /) { cond = cond " " $0; next }
+  if ($0 ~ /^    if:/) { l = $0; sub(/^    if:/, "", l); cond = bare(l); in_cond = 1; next }
+  if (in_cond && $0 ~ /^      /) { cond = cond " " bare($0); next }
   in_cond = 0
 }
 END { flush(); if (!n) print "(no job with needs:)" }
@@ -962,8 +964,10 @@ printf '%s\n' 'jobs:' '  a:' '    runs-on: x' '  b:' '    needs: [a]' '    if: a
   '    needs: a' '  d:' '    needs:' '      - a' '    if: failure()' > "$guards/each.yml"
 check "the status-function check takes always(), !cancelled() and failure() as guards, whatever the needs: shape or key order" \
   "$([[ -z $(guard_case "$guards/each.yml") ]] && echo 0 || echo 1)"
-printf '%s\n' 'jobs:' '  a:' '    runs-on: x' '  b:' '    needs: [a]' '    if: success() && true' '  c:' '    needs: [a]' '    runs-on: x' > "$guards/success.yml"
-check "the status-function check flags an if: with only success(), and a job with needs: and no if:" \
+# d, with no needs:, follows a job with one, so a needs: isn't carried over to the next job.
+printf '%s\n' 'jobs:' '  a:' '    runs-on: x' '  b:' '    needs: [a]' '    if: success() && true' '  c:' '    needs: [a]' '    runs-on: x' '  d:' '    runs-on: x' \
+  > "$guards/success.yml"
+check "the status-function check flags an if: with only success(), and a job with needs: and no if:, and not a job after it with no needs:" \
   "$([[ $(guard_case "$guards/success.yml") == $'b\nc' ]] && echo 0 || echo 1)"
 printf '%s\n' 'jobs:' '  a:' '    runs-on: x' > "$guards/none.yml"
 check "the status-function check says so when it finds no job with needs:" "$([[ $(guard_case "$guards/none.yml") == '(no job with needs:)' ]] && echo 0 || echo 1)"
@@ -977,11 +981,13 @@ check "the status-function check fails when awk fails" "$([[ $(PATH="$guards/bad
 printf '%s\n' 'jobs: # every job' '  a:' '    runs-on: x' '  b:' '    needs: [a]' '    if: always()' '  c: # a note' '    needs: [a]' 'other:' '  d:' '    needs: [a]' > "$guards/keys.yml"
 check "the status-function check reads a job key with a comment, and stops at the next top-level key" \
   "$([[ $(guard_case "$guards/keys.yml") == c ]] && echo 0 || echo 1)"
-# A status function inside a quoted string or a comment, the comment on the if: line or on a line of its own, isn't a guard.
+# A status function inside a quoted string or a comment, the comment at the end of the if: line or of a later one, or on a line of its own, isn't a guard;
+# a # inside a quoted string doesn't start a comment, so a guard after it on the line still counts (f).
 printf '%s\n' 'jobs:' '  a:' '    runs-on: x' '  b:' '    needs: [a]' "    if: contains(github.event.comment.body, 'always()') # cancelled()" \
-  '  c:' '    needs: [a]' '    # failure()' '    if: >-' '      true' '      # !cancelled()' '      && contains("x", "failure()")' > "$guards/quoted.yml"
+  '  c:' '    needs: [a]' '    # failure()' '    if: >-' '      true' '      # !cancelled()' '      && contains("x", "failure()")' \
+  '  e:' '    needs: [a]' '    if: >-' '      true' '      && true # always()' '  f:' '    needs: [a]' "    if: contains(x, 'a # b') && always()" > "$guards/quoted.yml"
 check "the status-function check doesn't take a status function in a quoted string or a comment as a guard" \
-  "$([[ $(guard_case "$guards/quoted.yml") == $'b\nc' ]] && echo 0 || echo 1)"
+  "$([[ $(guard_case "$guards/quoted.yml") == $'b\nc\ne' ]] && echo 0 || echo 1)"
 # A blank line inside a folded if: doesn't end it, and CRLF line endings read the same as LF.
 printf '%s\r\n' 'jobs:' '  a:' '    runs-on: x' '  b:' '    needs: [a]' '    if: >-' '      true' '' '      && !cancelled()' > "$guards/crlf.yml"
 check "the status-function check reads a folded if: past a blank line, with CRLF line endings" "$([[ -z $(guard_case "$guards/crlf.yml") ]] && echo 0 || echo 1)"
