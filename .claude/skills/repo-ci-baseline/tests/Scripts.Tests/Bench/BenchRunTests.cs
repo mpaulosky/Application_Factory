@@ -163,32 +163,133 @@ public partial class BenchTests
 		const string text = "a: &a x\nb: [*a]\n";
 
 		if (refused)
-			Assert.Throws<YamlException>(() => Yaml.Load(text, nodes, Yaml.MaxDepth));
+			Assert.Throws<YamlException>(() => Yaml.Load(text, Yaml.MaxDepth, nodes, Yaml.MaxScalarText));
 		else
-			Assert.Equal("""{"a":"x","b":["x"]}""", Yaml.Load(text, nodes, Yaml.MaxDepth)!.ToJsonString());
+			Assert.Equal("""{"a":"x","b":["x"]}""", Yaml.Load(text, Yaml.MaxDepth, nodes, Yaml.MaxScalarText)!.ToJsonString());
 	}
 
 	[Theory]
-	[InlineData(2, true)]
+	[InlineData(6, true)]
+	[InlineData(7, false)]
+	[InlineData(8, false)]
+	public void An_alias_to_a_list_is_charged_every_node_the_list_holds(int nodes, bool refused)
+	{
+		// The mapping, a's list and its two scalars, and b's copy of all three: 7 nodes.
+		const string text = "a: &a [x, x]\nb: *a\n";
+
+		if (refused)
+			Assert.Throws<YamlException>(() => Yaml.Load(text, Yaml.MaxDepth, nodes, Yaml.MaxScalarText));
+		else
+			Assert.Equal("""{"a":["x","x"],"b":["x","x"]}""", Yaml.Load(text, Yaml.MaxDepth, nodes, Yaml.MaxScalarText)!.ToJsonString());
+	}
+
+	[Theory]
+	[InlineData(1, true)]
+	[InlineData(2, false)]
 	[InlineData(3, false)]
-	[InlineData(4, false)]
 	public void A_text_nested_past_its_depth_is_refused(int depth, bool refused)
 	{
-		// The mapping is depth 1, its list 2, the scalar in it 3.
+		// The mapping is level 1 and its list level 2; a scalar opens no level.
 		const string text = "a: [x]\n";
 
 		if (refused)
-			Assert.Throws<YamlException>(() => Yaml.Load(text, Yaml.MaxNodes, depth));
+			Assert.Throws<YamlException>(() => Yaml.Load(text, depth, Yaml.MaxNodes, Yaml.MaxScalarText));
 		else
-			Assert.Equal("""{"a":["x"]}""", Yaml.Load(text, Yaml.MaxNodes, depth)!.ToJsonString());
+			Assert.Equal("""{"a":["x"]}""", Yaml.Load(text, depth, Yaml.MaxNodes, Yaml.MaxScalarText)!.ToJsonString());
+	}
+
+	[Theory]
+	[InlineData(-1, false)]
+	[InlineData(0, false)]
+	[InlineData(1, true)]
+	public void The_real_depth_limit_holds_at_its_edge(int past, bool refused)
+	{
+		var levels = Yaml.MaxDepth + past;
+		var text = new string('[', levels) + "x" + new string(']', levels);
+
+		if (refused)
+			Assert.Throws<YamlException>(() => Yaml.Load(text));
+		else
+			Assert.NotNull(Yaml.Load(text));
+	}
+
+	[Theory]
+	[InlineData(-1, false)]
+	[InlineData(0, false)]
+	[InlineData(1, true)]
+	public void The_real_node_limit_holds_at_its_edge(int past, bool refused)
+	{
+		// The list and its scalars: Yaml.MaxNodes + past nodes.
+		var text = "[" + string.Join(",", Enumerable.Repeat("x", Yaml.MaxNodes + past - 1)) + "]";
+
+		if (refused)
+			Assert.Throws<YamlException>(() => Yaml.Load(text));
+		else
+			Assert.Equal(Yaml.MaxNodes + past - 1, Yaml.Load(text)!.AsArray().Count);
+	}
+
+	[Theory]
+	[InlineData(-1, false)]
+	[InlineData(0, false)]
+	[InlineData(1, true)]
+	public void The_real_scalar_text_limit_holds_at_its_edge_counting_each_alias(int past, bool refused)
+	{
+		// One scalar of 4,096 digits and its aliases: (1 + aliases) * 4,096 characters of scalars once they are read in.
+		const int length = 4096;
+		var aliases = (int)(Yaml.MaxScalarText / length) - 1 + past;
+		var text = $"a: &a {new string('9', length)}\nb: [{string.Join(",", Enumerable.Repeat("*a", aliases))}]\n";
+
+		if (refused)
+			Assert.Throws<YamlException>(() => Yaml.Load(text));
+		else
+			Assert.Equal(aliases, J.Req(Yaml.Load(text), "b")!.AsArray().Count);
+	}
+
+	[Theory]
+	[InlineData(-1, false)]
+	[InlineData(0, false)]
+	[InlineData(1, true)]
+	public void The_real_text_limit_holds_at_its_edge(int past, bool refused)
+	{
+		var text = "a: " + new string('x', Yaml.MaxText + past - 3);
+
+		if (refused)
+			Assert.Throws<YamlException>(() => Yaml.Load(text));
+		else
+			Assert.Equal(Yaml.MaxText + past - 3, J.S(J.Req(Yaml.Load(text), "a"))!.Length);
 	}
 
 	[Fact]
-	public void The_template_workflow_is_well_inside_the_yaml_budget()
+	public void Nesting_deep_enough_to_overflow_a_recursive_reader_is_refused_and_pins_no_action()
+	{
+		var text = new string('[', 200_000) + new string(']', 200_000);
+
+		Assert.Throws<YamlException>(() => Yaml.Load(text));
+		Assert.Empty(Bench.PinnedActions(text));
+	}
+
+	[Fact]
+	public void An_anchor_aliased_inside_itself_is_refused()
+	{
+		Assert.Throws<YamlException>(() => Yaml.Load("a: &a [*a]\n"));
+	}
+
+	[Fact]
+	public void An_aliased_node_is_a_copy_not_the_same_node()
+	{
+		var tree = Yaml.Load("a: &a {x: [1]}\nb: *a\nc: *a\n")!;
+
+		Assert.Equal("""{"a":{"x":[1]},"b":{"x":[1]},"c":{"x":[1]}}""", tree.ToJsonString());
+		Assert.NotSame(J.Req(tree, "a"), J.Req(tree, "b"));
+	}
+
+	[Fact]
+	public void The_template_workflow_is_well_inside_the_yaml_limits()
 	{
 		var text = File.ReadAllText(Workflow);
 
-		Assert.NotNull(Yaml.Load(text, Yaml.MaxNodes / 10, Yaml.MaxDepth / 4));
+		Assert.True(text.Length < Yaml.MaxText / 4, $"{text.Length} characters");
+		Assert.NotNull(Yaml.Load(text, Yaml.MaxDepth / 4, Yaml.MaxNodes / 10, Yaml.MaxScalarText / 4));
 	}
 
 	// -- What Yaml.cs reads differently from PyYAML, on purpose --

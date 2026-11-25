@@ -7,7 +7,11 @@
 #   bash bench/tests/rescore.test.sh                     the C#: built once, then run as dotnet <its dll>
 #   bash bench/tests/rescore.test.sh <command> [arg]...  another implementation; a word that names a file is made absolute
 #   RESCORE_RECORD=1 bash bench/tests/rescore.test.sh    record rescore/expected.stdout and rescore/expected/ from the C#, after the cases file
-#                                                        changes; review the diff before committing
+#                                                        changes; review the diff before committing (with a command too, it exits 2: an
+#                                                        implementation under test never records its own oracle)
+#
+# Exit 0 when every check passes, 1 when one fails, 2 when the suite can't run (the build, the fixture clone, a temporary folder). It unsets
+# git's local variables (GIT_DIR and the rest) first, so a hook's never point the bench's git show at the caller's repository.
 #
 # Each run is from a folder holding a copy of rescore/input/, with --root naming a folder that holds one clone, fixture/, built here (two commits),
 # so a finding's line is checked against a real head; a case whose repo isn't there gets bad_lines null. The cases file is the bench's own.

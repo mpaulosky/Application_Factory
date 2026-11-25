@@ -578,11 +578,11 @@ static class Bench
 	// pathlib's name: the last part of the path, a trailing / dropped.
 	static string Name(string path) => Path.GetFileName(path.TrimEnd('/'));
 
-	// read_text(): UTF-8, a byte that isn't throwing.
 	// A prompt file's text with its line endings read as read_text() read them: \r\n and a lone \r are \n, so Render finds the workflow's lines
 	// in a prompt written on Windows.
 	public static string ReadPrompt(string path) => ReadText(path).Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
 
+	// read_text(): UTF-8, a byte that isn't throwing.
 	static string ReadText(string path) => new UTF8Encoding(false, true).GetString(File.ReadAllBytes(path));
 
 	// -- The command --

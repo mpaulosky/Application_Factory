@@ -429,7 +429,7 @@ A Factory-only port, as the ones above are, so `bench/claude-review-bench.py` an
   reads, not one a program parses, so it has no wrapper to do that.
 - **The YAML package is YamlDotNet.** The rule above says a script that needs a package needs its own ADR first; this Update is that decision, for the bench and for
   `Scripts.Tests`, whose tests read the Template's `claude-review.yml` too. The options:
-  - **YamlDotNet** (MIT, no dependencies, the most used YAML library for .NET). Chosen. Its representation model gives the node tree, and `Yaml.cs` turns that into the
+  - **YamlDotNet** (MIT, no dependencies, the most used YAML library for .NET). Chosen. Its parser gives the events, and `Yaml.cs` builds from them the
     `JsonNode` tree PyYAML's `safe_load()` gave, with the types PyYAML's YAML 1.1 resolvers gave a plain scalar (`on` and `yes` are true, `1.0` is a float, `1e3` is a
     string), so the bench and its tests read the workflow as the Python did. What it reads differently is named in `Yaml.cs` and tested: a key given twice is refused
     (GitHub refuses one in a workflow too) where PyYAML kept the last value, and an int in base 2, 8, 16 or 60, `.inf`, `.nan`, a timestamp and a merge key stay strings.
@@ -456,9 +456,12 @@ A Factory-only port, as the ones above are, so `bench/claude-review-bench.py` an
   into the folder it copied the action to and passed it to `git` as it was. The programs the bench runs (`git`, `tar`, `python3`, `claude`) are found in `PATH`'s absolute
   folders only, as `Gh.Which` finds `gh`. A linked `.claude`, `.mcp.json`, `CLAUDE.md` or `CLAUDE.local.md` in the head is removed itself, where the Python's `rmtree`
   failed on a linked folder and left a dangling link in place. A failed call's error names the command and its exit status, as Python's `CalledProcessError` did, in
-  words of its own. A program in `PATH` that can't be run fails its case, as the Python's `OSError` did, rather than the run. `Yaml.Load` refuses a text past
-  100,000 nodes or 100 levels deep once its aliases are read in (YamlDotNet hands back each alias as a copy to convert, where PyYAML shared one object), so a
-  head's workflow built as an alias bomb pins no action instead of ending the run. Claude's `stream-json` output is split at `\n` alone, where the Python's
+  words of its own. A program in `PATH` that can't be run fails its case, as the Python's `OSError` did, rather than the run. A case's head is read through
+  `Yaml.Load` too, so it refuses a text past fixed limits (`MaxText`, 1 Mi characters; `MaxDepth`, 100 levels; and, once its aliases are read in, `MaxNodes`,
+  100,000 nodes, and `MaxScalarText`, 4 Mi characters of scalars), and a head's workflow past one pins no action instead of ending the run. It builds the tree
+  from YamlDotNet's parser events with a stack of its own, not through YamlStream, whose load recurses once per level (200,000 `[` overflowed the call stack,
+  which no catch stops), and charges an alias the whole size of the node it names before copying it, where PyYAML shared the one object, so an alias bomb is
+  refused before it grows. Claude's `stream-json` output is split at `\n` alone, where the Python's
   `splitlines()` also broke at the U+2028, U+2029 and U+0085 that JSON writes raw inside a string and so lost such a review. A `--prompt-file` reads `\r\n` and
   `\r` as `\n`, as `read_text()` did. The run mode, which runs Claude on the cases' clones, has no parity suite: `Scripts.Tests` tests its parts (`BenchRunTests.cs`:
   each outcome a finished call gives, the `--max-turns` cap, the timeout, the YAML budget), and a run on the maintainer's machine the whole.

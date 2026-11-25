@@ -864,7 +864,11 @@ if in_shard scripts; then
   # The suite can fail: against an implementation that prints and writes nothing it must, and it never records from one under test.
   printf '#!/bin/sh\nexit 0\n' > "$md_tmp/rescore-silent"
   chmod +x "$md_tmp/rescore-silent"
-  ! bash "$skill_dir/bench/tests/rescore.test.sh" "$md_tmp/rescore-silent" > /dev/null 2>&1 || fail "rescore.test.sh passed against a bench that does nothing"
+  code=0
+  bash "$skill_dir/bench/tests/rescore.test.sh" "$md_tmp/rescore-silent" > "$md_tmp/rescore-silent.out" 2>&1 || code=$?
+  if [[ $code -ne 1 ]] || ! grep -q '^FAIL - it prints what the Python printed' "$md_tmp/rescore-silent.out"; then
+    fail "rescore.test.sh against a bench that does nothing exited $code, not 1 with its stdout check failed: $(tail -3 "$md_tmp/rescore-silent.out")"
+  fi
   code=0
   RESCORE_RECORD=1 bash "$skill_dir/bench/tests/rescore.test.sh" "$md_tmp/rescore-silent" > /dev/null 2>&1 || code=$?
   [[ $code -eq 2 ]] || fail "rescore.test.sh with RESCORE_RECORD and a command exited $code, not 2"

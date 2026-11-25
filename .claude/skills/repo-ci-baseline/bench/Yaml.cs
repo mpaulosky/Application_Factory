@@ -5,13 +5,18 @@
 // What these files don't hold is left out on purpose: an int in base 2, 8, 16 or 60, .inf and .nan, a !!timestamp and the << merge key read as
 // strings (and the key <<), where PyYAML read them as numbers, dates and merged mappings. A key is its scalar's text (PyYAML's True for on is "on"),
 // and a key given twice is refused, as GitHub refuses it in a workflow, where PyYAML kept its last value.
+//
+// A case's head is read through here too, so a text is refused (YamlException) past fixed limits that the Template's workflows sit far inside:
+// MaxText characters, MaxDepth levels of nesting, and MaxNodes nodes and MaxScalarText characters of scalars once its aliases are read in. The
+// tree is built from YamlDotNet's parser events with a stack of its own, not through its recursive YamlStream, so no nesting can overflow the
+// call stack, and an alias is charged the whole size of what it names before that is copied, so an alias bomb is refused before it grows.
 using System.Globalization;
 using System.Numerics;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
 using YamlDotNet.Core;
-using YamlDotNet.RepresentationModel;
+using YamlDotNet.Core.Events;
 
 static class Yaml
 {
@@ -22,56 +27,140 @@ static class Yaml
 	// A sign only before a digit: -.5 is a string, as it was to PyYAML.
 	static readonly Regex Float = new(@"\A(?:[-+]?[0-9][0-9_]*\.[0-9_]*(?:[eE][-+][0-9]+)?|\.[0-9_]+(?:[eE][-+][0-9]+)?)\z", RegexOptions.CultureInvariant);
 
-	// The most nodes, and the deepest nesting, a text may hold once its aliases are read in. YamlDotNet hands back an alias as the node it names,
-	// so a node aliased many times is converted that many times: a few lines of aliases of aliases (an alias bomb) would otherwise grow without
-	// bound, where PyYAML shared the one object. A case's head is read through here too, so a workflow past either is refused, as one YAML can't parse.
-	// The Template's claude-review.yml holds about 300 nodes, nested 7 deep.
-	public const int MaxNodes = 100_000;
+	// The limits. The Template's claude-review.yml is about 170,000 characters, with about 300 nodes nested 7 deep.
+	public const int MaxText = 1 << 20;
 	public const int MaxDepth = 100;
+	public const int MaxNodes = 100_000;
+	public const long MaxScalarText = 1 << 22;
 
-	// The first document's tree, null for a text with none (as safe_load("") is None). A text YAML can't parse, or one past MaxNodes or MaxDepth,
-	// throws YamlException.
-	public static JsonNode? Load(string text) => Load(text, MaxNodes, MaxDepth);
+	// The first document's tree, null for a text with none (as safe_load("") is None). A text YAML can't parse, or one past a limit, throws
+	// YamlException.
+	public static JsonNode? Load(string text) => Load(text, MaxDepth, MaxNodes, MaxScalarText);
 
-	public static JsonNode? Load(string text, int maxNodes, int maxDepth)
+	public static JsonNode? Load(string text, int maxDepth, int maxNodes, long maxScalarText)
 	{
-		var stream = new YamlStream();
-		stream.Load(new StringReader(text));
-		return stream.Documents.Count == 0 ? null : Node(stream.Documents[0].RootNode, new Budget(maxNodes, maxDepth), 1);
-	}
-
-	// What is left of a load's MaxNodes, and its MaxDepth.
-	sealed class Budget(int nodes, int depth)
-	{
-		public readonly int Nodes = nodes;
-		public readonly int Depth = depth;
-		public int Used;
-	}
-
-	static JsonNode? Node(YamlNode node, Budget budget, int depth)
-	{
-		if (++budget.Used > budget.Nodes)
-			throw new YamlException($"more than {budget.Nodes} YAML nodes once its aliases are read in");
-		if (depth > budget.Depth)
-			throw new YamlException($"YAML nested more than {budget.Depth} deep");
-		return node switch
+		if (text.Length > MaxText)
+			throw new YamlException($"a YAML text of more than {MaxText} characters");
+		var reader = new Reader(new Parser(new StringReader(text)), maxDepth, maxNodes, maxScalarText);
+		reader.Parser.Consume<StreamStart>();
+		JsonNode? first = null;
+		var documents = 0;
+		// Every document is read, as YamlStream read them, so a later one that doesn't parse is refused too; the first is the tree.
+		while (reader.Parser.TryConsume<DocumentStart>(out _))
 		{
-			YamlMappingNode mapping => Mapping(mapping, budget, depth),
-			YamlSequenceNode sequence => new JsonArray([.. sequence.Children.Select(child => Node(child, budget, depth + 1))]),
-			YamlScalarNode scalar => Scalar(scalar),
-			_ => throw new YamlException($"a YAML node the bench doesn't read: {node.NodeType}"),
-		};
+			var root = reader.Document();
+			reader.Parser.Consume<DocumentEnd>();
+			if (documents++ == 0)
+				first = root;
+		}
+		reader.Parser.Consume<StreamEnd>();
+		return first;
 	}
 
-	static JsonObject Mapping(YamlMappingNode mapping, Budget budget, int depth)
+	// A node read so far, with what it cost the budget (itself and all it holds), so an alias to it is charged the same again.
+	sealed record Anchored(JsonNode? Node, string? Text, int Nodes, long ScalarText);
+
+	// A mapping or sequence being read: its node, its anchor, the budget spent when it opened, and, for a mapping, the keys so far and the
+	// key waiting for its value.
+	sealed class Open(JsonNode node, string? anchor, int nodes, long scalarText)
 	{
-		var result = new JsonObject();
-		foreach (var (key, value) in mapping.Children)
-			result[key is YamlScalarNode scalar ? scalar.Value ?? "" : throw new YamlException("a mapping key that isn't a scalar")] = Node(value, budget, depth + 1);
-		return result;
+		public readonly JsonNode Node = node;
+		public readonly string? Anchor = anchor;
+		public readonly int Nodes = nodes;
+		public readonly long ScalarText = scalarText;
+		public string? Key;
 	}
 
-	static JsonNode? Scalar(YamlScalarNode scalar)
+	sealed class Reader(IParser parser, int maxDepth, int maxNodes, long maxScalarText)
+	{
+		public readonly IParser Parser = parser;
+		readonly Dictionary<string, Anchored> anchors = [];
+		int nodes;
+		long scalarText;
+
+		// One document's root, read with a stack of the mappings and sequences open around the current event.
+		public JsonNode? Document()
+		{
+			var open = new Stack<Open>();
+			while (true)
+			{
+				var parsed = Parser.Consume<ParsingEvent>();
+				Anchored? done;
+				switch (parsed)
+				{
+					case MappingStart or SequenceStart:
+						if (open.TryPeek(out var outer) && outer.Node is JsonObject && outer.Key is null)
+							throw new YamlException(parsed.Start, parsed.End, "a mapping key that isn't a scalar");
+						if (open.Count + 1 > maxDepth)
+							throw new YamlException(parsed.Start, parsed.End, $"YAML nested more than {maxDepth} deep");
+						Charge(1, 0, parsed);
+						var anchor = parsed is MappingStart mapping ? mapping.Anchor : ((SequenceStart)parsed).Anchor;
+						open.Push(new Open(parsed is MappingStart ? new JsonObject() : new JsonArray(), anchor.IsEmpty ? null : anchor.Value, nodes - 1, scalarText));
+						continue;
+					case MappingEnd or SequenceEnd:
+						var closed = open.Pop();
+						done = new Anchored(closed.Node, null, nodes - closed.Nodes, scalarText - closed.ScalarText);
+						if (closed.Anchor is not null)
+							anchors[closed.Anchor] = done;
+						break;
+					case Scalar scalar when open.TryPeek(out var map) && map.Node is JsonObject && map.Key is null:
+						// A key: its text, not a node of the tree.
+						if (!scalar.Anchor.IsEmpty)
+							anchors[scalar.Anchor.Value] = new Anchored(Scalar(scalar), scalar.Value, 0, 0);
+						SetKey(map, scalar.Value, parsed);
+						continue;
+					case Scalar scalar:
+						Charge(1, scalar.Value.Length, parsed);
+						done = new Anchored(Scalar(scalar), scalar.Value, 1, scalar.Value.Length);
+						if (!scalar.Anchor.IsEmpty)
+							anchors[scalar.Anchor.Value] = done;
+						break;
+					case AnchorAlias alias:
+						if (!anchors.TryGetValue(alias.Value.Value, out var named))
+							throw new YamlException(alias.Start, alias.End, $"an alias to an anchor not yet complete: *{alias.Value.Value}");
+						if (open.TryPeek(out var keyed) && keyed.Node is JsonObject && keyed.Key is null)
+						{
+							SetKey(keyed, named.Text ?? throw new YamlException(alias.Start, alias.End, "a mapping key that isn't a scalar"), parsed);
+							continue;
+						}
+						// Charged before it is copied: a node aliased past the budget is refused before it grows.
+						Charge(Math.Max(named.Nodes, 1), named.ScalarText, parsed);
+						done = named with { Node = named.Node?.DeepClone() };
+						break;
+					default:
+						throw new YamlException(parsed.Start, parsed.End, $"a YAML event the bench doesn't read: {parsed.GetType().Name}");
+				}
+				if (!open.TryPeek(out var parent))
+					return done.Node;
+				if (parent.Node is JsonArray array)
+					array.Add(done.Node);
+				else
+				{
+					((JsonObject)parent.Node)[parent.Key!] = done.Node;
+					parent.Key = null;
+				}
+			}
+		}
+
+		void SetKey(Open map, string key, ParsingEvent at)
+		{
+			if (((JsonObject)map.Node).ContainsKey(key))
+				throw new YamlException(at.Start, at.End, $"a key given twice: {key}");
+			map.Key = key;
+		}
+
+		void Charge(int more, long text, ParsingEvent at)
+		{
+			nodes += more;
+			scalarText += text;
+			if (nodes > maxNodes)
+				throw new YamlException(at.Start, at.End, $"more than {maxNodes} YAML nodes once its aliases are read in");
+			if (scalarText > maxScalarText)
+				throw new YamlException(at.Start, at.End, $"more than {maxScalarText} characters of YAML scalars once its aliases are read in");
+		}
+	}
+
+	static JsonNode? Scalar(Scalar scalar)
 	{
 		var text = scalar.Value ?? "";
 		if (scalar.Style is not ScalarStyle.Plain || (!scalar.Tag.IsNonSpecific && !scalar.Tag.IsEmpty && scalar.Tag.Value == "tag:yaml.org,2002:str"))
