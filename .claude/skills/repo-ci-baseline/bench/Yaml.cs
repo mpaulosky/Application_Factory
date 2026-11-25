@@ -2,8 +2,8 @@
 // (the one package the bench takes, ADR 0017's Update for mpaulosky/Application_Factory#161) parses it; this gives each plain scalar the type
 // PyYAML's YAML 1.1 resolvers gave it: null (~, null, an empty value), a bool (true, yes, on and false, no, off, in any of their three cases), a
 // decimal int or float (with _ between its digits), and a string for anything else. A quoted scalar, a block scalar and a !!str one are strings.
-// What these files don't hold is left out on purpose: an int in base 2, 8, 16 or 60, .inf and .nan, a !!timestamp and the << merge key read as
-// strings (and the key <<), where PyYAML read them as numbers, dates and merged mappings. A key is its scalar's text (PyYAML's True for on is "on"),
+// What these files don't hold is left out on purpose: an int in base 2, 8, 16 or 60, .inf and .nan, a float past a double's range, a !!timestamp
+// and the << merge key read as strings (and the key <<), where PyYAML read them as numbers, dates and merged mappings. A key is its scalar's text (PyYAML's True for on is "on"),
 // and a key given twice is refused, as GitHub refuses it in a workflow, where PyYAML kept its last value.
 //
 // A case's head is read through here too, so a text is refused (YamlException) past fixed limits that the Template's workflows sit far inside:
@@ -189,9 +189,10 @@ static class Yaml
 			var integer = digits.TrimStart('+');
 			return JsonNode.Parse(integer == "-0" ? "0" : integer);
 		}
-		// ._ matches the pattern but holds no digit, which PyYAML failed on: it stays a string here. A float is written as repr() writes it, so
-		// 1.0 keeps its point and reads as a float, not the int 1 (Py.Dumps tells them apart by the text).
-		if (Float.IsMatch(text) && double.TryParse(digits, NumberStyles.Float, CultureInfo.InvariantCulture, out var number))
+		// ._ matches the pattern but holds no digit, which PyYAML failed on: it stays a string here, and so does a float past a double's
+		// range, which PyYAML read as inf and JSON can't hold. A float is written as repr() writes it, so 1.0 keeps its point and reads as a
+		// float, not the int 1 (Py.Dumps tells them apart by the text).
+		if (Float.IsMatch(text) && double.TryParse(digits, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) && double.IsFinite(number))
 			return JsonNode.Parse(Py.FloatRepr(number));
 		return text;
 	}

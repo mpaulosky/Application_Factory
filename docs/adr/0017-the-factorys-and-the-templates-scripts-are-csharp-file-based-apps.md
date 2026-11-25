@@ -187,7 +187,7 @@ The first increment brings the .NET SDK into the Factory, with no script ported 
   and CA2266 stays visible as a warning. Checked on SDK 11.0.100: `TreatWarningsAsErrors` alone makes CA2266 an error (exit 1), with `WarningsNotAsErrors=CA2266` the build
   exits 0, and `dotnet build app.cs -warnaserror` isn't accepted for a file-based app (MSB4025). The other two ways were turned down: a shebang fails
   `dotnet format whitespace --verify-no-changes` (exit 2, the `# !` rewrite above), and an entry file with no `#:include` would undo the thin-entry-file rule.
-  (The Update for mpaulosky/Application_Factory#145 below adds NU1900 to `WarningsNotAsErrors`.)
+  (The Updates for mpaulosky/Application_Factory#145 and mpaulosky/Application_Factory#161 below add NU1900 and NU1905 to `WarningsNotAsErrors`.)
 
 ## Update (mpaulosky/Application_Factory#145): the C# step and the test project are hardened
 
@@ -465,7 +465,9 @@ A Factory-only port, as the ones above are, so `bench/claude-review-bench.py` an
   from YamlDotNet's parser events with a stack of its own, not through YamlStream, whose load recurses once per level (200,000 `[` overflowed the call stack,
   which no catch stops), and checks an alias against the depth and charges it the whole size of the node it names before copying it, where PyYAML shared the one
   object, so an alias bomb is refused before it grows. An int is read as its digits, not through `BigInteger`, and an anchor names a node in its own
-  document only, as in PyYAML. Claude's `stream-json` output is split at `\n` alone, where the Python's
+  document only, as in PyYAML. A float past a double's range, such as `1.0e+999`, is read as its string, where PyYAML read `inf`: no pinned action is a float.
+  A failed case's report shows a control character in its error, path or lines as `\xNN` (a tab and a newline as they are), where the Python printed it raw to the
+  terminal. Claude's `stream-json` output is split at `\n` alone, where the Python's
   `splitlines()` also broke at the U+2028, U+2029 and U+0085 that JSON writes raw inside a string and so lost such a review. A `--prompt-file` reads `\r\n` and
   `\r` as `\n`, as `read_text()` did. The run mode, which runs Claude on the cases' clones, has no parity suite: `Scripts.Tests` tests its parts (`BenchRunTests.cs`:
   each outcome a finished call gives, the `--max-turns` cap, the timeout, the YAML limits), and a run on the maintainer's machine the whole.

@@ -84,7 +84,7 @@ static class Bench
 		var start = lines.FindIndex(line => Py.Strip(line) == "python3 -I - <<'PY'") + 1;
 		var end = start == 0 ? -1 : lines.FindIndex(start, line => Py.Strip(line) == "PY");
 		if (end < 0)
-			throw new InvalidOperationException($"the diff step in {workflow} has no python3 -I - <<'PY' heredoc ending in PY");
+			throw new BenchExit($"{Prog}: the diff step in {workflow} has no python3 -I - <<'PY' heredoc ending in PY");
 		return string.Join("\n", lines[start..end]) + "\n";
 	}
 
@@ -511,13 +511,25 @@ static class Bench
 		return bad;
 	}
 
+	// Text from the model or a call, shown with each control character but a tab or newline written \xNN, as repr() writes it, so an
+	// escape sequence a head led the review to write can't reach the terminal. The Python printed them as they were.
+	public static string Shown(string text)
+	{
+		if (!text.Any(c => char.IsControl(c) && c is not '\t' and not '\n'))
+			return text;
+		var shown = new StringBuilder(text.Length + 8);
+		foreach (var c in text)
+			shown.Append(char.IsControl(c) && c is not '\t' and not '\n' ? $"\\x{(int)c:x2}" : c.ToString());
+		return shown.ToString();
+	}
+
 	public static void Report(JsonNode spec, JsonNode @case, JsonNode outcome, OrderedDictionary<string, bool> hits, TextWriter output)
 	{
 		var found = Found(outcome);
 		var findings = J.Req(spec, "findings");
 		output.Write($"== {Py.Str(J.Req(@case, "repo"))}#{Py.Str(J.Req(@case, "pr"))} {Py.Str(J.Req(@case, "head"))}\n");
 		if (J.Has(outcome, "error"))
-			output.Write($"   error: {Py.Str(J.Req(outcome, "error"))}\n");
+			output.Write($"   error: {Shown(Py.Str(J.Req(outcome, "error")))}\n");
 		var copilot = J.Has(@case, "copilot_threads") ? $" (Copilot opened {Py.Str(J.Req(@case, "copilot_threads"))} thread(s))" : "";
 		output.Write($"   {Py.Str(J.Get(outcome, "seconds"))}s, {Py.Str(J.Get(outcome, "turns"))} turns, ${Py.Str(J.Get(outcome, "cost_usd"))}; "
 				+ $"{found.Count} finding(s){copilot}\n");
@@ -534,11 +546,11 @@ static class Bench
 			output.Write($"   {(hit ? "caught" : "missed")} {key}{optional}: {Py.Str(J.Req(J.Req(findings, key), "about"))}\n");
 		}
 		foreach (var f in found)
-			output.Write($"   - {Py.Str(Py.Get(f, "path"))}:{Py.Str(Py.Get(f, "line"))}: {Py.Head(string.Join(" ", Py.Split(Py.Str(Py.Get(f, "body", "")))), 300)}\n");
+			output.Write($"   - {Shown(Py.Str(Py.Get(f, "path")))}:{Shown(Py.Str(Py.Get(f, "line")))}: {Shown(Py.Head(string.Join(" ", Py.Split(Py.Str(Py.Get(f, "body", "")))), 300))}\n");
 		if (J.Get(outcome, "bad_lines") is { } badLines && J.B(badLines))
 		{
 			var lines = Py.Items(badLines).Select(Py.Text).ToList();
-			output.Write($"   {lines.Count} finding(s) on a line the file doesn't have: {string.Join(", ", lines)}\n");
+			output.Write($"   {lines.Count} finding(s) on a line the file doesn't have: {Shown(string.Join(", ", lines))}\n");
 		}
 	}
 
@@ -772,7 +784,8 @@ static class Bench
 			return bytes.ToArray();
 		});
 		var stderr = inherit ? Task.FromResult("") : process.StandardError.ReadToEndAsync();
-		var limit = timeout is long seconds ? TimeSpan.FromSeconds(Math.Clamp(seconds, 0, int.MaxValue / 1000)) : Timeout.InfiniteTimeSpan;
+		var limit = Limit(timeout);
+		var clock = Stopwatch.StartNew();
 		if (!process.WaitForExit(limit))
 		{
 			process.Kill(entireProcessTree: true);
@@ -780,9 +793,18 @@ static class Bench
 			throw new TimeoutException();
 		}
 		process.WaitForExit();
-		write.Wait();
+		// The pipes close when every process holding them has, so a child the call left running keeps them open past its exit: the time
+		// left bounds them too, as Python's communicate(timeout=) did.
+		var left = limit == Timeout.InfiniteTimeSpan ? limit : limit - clock.Elapsed;
+		if (!Task.WaitAll([write, stdout, stderr], left < TimeSpan.Zero ? TimeSpan.Zero : left))
+			throw new TimeoutException();
 		return new Ran(process.ExitCode, stdout.Result, stderr.Result);
 	}
+
+	// A call's timeout as WaitForExit takes it: none without one, and otherwise its seconds between 0 and the most whole seconds an int of
+	// milliseconds holds, past which WaitForExit throws.
+	public static TimeSpan Limit(long? timeout) =>
+		timeout is long seconds ? TimeSpan.FromSeconds(Math.Clamp(seconds, 0, int.MaxValue / 1000)) : Timeout.InfiniteTimeSpan;
 
 	// Run argv, failing the case when it exits other than 0, as check=True did.
 	public static Ran Check(IReadOnlyList<string> argv) => Check(Exec(argv), argv);

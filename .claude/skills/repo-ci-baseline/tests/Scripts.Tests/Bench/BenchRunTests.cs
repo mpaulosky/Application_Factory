@@ -118,6 +118,93 @@ public partial class BenchTests
 	}
 
 	[Fact]
+	public void A_call_that_exits_leaving_a_child_on_its_pipes_is_bounded_by_its_timeout()
+	{
+		var started = System.Diagnostics.Stopwatch.StartNew();
+
+		Assert.Throws<TimeoutException>(() => Bench.Exec(["sh", "-c", "sleep 30 & exit 0"], timeout: 1));
+		Assert.True(started.Elapsed < TimeSpan.FromSeconds(20), $"took {started.Elapsed}");
+	}
+
+	[Theory]
+	[InlineData(-1L, 0L)]
+	[InlineData(0L, 0L)]
+	[InlineData(1L, 1L)]
+	[InlineData(int.MaxValue / 1000 - 1L, int.MaxValue / 1000 - 1L)]
+	[InlineData(int.MaxValue / 1000L, int.MaxValue / 1000L)]
+	[InlineData(int.MaxValue / 1000 + 1L, int.MaxValue / 1000L)]
+	[InlineData(long.MaxValue, int.MaxValue / 1000L)]
+	public void A_timeout_is_clamped_to_what_WaitForExit_takes(long seconds, long clamped)
+	{
+		Assert.Equal(TimeSpan.FromSeconds(clamped), Bench.Limit(seconds));
+	}
+
+	[Fact]
+	public void No_timeout_is_no_limit_and_the_largest_returns_normally()
+	{
+		Assert.Equal(Timeout.InfiniteTimeSpan, Bench.Limit(null));
+		Assert.Equal(0, Bench.Exec(["true"], timeout: long.MaxValue).Code);
+	}
+
+	// -- The workflow's steps --
+
+	[Theory]
+	[InlineData("jobs:\n  review:\n    steps:\n      - id: other\n        run: x\n", "no step with id: diff in")]
+	[InlineData("jobs:\n  review:\n    steps:\n      - id: diff\n        run: echo no heredoc\n", "has no python3 -I - <<'PY' heredoc ending in PY")]
+	[InlineData("jobs:\n  review:\n    steps:\n      - id: diff\n        run: |\n          python3 -I - <<'PY'\n          print(1)\n", "has no python3 -I - <<'PY' heredoc ending in PY")]
+	public void A_workflow_without_the_diff_steps_heredoc_ends_the_run_saying_why(string text, string message)
+	{
+		var workflow = Path.Combine(temp, "claude-review.yml");
+		File.WriteAllText(workflow, text);
+
+		Assert.Contains(message, Assert.Throws<BenchExit>(() => Bench.DiffStep(workflow)).Message, StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public void A_diff_step_that_writes_no_pieces_is_the_cases_error()
+	{
+		Assert.Contains("the diff step wrote no pieces_1 output", Assert.Throws<CaseError>(() => Bench.SplitDiff("pass\n", temp, temp, "a", "b")).Message,
+			StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public void A_diff_step_that_writes_no_context_gives_none()
+	{
+		const string script = "import os\nopen(os.environ['GITHUB_OUTPUT'], 'w').write('pieces_1<<EOF_ab\\none\\nEOF_ab\\n')\n";
+
+		Assert.Equal(("one", (string?)null), Bench.SplitDiff(script, temp, temp, "a", "b"));
+	}
+
+	// -- What the report shows --
+
+	[Theory]
+	[InlineData("plain text", "plain text")]
+	[InlineData("a\tb\nc", "a\tb\nc")]
+	[InlineData("\u001b]52;c;x\u0007", "\\x1b]52;c;x\\x07")]
+	[InlineData("csi\u009b2J del\u007f", "csi\\x9b2J del\\x7f")]
+	public void Text_from_the_model_is_shown_with_its_control_characters_escaped(string text, string shown)
+	{
+		Assert.Equal(shown, Bench.Shown(text));
+	}
+
+	[Theory]
+	[InlineData("a: 1.7976931348623157e+308\n", "1.7976931348623157e+308")]
+	[InlineData("a: 1.8e+309\n", "'1.8e+309'")]
+	[InlineData("a: -1.0e+999\n", "'-1.0e+999'")]
+	public void A_float_past_a_doubles_range_reads_as_a_string(string text, string repr)
+	{
+		Assert.Equal(repr, Py.Repr(J.Req(Yaml.Load(text), "a")));
+	}
+
+	[Fact]
+	public void A_head_holding_a_float_past_a_doubles_range_still_pins_its_actions()
+	{
+		const string workflow = "x: 1.0e+999\njobs:\n  review:\n    steps:\n      - uses: owner/repo@v1\n";
+
+		Assert.Equal([("owner", "repo", "v1")], Bench.PinnedActions(workflow));
+	}
+
+	[Fact]
 	public void A_program_that_isnt_on_path_is_the_cases_error()
 	{
 		var error = Assert.Throws<CaseError>(() => Bench.Exec(["no-such-program-for-the-bench"]));
