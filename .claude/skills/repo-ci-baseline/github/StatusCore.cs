@@ -600,7 +600,8 @@ static class Status
 				+ $" -> {decision.Action} ({decision.Reason})" + (notice != "" ? $" {notice}" : "");
 	}
 
-	// status.cs's command line. fetch reads one repo (StatusReader.Fetch by default) and readRepoList the Fleet (Repos.Read).
+	// status.cs's command line. fetch reads one repo (StatusReader.Fetch by default) and readRepoList the Fleet (Repos.Read)
+	// when it is first needed (LazyRepos).
 	public static int Run(IReadOnlyList<string> args, TextWriter output, TextWriter err, Func<string, string, JsonNode>? fetch = null,
 			Func<OrderedDictionary<string, string>>? readRepoList = null)
 	{
@@ -608,7 +609,7 @@ static class Status
 		if (parser.Parse(args, output, err) is int exit)
 			return exit;
 		fetch ??= new StatusReader(err: err).Fetch;
-		var listed = (readRepoList ?? (() => Repos.Read()))();
+		var listed = new LazyRepos(readRepoList ?? (() => Repos.Read()));
 		var repos = parser.Positional.Count > 0 ? parser.Positional : [.. listed.Keys];
 		// A name gh would read otherwise (-F reads a value starting with @ from a file, and . or .. would step out of a REST path) is
 		// refused before any call: a usage error when it was an argument, and exit 1 when it came from the Fleet registry.

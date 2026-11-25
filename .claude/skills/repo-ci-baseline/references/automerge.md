@@ -335,7 +335,11 @@ Skill files (not copied into repos): `status.sh`, which runs `github/status.cs`,
 and the decision both act on, `github/Landing.cs`. They are C# file-based apps ([the Factory's ADR 0017](../../../../docs/adr/0017-the-factorys-and-the-templates-scripts-are-csharp-file-based-apps.md)):
 each entry file pulls in its logic with `#:include` (`StatusCore.cs`, `LandCore.cs`, `Landing.cs`, `Repos.cs`, which reads `github/repos.txt`, and `Gh.cs`,
 the `gh` runner, JSON helpers and argument parser they share), and the wrapper runs it with `dotnet run --file` from `github/`, so the Factory's `global.json`
-picks the SDK; the first run after a change builds it.
+picks the SDK; the first run after a change builds it. Each wrapper first runs its app with `--help` under a lock on `github/` (`flock`), so runs started at once
+(`github-settings.sh` too) build it one at a time and the rest find it built; on macOS, which has no `flock`, start one run first.
+`repos.txt` is read only when it is needed: for the repos when none is named, and for a named repo's scope once its PRs are read, so a usage error or a repo
+that can't be read doesn't need it; when it is needed and can't be read, the run fails with that error (a named repo isn't taken as `full`).
+Each `gh` call is given two minutes (`Gh.Timeout`); one that runs past them is killed, with what it started, and fails as any other call does.
 Tests: `tests/Scripts.Tests/Landing/`, `Status/` and `Land/` (xUnit), run by `test.sh`; none calls GitHub.
 The parity suites run `status.cs` and `land.cs` through their command lines only, against a fake `gh` (`tests/parity/fake-gh.sh`) that answers
 from fixture files, so the same cases can judge another implementation: `tests/parity.test.sh <suite> <command> [arg]...`, where the suite is `status` or
@@ -349,8 +353,10 @@ The status and land cases were recorded from the Python, which the C# replaced o
 `PARITY_RECORD=1 tests/parity.test.sh <suite>` records a suite's cases from that reference only; the runner's header says what a case holds.
 `rollout.sh`'s suite has a runner of its own, `tests/rollout-parity.test.sh [command...]`, with its cases in `tests/rollout-parity/cases/`: rollout calls
 `reapply.sh` and `land.sh` beside itself and keeps its state under `~`, so each run is of a temporary copy of the skill folder, with stubs for those two and a
-fixed `repos.txt`, and a HOME of its own, and `git` and `claude` are fakes too (`tests/rollout-parity/fake-tool.sh`). It shares the fake `gh` and the stderr
-match (`tests/parity/stderr.sh`); `tests/rollout-parity-runner.test.sh` tests it.
+fixed `repos.txt`, and a HOME of its own, and `git` and `claude` are fakes too (`tests/rollout-parity/fake-tool.sh`). Its `--auto` cases add a stand-in
+Template, a PATH holding only fakes (every tool the preflight looks for) and the host's own commands, defaults for what those fakes answer, and a case's
+`setup.sh`, `after.sh`, `missing` tools and `ignore`d signals, so the preflight, the lock, the signals and a recorded review session each have a case. It shares
+the fake `gh` and the stderr match (`tests/parity/stderr.sh`); `tests/rollout-parity-runner.test.sh` tests it.
 
 ```bash
 status.sh                     # one line per open PR in every repo in github/repos.txt
@@ -375,6 +381,8 @@ nothing for a merged, closed or already-armed PR; **report blocker** for a faile
 no review needed, as `release.yml` arms it);
 **update branch** when it's `BEHIND` (nobody is asked to review the new head: Copilot is asked once per PR); **wait** until Copilot, or Claude (a marked `github-actions[bot]` review,
 backing a quota note or a request that didn't register on the same head), reviewed the current head and no thread is open.
+Copilot is its own logins only (`Landing.Copilot`, and `Land.CopilotJq` for the read-back): `copilot-pull-request-reviewer` or `Copilot`, in any case, with or without `[bot]`,
+as PR Auto-Merge and `reapply.sh` match it. A login that merely contains "copilot" (`not-copilot-bot`, `my-copilot`) reviews nothing for Copilot and isn't its request (#155).
 A head with neither review waits while Copilot is requested or `review:claude` is on; otherwise, for a PR with no record of an ask, **request Copilot**:
 a comment holding the marker (`Landing.CopilotAskedComment`), then the request, read back. With a record that hasn't settled (under 30 seconds) it **waits**.
 On a repo's first re-Apply PR the record is usually there already: `reapply.sh` posts the ask record when its request didn't register.

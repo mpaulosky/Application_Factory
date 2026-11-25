@@ -442,10 +442,19 @@ public class LandingTests
 	}
 
 	[Fact]
-	public void Copilot_reviews_match_any_copilot_login()
+	public void Copilot_reviews_match_copilots_own_logins()
 	{
 		(string?, string?, string?)[] reviews = [("copilot-pull-request-reviewer", Head, ""), ("Copilot", Old, null), ("mpaulosky", C40, ""), (null, D40, "")];
 		Assert.Equal(Sorted(Set(Head, Old)), Sorted(Landing.CopilotReviews(reviews)));
+	}
+
+	[Fact]
+	public void A_review_by_a_login_that_contains_copilot_covers_nothing()
+	{
+		(string?, string?, string?)[] reviews = [("not-copilot-bot", Head, ""), ("my-copilot", Old, "")];
+		Assert.Empty(Landing.CopilotReviews(reviews));
+		(string?, string?, string?, string?, long, bool)[] records = [Record("not-copilot-bot", "c1", "", "2026-01-02T00:01:00Z", comments: 1)];
+		Assert.Empty(Landing.ReviewRounds(records, declined: Set(), gone: false));
 	}
 
 	[Fact]

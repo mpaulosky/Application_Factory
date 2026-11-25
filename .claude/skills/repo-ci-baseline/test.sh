@@ -803,6 +803,30 @@ if in_shard scripts; then
   settings_help="$(cd "$other_sdk" && bash "$skill_dir/github-settings.sh" --help 2>&1)" \
     || fail "github-settings.sh --help fails from a folder whose global.json pins another SDK: $settings_help"
   [[ "$settings_help" == "usage: settings.cs "* ]] || fail "github-settings.sh --help didn't print settings' usage: $settings_help"
+  # Runs started at once right after a change share the first build (mpaulosky/Application_Factory#178): each wrapper builds under a lock on
+  # github/ first, so six runs of a fresh copy (a new path, so a new build) all pass, with only the usage on stdout. Without the lock about one
+  # run in three of three failed, the file in use by another's build. The lock is flock(1); macOS has none, and there the wrappers build as before.
+  if [[ "$(uname -s)" == Linux ]]; then
+    need flock
+    at_once="$md_tmp/at-once"
+    mkdir -p "$at_once/skill"
+    cp -R "$skill_dir/github" "$at_once/skill/github"
+    cp "$skill_dir/status.sh" "$skill_dir/land.sh" "$skill_dir/github-settings.sh" "$at_once/skill/"
+    cp "$skill_dir/../../../global.json" "$at_once/global.json"
+    for wrapper in status:status land:land github-settings:settings; do
+      script="${wrapper#*:}" wrapper="${wrapper%%:*}" pids=()
+      for run in 1 2 3 4 5 6; do
+        bash "$at_once/skill/$wrapper.sh" --help > "$at_once/$wrapper-$run.out" 2> "$at_once/$wrapper-$run.err" &
+        pids+=($!)
+      done
+      for run in 1 2 3 4 5 6; do
+        code=0
+        wait "${pids[run - 1]}" || code=$?
+        [[ $code -eq 0 && "$(head -1 "$at_once/$wrapper-$run.out")" == "usage: $script.cs "* ]] \
+          || fail "$wrapper.sh run $run of six started at once on a fresh build exited $code: $(head -c 600 "$at_once/$wrapper-$run.out" "$at_once/$wrapper-$run.err")"
+      done
+    done
+  fi
   # With no dotnet on PATH (only bash and dirname, which the wrappers need first), each wrapper exits 127 and says so.
   no_dotnet="$md_tmp/no-dotnet"
   mkdir -p "$no_dotnet"
@@ -824,8 +848,8 @@ if in_shard scripts; then
   GIT_DIR="$decoy/.git" GIT_WORK_TREE="$decoy" GIT_INDEX_FILE="$decoy/.git/index" \
     bash "$skill_dir/tests/parity-runner.test.sh" > /dev/null || fail "parity-runner.test.sh with a hook's GIT_DIR set"
   [[ -z "$("${decoy_git[@]}" -C "$decoy" ls-files)" && ! -e "$decoy/cases" ]] || fail "parity-runner.test.sh staged files in the caller's repository"
-  # The rollout suite has a runner of its own (a temporary copy of the skill folder with stub reapply.sh and land.sh, and a HOME per case):
-  # its cases against rollout.sh, then the runner's own tests.
+  # The rollout suite has a runner of its own (a temporary copy of the skill folder with stub reapply.sh and land.sh, a stand-in Template,
+  # a HOME per case and a PATH of fakes): its plain-mode and --auto cases against rollout.sh, then the runner's own tests.
   [[ -f "$skill_dir/tests/rollout-parity/README.md" ]] || fail "tests/rollout-parity has no README.md saying what its cases cover and leave out"
   bash "$skill_dir/tests/rollout-parity.test.sh" || fail "rollout-parity.test.sh"
   bash "$skill_dir/tests/rollout-parity-runner.test.sh" || fail "rollout-parity-runner.test.sh"
@@ -1049,6 +1073,7 @@ if in_shard checks; then
     "$skill_dir/tests/sandcastle-check.test.sh" "$skill_dir/tests/repos-scope.test.sh"
     "$skill_dir/tests/parity.test.sh" "$skill_dir/tests/parity/fake-gh.sh" "$skill_dir/tests/parity/stderr.sh" "$skill_dir/tests/parity-runner.test.sh"
     "$skill_dir/tests/rollout-parity.test.sh" "$skill_dir/tests/rollout-parity/fake-tool.sh" "$skill_dir/tests/rollout-parity-runner.test.sh"
+    "$skill_dir"/tests/rollout-parity/defaults/fakes/*.sh
     "$skill_dir/tests/parity/check_gh_repo/shfmt-shim.sh" "$skill_dir/tests/shfmt-shim.test.sh"
     "$skill_dir/tests/check-git-status.sh" "$skill_dir/tests/check-git-status.test.sh" "$skill_dir/tests/check-issue-refs.sh" "$skill_dir/tests/check-issue-refs.test.sh"
     "$skill_dir/tests/mutations/check-spec.test.sh"

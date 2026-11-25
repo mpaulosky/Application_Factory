@@ -29,7 +29,7 @@
 //   after the round that exhausted it (CurrentLoop()), and the label is ignored while Copilot can review: Claude reviews only where
 //   Copilot can't (mpaulosky/dotfiles#378);
 // - auto-merge is armed only once a reviewer has reviewed the current head and no review thread is unresolved. The reviewer is Copilot
-//   (an author matching /copilot/i), or Claude as its backup on a head Copilot can't review (its quota note, or a request that didn't
+//   (one of its own logins, the Copilot regex), or Claude as its backup on a head Copilot can't review (its quota note, or a request that didn't
 //   register): Claude Review posts as github-actions[bot] with ClaudeMarker first in the body. When Claude's latest review of the head
 //   has findings outside the diff (OffDiffMarker on its second line), they open no thread, so the PR waits for a new head;
 // - where the repo requires no checks (dotfiles), auto-merge wouldn't wait for CI, so the checks must finish green first;
@@ -50,7 +50,11 @@ static class Landing
 			Nothing = "nothing";
 	public static readonly string[] Actions = [Wait, MarkReady, UpdateBranch, RequestCopilot, RequestClaude, ArmAutoMerge, HandOff, Blocker, Nothing];
 
-	public static readonly Regex Copilot = new("copilot", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+	// Copilot's own logins and nothing else (#155): the reviews API and GraphQL name it copilot-pull-request-reviewer (REST with [bot]),
+	// the requested-reviewer and timeline APIs name it Copilot. PR Auto-Merge's isCopilotBot, reapply.sh's copilot_jq and Sandcastle's
+	// isCopilot take the same names, so a login that merely contains "copilot" (not-copilot-bot, my-copilot) isn't taken for it.
+	public static readonly Regex Copilot = new(@"\A(?:copilot|copilot-pull-request-reviewer)(?:\[bot\])?\z",
+			RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 	// Copilot's review of a head once the account's Copilot code review quota is used up: it reviewed nothing, so it isn't a review. PR
 	// Auto-Merge's COPILOT_NO_REVIEW and claude-review.yml skip it the same way. ASCII whitespace spelled out, not \s: gh's gojq (RE2)
 	// reads \s as ASCII only, JS and .NET as Unicode. Matched at the start of the body.
@@ -95,6 +99,9 @@ static class Landing
 	static readonly Regex IsoTime = new(
 			@"\A[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9]{2}(?::[0-9]{2}(?::[0-9]{2}(?:\.[0-9]{1,6})?)?)?(?:[+-][0-9]{2}:[0-9]{2})?)?\z", RegexOptions.CultureInvariant);
 
+	// The date and hour of an IsoTime that stops at the hour, before any offset.
+	static readonly Regex HourOnly = new(@"\A([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2})(?=[+-]|\z)", RegexOptions.CultureInvariant);
+
 	// An ISO-8601 time as epoch seconds, or null when it is missing or unreadable. Only the extended form datetime.fromisoformat() read
 	// (IsoTime) is taken, never the other forms DateTimeOffset.TryParse would guess at ("Jan 5 2026", "1/2/2026"); Python's basic and week
 	// forms aren't read either, and GitHub sends neither. A time with no offset is UTC, where the Python took the machine's zone: GitHub's
@@ -102,8 +109,11 @@ static class Landing
 	public static double? Epoch(string? text)
 	{
 		text = text?.Replace("Z", "+00:00", StringComparison.Ordinal);
-		if (text is null || !IsoTime.IsMatch(text)
-				|| !DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var at))
+		if (text is null || !IsoTime.IsMatch(text))
+			return null;
+		// A time to the hour alone (2026-01-05T10), which fromisoformat() read and DateTimeOffset.TryParse refuses, is read as its first minute.
+		text = HourOnly.Replace(text, "$1:00");
+		if (!DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var at))
 			return null;
 		return (at.UtcTicks - DateTimeOffset.UnixEpoch.UtcTicks) / (double)TimeSpan.TicksPerSecond;
 	}

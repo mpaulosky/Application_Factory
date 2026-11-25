@@ -161,9 +161,11 @@ static class Land
 	}
 
 	// How many of the PR's review requests and reviews of its head are Copilot's. Copilot's quota note counts here: Copilot was asked
-	// about the head and answered, so asking again only brings another note (Decide() calls in Claude).
+	// about the head and answered, so asking again only brings another note (Decide() calls in Claude). Copilot is its own logins, as
+	// Landing.Copilot reads them (#155), not a login that merely contains "copilot".
 	public const string CopilotJq = ".headRefOid as $h | [(.reviewRequests[] | .login // .name // \"\"), "
-			+ "(.reviews[] | select(.commit.oid == $h) | .author.login)] | map(select(test(\"copilot\"; \"i\"))) | length";
+			+ "(.reviews[] | select(.commit.oid == $h) | .author.login)] "
+			+ "| map(select(test(\"^(copilot|copilot-pull-request-reviewer)(\\\\[bot\\\\])?$\"; \"i\"))) | length";
 
 	// Whether Copilot's review is requested on the PR, or Copilot has reviewed its head.
 	public static bool GhCopilotRequested(string repo, long number, Func<IReadOnlyList<string>, GhRun>? process = null)
@@ -178,7 +180,7 @@ static class Land
 			ReadGh(["gh", "pr", "view", number.ToString(CultureInfo.InvariantCulture), "-R", repo, "--json", "state", "--jq", ".state"], process);
 
 	// land.cs's command line. lander is the watch loop (a new Lander over the targets by default), sleep waits between polls and
-	// readRepoList reads the Fleet (Repos.Read).
+	// readRepoList reads the Fleet (Repos.Read) when it is first needed (LazyRepos).
 	public static int Run(IReadOnlyList<string> args, TextWriter output, TextWriter err, Lander? lander = null, Action<double>? sleep = null,
 			Func<OrderedDictionary<string, string>>? readRepoList = null)
 	{
@@ -204,7 +206,7 @@ static class Land
 			return parser.Error(error.Message, err);
 		}
 		var once = parser.Has("--once");
-		var listed = (readRepoList ?? (() => Repos.Read()))();
+		var listed = new LazyRepos(readRepoList ?? (() => Repos.Read()));
 		OrderedDictionary<string, HashSet<long>?> targets;
 		try
 		{

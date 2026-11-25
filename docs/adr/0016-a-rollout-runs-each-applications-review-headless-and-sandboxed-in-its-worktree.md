@@ -159,3 +159,17 @@ The gate, the ledger and the review's rules are unchanged: the push still needs 
   the session record and checked the ledgers and `.security` after it by reading them as the record does, and every round of review found another way that reading and the
   record's differed. The round's checks can't tell a review's judgment from a steered one that raised less: that is the review's own trust, as when a person runs it.
   A security finding the skill would dismiss as a repeat of a fixed entry is recorded open instead, so the person decides it.
+
+## Update (mpaulosky/Application_Factory#157): how the C# round holds the lock, runs its groups and keeps its signals
+
+`rollout.py` and `auto_rollout.py` move to C# ([ADR 0017](0017-the-factorys-and-the-templates-scripts-are-csharp-file-based-apps.md), mpaulosky/Application_Factory#122).
+What the lock, the process groups and the signals do stays as this ADR decides; how the C# does each is in ADR 0017's Update for mpaulosky/Application_Factory#157, with
+the evidence in [`2026-11-25-rollout-csharp-processes.md`](../research/2026-11-25-rollout-csharp-processes.md). In short:
+
+- The lock is the same file, taken with a `FileStream` opened `FileShare.None`, which is the `flock` the Python takes, so the two rounds keep each other out while both exist.
+- A child that holds the lock (a review session, `prepare`, `record`, `reapply.sh`, `land.sh`) is started with libc's `posix_spawnp`, in a session of its own and with
+  the lock's descriptor and no other, its leader left a zombie until its group is killed. `Process.Start`, which .NET reaps at once, starts only the calls that don't hold it.
+- A SIGHUP or SIGINT the caller ignores stays ignored, as .NET leaves it; a SIGTERM the caller ignores is read by `rollout.sh` before .NET takes it over, and put back.
+- `rollout.sh` builds the C# and runs the dll, so a SIGTERM sent to it reaches the round: through `dotnet run --file` it ended the CLI and left the round running.
+
+The Python round is unchanged until the cut-over.

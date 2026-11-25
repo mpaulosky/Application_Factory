@@ -4,6 +4,9 @@ __pycache__/
 .pytest_cache/
 .idea/
 node_modules/
+# Except in the rollout parity suite's recorded HOMEs, which hold the re-Apply worktree's node_modules/.bin/tsx
+# (tests/rollout-parity/defaults/fakes/make-worktree.sh): ignored, it never reached a checkout, and cases 35 and 37 failed there.
+!/.claude/skills/repo-ci-baseline/tests/rollout-parity/cases/*/expected.home/**/node_modules/
 .security/*
 !.security/README.md
 .claude/skills/repo-ci-baseline/tests/Scripts.Tests/bin/
