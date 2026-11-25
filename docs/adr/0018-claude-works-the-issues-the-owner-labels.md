@@ -14,7 +14,7 @@ Template file; it doesn't reach the Fleet.
   someone else added is taken off with a comment.
 - One issue is worked at a time: the job has the concurrency group `claude-issues`. Each run takes the oldest queued issue that isn't blocked and starts the next run when it ends, so a batch of
   labels is worked in turn rather than all at once on branches that conflict. An hourly schedule picks up an issue whose blocker closed since. (The Update for up to three issues at
-  once, below, replaces this.)
+  once, below, replaces this, and the Update on `claude:blocked` starts a pick when the owner closes an issue.)
 - An issue is blocked while GitHub's issue dependencies list an open issue it is blocked by (the way the Factory's issues record their order), or while it carries the `blocked` label. A blocked
   issue keeps `claude` and gets `claude:blocked` and one comment naming its blockers, and starts by itself once they close.
 - `claude:working` marks the issue being worked. A run that ends without a pull request labels the issue `claude:needs-human` and says why on the issue, or, when Claude left no comment,
@@ -89,8 +89,14 @@ The pick step took `claude:blocked` off an issue only when its loop reached it w
 the "Start the next run" step, which skips `claude:blocked` issues, started no run for it. The owner asked for `claude:blocked` to come off whenever an issue's blocker does
 (2026-11-25).
 
-- Every pick first reads the open issues labelled `claude:blocked` and takes the label off each one that has no open "blocked by" issue and no `blocked` label, whether or not a slot
-  is free, before it reads the queue. A list or an issue's dependencies that can't be read leave the label on for the next run, and the pick goes on.
+- After it counts the slots taken and before it reads the queue, every pick reads the open issues labelled `claude:blocked` and takes the label off each one that has no open
+  "blocked by" issue and no `blocked` label, whether or not a slot is free. A list or an issue's dependencies that can't be read, or a label that can't be taken off, leave the label
+  on for the next run, with a warning, and the pick goes on.
 - The `blocked` label counts in any case (`Blocked` as well as `blocked`).
-- A closed issue (it can be the last blocker of another) and a `blocked` label taken off start a pick, so an unblocked issue doesn't wait for the hourly schedule. A "blocked by" link
-  taken off starts no workflow, so the hourly schedule still catches that one.
+- The owner closing an issue (it can be the last blocker of another) or taking a `blocked` label off starts a pick, so an unblocked issue usually doesn't wait for the hourly
+  schedule. This replaces the Decision's "An hourly schedule picks up an issue whose blocker closed since" for those two. The schedule still catches the rest: a "blocked by" link
+  taken off, which starts no workflow; a close by a workflow's own token (a pull request merged without a personal token), which starts none either; a dependency listing that
+  hadn't caught up with the close yet; and a close or an unlabel by anyone but the owner. That last one starts nothing on purpose: anyone can close an issue they opened, and the
+  run's actor would be theirs, joining the concurrency group and working the owner's queue.
+- An issue labelled `claude:working` holds its slot while its run is going even once it is closed, since a close now starts a pick at once, and closing an issue doesn't stop
+  its run: the pick counts closed issues with the label as well as open ones.
