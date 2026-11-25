@@ -1135,8 +1135,8 @@ check "a failed token exchange fails the Publish step without a push, saving the
 # The pick job, the merge order step, the Start the next run step and the Finish step run here with one stub gh. `gh api <path>` answers from
 # $STUB_API/<key>.json (`[]` when there's none) through the call's own --jq filter, so the filters are tested too: an array in pages of 100, each
 # page filtered on its own as gh does, and only the first page without --paginate. It fails with HTTP 500 when <key>.fail exists and with HTTP 404
-# when <key>.404 does. <key> is the path after repos/o/r/, with `/` as `.`, and `@<labels>` added for a `labels=` query. Each read's path is recorded
-# in $STUB_API/reads. A write (-X) or any other gh command is recorded in $STUB_API/calls, and fails when it matches the extended regex $STUB_FAIL.
+# when <key>.404 does. <key> is the path after repos/o/r/, with `/` as `.`, and `@<labels>` added for a `labels=` query; a `state=open` query leaves
+# out the items whose state is another (an item with no state is open), as GitHub does. Each read's path is recorded in $STUB_API/reads. A write (-X) or any other gh command is recorded in $STUB_API/calls, and fails when it matches the extended regex $STUB_FAIL.
 api="$work/api"
 api_bin="$work/api-bin"
 mkdir -p "$api_bin"
@@ -1174,6 +1174,7 @@ if [[ "$(jq -r type <<< "$data")" != array ]]; then
   jq -r "$jq_expr" <<< "$data"
   exit
 fi
+if [[ "&$query&" == *"&state=open&"* ]]; then data="$(jq -c 'map(select((.state // "open") == "open"))' <<< "$data")"; fi
 pages="$(jq '[length / 100 | ceil, 1] | max' <<< "$data")"
 ((paginate)) || pages=1
 for ((p = 0; p < pages; p++)); do
@@ -1211,8 +1212,8 @@ calls() { cat "$api/calls" 2> /dev/null || true; }
 # read_at <path prefix>: the line of the reads log where the last read of a path starting with it is
 read_at() { grep -nF -- "repos/o/r/$1" "$api/reads" 2> /dev/null | tail -n 1 | cut -d: -f1; }
 
-# The pick job takes up to CLAUDE_ISSUES_CAP issues at once, less the open issues labelled `claude:working` whose run, the one their latest "Claude
-# started" comment from the workflow names, is still going.
+# The pick job takes up to CLAUDE_ISSUES_CAP issues at once, less the issues labelled `claude:working`, open or closed, whose run, the one their latest
+# "Claude started" comment from the workflow names, is still going.
 pick="$work/pick"
 mkdir -p "$pick"
 sed -n '/^      - name: Pick the next issues$/,/^  work:$/p' "$issues_wf" | sed -n '/^        run: |$/,$p' | sed '1d;$d' | sed 's/^          //' > "$pick/run.sh"
@@ -1248,6 +1249,18 @@ read_working="$(read_at 'issues?state=all&labels=claude:working')" read_runs="$(
 read_queue="$(read_at 'issues?state=open&labels=claude&sort')"
 check "the pick step reads the issues being worked and their runs before the queue" \
   "$([[ -n $read_working && -n $read_runs && -n $read_queue ]] && ((read_working < read_runs && read_runs < read_queue)) && echo 0 || echo 1)"
+# A closed issue labelled `claude:working` holds its slot while its run is going, and gives it up once the run has ended.
+api_reset
+issues_fx 'issues@claude:working' "$(issue 1 claude:working | jq -c '. + {state: "closed"}')"
+comments_fx issues.1.comments "$(started 1 101)"
+fx actions.runs.101 '{"status": "in_progress"}'
+issues_fx 'issues@claude' "$(issue 3 claude)"
+owner_labelled 3
+pick_case 1
+check "a closed issue still being worked holds its slot" "$(picked '[]' && ! unlabelled 1 && ! labelled 3 && echo 0 || echo 1)"
+fx actions.runs.101 '{"status": "completed"}'
+pick_case 1
+check "a closed issue whose run has ended gives its slot up and loses claude:working" "$(picked '[3]' && unlabelled 1 && echo 0 || echo 1)"
 api_reset
 issues_fx 'issues@claude' "$(issue 3 claude)"
 owner_labelled 3

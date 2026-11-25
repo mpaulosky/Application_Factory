@@ -68,11 +68,11 @@ The Factory's issues are now split small, with "blocked by" links that keep depe
 chose to work up to three at once (`CLAUDE_ISSUES_CAP` in the pick step). This replaces the Decision's "One issue is worked at a time", the chosen option's one at a time, and the
 Consequence that issues are worked one after another.
 
-- A short pick job holds the `claude-issues` concurrency group, so two runs never pick the same issue. It counts the open issues labelled `claude:working` (with `claude` or without it)
-  whose run, the one the workflow's latest "Claude started" comment names, is still going, picks the oldest unblocked issues up to the free slots, and labels and comments on each
-  before it ends; one it can't label or comment on is left for the next run. A `claude:working` label left by a run that has ended or is gone, or with no "Claude started" comment, is
-  taken off, and the issue is queued again if it still carries `claude`; one whose comments or run can't be read keeps its slot. The Finish step takes `claude` off before
-  `claude:working`, so a finished issue isn't left queued with its slot freed, where another run's pick could take it again.
+- A short pick job holds the `claude-issues` concurrency group, so two runs never pick the same issue. It counts the open issues labelled `claude:working` (with `claude` or without it;
+  closed ones too since the Update on `claude:blocked`, below) whose run, the one the workflow's latest "Claude started" comment names, is still going, picks the oldest
+  unblocked issues up to the free slots, and labels and comments on each before it ends; one it can't label or comment on is left for the next run. A `claude:working` label
+  left by a run that has ended or is gone, or with no "Claude started" comment, is taken off, and the issue is queued again if it still carries `claude`; one whose comments
+  or run can't be read keeps its slot. The Finish step takes `claude` off before `claude:working`, so a finished issue isn't left queued with its slot freed, where another run's pick could take it again.
 - The work job is a matrix over the picks, each on its own runner and checkout of `main`, so the issues worked at once share nothing but the repository. Each one starts the next run as it
   ends, which fills the slot it freed, and keeps work it couldn't push as its own `claude-branch-<issue>` artifact, since an artifact's name is unique in a run. The job's token stays
   read-only for pull requests: the merge order comment goes through the issues API, which `issues: write` covers.
@@ -98,5 +98,5 @@ the "Start the next run" step, which skips `claude:blocked` issues, started no r
   taken off, which starts no workflow; a close by a workflow's own token (a pull request merged without a personal token), which starts none either; a dependency listing that
   hadn't caught up with the close yet; and a close or an unlabel by anyone but the owner. That last one starts nothing on purpose: anyone can close an issue they opened, and the
   run's actor would be theirs, joining the concurrency group and working the owner's queue.
-- An issue labelled `claude:working` holds its slot while its run is going even once it is closed, since a close now starts a pick at once, and closing an issue doesn't stop
-  its run: the pick counts closed issues with the label as well as open ones.
+- An issue labelled `claude:working` holds its slot while its run is going even once it is closed, whoever closed it: closing an issue doesn't stop its run, and the owner's
+  close now starts a pick at once. The pick counts closed issues with the label as well as open ones.
