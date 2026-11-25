@@ -14,9 +14,6 @@ using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
-// One finished command: its exit code, stdout and stderr (run_quiet's tuple).
-readonly record struct Ran(int Code, string Out, string Err);
-
 // A name denied_around must hide but a sandbox path can't name (Python's ValueError there).
 sealed class UnnameableError(string message) : Exception(message);
 
@@ -114,29 +111,8 @@ static partial class AutoRollout
 		+ @"|^GIT_SSH|^SSH_|^DBUS_SESSION_BUS_ADDRESS$|^XAUTHORITY$|^GIT_CONFIG_(COUNT|PARAMETERS|KEY_[0-9]+|VALUE_[0-9]+)$"
 		+ @"|^AWS_|^AZURE_|^GOOGLE_", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 	public static readonly Regex ClaudeSignIn = new(@"^(ANTHROPIC_|CLAUDE_)", RegexOptions.CultureInvariant);
-	// Claude Code's names the session keeps: where its config is and which model, endpoint and cloud it uses, none a secret.
-	public static readonly IReadOnlyList<string> ClaudeKept =
-	[
-		"ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
-		"ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_VERTEX_PROJECT_ID",
-		"ANTHROPIC_FOUNDRY_RESOURCE", "ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_VERTEX_BASE_URL", "ANTHROPIC_FOUNDRY_BASE_URL",
-		"CLAUDE_CONFIG_DIR", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
-	];
-	// A cloud variable that is a secret, or names a file of one: left out by SessionEnv.
-	public static readonly Regex SignInSecret = new(
-		@"TOKEN|SECRET|PASSW|API_?KEY|ACCESS_KEY|AUTH(?!OR)|CREDENTIAL|_KEY$|COOKIE|BEARER|CERT|PRIVATE|KEY_?FILE",
-		RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-	// The proxy variables the session's own claude reaches its endpoint through (curl's and Node's names, either case).
-	public static readonly Regex ProxyName = new(@"^(HTTPS?|ALL|FTP)_PROXY$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-	// A proxy written with no scheme whose host has a sign-in before it (user:pass@proxy:3128, token@proxy:3128, :pass@proxy:3128).
-	public static readonly Regex BareUserinfo = new(@"^\s*(?:[^/@\s:]+(?::[^/@\s]*)?|:[^/@\s]+)@[^/@\s]", RegexOptions.CultureInvariant);
 	// Any tool's proxy variable, any name ending in proxy; NO_PROXY is a list of hosts, not a proxy.
 	public static readonly Regex AnyProxyName = new(@"^(?!no_proxy$).*proxy$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-	// Each cloud flag Claude Code reads, and the prefix of the variables that cloud signs in with.
-	public static readonly IReadOnlyList<(string Flag, string Prefix)> CloudSignIn =
-		[("CLAUDE_CODE_USE_BEDROCK", "AWS_"), ("CLAUDE_CODE_USE_VERTEX", "GOOGLE_"), ("CLAUDE_CODE_USE_FOUNDRY", "AZURE_")];
-	// The values of a CLAUDE_CODE_USE_* flag that turn its cloud on.
-	public static readonly IReadOnlyList<string> FlagOn = ["1", "true", "yes", "on"];
 	// git settings for the session, through GIT_CONFIG_COUNT: no credential helper, every push to GitHub sent to an address that
 	// doesn't resolve, and no automatic gc.
 	public const string NoPush = "https://push.invalid/";
@@ -168,9 +144,6 @@ static partial class AutoRollout
 	const string WordStart = "(?<!" + PyWord + ")";
 	const string WordEnd = "(?!" + PyWord + ")";
 
-	// A URL with a sign-in in it: userinfo after any scheme; a bare user is no secret, but over http(s) or ftp(s) the user may be the
-	// token. A scheme takes no dot here, so url.https://<token>@host/.insteadOf, a key naming a URL, is read as https.
-	public static readonly Regex UrlUserinfo = new(WordStart + @"([a-z][a-z0-9+-]*)://([^/@\s]+)@", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 	// The last part of a git config key that holds a password or a token as its value.
 	public static readonly Regex SecretKey = new(
 		@"\.(?:[a-z0-9-]*(?:token|secret|password|passwd|passphrase|apikey)"
@@ -190,63 +163,6 @@ static partial class AutoRollout
 	public static readonly Regex HelperSecret = new(
 		@"password\s*=\s*(?!" + NamesAVariable + @")[""']?[^\s""';]"
 		+ @"|--pass(?:word)?(?:=|\s+)(?!" + NamesAVariable + @")\S|--file(?![\p{L}\p{N}_-])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
-	// (exit code, stdout, stderr) of a command; 127 when it can't start, 124 when it runs past two minutes (seconds), or its output stays open that long. The program is found in
-	// PATH's absolute folders only, as Gh.Which finds gh.
-	public static Ran RunQuiet(IReadOnlyList<string> command, string? cwd = null, IReadOnlyDictionary<string, string>? env = null, int seconds = 120)
-	{
-		Process? run;
-		try
-		{
-			var program = command[0].Contains('/') ? command[0] : Gh.Which(command[0], env is null ? Environment.GetEnvironmentVariable("PATH") : env.GetValueOrDefault("PATH"));
-			var start = new ProcessStartInfo(program)
-			{
-				RedirectStandardInput = true,
-				RedirectStandardOutput = true,
-				RedirectStandardError = true,
-				UseShellExecute = false,
-				StandardOutputEncoding = Encoding.UTF8,
-				StandardErrorEncoding = Encoding.UTF8,
-			};
-			if (cwd is not null)
-				start.WorkingDirectory = cwd;
-			if (env is not null)
-			{
-				start.Environment.Clear();
-				foreach (var (name, value) in env)
-					start.Environment[name] = value;
-			}
-			foreach (var arg in command.Skip(1))
-				start.ArgumentList.Add(arg);
-			run = Process.Start(start)!;
-		}
-		catch (Exception error) when (error is IOException or System.ComponentModel.Win32Exception or UnauthorizedAccessException)
-		{
-			return new Ran(127, "", error.Message);
-		}
-		using (run)
-		{
-			run.StandardInput.Close();
-			var err = run.StandardError.ReadToEndAsync();
-			var output = run.StandardOutput.ReadToEndAsync();
-			var limit = TimeSpan.FromSeconds(seconds);
-			var clock = Stopwatch.StartNew();
-			if (!run.WaitForExit(limit))
-			{
-				run.Kill(entireProcessTree: true);
-				run.WaitForExit();
-				return new Ran(124, "", $"{command[0]} didn't answer in {seconds} s");
-			}
-			run.WaitForExit();
-			// The pipes close when every process holding them has, so a child the command left running keeps them open past its exit:
-			// the time left bounds the reads too, as Python's subprocess.run(timeout=) does. Elapsed is read once, so the span can't go
-			// below zero between two reads.
-			var left = limit - clock.Elapsed;
-			if (!Task.WaitAll([output, err], left < TimeSpan.Zero ? TimeSpan.Zero : left))
-				return new Ran(124, "", $"{command[0]} didn't answer in {seconds} s");
-			return new Ran(run.ExitCode, output.Result, err.Result);
-		}
-	}
 
 	// path with a leading ~ (alone, or before a /) replaced by home; ~user and anything else as it is.
 	public static string ExpandHome(string path, string home) => path == "~" || path.StartsWith("~/", StringComparison.Ordinal) ? home + path[1..] : path;
@@ -472,10 +388,6 @@ static partial class AutoRollout
 		return (SessionReads(worktree, common, security, tmp), credentials, home);
 	}
 
-	// The process's environment, as os.environ holds it.
-	public static Dictionary<string, string> Environ() =>
-		Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>().ToDictionary(entry => (string)entry.Key, entry => (string?)entry.Value ?? "", StringComparer.Ordinal);
-
 	// The session's settings, which the round writes to a 0600 file beside its log that --settings names (never its command line, which
 	// any local user can read): dontAsk permissions that allow only SessionTools, reads of the worktree, the main checkout's .security and
 	// tmp, and edits in tmp alone, and deny the credentials, the Factory, ~/.claude and every edit in the worktree; and a sandbox for its
@@ -540,20 +452,8 @@ static partial class AutoRollout
 			"--agents", PyLib.JsonDumps(agents), "--disallowedTools", .. DeniedTools];
 	}
 
-	// Whether text holds a URL with a sign-in in it (UrlUserinfo).
-	public static bool HasSignIn(string text) =>
-		UrlUserinfo.Matches(text).Any(found => found.Groups[2].Value.Contains(':') || found.Groups[1].Value.ToLowerInvariant() is "http" or "https" or "ftp" or "ftps");
-
 	// text with every URL's userinfo replaced by ***, so a key naming a URL (url.<base>.insteadOf) prints no token.
 	public static string Redacted(string text) => UrlUserinfo.Replace(text, found => $"{found.Groups[1].Value}://***@");
-
-	// The prefixes of the clouds Claude Code signs in through (CLAUDE_CODE_USE_* on), whose variables it needs.
-	public static List<string> KeptClouds(IReadOnlyDictionary<string, string> environ) =>
-		[.. CloudSignIn.Where(cloud => FlagOn.Contains(PyLib.Strip(environ.GetValueOrDefault(cloud.Flag, "")).ToLowerInvariant())).Select(cloud => cloud.Prefix)];
-
-	// Whether the variable name=value holds a URL with a sign-in (HasSignIn), or is a proxy (ProxyName) written with no scheme whose host
-	// has one before it (BareUserinfo), as curl and git read it.
-	public static bool HoldsSignIn(string name, string value) => HasSignIn(value) || (ProxyName.IsMatch(name) && BareUserinfo.IsMatch(value));
 
 	// Every git config file in the clone's git folder common, which the session's Bash reads whole: the config and config.worktree of
 	// every git folder in it, where one exists, in the walk's order, each level sorted by name: common's own, then each linked

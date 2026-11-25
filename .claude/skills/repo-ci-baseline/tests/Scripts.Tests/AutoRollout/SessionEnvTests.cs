@@ -94,8 +94,8 @@ public class SessionEnvTests
 	[InlineData("CLAUDE_CODE_USE_FOUNDRY", "AZURE_")]
 	public void A_cloud_sign_in_keeps_its_own_variables(string flag, string prefix)
 	{
-		Assert.Contains((flag, prefix), AutoRollout.CloudSignIn);
-		var others = AutoRollout.CloudSignIn.Select(cloud => cloud.Prefix).Where(p => p != prefix).ToList();
+		Assert.Contains(new KeyValuePair<string, string>(flag, prefix), AutoRollout.CloudSignIn);
+		var others = AutoRollout.CloudSignIn.Select(cloud => cloud.Value).Where(p => p != prefix).ToList();
 		var baseEnv = Env((flag, "1"), ($"{prefix}PROFILE", "p"), ("GH_TOKEN", "t"), ($"{prefix}SECRET_ACCESS_KEY", "s"));
 		foreach (var other in others)
 			baseEnv[$"{other}PROFILE"] = "q";
