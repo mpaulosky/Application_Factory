@@ -83,16 +83,24 @@ static class SessionGuard
 		}
 	}
 
-	// The sha256 of a file's bytes, or null when it can't be read.
+	// The sha256 of a file's bytes, a symlink followed, or null when it can't be read. Only a regular file of at most RecordLimit bytes is
+	// read, opened without waiting, so a FIFO or a link to /dev/zero the session put in an Owned file's place gives null (no Template hash)
+	// rather than hanging or filling memory, where Python's open().read() would have.
 	public static string? FileHash(string path)
 	{
+		var fd = Posix.OpenFollow(path);
+		if (fd < 0)
+			return null;
 		try
 		{
-			return Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(path)));
+			if (Posix.FStat(fd) is not { IsRegular: true })
+				return null;
+			var data = Posix.ReadUpTo(fd, RecordLimit + 1L);
+			return data is not null && data.Length <= RecordLimit ? Convert.ToHexStringLower(SHA256.HashData(data)) : null;
 		}
-		catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+		finally
 		{
-			return null;
+			Posix.Close(fd);
 		}
 	}
 
@@ -125,13 +133,18 @@ static class SessionGuard
 	// What a read gives a name it can't reach: different every time, so no two reads match.
 	static string Unseen() => $"unseen {Guid.NewGuid():N}";
 
-	// The names in a folder, sorted by code point, every one of them (dot files too); none when it can't be listed.
+	// The names in a folder, sorted by code point, every one of them (dot files too); none when it can't be listed. A name listed twice
+	// (a name that isn't UTF-8 decoded to the same text as one that is) is given, each time, a name no path holds, so Unreachable reads
+	// both as changed rather than reading the one file twice.
 	static List<string> List(string folder)
 	{
 		try
 		{
-			var names = Directory.GetFileSystemEntries(folder, "*", new EnumerationOptions { AttributesToSkip = 0, IgnoreInaccessible = false })
+			var listed = Directory.GetFileSystemEntries(folder, "*", new EnumerationOptions { AttributesToSkip = 0, IgnoreInaccessible = false })
 					.Select(path => Path.GetFileName(path)).ToList();
+			var twice = listed.GroupBy(name => name, StringComparer.Ordinal).Where(group => group.Count() > 1).Select(group => group.Key)
+					.ToHashSet(StringComparer.Ordinal);
+			var names = listed.Select(name => twice.Contains(name) ? $"{name}\uFFFD{Guid.NewGuid():N}" : name).ToList();
 			names.Sort(Py.CodePoints);
 			return names;
 		}
@@ -573,6 +586,9 @@ static class Posix
 
 	// open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC): its descriptor, or -1 when it fails.
 	public static int OpenNoFollow(string path) => Open(path, ONoFollow | 0x800 | 0x80000);
+
+	// open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC), a symlink followed: its descriptor, or -1 when it fails.
+	public static int OpenFollow(string path) => Open(path, 0x800 | 0x80000);
 
 	// read(fd) into buffer: how many bytes, 0 at the end, -1 on an error.
 	public static int Read(int fd, byte[] buffer) => (int)ReadFd(fd, buffer, buffer.Length);

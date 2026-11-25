@@ -530,4 +530,6 @@ F3c, the third library under the rule above, after F3a's and F3b's. `auto_rollou
   child left holding its output can't stall the guard past the limit.
 - **A name that isn't UTF-8 fails closed.** .NET lists such a name with U+FFFD, and its path then names nothing, where `os.walk` kept the bytes. So `TreeState`,
   `FolderState` and `TreeHashes` read a name they can't reach as different every time: the session guard breaks a Rule on a tree that holds one, rather than missing a
-  change made under it.
+  change made under it. A name listed twice (one that isn't UTF-8 decoded to the same text as one that is) reads the same way.
+- **`FileHash` never waits or reads without end.** It hashes a regular file of at most `RecordLimit` bytes, opened without waiting, a symlink followed; a FIFO, a device
+  or a bigger file gives null, no Template hash, where Python's `open().read()` would have hung or filled memory.

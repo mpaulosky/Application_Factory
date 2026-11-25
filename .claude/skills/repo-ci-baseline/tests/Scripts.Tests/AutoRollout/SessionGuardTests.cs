@@ -818,6 +818,51 @@ public sealed class SessionGuardTests : IDisposable
 	}
 
 	[Fact]
+	public void A_name_that_isnt_utf8_beside_one_it_decodes_to_still_reads_as_changed()
+	{
+		Directory.CreateDirectory(P("tree"));
+		Run("sh", ["-c", "touch \"$(printf 'a\\377b')\" \"$(printf 'a\\357\\277\\275b')\"", "sh"], cwd: P("tree"));
+		Assert.Equal(4, SessionGuard.TreeChanges(SessionGuard.TreeState(P("tree")), SessionGuard.TreeState(P("tree"))).Count);
+		Assert.Equal(4, SessionGuard.FolderChanges(P("tree"), SessionGuard.FolderState(P("tree")), "the review ledgers").Count);
+		Run("rm", ["-rf", P("tree")]);
+	}
+
+	[Theory]
+	[InlineData("fifo")]
+	[InlineData("zero")]
+	[InlineData("oversized")]
+	public void A_file_hash_never_waits_on_a_fifo_or_reads_without_end(string what)
+	{
+		var path = P("owned");
+		if (what == "fifo")
+			MkFifo(path);
+		else if (what == "zero")
+			File.CreateSymbolicLink(path, "/dev/zero");
+		else
+			File.WriteAllBytes(path, new byte[11]);
+		var limit = SessionGuard.RecordLimit;
+		SessionGuard.RecordLimit = 10;
+		try
+		{
+			Assert.Null(SessionGuard.FileHash(path));
+			Assert.Equal(new Dictionary<string, string?> { ["owned"] = null }, SessionGuard.TreeHashes(tmp));
+		}
+		finally
+		{
+			SessionGuard.RecordLimit = limit;
+		}
+	}
+
+	[Fact]
+	public void A_file_hash_follows_a_symlink_to_a_regular_file()
+	{
+		Write(P("real"), "x");
+		File.CreateSymbolicLink(P("link"), P("real"));
+		Assert.Equal(SessionGuard.FileHash(P("real")), SessionGuard.FileHash(P("link")));
+		Assert.NotNull(SessionGuard.FileHash(P("link")));
+	}
+
+	[Fact]
 	public void Run_text_gives_none_once_its_limit_passes_while_a_child_left_behind_holds_its_output()
 	{
 		var clock = System.Diagnostics.Stopwatch.StartNew();
