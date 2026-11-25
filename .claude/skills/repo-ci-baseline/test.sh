@@ -850,8 +850,8 @@ if in_shard scripts; then
   GIT_DIR="$decoy/.git" GIT_WORK_TREE="$decoy" GIT_INDEX_FILE="$decoy/.git/index" \
     bash "$skill_dir/tests/parity-runner.test.sh" > /dev/null || fail "parity-runner.test.sh with a hook's GIT_DIR set"
   [[ -z "$("${decoy_git[@]}" -C "$decoy" ls-files)" && ! -e "$decoy/cases" ]] || fail "parity-runner.test.sh staged files in the caller's repository"
-  # The rollout suite has a runner of its own (a temporary copy of the skill folder with stub reapply.sh and land.sh, and a HOME per case):
-  # its cases against rollout.sh, then the runner's own tests.
+  # The rollout suite has a runner of its own (a temporary copy of the skill folder with stub reapply.sh and land.sh, a stand-in Template,
+  # a HOME per case and a PATH of fakes): its plain-mode and --auto cases against rollout.sh, then the runner's own tests.
   [[ -f "$skill_dir/tests/rollout-parity/README.md" ]] || fail "tests/rollout-parity has no README.md saying what its cases cover and leave out"
   bash "$skill_dir/tests/rollout-parity.test.sh" || fail "rollout-parity.test.sh"
   bash "$skill_dir/tests/rollout-parity-runner.test.sh" || fail "rollout-parity-runner.test.sh"
@@ -1075,6 +1075,7 @@ if in_shard checks; then
     "$skill_dir/tests/sandcastle-check.test.sh" "$skill_dir/tests/repos-scope.test.sh"
     "$skill_dir/tests/parity.test.sh" "$skill_dir/tests/parity/fake-gh.sh" "$skill_dir/tests/parity/stderr.sh" "$skill_dir/tests/parity-runner.test.sh"
     "$skill_dir/tests/rollout-parity.test.sh" "$skill_dir/tests/rollout-parity/fake-tool.sh" "$skill_dir/tests/rollout-parity-runner.test.sh"
+    "$skill_dir"/tests/rollout-parity/defaults/fakes/*.sh
     "$skill_dir/tests/parity/check_gh_repo/shfmt-shim.sh" "$skill_dir/tests/shfmt-shim.test.sh"
     "$skill_dir/tests/check-git-status.sh" "$skill_dir/tests/check-git-status.test.sh" "$skill_dir/tests/check-issue-refs.sh" "$skill_dir/tests/check-issue-refs.test.sh"
     "$skill_dir/tests/mutations/check-spec.test.sh"
@@ -1123,7 +1124,7 @@ if in_shard checks; then
   fi
   [[ ! -e "$owned/LICENSE" ]] || fail "LICENSE must be a Seed file, not Owned: Apply would overwrite an existing project's copyright year"
   grep -qxF 'Copyright (c) {{YEAR}} mpaulosky' "$seed/LICENSE" || fail "the Seed LICENSE must read 'Copyright (c) {{YEAR}} mpaulosky': Apply fills in the year it writes the file, and never changes an existing one"
-  for template in bug_report.md feature_request.md; do
+  for template in bug_report.md feature_request.md chore_request.md; do
     grep -qxF 'assignees: mpaulosky' "$owned/.github/ISSUE_TEMPLATE/$template" \
       || fail "the Owned $template must carry 'assignees: mpaulosky': an Owned file has no {{OWNER}} to fill"
   done

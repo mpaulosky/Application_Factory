@@ -1,0 +1,5 @@
+tools: all there
+would run: reapply.sh --brings '#80' ~/github/TicketManager, with /pre-push-review headless in ~/github/TicketManager-worktrees/chore-reapply-baseline when its gate asks for one
+would run: reapply.sh --brings '#80' ~/github/Alpha, with /pre-push-review headless in ~/github/Alpha-worktrees/chore-reapply-baseline when its gate asks for one
+would run: reapply.sh --brings '#80' ~/github/Zed, with /pre-push-review headless in ~/github/Zed-worktrees/chore-reapply-baseline when its gate asks for one
+then land TicketManager's re-Apply PR with land.sh before the rest start (at once when it already matches the Template), and the rest's together

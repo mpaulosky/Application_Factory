@@ -10,7 +10,7 @@ Template's file does not fit, a file of its own. It still carries no .NET workfl
 
 | Carried | How |
 | --- | --- |
-| Issue templates (`.github/ISSUE_TEMPLATE/{bug_report.md,feature_request.md,config.yml}`) and `.github/pull_request_template.md` | copies |
+| Issue templates (`.github/ISSUE_TEMPLATE/{bug_report.md,feature_request.md,chore_request.md,config.yml}`) and `.github/pull_request_template.md` | copies |
 | `pr-title.yml` with `scripts/check-pr-title.sh` | copies |
 | `lint-markdown.yml`, `lint-yaml.yml`, `lint-actions.yml` (actionlint, zizmor, shellcheck) | copies |
 | `.github/dependabot.yml` | the Factory's own: the `github-actions` block of the Template's Seed, with its groups limited to minor and patch updates (see Consequences) |

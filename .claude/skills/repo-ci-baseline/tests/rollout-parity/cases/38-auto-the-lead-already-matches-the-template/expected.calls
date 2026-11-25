@@ -1,0 +1,20 @@
+bwrap --unshare-all --ro-bind / / --dev /dev true
+claude --version
+claude --setting-sources "" auth status --json
+shfmt --version
+auth.status
+dotnet --version
+git -C ~/github/TicketManager rev-parse --path-format=absolute --git-common-dir
+reapply.sh --brings #80 ~/github/TicketManager
+git -C ~/github/TicketManager rev-parse --path-format=absolute --git-common-dir
+git -C ~/github/TicketManager-worktrees/chore-reapply-baseline rev-parse HEAD
+git -C ~/github/TicketManager-worktrees/chore-reapply-baseline merge-base --is-ancestor HEAD origin/main
+pr.list.mpaulosky.TicketManager gh pr list -R mpaulosky/TicketManager --head chore/reapply-baseline --state all --limit 100 --json number,state,headRefOid,isCrossRepository --jq "[.[] | select(.isCrossRepository == false)][0] // empty | \"\\(.number) \\(.state) \\(.headRefOid)\""
+git -C ~/github/Alpha rev-parse --path-format=absolute --git-common-dir
+reapply.sh --brings #80 ~/github/Alpha
+git -C ~/github/Alpha rev-parse --path-format=absolute --git-common-dir
+git -C ~/github/Alpha-worktrees/chore-reapply-baseline rev-parse HEAD
+git -C ~/github/Alpha-worktrees/chore-reapply-baseline merge-base --is-ancestor HEAD origin/main
+pr.list.mpaulosky.Alpha gh pr list -R mpaulosky/Alpha --head chore/reapply-baseline --state all --limit 100 --json number,state,headRefOid,isCrossRepository --jq "[.[] | select(.isCrossRepository == false)][0] // empty | \"\\(.number) \\(.state) \\(.headRefOid)\""
+git -C ~/github/Zed rev-parse --path-format=absolute --git-common-dir
+reapply.sh --brings #80 ~/github/Zed

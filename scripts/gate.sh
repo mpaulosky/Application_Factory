@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # The Application Factory's pre-push gate, run by .github/hooks/pre-push (a copy of the Template's) and safe to run by hand.
 # The Factory isn't a .NET repo, so its gate is what its CI runs: first this script's own test and the review's three stand-alone tests (they install
-# the packages with pnpm), then that its copies of Template files haven't drifted from the Template (ADR 0006), then that no Owned file has a bare #N (tests/check-issue-refs.sh),
+# the packages with pnpm), then the branch's size (a warning past the review's line of 30 files or 3,000 lines, scripts/review.sh size; it never fails the gate), then that its copies of Template files haven't drifted from the Template (ADR 0006), then that no Owned file has a bare #N (tests/check-issue-refs.sh),
 # then that no Owned script reads git status --porcelain without --untracked-files (tests/check-git-status.sh; both are C# file-based apps, ADR 0017), then the Markdown and YAML lint, then shellcheck of the shell files the branch changes, then that every shell file is formatted as shfmt formats it, then ruff over every Python file, then dotnet format whitespace of every C# file and a build of every C# script with warnings as errors (ADR 0017), then that the branch passed the local review (scripts/review.sh check, ADR 0010; GATE_SKIP_REVIEW=1 skips it),
 # then the repo-ci-baseline skill's test.sh (skipped when it already passed on the same clean tree and .NET SDK; GATE_NO_CACHE=1 runs it). This script is the Factory's own, not a copy of the Template's scripts/gate.sh.
 
 # GATE_PART=self|review|static|template|sandcastle runs one part of this gate, which is how CI runs a part per job (ADR 0012, ADR 0013): self is this script's own test, review the
-# review's stand-alone tests, static the copies, the issue references, the git status guards, the lint, shellcheck, shfmt, ruff and the C# check, template the review check and test.sh, sandcastle the Template's Sandcastle check.
+# review's stand-alone tests, static the size warning, the copies, the issue references, the git status guards, the lint, shellcheck, shfmt, ruff and the C# check, template the review check and test.sh, sandcastle the Template's Sandcastle check.
 # With no GATE_PART every part runs, in that order, except that sandcastle runs only when the branch changed a file it reads (a part run by name always runs). The pre-push hook drops GATE_PART.
 # TEST_SH_SHARD=hooks|scripts|checks, with GATE_PART=template, runs one shard of test.sh (ADR 0013); any other run of the gate ignores it and runs the whole of test.sh.
 set -euo pipefail
@@ -14,7 +14,7 @@ set -euo pipefail
 # dotnet sends no CLI usage data and skips its first-run setup, as in the Template's ci.yml, and prints no logo (DOTNET_NOLOGO, the Factory's own addition).
 export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1
 
-# scripts/gate.sh --quick: the checks that finish in about a minute (its test, the review tests, the copies' drift, the bare-#N check, the git status guard check, lint, shellcheck of the shell files the branch changes, shfmt of every shell file, ruff of every Python file, the C# check), then stop before the local
+# scripts/gate.sh --quick: the checks that finish in about a minute (its test, the review tests, the size warning, the copies' drift, the bare-#N check, the git status guard check, lint, shellcheck of the shell files the branch changes, shfmt of every shell file, ruff of every Python file, the C# check), then stop before the local
 # review check, test.sh and the Sandcastle check. It is for iterating, never for pushing: the pre-push hook and CI call this script with no argument.
 # scripts/gate.sh --sync: copies every Template file the Factory carries over its copy (cp -p keeps the execute bit), prints the ones that changed,
 # and stops. A copy edited by hand is overwritten, so edit the Template's file. Run it after editing the Template's file; the drift check below is what finds a copy you forgot.
@@ -76,6 +76,7 @@ copies=(
   .github/scripts/post_claude_review.py
   .github/ISSUE_TEMPLATE/bug_report.md
   .github/ISSUE_TEMPLATE/feature_request.md
+  .github/ISSUE_TEMPLATE/chore_request.md
   .github/ISSUE_TEMPLATE/config.yml
   .github/pull_request_template.md
   .github/workflows/pr-title.yml
@@ -146,6 +147,21 @@ run_review() {
 }
 
 run_static() {
+  # The warning /pre-push-review's first round gives for a branch past 30 files or 3,000 lines (a file and its Template mirror count once), given here too so a branch
+  # is caught while it grows and not once its review starts. scripts/review.sh size holds the line, so it is written down once. It only advises: a mechanical change, a
+  # mass rename say, can be past the line and still easy to review, so neither the warning nor a size that can't be measured fails the gate.
+  echo -e "\n${CYAN}▶ Branch size${RESET}"
+  local size size_base
+  if ! git rev-parse -q --verify refs/remotes/origin/main > /dev/null || ! size_base="$(git merge-base HEAD refs/remotes/origin/main 2> /dev/null)"; then
+    echo "skipped: no origin/main, or no merge base with it, to measure the branch from (run git fetch origin main)."
+  elif ! size="$(scripts/review.sh size "$size_base")"; then
+    echo "⚠ scripts/review.sh size failed (see above), so the branch's size was not measured." >&2
+  elif [[ -n "$size" ]]; then
+    echo "$size" >&2
+  else
+    echo "under the line (30 files, 3,000 lines)."
+  fi
+
   echo -e "\n${CYAN}▶ Copies of Template files${RESET}"
   drifted=()
   for file in "${copies[@]}"; do

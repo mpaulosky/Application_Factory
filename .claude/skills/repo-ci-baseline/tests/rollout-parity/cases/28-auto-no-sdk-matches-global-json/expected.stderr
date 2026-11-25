@@ -1,0 +1,2 @@
+^rollout\.sh: no installed \.NET SDK matches the Template's global\.json \(\.NET SDK 11\.0\.100\): dotnetup sdk install 11\.0\.100$
+^rollout\.sh: nothing run; fix those first, then run: rollout\.sh --auto --brings '#80'$

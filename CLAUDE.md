@@ -46,8 +46,9 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   `pnpm-lock.yaml` and the `.gitignore` lines for `node_modules/` and `.security/`.
 - `.claude/settings.json` and `scripts/lint-edited-file.sh` (a copy of the Template's Owned file): the edit-time lint (ADR 0011). The settings file holds one `PostToolUse` hook
   that lints each Markdown, YAML, shell or Python file Claude writes; the Template carries the script but not the settings file.
-- `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too; its header lists the steps (its test and the review's three tests, the copies' drift check, the bare-`#N` check,
-  the Git-status check, lint, shellcheck of the changed shell files, shfmt of every shell file, ruff of every Python file, `dotnet format whitespace` of every C# file and a build
+- `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too; its header lists the steps (its test and the review's three tests,
+  a warning for a branch past the review's size line, the copies' drift check, the bare-`#N` check, the Git-status check, lint, shellcheck of the changed shell files,
+  shfmt of every shell file, ruff of every Python file, `dotnet format whitespace` of every C# file and a build
   of every C# script with warnings as errors but CA2266 and NU1900 (ADR 0017), the local review check, then `test.sh`, which it skips for a tree and .NET SDK that already passed it, then
   the Sandcastle check when the branch changed a file it reads).
   `GATE_PART=<part>` runs one part (CI's jobs; the pre-push hook drops it), and `TEST_SH_SHARD` one shard of `test.sh` in the `template` part only.
@@ -92,10 +93,10 @@ you changed anything it applies or tests (`template/`, `apply.sh`, `SKILL.md`, `
 Branches are `feature/{issue}-{slug}`, `fix/{issue}-{slug}`, `hotfix/{issue}-{slug}` or `chore/{slug}`. Commit subjects are
 `<type>(<scope>): <Summary>`, with the scope `baseline` for the Template.
 
-Size each issue so its pull request stays small: 30 files and 3,000 changed lines at most, tests included (the line the pre-push review warns at), and at
-most one open decision, as the feature request template says. Claude Review reads a big diff in up to four batches of 8 pieces (about 300 KB each), a review
-each, so a bigger pull request costs a review per batch and each review round over it takes longer; only pieces past the fourth batch go unread, and they
-hold the merge. Split a bigger issue into smaller ones before work starts, ordered with "blocked by"
+Size each issue so its pull request stays small: 30 files and 3,000 changed lines at most, tests included (the line the pre-push review and the gate warn at), and at
+most one open decision, as the feature request and chore templates say, with the expected size and, past the line, the pull requests it splits into.
+Claude Review reads a big diff in up to four batches of 8 pieces (about 300 KB each), a review each, so a bigger pull request costs a review per batch
+and each review round over it takes longer; only pieces past the fourth batch go unread, and they hold the merge. Split a bigger issue into smaller ones before work starts, ordered with "blocked by"
 links, rather than opening one large pull request.
 
 Commit in a linked worktree under `../Application_Factory-worktrees/`: `pre-commit` refuses a commit in the primary checkout, and `pre-push` refuses a push
