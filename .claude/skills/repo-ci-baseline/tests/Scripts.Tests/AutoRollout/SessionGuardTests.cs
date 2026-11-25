@@ -16,7 +16,15 @@ public sealed class SessionGuardCollection;
 [System.Runtime.Versioning.SupportedOSPlatform("linux")]
 public sealed class SessionGuardTests : IDisposable
 {
-	readonly string tmp = Directory.CreateTempSubdirectory("auto-rollout.").FullName;
+	readonly string tmp;
+
+	// SupportedOSPlatform only quiets the analyzer, so each test skips itself off Linux here, before its folder is made, and so before Dispose's
+	// reads of it (a constructor that throws gets no Dispose).
+	public SessionGuardTests()
+	{
+		Assert.SkipUnless(OperatingSystem.IsLinux(), "--auto runs on Linux only");
+		tmp = Directory.CreateTempSubdirectory("auto-rollout.").FullName;
+	}
 
 	// The folders a test locked are opened again first, never through a symlink, so the whole tree can be removed.
 	public void Dispose()

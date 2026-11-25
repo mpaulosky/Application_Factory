@@ -12,10 +12,16 @@ using System.Text.Json.Nodes;
 [System.Runtime.Versioning.SupportedOSPlatform("linux")]
 public sealed class ReviewRecordTests : IDisposable
 {
-	readonly string tmp = Directory.CreateTempSubdirectory("auto-rollout.").FullName;
+	readonly string tmp;
 	readonly FileStream log;
 
-	public ReviewRecordTests() => log = new FileStream(Path.Combine(tmp, "out.log"), FileMode.Create, FileAccess.ReadWrite, FileShare.ReadWrite);
+	// Skips off Linux before anything is made, as SessionGuardTests does.
+	public ReviewRecordTests()
+	{
+		Assert.SkipUnless(OperatingSystem.IsLinux(), "--auto runs on Linux only");
+		tmp = Directory.CreateTempSubdirectory("auto-rollout.").FullName;
+		log = new FileStream(Path.Combine(tmp, "out.log"), FileMode.Create, FileAccess.ReadWrite, FileShare.ReadWrite);
+	}
 
 	public void Dispose()
 	{

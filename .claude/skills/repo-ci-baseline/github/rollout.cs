@@ -3,6 +3,7 @@
 #:include Py.cs
 #:include AutoRollout.cs
 #:include AutoRolloutPreflight.cs
+#:include AutoRolloutSandbox.cs
 #:include AutoRolloutGuard.cs
 #:include AutoRolloutRecord.cs
 #:property PublishAot=false

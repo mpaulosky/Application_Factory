@@ -152,13 +152,15 @@ scripts_tests_run() {
   (cd "$1" && TMPDIR="$tmp" DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 \
     dotnet test --project Scripts.Tests.csproj -p:RestoreLockedMode=true -p:UseSharedCompilation=false --artifacts-path "$out" --results-directory "$out/results")
 }
-# Copies the skill into folder argument 1, as <argument 1>/skill, for a check on a copy of the C# scripts' test project, and prints the copy's project
-# folder: the project compiles the scripts in the skill's github/ and its tests read the skill's files, so a copy builds only beside them. What a
-# build wrote into the project's folder (bin/, obj/, TestResults/) is left out.
+# Copies the skill into folder argument 1, as <argument 1>/.claude/skills/repo-ci-baseline with the Factory's CLAUDE.md at <argument 1>, for a check on a
+# copy of the C# scripts' test project, and prints the copy's project folder: the project compiles the scripts in the skill's github/ and its tests read
+# the skill's files, and the Factory's checkout three folders above the skill (AutoRollout.Factory), so a copy builds and passes only in that layout.
+# What a build wrote into the project's folder (bin/, obj/, TestResults/) is left out.
 scripts_tests_copy() {
-  cp -R "$skill_dir/." "$1/skill" || return 1
-  rm -rf "$1/skill/tests/Scripts.Tests/bin" "$1/skill/tests/Scripts.Tests/obj" "$1/skill/tests/Scripts.Tests/TestResults"
-  printf '%s\n' "$1/skill/tests/Scripts.Tests"
+  local copy="$1/.claude/skills/repo-ci-baseline"
+  mkdir -p "$copy" && cp -R "$skill_dir/." "$copy" && cp "$skill_dir/../../../CLAUDE.md" "$1/" || return 1
+  rm -rf "$copy/tests/Scripts.Tests/bin" "$copy/tests/Scripts.Tests/obj" "$copy/tests/Scripts.Tests/TestResults"
+  printf '%s\n' "$copy/tests/Scripts.Tests"
 }
 # Whether an action or workflow (argument 1) has an actions/setup-dotnet step pinned to a 40-hex commit with global-json-file: global.json under it,
 # before the next step; prints the commit. A commented-out line is no step.

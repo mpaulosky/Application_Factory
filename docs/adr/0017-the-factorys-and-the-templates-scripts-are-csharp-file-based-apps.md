@@ -508,7 +508,7 @@ F3a, the first library under the library-first rule above. Nothing runs it: `rol
 
 ## Update (mpaulosky/Application_Factory#160): the session guard and the review record are a library
 
-F3c, the second library under the rule above, after F3a's. `auto_rollout.py`'s `run_text` to `record_review` is C#, run by nothing; the `.py`, its pytest and `rollout.sh` are unchanged.
+F3c, the third library under the rule above, after F3a's and F3b's. `auto_rollout.py`'s `run_text` to `record_review` is C#, run by nothing; the `.py`, its pytest and `rollout.sh` are unchanged.
 
 - **The files.** `github/rollout.cs`, F3a's entry file, also includes `Repos.cs`, `Py.cs` (`Py`: `repr()`, `json.dumps()`, `str.strip()` and the code point sort) and
   two more libraries. `AutoRolloutGuard.cs` holds the `Guard`, `SessionGuard`
