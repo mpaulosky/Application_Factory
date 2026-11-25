@@ -488,12 +488,30 @@ A Factory-only port, as the ones above are, so `bench/claude-review-bench.py` an
 - **The pytest suite.** `bench/tests/test_claude_review_bench.py` is deleted, its 26 tests moved to `tests/Scripts.Tests/Bench/BenchTests.cs` under the rule above, a
   `Bench/` folder beside the others; `BenchPortTests.cs` holds the port's own. `Scripts.Tests` compiles every `.cs` in `bench/` but the entry file.
 
+## Update (mpaulosky/Application_Factory#158): the first AutoRollout library, the preflight, sign-in and lock
+
+F3a, the first library under the library-first rule above. Nothing runs it: `rollout.sh` still runs `rollout.py`, and `auto_rollout.py` and its pytest are unchanged.
+
+- **The files.** `github/rollout.cs` is the entry file; until the cut-over it writes to stderr that `rollout.sh` still runs the Python, and exits 2. It includes `Gh.cs`,
+  `AutoRollout.cs` (where the round's files are, as a `Folders` record of the skill folder; `short_name`, `review_worktree`, `run_quiet`, the lock, `retired_paths`,
+  `owned_changes`, `front_matter`, `read_skill`, and the Python readings they need) and `AutoRolloutPreflight.cs` (the preflight and the sign-in checks).
+  `Scripts.Tests` leaves `rollout.cs` out of its `Compile` items, and its copies of the pytest tests are in `tests/Scripts.Tests/AutoRollout/`. A copy whose original also
+  checks `session_env`, which mpaulosky/Application_Factory#159 ports, keeps the preflight's assertions; the rest joins it with that port.
+- **The lock** is as the Update above decides. Held is an `IOException` of that exact type whose errno is EWOULDBLOCK (11 on Linux); any other error is "can't take it"
+  and propagates. Tests hold it against `flock -n` and `auto_rollout.py`'s own `take_lock`, both ways.
+- **What the port changes on purpose.** The preflight's `which` and `run_quiet` find a program in `PATH`'s absolute folders only, as `Gh.cs` finds `gh` (`shutil.which`
+  and `subprocess` took a relative folder too). `TakeLock` refuses to run when .NET's file locking is turned off (`DOTNET_SYSTEM_IO_DISABLEFILELOCKING`,
+  `System.IO.DisableFileLocking`), where a `FileStream` would take no lock and a second round would run beside the first.
+- **What it keeps of the Python that .NET doesn't give for free.** `Folders.Default` resolves the entry file's folder through its symlinks first, as `SKILL_DIR` reads
+  `os.path.realpath(__file__)`, so a run through `~/.claude/skills/repo-ci-baseline` still finds the Factory's checkout. `RunQuiet` holds one deadline over the exit and
+  both pipes' reads, as `subprocess.run(timeout=)` does, so a command that exits but leaves a child holding its output still ends in 124 at the limit.
+
 ## Update (mpaulosky/Application_Factory#160): the session guard and the review record are a library
 
-F3c, the first library under the rule above. `auto_rollout.py`'s `run_text` to `record_review` is C#, run by nothing; the `.py`, its pytest and `rollout.sh` are unchanged.
+F3c, the second library under the rule above, after F3a's. `auto_rollout.py`'s `run_text` to `record_review` is C#, run by nothing; the `.py`, its pytest and `rollout.sh` are unchanged.
 
-- **The files.** `github/rollout.cs` is the entry file. Until the cut-over it writes to stderr that `rollout.sh` still runs `rollout.py`, and exits 2. It includes `Gh.cs`,
-  `Repos.cs`, `Py.cs` (`Py`: `repr()`, `json.dumps()`, `str.strip()` and the code point sort) and two libraries. `AutoRolloutGuard.cs` holds the `Guard`, `SessionGuard`
+- **The files.** `github/rollout.cs`, F3a's entry file, also includes `Repos.cs`, `Py.cs` (`Py`: `repr()`, `json.dumps()`, `str.strip()` and the code point sort) and
+  two more libraries. `AutoRolloutGuard.cs` holds the `Guard`, `SessionGuard`
   (`session_guard`, `broken_rules` and the file and tree snapshots they compare), `PyText` (`ascii()`, a bytes `repr()`, `shlex.quote()` and `shlex.join()`) and `Posix`.
   `AutoRolloutRecord.cs` holds `ReviewRecord` (`staged_findings` to `record_review`, with `run_bounded` and `wait_for`) and `GroupLeft`. Each library's classes have
   names of their own, not a shared `partial` class, so F3a and F3b can land beside them in any order.
@@ -508,3 +526,5 @@ F3c, the first library under the rule above. `auto_rollout.py`'s `run_text` to `
   value, as a `dict` does. Python's `NaN` and `Infinity` literals, which `json.loads()` takes, are refused, so a file holding one breaks a Rule, and so is a lone surrogate
   (`\ud800`) in a string or a name, which a .NET string can't hold. The findings are written again
   with `Py.Dumps`, so the kept copy is byte for byte what `json.dumps()` writes. `mkdir`'s error reads as Python's `OSError` does (`[Errno 17] File exists: '<path>'`).
+- **One deadline over the exit and the reads.** `SessionGuard.RunText`, as F3a's `RunQuiet`, counts its 120 s over the command's exit and both pipes' reads, so a
+  child left holding its output can't stall the guard past the limit.
