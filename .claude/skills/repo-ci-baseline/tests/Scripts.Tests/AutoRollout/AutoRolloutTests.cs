@@ -62,6 +62,22 @@ public class AutoRolloutTests : IDisposable
 	}
 
 	[Fact]
+	public void Folders_from_a_linked_entry_find_the_checkout_the_link_points_into()
+	{
+		// Not in the original, whose SKILL_DIR is os.path.realpath(__file__): run through ~/.claude/skills/repo-ci-baseline, a link to the
+		// Factory's skill, the Factory is the checkout, not the folders above the link.
+		Assert.SkipUnless(OperatingSystem.IsLinux(), "--auto runs on Linux only");
+		var skill = Path.Combine(tmp, "factory", ".claude", "skills", "repo-ci-baseline");
+		Directory.CreateDirectory(Path.Combine(skill, "github"));
+		var link = Path.Combine(tmp, "home", ".claude", "skills", "repo-ci-baseline");
+		Directory.CreateDirectory(Path.GetDirectoryName(link)!);
+		Directory.CreateSymbolicLink(link, skill);
+		var folders = Folders.FromEntry(Path.Combine(link, "github"));
+		Assert.Equal(AutoRollout.RealPath(skill), folders.Skill);
+		Assert.Equal(AutoRollout.RealPath(Path.Combine(tmp, "factory")), folders.Factory);
+	}
+
+	[Fact]
 	public void The_exit_codes_and_worktree_agree_with_reapply_sh()
 	{
 		// The original's part this library holds: the branch and the worktree's folder. The exit codes join it with the round's port.
@@ -140,7 +156,8 @@ public class AutoRolloutTests : IDisposable
 		Assert.Equal(0, Start("flock", "-n", path, "true").Code);
 		Assert.Equal((0, "False\n"), Start("python3", "-I", "-c", python, Skill.Path("github"), path));
 		// And the other way: while flock(1) holds it, the C# can't take it.
-		var start = new ProcessStartInfo("flock", ["-n", path, "sleep", "30"]) { UseShellExecute = false };
+		// The holder waits for the lock (no -n), so a probe of the loop below that holds it for a moment doesn't make flock give up.
+		var start = new ProcessStartInfo("flock", [path, "sleep", "30"]) { UseShellExecute = false };
 		using var other = Process.Start(start)!;
 		try
 		{

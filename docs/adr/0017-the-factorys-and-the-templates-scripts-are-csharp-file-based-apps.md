@@ -502,3 +502,6 @@ F3a, the first library under the library-first rule above. Nothing runs it: `rol
 - **What the port changes on purpose.** The preflight's `which` and `run_quiet` find a program in `PATH`'s absolute folders only, as `Gh.cs` finds `gh` (`shutil.which`
   and `subprocess` took a relative folder too). `TakeLock` refuses to run when .NET's file locking is turned off (`DOTNET_SYSTEM_IO_DISABLEFILELOCKING`,
   `System.IO.DisableFileLocking`), where a `FileStream` would take no lock and a second round would run beside the first.
+- **What it keeps of the Python that .NET doesn't give for free.** `Folders.Default` resolves the entry file's folder through its symlinks first, as `SKILL_DIR` reads
+  `os.path.realpath(__file__)`, so a run through `~/.claude/skills/repo-ci-baseline` still finds the Factory's checkout. `RunQuiet` holds one deadline over the exit and
+  both pipes' reads, as `subprocess.run(timeout=)` does, so a command that exits but leaves a child holding its output still ends in 124 at the limit.

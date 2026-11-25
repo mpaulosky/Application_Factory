@@ -19,8 +19,12 @@ delegate Ran Runner(IReadOnlyList<string> command, string? cwd = null, IReadOnly
 // TEMPLATE_GLOBAL_JSON, FACTORY_GLOBAL_JSON, RETIRED, SKILL_FILE and AGENT_FILE name them. Default is the skill rollout.cs is in.
 sealed record Folders(string Skill)
 {
-	public static Folders Default => new(Path.GetDirectoryName(AppContext.GetData("EntryPointFileDirectoryPath") as string
-			?? throw new InvalidOperationException("Folders.Default needs the script's folder when no script file runs"))!);
+	public static Folders Default => FromEntry(AppContext.GetData("EntryPointFileDirectoryPath") as string
+			?? throw new InvalidOperationException("Folders.Default needs the script's folder when no script file runs"));
+
+	// The skill whose github/ is entry, with its symlinks resolved first, as SKILL_DIR reads os.path.realpath(__file__): run through the
+	// ~/.claude/skills/repo-ci-baseline link, the Factory is still the checkout the link points into, not the folders above the link.
+	public static Folders FromEntry(string entry) => new(Path.GetDirectoryName(AutoRollout.RealPath(entry))!);
 
 	// The Factory's checkout: the skill is its .claude/skills/repo-ci-baseline.
 	public string Factory => Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(Skill)!)!)!;
@@ -208,11 +212,22 @@ static partial class AutoRollout
 			run.StandardInput.Close();
 			var err = run.StandardError.ReadToEndAsync();
 			var output = run.StandardOutput.ReadToEndAsync();
-			if (!run.WaitForExit(timeout))
+			// One deadline for the exit and both pipes, as subprocess.run's communicate(timeout=) has: a command that exits but leaves a child
+			// holding its stdout or stderr open would otherwise keep the reads, and the preflight, waiting past the limit.
+			var watch = Stopwatch.StartNew();
+			var exited = run.WaitForExit(timeout);
+			var left = timeout - watch.Elapsed;
+			if (!exited || !Task.WaitAll([err, output], left > TimeSpan.Zero ? left : TimeSpan.Zero))
 			{
-				run.Kill(entireProcessTree: true);
-				run.WaitForExit();
-				Task.WaitAll([err, output], TimeSpan.FromSeconds(5));
+				try
+				{
+					run.Kill(entireProcessTree: true);
+				}
+				catch (InvalidOperationException)
+				{
+					// It had already exited: only the child holding its pipes is left, which subprocess.run doesn't kill either.
+				}
+				run.WaitForExit(TimeSpan.FromSeconds(5));
 				return new Ran(124, "", $"{command[0]} didn't answer in {Script.G(timeout.TotalSeconds)} s");
 			}
 			run.WaitForExit();

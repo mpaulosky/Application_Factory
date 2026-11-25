@@ -506,6 +506,18 @@ public class PreflightTests : IDisposable
 	}
 
 	[Fact]
+	public void Run_quiet_times_out_when_a_child_keeps_its_pipes_after_it_exits()
+	{
+		// Not in the original, whose subprocess.run(timeout=) bounds the pipes' reads as well: the command exits at once, but the sleep it
+		// leaves behind holds stdout open, so only one deadline over the exit and both reads keeps the limit.
+		Assert.SkipUnless(OperatingSystem.IsLinux(), "--auto runs on Linux only");
+		var watch = System.Diagnostics.Stopwatch.StartNew();
+		var ran = AutoRollout.RunQuiet(["sh", "-c", "sleep 5 & exit 0"], TimeSpan.FromSeconds(0.5));
+		Assert.Equal(new Ran(124, "", "sh didn't answer in 0.5 s"), ran);
+		Assert.True(watch.Elapsed < TimeSpan.FromSeconds(4), $"took {watch.Elapsed}");
+	}
+
+	[Fact]
 	public void Python_s_readings_of_space_and_line_breaks()
 	{
 		// Not in the original: the readings the port re-implements, where .NET's own differ.
