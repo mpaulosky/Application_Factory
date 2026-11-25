@@ -5,10 +5,10 @@
 #   TEST_SH_SHARD=hooks|scripts|checks test.sh
 #
 # Runs the Template's own tests (hook suites, auto-merge script tests,
-# the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle and the GitHub scripts' pytest
-# (rollout) with the parity suites (status, land, settings, check_gh_repo, the release scripts and rollout), the Claude Review
-# benchmark's --rescore parity suite and the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land, settings, the AutoRollout libraries of
-# rollout.cs, what they share, the two checkers in tests/ and the benchmark), lints its workflows, YAML, shell
+# the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle, the parity suites
+# (status, land, settings, check_gh_repo, the release scripts and rollout), the Claude Review benchmark's --rescore parity suite and
+# the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land, settings, rollout and its AutoRollout libraries,
+# what they share, the two checkers in tests/ and the benchmark), lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
 # Owned files carry no {{PLACEHOLDER}} and that the Owned scripts, and this repo's own
 # scripts and skills, tell every gh command its repository, checks the Seed Sandcastle files, and smoke-tests apply.sh and
@@ -17,7 +17,7 @@
 # change. A repo's copies of Owned files are checked by status.sh and apply.sh --dry-run, not here.
 #
 # TEST_SH_SHARD runs one of its three shards, which is how the Factory's CI runs it in parallel jobs (ADR 0013): hooks is the hook and Owned script
-# tests, scripts the auto-merge, Owned .github/scripts, hardening-review, renderer, GitHub script, parity, benchmark and C# script tests, checks everything from actionlint on. With
+# tests, scripts the auto-merge, Owned .github/scripts, hardening-review, renderer, parity, benchmark and C# script tests, checks everything from actionlint on. With
 # no TEST_SH_SHARD every shard runs, in that order. Every step sits in exactly one shard; scripts/tests/gate.test.sh checks that.
 set -euo pipefail
 # The step headers carry SECONDS: count from here, whatever SECONDS a caller exported (mpaulosky/dotfiles#417).
@@ -753,14 +753,10 @@ if in_shard scripts; then
   fi
   (cd "$skill_dir/tests/render_oracle" && "${oracle_cmd[@]}" -q -p no:cacheprovider .) || fail "renderer oracle"
 
-  step "GitHub scripts tests (rollout)"
-  (cd "$skill_dir" && "${pytest_cmd[@]}" -q -p no:cacheprovider github/tests) || fail "github scripts pytest"
-
-  step "Parity suites (status.cs, land.cs, settings.py and settings.cs, check_gh_repo.py, the release scripts and rollout.sh through their command lines, against a fake gh) and their runners' tests"
+  step "Parity suites (status.cs, land.cs, settings.cs, check_gh_repo.py, the release scripts and rollout.sh through their command lines, against a fake gh) and their runners' tests"
   # The fake gh runs jq for a REST call's --jq, which the release scripts' suites make, and for a REST call's --input body, which the
-  # settings suite's make. The status and land suites' reference is the C# (github/status.cs, github/land.cs), which the runner builds once
-  # before its cases (ADR 0017). The settings suite's is settings.py, which stays for rollout.py, and it runs against github-settings.sh
-  # (settings.cs) below.
+  # settings suite's make. The status, land and settings suites' reference is the C# (github/status.cs, github/land.cs, github/settings.cs),
+  # which the runner builds once before its cases (ADR 0017); the settings suite runs against github-settings.sh below too.
   need jq
   need dotnet
   # Every suite is run: each folder under tests/parity/ with a cases/ folder, so a suite added later can't be left out. Each needs its README.md
@@ -806,6 +802,39 @@ if in_shard scripts; then
   settings_help="$(cd "$other_sdk" && bash "$skill_dir/github-settings.sh" --help 2>&1)" \
     || fail "github-settings.sh --help fails from a folder whose global.json pins another SDK: $settings_help"
   [[ "$settings_help" == "usage: settings.cs "* ]] || fail "github-settings.sh --help didn't print settings' usage: $settings_help"
+  # rollout.sh builds github/rollout.cs from its own folder too, then runs the built dll from the caller's (ADR 0017).
+  rollout_help="$(cd "$other_sdk" && bash "$skill_dir/rollout.sh" --help 2>&1)" || fail "rollout.sh --help fails from a folder whose global.json pins another SDK: $rollout_help"
+  [[ "$rollout_help" == "usage: rollout.cs "* ]] || fail "rollout.sh --help didn't print rollout's usage from a folder whose global.json pins another SDK: $rollout_help"
+  # rollout.sh runs the dll its build names in its own place, with its arguments, and passes on the signals its caller ignores (ROLLOUT_SIGIGN,
+  # SigIgn of /proc/$$/status), since the runtime takes SIGTERM over before the round's first line: checked with a stand-in dotnet that
+  # prints what it was asked to run and that variable. A build that fails shows its output on stderr and exits 1, and so does one that
+  # names no dll; neither runs anything.
+  if [[ -r /proc/self/status ]]; then
+    fake_dotnet="$md_tmp/fake-dotnet"
+    mkdir -p "$fake_dotnet"
+    : > "$fake_dotnet/rollout.dll"
+    # The stand-in's own $1, $* and variables, written for it to read.
+    # shellcheck disable=SC2016
+    printf '%s\n' '#!/usr/bin/env bash' 'if [[ "$1" == build ]]; then' \
+      '  [[ -z "${FAKE_BUILD_FAILS:-}" ]] || { echo "error CS0103: broken" >&2; exit 1; }' \
+      "  echo \"\${FAKE_DLL:-$fake_dotnet/rollout.dll}\"" '  exit 0' 'fi' 'printf "%s\n" "$*" "$ROLLOUT_SIGIGN"' > "$fake_dotnet/dotnet"
+    chmod +x "$fake_dotnet/dotnet"
+    said="$(PATH="$fake_dotnet:$PATH" bash -c 'trap "" TERM; exec bash "$1" --brings "#1" --root "a b"' _ "$skill_dir/rollout.sh" 2>&1)" \
+      || fail "rollout.sh with a stand-in dotnet failed: $said"
+    [[ "$(head -1 <<< "$said")" == "$fake_dotnet/rollout.dll --brings #1 --root a b" ]] || fail "rollout.sh didn't run the dll its build named, with its arguments: $said"
+    mask="$(sed -n 2p <<< "$said")"
+    if [[ ! "$mask" =~ ^[0-9a-f]{16}$ ]] || ((! (0x$mask & 0x4000))); then
+      fail "rollout.sh didn't pass on its caller's ignored SIGTERM in ROLLOUT_SIGIGN: $said"
+    fi
+    code=0
+    said="$(FAKE_BUILD_FAILS=1 PATH="$fake_dotnet:$PATH" bash "$skill_dir/rollout.sh" --brings '#1' 2>&1)" || code=$?
+    [[ $code -eq 1 && "$said" == *"error CS0103: broken"* && "$said" == *"rollout.sh: dotnet build github/rollout.cs failed (above); nothing run"* ]] \
+      || fail "rollout.sh with a build that fails exited $code, not 1 with the build's output: $said"
+    code=0
+    said="$(FAKE_DLL="$md_tmp/none.dll" PATH="$fake_dotnet:$PATH" bash "$skill_dir/rollout.sh" --brings '#1' 2>&1)" || code=$?
+    [[ $code -eq 1 && "$said" == "rollout.sh: dotnet build github/rollout.cs named no dll it built"* ]] \
+      || fail "rollout.sh with a build that named no dll exited $code, not 1 saying so: $said"
+  fi
   # Runs started at once right after a change share the first build (mpaulosky/Application_Factory#178): each wrapper builds under a lock on
   # github/ first, so six runs of a fresh copy (a new path, so a new build) all pass, with only the usage on stdout. Without the lock about one
   # run in three of three failed, the file in use by another's build. The lock is flock(1); macOS has none, and there the wrappers build as before.
@@ -814,9 +843,9 @@ if in_shard scripts; then
     at_once="$md_tmp/at-once"
     mkdir -p "$at_once/skill"
     cp -R "$skill_dir/github" "$at_once/skill/github"
-    cp "$skill_dir/status.sh" "$skill_dir/land.sh" "$skill_dir/github-settings.sh" "$at_once/skill/"
+    cp "$skill_dir/status.sh" "$skill_dir/land.sh" "$skill_dir/github-settings.sh" "$skill_dir/rollout.sh" "$at_once/skill/"
     cp "$skill_dir/../../../global.json" "$at_once/global.json"
-    for wrapper in status:status land:land github-settings:settings; do
+    for wrapper in status:status land:land github-settings:settings rollout:rollout; do
       script="${wrapper#*:}" wrapper="${wrapper%%:*}" pids=()
       for run in 1 2 3 4 5 6; do
         bash "$at_once/skill/$wrapper.sh" --help > "$at_once/$wrapper-$run.out" 2> "$at_once/$wrapper-$run.err" &
@@ -835,7 +864,7 @@ if in_shard scripts; then
   mkdir -p "$no_dotnet"
   ln -sf "$(command -v bash)" "$no_dotnet/bash"
   ln -sf "$(command -v dirname)" "$no_dotnet/dirname"
-  for wrapper in status:status land:land github-settings:settings; do
+  for wrapper in status:status land:land github-settings:settings rollout:rollout; do
     script="${wrapper#*:}" wrapper="${wrapper%%:*}" code=0
     said="$(PATH="$no_dotnet" "$no_dotnet/bash" "$skill_dir/$wrapper.sh" --help 2>&1)" || code=$?
     [[ $code -eq 127 && "$said" == "$wrapper.sh: dotnet isn't on PATH; github/$script.cs runs on the .NET SDK"* ]] \

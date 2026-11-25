@@ -133,7 +133,7 @@ public class AutoRolloutTests : IDisposable
 	public void A_second_run_cannot_take_the_lock()
 	{
 		// The original's second run is another python3; flock's lock is on the open file, so a second open in this process is refused as well,
-		// and a second run of auto_rollout.py is what the next test holds.
+		// and another process's flock is what the next test holds.
 		var path = Path.Combine(tmp, "sub", "lock");
 		var first = AutoRollout.TakeLock(path);
 		Assert.NotNull(first);
@@ -144,21 +144,18 @@ public class AutoRolloutTests : IDisposable
 	}
 
 	[Fact]
-	public void The_lock_is_flocks_own_so_the_python_round_and_flock_n_are_kept_out()
+	public void The_lock_is_flocks_own_so_flock_n_is_kept_out_both_ways()
 	{
 		// ADR 0017's Update for mpaulosky/Application_Factory#157: a FileStream with FileShare.None is flock(LOCK_EX | LOCK_NB), the call
-		// auto_rollout.py's take_lock makes, so a C# round and a Python round keep each other out while both exist.
+		// auto_rollout.py's take_lock made, so a round of the C# keeps out a round of an older checkout's Python too.
 		Assert.SkipUnless(OperatingSystem.IsLinux(), "--auto runs on Linux only");
 		var path = Path.Combine(tmp, "lock");
-		var python = $"import sys; sys.path.insert(0, sys.argv[1]); import auto_rollout as a; print(a.take_lock(sys.argv[2]) is None)";
 		using (var held = AutoRollout.TakeLock(path))
 		{
 			Assert.NotNull(held);
 			Assert.Equal(1, Start("flock", "-n", path, "true").Code);
-			Assert.Equal((0, "True\n"), Start("python3", "-I", "-c", python, Skill.Path("github"), path));
 		}
 		Assert.Equal(0, Start("flock", "-n", path, "true").Code);
-		Assert.Equal((0, "False\n"), Start("python3", "-I", "-c", python, Skill.Path("github"), path));
 		// And the other way: while flock(1) holds it, the C# can't take it.
 		// The holder waits for the lock (no -n), so a probe of the loop below that holds it for a moment doesn't make flock give up.
 		var start = new ProcessStartInfo("flock", [path, "sleep", "30"]) { UseShellExecute = false };
