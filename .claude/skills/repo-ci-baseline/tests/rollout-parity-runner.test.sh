@@ -254,6 +254,18 @@ grep -qxF 'made rollout-session.XXXXXXXX' "$cases/fresh/expected.stdout" || fail
   || fail "record mode didn't write the second random name -2, with <tmp> in its content: $(ls "$cases/fresh/expected.home/logs" 2>&1)"
 [[ -f "$cases/fresh/expected.home/repo/file" && ! -e "$cases/fresh/expected.home/repo/.git" ]] || fail "record mode kept a .git in expected.home/"
 run_runner 0 "random names and a .git, compared" STUB_MODE=names -- && said "random names and a .git, compared" "ok   fresh"
+# The runner sorts HOME's entries in the C locale, where sort -n reads %T@'s . as a decimal point: a sort that orders them
+# wrongly in any other locale (as sort -n does where the decimal point is a comma) leaves the comparison as it was.
+mkdir -p "$work/sortbin"
+real_sort="$(type -P sort)"
+cat > "$work/sortbin/sort" << END
+#!/usr/bin/env bash
+[[ "\${LC_ALL-}" != C ]] || exec "$real_sort" "\$@"
+"$real_sort" "\$@" | tr '\\0\\n' '\\n\\0' | tac | tr '\\0\\n' '\\n\\0'
+END
+chmod +x "$work/sortbin/sort"
+run_runner 0 "random names and a .git, compared under another locale's sort" PATH="$work/sortbin:$work/hostbin:$PATH" STUB_MODE=names -- \
+  && said "random names, another locale's sort" "ok   fresh"
 rm -rf "$cases/fresh"
 mv "$work/one" "$cases/one"
 
