@@ -505,3 +505,31 @@ F3a, the first library under the library-first rule above. Nothing runs it: `rol
 - **What it keeps of the Python that .NET doesn't give for free.** `Folders.Default` resolves the entry file's folder through its symlinks first, as `SKILL_DIR` reads
   `os.path.realpath(__file__)`, so a run through `~/.claude/skills/repo-ci-baseline` still finds the Factory's checkout. `RunQuiet` holds one deadline over the exit and
   both pipes' reads, as `subprocess.run(timeout=)` does, so a command that exits but leaves a child holding its output still ends in 124 at the limit.
+
+## Update (mpaulosky/Application_Factory#160): the session guard and the review record are a library
+
+F3c, the third library under the rule above, after F3a's and F3b's. `auto_rollout.py`'s `run_text` to `record_review` is C#, run by nothing; the `.py`, its pytest and `rollout.sh` are unchanged.
+
+- **The files.** `github/rollout.cs`, F3a's entry file, also includes `Repos.cs`, `Py.cs` (`Py`: `repr()`, `json.dumps()`, `str.strip()` and the code point sort) and
+  two more libraries. `AutoRolloutGuard.cs` holds the `Guard`, `SessionGuard`
+  (`session_guard`, `broken_rules` and the file and tree snapshots they compare), `PyText` (`ascii()`, a bytes `repr()`, `shlex.quote()` and `shlex.join()`) and `Posix`.
+  `AutoRolloutRecord.cs` holds `ReviewRecord` (`staged_findings` to `record_review`, with `run_bounded` and `wait_for`) and `GroupLeft`. Each library's classes have
+  names of their own, not a shared `partial` class, so F3a and F3b can land beside them in any order.
+- **The file reads go through libc.** The BCL has no `lstat` that gives the inode and the mtime in nanoseconds, no open that follows no symlink and never waits on a FIFO,
+  and no `mkdir` that fails on a folder already there. So `Posix` calls `statx`, whose layout is the same on every Linux architecture, and `open`, `read`, `close`, `mkdir`
+  and `access` through `DllImport`. `O_NOFOLLOW` is the one flag whose value differs between x64 and arm64. `--auto` is Linux only, so this is too.
+- **The process group is the cut-over's.** `run_bounded` starts its command with `posix_spawnp` in a group of its own, and that spawner lands with the rest of the
+  groups and signals. So `RunBounded` takes the spawner (it returns an `IGroupChild`: its pid, and its exit code once it exits, unreaped) and the group's end as
+  parameters, and `RecordReview` takes its bounded runner as one. Their two pytest tests that run a real process group move to xUnit with the cut-over. The other 68
+  tests of these functions are in `tests/Scripts.Tests/AutoRollout/`, under the naming rule.
+- **What it reads as Python reads it.** A staged findings file is strict UTF-8 JSON, nested at most 1,000 deep. An object's repeated key keeps its first place and its last
+  value, as a `dict` does. Python's `NaN` and `Infinity` literals, which `json.loads()` takes, are refused, so a file holding one breaks a Rule, and so is a lone surrogate
+  (`\ud800`) in a string or a name, which a .NET string can't hold. The findings are written again
+  with `Py.Dumps`, so the kept copy is byte for byte what `json.dumps()` writes. `mkdir`'s error reads as Python's `OSError` does (`[Errno 17] File exists: '<path>'`).
+- **One deadline over the exit and the reads.** `SessionGuard.RunText`, as F3a's `RunQuiet`, counts its 120 s over the command's exit and both pipes' reads, so a
+  child left holding its output can't stall the guard past the limit.
+- **A name that isn't UTF-8 fails closed.** .NET lists such a name with U+FFFD, and its path then names nothing, where `os.walk` kept the bytes. So `TreeState`,
+  `FolderState` and `TreeHashes` read a name they can't reach as different every time: the session guard breaks a Rule on a tree that holds one, rather than missing a
+  change made under it. A name listed twice (one that isn't UTF-8 decoded to the same text as one that is) reads the same way.
+- **`FileHash` never waits or reads without end.** It hashes a regular file of at most `RecordLimit` bytes, opened without waiting, a symlink followed; a FIFO, a device
+  or a bigger file gives null, no Template hash, where Python's `open().read()` would have hung or filled memory.
