@@ -273,7 +273,11 @@ jobs:
   work:
     name: Work issue ${{ matrix.issue }}
     needs: [pick]
-    if: needs.pick.outputs.issues != '' && needs.pick.outputs.issues != '[]'
+    # Without a status function GitHub adds `success()`, which counts every job upstream, the queue job too, and that one is
+    # skipped on every event but the owner's `@claude` comment: so this job checks the pick job's result itself.
+    if: >-
+      !cancelled() && needs.pick.result == 'success'
+      && needs.pick.outputs.issues != '' && needs.pick.outputs.issues != '[]'
     # Each issue on its own runner and checkout of `main`, so the issues worked at once share nothing but the repository.
     strategy:
       fail-fast: false

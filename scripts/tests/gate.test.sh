@@ -916,6 +916,29 @@ issues_wf="$here/.github/workflows/claude-issues.yml"
 issues_settings="$(sed -n '/^      - name: Work the issue$/,/^      - name: /p' "$issues_wf" | sed -n '/^          settings: |$/{n;p;}')"
 check "the issue worker's Claude runs with background tasks off" \
   "$(jq -e '.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS == "1"' <<< "${issues_settings:-null}" > /dev/null 2>&1 && echo 0 || echo 1)"
+# A job's `if:` with no status function gets GitHub's implicit `success()`, which counts every job upstream: the queue job is skipped on every event but the
+# owner's `@claude` comment, so a job below it without one is skipped too (#185). Each job with `needs:` names a status function in its `if:`; the awk prints
+# each that doesn't, and says so when it finds no job with `needs:` at all, so the check can't pass on a file it no longer reads.
+unguarded_jobs() { # unguarded_jobs <workflow>
+  awk '
+    function flush() { if (job != "" && needs) { n++; if (cond !~ /(always|cancelled|success|failure)\(\)/) print job } }
+    /^jobs:$/ { in_jobs = 1; next }
+    in_jobs && /^[^ #]/ { in_jobs = 0 }
+    in_jobs && /^  [A-Za-z0-9_-]+:$/ { flush(); job = $1; sub(/:$/, "", job); needs = 0; cond = ""; in_cond = 0; next }
+    in_jobs && job != "" {
+      if ($0 ~ /^    needs:/) needs = 1
+      if ($0 ~ /^    if:/) { cond = $0; in_cond = 1; next }
+      if (in_cond && $0 ~ /^      /) { cond = cond " " $0; next }
+      in_cond = 0
+    }
+    END { flush(); if (!n) print "(no job with needs:)" }
+  ' "$1"
+}
+check "every issue worker job below another checks a status function, so a skipped queue job doesn't skip it" \
+  "$([[ -z $(unguarded_jobs "$issues_wf") ]] && echo 0 || echo 1)"
+unguarded_wf="$work/unguarded.yml"
+sed 's/^      !cancelled() && needs.pick.result == .success.$/      true/' "$issues_wf" > "$unguarded_wf"
+check "the status-function check flags the work job when its if: checks none" "$([[ $(unguarded_jobs "$unguarded_wf") == work ]] && echo 0 || echo 1)"
 # The comment on a run with no pull request sends the owner to the Finish step's "Claude's last message" group, so the step prints that group whether or not
 # the work step left an execution file. The step's script runs here with a stub gh that finds no pull request and keeps the comment's body.
 finish="$work/finish"
