@@ -56,7 +56,9 @@ public class AutoRolloutTests : IDisposable
 		Assert.True(Executable(folders.Land));
 		Assert.True(Executable(folders.Reapply));
 		Assert.True(Directory.Exists(folders.Owned));
-		Assert.True(File.Exists(Path.Combine(folders.Factory, "CLAUDE.md")), "FACTORY is the Factory's root");
+		// test.sh also runs this project from a copy of the skill alone, with no Factory around it.
+		if (Path.GetFileName(Skill.Dir) == "repo-ci-baseline")
+			Assert.True(File.Exists(Path.Combine(folders.Factory, "CLAUDE.md")), "FACTORY is the Factory's root");
 	}
 
 	[Fact]
