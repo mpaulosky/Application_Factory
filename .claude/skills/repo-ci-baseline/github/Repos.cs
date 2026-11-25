@@ -1,4 +1,5 @@
 // The Fleet registry, github/repos.txt, as settings.py's read_repo_list() reads it (a test holds the two equal while settings.py is left).
+using System.Collections;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -30,4 +31,22 @@ static class Repos
 		}
 		return repos;
 	}
+}
+
+// The Fleet registry read the first time a key or scope is asked for, not before: status.cs and land.cs need it for every repo when
+// no target is named, but only for a scope when one is, so a run that never gets that far (a usage error, --help, a repo whose read
+// failed) doesn't need a readable repos.txt. When it is needed, its error is the one Repos.Read throws; a named repo isn't given
+// "full" in its place, since a wrong scope would decide a wrong landing action (mpaulosky/Application_Factory#178).
+sealed class LazyRepos(Func<OrderedDictionary<string, string>> read) : IReadOnlyDictionary<string, string>
+{
+	readonly Lazy<OrderedDictionary<string, string>> repos = new(read);
+
+	public string this[string key] => repos.Value[key];
+	public IEnumerable<string> Keys => repos.Value.Keys;
+	public IEnumerable<string> Values => repos.Value.Values;
+	public int Count => repos.Value.Count;
+	public bool ContainsKey(string key) => repos.Value.ContainsKey(key);
+	public bool TryGetValue(string key, out string value) => repos.Value.TryGetValue(key, out value!);
+	public IEnumerator<KeyValuePair<string, string>> GetEnumerator() => repos.Value.GetEnumerator();
+	IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 }

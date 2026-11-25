@@ -144,6 +144,22 @@ LAND = os.path.join(SKILL_DIR, "land.sh")
 REAPPLY = os.path.join(SKILL_DIR, "reapply.sh")
 OWNED = os.path.join(SKILL_DIR, "template", "owned")
 TEMPLATE_GLOBAL_JSON = os.path.join(OWNED, "global.json")
+
+
+def nearest_global_json(folder):
+    """The global.json dotnet reads for a command run in folder: the nearest one in it or a folder above, or None."""
+    while True:
+        path = os.path.join(folder, "global.json")
+        if os.path.lexists(path):
+            return path
+        parent = os.path.dirname(folder)
+        if parent == folder:
+            return None
+        folder = parent
+
+
+# The Factory's own global.json, which land.sh and status.sh run on: they run dotnet from github/ (ADR 0017).
+FACTORY_GLOBAL_JSON = nearest_global_json(os.path.join(SKILL_DIR, "github"))
 # The Owned files the Template retired, which Apply deletes (apply.sh reads the same file).
 RETIRED = os.path.join(SKILL_DIR, "retired.txt")
 # The lock that lets one round run at a time.
@@ -416,7 +432,7 @@ def run_quiet(command, cwd=None, env=None):
 
 
 def preflight(which=shutil.which, run=run_quiet, template_global_json=TEMPLATE_GLOBAL_JSON, environ=None,
-              platform=None):
+              platform=None, factory_global_json=FACTORY_GLOBAL_JSON):
     """What would stop the round partway through, as a list of problems (empty when there's none)."""
     environ = os.environ if environ is None else environ
     platform = sys.platform if platform is None else platform
@@ -458,7 +474,20 @@ def preflight(which=shutil.which, run=run_quiet, template_global_json=TEMPLATE_G
                             " gh auth login")
     if os.path.lexists(template_global_json):
         problems += sdk_problems(template_global_json, which, run)
+    # land.sh runs on the Factory's global.json, not the Template's: when the two pins differ, its SDK is checked too, or the
+    # round would start and land.sh fail at dotnet run (mpaulosky/Application_Factory#178).
+    if factory_global_json and os.path.lexists(factory_global_json) and not same_file_text(factory_global_json, template_global_json):
+        problems += sdk_problems(factory_global_json, which, run, "the Factory's global.json, which land.sh runs on")
     return problems
+
+
+def same_file_text(path, other):
+    """Whether two files hold the same bytes; False when either can't be read."""
+    try:
+        with open(path, "rb") as one, open(other, "rb") as two:
+            return one.read() == two.read()
+    except OSError:
+        return False
 
 
 def kept_clouds(base):
@@ -535,13 +564,13 @@ def ruff_problems(which, run):
             f" the pinned one: {RUFF_INSTALL}"]
 
 
-def sdk_problems(global_json, which, run):
-    """Whether an installed .NET SDK satisfies the Template's global.json, asked of dotnet in a folder holding a copy."""
+def sdk_problems(global_json, which, run, name="the Template's global.json"):
+    """Whether an installed .NET SDK satisfies a global.json (name says whose), asked of dotnet in a folder holding a copy."""
     try:
         with open(global_json, encoding="utf-8", errors="replace") as handle:
             version = sdk_hint(handle.read())
     except OSError as error:
-        return [f"can't read the Template's global.json: {error}"]
+        return [f"can't read {name}: {error}"]
     named = f".NET SDK {version}" if version else "the .NET SDK it names"
     if which("dotnet") is None:  # TOOLS has dotnet, so it is named once, there
         return []
@@ -555,7 +584,7 @@ def sdk_problems(global_json, which, run):
         return []
     install = f": dotnetup sdk install {version}" if version else ""
     why = f" ({error.strip()})" if code in (124, 127) else ""
-    return [f"no installed .NET SDK matches the Template's global.json ({named}){install}{why}"]
+    return [f"no installed .NET SDK matches {name} ({named}){install}{why}"]
 
 
 # ── The outside world ───────────────────────────────────────────────────────

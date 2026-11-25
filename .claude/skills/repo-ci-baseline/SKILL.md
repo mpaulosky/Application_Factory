@@ -113,11 +113,11 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
      wait for you (exit 4) says what to run before you run `rollout.sh` again.
    - **Roll out unattended:** `rollout.sh --auto --brings '#<n>,#<n>'` does all of that in one run (the Factory's [ADR 0016](../../../docs/adr/0016-a-rollout-runs-each-applications-review-headless-and-sandboxed-in-its-worktree.md)).
      It runs on Linux only, and checks the tools (bubblewrap and socat for the sandbox among them, and that bubblewrap can make one), ruff 0.17 or uv,
-     and the Template's `global.json` SDK first (`--dry-run` stops there and prints the plan). It refuses to start with `claude` signed out (as it is with no settings file
-     read; a cloud's sign-in, which `claude auth status` doesn't report, isn't asked), or with a Claude Code or cloud sign-in secret in the environment
-     (`ANTHROPIC_API_KEY`, say): sign Claude Code in with `claude /login` instead. It refuses too when its endpoint, cloud or proxy variable (`ANTHROPIC_BASE_URL`,
-     `HTTPS_PROXY`) holds a URL with a sign-in, which the session is never given (a proxy variable counts with no scheme too, as `user:pass@proxy:3128`):
-     set one with no sign-in in it for the round.
+     and the SDKs the Template's `global.json` and the Factory's (which `land.sh` runs on) name first (`--dry-run` stops there and prints the plan).
+     It refuses to start with `claude` signed out (as it is with no settings file read; a cloud's sign-in, which `claude auth status` doesn't report, isn't asked),
+     or with a Claude Code or cloud sign-in secret in the environment (`ANTHROPIC_API_KEY`, say): sign Claude Code in with `claude /login` instead.
+     It refuses too when its endpoint, cloud or proxy variable (`ANTHROPIC_BASE_URL`, `HTTPS_PROXY`) holds a URL with a sign-in, which the session is never given
+     (a proxy variable counts with no scheme too, as `user:pass@proxy:3128`): set one with no sign-in in it for the round.
      When the gate asks for a review it runs the pre-push review headless in the repo's re-Apply worktree, review-only: one round that stages each finding open, or dismissed when
      it isn't a security one, and edits, fixes and commits nothing. It runs in Claude Code's sandbox: its shell reads none of your credentials, and of the rest of the disk only the worktree, the
      clone's git folder, `.security`, its own folder, the system's folders and node's and git's own files, as listed when it starts (what appears later is named once
