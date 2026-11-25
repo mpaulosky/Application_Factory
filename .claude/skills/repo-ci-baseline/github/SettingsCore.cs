@@ -665,7 +665,8 @@ static class Settings
 	{
 		var prefixes = Py.Items(std.Setting("removed_label_prefixes")).Select(Py.Text).ToList();
 		return [.. live.Keys.Order(Py.CodePoints).Where(name => prefixes.Any(prefix => name.StartsWith(prefix, StringComparison.Ordinal)))
-				.Select(name => new Finding($"label {name}", Drift, "retired label → deleted", () => gh("DELETE", $"repos/{repo}/labels/{Segment(name)}")))];
+				.Select(name => (name, path: $"repos/{repo}/labels/{Segment(name)}"))
+				.Select(label => new Finding($"label {label.name}", Drift, "retired label → deleted", () => gh("DELETE", label.path)))];
 	}
 
 	public static List<Finding> CheckLabels(Api gh, string repo, Standard std, OrderedDictionary<string, JsonNode?> live)
@@ -681,7 +682,8 @@ static class Settings
 					|| !Py.Eq(J.B(Py.Get(current, "description")) ? Py.Get(current, "description") : (JsonNode)"", J.Req(want, "description")))
 			{
 				var body = new JsonObject { ["color"] = J.Copy(J.Req(want, "color")), ["description"] = J.Copy(J.Req(want, "description")) };
-				findings.Add(new($"label {name}", Drift, "color or description → the standard's", () => gh("PATCH", $"repos/{repo}/labels/{Segment(name)}", body)));
+				var path = $"repos/{repo}/labels/{Segment(name)}";
+				findings.Add(new($"label {name}", Drift, "color or description → the standard's", () => gh("PATCH", path, body)));
 			}
 			else
 				findings.Add(new($"label {name}", OK, "present"));
@@ -692,10 +694,11 @@ static class Settings
 	// A value for a query (a ref=): every byte but the unreserved ones percent-encoded, as quote(name, safe="") does.
 	public static string Quote(string name) => Uri.EscapeDataString(name);
 
-	// A name GitHub answered with (a ruleset id, a label name) as one path segment, encoded as Quote encodes it. An empty, . or ..
-	// segment would name another REST path (the list, or a step out of it), and Quote leaves them as they are, so it is refused.
+	// A name that goes into a REST path as one segment (a ruleset id GitHub answered with, a label name), encoded as Quote encodes it.
+	// An empty, . or .. segment would name another REST path (the list, or a step out of it), and Quote leaves them as they are, so it
+	// is refused. Each caller builds its path while it checks, before any --fix write runs.
 	public static string Segment(string name) => name is "" or "." or ".."
-			? throw new ArgumentException($"a name GitHub answered with is an empty, . or .. path segment: '{name}'", nameof(name))
+			? throw new ArgumentException($"a name is an empty, . or .. path segment: '{name}'", nameof(name))
 			: Quote(name);
 
 	// A path GitHub answered with (a workflow's, a branch name) as path segments: each segment encoded as Segment encodes it, the slashes

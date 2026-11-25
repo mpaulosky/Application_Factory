@@ -160,6 +160,39 @@ public partial class SettingsTests
 		Assert.DoesNotContain(calls, call => call is not ("GET repos/o/app/rulesets?includes_parents=false" or "GET repos/o/app/rulesets/1"));
 	}
 
+	// A label name goes into labels/<name> as one segment too: an empty, . or .. one is refused while the labels are checked, so a
+	// --fix stops before any write rather than part way through. A name like ..x is sent encoded.
+	[Theory]
+	[InlineData("..")]
+	[InlineData(".")]
+	[InlineData("")]
+	public void A_label_name_that_is_a_dot_segment_is_refused_while_checking(string name)
+	{
+		List<string> calls = [];
+		JsonNode? Answer(string method, string path, JsonNode? body = null)
+		{
+			calls.Add($"{method} {path}");
+			return new JsonObject();
+		}
+		var loaded = Settings.Load(Github, "o/app");
+		var settings = (JsonObject)loaded.Settings.DeepClone();
+		settings["removed_label_prefixes"] = new JsonArray(name);
+		var std = loaded with
+		{
+			Settings = settings,
+			Labels = [new JsonObject { ["name"] = name, ["color"] = "000000", ["description"] = "d" }, new JsonObject { ["name"] = "..x", ["color"] = "000000", ["description"] = "d" }],
+		};
+		var live = new OrderedDictionary<string, JsonNode?> { [name] = P("""{"color": "ffffff", "description": "d"}""") };
+
+		Assert.Throws<ArgumentException>(() => Settings.CheckLabels(Answer, "o/app", std, live));
+		Assert.Throws<ArgumentException>(() => Settings.CheckRetiredLabels(Answer, "o/app", std, live));
+		Assert.Empty(calls);
+		var dotted = new OrderedDictionary<string, JsonNode?> { ["..x"] = P("""{"color": "ffffff", "description": "d"}""") };
+		foreach (var finding in Settings.CheckLabels(Answer, "o/app", std with { Labels = [std.Labels[1]!.DeepClone()] }, dotted))
+			finding.Fix?.Invoke();
+		Assert.Equal(["PATCH repos/o/app/labels/..x"], calls);
+	}
+
 	// Each read that GitHub may refuse is read as an answer for the statuses settings.py caught there, and any other failure stops the
 	// check as an ApiError (exit 1): 404 alone where a missing thing is the answer, 403 or 404 where a plan may not offer the feature.
 	[Theory]
