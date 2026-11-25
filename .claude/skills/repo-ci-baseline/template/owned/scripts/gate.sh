@@ -3,7 +3,9 @@
 # Lints the Markdown, YAML, workflow and shell files changed since origin/main
 # (every unpushed commit, with the same configs as CI), checks that the
 # changed shell files are formatted as shfmt formats them, lints the changed
-# Python files with ruff (bug-finding rules only), checks that the
+# Python files with ruff (bug-finding rules only), checks the Owned C# scripts in
+# .github/scripts/ when the branch changes one (dotnet format whitespace, and a
+# build of each with warnings as errors but CA2266 and NU1900), checks that the
 # branch's diff passed the local review (/pre-push-review), that its own
 # scripts and skills tell every gh command its repository, that
 # .github/copilot-instructions.md matches the repo's code-review skill (when
@@ -54,8 +56,10 @@ printable() {
 # Without an origin/main (a fresh clone of a fork, say) lint every tracked file; the Shell format step skips then (below).
 # NUL-separated, so a name git would quote (non-ASCII, a tab, a newline, a quote) reaches the linters as it is on disk. Written to a
 # file first, so a git that fails stops the gate here (set -e) instead of leaving every list empty.
+# CS_OUT: the C# scripts step's build folder, set below; the trap removes it however the gate ends.
+CS_OUT=""
 CHANGED_FILE="$(mktemp)"
-trap 'rm -f "$CHANGED_FILE"' EXIT
+trap 'rm -f "$CHANGED_FILE"; [[ -z "$CS_OUT" ]] || rm -rf -- "$CS_OUT"' EXIT
 if BASE="$(git merge-base HEAD origin/main 2> /dev/null)"; then
   git diff --name-only -z --diff-filter=ACMR "$BASE" HEAD > "$CHANGED_FILE"
 else
@@ -277,6 +281,55 @@ if [[ ${#PY_FILES[@]} -gt 0 ]]; then
     echo "❌ ruff failed (exit $RUFF_RC) without checking the files: check the ruff install, or the file it names." >&2
     exit 1
   fi
+fi
+
+# The Owned C# scripts in .github/scripts/ (C# file-based apps, ADR 0017 in the Application Factory), when the branch changes one of them (and,
+# like the other lints, every time without an origin/main): every .cs there is formatted as dotnet format whitespace formats it under
+# .editorconfig, in folder mode, which reads no project and runs no MSBuild, and every script there builds with warnings as errors but CA2266
+# (an entry file without a #! line, which the scripts leave out on purpose) and NU1900 (vulnerability data a feed outage kept from the
+# restore). A script is a .cs no .cs in the folder pulls in with #:include. Each is built from the root, whose global.json picks the SDK,
+# with --no-incremental, so a build cached without these properties can't hide a warning, into a folder of this run's own, removed however
+# the gate ends, and with no build server left running. The repo's own C# is built by the Build step below.
+mapfile -d '' -t CS_FILES < <(pick '^\.github/scripts/[^/]+\.cs$')
+step "C# scripts (${#CS_FILES[@]} changed file(s))"
+if [[ ${#CS_FILES[@]} -gt 0 ]]; then
+  if ! command -v dotnet &> /dev/null; then
+    echo "❌ The C# scripts step needs the .NET SDK global.json names: install it on PATH." >&2
+    exit 1
+  fi
+  export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1
+  CS_FORMAT_RC=0
+  dotnet format whitespace .github/scripts --folder --verify-no-changes || CS_FORMAT_RC=$?
+  if ((CS_FORMAT_RC == 2)); then
+    echo "❌ dotnet format: run dotnet format whitespace .github/scripts --folder (it reads .editorconfig), or take the Template's copy again." >&2
+    exit 1
+  elif ((CS_FORMAT_RC != 0)); then
+    echo "❌ dotnet format failed (exit $CS_FORMAT_RC) without checking the format: check the .NET SDK install." >&2
+    exit 1
+  fi
+  # Every #:include target in the folder, one per line, then each .cs that isn't one of them.
+  CS_INCLUDED=$'\n'
+  CS_SCRIPTS=()
+  for f in .github/scripts/*.cs; do
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ "${line%$'\r'}" =~ ^#:include[[:space:]]+(\./)?([^[:space:]]+)[[:space:]]*$ ]] || continue
+      CS_INCLUDED+=".github/scripts/${BASH_REMATCH[2]}"$'\n'
+    done < "$f"
+  done
+  for f in .github/scripts/*.cs; do
+    [[ -f "$f" && "$CS_INCLUDED" != *$'\n'"$f"$'\n'* ]] && CS_SCRIPTS+=("$f")
+  done
+  CS_OUT="$(mktemp -d)"
+  for f in ${CS_SCRIPTS[@]+"${CS_SCRIPTS[@]}"}; do
+    if ! dotnet build "$f" --no-incremental --disable-build-servers --artifacts-path "$CS_OUT" \
+      -p:TreatWarningsAsErrors=true -p:WarningsNotAsErrors=CA2266%3BNU1900; then
+      echo "❌ dotnet build $f: fix each warning or error shown above (CA2266 and NU1900 alone are allowed), in the Application Factory's Template: the file is Owned." >&2
+      exit 1
+    fi
+  done
+  rm -rf "$CS_OUT"
+  CS_OUT=""
+  echo "${#CS_SCRIPTS[@]} C# script(s) built."
 fi
 
 # A gh command not told its repository reaches gh's default one, a fork in a

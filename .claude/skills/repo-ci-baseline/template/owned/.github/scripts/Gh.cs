@@ -62,7 +62,8 @@ sealed class Arguments(string prog, string usage, string description, bool posit
 			if (arg == "--")
 			{
 				positional = true;
-				if (taken)
+				// A parser with no positional arguments has nothing to give the -- to, so argparse reports it with what follows it.
+				if (taken || !positionals)
 					unknown.Add(arg);
 				continue;
 			}

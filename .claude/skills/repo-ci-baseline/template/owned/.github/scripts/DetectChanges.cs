@@ -35,7 +35,8 @@ static class DetectChanges
 			&& paths.Count > 0
 			&& paths.All(path => path.StartsWith(".github/workflows/", StringComparison.Ordinal) || path.StartsWith(".github/actions/", StringComparison.Ordinal));
 
-	public static int Run(IEnumerable<string> args, TextWriter stdout, TextWriter stderr)
+	// The script: git runs in cwd, else the current folder (a test hands in its repo's, as pytest's monkeypatch.chdir did).
+	public static int Run(IEnumerable<string> args, TextWriter stdout, TextWriter stderr, string? cwd = null)
 	{
 		var parser = new Arguments("detect_changes.cs", Usage, "Decide whether a pull request changes code, or only docs.")
 				.Required("--base", "the PR's base commit")
@@ -46,7 +47,7 @@ static class DetectChanges
 		if (parser.Parse(args, stdout, stderr) is int exit)
 			return exit;
 
-		var paths = ChangedPaths(parser.Value("--base", ""), parser.Value("--head", "HEAD"));
+		var paths = ChangedPaths(parser.Value("--base", ""), parser.Value("--head", "HEAD"), cwd);
 		var code = IsCodeChange(paths);
 		var skipReason = code ? "" : "docs-only";
 		if (code && IsActionsBump(paths, parser.Value("--author", ""), parser.Value("--head-ref", "")))
