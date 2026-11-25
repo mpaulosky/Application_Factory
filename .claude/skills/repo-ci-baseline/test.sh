@@ -804,6 +804,30 @@ if in_shard scripts; then
   settings_help="$(cd "$other_sdk" && bash "$skill_dir/github-settings.sh" --help 2>&1)" \
     || fail "github-settings.sh --help fails from a folder whose global.json pins another SDK: $settings_help"
   [[ "$settings_help" == "usage: settings.cs "* ]] || fail "github-settings.sh --help didn't print settings' usage: $settings_help"
+  # Runs started at once right after a change share the first build (mpaulosky/Application_Factory#178): each wrapper builds under a lock on
+  # github/ first, so six runs of a fresh copy (a new path, so a new build) all pass, with only the usage on stdout. Without the lock about one
+  # run in three of three failed, the file in use by another's build. The lock is flock(1); macOS has none, and there the wrappers build as before.
+  if [[ "$(uname -s)" == Linux ]]; then
+    need flock
+    at_once="$md_tmp/at-once"
+    mkdir -p "$at_once/skill"
+    cp -R "$skill_dir/github" "$at_once/skill/github"
+    cp "$skill_dir/status.sh" "$skill_dir/land.sh" "$skill_dir/github-settings.sh" "$at_once/skill/"
+    cp "$skill_dir/../../../global.json" "$at_once/global.json"
+    for wrapper in status:status land:land github-settings:settings; do
+      script="${wrapper#*:}" wrapper="${wrapper%%:*}" pids=()
+      for run in 1 2 3 4 5 6; do
+        bash "$at_once/skill/$wrapper.sh" --help > "$at_once/$wrapper-$run.out" 2> "$at_once/$wrapper-$run.err" &
+        pids+=($!)
+      done
+      for run in 1 2 3 4 5 6; do
+        code=0
+        wait "${pids[run - 1]}" || code=$?
+        [[ $code -eq 0 && "$(head -1 "$at_once/$wrapper-$run.out")" == "usage: $script.cs "* ]] \
+          || fail "$wrapper.sh run $run of six started at once on a fresh build exited $code: $(head -c 600 "$at_once/$wrapper-$run.out" "$at_once/$wrapper-$run.err")"
+      done
+    done
+  fi
   # With no dotnet on PATH (only bash and dirname, which the wrappers need first), each wrapper exits 127 and says so.
   no_dotnet="$md_tmp/no-dotnet"
   mkdir -p "$no_dotnet"

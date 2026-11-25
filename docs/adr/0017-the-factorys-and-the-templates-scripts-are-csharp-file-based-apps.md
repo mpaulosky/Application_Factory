@@ -353,6 +353,69 @@ imports `auto_rollout` in plain mode too, and `test_auto_rollout.py` imports `ro
 - **The pytest suite.** `github/tests/test_settings.py` is deleted, its 34 tests moved to `tests/Scripts.Tests/Settings/SettingsTests.cs` under the rule above, a
   `Settings/` folder beside the ones the mpaulosky/Application_Factory#119 Update lists. It held no `read_repo_list` test: `ReposTests.cs` already holds `Repos.cs` to it.
 
+## Update (mpaulosky/Application_Factory#157): library-first ports, and how rollout's C# holds the lock, runs groups and keeps signals
+
+Decisions only; nothing is ported here. The evidence is the research note
+[`2026-11-25-rollout-csharp-processes.md`](../research/2026-11-25-rollout-csharp-processes.md), whose spikes ran on Linux and were then thrown away.
+
+### Library first
+
+This updates the rule above that a script ports with everything that imports it. `auto_rollout.py` is too large for one worker run to port, so a module's C# logic may land ahead
+of its cut-over:
+
+- **As a library that nothing runs yet**, beside its `.py`, tested by xUnit copies of its pytest tests, one method each under the naming rule of the
+  mpaulosky/Application_Factory#119 Update, with the same cases and assertions. The `.py`, its pytest and the wrapper don't change: the pytest keeps running, and the `.py` is
+  still what runs and what a parity suite judges against.
+- **Kept in step until the cut-over.** A PR that changes the `.py`'s logic in the meantime changes the library and its xUnit copy too, so the cut-over doesn't find the
+  difference late.
+- **The entry file lands with the first library.** The gate builds every `.cs` that no file in its folder includes as a script on its own, and a file with no top-level statements
+  fails that build (CS5001, which the note shows). So the first library PR adds the script's entry file (for rollout, `github/rollout.cs`), which `#:include`s each library file as
+  it lands, and the gate builds them through it with warnings as errors. Until the cut-over its top-level statements only write to stderr that the wrapper still runs the
+  Python, and exit 2; nothing calls it. `Scripts.Tests` leaves it out of its `Compile` items, as it does the other entry files.
+- **The cut-over PR** fills in the entry file, switches the wrapper and the callers, runs the parity suite against the C#, and deletes the `.py` files and their pytest, as
+  the rule above says (for rollout, `settings.py` with them).
+- **Who uses it:** F3a to F3c, mpaulosky/Application_Factory#122's split of `auto_rollout`'s logic into libraries, and T3b, mpaulosky/Application_Factory#128's split of the
+  release scripts. A T3b library is part of the Template, so where it and its tests sit is T3b's, with where the Template's own scripts' tests go (still open above).
+
+### How rollout's C# runs its children
+
+This updates ADR 0016's "Its processes" and its lock (its own Update for mpaulosky/Application_Factory#157 points here). What the round does is unchanged; this is how the C# does
+it, and each part is shown in the note.
+
+- **The lock is a `FileStream` with `FileShare.None`**, on the same file (`~/.cache/repo-ci-baseline/rollout-auto.lock`). On Linux that is `flock(LOCK_EX | LOCK_NB)`, the call
+  Python's `fcntl.flock` makes, so a C# round and a Python round keep each other out while both exist; an `IOException` from the open is the lock held. `flock(1)` around the
+  wrapper is rejected: every child the round starts holds the lock then, `gh` and `git` among them, as it is when the descriptor's `FD_CLOEXEC` is cleared, and plain mode and
+  `--dry-run`, which take no lock today, would take it too.
+- **Each group's command is started with `posix_spawnp`**, called through `DllImport` from libc, not `Process.Start`:
+  - `POSIX_SPAWN_SETSID` gives it a session and group of its own, with its pid as the group's id, as `start_new_session=True` does.
+  - `posix_spawn_file_actions_adddup2(fd, fd)` clears `FD_CLOEXEC` on the lock's descriptor in that child alone, as `pass_fds` does; the same file actions put the log
+    on its stdout and stderr where `auto_rollout.py` gives `stdout=`.
+  - Its signal mask is emptied and SIGPIPE set back to its default (`POSIX_SPAWN_SETSIGMASK`, `POSIX_SPAWN_SETSIGDEF`), as Python's `restore_signals` does: .NET ignores SIGPIPE,
+    and a `Process.Start` child starts with it ignored.
+  - The program is the absolute path the round resolved, from `PATH`'s absolute folders only, as `Gh.cs` finds `gh`.
+
+  `Process.Start` stays for the short calls whose output the round reads (`gh`, `git`, `claude auth status`), none of which gets the lock.
+- **The leader is left unreaped until its group is killed.** .NET reaps every child `Process.Start` started, the `setsid` program's too, the moment it exits, so a group whose
+  leader came from `Process.Start` keeps its id only while a member is left; it reaps none it didn't start. So the round waits on a spawned leader with
+  `waitid(P_PID, pid, WEXITED | WNOHANG | WNOWAIT)`, polling as `wait_for` does, kills the group with `kill(-pgid, SIGKILL)`, reaps the leader with `waitid` after that, and
+  reads what is left of the group from `/proc` as `group_alive` does. `setsid` through `Process.Start` is rejected for that reason.
+- **Signals are held with `PosixSignalRegistration`**, whose handler records the first SIGINT, SIGTERM or SIGHUP and sets `Cancel`, the round acting on it as
+  `deferred_signals` and `round_signals` do now. An ignored signal stays ignored:
+  - SIGHUP and SIGINT. The runtime leaves an ignored one ignored, even with a registration, and a child inherits it; the round reads `SigIgn` from `/proc/self/status` as
+    it starts and registers nothing for one the caller ignores, as `held` does.
+  - SIGTERM. The runtime takes it over before the first line runs, so `rollout.sh` passes on the `SigIgn` it reads from `/proc/$$/status` before its `exec`, and when SIGTERM was
+    ignored the round puts `SIG_IGN` back (`signal(SIGTERM, SIG_IGN)` through `DllImport`) and holds nothing for it. Its children inherit that, as Python's do.
+- **`rollout.sh` runs the built dll, not `dotnet run --file`.** It builds with `dotnet build <github/rollout.cs> -t:Build -getProperty:TargetPath`, which builds and prints only
+  the dll's path (in the file-based app's own artifacts folder, where `dotnet run` builds it), with the build environment `status.sh` uses, and then runs `exec dotnet <dll>`.
+  So the round is the wrapper's pid, and a SIGTERM or SIGHUP sent to it reaches the round's handler. Through `dotnet run --file` the app is the CLI's child: in the note's runs
+  a SIGTERM or SIGHUP to the wrapper's pid ended the CLI at once and left the round running, its handler never called, and a SIGKILL left it running as well, where a SIGKILL
+  of `rollout.sh` ends the round today. Once built, the build step took about 1.5 s for the spike's small app; the round runs for minutes to hours.
+- **`--auto` is Linux only, as ADR 0016 already says.** The struct sizes and offsets the `DllImport` calls use are glibc's on 64-bit Linux, where the note's spikes ran.
+  Plain mode starts no group and takes no lock, as today, so it calls none of them.
+
+What this leaves to F3a to F3c and the cut-over: the exact names, the tests that hold each part (a test of the lock against `flock -n`, a spawned child that holds it after
+the round's SIGKILL, a leader that stays a zombie until the kill, SIGHUP under `nohup`), and the parity cases for `--auto` (mpaulosky/Application_Factory#156).
+
 ## Update (mpaulosky/Application_Factory#161): the bench is C#, and YamlDotNet reads its YAML
 
 A Factory-only port, as the ones above are, so `bench/claude-review-bench.py` and its pytest are deleted in the PR that ports it, and there is no Rollout.
@@ -362,7 +425,8 @@ A Factory-only port, as the ones above are, so `bench/claude-review-bench.py` an
   takes it without the rest of settings. `Arguments` gains an int option and an option that takes one value or more (argparse's `nargs="+"`, for `--rescore`), held to
   argparse by a test. `bench/` holds the three empty shields, which `test.sh` checks with the others. The bench has no wrapper: run it as
   `dotnet run --file bench/claude-review-bench.cs -- <args>` from anywhere in the Factory, whose `global.json` picks the SDK. Its first run after a change prints CA2266
-  on stdout, as `status.sh` and `land.sh` do.
+  on stdout, as `status.sh` and `land.sh` did before their wrappers built them first under a lock (mpaulosky/Application_Factory#192); the bench's output is a report a person
+  reads, not one a program parses, so it has no wrapper to do that.
 - **The YAML package is YamlDotNet.** The rule above says a script that needs a package needs its own ADR first; this Update is that decision, for the bench and for
   `Scripts.Tests`, whose tests read the Template's `claude-review.yml` too. The options:
   - **YamlDotNet** (MIT, no dependencies, the most used YAML library for .NET). Chosen. Its representation model gives the node tree, and `Yaml.cs` turns that into the
