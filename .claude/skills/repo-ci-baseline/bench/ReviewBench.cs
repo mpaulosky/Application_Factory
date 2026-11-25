@@ -19,8 +19,9 @@
 // The source of the actions the case head's review job pins is copied into the temporary directory's work/_actions, where the workflow's
 // prompt says the runner keeps it (clones are cached in ~/.cache/claude-review-bench), by git and tar calls that each have a time limit, never
 // ask for credentials, and read at most 4 MiB of the head's workflow and 128 MiB of an action's archive. Each call the bench makes runs in a
-// session of its own, whose process group is killed when the call runs past its time, a child it left included, and when the bench is
-// stopped by SIGINT, SIGTERM, SIGHUP or SIGQUIT. Claude reads only the case's worktree, the diff and
+// session of its own, whose process group is killed when the call returns or runs past its time, and when the bench is stopped by SIGINT,
+// SIGTERM, SIGHUP or SIGQUIT. A child that started a session of its own leaves the group, and is reached only while the call is alive to
+// walk to it (Process.Kill's tree). Claude reads only the case's worktree, the diff and
 // that copy, as in CI. Still, only add a case whose commits you trust, and read a results file before committing it. The diff is split into
 // pieces by the workflow's own "Write the PR's diff" step, whose Python this runs in the case's worktree with python3 -I, with
 // GITHUB_WORKSPACE set so it finds that copy of the actions; the step also writes the context pieces, and the prompt gets the step's lists
@@ -342,13 +343,14 @@ static class Bench
 	// Remove each .claude, CLAUDE.md and CLAUDE.local.md below the tree's root, in any case (a case-insensitive file system opens claude.md as
 	// CLAUDE.md), so a head's nested instructions, skills and settings never reach its own review: Claude Code loads a subdirectory's when it
 	// reads a file there. The root's are the base's (UseBaseSettings) and stay, .git is skipped, and a link is removed itself, never followed.
+	// The root's .claude is matched exactly: on a case-sensitive file system a .Claude beside it is the head's, and is searched like any folder.
 	public static void RemoveNestedConfig(string tree)
 	{
 		string[] names = [".claude", "CLAUDE.md", "CLAUDE.local.md"];
 		Stack<DirectoryInfo> folders = new();
 		foreach (var entry in new DirectoryInfo(tree).EnumerateDirectories())
 		{
-			if (entry.LinkTarget is null && !entry.Name.Equals(".git", StringComparison.Ordinal) && !entry.Name.Equals(".claude", StringComparison.OrdinalIgnoreCase))
+			if (entry.LinkTarget is null && !entry.Name.Equals(".git", StringComparison.Ordinal) && !entry.Name.Equals(".claude", StringComparison.Ordinal))
 				folders.Push(entry);
 		}
 		while (folders.TryPop(out var folder))
