@@ -5,7 +5,7 @@ using YamlDotNet.Core;
 
 // The run mode's parts that no parity suite holds (ADR 0017's Update for mpaulosky/Application_Factory#161: the suite covers --rescore only),
 // and the limits the port adds: what a finished claude call becomes, the --max-turns cap, the processes it runs, the prompt file's line endings,
-// Claude's stream, and the YAML budget a case's head is read under.
+// Claude's stream, and the YAML limits a case's head is read under.
 public partial class BenchTests
 {
 	static Bench.Ran Claude(int code, string stdout, string stderr = "") => new(code, Encoding.UTF8.GetBytes(stdout), stderr);
@@ -133,7 +133,7 @@ public partial class BenchTests
 		Assert.Equal("Command ['sh', '-c', 'echo oops >&2; exit 3'] returned non-zero exit status 3. oops", error.Message);
 	}
 
-	// -- The YAML budget --
+	// -- The YAML limits --
 
 	// An alias bomb: each level a list of nine aliases of the level before, so levels levels expand to 9^levels scalars.
 	static string AliasBomb(int levels)
@@ -290,6 +290,139 @@ public partial class BenchTests
 
 		Assert.True(text.Length < Yaml.MaxText / 4, $"{text.Length} characters");
 		Assert.NotNull(Yaml.Load(text, Yaml.MaxDepth / 4, Yaml.MaxNodes / 10, Yaml.MaxScalarText / 4));
+	}
+
+	[Theory]
+	[InlineData(10, true)]
+	[InlineData(11, false)]
+	[InlineData(12, false)]
+	public void An_alias_to_a_list_is_charged_every_character_the_list_holds(long scalarText, bool refused)
+	{
+		// a's list holds 5 characters (abc, de), and b's copy 5 more: 10, with the 1 of c's own scalar 11.
+		const string text = "a: &a [abc, de]\nb: *a\nc: x\n";
+
+		if (refused)
+			Assert.Throws<YamlException>(() => Yaml.Load(text, Yaml.MaxDepth, Yaml.MaxNodes, scalarText));
+		else
+			Assert.Equal("""{"a":["abc","de"],"b":["abc","de"],"c":"x"}""", Yaml.Load(text, Yaml.MaxDepth, Yaml.MaxNodes, scalarText)!.ToJsonString());
+	}
+
+	[Theory]
+	[InlineData(10, true)]
+	[InlineData(11, false)]
+	[InlineData(12, false)]
+	public void An_alias_to_an_anchored_key_is_charged_its_text_as_a_value(long scalarText, bool refused)
+	{
+		// The key's text is charged only where it is aliased as a value: 1 (a's value), 5 (b's copy of "keyed") and 5 (c's): 11.
+		const string text = "&k keyed: 1\nb: *k\nc: *k\n";
+
+		if (refused)
+			Assert.Throws<YamlException>(() => Yaml.Load(text, Yaml.MaxDepth, Yaml.MaxNodes, scalarText));
+		else
+			Assert.Equal("""{"keyed":1,"b":"keyed","c":"keyed"}""", Yaml.Load(text, Yaml.MaxDepth, Yaml.MaxNodes, scalarText)!.ToJsonString());
+	}
+
+	[Theory]
+	[InlineData(4, true)]
+	[InlineData(5, false)]
+	[InlineData(6, false)]
+	public void An_alias_to_an_anchored_key_is_charged_a_node_as_a_value(int nodes, bool refused)
+	{
+		// The mapping, a's value, and b's and c's copies of the key: 4 nodes, and d's 5.
+		const string text = "&k a: 1\nb: *k\nc: *k\nd: x\n";
+
+		if (refused)
+			Assert.Throws<YamlException>(() => Yaml.Load(text, Yaml.MaxDepth, nodes, Yaml.MaxScalarText));
+		else
+			Assert.NotNull(Yaml.Load(text, Yaml.MaxDepth, nodes, Yaml.MaxScalarText));
+	}
+
+	[Theory]
+	[InlineData(3, true)]
+	[InlineData(4, false)]
+	[InlineData(5, false)]
+	public void An_alias_nests_as_deep_as_what_it_names(int depth, bool refused)
+	{
+		// a's [[x]] is 2 levels under the mapping's 1; copied into b's list, at level 2, it reaches level 4.
+		const string text = "a: &a [[x]]\nb: [*a]\n";
+
+		if (refused)
+			Assert.Throws<YamlException>(() => Yaml.Load(text, depth, Yaml.MaxNodes, Yaml.MaxScalarText));
+		else
+			Assert.Equal("""{"a":[["x"]],"b":[[["x"]]]}""", Yaml.Load(text, depth, Yaml.MaxNodes, Yaml.MaxScalarText)!.ToJsonString());
+	}
+
+	[Fact]
+	public void A_chain_of_aliases_past_the_real_depth_is_refused_and_pins_no_action()
+	{
+		// Each link nests the last 40 levels deeper, so written 41 deep at most, the third link's copy is past MaxDepth.
+		var text = new StringBuilder("jobs:\n  review:\n    steps:\n      - uses: &l0 x\n");
+		for (var link = 1; link <= 3; link++)
+			text.Append($"      - uses: &l{link} {new string('[', 40)}*l{link - 1}{new string(']', 40)}\n");
+
+		Assert.Throws<YamlException>(() => Yaml.Load(text.ToString()));
+		Assert.Empty(Bench.PinnedActions(text.ToString()));
+	}
+
+	[Fact]
+	public void An_alias_to_a_scalar_nests_no_deeper_and_an_alias_to_null_is_null()
+	{
+		Assert.Equal("""{"a":null,"b":[null]}""", Yaml.Load("a: &a ~\nb: [*a]\n", 2, Yaml.MaxNodes, Yaml.MaxScalarText)!.ToJsonString());
+	}
+
+	[Theory]
+	[InlineData("a: &k x\n*k : 1\n", """{"a":"x","x":1}""")]
+	[InlineData("&k a: 1\nb: *k\n", """{"a":1,"b":"a"}""")]
+	[InlineData("&k on: 1\nb: *k\n", """{"on":1,"b":true}""")]
+	public void An_anchored_key_and_an_alias_as_a_key_read_as_their_scalar(string text, string json)
+	{
+		Assert.Equal(json, Yaml.Load(text)!.ToJsonString());
+	}
+
+	[Theory]
+	[InlineData("a: &m {x: 1}\n*m : 1\n")]
+	[InlineData("a: &l [x]\n*l : 1\n")]
+	[InlineData("a: &k x\n*k : 1\nx: 2\n")]
+	[InlineData("a: *nope\n")]
+	public void An_alias_to_a_collection_as_a_key_a_key_given_twice_through_an_alias_and_an_unknown_alias_are_refused(string text)
+	{
+		Assert.Throws<YamlException>(() => Yaml.Load(text));
+	}
+
+	[Theory]
+	[InlineData("a: 1\n---\nb: 2\n", """{"a":1}""")]
+	[InlineData("---\na: 1\n...\n---\nb: 2\n", """{"a":1}""")]
+	[InlineData("x\n", "\"x\"")]
+	public void The_first_document_is_the_tree(string text, string json)
+	{
+		Assert.Equal(json, Yaml.Load(text)!.ToJsonString());
+	}
+
+	[Theory]
+	[InlineData("a: 1\n---\nb: [\n")]
+	[InlineData("a: &a 1\n---\nb: *a\n")]
+	public void A_later_document_that_doesnt_parse_or_aliases_an_earlier_ones_anchor_is_refused(string text)
+	{
+		Assert.ThrowsAny<YamlException>(() => Yaml.Load(text));
+	}
+
+	[Theory]
+	[InlineData("a: +5\n", """{"a":5}""")]
+	[InlineData("a: -0\n", """{"a":0}""")]
+	[InlineData("a: +0\n", """{"a":0}""")]
+	[InlineData("a: -1_000\n", """{"a":-1000}""")]
+	[InlineData("a: 12345678901234567890123\n", """{"a":12345678901234567890123}""")]
+	public void An_int_is_its_digits_without_a_plus_or_underscores(string text, string json)
+	{
+		Assert.Equal(json, Yaml.Load(text)!.ToJsonString());
+	}
+
+	[Fact]
+	public void An_int_of_a_million_digits_reads_as_its_digits()
+	{
+		var digits = "9" + new string('0', 999_999);
+
+		Assert.Equal(digits, J.Req(Yaml.Load($"a: {digits}\n"), "a")!.ToJsonString());
 	}
 
 	// -- What Yaml.cs reads differently from PyYAML, on purpose --

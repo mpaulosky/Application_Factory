@@ -460,10 +460,11 @@ A Factory-only port, as the ones above are, so `bench/claude-review-bench.py` an
   `Yaml.Load` too, so it refuses a text past fixed limits (`MaxText`, 1 Mi characters; `MaxDepth`, 100 levels; and, once its aliases are read in, `MaxNodes`,
   100,000 nodes, and `MaxScalarText`, 4 Mi characters of scalars), and a head's workflow past one pins no action instead of ending the run. It builds the tree
   from YamlDotNet's parser events with a stack of its own, not through YamlStream, whose load recurses once per level (200,000 `[` overflowed the call stack,
-  which no catch stops), and charges an alias the whole size of the node it names before copying it, where PyYAML shared the one object, so an alias bomb is
-  refused before it grows. Claude's `stream-json` output is split at `\n` alone, where the Python's
+  which no catch stops), and checks an alias against the depth and charges it the whole size of the node it names before copying it, where PyYAML shared the one
+  object, so an alias bomb is refused before it grows. An int is read as its digits, not through `BigInteger`, and an anchor names a node in its own
+  document only, as in PyYAML. Claude's `stream-json` output is split at `\n` alone, where the Python's
   `splitlines()` also broke at the U+2028, U+2029 and U+0085 that JSON writes raw inside a string and so lost such a review. A `--prompt-file` reads `\r\n` and
   `\r` as `\n`, as `read_text()` did. The run mode, which runs Claude on the cases' clones, has no parity suite: `Scripts.Tests` tests its parts (`BenchRunTests.cs`:
-  each outcome a finished call gives, the `--max-turns` cap, the timeout, the YAML budget), and a run on the maintainer's machine the whole.
+  each outcome a finished call gives, the `--max-turns` cap, the timeout, the YAML limits), and a run on the maintainer's machine the whole.
 - **The pytest suite.** `bench/tests/test_claude_review_bench.py` is deleted, its 26 tests moved to `tests/Scripts.Tests/Bench/BenchTests.cs` under the rule above, a
   `Bench/` folder beside the others; `BenchPortTests.cs` holds the port's own. `Scripts.Tests` compiles every `.cs` in `bench/` but the entry file.

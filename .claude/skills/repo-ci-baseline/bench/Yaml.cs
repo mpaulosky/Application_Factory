@@ -7,11 +7,11 @@
 // and a key given twice is refused, as GitHub refuses it in a workflow, where PyYAML kept its last value.
 //
 // A case's head is read through here too, so a text is refused (YamlException) past fixed limits that the Template's workflows sit far inside:
-// MaxText characters, MaxDepth levels of nesting, and MaxNodes nodes and MaxScalarText characters of scalars once its aliases are read in. The
+// MaxText characters, and MaxDepth levels of nesting, MaxNodes nodes and MaxScalarText characters of scalars once its aliases are read in. The
 // tree is built from YamlDotNet's parser events with a stack of its own, not through its recursive YamlStream, so no nesting can overflow the
-// call stack, and an alias is charged the whole size of what it names before that is copied, so an alias bomb is refused before it grows.
+// call stack, and an alias is checked against the depth and charged the whole size of what it names before that is copied, so an alias bomb
+// is refused before it grows. An anchor names a node in its own document only.
 using System.Globalization;
-using System.Numerics;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
@@ -57,17 +57,19 @@ static class Yaml
 		return first;
 	}
 
-	// A node read so far, with what it cost the budget (itself and all it holds), so an alias to it is charged the same again.
-	sealed record Anchored(JsonNode? Node, string? Text, int Nodes, long ScalarText);
+	// A node read so far, with what it cost the budget (itself and all it holds) and its height (the levels of mappings and sequences
+	// it is, 0 for a scalar), so an alias to it is charged the same again and nests as deep as it does.
+	sealed record Anchored(JsonNode? Node, string? Text, int Nodes, long ScalarText, int Height);
 
-	// A mapping or sequence being read: its node, its anchor, the budget spent when it opened, and, for a mapping, the keys so far and the
-	// key waiting for its value.
+	// A mapping or sequence being read: its node, its anchor, the budget spent when it opened, the height of the tallest node in it so
+	// far, and, for a mapping, the key waiting for its value (the keys so far are in its JsonObject, which SetKey checks for a duplicate).
 	sealed class Open(JsonNode node, string? anchor, int nodes, long scalarText)
 	{
 		public readonly JsonNode Node = node;
 		public readonly string? Anchor = anchor;
 		public readonly int Nodes = nodes;
 		public readonly long ScalarText = scalarText;
+		public int Tallest;
 		public string? Key;
 	}
 
@@ -78,9 +80,11 @@ static class Yaml
 		int nodes;
 		long scalarText;
 
-		// One document's root, read with a stack of the mappings and sequences open around the current event.
+		// One document's root, read with a stack of the mappings and sequences open around the current event. An anchor names a node in
+		// its own document only, as in YamlStream and PyYAML; the budget is the whole text's.
 		public JsonNode? Document()
 		{
+			anchors.Clear();
 			var open = new Stack<Open>();
 			while (true)
 			{
@@ -99,19 +103,20 @@ static class Yaml
 						continue;
 					case MappingEnd or SequenceEnd:
 						var closed = open.Pop();
-						done = new Anchored(closed.Node, null, nodes - closed.Nodes, scalarText - closed.ScalarText);
+						done = new Anchored(closed.Node, null, nodes - closed.Nodes, scalarText - closed.ScalarText, closed.Tallest + 1);
 						if (closed.Anchor is not null)
 							anchors[closed.Anchor] = done;
 						break;
 					case Scalar scalar when open.TryPeek(out var map) && map.Node is JsonObject && map.Key is null:
-						// A key: its text, not a node of the tree.
+						// A key: its text, not a node of the tree, so it is charged nothing here (its value is). An alias to it as a value
+						// is charged what that scalar would be.
 						if (!scalar.Anchor.IsEmpty)
-							anchors[scalar.Anchor.Value] = new Anchored(Scalar(scalar), scalar.Value, 0, 0);
+							anchors[scalar.Anchor.Value] = new Anchored(Scalar(scalar), scalar.Value, 1, scalar.Value.Length, 0);
 						SetKey(map, scalar.Value, parsed);
 						continue;
 					case Scalar scalar:
 						Charge(1, scalar.Value.Length, parsed);
-						done = new Anchored(Scalar(scalar), scalar.Value, 1, scalar.Value.Length);
+						done = new Anchored(Scalar(scalar), scalar.Value, 1, scalar.Value.Length, 0);
 						if (!scalar.Anchor.IsEmpty)
 							anchors[scalar.Anchor.Value] = done;
 						break;
@@ -123,15 +128,19 @@ static class Yaml
 							SetKey(keyed, named.Text ?? throw new YamlException(alias.Start, alias.End, "a mapping key that isn't a scalar"), parsed);
 							continue;
 						}
-						// Charged before it is copied: a node aliased past the budget is refused before it grows.
-						Charge(Math.Max(named.Nodes, 1), named.ScalarText, parsed);
+						// Checked and charged before it is copied: a node aliased past the depth or the budget is refused before it grows.
+						if (open.Count + named.Height > maxDepth)
+							throw new YamlException(alias.Start, alias.End, $"YAML nested more than {maxDepth} deep once its aliases are read in");
+						Charge(named.Nodes, named.ScalarText, parsed);
 						done = named with { Node = named.Node?.DeepClone() };
 						break;
 					default:
+						// Not reached: between a document's start and its end YamlDotNet's parser gives only the events above.
 						throw new YamlException(parsed.Start, parsed.End, $"a YAML event the bench doesn't read: {parsed.GetType().Name}");
 				}
 				if (!open.TryPeek(out var parent))
 					return done.Node;
+				parent.Tallest = Math.Max(parent.Tallest, done.Height);
 				if (parent.Node is JsonArray array)
 					array.Add(done.Node);
 				else
@@ -171,7 +180,12 @@ static class Yaml
 			return True.IsMatch(text);
 		var digits = text.Replace("_", "", StringComparison.Ordinal);
 		if (Int.IsMatch(text))
-			return JsonNode.Parse(BigInteger.Parse(digits, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture));
+		{
+			// The digits as written, without a + and with -0 as 0 (Int allows no leading zero), rather than through BigInteger, whose parse
+			// and print of a long run of digits cost more than its length.
+			var integer = digits.TrimStart('+');
+			return JsonNode.Parse(integer == "-0" ? "0" : integer);
+		}
 		// ._ matches the pattern but holds no digit, which PyYAML failed on: it stays a string here. A float is written as repr() writes it, so
 		// 1.0 keeps its point and reads as a float, not the int 1 (Py.Dumps tells them apart by the text).
 		if (Float.IsMatch(text) && double.TryParse(digits, NumberStyles.Float, CultureInfo.InvariantCulture, out var number))

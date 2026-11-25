@@ -220,7 +220,7 @@ public partial class BenchTests
 	{
 		Assert.Null(Yaml.Load(""));
 		Assert.ThrowsAny<YamlDotNet.Core.YamlException>(() => Yaml.Load("a: [b"));
-		// PyYAML kept the last value; GitHub refuses such a workflow, and so does YamlDotNet.
+		// PyYAML kept the last value; GitHub refuses such a workflow, and so does Yaml.cs.
 		Assert.ThrowsAny<YamlDotNet.Core.YamlException>(() => Yaml.Load("a: 1\na: 2\n"));
 		Assert.Empty(Bench.PinnedActions("a: [b"));
 	}
