@@ -104,7 +104,8 @@ Each of these is decided in its increment, and recorded as an Update below:
   for a hook that runs on every edit, and the replacement must run no code from the tree.
 - The white-box tests in xUnit v3: when each pytest suite is replaced, where the test projects live (both decided for the skill's `github/` scripts in the
   Update for mpaulosky/Application_Factory#119; where the Template's own scripts' tests go is still open), and which package reads YAML for the tests that check workflows, since the BCL
-  has none. The Factory's Python test helpers move with them: `tests/check-issue-refs.py` and `tests/check-git-status.py` (which the gate and `test.sh` run),
+  has none. The Factory's Python test helpers move with them: `tests/check-issue-refs.py` and `tests/check-git-status.py` (which the gate and `test.sh` run; both C#
+  now, Update for mpaulosky/Application_Factory#123),
   `tests/mutations/check-spec.py` and `tests/render_oracle/`.
 - The checkers' cut-over: how the workflow steps build them in a temp folder with the base's `global.json`, where the `OWNED` list lives once `check_owned_files` can't import
   `check_gh_repo`, which checker judges the PR that replaces the checker, and for how many Applies both names are honoured.
@@ -290,3 +291,30 @@ has no way to give a run. So its suite, which judges `auto_rollout.py` too (it h
 of its own, and `git` and `claude` are fakes on `PATH` beside the fake `gh`. A command word that names a file in the skill folder names the copy's, so a port
 finds the stubs as the reference does. The two runners share the fake `gh` and the stderr match (`tests/parity/stderr.sh`), not their case loops.
 The plain-mode cases come first; `--auto`'s follow in mpaulosky/Application_Factory#156.
+
+## Update (mpaulosky/Application_Factory#123): the gate's two checkers are C#
+
+`tests/check-issue-refs.py` and `tests/check-git-status.py`, the Factory's test helpers that the gate and `test.sh` run, are C# file-based apps, and the `.py` files and the
+pytest (`tests/issue_refs/`) are gone. They are Factory-only, so there is no Rollout. The bench and its YAML package moved to mpaulosky/Application_Factory#161.
+
+- **The files.** The entry files `tests/check-issue-refs.cs` and `tests/check-git-status.cs` pull in `IssueRefs.cs` and `GitStatusGuards.cs`, which hold the rules,
+  and `Checker.cs`, which both share: `Checker.Run`, and Python's text rules (below). `tests/` holds the three empty shields, which `test.sh` checks with the others.
+  The Owned-files checkers' rules don't apply: these two read the Template's own `owned/` folder, not a PR's tree.
+- **A crash is exit 2.** `Checker.Run` turns an uncaught exception into exit 2, "nothing was fully checked", where `Gh.cs`'s `Script.Run` gives 1: for a checker 1 means
+  "found". `check-git-status.py` already did this; `check-issue-refs.py` exited 1 with a traceback, which the port changes on purpose.
+- **Python's rules are kept where .NET's differ**, each pinned by a parity case that fails without it: a line ends where `str.splitlines()` ends one (`\v`, `\f`, `\x1c` to
+  `\x1e`, U+0085, U+2028, U+2029, a lone `\r`) for the bare-`#N` check, and as Python's text mode read it (`\r\n` and `\r` as `\n`, a byte that isn't UTF-8 as U+FFFD) for the
+  guard check; space is `str.isspace()` (`\x1c` to `\x1f` too); `\w` is a letter, a number or `_` (not .NET's marks and connector punctuation), and `\d` and `\w` read an
+  astral character as Python does (.NET's regex reads UTF-16 code units, so each is folded to one BMP character of its class before matching); paths sort as `sorted()`
+  sorted pathlib paths, a segment at a time by code point, so `a/x` comes before `a-b/x` and an astral name after U+FFFD.
+- **A FIFO, a dangling link and a loop.** The bare-`#N` check skips what isn't a regular file and a name that resolves to nothing (ENOENT, ENOTDIR, ELOOP), and fails on any other
+  error, as `os.stat` let the Python. The BCL tells neither a FIFO from a regular file nor ELOOP from ENOENT, so it calls the runtime's own stat, `SystemNative_Stat` in
+  `libSystem.Native`, which `System.IO` calls, reading only the mode: its second `int32`, whose file-type bits are the same on every platform. A runtime without it fails the
+  check with exit 2, not a pass. The guard check still blocks on a FIFO named `*.sh`, as the Python did.
+- **The wrappers.** `tests/check-issue-refs.sh` is new and `tests/check-git-status.sh` now runs the C#; each changes to `tests/`, makes a relative folder absolute (so the guard
+  check prints it absolute), and exits 2 with a message when `dotnet` isn't on `PATH`. `test.sh` checks both from under a `global.json` that pins an SDK nobody has installed.
+- **The parity suites.** `tests/check-issue-refs.test.sh` is new, and `tests/check-git-status.test.sh` now takes the implementation as its command. Both passed against the
+  Python and the C# before the `.py` files went. With no command each builds the C# once, into its own temp folder, and runs `dotnet <dll>`, which starts in about a tenth of the
+  time `dotnet run --no-build` takes (a 105-case suite ran in 6 s rather than 54).
+- **The xUnit tests.** The pytest's 13 tests are `tests/Scripts.Tests/IssueRefs/`, one method each; `Scripts.Tests` compiles every `.cs` in `tests/` but the two entry
+  files. The guard check's crash case, which `check-git-status.test.sh` ran through Python, is in `Checker/`.

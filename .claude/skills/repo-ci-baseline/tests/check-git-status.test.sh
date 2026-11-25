@@ -1,14 +1,41 @@
 #!/usr/bin/env bash
-# Tests for tests/check-git-status.sh, on folders of fixtures.
-# Usage: bash tests/check-git-status.test.sh
+# The parity suite for the git status guard check (tests/check-git-status.cs, ADR 0017): its exit codes and output through its command line,
+# on folders of fixtures, so the same cases judge any implementation of it.
+#
+#   bash tests/check-git-status.test.sh                     the C#: built once, then run as dotnet <its dll> from this folder
+#   bash tests/check-git-status.test.sh <command> [arg]...  another implementation (the Python it was ported from was
+#                                                           python3 -I tests/check-git-status.py, deleted once this passed against the C#);
+#                                                           a word that names a file is made absolute
+#
+# Each run gets the folder as its one argument (absolute), from this folder (so dotnet picks the Factory's SDK). The C# exits 2 where the Python's
+# guarded_main() turned a crash into exit 2 too, which Scripts.Tests checks, since no input here crashes either. The unreadable file and folder
+# cases need a user other than root.
 # shellcheck disable=SC2016,SC2034 # the fixtures are text that must not expand; $out and $st are read inside the checks' eval strings
 set -uo pipefail
 
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-checker="$here/check-git-status.sh"
-work="$(mktemp -d)" || exit 1
-[[ -n "$work" && -d "$work" ]] || exit 1
+here="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+work="$(mktemp -d)" || exit 2
+[[ -n "$work" && -d "$work" ]] || exit 2
+[[ "$work" == /* ]] || work="$PWD/$work"
 trap 'command rm -rf -- "$work"' EXIT
+export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0
+if (($#)); then
+  checker=()
+  for word in "$@"; do
+    [[ "$word" == /* || ! -e "$word" ]] || word="$PWD/$word"
+    checker+=("$word")
+  done
+else
+  # Built once, from this folder, into this run's own folder, so no case times its build and two runs can't build into one folder (ADR 0017,
+  # How a script runs); then run as dotnet <dll>, which starts in about a tenth of the time dotnet run takes.
+  dll="$work/build/bin/check-git-status.cs/debug/check-git-status.dll"
+  (cd -- "$here" && dotnet build check-git-status.cs --artifacts-path "$work/build" -p:UseSharedCompilation=false > "$work/build.log" 2>&1) && [[ -f "$dll" ]] || {
+    cat "$work/build.log" >&2
+    echo "check-git-status.test.sh: the build of check-git-status.cs failed, or left no $dll" >&2
+    exit 2
+  }
+  checker=(dotnet "$dll")
+fi
 PASSED=0
 FAILED=0
 check() { if eval "$2"; then
@@ -26,7 +53,7 @@ fixture() {
 }
 # run_checker <name>: exit status in $st, output in $out
 run_checker() {
-  out="$(bash "$checker" "$work/$1" 2>&1)"
+  out="$(cd -- "$here" && "${checker[@]}" "$work/$1" 2>&1)"
   st=$?
 }
 
@@ -66,19 +93,18 @@ check "a Markdown file is not scanned" "[[ $st == 0 ]]"
 fixture lookalike scripts/a.sh 'my-git status --porcelain'
 run_checker lookalike
 check "another command that ends in git is not git" "[[ $st == 0 ]]"
-bash "$checker" "$work/missing" > /dev/null 2>&1
-st=$?
-check "a missing folder is exit 2, not a pass" "[[ $st == 2 ]]"
-bash "$checker" > /dev/null 2>&1
+run_checker missing
+check "a missing folder is exit 2, not a pass, with a usage line" "[[ $st == 2 && \$out == usage:* ]]"
+(cd -- "$here" && "${checker[@]}") > /dev/null 2>&1
 st=$?
 check "no argument is exit 2" "[[ $st == 2 ]]"
-bash "$checker" "$here/../template/owned" > /dev/null 2>&1
+(cd -- "$here" && "${checker[@]}" "$here/../template/owned") > /dev/null 2>&1
 st=$?
 check "the Template's own Owned scripts pass" "[[ $st == 0 ]]"
 
 # the checkout's own path may hold a folder named tests: only folders below the one given are skipped
 fixture under/tests/owned scripts/a.sh 'git status --porcelain'
-out="$(bash "$checker" "$work/under/tests/owned" 2>&1)"
+out="$(cd -- "$here" && "${checker[@]}" "$work/under/tests/owned" 2>&1)"
 st=$?
 check "a checkout below a folder named tests is still scanned" "[[ $st == 1 ]]"
 fixture skipped scripts/tests/a.sh 'git status --porcelain'
@@ -347,14 +373,29 @@ check "a lone \$ at the end of the call changes nothing" "[[ $st == 1 ]]"
 fixture bt-close scripts/a.sh 'echo `git status --porcelain` x `-u`'
 run_checker bt-close
 check "the second backtick ends a call inside backticks, so a later -u is not its setting" "[[ $st == 1 ]]"
-# a scan that crashes is exit 2 (an uncaught exception would exit 1, which means "found")
-fixture crash scripts/a.sh 'echo hi'
-out="$(python3 -I -c '
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location("cgs", sys.argv[1]); mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
-mod.scan = lambda root: 1 / 0
-sys.exit(mod.guarded_main(["x", sys.argv[2]]))' "$here/check-git-status.py" "$work/crash" 2>&1)"
-st=$?
-check "a crash in the scan is exit 2, saying it did not check" "[[ $st == 2 ]] && grep -q 'failed without checking' <<<\"\$out\""
+# a file is read as Python's text mode read it, and space and word characters are Python's
+fixture cr scripts/a.sh $'echo hi\rgit status --porcelain'
+run_checker cr
+check "a lone carriage return ends a line, as Python's text mode reads it" "[[ $st == 1 ]] && grep -q 'scripts/a.sh:2:git status --porcelain$' <<<\"\$out\""
+fixture crlf-cont scripts/a.sh $'git status \\\r\n  --porcelain\r'
+run_checker crlf-cont
+check "a backslash before a CRLF continues the line" "[[ $st == 1 ]] && grep -q 'scripts/a.sh:1:' <<<\"\$out\""
+fixture fs scripts/a.sh $'git\x1cstatus --porcelain'
+run_checker fs
+check "\\x1c is space, as str.isspace() has it" "[[ $st == 1 ]]"
+fixture astral scripts/a.sh $'\U0001D400git status --porcelain'
+run_checker astral
+check "an astral letter before git makes another word, not git" "[[ $st == 0 ]]"
+fixture mark scripts/a.sh $'́git status --porcelain'
+run_checker mark
+check "a combining mark before git is no word character" "[[ $st == 1 ]]"
+fixture dir-link elsewhere/a.sh 'git status --porcelain'
+mkdir -p "$work/dir-link/owned"
+ln -s ../elsewhere "$work/dir-link/owned/linked"
+run_checker dir-link/owned
+check "a link to a folder is not followed" "[[ $st == 0 ]]"
+fixture latin1 scripts/a.sh $'echo \xff; git status --porcelain'
+run_checker latin1
+check "a byte that isn't UTF-8 is replaced, and the line still checked" "[[ $st == 1 ]] && grep -q $'scripts/a.sh:1:echo �; git' <<<\"\$out\""
 echo "$PASSED passed, $FAILED failed"
 [[ $FAILED == 0 ]]
