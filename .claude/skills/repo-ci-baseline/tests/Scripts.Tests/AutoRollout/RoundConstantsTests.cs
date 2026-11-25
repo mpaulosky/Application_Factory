@@ -26,13 +26,17 @@ public sealed class RoundConstantsTests
 		check = check[..check.IndexOf("\n}\n", StringComparison.Ordinal)];
 		Assert.Contains($"message: `{ReapplyConstant("no_review_text")}", check, StringComparison.Ordinal);
 		Assert.Contains($"`${{blocking.length}} {ReapplyConstant("findings_wait_text")}", check, StringComparison.Ordinal);
-		Assert.Contains("process.stderr.write(`${printable(text)}\\n`)", ledger, StringComparison.Ordinal); // fail() writes to stderr, which reapply.sh reads
+		// fail() writes to stderr, which reapply.sh reads.
+		Assert.Contains("process.stderr.write(`${printable(text)}\\n`)", ledger, StringComparison.Ordinal);
 		var command = ledger[ledger.IndexOf("case \"check\": {", StringComparison.Ordinal)..];
 		command = command[..command.IndexOf("\n      }\n", StringComparison.Ordinal)];
-		Assert.Contains("if (!result.ok) return fail(result.message);", command, StringComparison.Ordinal); // the check's refusal goes through fail()
+		// The check's refusal goes through fail().
+		Assert.Contains("if (!result.ok) return fail(result.message);", command, StringComparison.Ordinal);
 		var gate = File.ReadAllText(Skill.Path("template", "owned", "scripts", "gate.sh"));
-		Assert.Contains($"step \"{ReapplyConstant("review_step")}\"", gate, StringComparison.Ordinal); // reapply.sh asks only when the gate stopped at this step
-		Assert.Contains("step() { echo -e \"\\n${CYAN}▶ $1${RESET}\"; }", gate, StringComparison.Ordinal); // reapply.sh reads this header form
+		// reapply.sh asks only when the gate stopped at this step.
+		Assert.Contains($"step \"{ReapplyConstant("review_step")}\"", gate, StringComparison.Ordinal);
+		// reapply.sh reads this header form.
+		Assert.Contains("step() { echo -e \"\\n${CYAN}▶ $1${RESET}\"; }", gate, StringComparison.Ordinal);
 		// reapply.sh asks the check as the gate does.
 		Assert.Contains("scripts/review.sh check \"$BASE\"", gate, StringComparison.Ordinal);
 		Assert.Contains("BASE=\"$(git merge-base HEAD origin/main", gate, StringComparison.Ordinal);
