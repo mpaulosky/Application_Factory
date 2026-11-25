@@ -533,3 +533,41 @@ F3c, the third library under the rule above, after F3a's and F3b's. `auto_rollou
   change made under it. A name listed twice (one that isn't UTF-8 decoded to the same text as one that is) reads the same way.
 - **`FileHash` never waits or reads without end.** It hashes a regular file of at most `RecordLimit` bytes, opened without waiting, a symlink followed; a FIFO, a device
   or a bigger file gives null, no Template hash, where Python's `open().read()` would have hung or filled memory.
+
+## Update (mpaulosky/Application_Factory#122): rollout is C#, and the skill's github/ holds no Python
+
+F3d, the cut-over under the library-first rule above. `rollout.sh` runs the C#; `rollout.py`, `auto_rollout.py`, `settings.py` and their pytest are deleted.
+
+- **The files.** `github/rollout.cs` runs `RolloutCore.cs` (`rollout.py`: the plain mode, its argument parser held to argparse's words) and the round's three
+  last libraries: `AutoRolloutGroups.cs` (`held` to `run_reapply`: `Signals`, the spawner, `EndGroup`, `GroupAlive`, `RunInGroup`), `AutoRolloutReview.cs`
+  (`settings_path` to `stop_line`: the review session) and `AutoRolloutRound.cs` (`gh_pr` to `run`). `auto_rollout.py`'s docstring, the round's contract, is
+  `AutoRolloutRound.cs`'s header, its names in their C# forms, and a test reads it as the pytest read the docstring.
+- **The tests.** Every one of `test_auto_rollout.py`'s 362 tests and `test_rollout.py`'s 44 has its xUnit method under the naming rule, in
+  `tests/Scripts.Tests/AutoRollout/` and `tests/Scripts.Tests/Rollout/`. The ones that hold or send signals, start process groups or set the lock are one
+  collection that runs alone, since the signal handlers and the lock's descriptor are the process's. A real SIGINT to the test host also reaches the xUnit
+  runner's Ctrl+C handler, which cancels the run, so those tests send SIGHUP or SIGTERM, which the round holds the same way, and the SIGINT case of the
+  deferred signals is skipped; parity case 33 holds SIGINT end to end. The tests that compared the C# with `settings.py` (`read_repo_list`, the workflow and
+  branch readers) hold what it read, recorded from it before it was deleted, and the lock's test holds `flock(1)` alone. The `settings` parity suite's
+  reference is `github/settings.cs` now, under the reference rule of the mpaulosky/Application_Factory#119 Update.
+- **The parity suite passes unchanged.** Its 40 cases, recorded from the Python, pass against `rollout.sh` running the C#. `rollout.sh` builds and runs it with
+  the `dotnet` on PATH, which in a run is the fake, so the runner builds the copy's `github/rollout.cs` once before the first case, and the fake `dotnet` hands
+  those two calls alone to the caller's `dotnet`, logging neither; the build gets the caller's HOME, so it writes nothing in the case's.
+- **The wrapper.** `rollout.sh` builds with `dotnet build github/rollout.cs -t:Build -getProperty:TargetPath`, from `github/` (the Factory's `global.json`
+  picks the SDK) under `flock` on `github/` as `status.sh` does, its output shown only when it fails (exit 1, nothing run), then `exec dotnet <dll>` from the
+  caller's folder. Only the build changes folder, so `--root` is passed on as given and a relative one names what it named. It passes the caller's ignored
+  signals on in `ROLLOUT_SIGIGN`, the `SigIgn` mask of `/proc/$$/status`; `Signals.Init` reads it first, drops it from the environment, and puts SIGTERM back
+  to `SIG_IGN` when its bit is set. `test.sh` checks the wrapper as it checks `status.sh`'s: from under a `global.json` that pins another SDK, six runs at once on a
+  fresh build, no `dotnet` on PATH (127), and with a stand-in `dotnet` the dll it runs, its arguments, the mask, and a build that fails.
+- **How the children run.** `Groups.Spawn` calls `posix_spawn` on the absolute path the program resolves to in the absolute folders of the `PATH` the child
+  gets (the review session's own `PATH` first), as decided above; the folder is set with `posix_spawn_file_actions_addchdir_np` (glibc 2.29), `/dev/null` with
+  `addopen`. A spawn that fails is a `SpawnError` worded as Python's `OSError` (`[Errno 2] No such file or directory: 'claude'`). `SpawnedChild.Exit` polls
+  `waitid(WNOWAIT)` and leaves the leader a zombie; `Reap`, after the group's kill, waits it. `Process.Start` stays for `gh`, `git` and the preflight's calls.
+- **How the signals are held.** One `PosixSignalRegistration` per signal while any handler is installed, and a stack of handlers over it, so a hold replaces the
+  round's handler and the round's is back once the hold is disposed, as `signal.signal` has it. Inside a hold the first signal is recorded and passed on, once
+  the group is gone, as an `Interrupted` exception that `Run` turns into the resume line and 128 + the signal. Outside one the round's handler prints the same
+  line and ends the process with that code at once (`Environment.Exit`), as Python's `SystemExit` ended it: a `gh` or `git` call then running is left to
+  finish by itself (at most its 120 s), where `subprocess.run` killed it, and holds no lock.
+- **What the port changes on purpose.** The review log is opened with `O_APPEND`, so what the round writes there lands after what the session, sharing the file,
+  wrote (.NET writes at a position of its own); a crash's line names the .NET exception (`InvalidOperationException`) where Python named its own, while a
+  spawn's error keeps Python's name (`FileNotFoundError`); a set-up error of the session that .NET throws as `InvalidDataException` (an agent or skill file that
+  doesn't read, Python's `ValueError`) stops it as Python's did, rather than crashing the round.

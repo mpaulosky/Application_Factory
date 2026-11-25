@@ -9,7 +9,8 @@ repo could stop at the review again. A missing tool, such as the .NET SDK the Te
 
 ## Decision
 
-`rollout.sh --auto` (`github/auto_rollout.py`) drives a round to the end. Before anything runs it checks the tools the gates, `reapply.sh` and the review need (that it runs on Linux,
+`rollout.sh --auto` (`github/rollout.cs` and its `AutoRollout*.cs` libraries, `github/auto_rollout.py` until mpaulosky/Application_Factory#122) drives a round to the end.
+Before anything runs it checks the tools the gates, `reapply.sh` and the review need (that it runs on Linux,
 bubblewrap and socat for the sandbox among them, and that bubblewrap can make one there), a `claude` that runs and is signed in with no settings file read, as the session runs (a
 cloud's sign-in, which `claude auth status` doesn't report, isn't asked), an shfmt the gate's gh check accepts, ruff 0.17 or uv for
 the gate's Python lint, `gh`'s sign-in and the SDK the Template's `global.json` names, that no sign-in secret is in the environment the session would inherit and that no
@@ -173,3 +174,10 @@ the evidence in [`2026-11-25-rollout-csharp-processes.md`](../research/2026-11-2
 - `rollout.sh` builds the C# and runs the dll, so a SIGTERM sent to it reaches the round: through `dotnet run --file` it ended the CLI and left the round running.
 
 The Python round is unchanged until the cut-over.
+
+## Update (mpaulosky/Application_Factory#122): the round is C#
+
+The cut-over the Update above names is done: `rollout.sh` builds `github/rollout.cs` and runs the dll, and `rollout.py` and `auto_rollout.py` are deleted. What the round
+does is unchanged, and the rollout parity suite's 40 cases, recorded from the Python, pass against it unchanged. How the C# does each part, and where it differs on
+purpose, is in ADR 0017's Update for mpaulosky/Application_Factory#122. A child that holds the lock is started with `posix_spawn` on the absolute path its program
+resolves to, as ADR 0017 decides, where the Update above says `posix_spawnp`. The round's contract, `auto_rollout.py`'s docstring, is `github/AutoRolloutRound.cs`'s header.
