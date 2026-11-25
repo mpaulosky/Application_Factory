@@ -82,8 +82,8 @@
 # Exit 0 when every case passes, 1 when one fails, 2 on a usage or setup error (a case missing a file or holding a bad one,
 # a setup.sh that fails, a command that can't be run, a temporary folder that can't be made). Needs bash 4.4 or later,
 # python3 (the launcher; the reference needs it too), coreutils (mktemp, mkdir, rm, ln, cp, mv, cat, tr, env, basename,
-# dirname, timeout, sort), findutils (find), a diff with --no-dereference (GNU diffutils 3.3 or later), grep and sed; the
-# cases' fixtures need jq and flock (util-linux) too.
+# dirname, timeout, and GNU sort for -z), GNU findutils (find with -printf and -quit), a diff with --no-dereference (GNU
+# diffutils 3.3 or later), grep and sed; the cases' fixtures need jq, flock (util-linux) and Linux's /proc too.
 set -euo pipefail
 
 setup_error() {
@@ -186,7 +186,10 @@ command -v -- "${impl[0]}" > /dev/null || setup_error "the command '${impl[0]}' 
 shown="${impl[*]}"
 shown="${shown//"$layout"/<skill>}"
 # The run's PATH holds the fakes, so the first word is found on the caller's PATH now, as the caller would find it.
-[[ "${impl[0]}" == */* ]] || impl[0]="$(type -P -- "${impl[0]}")" || setup_error "the command '${impl[0]}' is not a file on PATH."
+if [[ "${impl[0]}" != */* ]]; then
+  found="$(type -P -- "${impl[0]}")" || setup_error "the command '${impl[0]}' is not a file on PATH."
+  impl[0]="$found"
+fi
 
 shopt -s nullglob
 cases=("$cases_dir"/*/)
@@ -283,7 +286,10 @@ normalize() {
 normalize_home() {
   local path entry name new target n
   # The names first: normalizing a file's content writes it, which would change the order they were written in. The sort runs in the C
-  # locale: in another, sort -n may not read %T@'s . as a decimal point, so entries written in one second would tie.
+  # locale: in another, sort -n may not read %T@'s . as a decimal point, so entries written in one second would tie. Each listing is
+  # written to a file first, so a find or sort that fails stops the runner rather than leaving HOME as the run left it.
+  { find "$home" -mindepth 1 -printf '%d %T@ %p\0' > "$tmp/listed" && LC_ALL=C sort -z -k1,1nr -k2,2n "$tmp/listed" > "$tmp/entries"; } \
+    || setup_error "can't list the run's HOME."
   while IFS= read -r -d '' entry; do
     path="${entry#* * }"
     name="${path##*/}"
@@ -295,10 +301,11 @@ normalize_home() {
       target="${path%/*}/$new-$n"
     done
     mv -- "$path" "$target"
-  done < <(find "$home" -mindepth 1 -printf '%d %T@ %p\0' | LC_ALL=C sort -z -k1,1nr -k2,2n)
+  done < "$tmp/entries"
+  find "$home" -name .git -prune -o -type f -print0 > "$tmp/files" || setup_error "can't list the files in the run's HOME."
   while IFS= read -r -d '' path; do
     normalize "$path"
-  done < <(find "$home" -name .git -prune -o -type f -print0)
+  done < "$tmp/files"
 }
 
 # home_problems <case folder>: prints how the run's HOME differs from the case's expected.home/ (or, with none, its home/),

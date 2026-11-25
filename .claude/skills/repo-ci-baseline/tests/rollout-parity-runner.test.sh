@@ -12,7 +12,7 @@
 #
 # Copies the runner, the fake gh and tool and the stderr match into a throwaway skill folder whose rollout.sh is a stub, with
 # cases of its own, so no real case is run or written. Needs what the runner needs (bash 4.4, coreutils, findutils, diff,
-# grep and sed).
+# grep, sed and tac).
 set -euo pipefail
 
 here="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -59,7 +59,7 @@ mode="${STUB_MODE:-ok}"
 dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "from $dir, in $(pwd -P), home $HOME"
 echo "list $(cat "$dir/github/repos.txt"), tests $([[ -e "$dir/github/tests" ]] && echo kept || echo dropped)"
-echo "token ${GH_TOKEN-unset} ${PYTHONPATH-unset} ${XDG_CONFIG_HOME-unset} $(ls -A "$GH_CONFIG_DIR" | wc -l) ${CLAUDE_CODE_OAUTH_TOKEN-unset} ${HTTPS_PROXY-unset}"
+echo "token ${GH_TOKEN-unset} ${PYTHONPATH-unset} ${XDG_CONFIG_HOME-unset} $(ls -A "$GH_CONFIG_DIR" | wc -l) ${CLAUDE_CODE_OAUTH_TOKEN-unset} ${HTTPS_PROXY-unset} ${ANTHROPIC_API_KEY-unset} ${http_proxy-unset}${MY_PROXYISH+ $MY_PROXYISH}${CLAUDEX+ $CLAUDEX}"
 mask="$(sed -n 's/^SigIgn:[[:space:]]*//p' "/proc/$$/status")"
 echo "pid $([[ "$(cat "$FAKE_PID_FILE")" == "$$" ]] && echo ok || echo other), HUP $(((0x$mask >> 0) & 1)), INT $(((0x$mask >> 1) & 1))"
 echo "hosttool $(command -v hosttool > /dev/null && echo found || echo hidden), skill $(ls "$dir/template/owned/.claude/skills/pre-push-review")"
@@ -79,11 +79,15 @@ gh pr list -R owner/app --head b --json number --jq '.[0]'
 [[ "$mode" != stderr ]] || echo "warning: other" >&2
 [[ "$mode" != hang ]] || sleep 30
 if [[ "$mode" == names ]]; then
-  echo "made rollout-session.ab12_x9Z"
-  mkdir -p "$HOME/logs" "$HOME/repo/.git"
+  echo "made rollout-session.ab12_x9Z, rollout-sdk.q1_Z9aaa and rollout-other.abc"
+  mkdir -p "$HOME/logs/rollout-record.zz12" "$HOME/repo/.git"
   echo first > "$HOME/logs/review-App.k3_x9Zq1.log"
   sleep 0.05
   echo "second, in $TMPDIR" > "$HOME/logs/review-App.Pq7aaaaa.log"
+  sleep 0.05
+  echo third > "$HOME/logs/review-App.Aa0bbbbb.log"
+  echo settings > "$HOME/logs/rollout-record.zz12/review-App.c4dd.settings.json"
+  echo plain > "$HOME/logs/review-App.log"
   echo kept > "$HOME/repo/file"
   echo "[core]" > "$HOME/repo/.git/config"
 fi
@@ -107,7 +111,7 @@ make_case() {
   printf '#!/usr/bin/env bash\necho "reapplying ${3##*/}"\nexit 4\n' > "$dir/fakes/reapply.sh"
   printf '#!/usr/bin/env bash\necho abc\n' > "$dir/fakes/git.sh"
   printf '#!/usr/bin/env bash\necho "fake pnpm"\n' > "$dir/fakes/pnpm.sh"
-  printf '%s\n' 'from <skill>, in ~, home ~' 'list owner/suite-list, tests dropped' 'token unset unset unset 0 unset unset' \
+  printf '%s\n' 'from <skill>, in ~, home ~' 'list owner/suite-list, tests dropped' 'token unset unset unset 0 unset unset unset unset' \
     'pid ok, HUP 0, INT 0' 'hosttool hidden, skill SKILL.md' 'setup none' 'fake pnpm' 'default shfmt' 'default auth' 'reapplying App' \
     'reapply exited 4' 7 abc > "$dir/expected.stdout"
   echo 0 > "$dir/expected.code"
@@ -137,8 +141,12 @@ said() {
 run_runner 0 "a matching implementation" -- && said "a matching implementation" "ok   one"
 said "the summary names the copy <skill>" "1 case(s) pass against: <skill>/rollout.sh"
 # The caller's token, PYTHONPATH, XDG folder, Claude Code sign-in and proxy don't reach the run.
-run_runner 0 "a caller's GH_TOKEN, PYTHONPATH, XDG_CONFIG_HOME, CLAUDE_CODE_OAUTH_TOKEN and HTTPS_PROXY" GH_TOKEN=secret PYTHONPATH=/x \
-  XDG_CONFIG_HOME=/x CLAUDE_CODE_OAUTH_TOKEN=secret HTTPS_PROXY=http://u:p@proxy --
+run_runner 0 "a caller's GH_TOKEN, PYTHONPATH, XDG_CONFIG_HOME, CLAUDE_CODE_OAUTH_TOKEN, HTTPS_PROXY, ANTHROPIC_API_KEY and http_proxy" \
+  GH_TOKEN=secret PYTHONPATH=/x XDG_CONFIG_HOME=/x CLAUDE_CODE_OAUTH_TOKEN=secret HTTPS_PROXY=http://u:p@proxy ANTHROPIC_API_KEY=secret \
+  http_proxy=http://u:p@proxy --
+# A name that only looks like one of them does reach it.
+run_runner 1 "a caller's MY_PROXYISH and CLAUDEX" MY_PROXYISH=kept CLAUDEX=kept -- \
+  && said "a caller's MY_PROXYISH and CLAUDEX" "+token unset unset unset 0 unset unset unset unset kept kept"
 # A signal the caller ignores is reset to its default for the run: the case's ignore is what sets one.
 code=0
 (cd "$skill" && env PATH="$work/hostbin:$PATH" python3 -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_IGN); os.execvp("bash", sys.argv[1:])' \
@@ -170,6 +178,8 @@ run_runner 1 "a case's missing" -- && said "a case's missing" "+no pnpm"
 rm "$cases/one/missing"
 echo HUP > "$cases/one/ignore"
 run_runner 1 "a case's ignore" -- && said "a case's ignore" "+pid ok, HUP 1, INT 0"
+printf '%s\n' HUP INT > "$cases/one/ignore"
+run_runner 1 "a case's ignore of two signals" -- && said "a case's ignore of two signals" "+pid ok, HUP 1, INT 1"
 rm "$cases/one/ignore"
 # The case's fixtures win over the defaults: its shfmt.sh over the default's, its auth.status.fail over the default .json.
 printf '#!/usr/bin/env bash\necho "case shfmt"\n' > "$cases/one/fakes/shfmt.sh"
@@ -178,6 +188,12 @@ rm "$cases/one/fakes/shfmt.sh"
 echo 'signed out' > "$cases/one/gh/auth.status.fail"
 run_runner 1 "a case's .fail over a default .json" -- && said "a case's .fail over a default .json" "-default auth"
 rm "$cases/one/gh/auth.status.fail"
+# A case's numbered fixture hides the default too: with only a second call's, the first call has no answer, not the default's.
+for fixture in auth.status.2.fail auth.status.2.json; do
+  echo 'numbered auth' > "$cases/one/gh/$fixture"
+  run_runner 1 "a case's $fixture over a default .json" -- && said "a case's $fixture over a default .json" "UNMATCHED"
+  rm "$cases/one/gh/$fixture"
+done
 # setup.sh runs in HOME before the run, and after.sh after it; one that fails is a setup error, the other a failed case.
 printf '#!/usr/bin/env bash\necho done > setup.txt\n' > "$cases/one/setup.sh"
 printf '#!/usr/bin/env bash\nrm setup.txt\n' > "$cases/one/after.sh"
@@ -204,6 +220,36 @@ rm -rf "$cases/one/expected.home" "$cases/one/env" "$cases/two"
 run_runner 2 "a command naming a skill file the copy lacks" -- bash not-copied.sh
 said "a command naming a skill file the copy lacks" "is in the skill folder but not in its copy"
 run_runner 2 "a command that can't be run" -- ./no-such-command
+run_runner 2 "a command that is no file on PATH" -- cd && said "a command that is no file on PATH" "the command 'cd' is not a file on PATH"
+# A PATH of the caller's commands but python3.
+mkdir -p "$work/nopython"
+IFS=: read -ra dirs <<< "$PATH"
+for dir in "$work/hostbin" "${dirs[@]}"; do
+  for command in "$dir"/*; do
+    name="${command##*/}"
+    [[ -x "$command" && ! -e "$work/nopython/$name" && "$name" != python3* ]] || continue
+    ln -s -- "$command" "$work/nopython/$name"
+  done
+done
+run_runner 2 "no python3 on PATH" PATH="$work/nopython" -- && said "no python3 on PATH" "python3, which starts each run, is not on PATH"
+for file in global.json pre-push-review.md pre-push-reviewer.md; do
+  mv "$skill/tests/rollout-parity/template/$file" "$work/moved"
+  run_runner 2 "no stand-in $file" -- && said "no stand-in $file" "template/$file, the stand-in Template's, is missing"
+  mv "$work/moved" "$skill/tests/rollout-parity/template/$file"
+done
+for folder in fakes gh; do
+  mv "$skill/tests/rollout-parity/defaults/$folder" "$work/moved"
+  run_runner 2 "no defaults/$folder/" -- && said "no defaults/$folder/" "has no fakes/ and gh/ folders"
+  mv "$work/moved" "$skill/tests/rollout-parity/defaults/$folder"
+done
+for file in setup.sh after.sh missing ignore; do
+  mkdir "$cases/one/$file"
+  run_runner 2 "a $file that is a folder" -- && said "a $file that is a folder" "one/$file is not a file"
+  rmdir "$cases/one/$file"
+done
+printf 'pnpm\r\n' > "$cases/one/missing"
+run_runner 2 "a carriage return in missing" -- && said "a carriage return in missing" "missing holds a carriage return"
+rm "$cases/one/missing"
 run_runner 2 "a bad PARITY_TIMEOUT" PARITY_TIMEOUT=0 --
 run_runner 2 "record mode with a command" PARITY_RECORD=1 -- bash github/alt.sh
 for file in gh fakes expected.calls; do
@@ -247,11 +293,17 @@ cmp -s "$work/stdout" "$cases/fresh/expected.stdout" || fail "record mode wrote 
 # A random name is written XXXXXXXX, in output and in HOME (a second the same name -2, in the order they were written), the
 # temporary folder <tmp> in a file's content, and a .git in HOME is left out of what is recorded and compared.
 run_runner 0 "record mode, random names and a .git" PARITY_RECORD=1 STUB_MODE=names --
-grep -qxF 'made rollout-session.XXXXXXXX' "$cases/fresh/expected.stdout" || fail "record mode didn't write a random name XXXXXXXX in stdout"
+grep -qxF 'made rollout-session.XXXXXXXX, rollout-sdk.XXXXXXXX and rollout-other.abc' "$cases/fresh/expected.stdout" \
+  || fail "record mode didn't write each random name XXXXXXXX in stdout, and only those: $(grep made "$cases/fresh/expected.stdout")"
 [[ "$(cat "$cases/fresh/expected.home/logs/review-App.XXXXXXXX.log" 2> /dev/null)" == first ]] \
   || fail "record mode didn't write the first random name in HOME XXXXXXXX: $(ls "$cases/fresh/expected.home/logs" 2>&1)"
 [[ "$(cat "$cases/fresh/expected.home/logs/review-App.XXXXXXXX.log-2" 2> /dev/null)" == "second, in <tmp>/run/tmp" ]] \
   || fail "record mode didn't write the second random name -2, with <tmp> in its content: $(ls "$cases/fresh/expected.home/logs" 2>&1)"
+[[ "$(cat "$cases/fresh/expected.home/logs/review-App.XXXXXXXX.log-3" 2> /dev/null)" == third ]] \
+  || fail "record mode didn't write the third random name -3: $(ls "$cases/fresh/expected.home/logs" 2>&1)"
+[[ "$(cat "$cases/fresh/expected.home/logs/rollout-record.XXXXXXXX/review-App.XXXXXXXX.settings.json" 2> /dev/null)" == settings ]] \
+  || fail "record mode didn't rename a random-named file in a random-named folder: $(find "$cases/fresh/expected.home/logs" 2>&1)"
+[[ "$(cat "$cases/fresh/expected.home/logs/review-App.log" 2> /dev/null)" == plain ]] || fail "record mode renamed review-App.log, which has no random part"
 [[ -f "$cases/fresh/expected.home/repo/file" && ! -e "$cases/fresh/expected.home/repo/.git" ]] || fail "record mode kept a .git in expected.home/"
 run_runner 0 "random names and a .git, compared" STUB_MODE=names -- && said "random names and a .git, compared" "ok   fresh"
 # The runner sorts HOME's entries in the C locale, where sort -n reads %T@'s . as a decimal point: a sort that orders them
@@ -266,6 +318,17 @@ END
 chmod +x "$work/sortbin/sort"
 run_runner 0 "random names and a .git, compared under another locale's sort" PATH="$work/sortbin:$work/hostbin:$PATH" STUB_MODE=names -- \
   && said "random names, another locale's sort" "ok   fresh"
+# A listing of HOME that fails stops the runner rather than leaving HOME as the run left it.
+mkdir -p "$work/findbin"
+real_find="$(type -P find)"
+cat > "$work/findbin/find" << END
+#!/usr/bin/env bash
+for word in "\$@"; do [[ "\$word" != -printf ]] || exit 1; done
+exec "$real_find" "\$@"
+END
+chmod +x "$work/findbin/find"
+run_runner 2 "a listing of HOME that fails" PATH="$work/findbin:$work/hostbin:$PATH" STUB_MODE=names -- \
+  && said "a listing of HOME that fails" "can't list the run's HOME"
 rm -rf "$cases/fresh"
 mv "$work/one" "$cases/one"
 
