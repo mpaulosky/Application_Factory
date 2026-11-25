@@ -1086,8 +1086,8 @@ HALF
     ! targets_net_major "$md_tmp/tfm.csproj" 11 > /dev/null || fail "the target framework check passes for SDK 11: $wrong"
   done
   # The shields (ADR 0017): an empty Directory.Build.props, Directory.Build.targets and Directory.Packages.props in github/, in tests/ (the two checkers), in
-  # bench/ and in the test project, so the files of those names above them never reach their builds.
-  for shielded in github tests bench tests/Scripts.Tests; do
+  # bench/, in the test project and beside the Template's C# scripts, so the files of those names above them never reach their builds.
+  for shielded in github tests bench tests/Scripts.Tests template/owned/.github/scripts; do
     for shield in Directory.Build.props Directory.Build.targets Directory.Packages.props; do
       is_empty_shield "$skill_dir/$shielded/$shield" || fail "$shielded/$shield must be the empty shield, <Project />"
     done
@@ -1220,6 +1220,27 @@ if in_shard checks; then
     grep -qxF 'assignees: mpaulosky' "$owned/.github/ISSUE_TEMPLATE/$template" \
       || fail "the Owned $template must carry 'assignees: mpaulosky': an Owned file has no {{OWNER}} to fill"
   done
+
+  step "The Owned files check covers what builds the C# scripts in .github/scripts/"
+  # check_gh_repo.py's OWNED is the list owned-files.yml's check holds a PR to, and it names .github/scripts/ files one by one: each shield there
+  # (a Directory.* file, which every build of a script reads) must be in it, so a PR can't make a script's build read the repo's own files
+  # unseen, and each .github/scripts/ entry must be a file the Template ships (mpaulosky/Application_Factory#125).
+  owned_scripts_list="$(python3 -I -c 'import ast, sys
+tree = ast.parse(open(sys.argv[1], encoding="utf-8").read())
+owned = next(ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign) and [getattr(t, "id", "") for t in node.targets] == ["OWNED"])
+print("\n".join(entry for entry in owned if entry.startswith(".github/scripts/")))' "$owned/.github/scripts/check_gh_repo.py")" \
+    || fail "can't read OWNED from template/owned/.github/scripts/check_gh_repo.py"
+  owned_shields=0
+  for shield in "$owned"/.github/scripts/Directory.*; do
+    [[ -f "$shield" ]] || continue
+    owned_shields=$((owned_shields + 1))
+    grep -qxF ".github/scripts/${shield##*/}" <<< "$owned_scripts_list" \
+      || fail "template/owned/.github/scripts/${shield##*/} is a shield of the C# scripts, so it must be in check_gh_repo.py's OWNED"
+  done
+  ((owned_shields == 3)) || fail "found $owned_shields Directory.* shield(s) in template/owned/.github/scripts/, expected Directory.Build.props, Directory.Build.targets and Directory.Packages.props"
+  while IFS= read -r entry; do
+    [[ -z "$entry" || -f "$owned/$entry" ]] || fail "check_gh_repo.py's OWNED names $entry, which the Template doesn't ship"
+  done <<< "$owned_scripts_list"
 
   step "Issue references in Owned files name their repo"
   # Applied into a repo, a bare #N reads as that repo's own issue or PR

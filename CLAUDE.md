@@ -20,8 +20,9 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   `bench/tests/rescore.test.sh` is its `--rescore` parity suite.
   `test.sh` and `tests/` test all of it. The gate and `test.sh` run two checkers in `tests/`: `check-issue-refs.sh` and `check-git-status.sh` run the C# file-based apps
   `check-issue-refs.cs` and `check-git-status.cs`, which include `IssueRefs.cs`, `GitStatusGuards.cs` and `Checker.cs`, each judged by its parity suite (`<checker>.test.sh`).
-  `tests/Scripts.Tests/` is the xUnit v3 project for the C# scripts (ADR 0017); it, `tests/`, `github/` and `bench/` each hold three empty shield
-  files (`Directory.Build.props`, `Directory.Build.targets`, `Directory.Packages.props`), which are not Owned. The test project also holds its own `NuGet.config`
+  `tests/Scripts.Tests/` is the xUnit v3 project for the C# scripts (ADR 0017), the Template's own in `.github/scripts/` among them (in `Template/`, namespace `Baseline`);
+  it, `tests/`, `github/` and `bench/` each hold three empty shield files (`Directory.Build.props`, `Directory.Build.targets`, `Directory.Packages.props`), which are not
+  Owned; the Template's `.github/scripts/` holds three more, which are. The test project also holds its own `NuGet.config`
   (nuget.org alone) and `packages.lock.json`, which `test.sh` restores against in locked mode (ADR 0017's Update on hardening the C# step).
 - `.claude/skills/`: also the shared skills (`build-repair`, `dotnet-*`, `remove-squad`, `review-changes`), and `starting-points/`: the optional app-stack files
   (`.aspire/`, `.github/instructions/`, the `beast` agent, the `code-review` skill) that `docs/Instructions.md` Part C says to copy into an Application. ADR 0007.

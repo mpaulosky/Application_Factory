@@ -456,3 +456,23 @@ def test_the_templates_owned_list_reports_a_bumped_global_json(tmp_path):
 
     # Assert
     assert (code, out, err) == (1, differs("global.json"), "")
+
+
+@pytest.mark.parametrize("shield", [".github/scripts/Directory.Build.props", ".github/scripts/Directory.Build.targets",
+                                    ".github/scripts/Directory.Packages.props"])
+@pytest.mark.parametrize("change", ["edited", "deleted"])
+def test_the_templates_owned_list_reports_a_changed_shield(tmp_path, shield, change):
+    # Arrange: the Template's own checker as the base's, and one of the empty shields beside the C# scripts edited to chain to the repo's own
+    # Directory.* files, or deleted. They are Owned (mpaulosky/Application_Factory#125), so only a Rollout changes them.
+    real_checker = (SCRIPT.parent / "check_gh_repo.py").read_text()
+    work = tmp_path / "work"
+    work.mkdir()
+    repo = Repo(work, {CHECKER_PATH: real_checker, shield: "<Project />\n"})
+    repo.write({shield: None if change == "deleted" else '<Project><Import Project="../../Directory.Build.props" /></Project>\n'})
+    repo.commit(f"{change} a shield")
+
+    # Act
+    code, out, err = repo.check(tmp_path)
+
+    # Assert
+    assert (code, out, err) == (1, differs(shield), "")

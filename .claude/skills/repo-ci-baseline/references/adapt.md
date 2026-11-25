@@ -20,6 +20,10 @@ Done when every item below is resolved for this repo and `scripts/gate.sh` passe
 - **Seed `.sandcastle/Dockerfile`.** Its `DOTNET_CHANNEL` is the feature band of the Owned `global.json`'s SDK (`11.0.1xx` for `11.0.100`). A Seed is written once, so
   when a Rollout brings a pin in a new band, an Application with Sandcastle sets `ARG DOTNET_CHANNEL` to that band in its own Dockerfile by hand (from `10.0` to
   `11.0.1xx` for mpaulosky/Application_Factory#103); otherwise the sandbox has no SDK the pin accepts and its gate fails.
+- **The C# scripts in `.github/scripts/`.** Apply writes `detect_changes.cs`, `DetectChanges.cs`, `Gh.cs` and three empty shields
+  (`Directory.Build.props`, `Directory.Build.targets`, `Directory.Packages.props`) there, all Owned. A repo that kept its own `Directory.*` file in that folder
+  loses it: the shields must stay empty, or the scripts build with the repo's settings (the Owned files check reports an edited one). Nothing else to do:
+  CI's Detect Changes job sets up the SDK the Owned `global.json` names, and Apply removes `test_detect_changes.py`, whose tests moved to the Factory.
 - **Seed files skipped.** Diff each against `template/seed/` and bring over what the repo lacks.
   The repo's version wins on content.
 - **Seed files written.** Check each against what the repo had before.

@@ -103,8 +103,9 @@ Each of these is decided in its increment, and recorded as an Update below:
 - What replaces ruff in the edit-time lint, the gate and CI. `dotnet format whitespace --verify-no-changes` takes 1 to 2 s a run (mpaulosky/Application_Factory#97), too slow
   for a hook that runs on every edit, and the replacement must run no code from the tree.
 - The white-box tests in xUnit v3: when each pytest suite is replaced, where the test projects live (both decided for the skill's `github/` scripts in the
-  Update for mpaulosky/Application_Factory#119; where the Template's own scripts' tests go is still open), and which package reads YAML for the tests that check workflows, since the BCL
-  has none (YamlDotNet for the bench and `Scripts.Tests`, Update for mpaulosky/Application_Factory#161; a test the Template carries is still open).
+  Update for mpaulosky/Application_Factory#119; for the Template's own scripts in the Update for mpaulosky/Application_Factory#125), and which package
+  reads YAML for the tests that check workflows, since the BCL has none (YamlDotNet for the bench and `Scripts.Tests`, Update for mpaulosky/Application_Factory#161;
+  a test the Template carries is still open).
   The Factory's Python test helpers move with them: `tests/check-issue-refs.py` and `tests/check-git-status.py` (which the gate and `test.sh` run; both C#
   now, Update for mpaulosky/Application_Factory#123),
   `tests/mutations/check-spec.py` and `tests/render_oracle/`.
@@ -385,7 +386,8 @@ of its cut-over:
 - **The cut-over PR** fills in the entry file, switches the wrapper and the callers, runs the parity suite against the C#, and deletes the `.py` files and their pytest, as
   the rule above says (for rollout, `settings.py` with them).
 - **Who uses it:** F3a to F3c, mpaulosky/Application_Factory#122's split of `auto_rollout`'s logic into libraries, and T3b, mpaulosky/Application_Factory#128's split of the
-  release scripts. A T3b library is part of the Template, so where it and its tests sit is T3b's, with where the Template's own scripts' tests go (still open above).
+  release scripts. A T3b library is part of the Template, so where it sits is T3b's; its tests go where the Template's own scripts' tests go (the Update for
+  mpaulosky/Application_Factory#125).
 
 ### How rollout's C# runs its children
 
@@ -589,3 +591,40 @@ F3d, the cut-over under the library-first rule above. `rollout.sh` runs the C#; 
   wrote (.NET writes at a position of its own); a crash's line names the .NET exception (`InvalidOperationException`) where Python named its own, while a
   spawn's error keeps Python's name (`FileNotFoundError`); a set-up error of the session that .NET throws as `InvalidDataException` (an agent or skill file that
   doesn't read, Python's `ValueError`) stops it as Python's did, rather than crashing the round.
+
+## Update (mpaulosky/Application_Factory#125): the Template's first C#, detect_changes
+
+T1a, the first Owned script ported. `ci.yml`'s Detect Changes job runs the C#, and `detect_changes.py` ships beside it for this one Rollout (the rule above for an Owned
+script), so a revert is one workflow line; T2 adds it to `retired.txt`.
+
+- **The files.** `.github/scripts/detect_changes.cs` is the entry file; it pulls in `DetectChanges.cs` (the logic) and `.github/scripts/Gh.cs`, created here: the argument
+  parser (`Arguments`, the Factory's held to argparse, with `Required` for `required=True` and a parser that takes no positional argument, so an extra one and a `--` are
+  refused as argparse refuses them), `Script.Run`, `Script.Which` (a program found in `PATH`'s absolute folders only, since the script runs from the PR's checkout, where a
+  `git` at the root is the PR's), `Script.Capture` and `CheckOutput` (`subprocess.run(capture_output=True, check=True)`, a failure a `CalledProcessError` naming the command,
+  its exit status and git's stderr), and `SurrogateEscape`, Python's `surrogateescape`: a name that isn't UTF-8 is read as lone surrogates and printed back as its own
+  bytes. The gh runner joins `Gh.cs` with the first script there that calls `gh`. The Template's classes are in the namespace `Baseline`, so `Scripts.Tests` compiles them
+  beside the Factory's `github/Gh.cs`, whose classes have the same names; the entry file says `using Baseline;`.
+- **The shields.** `.github/scripts/` holds the three empty `Directory.*` files. They are Owned and in `check_gh_repo.py`'s `OWNED`, so the Owned files check reports a PR
+  that edits or deletes one, and `test.sh` checks that every `Directory.*` file there is in `OWNED`, that each `.github/scripts/` entry of `OWNED` is a file the Template
+  ships, and that each shield is `<Project />`.
+- **The workflow.** The Detect Changes job runs `setup-dotnet` from `global.json`, builds the script in a step of its own (`dotnet build .github/scripts/detect_changes.cs`),
+  and runs it with `dotnet run --no-build --file`, so its log holds only what the script prints. Both are on `pull_request` only, as the checkout is, so every PR, a
+  docs-only one too, pays the setup and a first build, about 12 s on a fresh runner. The Hook tests job gains `setup-dotnet` too.
+- **The Template gate.** A C# scripts step after the Python lint: when the branch changes a `.cs` in `.github/scripts/` (and without an `origin/main`), `dotnet format
+  whitespace .github/scripts --folder --verify-no-changes`, then a build of each script there with `--no-incremental --disable-build-servers`, into a folder the gate
+  removes, warnings as errors but CA2266 and NU1900, as the Factory's gate builds its own. `pre-push.test.sh`'s `dotnet` stub hands those two calls to the real `dotnet` when
+  it runs the SDK the Template's `global.json` names, and its "stops before the build" cases now match the solution's build alone (`dotnet build *--configuration Release*`),
+  so a script build before it doesn't fail them. `discover_tests` and `load_test_env`, and the gate's run of `discover_tests` as C#, moved to mpaulosky/Application_Factory#162.
+- **Where the Template's own scripts' tests go** (Still open, above, until now): in the Factory's `tests/Scripts.Tests/Template/`, one folder per script or class (`DetectChanges/`,
+  `Gh/`), in the namespace `Baseline.Tests`, so a simple name finds the Template's class first. The project compiles every `.cs` in `template/owned/.github/scripts/` but the
+  entry files. An Application carries no test of its C#: the Factory's parity suite and xUnit tests judge it before a Rollout brings it.
+- **The pytest file retires now.** `test_detect_changes.py`'s 16 tests are `DetectChangesTests.cs`, one method each, and the file is deleted and in `retired.txt`, all three
+  versions the Factory's history holds (the skill's history in dotfiles, before it moved here, isn't, so a copy from then is kept and reported), and in the ledger's
+  `RETIRED_PATHS`. This departs from the rule above that an Owned script's pytest goes with its `.py`: the issue decided it, since the parity suite, run against both, holds
+  the `.py` to the `.cs` while it ships.
+- **The parity suite.** `tests/parity/detect_changes/`, 31 cases over real git repos that each `setup.sh` builds, comparing stdout, the exit code and the bytes appended to
+  `--output`. Recorded from the `.py`, they pass against it and against the C#, and `test.sh` runs every Owned entry file in `.github/scripts/` against its suite
+  (built once from the Template's folder, then `dotnet run --no-build --file`), failing an entry file with no suite. They pin git's path order (`a-b/x` before `a/x`),
+  a name that isn't UTF-8, and argparse's errors and forms.
+- **What the port changes on purpose.** `git` is found in `PATH`'s absolute folders only (above), and a failed `git` call's message carries what git said, where the
+  Python's traceback named only its exit status. The usage line names `detect_changes.cs`.
