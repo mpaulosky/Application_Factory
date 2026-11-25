@@ -107,12 +107,14 @@ static class Rollout
 
 	// rollout.sh's command line. listed, reapply, latestPr, exists, auto and ahead stand in for repos.txt, reapply.sh, gh, the checkouts, the
 	// --auto round's outside world and whether the checkout at a path has a re-Apply worktree with commits main lacks (throws when git can't
-	// say), for the tests; folders is the skill rollout.cs is in.
+	// say), for the tests, as do advisories (ReviewSession.OpenAdvisories), onSignal (what a signal outside a hold does: AutoRound.Run's) and
+	// defaultRoot (DefaultRoot); folders is the skill rollout.cs is in.
 	public static int Run(IReadOnlyList<string> argv, TextWriter output, TextWriter err, IEnumerable<KeyValuePair<string, string>>? listed = null,
 			Func<string, string, int?>? reapply = null, Func<string, (long Number, string State)?>? latestPr = null, Func<string, bool>? exists = null,
 			World? auto = null, Func<string, bool>? ahead = null, Folders? folders = null, Func<string, string?>? advisories = null,
-			Action<int, string>? onSignal = null)
+			Action<int, string>? onSignal = null, string? defaultRoot = null)
 	{
+		defaultRoot ??= DefaultRoot;
 		var parser = new Arguments("rollout.cs", "[-h] --brings BRINGS [--root ROOT] [--dry-run] [--auto]", Description)
 				.Option("--brings", "the Factory PRs this round brings in, as reapply.sh takes them: '#80,#81' (quoted) or mpaulosky/Application_Factory#80,#81")
 				.Option("--root", "the directory holding each repo's checkout (default ~/github)")
@@ -122,7 +124,7 @@ static class Rollout
 			return exit;
 		if (parser.Values.GetValueOrDefault("--brings") is not { } brings)
 			return parser.Error("the following arguments are required: --brings", err);
-		var root = parser.Values.GetValueOrDefault("--root") ?? DefaultRoot;
+		var root = parser.Values.GetValueOrDefault("--root") ?? defaultRoot;
 		var (dryRun, isAuto) = (parser.Has("--dry-run"), parser.Has("--auto"));
 		List<string> order;
 		try
@@ -158,7 +160,7 @@ static class Rollout
 			var world = auto ?? World.Real(folders ?? Folders.Default);
 			if (reapply is not null)
 				world = world with { Reapply = reapply };
-			return AutoRound.Run(order, brings, root, Checkout, dryRun, world, Say, err, DefaultRoot, advisories, onSignal);
+			return AutoRound.Run(order, brings, root, Checkout, dryRun, world, Say, err, defaultRoot, advisories, onSignal);
 		}
 		reapply ??= (b, path) => RunReapply(b, path, folders);
 		latestPr ??= GhLatestPr;
