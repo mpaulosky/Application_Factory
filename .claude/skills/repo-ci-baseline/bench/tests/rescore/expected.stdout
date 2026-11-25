@@ -1,22 +1,3 @@
-#### 20261007T213720-baseline.json
-== Articles#298 4b90c96
-   17s, 4 turns, $0.18735919999999998; 0 finding(s)
-   missed 1: An off-diff finding's only blocker is the failed post check, and a skipped rerun (another label added) replaces it.
-   missed 2 (optional): The shared github-actions[bot] login and the public marker don't prove Claude wrote a review; a branch can change the post step.
-   missed 3: release_post.py strips only spaces after a removed HTML comment, so a tab survives and a definition-like subject renders as an empty list item.
-   missed 4: The post job exits 1 on off-diff findings; the failed check leaves the PR UNSTABLE, and PR Auto-Merge needs CLEAN even past the review cap.
-   missed 5: Copilot's coding agent acts as `Copilot`, without a [bot] suffix, so it passes the bot-actor guard and the pinned action refuses it.
-== Articles#298 38b0431
-   25s, 6 turns, $0.1863896; 0 finding(s)
-   missed 2 (optional): The shared github-actions[bot] login and the public marker don't prove Claude wrote a review; a branch can change the post step.
-   missed 4: The post job exits 1 on off-diff findings; the failed check leaves the PR UNSTABLE, and PR Auto-Merge needs CLEAN even past the review cap.
-   missed 5: Copilot's coding agent acts as `Copilot`, without a [bot] suffix, so it passes the bot-actor guard and the pinned action refuses it.
-== Articles#298 d6d55a2
-   16s, 4 turns, $0.147544; 0 finding(s)
-   missed 2 (optional): The shared github-actions[bot] login and the public marker don't prove Claude wrote a review; a branch can change the post step.
-   missed 5: Copilot's coding agent acts as `Copilot`, without a [bot] suffix, so it passes the bot-actor guard and the pinned action refuses it.
-
-score: 0/7 required findings caught (written back to 20261007T213720-baseline.json)
 #### edge-cases.json
 == fixture#7 HEAD
    3.5s, 4 turns, $0.1234; 12 finding(s) (Copilot opened 2 thread(s))

@@ -6,8 +6,7 @@
 mpaulosky/Application_Factory#161). On the day of the port, `--rescore` over a copy of every file in `bench/results/` gave the same stdout and
 bytes from both as well.
 
-- `input/20261007T213720-baseline.json`: a real run, whose heads the cases file knows, so their repo, PR and expected findings come from it.
-- `input/edge-cases.json`: what a real run seldom holds.
+- `input/edge-cases.json`: what a real run seldom holds, beside a case like a real run's (the last), whose head the cases file knows.
   - Text past ASCII, written back as `\u` escapes, an astral character as a surrogate pair, and a finding's body cut at 300 code points,
     not UTF-16 units, after its space runs (a tab, U+2028 and U+001C among them) are made single spaces.
   - Floats as Python's `repr()` writes them (`1e-05`, `1.2345678901234568e+16`, `-0.0`, `2.0`), a bool where a number goes, and None.
