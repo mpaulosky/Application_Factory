@@ -1,0 +1,5 @@
+── rollout: TicketManager
+reapply.sh holds the lock's descriptor
+reapply.sh: another flock of the lock is refused
+rollout: TicketManager: reapply.sh exited 1; retry it with: reapply.sh --brings '#80' ~/github/TicketManager; held: Alpha, Zed
+  resume with: rollout.sh --auto --brings '#80'

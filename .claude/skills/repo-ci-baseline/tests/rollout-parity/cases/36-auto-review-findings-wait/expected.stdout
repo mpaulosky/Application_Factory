@@ -1,0 +1,4 @@
+── rollout: TicketManager
+reapply.sh: working on TicketManager
+rollout: TicketManager: review findings wait for you (cd ~/github/TicketManager-worktrees/chore-reapply-baseline && scripts/review.sh report): fix them with /pre-push-review there (one in an Owned file goes to the Factory's template/owned/ first: add that PR to --brings), or accept them: cd ~/github/TicketManager-worktrees/chore-reapply-baseline && scripts/review.sh accept-open; held: Alpha, Zed
+  resume with: rollout.sh --auto --brings '#80'

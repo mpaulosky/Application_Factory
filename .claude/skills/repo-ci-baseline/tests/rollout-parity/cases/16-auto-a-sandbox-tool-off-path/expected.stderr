@@ -1,0 +1,2 @@
+^rollout\.sh: socat isn't on PATH: the review session's sandbox needs it$
+^rollout\.sh: nothing run; fix those first, then run: rollout\.sh --auto --brings '#80'$

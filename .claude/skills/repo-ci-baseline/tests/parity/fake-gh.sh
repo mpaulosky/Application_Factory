@@ -16,6 +16,7 @@
 #   gh pr merge <n> -R <owner/repo> [--auto] [--squash] [--match-head-commit <sha>]...
 #   gh pr view <n> -R <owner/repo> --json <fields> --jq <expression>
 #   gh pr list -R <owner/repo> [--head <branch>] [--state <state>] [--limit <n>] --json <fields> --jq <expression>
+#   gh auth status                                                   no other argument
 #
 # A GraphQL call is told apart by its query with all whitespace removed, so spacing and line breaks don't matter:
 #
@@ -27,6 +28,7 @@
 #   rest.<METHOD>.<path>          gh api -X <METHOD> <path>, for any METHOD but GET (rest.PATCH.repos_o_app)
 #   pr.<sub>.<owner>.<name>.<n>   gh pr <sub> (a view's key ends .<fields> too: pr.view.<owner>.<name>.<n>.<fields>)
 #   pr.list.<owner>.<name>        gh pr list, which takes no PR number
+#   auth.status                   gh auth status (rollout.sh --auto's preflight asks it)
 #
 # A cursor given but empty is part of the key too (comments.<id>.), so it never passes for a first page. A cursor of digits
 # alone is unmatched: <key>.<digits> names the nth call's fixture below, so comments.<id>.1.json would answer both the page
@@ -142,6 +144,10 @@ if [[ "${1:-}" == pr ]]; then
   for arg in "${argv[@]}"; do
     entry+=" $(encode "$arg")"
   done
+elif [[ "${1:-}" == auth ]]; then
+  [[ $# -eq 2 && "$2" == status ]] || unmatched "gh $all"
+  key="auth.status"
+  entry="$key"
 else
   [[ "${1:-}" == api ]] || unmatched "gh $all"
   shift

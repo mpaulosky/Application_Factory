@@ -353,8 +353,10 @@ The status and land cases were recorded from the Python, which the C# replaced o
 `PARITY_RECORD=1 tests/parity.test.sh <suite>` records a suite's cases from that reference only; the runner's header says what a case holds.
 `rollout.sh`'s suite has a runner of its own, `tests/rollout-parity.test.sh [command...]`, with its cases in `tests/rollout-parity/cases/`: rollout calls
 `reapply.sh` and `land.sh` beside itself and keeps its state under `~`, so each run is of a temporary copy of the skill folder, with stubs for those two and a
-fixed `repos.txt`, and a HOME of its own, and `git` and `claude` are fakes too (`tests/rollout-parity/fake-tool.sh`). It shares the fake `gh` and the stderr
-match (`tests/parity/stderr.sh`); `tests/rollout-parity-runner.test.sh` tests it.
+fixed `repos.txt`, and a HOME of its own, and `git` and `claude` are fakes too (`tests/rollout-parity/fake-tool.sh`). Its `--auto` cases add a stand-in
+Template, a PATH holding only fakes (every tool the preflight looks for) and the host's own commands, defaults for what those fakes answer, and a case's
+`setup.sh`, `after.sh`, `missing` tools and `ignore`d signals, so the preflight, the lock, the signals and a recorded review session each have a case. It shares
+the fake `gh` and the stderr match (`tests/parity/stderr.sh`); `tests/rollout-parity-runner.test.sh` tests it.
 
 ```bash
 status.sh                     # one line per open PR in every repo in github/repos.txt
@@ -379,6 +381,8 @@ nothing for a merged, closed or already-armed PR; **report blocker** for a faile
 no review needed, as `release.yml` arms it);
 **update branch** when it's `BEHIND` (nobody is asked to review the new head: Copilot is asked once per PR); **wait** until Copilot, or Claude (a marked `github-actions[bot]` review,
 backing a quota note or a request that didn't register on the same head), reviewed the current head and no thread is open.
+Copilot is its own logins only (`Landing.Copilot`, and `Land.CopilotJq` for the read-back): `copilot-pull-request-reviewer` or `Copilot`, in any case, with or without `[bot]`,
+as PR Auto-Merge and `reapply.sh` match it. A login that merely contains "copilot" (`not-copilot-bot`, `my-copilot`) reviews nothing for Copilot and isn't its request (#155).
 A head with neither review waits while Copilot is requested or `review:claude` is on; otherwise, for a PR with no record of an ask, **request Copilot**:
 a comment holding the marker (`Landing.CopilotAskedComment`), then the request, read back. With a record that hasn't settled (under 30 seconds) it **waits**.
 On a repo's first re-Apply PR the record is usually there already: `reapply.sh` posts the ask record when its request didn't register.

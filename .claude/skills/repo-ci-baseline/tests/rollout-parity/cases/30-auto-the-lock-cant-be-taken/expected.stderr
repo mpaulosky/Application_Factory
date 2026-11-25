@@ -1,0 +1,1 @@
+^rollout\.sh: can't take the lock ~/\.cache/repo-ci-baseline/rollout-auto\.lock: .*~/\.cache/repo-ci-baseline.*; nothing run\. Once it can be taken, run: rollout\.sh --auto --brings '#80'$

@@ -1,0 +1,2 @@
+^rollout\.sh: claude --version failed \(exit 1\): claude: cannot find module$
+^rollout\.sh: nothing run; fix those first, then run: rollout\.sh --auto --brings '#80'$
