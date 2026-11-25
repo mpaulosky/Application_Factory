@@ -1,7 +1,8 @@
 # Dependabot version updates for the Factory (ADR 0009). Its own file, not the Template's Seed: the Factory has GitHub Actions, the local review's npm packages (ADR 0010)
 # and the Template's hashed Python test pins (requirements-tests.txt, a pip block; ADR 0009's Update notes) to update, and the Template's Owned
 # global.json, the .NET SDK every Application builds with, and the Factory's copy of it (a dotnet-sdk block; mpaulosky/Application_Factory#103, ADR 0017),
-# and the C# test project's packages (a nuget block).
+# and the C# test project's packages (a nuget block). The bench's YamlDotNet pin, in a file-based app Dependabot doesn't read, moves by hand on a bump's PR
+# of the test project's: Scripts.Tests fails until the two match (ADR 0017, Update for mpaulosky/Application_Factory#161).
 # For GitHub Actions and the SDK both directories are listed so one PR bumps an action in a copied workflow and in its source under template/owned/ together,
 # or the gate's drift check would fail the copy. GitHub Actions also lists the Factory's template-tools action, whose pins Dependabot reads only there;
 # test.sh holds its setup-dotnet pin equal to the Template ci.yml's (mpaulosky/Application_Factory#145). A major bump, which the minor-and-patch group leaves

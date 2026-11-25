@@ -11,12 +11,15 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   `template/seed/` (written only if missing) hold the Template's files; `references/` and its own `docs/adr/` describe the parts;
   `github/repos.txt` is the Fleet registry; `apply.sh`, `reapply.sh`, `rollout.sh`, `status.sh`, `land.sh` and `github-settings.sh` are the scripts;
   `status.sh`, `land.sh` and `github-settings.sh` run the C# file-based apps `github/status.cs`, `github/land.cs` and `github/settings.cs`, which include
-  `Landing.cs`, `StatusCore.cs`, `LandCore.cs`, `SettingsCore.cs`, `Repos.cs` and `Gh.cs` (ADR 0017); `rollout.py` and `auto_rollout.py` are still Python,
+  `Landing.cs`, `StatusCore.cs`, `LandCore.cs`, `SettingsCore.cs`, `Py.cs`, `Repos.cs` and `Gh.cs` (ADR 0017); `rollout.py` and `auto_rollout.py` are still Python,
   and `settings.py` stays, run by nothing, for the `read_repo_list` that `rollout.py` imports. Their port lands a library at a time (ADR 0017's library-first Update):
-  `github/rollout.cs`, which nothing runs yet, includes `AutoRolloutSandbox.cs`, the review session's sandbox, so the gate builds it.
+  `github/rollout.cs`, which nothing runs yet, includes `AutoRolloutSandbox.cs`, the review session's sandbox, so the gate builds it. `bench/` holds the Claude Review benchmark, the C# file-based app
+  `claude-review-bench.cs` (with `ReviewBench.cs`, `Yaml.cs`, and `Gh.cs` and `Py.cs` from `github/`), which reads `claude-review.yml` with YamlDotNet, its one package,
+  pinned in its own `packages.lock.json` and restored from nuget.org alone by its own `NuGet.config` (ADR 0017's Update for mpaulosky/Application_Factory#161);
+  `bench/tests/rescore.test.sh` is its `--rescore` parity suite.
   `test.sh` and `tests/` test all of it. The gate and `test.sh` run two checkers in `tests/`: `check-issue-refs.sh` and `check-git-status.sh` run the C# file-based apps
   `check-issue-refs.cs` and `check-git-status.cs`, which include `IssueRefs.cs`, `GitStatusGuards.cs` and `Checker.cs`, each judged by its parity suite (`<checker>.test.sh`).
-  `tests/Scripts.Tests/` is the xUnit v3 project for the C# scripts (ADR 0017); it, `tests/` and `github/` each hold three empty shield
+  `tests/Scripts.Tests/` is the xUnit v3 project for the C# scripts (ADR 0017); it, `tests/`, `github/` and `bench/` each hold three empty shield
   files (`Directory.Build.props`, `Directory.Build.targets`, `Directory.Packages.props`), which are not Owned. The test project also holds its own `NuGet.config`
   (nuget.org alone) and `packages.lock.json`, which `test.sh` restores against in locked mode (ADR 0017's Update on hardening the C# step).
 - `.claude/skills/`: also the shared skills (`build-repair`, `dotnet-*`, `remove-squad`, `review-changes`), and `starting-points/`: the optional app-stack files
