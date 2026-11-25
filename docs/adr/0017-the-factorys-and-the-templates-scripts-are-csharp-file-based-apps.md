@@ -145,8 +145,8 @@ the increments change what their text describes, and the increment that does add
   its scripts once before it runs them.
 - [ADR 0016](0016-a-rollout-runs-each-applications-review-headless-and-sandboxed-in-its-worktree.md): its preflight's check for ruff 0.17 or uv goes with ruff, and the increment
   that retires ruff adds the Update. It already checks for the SDK `global.json` names.
-- The skill's [ADR 0003](../../.claude/skills/repo-ci-baseline/docs/adr/0003-github-settings-as-code.md) is unchanged: the settings stay data in the skill, read by `Settings.cs`
-  once `settings.py` goes.
+- The skill's [ADR 0003](../../.claude/skills/repo-ci-baseline/docs/adr/0003-github-settings-as-code.md) is unchanged: the settings stay data in the skill, read by `SettingsCore.cs`
+  (`settings.cs`) since mpaulosky/Application_Factory#120.
 - The skill's [ADR 0011](../../.claude/skills/repo-ci-baseline/docs/adr/0011-the-gh-repo-check-parses-shell-with-shfmt.md) is unchanged in what it decides. The C# `check_gh_repo`
   still reads each script's syntax tree from `shfmt -ln bash --to-json`, run in an empty folder. Its text names `check_gh_repo.py`, `python3 -I` and Python's recursion limit, so
   the increment that ports the checker adds an Update there for those.
@@ -318,3 +318,36 @@ pytest (`tests/issue_refs/`) are gone. They are Factory-only, so there is no Rol
   time `dotnet run --no-build` takes (a 105-case suite ran in 6 s rather than 54).
 - **The xUnit tests.** The pytest's 13 tests are `tests/Scripts.Tests/IssueRefs/`, one method each; `Scripts.Tests` compiles every `.cs` in `tests/` but the two entry
   files. The guard check's crash case, which `check-git-status.test.sh` ran through Python, is in `Checker/`.
+
+## Update (mpaulosky/Application_Factory#120): settings is C#, and settings.py stays for rollout.py
+
+A Factory-only port, as the mpaulosky/Application_Factory#119 and mpaulosky/Application_Factory#123 ones are. `rollout` isn't part of it: `rollout.py`
+imports `auto_rollout` in plain mode too, and `test_auto_rollout.py` imports `rollout`, so under the import rule above they port together
+(mpaulosky/Application_Factory#122).
+
+- **The files.** `github/settings.cs` is the entry file; it pulls in `SettingsCore.cs` (the logic; a `Settings.cs` would clash with
+  `settings.cs` where case is ignored), `Repos.cs` and `Gh.cs`. `github-settings.sh` changes to `github/` and runs it, as `status.sh` does. `Gh.Process` gains an overload
+  that writes a body to gh's stdin, and the `owner/repo` pattern moves from `StatusCore.cs` to `Repos.cs` (`Repos.Name`), so `settings.cs` needs no `StatusCore.cs`.
+- **settings.py stays.** `rollout.py` imports its `read_repo_list`, so it is deleted with `rollout.py`; nothing runs it as a command now. While it is left it is the
+  settings parity suite's reference (the runner's rule above), `test.sh` runs the suite against `github-settings.sh` too, and `SettingsPortTests.cs` checks the
+  Python readings the C# re-implements against it, run by `python3`.
+- **Its output is Python's, byte for byte.** A report prints settings as `repr()` did (`True`, `None`, `'PR_TITLE'`), ruleset parts as `json.dumps()` did
+  (`", "` and `": "`, every character past ASCII escaped), and `--json` as `json.dump(indent=2)` did, so `SettingsCore.cs` carries those readings (`Py`), with
+  Python's `==` (a bool is an int), `sorted()` (by code point; None against a number fails), `str.splitlines()`, `str.strip()` and `b64decode()`.
+- **The parity suite runs on a copy of `github/`.** The suite holds a `github/` of its own (a small standard, a `repos.txt` with each scope and two per-repo files),
+  which the runner lays over a copy of the skill's `github/`, beside copies of the skill's wrappers and the `global.json` above it; the reference and any command word
+  naming a skill file the copy holds run from the copy. So its cases don't change when the Fleet's standard or registry does, and `--all` and the scopes are covered.
+  The fake `gh` answers `gh api -X <method> <path> [-H <header>]... [--input -]`, keys a write by its method (`rest.PATCH.<path>`), and logs each call's argv and its
+  body as canonical JSON (`jq -cS`), so two serializations of one body log the same line.
+- **What the port changes on purpose.** A repo that isn't `owner/repo` is refused before any call: a usage error (exit 2) for an argument, exit 1 for a `repos.txt`
+  line, as `status.sh` refuses one. The Python sent it to `gh` as it was, where `..` would step out of the REST path a write goes to. The names GitHub answers with
+  that go into a path or a query (a workflow's path, the default branch, a ruleset's id) are percent-encoded, a segment at a time with the slashes kept
+  (`Settings.Segment` and `Settings.Segments`), and an empty, `.` or `..` segment is refused (exit 1, the error on stderr), so a `?`, `#` or `%` in one can't
+  change the call; the Python spliced them in as they were. Plain
+  names are sent as before, so the parity cases are unchanged. `Gh.Process` ignores a broken pipe on gh's stdin, as Python's `communicate()` did, so a `gh` that
+  fails before it reads its body still reports its own exit code and error.
+- **The wrapper's build leaves CA2266 out.** `dotnet run` prints its build's warnings on stdout, so the first run after a change would start its report, or its
+  `--json`, with the CA2266 line. `github-settings.sh` passes `-p:NoWarn=CA2266` to that build alone; the gate's build of every script still shows it.
+  `status.sh` and `land.sh` print it too on a first run, which this Update leaves for their own change.
+- **The pytest suite.** `github/tests/test_settings.py` is deleted, its 34 tests moved to `tests/Scripts.Tests/Settings/SettingsTests.cs` under the rule above, a
+  `Settings/` folder beside the ones the mpaulosky/Application_Factory#119 Update lists. It held no `read_repo_list` test: `ReposTests.cs` already holds `Repos.cs` to it.

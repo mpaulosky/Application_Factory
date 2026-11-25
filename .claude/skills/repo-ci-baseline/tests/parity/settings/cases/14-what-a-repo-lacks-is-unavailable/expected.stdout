@@ -1,0 +1,17 @@
+
+o/app
+  OK          repo settings: merge, branch and forking settings
+  UNAVAILABLE secret scanning: not offered for this repo (private without GHAS)
+  OK          Dependabot alerts: enabled
+  DRIFT       Dependabot security updates: disabled → enabled
+  UNAVAILABLE CodeQL default setup: code scanning isn't offered for this repo
+  OK          Actions token: read by default; may create PRs
+  OK          pinned actions: required
+  UNAVAILABLE ruleset main-rules: rulesets need GitHub Pro (or a public repo)
+  MANUAL      review cap: no pr-automerge.yml; re-Apply the Template for the 3-round cap
+  OK          label docs-only: present
+  OK          label review:claude: present
+  OK          secret RELEASE_PR_PAT: present
+  OK          secret CLAUDE_CODE_OAUTH_TOKEN: present
+
+Not at the standard: see DRIFT, MANUAL and LEGACY above.

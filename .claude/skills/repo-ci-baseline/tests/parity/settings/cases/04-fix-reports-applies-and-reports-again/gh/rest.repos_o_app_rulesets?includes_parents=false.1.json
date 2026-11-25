@@ -1,0 +1,8 @@
+[
+  {
+    "id": 8,
+    "name": "dev-rules",
+    "target": "branch",
+    "enforcement": "active"
+  }
+]

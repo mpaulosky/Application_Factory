@@ -1,0 +1,3 @@
+^usage: settings\.(py|cs) 
+...
+^settings\.(py|cs): error: --remove-legacy only acts with --fix$

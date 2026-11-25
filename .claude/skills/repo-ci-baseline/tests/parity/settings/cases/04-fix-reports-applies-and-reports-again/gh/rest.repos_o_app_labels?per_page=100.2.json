@@ -1,0 +1,12 @@
+[
+  {
+    "name": "review:claude",
+    "color": "D97757",
+    "description": "Claude reviews each head \u2014 a backup to Copilot's review"
+  },
+  {
+    "name": "docs-only",
+    "color": "0075CA",
+    "description": "Changes only docs; CI skips the build and tests"
+  }
+]

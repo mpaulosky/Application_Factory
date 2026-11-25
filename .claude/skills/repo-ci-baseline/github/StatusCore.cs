@@ -647,9 +647,8 @@ static class Status
 		return status;
 	}
 
-	// owner/repo: ASCII letters and digits, _, . and - on each side of one /, as GitHub names are, and neither side . or .. (a path
-	// step in the REST calls); a trailing line break too is refused.
-	public static readonly Regex RepoName = new(@"\A(?!\.\.?/)[A-Za-z0-9_.-]+/(?!\.\.?\z)[A-Za-z0-9_.-]+\z", RegexOptions.CultureInvariant);
+	// owner/repo, as Repos.Name reads it.
+	public static readonly Regex RepoName = Repos.Name;
 
 	// owner/name split at its /; anything but owner/repo throws.
 	public static (string Owner, string Name) SplitRepo(string repo)

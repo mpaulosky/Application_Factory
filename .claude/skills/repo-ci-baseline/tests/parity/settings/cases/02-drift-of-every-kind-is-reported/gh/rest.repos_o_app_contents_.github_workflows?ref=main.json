@@ -1,0 +1,27 @@
+[
+  {
+    "name": "ci.yml",
+    "path": ".github/workflows/ci.yml",
+    "type": "file"
+  },
+  {
+    "name": "old.yml",
+    "path": ".github/workflows/old.yml",
+    "type": "file"
+  },
+  {
+    "name": "codeql-analysis.yml",
+    "path": ".github/workflows/codeql-analysis.yml",
+    "type": "file"
+  },
+  {
+    "name": "pr-automerge.yml",
+    "path": ".github/workflows/pr-automerge.yml",
+    "type": "file"
+  },
+  {
+    "name": "README.md",
+    "path": ".github/workflows/README.md",
+    "type": "file"
+  }
+]

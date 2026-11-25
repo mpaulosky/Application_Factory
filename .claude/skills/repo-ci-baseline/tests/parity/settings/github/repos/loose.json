@@ -1,0 +1,8 @@
+{
+  "required_checks": [
+    "Lint"
+  ],
+  "repo": {
+    "allow_merge_commit": true
+  }
+}

@@ -17,6 +17,14 @@
 #                                                   replaced the .py, the .cs is the reference and records); review the diff
 #                                                   before committing
 #
+# A suite may hold github/, files laid over a copy of the skill's github/ folder, for a script that reads files beside it (its
+# standard, repos.txt) that the suite fixes for its cases. The runner then copies the skill's github/ (but its tests/), the
+# skill's top-level *.sh wrappers and the nearest global.json above github/ (so a C# script picks the same SDK) into a folder
+# of its own, lays the suite's github/ over the copy, and runs the reference from the copy. A command word (or the value of a
+# later --option=value word) that names a file under the skill's folder that the copy holds is made to name the copy's, so
+# `tests/parity.test.sh settings github-settings.sh` runs the copied wrapper on the copied github/. The skill's own files are
+# never written to.
+#
 # Each case is a folder under tests/parity/<suite>/cases/:
 #
 #   args             the implementation's arguments, one per line, taken verbatim (a blank line is an empty argument;
@@ -31,8 +39,8 @@
 #                    A line that is exactly ... stands for any number of lines, none included, so a usage block whose
 #                    wrapping is the argument parser's own is matched by its first line and ... alone
 #   expected.calls   the fake's log of the `gh` calls made, in order: each call's fixture key, and for a `gh pr` call or a
-#                    REST call with --paginate or --jq the key and the call's whole argv; the queries a run costs, and
-#                    what it writes, are behaviour too
+#                    REST call with --paginate, --jq, -X, -H or --input the key and the call's whole argv, then for --input
+#                    ` <<< ` and its body as canonical JSON; the queries a run costs, and what it writes, are behaviour too
 #
 # and, when the script reads more than its arguments and gh, any of:
 #
@@ -77,7 +85,7 @@
 # Exit 0 when every case passes, 1 when one fails, 2 on a usage or setup error (a case missing a file or holding a bad
 # one, a command that can't be run, a temporary folder that can't be made). Needs bash 4.4 or later, coreutils (mktemp,
 # mkdir, rm, ln, cp, cat, head, sort, env, basename, dirname, timeout), findutils (find), a diff with --no-dereference (GNU diffutils 3.3 or later), grep and sed, and git 2.32 or later
-# (GIT_CONFIG_GLOBAL) for a case with a setup.sh; the fake gh needs bash and cat, and mktemp, rm and jq 1.6 or later (for walk) for a REST call with --jq.
+# (GIT_CONFIG_GLOBAL) for a case with a setup.sh; the fake gh needs bash and cat, and mktemp, rm and jq 1.6 or later (for walk) for a REST call with --jq or --input.
 set -euo pipefail
 
 setup_error() {
@@ -150,6 +158,34 @@ ln -s "$fake" "$tmp/bin/gh" || setup_error "can't link the fake gh into $tmp/bin
 # A C# reference is built once, from its own folder, so the SDK is the one the global.json above it names (ADR 0017), and
 # each case runs it from that folder too (a script in tmp/bin that cds there), since dotnet picks the SDK by the folder it runs
 # in: from the case's folder, --no-build could run on an SDK other than the one that built it.
+# The suite's github/ over a copy of the skill's, and the command's words that name a skill file the copy holds made to name the copy's.
+overlay="$here/parity/$suite/github"
+if [[ -e "$overlay" ]]; then
+  [[ -d "$overlay" ]] || setup_error "$overlay is not a folder."
+  copy="$tmp/skill"
+  {
+    mkdir "$copy" && cp -R "$skill_dir/github" "$copy/github" && rm -rf "$copy/github/tests" && cp -R "$overlay/." "$copy/github/"
+  } || setup_error "can't copy the skill's github/ and lay $overlay over it."
+  # Each wrapper's copy is checked on its own: a loop's status is only its last iteration's.
+  for wrapper in "$skill_dir"/*.sh; do
+    [[ ! -f "$wrapper" ]] || cp "$wrapper" "$copy/" || setup_error "can't copy $wrapper beside the copy of github/."
+  done
+  folder="$(CDPATH='' cd -- "$skill_dir/github" && pwd -P)"
+  while [[ ! -f "$folder/global.json" && "$folder" != / ]]; do folder="$(dirname -- "$folder")"; done
+  if [[ -f "$folder/global.json" ]]; then
+    cp "$folder/global.json" "$copy/global.json" || setup_error "can't copy $folder/global.json beside the copy of github/."
+  fi
+  for i in "${!impl[@]}"; do
+    word="${impl[i]}" option=""
+    if [[ $i -gt 0 && "$word" == --?*=* ]]; then
+      option="${word%%=*}=" word="${word#*=}"
+    fi
+    if [[ "$word" == "$skill_dir"/* && -e "$copy/${word#"$skill_dir"/}" ]]; then
+      impl[i]="$option$copy/${word#"$skill_dir"/}"
+    fi
+  done
+  [[ -z "$build_cs" ]] || build_cs="$copy/${build_cs#"$skill_dir"/}"
+fi
 if [[ -n "$build_cs" ]]; then
   (cd -- "$(dirname -- "$build_cs")" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 \
     MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 UseSharedCompilation=false \

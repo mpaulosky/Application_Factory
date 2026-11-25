@@ -1,0 +1,4 @@
+# The parity suite's own Fleet registry (tests/parity/settings/README.md).
+o/app
+o/dots repo-settings-only  # a merge-settings-only repo
+o/factory factory

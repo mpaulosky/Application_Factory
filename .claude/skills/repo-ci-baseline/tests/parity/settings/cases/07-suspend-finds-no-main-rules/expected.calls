@@ -1,0 +1,2 @@
+rest.repos_o_app_rulesets?includes_parents=false gh api -X GET "repos/o/app/rulesets?includes_parents=false" -H "Accept: application/vnd.github+json"
+rest.repos_o_lib_rulesets?includes_parents=false gh api -X GET "repos/o/lib/rulesets?includes_parents=false" -H "Accept: application/vnd.github+json"
