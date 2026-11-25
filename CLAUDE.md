@@ -29,8 +29,9 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
 - `.github/workflows/template-tests.yml`: the Factory's own workflow (named `repo-ci-baseline Template`, the required job `Template tests`). It runs the gate one part per job in parallel
   (`GATE_PART`: `self`, `review`, `static`, `template`, `sandcastle`, ADR 0012), with `test.sh` in three shards (`TEST_SH_SHARD`, ADR 0013), and
   `Template tests` passes only when every part did. `.github/actions/template-tools/` installs the tools each job needs.
-- `.github/workflows/claude-issues.yml`: the Factory's own workflow (ADR 0018). Claude works the open issues labelled `claude`, one at a time and skipping blocked ones, and opens a draft
-  pull request for each; its header lists the labels it uses.
+- `.github/workflows/claude-issues.yml`: the Factory's own workflow (ADR 0018). Claude works the open issues labelled `claude`, up to three at once and skipping blocked ones, and opens a
+  draft pull request for each, with a comment naming the other open pull requests from this repository's branches that change the same files and the order to merge them (written
+  when its run ends, so an older pull request's comment doesn't learn of a newer one); its header lists the labels it uses.
 - `.github/hooks/` (`pre-commit`, `pre-push`, `post-checkout`), `scripts/check-branch-name.sh`, `.github/workflows/{claude-review,pr-automerge,pr-review-submitted}.yml` and
   `.github/scripts/post_claude_review.py`, and the issue and PR process (ADR 0009): `.github/ISSUE_TEMPLATE/*`, `.github/pull_request_template.md`, `.github/workflows/pr-title.yml` and
   `scripts/check-pr-title.sh`, and `.github/workflows/lint-{markdown,yaml,actions}.yml`, and the local review (ADR 0010): `scripts/review.sh`, five `.sandcastle/lib/` modules with three tests,

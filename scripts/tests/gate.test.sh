@@ -1022,6 +1022,363 @@ check "a push refused three times fails the Publish step and saves the branch as
 PUB_EXCHANGE=fail publish_case feature/7-port "abc123"
 check "a failed token exchange fails the Publish step without a push, saving the branch as a bundle" \
   "$([[ $publish_rc == 1 && ! -e $publish/push && ! -e $publish/pr ]] && grep -qF 'bundle=' "$publish/output" && echo 0 || echo 1)"
+# The pick job, the merge order step, the Start the next run step and the Finish step run here with one stub gh. `gh api <path>` answers from
+# $STUB_API/<key>.json (`[]` when there's none) through the call's own --jq filter, so the filters are tested too: an array in pages of 100, each
+# page filtered on its own as gh does, and only the first page without --paginate. It fails with HTTP 500 when <key>.fail exists and with HTTP 404
+# when <key>.404 does. <key> is the path after repos/o/r/, with `/` as `.`, and `@<labels>` added for a `labels=` query. Each read's path is recorded
+# in $STUB_API/reads. A write (-X) or any other gh command is recorded in $STUB_API/calls, and fails when it matches the extended regex $STUB_FAIL.
+api="$work/api"
+api_bin="$work/api-bin"
+mkdir -p "$api_bin"
+cat > "$api_bin/gh" << 'STUBGH'
+#!/usr/bin/env bash
+write=0 paginate=0 path="" jq_expr="."
+[[ $1 == api ]] || write=1
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  case "${args[i]}" in
+    -X) write=1 ;;
+    --paginate) paginate=1 ;;
+    --jq) jq_expr="${args[i + 1]}" ;;
+    repos/*) [[ -n $path ]] || path="${args[i]}" ;;
+  esac
+done
+if ((write)); then
+  printf '%s\n' "$*" >> "$STUB_API/calls"
+  if [[ -n ${STUB_FAIL:-} ]] && grep -qE -- "$STUB_FAIL" <<< "$*"; then exit 1; fi
+  exit 0
+fi
+printf '%s\n' "$path" >> "$STUB_API/reads"
+base="${path#repos/o/r/}" query=""
+if [[ $base == *\?* ]]; then query="${base#*\?}" base="${base%%\?*}"; fi
+key="${base//\//.}"
+if [[ "&$query&" == *"&labels="* ]]; then
+  l="&$query&" l="${l#*&labels=}"
+  key+="@${l%%&*}"
+fi
+[[ ! -e $STUB_API/$key.fail ]] || { echo "gh: Server Error (HTTP 500)" >&2; exit 1; }
+[[ ! -e $STUB_API/$key.404 ]] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
+data='[]'
+[[ ! -e $STUB_API/$key.json ]] || data="$(cat "$STUB_API/$key.json")"
+if [[ "$(jq -r type <<< "$data")" != array ]]; then
+  jq -r "$jq_expr" <<< "$data"
+  exit
+fi
+pages="$(jq '[length / 100 | ceil, 1] | max' <<< "$data")"
+((paginate)) || pages=1
+for ((p = 0; p < pages; p++)); do
+  jq -c ".[$((p * 100)):$(((p + 1) * 100))]" <<< "$data" | jq -r "$jq_expr" || exit
+done
+STUBGH
+chmod +x "$api_bin/gh"
+api_reset() { rm -rf "$api" && mkdir -p "$api"; }
+# fx <key> <json>
+fx() { printf '%s\n' "$2" > "$api/$1.json"; }
+# issue <number> <labels, comma-separated> [pr]: an issue (a pull request with pr) the owner opened
+issue() {
+  jq -nc --argjson n "$1" --arg l "$2" --arg pr "${3:-}" \
+    '{number: $n, labels: ($l | split(",") | map(select(. != "") | {name: .})), user: {login: "o"}} + (if $pr == "" then {} else {pull_request: {}} end)'
+}
+# pr <n> <branch> [repo, or null for a deleted fork]
+pr() {
+  jq -nc --argjson n "$1" --arg ref "$2" --arg repo "${3:-o/r}" \
+    '{number: $n, html_url: "https://github.com/o/r/pull/\($n)", head: {ref: $ref, repo: (if $repo == "null" then null else {full_name: $repo} end)}}'
+}
+# issues_fx <key> <issue json>...
+issues_fx() { printf '%s\n' "${@:2}" | jq -s . > "$api/$1.json"; }
+# comments_fx <key> <id|login|body>...
+comments_fx() {
+  printf '%s\n' "${@:2}" | jq -Rn '[inputs | capture("^(?<id>[0-9]+)\\|(?<l>[^|]*)\\|(?<b>.*)$") | {id: (.id | tonumber), user: {login: .l}, body: .b}]' > "$api/$1.json"
+}
+# started <comment id> <run id>
+started() { echo "$1|github-actions[bot]|Claude started on this issue: https://github.com/o/r/actions/runs/$2"; }
+# owner_labelled <number>...: the owner added each issue's `claude` label
+owner_labelled() {
+  local n
+  for n in "$@"; do fx "issues.$n.events" '[{"event": "labeled", "label": {"name": "claude"}, "actor": {"login": "o"}}]'; done
+}
+calls() { cat "$api/calls" 2> /dev/null || true; }
+# read_at <path prefix>: the line of the reads log where the last read of a path starting with it is
+read_at() { grep -nF -- "repos/o/r/$1" "$api/reads" 2> /dev/null | tail -n 1 | cut -d: -f1; }
+
+# The pick job takes up to CLAUDE_ISSUES_CAP issues at once, less the open issues labelled `claude:working` whose run, the one their latest "Claude
+# started" comment from the workflow names, is still going.
+pick="$work/pick"
+mkdir -p "$pick"
+sed -n '/^      - name: Pick the next issues$/,/^  work:$/p' "$issues_wf" | sed -n '/^        run: |$/,$p' | sed '1d;$d' | sed 's/^          //' > "$pick/run.sh"
+pick_case() { # pick_case <cap>: runs the pick step, leaving its output in $pick/output, its log in $pick/log and its exit status in $pick_rc
+  rm -f "$api/calls" "$api/reads" "$pick/output"
+  pick_rc=0
+  env STUB_API="$api" PATH="$api_bin:$PATH" GH_TOKEN=x GH_REPO=o/r CLAUDE_ISSUES_CAP="$1" GITHUB_OUTPUT="$pick/output" GITHUB_REPOSITORY_OWNER=o \
+    GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=o/r GITHUB_RUN_ID=1 RUNNER_TEMP="$pick" bash "$pick/run.sh" > "$pick/log" 2>&1 || pick_rc=$?
+}
+picked() { [[ $pick_rc == 0 ]] && grep -qxF "issues=$1" "$pick/output"; } # picked <json array>: the step passed and picked exactly these
+labelled() { calls | grep -qF "issues/$1/labels -f labels[]=claude:working"; }
+unlabelled() { calls | grep -qF "DELETE repos/o/r/issues/$1/labels/claude:working"; }
+commented() { calls | grep -qF "issue comment $1 --body Claude started"; }
+api_reset
+issues_fx 'issues@claude:working' "$(issue 1 claude,claude:working)" "$(issue 2 claude,claude:working)"
+issues_fx 'issues@claude' "$(issue 1 claude,claude:working)" "$(issue 2 claude,claude:working)" "$(issue 3 claude)" "$(issue 4 claude)" "$(issue 5 claude)"
+comments_fx issues.1.comments "$(started 1 90)" "$(started 2 101)" "3|mallory|Claude started on this issue: https://github.com/o/r/actions/runs/99"
+comments_fx issues.2.comments "$(started 4 102)"
+fx actions.runs.90 '{"status": "completed"}'
+fx actions.runs.99 '{"status": "completed"}'
+fx actions.runs.101 '{"status": "in_progress"}'
+fx actions.runs.102 '{"status": "completed"}'
+owner_labelled 1 2 3 4 5
+pick_case 3
+check "the pick step fills the free slots under the cap, oldest first, queuing again an issue whose run has ended and skipping one still being worked" \
+  "$(picked '[2,3]' && labelled 2 && labelled 3 && commented 2 && commented 3 && unlabelled 2 \
+    && ! labelled 4 && ! commented 4 && ! labelled 1 && ! unlabelled 1 && echo 0 || echo 1)"
+check "the pick step goes by the latest \"Claude started\" comment from the workflow, not an earlier one or anyone else's" \
+  "$(grep -qF '#1 is being worked by run 101 (in_progress)' "$pick/log" && echo 0 || echo 1)"
+# The working list and every run's status are read before the queue, so an issue a run finishes in between is either counted or not queued.
+read_working="$(read_at 'issues?state=open&labels=claude:working')" read_runs="$(read_at actions/runs/)"
+read_queue="$(read_at 'issues?state=open&labels=claude&sort')"
+check "the pick step reads the issues being worked and their runs before the queue" \
+  "$([[ -n $read_working && -n $read_runs && -n $read_queue ]] && ((read_working < read_runs && read_runs < read_queue)) && echo 0 || echo 1)"
+api_reset
+issues_fx 'issues@claude' "$(issue 3 claude)"
+owner_labelled 3
+pick_case 3
+check "with fewer queued issues than free slots, the pick step picks them all" "$(picked '[3]' && labelled 3 && echo 0 || echo 1)"
+for list in 'claude:working' 'claude'; do
+  touch "$api/issues@$list.fail"
+  pick_case 3
+  check "when the issues labelled \`$list\` can't be listed, the pick step fails and labels nothing" \
+    "$([[ $pick_rc != 0 ]] && ! labelled 3 && ! commented 3 && echo 0 || echo 1)"
+  rm -f "$api/issues@$list.fail"
+done
+# A pull request labelled `claude:working` holds no slot.
+issues_fx 'issues@claude:working' "$(issue 5 claude:working pr)"
+pick_case 1
+check "a pull request labelled \`claude:working\` takes no slot" "$(picked '[3]' && ! grep -qF '#5' "$pick/log" && echo 0 || echo 1)"
+# Only this repository's branches tell that an issue already has a pull request: a fork names its branch as it likes, or is gone (no head repository).
+issues_fx 'issues@claude:working'
+issues_fx pulls "$(pr 20 feature/3-evil other/r)" "$(pr 21 fix/3-gone null)"
+pick_case 1
+check "a fork's pull request on an issue's branch name doesn't take the issue off the queue" "$(picked '[3]' && echo 0 || echo 1)"
+issues_fx pulls "$(pr 20 feature/3-mine)"
+pick_case 1
+check "a pull request from this repository's branch for the issue takes it off the queue" \
+  "$(picked '[]' && calls | grep -qF 'DELETE repos/o/r/issues/3/labels/claude' && grep -qF 'feature/3-mine' "$pick/log" && echo 0 || echo 1)"
+api_reset
+issues_fx 'issues@claude:working' "$(issue 1 claude,claude:working)" "$(issue 2 claude,claude:working)"
+issues_fx 'issues@claude' "$(issue 1 claude,claude:working)" "$(issue 2 claude,claude:working)" "$(issue 3 claude)"
+comments_fx issues.1.comments "$(started 1 101)"
+comments_fx issues.2.comments "$(started 2 102)"
+fx actions.runs.101 '{"status": "in_progress"}'
+fx actions.runs.102 '{"status": "queued"}'
+owner_labelled 3
+pick_case 1
+check "with more issues being worked than the cap, the pick step picks nothing" \
+  "$(picked '[]' && ! labelled 3 && grep -qF '2 of 1 slots are taken' "$pick/log" && echo 0 || echo 1)"
+api_reset
+issues_fx 'issues@claude:working' "$(issue 1 claude:working)"
+issues_fx 'issues@claude' "$(issue 3 claude)"
+comments_fx issues.1.comments "$(started 1 101)"
+fx actions.runs.101 '{"status": "in_progress"}'
+owner_labelled 3
+pick_case 1
+check "an issue being worked holds its slot after its \`claude\` label is taken off" "$(picked '[]' && ! labelled 3 && echo 0 || echo 1)"
+for fail in comments run; do
+  api_reset
+  issues_fx 'issues@claude:working' "$(issue 1 claude,claude:working)"
+  issues_fx 'issues@claude' "$(issue 1 claude,claude:working)" "$(issue 3 claude)"
+  comments_fx issues.1.comments "$(started 1 101)"
+  if [[ $fail == comments ]]; then touch "$api/issues.1.comments.fail"; else touch "$api/actions.runs.101.fail"; fi
+  owner_labelled 1 3
+  pick_case 1
+  check "an issue whose $fail can't be read keeps its slot, so a full cap picks nothing" \
+    "$(picked '[]' && ! unlabelled 1 && ! labelled 3 && { [[ $fail != comments ]] || grep -qF "::warning::Couldn't read the comments on #1" "$pick/log"; } \
+      && { [[ $fail != run ]] || grep -qF "::warning::Couldn't read run 101 of #1: gh: Server Error (HTTP 500)" "$pick/log"; } && echo 0 || echo 1)"
+done
+for gone in 404 none; do
+  api_reset
+  issues_fx 'issues@claude:working' "$(issue 1 claude,claude:working)"
+  issues_fx 'issues@claude' "$(issue 1 claude,claude:working)"
+  [[ $gone == none ]] || { comments_fx issues.1.comments "$(started 1 101)" && touch "$api/actions.runs.101.404"; }
+  owner_labelled 1
+  pick_case 1
+  check "an issue left claude:working by a run that is gone ($gone) is queued again" "$(picked '[1]' && unlabelled 1 && labelled 1 && ! grep -qF "Couldn't read run" "$pick/log" && echo 0 || echo 1)"
+done
+# The latest "Claude started" comment can be past the first page of 100.
+api_reset
+issues_fx 'issues@claude:working' "$(issue 1 claude,claude:working)"
+issues_fx 'issues@claude' "$(issue 1 claude,claude:working)" "$(issue 3 claude)"
+filler=()
+for ((i = 2; i <= 100; i++)); do filler+=("$i|o|a comment"); done
+comments_fx issues.1.comments "$(started 1 90)" "${filler[@]}" "$(started 101 101)"
+fx actions.runs.90 '{"status": "completed"}'
+fx actions.runs.101 '{"status": "in_progress"}'
+owner_labelled 1 3
+pick_case 1
+check "the pick step reads every page of an issue's comments for its latest \"Claude started\" one" \
+  "$(picked '[]' && ! unlabelled 1 && grep -qF '#1 is being worked by run 101' "$pick/log" && echo 0 || echo 1)"
+api_reset
+issues_fx 'issues@claude' "$(issue 3 claude)" "$(issue 4 claude)"
+fx issues.3.dependencies.blocked_by '[{"number": 9, "state": "open"}]'
+owner_labelled 3 4
+pick_case 1
+check "a blocked issue takes no slot, so the next queued issue is picked" \
+  "$(picked '[4]' && ! labelled 3 && calls | grep -qF 'issues/3/labels -f labels[]=claude:blocked' && echo 0 || echo 1)"
+api_reset
+issues_fx 'issues@claude' "$(issue 3 claude)" "$(issue 4 claude)"
+owner_labelled 3 4
+STUB_FAIL='issues/3/labels -f' pick_case 2
+check "an issue the pick can't label is left for the next run, and the rest are worked" \
+  "$(picked '[4]' && ! commented 3 && commented 4 && grep -qF "::warning::Couldn't label #3" "$pick/log" && echo 0 || echo 1)"
+STUB_FAIL='^issue comment 4 ' pick_case 2
+check "an issue the pick can't comment on has its label taken off again and is left for the next run" \
+  "$(picked '[3]' && unlabelled 4 && ! unlabelled 3 && echo 0 || echo 1)"
+STUB_FAIL='labels -f labels\[\]=claude:working' pick_case 2
+check "when no pick can be labelled, the pick step passes and picks nothing" "$(picked '[]' && echo 0 || echo 1)"
+
+# The merge order comment on the run's pull request names the open pull requests from this repository's branches that change the same files, oldest first.
+order="$work/order"
+mkdir -p "$order"
+sed -n '/^      - name: Note the merge order$/,/^      - name: /p' "$issues_wf" | sed -n '/^        run: |$/,$p' | sed '1d;$d' | sed 's/^          //' > "$order/run.sh"
+order_case() { # order_case: runs the step for issue 7, leaving its log in $order/log and its exit status in $order_rc
+  rm -f "$api/calls" "$api/reads"
+  order_rc=0
+  env STUB_API="$api" PATH="$api_bin:$PATH" GH_TOKEN=x GH_REPO=o/r ISSUE=7 bash "$order/run.sh" > "$order/log" 2>&1 || order_rc=$?
+}
+# files_fx <pr> <file>...
+files_fx() { printf '%s\n' "${@:2}" | jq -Rn '[inputs | {filename: .}]' > "$api/pulls.$1.files.json"; }
+api_reset
+issues_fx pulls "$(pr 12 feature/9-y)" "$(pr 11 feature/7-evil other/r)" "$(pr 10 feature/7-port)" "$(pr 8 fix/5-x)"
+files_fx 12 c.sh
+files_fx 11 b.sh
+files_fx 10 a.sh b.sh
+files_fx 8 b.sh
+order_case
+check "the merge order comment names the pull requests that change the same files, oldest first, and leaves out the rest and a fork's" \
+  "$(calls | grep -qF 'POST repos/o/r/issues/10/comments' && calls | grep -qF 'Merge them oldest first' && calls | grep -qF '#8, #10 (this one).' \
+    && calls | grep -qF "#8 also changes \`b.sh\`" && ! calls | grep -qE '#1[12]|issues/11' && [[ $order_rc == 0 ]] && echo 0 || echo 1)"
+comments_fx issues.10.comments "50|github-actions[bot]|<!-- claude-issues-merge-order --> older" "55|github-actions[bot]|<!-- claude-issues-merge-order --> old" \
+  "60|mallory|<!-- claude-issues-merge-order --> fake" "66|github-actions[bot]|another comment"
+order_case
+check "a later run updates the latest merge order comment the workflow left instead of adding another, and never anyone else's" \
+  "$(calls | grep -qF -- '-X PATCH repos/o/r/issues/comments/55' && ! calls | grep -qE -- '-X POST|comments/(50|60|66)' && echo 0 || echo 1)"
+touch "$api/issues.10.comments.fail"
+order_case
+check "when this pull request's comments can't be read, no merge order is noted, with a warning" \
+  "$([[ $order_rc == 0 && -z "$(calls)" ]] && grep -qF "::warning::Couldn't read the comments on #10" "$order/log" && echo 0 || echo 1)"
+api_reset
+issues_fx pulls "$(pr 10 feature/7-port)" "$(pr 12 feature/9-y)"
+files_fx 10 a.sh
+files_fx 12 c.sh
+order_case
+check "with no other pull request changing the same files, no merge order comment is left" \
+  "$([[ $order_rc == 0 && -s $order/run.sh ]] && [[ -z "$(calls)" ]] && grep -qF 'No other open pull request changes the files #10' "$order/log" && echo 0 || echo 1)"
+api_reset
+issues_fx pulls "$(pr 70 feature/70-big)" "$(pr 71 fix/7)" "$(pr 8 fix/5-x)"
+files_fx 70 b.sh
+files_fx 71 b.sh
+files_fx 8 b.sh
+order_case
+check "with no pull request for the issue (feature/70-… and fix/7 aren't issue 7's), no merge order comment is left" \
+  "$([[ $order_rc == 0 && -z "$(calls)" ]] && grep -qF '#7 has no open pull request' "$order/log" && echo 0 || echo 1)"
+api_reset
+issues_fx pulls "$(pr 10 hotfix/7-x)" "$(pr 8 fix/5-x)"
+files_fx 10 b.sh
+files_fx 8 b.sh
+order_case
+check "a hotfix branch is the issue's pull request too" "$(calls | grep -qF 'POST repos/o/r/issues/10/comments' && echo 0 || echo 1)"
+for shared in 4 5 6; do
+  api_reset
+  issues_fx pulls "$(pr 10 feature/7-port)" "$(pr 8 fix/5-x)"
+  names=('0`@x.sh')
+  for ((i = 1; i <= shared; i++)); do names+=("f$i.sh"); done
+  files_fx 10 "${names[@]}"
+  files_fx 8 "${names[@]}"
+  order_case
+  want=$((shared < 5 ? shared : 5))
+  check "with $shared plainly named files shared and one that isn't, $want are named and the other never" \
+    "$([[ "$(calls | grep -oE "[\`]f[0-9][.]sh[\`]" | wc -l)" == "$want" ]] && calls | grep -qF "\`f$want.sh\`" && ! calls | grep -qF '@x' && echo 0 || echo 1)"
+done
+api_reset
+issues_fx pulls "$(pr 10 feature/7-port)" "$(pr 8 fix/5-x)" "$(pr 6 fix/4-w)"
+odd=('a b.sh' "a\$b.sh" 'a<b>.sh' 'a|b.sh' 'a*b.sh' 'a\b.sh' "a'b.sh" 'a"b.sh' 'a(b).sh' 'a[b].sh')
+files_fx 10 'A-z_0.9/+x.sh' "${odd[@]}"
+files_fx 8 'A-z_0.9/+x.sh' "${odd[@]}"
+files_fx 6 "${odd[@]:0:2}"
+order_case
+check "a file name of letters, digits and ._/+- is named, and one with any other character never" \
+  "$(calls | grep -qxF -- "- #8 also changes \`A-z_0.9/+x.sh\`" && ! calls | grep -qE 'b[])>]?[.]sh' && echo 0 || echo 1)"
+check "a pull request whose shared files all have other names is still listed, without the names" \
+  "$(calls | grep -qF '#6, #8, #10 (this one).' && calls | grep -qxF -- '- #6 also changes files with other names' && echo 0 || echo 1)"
+api_reset
+issues_fx pulls "$(pr 9 feature/7-gone null)" "$(pr 10 feature/7-port)" "$(pr 8 fix/5-x)"
+files_fx 9 b.sh
+files_fx 10 b.sh
+files_fx 8 b.sh
+order_case
+check "a pull request from a deleted fork is left out of the merge order and never taken for the issue's" \
+  "$(calls | grep -qF 'POST repos/o/r/issues/10/comments' && calls | grep -qF '#8, #10 (this one).' && ! calls | grep -qE '#9|issues/9' && echo 0 || echo 1)"
+api_reset
+issues_fx pulls "$(pr 10 feature/7-port)" "$(pr 9 fix/6-z)" "$(pr 8 fix/5-x)"
+files_fx 10 b.sh
+files_fx 9 b.sh
+touch "$api/pulls.8.files.fail"
+order_case
+check "a pull request whose files can't be listed is left out with a warning, and the rest are still noted" \
+  "$(calls | grep -qF '#9, #10 (this one).' && grep -qF "::warning::Couldn't list the files #8 changes" "$order/log" && echo 0 || echo 1)"
+STUB_FAIL='-X POST' order_case
+check "a merge order comment that can't be written is warned of, and the step still passes" \
+  "$([[ $order_rc == 0 ]] && grep -qF "::warning::Couldn't write the merge order comment on #10" "$order/log" \
+    && ! grep -qF 'Noted the merge order' "$order/log" && echo 0 || echo 1)"
+touch "$api/pulls.10.files.fail"
+order_case
+check "when this pull request's files can't be listed, no merge order is noted, with a warning" \
+  "$([[ $order_rc == 0 && -z "$(calls)" ]] && grep -qF "::warning::Couldn't list the files #10 changes" "$order/log" && echo 0 || echo 1)"
+touch "$api/pulls.fail"
+order_case
+check "when the open pull requests can't be listed, no merge order is noted, with a warning" \
+  "$([[ $order_rc == 0 && -z "$(calls)" ]] && grep -qF "::warning::Couldn't list the open pull requests" "$order/log" && echo 0 || echo 1)"
+
+# Each leg of the run starts the next run when an issue is queued that no run is working and nothing blocks.
+next="$work/next"
+mkdir -p "$next"
+sed -n '/^      - name: Start the next run$/,$p' "$issues_wf" | sed -n '/^        run: |$/,$p' | sed '1d' | sed 's/^          //' > "$next/run.sh"
+next_case() { rm -f "$api/calls" && env STUB_API="$api" PATH="$api_bin:$PATH" GH_TOKEN=x GH_REPO=o/r bash "$next/run.sh" > "$next/log" 2>&1; }
+api_reset
+issues_fx 'issues@claude' "$(issue 1 claude:working,claude)" "$(issue 2 claude,claude:blocked)" "$(issue 3 claude pr)"
+next_case
+check "with only issues being worked, blocked ones and pull requests queued, no next run is started" \
+  "$([[ -s $next/run.sh ]] && ! calls | grep -qF 'workflow run' && echo 0 || echo 1)"
+issues_fx 'issues@claude' "$(issue 1 claude:working,claude)" "$(issue 2 claude,claude:blocked)" "$(issue 4 claude)"
+next_case
+check "with an issue queued that no run is working, the next run is started" "$(calls | grep -qxF 'workflow run claude-issues.yml --ref main' && echo 0 || echo 1)"
+
+# Each leg keeps its unpushed work under a name of its own, since an artifact's name is unique in a run, and its Finish step takes `claude` off before
+# `claude:working`, so a finished issue isn't left queued with its slot freed.
+check "each issue's unpushed work is kept as an artifact named for the issue" \
+  "$(sed -n '/^      - name: Keep the unpushed work$/,/^      - name: /p' "$issues_wf" | grep -qxF "          name: claude-branch-\${{ matrix.issue }}" && echo 0 || echo 1)"
+# The work job runs Claude with unrestricted Bash, so its token stays read-only for pull requests: the merge order comment goes through the issues API.
+work_perms="$(sed -n '/^  work:$/,/^    steps:$/p' "$issues_wf" | sed -n '/^    permissions:$/,/^    [a-z]/p')"
+check "the work job's token can read pull requests but not write them" \
+  "$(grep -qxF '      pull-requests: read' <<< "$work_perms" && ! grep -qF 'pull-requests: write' <<< "$work_perms" && echo 0 || echo 1)"
+finish_api_case() { # finish_api_case [saved bundle]: runs the Finish step for issue 7 with the shared stub, leaving its log in $finish/log
+  rm -f "$api/calls" "$api/reads"
+  env STUB_API="$api" PATH="$api_bin:$PATH" GH_TOKEN=x GH_REPO=o/r ISSUE=7 OUTCOME=failure PUBLISH=failure SAVED="${1:-}" EXECUTION_FILE="" \
+    GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=o/r GITHUB_RUN_ID=1 bash "$finish/run.sh" > "$finish/log" 2>&1
+}
+api_reset
+issues_fx pulls "$(pr 20 feature/7-evil other/r)" "$(pr 21 fix/7-gone null)"
+finish_api_case "$finish/branch.bundle"
+finish_claude="$(calls | grep -nxF 'api --silent -X DELETE repos/o/r/issues/7/labels/claude' | cut -d: -f1)"
+finish_working="$(calls | grep -nxF 'api --silent -X DELETE repos/o/r/issues/7/labels/claude:working' | cut -d: -f1)"
+check "the Finish step takes \`claude\` off before \`claude:working\`" \
+  "$([[ -n $finish_claude && -n $finish_working ]] && ((finish_claude < finish_working)) && echo 0 || echo 1)"
+check "a fork's pull request on the issue's branch name isn't taken for the issue's, so the Finish step asks for a person" \
+  "$(calls | grep -qF 'issues/7/labels -f labels[]=claude:needs-human' && ! grep -qF 'has the pull request' "$finish/log" && echo 0 || echo 1)"
+check "with the work saved, the Finish step's comment names the issue's own artifact" \
+  "$(calls | grep -qF "\`claude-branch-7\` artifact" && echo 0 || echo 1)"
+issues_fx pulls "$(pr 22 feature/7-mine)"
+finish_api_case
+check "with a pull request from this repository's branch for the issue, the Finish step asks for no person" \
+  "$(! calls | grep -qF 'claude:needs-human' && grep -qF '#7 has the pull request https://github.com/o/r/pull/22.' "$finish/log" && echo 0 || echo 1)"
 
 # The local review check (ADR 0010). The stub review.sh stands for scripts/review.sh; GATE_SKIP_REVIEW=1 skips it, anything else doesn't.
 repo="$(new_repo review-skipped)"
