@@ -893,7 +893,14 @@ static class Bench
 					{
 						past = true;
 						Groups.Kill(group);
-						process.Kill(entireProcessTree: true);
+						try
+						{
+							process.Kill(entireProcessTree: true);
+						}
+						catch (InvalidOperationException)
+						{
+							// It had already ended.
+						}
 						break;
 					}
 					bytes.Write(buffer, 0, read);
