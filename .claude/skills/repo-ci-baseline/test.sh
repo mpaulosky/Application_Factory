@@ -7,8 +7,8 @@
 # Runs the Template's own tests (hook suites, auto-merge script tests,
 # the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle and the GitHub scripts' pytest
 # (rollout) with the parity suites (status, land, settings, check_gh_repo, the release scripts and rollout), the Claude Review
-# benchmark's --rescore parity suite and the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land, settings, what they share, the two checkers in
-# tests/ and the benchmark), lints its workflows, YAML, shell
+# benchmark's --rescore parity suite and the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land, settings, the AutoRollout library of
+# rollout.cs, what they share, the two checkers in tests/ and the benchmark), lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
 # Owned files carry no {{PLACEHOLDER}} and that the Owned scripts, and this repo's own
 # scripts and skills, tell every gh command its repository, checks the Seed Sandcastle files, and smoke-tests apply.sh and
