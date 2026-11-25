@@ -82,3 +82,15 @@ Consequence that issues are worked one after another.
   comment doesn't learn of one opened later, and two runs ending together may each miss the other's. The pull requests stay drafts, so the owner still reads and lands each one on its own.
 - Three runs of up to five and a half hours each draw on the owner's Claude usage at once, so a usage limit can end a run early, as `claude:needs-human`. Runner minutes are free on the
   public repository, and each run makes a few dozen GitHub API calls.
+
+## Update: `claude:blocked` comes off with its blockers
+
+The pick step took `claude:blocked` off an issue only when its loop reached it with a slot free, so with every slot taken the label stayed on an issue nothing blocked any more, and
+the "Start the next run" step, which skips `claude:blocked` issues, started no run for it. The owner asked for `claude:blocked` to come off whenever an issue's blocker does
+(2026-11-25).
+
+- Every pick first reads the open issues labelled `claude:blocked` and takes the label off each one that has no open "blocked by" issue and no `blocked` label, whether or not a slot
+  is free, before it reads the queue. A list or an issue's dependencies that can't be read leave the label on for the next run, and the pick goes on.
+- The `blocked` label counts in any case (`Blocked` as well as `blocked`).
+- A closed issue (it can be the last blocker of another) and a `blocked` label taken off start a pick, so an unblocked issue doesn't wait for the hourly schedule. A "blocked by" link
+  taken off starts no workflow, so the hourly schedule still catches that one.
