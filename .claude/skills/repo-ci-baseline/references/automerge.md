@@ -375,6 +375,8 @@ nothing for a merged, closed or already-armed PR; **report blocker** for a faile
 no review needed, as `release.yml` arms it);
 **update branch** when it's `BEHIND` (nobody is asked to review the new head: Copilot is asked once per PR); **wait** until Copilot, or Claude (a marked `github-actions[bot]` review,
 backing a quota note or a request that didn't register on the same head), reviewed the current head and no thread is open.
+Copilot is its own logins only (`Landing.Copilot`, and `Land.CopilotJq` for the read-back): `copilot-pull-request-reviewer` or `Copilot`, in any case, with or without `[bot]`,
+as PR Auto-Merge and `reapply.sh` match it. A login that merely contains "copilot" (`not-copilot-bot`, `my-copilot`) reviews nothing for Copilot and isn't its request (#155).
 A head with neither review waits while Copilot is requested or `review:claude` is on; otherwise, for a PR with no record of an ask, **request Copilot**:
 a comment holding the marker (`Landing.CopilotAskedComment`), then the request, read back. With a record that hasn't settled (under 30 seconds) it **waits**.
 On a repo's first re-Apply PR the record is usually there already: `reapply.sh` posts the ask record when its request didn't register.

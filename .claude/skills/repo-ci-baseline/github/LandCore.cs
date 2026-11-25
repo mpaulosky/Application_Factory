@@ -161,9 +161,11 @@ static class Land
 	}
 
 	// How many of the PR's review requests and reviews of its head are Copilot's. Copilot's quota note counts here: Copilot was asked
-	// about the head and answered, so asking again only brings another note (Decide() calls in Claude).
+	// about the head and answered, so asking again only brings another note (Decide() calls in Claude). Copilot is its own logins, as
+	// Landing.Copilot reads them (#155), not a login that merely contains "copilot".
 	public const string CopilotJq = ".headRefOid as $h | [(.reviewRequests[] | .login // .name // \"\"), "
-			+ "(.reviews[] | select(.commit.oid == $h) | .author.login)] | map(select(test(\"copilot\"; \"i\"))) | length";
+			+ "(.reviews[] | select(.commit.oid == $h) | .author.login)] "
+			+ "| map(select(test(\"^(copilot|copilot-pull-request-reviewer)(\\\\[bot\\\\])?$\"; \"i\"))) | length";
 
 	// Whether Copilot's review is requested on the PR, or Copilot has reviewed its head.
 	public static bool GhCopilotRequested(string repo, long number, Func<IReadOnlyList<string>, GhRun>? process = null)
