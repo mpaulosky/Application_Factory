@@ -27,7 +27,7 @@
        skill's folder is the assembly's SkillDir metadata, so a test finds the files it reads (repos.txt, the Template's workflows) beside
        whichever copy of the project it was built from. -->
   <ItemGroup>
-    <Compile Include="../../github/*.cs" Exclude="../../github/status.cs;../../github/land.cs;../../github/settings.cs" Link="github/%(Filename)%(Extension)" />
+    <Compile Include="../../github/*.cs" Exclude="../../github/status.cs;../../github/land.cs;../../github/settings.cs;../../github/rollout.cs" Link="github/%(Filename)%(Extension)" />
     <Compile Include="../*.cs" Exclude="../check-issue-refs.cs;../check-git-status.cs" Link="tests/%(Filename)%(Extension)" />
     <AssemblyMetadata Include="SkillDir" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))" />
   </ItemGroup>
