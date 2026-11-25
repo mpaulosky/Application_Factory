@@ -480,13 +480,31 @@ A Factory-only port, as the ones above are, so `bench/claude-review-bench.py` an
   Each case's report, in a run and in `--rescore`, shows a control character (but a tab or a newline), a format or line or paragraph separator
   character and a lone surrogate in its error, its seconds, turns and cost, a finding's path, line and body, and the bad lines as `\xNN`, `\uNNNN` or
   `\UNNNNNNNN`, read by code point, where the Python
-  printed it raw to the terminal. A call that exits within its timeout but leaves a child holding its pipes ends in a timeout, and the child runs on.
+  printed it raw to the terminal. A call that exits within its timeout but leaves a child holding its pipes ends in a timeout, and the child is killed with
+  the call's process group (mpaulosky/Application_Factory#196, below).
   Claude's `stream-json` output is split at `\n` alone, where the Python's
   `splitlines()` also broke at the U+2028, U+2029 and U+0085 that JSON writes raw inside a string and so lost such a review. A `--prompt-file` reads `\r\n` and
   `\r` as `\n`, as `read_text()` did. The run mode, which runs Claude on the cases' clones, has no parity suite: `Scripts.Tests` tests its parts (`BenchRunTests.cs`:
-  each outcome a finished call gives, the `--max-turns` cap, the timeout, the YAML limits), and a run on the maintainer's machine the whole.
+  each outcome a finished call gives, the `--max-turns` cap, the timeout, the YAML limits), and a run on the maintainer's machine the whole. Since
+  mpaulosky/Application_Factory#196, `BenchCaseTests.cs` runs the run mode whole too, with a fake `claude` on `PATH` over fixture clones (below).
 - **The pytest suite.** `bench/tests/test_claude_review_bench.py` is deleted, its 26 tests moved to `tests/Scripts.Tests/Bench/BenchTests.cs` under the rule above, a
   `Bench/` folder beside the others; `BenchPortTests.cs` holds the port's own. `Scripts.Tests` compiles every `.cs` in `bench/` but the entry file.
+- **Hardened after the port (mpaulosky/Application_Factory#196).** Gaps the Python had too, left out of the port's PR:
+  - **The run mode is tested.** `BenchCaseTests.cs` runs `Bench.Run` with a fake `claude` on `PATH`, which records its argv, its folder and the config it could
+    load, over fixture clones with a base and a head commit: the results file and its fields, claude's argv and folder, a timed-out case's and a missing clone's
+    error with the run going on to the next case, each case's worktree and temporary folder removed, `--only` and `--set`, and the message when `claude` isn't on `PATH`.
+  - **The action clones are bounded.** `CopyActions` runs each `git` and `tar` call through `Exec` with a time limit (600 s), with `GIT_TERMINAL_PROMPT=0` and an empty
+    `GIT_ASKPASS`, so a repo that wants credentials fails its case rather than waiting at a prompt. `Exec` takes the most bytes of stdout a call may give and stops it
+    there: 4 MiB of the head's workflow (four bytes for each character `Yaml.Load` takes; past it the head pins no action) and 128 MiB of an action's archive (past it
+    the case fails). A call past its time is the case's error. A clone goes to a folder of its own beside the cache and is moved into place whole, so one stopped
+    part way never reads as cached, and a run whose clone fails never removes the cache another run filled meanwhile.
+  - **A head's nested Claude Code config is removed.** Every `.claude` folder, `CLAUDE.md` and `CLAUDE.local.md` below the root of a case's tree, in any case, is
+    removed before `claude` runs, where they came from the head before. The root's stay the base's; `.git` is skipped, and a link is removed itself, never followed.
+  - **A call's leftover children end.** Each call starts in a session of its own (`ProcessStartInfo.StartDetached`, `setsid()`), so its process group holds what it
+    starts after the call has exited. A call past its time, or one that exits but leaves a child holding its pipes when its time is up, has its group killed, and so
+    does every call as it returns, so a child that let go of the pipes ends with it too, where the child ran on before (the Python waited for it instead). The
+    terminal's Ctrl-C no longer reaches a call in its own session, so the bench kills every live group on SIGINT, SIGTERM, SIGHUP and SIGQUIT before it ends as the
+    signal would end it.
 
 ## Update (mpaulosky/Application_Factory#158): the first AutoRollout library, the preflight, sign-in and lock
 

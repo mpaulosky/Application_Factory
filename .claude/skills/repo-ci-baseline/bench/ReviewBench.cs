@@ -13,11 +13,15 @@
 // installs. The results file records the CLI version, so a rerun on another version is told apart. It takes the case's root Claude Code
 // config (.claude/, .mcp.json, CLAUDE.md, CLAUDE.local.md) from the base, as the action does. It loads no settings at all
 // (--setting-sources "", standing in for the runner's empty user level), starts no MCP servers and runs git with hooks off, so neither a
-// head commit's nor the base's settings, hooks and servers run, nor your own. Nested CLAUDE.md files and .claude/skills in subdirectories
-// still come from the head, as the diff Claude reads does.
+// head commit's nor the base's settings, hooks and servers run, nor your own. Every .claude folder, CLAUDE.md and CLAUDE.local.md below the
+// root is removed before claude runs (mpaulosky/Application_Factory#196), so a head's nested instructions and skills can't steer its own review.
 //
 // The source of the actions the case head's review job pins is copied into the temporary directory's work/_actions, where the workflow's
-// prompt says the runner keeps it (clones are cached in ~/.cache/claude-review-bench). Claude reads only the case's worktree, the diff and
+// prompt says the runner keeps it (clones are cached in ~/.cache/claude-review-bench), by git and tar calls that each have a time limit, never
+// ask for credentials, and read at most 4 MiB of the head's workflow and 128 MiB of an action's archive. Each call the bench makes runs in a
+// session of its own, whose process group is killed when the call returns or runs past its time, and when the bench is stopped by SIGINT,
+// SIGTERM, SIGHUP or SIGQUIT. A child that started a session of its own leaves the group, and is reached only while the call is alive to
+// walk to it (Process.Kill's tree). Claude reads only the case's worktree, the diff and
 // that copy, as in CI. Still, only add a case whose commits you trust, and read a results file before committing it. The diff is split into
 // pieces by the workflow's own "Write the PR's diff" step, whose Python this runs in the case's worktree with python3 -I, with
 // GITHUB_WORKSPACE set so it finds that copy of the actions; the step also writes the context pieces, and the prompt gets the step's lists
@@ -35,6 +39,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -47,7 +52,10 @@ sealed class BenchExit(string message) : Exception(message);
 
 // What made one case fail, which never ends the run: a git, tar or diff step call that failed (the Python's CalledProcessError), or a
 // program that isn't there or a step's output that isn't read (its OSError).
-sealed class CaseError(string message) : Exception(message);
+class CaseError(string message) : Exception(message);
+
+// A call whose stdout ran past the bytes it may give (Bench.Exec's maxOutput).
+sealed class OutputPastLimit(string message) : CaseError(message);
 
 static class Bench
 {
@@ -260,21 +268,105 @@ static class Bench
 		return found;
 	}
 
-	// Copy the source of the actions the head's review job pins into actionsDir, as a runner lays it out.
-	static void CopyActions(string tree, string head, string actionsDir)
+	// Where CopyActions fetches the actions from (Remote/owner/repo.git) and caches them, and its bounds: the seconds each git or tar call may
+	// take, and the most bytes it reads of the head's workflow (four for each character Yaml.Load reads, so any text it takes fits) and of
+	// one action's archive.
+	public sealed record ActionSource(string Cache, string Remote, long Timeout = 600, long MaxWorkflow = 4L * Yaml.MaxText, long MaxArchive = 128L << 20)
 	{
-		var shown = Exec([.. Git, "-C", tree, "show", $"{head}:.github/workflows/claude-review.yml"]);
-		foreach (var (owner, repo, @ref) in PinnedActions(shown.Code == 0 ? shown.Text : ""))
+		public static ActionSource GitHub => new(Bench.Cache, "https://github.com");
+	}
+
+	// Copy the source of the actions the head's review job pins into actionsDir, as a runner lays it out. Git never asks for credentials (a
+	// repo that needs them fails its case rather than waiting at a prompt), each call is bounded by source's timeout, and a workflow past
+	// its bytes pins no action, as one past Yaml.Load's limits does. A call past its time or an archive past its bytes is the case's error.
+	public static void CopyActions(string tree, string head, string actionsDir, ActionSource source)
+	{
+		var env = Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>()
+				.ToDictionary(entry => (string)entry.Key, entry => (string?)entry.Value ?? "");
+		env["GIT_TERMINAL_PROMPT"] = "0";
+		// Empty, not unset: git then asks no askpass program, core.askPass's or SSH_ASKPASS's either.
+		env["GIT_ASKPASS"] = "";
+		Ran Run(IReadOnlyList<string> argv, byte[]? input = null, long? maxOutput = null) =>
+				Exec(argv, env: env, input: input, timeout: source.Timeout, maxOutput: maxOutput);
+		Ran Checked(IReadOnlyList<string> argv, byte[]? input = null, long? maxOutput = null) => Check(Run(argv, input, maxOutput), argv);
+		try
 		{
-			var cache = Path.Combine(Cache, owner, repo);
-			if (!Path.Exists(cache))
-				Check([.. Git, "clone", "-q", "--bare", "--filter=blob:none", $"https://github.com/{owner}/{repo}.git", cache]);
-			if (Exec([.. Git, "-C", cache, "cat-file", "-e", $"{@ref}^{{commit}}"]).Code != 0)
-				Check([.. Git, "-C", cache, "fetch", "-q", "origin", @ref]);
-			var dest = Path.Combine(actionsDir, owner, repo, @ref);
-			Directory.CreateDirectory(dest);
-			var archive = Check([.. Git, "-C", cache, "archive", @ref]).Stdout;
-			Check(Exec(["tar", "-x", "-C", dest], input: archive), ["tar", "-x", "-C", dest]);
+			var text = "";
+			try
+			{
+				var shown = Run([.. Git, "-C", tree, "show", $"{head}:.github/workflows/claude-review.yml"], maxOutput: source.MaxWorkflow);
+				text = shown.Code == 0 ? shown.Text : "";
+			}
+			catch (OutputPastLimit)
+			{
+			}
+			foreach (var (owner, repo, @ref) in PinnedActions(text))
+			{
+				var cache = Path.Combine(source.Cache, owner, repo);
+				if (!Path.Exists(cache))
+				{
+					// Cloned beside the cache under a name of this call's own and moved into place whole, so a clone stopped part way never
+					// reads as cached, and two runs filling the same cache never remove each other's: the one that moves second drops its own.
+					Directory.CreateDirectory(Path.GetDirectoryName(cache)!);
+					var fresh = $"{cache}.{Guid.NewGuid():N}.tmp";
+					try
+					{
+						Checked([.. Git, "clone", "-q", "--bare", "--filter=blob:none", $"{source.Remote}/{owner}/{repo}.git", fresh]);
+						try
+						{
+							Directory.Move(fresh, cache);
+						}
+						catch (IOException) when (Path.Exists(cache))
+						{
+						}
+					}
+					finally
+					{
+						if (Directory.Exists(fresh))
+							Directory.Delete(fresh, recursive: true);
+					}
+				}
+				if (Run([.. Git, "-C", cache, "cat-file", "-e", $"{@ref}^{{commit}}"]).Code != 0)
+					Checked([.. Git, "-C", cache, "fetch", "-q", "origin", @ref]);
+				var dest = Path.Combine(actionsDir, owner, repo, @ref);
+				Directory.CreateDirectory(dest);
+				var archive = Checked([.. Git, "-C", cache, "archive", @ref], maxOutput: source.MaxArchive).Stdout;
+				Checked(["tar", "-x", "-C", dest], input: archive);
+			}
+		}
+		catch (TimeoutException error)
+		{
+			throw new CaseError(error.Message);
+		}
+	}
+
+	// Remove each .claude, CLAUDE.md and CLAUDE.local.md below the tree's root, in any case (a case-insensitive file system opens claude.md as
+	// CLAUDE.md), so a head's nested instructions, skills and settings never reach its own review: Claude Code loads a subdirectory's when it
+	// reads a file there. The root's are the base's (UseBaseSettings) and stay, .git is skipped, and a link is removed itself, never followed.
+	// The root's .claude is matched exactly: on a case-sensitive file system a .Claude beside it is the head's, and is searched like any folder.
+	public static void RemoveNestedConfig(string tree)
+	{
+		string[] names = [".claude", "CLAUDE.md", "CLAUDE.local.md"];
+		Stack<DirectoryInfo> folders = new();
+		foreach (var entry in new DirectoryInfo(tree).EnumerateDirectories())
+		{
+			if (entry.LinkTarget is null && !entry.Name.Equals(".git", StringComparison.Ordinal) && !entry.Name.Equals(".claude", StringComparison.Ordinal))
+				folders.Push(entry);
+		}
+		while (folders.TryPop(out var folder))
+		{
+			foreach (var entry in folder.EnumerateFileSystemInfos())
+			{
+				if (names.Contains(entry.Name, StringComparer.OrdinalIgnoreCase))
+				{
+					if (entry is DirectoryInfo { LinkTarget: null } config)
+						config.Delete(recursive: true);
+					else
+						entry.Delete();
+				}
+				else if (entry is DirectoryInfo { LinkTarget: null } sub)
+					folders.Push(sub);
+			}
 		}
 	}
 
@@ -302,7 +394,7 @@ static class Bench
 
 	// One case's review, or an error outcome: a failed case never ends the run.
 	public static JsonObject RunCase(JsonNode @case, string prompt, string claudeArgs, (string? Effort, string? Model, string? Tools) overrides,
-			string root, long timeout, string? split)
+			string root, long timeout, string? split, ActionSource? actions = null)
 	{
 		var repo = Path.Combine(root, Py.Text(J.Req(@case, "repo")));
 		var (head, @base, pr) = (Py.Text(J.Req(@case, "head")), Py.Text(J.Req(@case, "base")), Py.Str(J.Req(@case, "pr")));
@@ -318,8 +410,9 @@ static class Bench
 			Check([.. Git, "-C", repo, "worktree", "add", "-q", "--detach", tree, head]);
 			added = true;
 			UseBaseSettings(tree, @base);
+			RemoveNestedConfig(tree);
 			Directory.CreateDirectory(Path.Combine(temp, "work", "repo", "repo"));
-			CopyActions(tree, head, Path.Combine(temp, "work", "_actions"));
+			CopyActions(tree, head, Path.Combine(temp, "work", "_actions"), actions ?? ActionSource.GitHub);
 			// The runner's plain git diff: no external diff tool or prefix settings from the global config, and any file encoding read
 			// without failing.
 			var diff = Check([.. Git, "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "-c", "core.quotePath=true", "-C", tree,
@@ -744,11 +837,13 @@ static class Bench
 	}
 
 	// Runs argv (its program found by Which) in cwd, with env as its whole environment when given, input on its stdin, and its output
-	// captured unless inherit; past timeout seconds it is killed with its children and TimeoutException thrown. One that exits within it
-	// but leaves a child holding its pipes throws TimeoutException once the time is up, and that child, no longer its child, runs on (as
-	// under the Python, where communicate() then waited for it). A program that isn't there, or can't be run, throws CaseError.
+	// captured unless inherit; past timeout seconds it is killed with its children and TimeoutException thrown. Each call starts in a session of
+	// its own, so its process group holds what it starts even after the call exits: one that exits within its time but leaves a child holding its
+	// pipes is waited for until the time is up, as Python's communicate(timeout=) waited, and then its group is killed and TimeoutException
+	// thrown. A stdout past maxOutput bytes kills the group and throws OutputPastLimit before more is read. A program that isn't there, or can't
+	// be run, throws CaseError.
 	public static Ran Exec(IReadOnlyList<string> argv, string? cwd = null, Dictionary<string, string>? env = null, byte[]? input = null, long? timeout = null,
-			bool inherit = false)
+			bool inherit = false, long? maxOutput = null)
 	{
 		var start = new ProcessStartInfo(Which(argv[0]) ?? throw new CaseError($"{argv[0]} isn't on PATH (only its absolute folders are searched)"))
 		{
@@ -757,6 +852,8 @@ static class Bench
 			RedirectStandardError = !inherit,
 			UseShellExecute = false,
 			StandardErrorEncoding = inherit ? null : Encoding.UTF8,
+			// setsid(): the call leads a process group of its own, whose id is its pid.
+			StartDetached = true,
 		};
 		if (cwd is not null)
 			start.WorkingDirectory = cwd;
@@ -768,6 +865,7 @@ static class Bench
 		}
 		foreach (var arg in argv.Skip(1))
 			start.ArgumentList.Add(arg);
+		Groups.Watch();
 		Process process;
 		try
 		{
@@ -779,46 +877,134 @@ static class Bench
 			throw new CaseError($"{argv[0]} couldn't be run: {error.Message}");
 		}
 		using var _ = process;
-		var write = Task.Run(() =>
+		var group = process.Id;
+		Groups.Live[group] = 0;
+		try
 		{
-			try
+			var write = Task.Run(() =>
 			{
-				if (input is not null)
-					process.StandardInput.BaseStream.Write(input);
-				process.StandardInput.Close();
-			}
-			catch (IOException)
+				try
+				{
+					if (input is not null)
+						process.StandardInput.BaseStream.Write(input);
+					process.StandardInput.Close();
+				}
+				catch (IOException)
+				{
+				}
+			});
+			var past = false;
+			var stdout = inherit ? Task.FromResult(Array.Empty<byte>()) : Task.Run(() =>
 			{
+				using var bytes = new MemoryStream();
+				var buffer = new byte[81920];
+				for (int read; (read = process.StandardOutput.BaseStream.Read(buffer)) > 0;)
+				{
+					if (bytes.Length + read > maxOutput)
+					{
+						past = true;
+						// The tree first, while the call still links its descendants (one in a session of its own is outside the group), then
+						// the group, for what had already outlived its parent.
+						try
+						{
+							process.Kill(entireProcessTree: true);
+						}
+						catch (InvalidOperationException)
+						{
+							// It had already ended.
+						}
+						Groups.Kill(group);
+						break;
+					}
+					bytes.Write(buffer, 0, read);
+				}
+				return bytes.ToArray();
+			});
+			var stderr = inherit ? Task.FromResult("") : process.StandardError.ReadToEndAsync();
+			var limit = Limit(timeout);
+			var clock = Stopwatch.StartNew();
+			if (!process.WaitForExit(limit))
+			{
+				// The tree, then the group, as past the output's bytes above.
+				try
+				{
+					process.Kill(entireProcessTree: true);
+				}
+				catch (InvalidOperationException)
+				{
+					// It ended just now.
+				}
+				Groups.Kill(group);
+				process.WaitForExit();
+				throw new TimeoutException(TimedOut(argv, timeout));
 			}
-		});
-		var stdout = inherit ? Task.FromResult(Array.Empty<byte>()) : Task.Run(() =>
-		{
-			using var bytes = new MemoryStream();
-			process.StandardOutput.BaseStream.CopyTo(bytes);
-			return bytes.ToArray();
-		});
-		var stderr = inherit ? Task.FromResult("") : process.StandardError.ReadToEndAsync();
-		var limit = Limit(timeout);
-		var clock = Stopwatch.StartNew();
-		if (!process.WaitForExit(limit))
-		{
-			process.Kill(entireProcessTree: true);
 			process.WaitForExit();
-			throw new TimeoutException();
+			// The pipes close when every process holding them has, so a child the call left running keeps them open past its exit: the time
+			// left bounds them too, as Python's communicate(timeout=) did.
+			if (limit == Timeout.InfiniteTimeSpan)
+				Task.WaitAll(write, stdout, stderr);
+			else
+			{
+				// Elapsed is read once: a second read could be later, and WaitAll throws for a span below -1 ms and waits forever at -1 ms.
+				var left = limit - clock.Elapsed;
+				if (!Task.WaitAll([write, stdout, stderr], left < TimeSpan.Zero ? TimeSpan.Zero : left))
+				{
+					// What the call left running, so it can't run on with the case's tree or its pipes.
+					Groups.Kill(group);
+					throw new TimeoutException(TimedOut(argv, timeout));
+				}
+			}
+			if (past)
+			{
+				// The rest of the group too: a child holding the pipe ends with the call.
+				Task.WaitAll([write, stderr], TimeSpan.FromSeconds(5));
+				throw new OutputPastLimit($"{Command(argv)} wrote more than {maxOutput} bytes, so it was stopped");
+			}
+			return new Ran(process.ExitCode, stdout.Result, stderr.Result);
 		}
-		process.WaitForExit();
-		// The pipes close when every process holding them has, so a child the call left running keeps them open past its exit: the time
-		// left bounds them too, as Python's communicate(timeout=) did.
-		if (limit == Timeout.InfiniteTimeSpan)
-			Task.WaitAll(write, stdout, stderr);
-		else
+		finally
 		{
-			// Elapsed is read once: a second read could be later, and WaitAll throws for a span below -1 ms and waits forever at -1 ms.
-			var left = limit - clock.Elapsed;
-			if (!Task.WaitAll([write, stdout, stderr], left < TimeSpan.Zero ? TimeSpan.Zero : left))
-				throw new TimeoutException();
+			// A child that let go of the pipes is still in the group, outside the terminal's and past the signal handlers once it leaves
+			// Live, so it ends with the call. A group whose processes have all ended is no error.
+			Groups.Kill(group);
+			Groups.Live.TryRemove(group, out var _);
 		}
-		return new Ran(process.ExitCode, stdout.Result, stderr.Result);
+	}
+
+	// TimeoutExpired's message, in words of its own.
+	static string TimedOut(IReadOnlyList<string> argv, long? timeout) => $"{Command(argv)} timed out after {timeout} seconds";
+
+	static string Command(IReadOnlyList<string> argv) => $"Command {Py.Repr(new JsonArray([.. argv.Select(a => (JsonNode?)a)]))}";
+
+	// The process groups of the calls running now, each led by its call. Each call has a session of its own, so the terminal's Ctrl-C reaches
+	// the bench alone: on SIGINT, SIGTERM, SIGHUP or SIGQUIT the bench kills every live group, then ends as the signal would end it.
+	static class Groups
+	{
+		public static readonly System.Collections.Concurrent.ConcurrentDictionary<int, byte> Live = [];
+		static List<PosixSignalRegistration>? registrations;
+
+		public static void Watch()
+		{
+			if (OperatingSystem.IsWindows())
+				return;
+			lock (Live)
+				registrations ??= [.. new[] { PosixSignal.SIGINT, PosixSignal.SIGTERM, PosixSignal.SIGHUP, PosixSignal.SIGQUIT }
+						.Select(signal => PosixSignalRegistration.Create(signal, _ =>
+						{
+							foreach (var group in Live.Keys)
+								Kill(group);
+						}))];
+		}
+
+		// SIGKILL to every process in the group; one that has already ended is no error.
+		public static void Kill(int group)
+		{
+			if (!OperatingSystem.IsWindows())
+				_ = kill(-group, 9);
+		}
+
+		[DllImport("libc", SetLastError = true)]
+		static extern int kill(int pid, int signal);
 	}
 
 	// A call's timeout as WaitForExit takes it: none without one, and otherwise its seconds between 0 and the most whole seconds an int of
@@ -830,5 +1016,5 @@ static class Bench
 	public static Ran Check(IReadOnlyList<string> argv) => Check(Exec(argv), argv);
 
 	static Ran Check(Ran ran, IReadOnlyList<string> argv) => ran.Code == 0 ? ran
-			: throw new CaseError($"Command {Py.Repr(new JsonArray([.. argv.Select(a => (JsonNode?)a)]))} returned non-zero exit status {ran.Code}. {ran.Stderr}".Trim());
+			: throw new CaseError($"{Command(argv)} returned non-zero exit status {ran.Code}. {ran.Stderr}".Trim());
 }
