@@ -901,7 +901,8 @@ static class Bench
 					if (bytes.Length + read > maxOutput)
 					{
 						past = true;
-						Groups.Kill(group);
+						// The tree first, while the call still links its descendants (one in a session of its own is outside the group), then
+						// the group, for what had already outlived its parent.
 						try
 						{
 							process.Kill(entireProcessTree: true);
@@ -910,6 +911,7 @@ static class Bench
 						{
 							// It had already ended.
 						}
+						Groups.Kill(group);
 						break;
 					}
 					bytes.Write(buffer, 0, read);
@@ -921,8 +923,16 @@ static class Bench
 			var clock = Stopwatch.StartNew();
 			if (!process.WaitForExit(limit))
 			{
+				// The tree, then the group, as past the output's bytes above.
+				try
+				{
+					process.Kill(entireProcessTree: true);
+				}
+				catch (InvalidOperationException)
+				{
+					// It ended just now.
+				}
 				Groups.Kill(group);
-				process.Kill(entireProcessTree: true);
 				process.WaitForExit();
 				throw new TimeoutException(TimedOut(argv, timeout));
 			}

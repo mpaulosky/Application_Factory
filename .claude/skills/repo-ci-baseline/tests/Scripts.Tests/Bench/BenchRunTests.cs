@@ -136,6 +136,8 @@ public partial class BenchTests
 	[Theory]
 	[InlineData("sleep 30 & echo $! > \"$0\"; exit 0")]
 	[InlineData("sleep 30 & echo $! > \"$0\"; wait")]
+	// A descendant in a session of its own is outside the group: the tree reaches it while its shell still links it.
+	[InlineData("setsid sleep 30 & echo $! > \"$0\"; wait")]
 	public void A_child_the_call_leaves_running_is_killed_with_its_group_when_the_time_is_up(string script)
 	{
 		var pid = Path.Combine(temp, "pid");
