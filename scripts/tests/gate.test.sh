@@ -13,7 +13,7 @@
 # It also checks GATE_PART (ADR 0012) and TEST_SH_SHARD (ADR 0013, only the template part runs a shard; test.sh's steps each sit in one shard; the workflow's matrix lists them all): each part runs alone, a bad value, or --quick or --sync with a part, is refused, the Sandcastle check runs in a full gate only when the branch changed
 # a file it reads (and is remembered per clean tree), and the CI workflow has one job per part and a Template tests job that needs them all.
 # It also checks the C# step (ADR 0017): with no .cs file it passes without an SDK; otherwise it needs dotnet, format-checks every .cs in one folder-mode run, builds only the
-# entry files (no #:include'd file, no project's file) from their own folders with warnings as errors but CA2266 and NU1900, from scratch into a gate-cs.* folder of its own with
+# entry files (no #:include'd file, no project's file) from their own folders with warnings as errors but CA2266, NU1900 and NU1905, from scratch into a gate-cs.* folder of its own with
 # no build server, and tells a finding from a failed dotnet; that the build folder is gone after a pass, a failing build, a TERM mid-build (the build ended and waited for
 # first, and one that ignores the TERM killed), a TERM between the build's fork and cs_pid=$! (sent there by a DEBUG trap BASH_ENV sets) and with a relative TMPDIR, and a mktemp that can't make it fails the step; that the gate and the CI workflow run dotnet with
 # telemetry off, no first-run setup and no logo; and that a pass is remembered per .NET SDK as well as per tree.
@@ -603,7 +603,7 @@ check "the key names the SDK release and global.json's version, a byte outside l
 check "an SDK and a global.json that can't be read are each none in the key" \
   "$([[ "$(cd "$work" && PATH="$work/noruff" sdk_key)" == sdk_none_global_none ]] && echo 0 || echo 1)"
 
-# The C# step (ADR 0017): every C# file passes dotnet format whitespace, and every script entry file builds with warnings as errors but CA2266 and NU1900.
+# The C# step (ADR 0017): every C# file passes dotnet format whitespace, and every script entry file builds with warnings as errors but CA2266, NU1900 and NU1905.
 # With no .cs file, as in the Factory before its first port, the step checks nothing and needs no SDK.
 repoC="$(new_repo csharp)"
 mkdir -p "$work/nodotnet" "$work/stubdotnet"
@@ -641,8 +641,8 @@ run_csharp "$work/stubdotnet" --quick
 want_format="$repoC|format whitespace . --folder --verify-no-changes --include $(cd "$repoC" && git ls-files --others --exclude-standard -- '*.cs' | sort | sed 's|^|./|' | tr '\n' ' ' | sed 's/ $//')"
 check "every C# file is format-checked in one folder-mode run, each name after ./" \
   "$([[ $status == 0 ]] && [[ "$(grep '|format ' "$work/dotnet-log" | tr ' ' '\n' | sort | tr '\n' ' ')" == "$(printf '%s' "$want_format" | tr ' ' '\n' | sort | tr '\n' ' ')" ]] && echo 0 || echo 1)"
-want_builds="$(printf '%s|build %s --no-incremental --disable-build-servers --artifacts-path <out> -p:TreatWarningsAsErrors=true -p:WarningsNotAsErrors=CA2266%%3BNU1900\n' "$repoC/-x" "$repoC/-x/-dash.cs" "$repoC" "$repoC/root.cs" "$repoC/scripts" "$repoC/scripts/tool.cs" | sort)"
-check "only the entry files are built, each from its own folder, from scratch into the run's own folder with no build server, with warnings as errors but CA2266 and NU1900: no included file (a CRLF and a ./ in the #:include too) and no project's file" \
+want_builds="$(printf '%s|build %s --no-incremental --disable-build-servers --artifacts-path <out> -p:TreatWarningsAsErrors=true -p:WarningsNotAsErrors=CA2266%%3BNU1900%%3BNU1905\n' "$repoC/-x" "$repoC/-x/-dash.cs" "$repoC" "$repoC/root.cs" "$repoC/scripts" "$repoC/scripts/tool.cs" | sort)"
+check "only the entry files are built, each from its own folder, from scratch into the run's own folder with no build server, with warnings as errors but CA2266, NU1900 and NU1905: no included file (a CRLF and a ./ in the #:include too) and no project's file" \
   "$([[ "$(grep '|build ' "$work/dotnet-log" | sed 's|--artifacts-path [^ ]* |--artifacts-path <out> |' | sort)" == "$want_builds" ]] && grep -qx '6 C# file(s) format-checked, 3 script(s) built.' "$repoC/out" && echo 0 || echo 1)"
 STUB_FORMAT_EXIT=2 run_csharp "$work/stubdotnet" --quick
 check "a format finding (exit 2) fails the step, saying how to fix it" "$([[ $status == 1 ]] && grep -q '❌ dotnet format: run dotnet format whitespace' "$repoC/out" && echo 0 || echo 1)"
@@ -801,8 +801,8 @@ check "a second TERM while the gate ends a build that ignores the first still ki
   "$([[ -n "$twice_build" && $twice_alive == 0 ]] && ((twice_took >= 4 && twice_took <= 10)) && [[ -z "$(cs_tmp_left)" ]] && echo 0 || echo 1)"
 check "the gate runs dotnet with telemetry off, no first-run setup and no logo, over a caller's 0s" \
   "$([[ -s "$work/slowdotnet/env" ]] && ! grep -vqx 'optout=1 first=1 nologo=1' "$work/slowdotnet/env" && echo 0 || echo 1)"
-check "the build's warnings as errors leave CA2266 and NU1900 (a vulnerability feed that can't be reached) warnings, and nothing else" \
-  "$(grep -qx -- '-p:TreatWarningsAsErrors=true' "$work/slowdotnet/args" && grep -qx -- '-p:WarningsNotAsErrors=CA2266%3BNU1900' "$work/slowdotnet/args" \
+check "the build's warnings as errors leave CA2266, NU1900 and NU1905 (a vulnerability feed that can't be reached) warnings, and nothing else" \
+  "$(grep -qx -- '-p:TreatWarningsAsErrors=true' "$work/slowdotnet/args" && grep -qx -- '-p:WarningsNotAsErrors=CA2266%3BNU1900%3BNU1905' "$work/slowdotnet/args" \
     && [[ "$(grep -c -- '^-p:' "$work/slowdotnet/args")" == 2 ]] && echo 0 || echo 1)"
 # A relative TMPDIR names a folder from where the gate runs, not from each script's folder: the build lands in the gate's own gate-cs.* folder there, and
 # nothing is left behind, in the tree or in TMPDIR.

@@ -323,6 +323,21 @@ public partial class BenchTests
 	}
 
 	[Theory]
+	[InlineData(16, true)]
+	[InlineData(17, false)]
+	[InlineData(18, false)]
+	public void An_alias_as_a_key_is_charged_its_text(long scalarText, bool refused)
+	{
+		// a's value 5 characters, then two mappings each keyed by a copy of it (5) with a value of 1: 17.
+		const string text = "a: &a abcde\nb: [{*a : 1}, {*a : 2}]\n";
+
+		if (refused)
+			Assert.Throws<YamlException>(() => Yaml.Load(text, Yaml.MaxDepth, Yaml.MaxNodes, scalarText));
+		else
+			Assert.Equal("""{"a":"abcde","b":[{"abcde":1},{"abcde":2}]}""", Yaml.Load(text, Yaml.MaxDepth, Yaml.MaxNodes, scalarText)!.ToJsonString());
+	}
+
+	[Theory]
 	[InlineData(4, true)]
 	[InlineData(5, false)]
 	[InlineData(6, false)]

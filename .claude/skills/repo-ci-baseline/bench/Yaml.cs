@@ -108,8 +108,8 @@ static class Yaml
 							anchors[closed.Anchor] = done;
 						break;
 					case Scalar scalar when open.TryPeek(out var map) && map.Node is JsonObject && map.Key is null:
-						// A key: its text, not a node of the tree, so it is charged nothing here (its value is). An alias to it as a value
-						// is charged what that scalar would be.
+						// A key: its text, not a node of the tree, so it is charged nothing here: its value is, and written keys' text is bounded by
+						// MaxText. An alias to it is charged its text, as a key and as a value (and a node as a value).
 						if (!scalar.Anchor.IsEmpty)
 							anchors[scalar.Anchor.Value] = new Anchored(Scalar(scalar), scalar.Value, 1, scalar.Value.Length, 0);
 						SetKey(map, scalar.Value, parsed);
@@ -125,7 +125,10 @@ static class Yaml
 							throw new YamlException(alias.Start, alias.End, $"an alias to an anchor not yet complete: *{alias.Value.Value}");
 						if (open.TryPeek(out var keyed) && keyed.Node is JsonObject && keyed.Key is null)
 						{
-							SetKey(keyed, named.Text ?? throw new YamlException(alias.Start, alias.End, "a mapping key that isn't a scalar"), parsed);
+							var key = named.Text ?? throw new YamlException(alias.Start, alias.End, "a mapping key that isn't a scalar");
+							// Charged as the text it repeats, which no limit on the written text bounds.
+							Charge(0, key.Length, parsed);
+							SetKey(keyed, key, parsed);
 							continue;
 						}
 						// Checked and charged before it is copied: a node aliased past the depth or the budget is refused before it grows.

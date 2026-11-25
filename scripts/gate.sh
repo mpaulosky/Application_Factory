@@ -359,9 +359,10 @@ run_static() {
   echo "${#py_all[@]} Python file(s) checked."
 
   # Every tracked and untracked C# file is formatted as dotnet format whitespace formats it, under .editorconfig, and every script entry file builds with warnings as
-  # errors but CA2266 and NU1900, which stay warnings (ADR 0017, Updates: what lints C#, CA2266, and mpaulosky/Application_Factory#145). NU1900 is a #:package
-  # restore that couldn't fetch the vulnerability data (a feed outage), which says nothing of the package; NuGetAudit's NU1901 to NU1904 stay errors. %3B is
-  # MSBuild's escaped ';', so the property holds both. The edit-time lint doesn't check C#: a dotnet format run takes 1 to 2 s.
+  # errors but CA2266, NU1900 and NU1905, which stay warnings (ADR 0017, Updates: what lints C#, CA2266, mpaulosky/Application_Factory#145 and #161). NU1900 is a
+  # #:package restore that couldn't fetch the vulnerability data (a feed outage), and NU1905 the same outage when the script names its audit source (the bench's
+  # NuGet.config names nuget.org), which say nothing of the package; NuGetAudit's NU1901 to NU1904 stay errors. %3B is MSBuild's escaped ';', so the property
+  # holds all three. The edit-time lint doesn't check C#: a dotnet format run takes 1 to 2 s.
   # The format check runs in folder mode, which reads no project and runs no MSBuild. An entry file is a .cs in no project's folder (no *.csproj in its folder or any
   # folder above it) that no .cs in its folder pulls in with #:include; an included file can't hold top-level statements, so it builds only as part of its entry file.
   # A project's .cs files are built by the test that runs the project (test.sh builds tests/Scripts.Tests). Each entry file is built from its own folder, so the
@@ -432,14 +433,14 @@ run_static() {
         # The build runs in the background with exec, so its pid is dotnet's own and the EXIT trap can end it.
         cs_before="${!:-}" cs_starting=1
         (cd -- "$dir" && TMPDIR="$cs_tmp" exec dotnet build "$ROOT/$f" --no-incremental --disable-build-servers --artifacts-path "$cs_out" \
-          -p:TreatWarningsAsErrors=true -p:WarningsNotAsErrors=CA2266%3BNU1900) &
+          -p:TreatWarningsAsErrors=true -p:WarningsNotAsErrors=CA2266%3BNU1900%3BNU1905) &
         cs_pid=$!
         cs_starting=""
         build_rc=0
         wait "$cs_pid" || build_rc=$?
         cs_pid=""
         if ((build_rc != 0)); then
-          echo -e "${RED}❌ dotnet build $f: fix each warning or error shown above (CA2266 and NU1900 alone are allowed; in the Template's file for a copy, then scripts/gate.sh --sync).${RESET}" >&2
+          echo -e "${RED}❌ dotnet build $f: fix each warning or error shown above (CA2266, NU1900 and NU1905 alone are allowed; in the Template's file for a copy, then scripts/gate.sh --sync).${RESET}" >&2
           exit 1
         fi
       done

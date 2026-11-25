@@ -50,7 +50,7 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   that lints each Markdown, YAML, shell or Python file Claude writes; the Template carries the script but not the settings file.
 - `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too; its header lists the steps (its test and the review's three tests, the copies' drift check, the bare-`#N` check,
   the Git-status check, lint, shellcheck of the changed shell files, shfmt of every shell file, ruff of every Python file, `dotnet format whitespace` of every C# file and a build
-  of every C# script with warnings as errors but CA2266 and NU1900 (ADR 0017), the local review check, then `test.sh`, which it skips for a tree and .NET SDK that already passed it, then
+  of every C# script with warnings as errors but CA2266, NU1900 and NU1905 (ADR 0017), the local review check, then `test.sh`, which it skips for a tree and .NET SDK that already passed it, then
   the Sandcastle check when the branch changed a file it reads).
   `GATE_PART=<part>` runs one part (CI's jobs; the pre-push hook drops it), and `TEST_SH_SHARD` one shard of `test.sh` in the `template` part only.
   [ADR 0006](docs/adr/0006-the-factory-carries-the-git-hooks-and-a-gate.md), [ADR

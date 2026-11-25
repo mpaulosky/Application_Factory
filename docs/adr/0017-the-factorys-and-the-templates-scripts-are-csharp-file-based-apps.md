@@ -445,7 +445,10 @@ A Factory-only port, as the ones above are, so `bench/claude-review-bench.py` an
   bump's PR moves the bench's by hand (the version in the entry file, then `dotnet build bench/claude-review-bench.cs -p:RestoreLockedMode=false` rewrites its lock file).
 - **Offline.** A `#:package` needs nuget.org on its first restore, which a cold start offline can't do. The bench needs the network anyway (it fetches the actions a case
   pins, and runs Claude), but the gate builds every script, so its first build of the bench on a machine needs nuget.org once; after that the package comes from the
-  NuGet cache. CI has the network.
+  NuGet cache. CI has the network. With the package cached but nuget.org unreachable, the restore can't fetch the vulnerability data (NU1900), and since
+  `bench/NuGet.config` names nuget.org as its audit source, that source gave none (NU1905): the gate builds every script with both as warnings, as
+  `Scripts.Tests.csproj` already allows them, so an outage doesn't fail the gate. `test.sh` builds a copy of the bench, with the gate's properties, whose feed
+  can't be reached.
 - **The heredoc stays Python.** The bench runs the workflow's "Write the PR's diff" heredoc with `python3 -I`, as the runner does, until the heredocs in `claude-review.yml`
   are C# (Still open, above).
 - **Its output is Python's, byte for byte.** `--rescore` prints and writes back what the Python did: `repr()` and `str()` of a value, `json.dump(indent=2)` with every

@@ -888,6 +888,24 @@ if in_shard scripts; then
     || fail "the bench must restore from nuget.org alone, whatever a NuGet.config above says; it sees: ${bench_sources//$'\n'/ | }"
   audit="$(audit_sources_nuget_only "$skill_dir/bench/NuGet.config")" \
     || fail "bench/NuGet.config must clear its auditSources and add nuget.org alone (found: ${audit:-none})"
+  # A feed that can't be reached (NU1900, and NU1905 since its audit source, nuget.org alone, gave no data) leaves the bench building as the gate builds it,
+  # with scripts/gate.sh's properties, once the package is in the cache (the restore of tests/Scripts.Tests below and the gate's build put it there).
+  bench_offline="$md_tmp/bench-offline"
+  mkdir -p "$bench_offline"
+  if ! cp "$skill_dir/../../../global.json" "$bench_offline/" || ! cp -R "$skill_dir/bench" "$skill_dir/github" "$bench_offline/"; then
+    fail "can't copy bench/ and github/ under $bench_offline"
+  fi
+  sed -i.bak 's#https://api.nuget.org/v3/index.json#https://nuget.invalid/v3/index.json#g' "$bench_offline/bench/NuGet.config"
+  ! cmp -s "$bench_offline/bench/NuGet.config" "$bench_offline/bench/NuGet.config.bak" \
+    || fail "the bench's offline check couldn't point its copy at an unreachable feed"
+  rm -f "$bench_offline/bench/NuGet.config.bak"
+  bench_rc=0
+  (cd "$bench_offline/bench" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 \
+    dotnet build claude-review-bench.cs --no-incremental --disable-build-servers --artifacts-path "$bench_offline/out" \
+    -p:TreatWarningsAsErrors=true -p:WarningsNotAsErrors=CA2266%3BNU1900%3BNU1905) > "$bench_offline/build.log" 2>&1 || bench_rc=$?
+  if ((bench_rc != 0)) || ! grep -q 'warning NU1900' "$bench_offline/build.log" || ! grep -q 'warning NU1905' "$bench_offline/build.log"; then
+    fail "the bench must build as the gate builds it, with NU1900 and NU1905 warnings, when its feed can't be reached (exit $bench_rc): $(grep -m 3 -E 'error|NU1' "$bench_offline/build.log" | tr '\n' ' ')"
+  fi
 
   step "C# script tests (tests/Scripts.Tests, xUnit v3)"
   # The white-box tests of the C# scripts (ADR 0017), on Microsoft Testing Platform (the Factory's global.json). The build output and results go to md_tmp,
