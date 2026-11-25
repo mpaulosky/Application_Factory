@@ -1,6 +1,76 @@
-// The --auto round (auto_rollout.py's gh_pr to run, ADR 0016): reapply.sh on each repo with a headless review each time its gate asks for
-// one (Drive), TicketManager's re-Apply PR landed before the rest start and the rest's together (Round), after the preflight and under the
-// lock (Run). How a child runs is AutoRolloutGroups.cs's, and the review session AutoRolloutReview.cs's.
+// rollout.sh --auto: a re-Apply round driven to the end with no person between the steps (ADR 0016).
+//
+//     rollout.sh --auto --brings <prs> [--root dir] [--dry-run]
+//
+// 1. It checks what would stop the round partway through: a tool missing from PATH, an shfmt the gate's gh check refuses, neither ruff 0.17 nor uv
+//    for the gate's Python lint, a claude that doesn't run or isn't signed in (as it is with no settings file; a cloud's sign-in isn't asked), a
+//    system other than Linux, a sandbox bubblewrap can't make, gh signed out, and the .NET SDK the Template's global.json names (an Owned file, so
+//    Apply writes it into every re-Apply worktree and the gate builds with it; the Factory's copy is the SDK land.sh's C# runs on), a sign-in secret
+//    in the environment the review session would inherit, and an endpoint, cloud or proxy variable holding a URL with a sign-in, which the session
+//    would run without. One problem stops the round before anything runs. A second --auto run while the lock is held stops too, since both would
+//    work the same worktrees and review ledgers; every child the round starts holds the lock as well, so one a SIGKILL of rollout.sh leaves running
+//    keeps it, and its process group is killed when it exits, with no build server left (NoBuildServers), so nothing it leaves keeps the lock after
+//    the round. The lock keeps --auto runs apart only: while a round runs, don't run reapply.sh or /pre-push-review by hand in a re-Apply worktree.
+// 2. reapply.sh on each repo, TicketManager first. When the gate asks for a review (reapply.sh exits 3), it runs /pre-push-review headless: `claude
+//    -p` started in the repo's re-Apply worktree, with the skill's text and its pre-push-reviewer agent from the Template, so the skill runs that
+//    worktree's scripts/review.sh and ledger. Then reapply.sh again, with at most MaxReviews sessions per repo, each one at most
+//    ReviewTimeoutMinutes long.
+// 3. It lands TicketManager's re-Apply PR with land.sh before it starts the rest (at once when reapply.sh finds TicketManager already matching the
+//    Template, with nothing to push and no PR), and the rest's PRs together once each has been reapplied.
+//
+// The session runs unattended, reading text people without write access may have written, so it reviews only, and runs in Claude Code's sandbox
+// (SessionSettings; ADR 0016). It runs one review-only round and stages what it finds in a run folder of its own, open, or dismissed when it isn't a
+// security finding; once it ends, the round records that with the worktree's scripts/review.sh record (RecordReview), so the session writes no
+// ledger or .security entry itself. It edits, fixes and commits nothing, and runs no gate, so nothing it wrote runs later as the person. Its Bash
+// reads none of the person's credentials (CredentialPaths, ~/.claude among them, and where CredentialVars move them), and of their data only the
+// worktree, the clone's git folder, .security and its own folder, which is in SessionDir, not /tmp: every entry of / but those, the system's own
+// folders (SystemReads: of /run only NixOS's links) and node's and git's own files (ToolReads) is denied (ReadDenials), as listed when the session
+// starts, so an entry made after that is readable, and the round names any it finds once the session ends (AfterSession); a clone whose git folder
+// holds a sign-in secret isn't reviewed (ConfigSecrets). Linux only: the preflight refuses another system. It writes only a temporary folder of its
+// own (SessionWrites: never the worktree, its git folder, the ledgers or .security), reaches no host (SandboxDomains is empty), and can't leave the
+// sandbox; the session refuses to start without the sandbox (bubblewrap and socat, which the preflight checks for). Its file tools, which run
+// outside the sandbox, may read only the worktree, the .security record and that folder, and edit only that folder (dontAsk: anything not allowed is
+// refused). It loads no settings file (neither the repository's nor the person's), no MCP server and only SessionBuiltins, gets its settings from a
+// 0600 file beside its log, which it can neither read nor write (removed after it, and one a killed run left by the next: SweepSettings; never on
+// its command line, which any local user can read in /proc/<pid>/cmdline), and the skill and its reviewer agent from the Template, so no hook,
+// permission rule or plugin but these applies. Its environment has no sign-in secret (gh points at an empty config; names that look like secrets are
+// dropped, and so is any value holding a URL with a sign-in (HoldsSignIn: a password, or any user over http(s) or ftp(s), which may be a token, and
+// a proxy's written with no scheme), and of Claude Code's own only ClaudeKept is kept, while the preflight refuses a round with a Claude Code or
+// cloud sign-in secret set, since the session would inherit it, or with its endpoint, cloud or proxy variable holding a URL with a sign-in (a
+// proxy's with no scheme too: HoldsSignIn), which it would run without) and git's push is sent nowhere: layers behind the sandbox. After the session
+// the round checks what it still could do: a session after which the worktree's .git link changed, the remote branch moved (or can't be read), the
+// clone's git config or hooks changed (GitFilesState), the worktree's HEAD, branch or status changed, the Template changed, an Owned file is no
+// longer the Template's, a file of the ledgers or of .security was added, removed or changed, any path of the worktree changed in content, mode or
+// link target (TreeState: node_modules too, which git status doesn't show; read again just before the record), the session's group outlived its
+// kill, or it staged a finding fixed or accepted, or a security one dismissed (only the person decides those), stops the round for the person, and
+// nothing is recorded. A file it didn't read (a symlink, a FIFO) is compared by what lstat says of it. A process that left the session's group
+// (setsid) is past what these checks cover, as is a filesystem a sandbox that didn't hold let the session reach outside the worktree. It runs in a
+// process group of its own, killed whole however it ends (it exits, or runs past its time); an interrupt, a SIGTERM or a SIGHUP while it runs is
+// held until the group is gone, then passed on, and a SIGKILL of rollout.sh can't be caught, and leaves the session running (holding the lock until
+// it ends). reapply.sh and land.sh run in groups of their own too, held the same way, which a SIGTERM, SIGHUP or interrupt of the round kills; one
+// whose group is still there after the kill stops the round (GroupLeft). The round's own scripts/review.sh prepare and record run in groups of their
+// own as well (RunBounded), for at most RecordTimeoutSeconds each; an interrupt stops prepare, and waits for record to end, and signals are held
+// from the start of the session until what it staged is recorded or kept; after a group record left, the interrupt says to check scripts/review.sh
+// report before recording again. That is kept beside the log (StagedCopy) with the HEAD it reviewed: a record that failed, a group record left, or
+// an interrupt prints the command that records it, at that HEAD only. A broken rule (HEAD moved, a changed file) keeps nothing, since the findings
+// vouch for code that is no longer there. Its log is kept, 0600, in a 0700 folder of the user's own, ~/.cache/repo-ci-baseline/logs: it can hold the
+// session's report of security findings.
+//
+// A PR is the repo's own (never a fork's of the same branch name), and when the worktree's branch has commits main lacks, it is the one at the
+// worktree's head: the name is the same every round, so the newest PR by name may be the last round's. An OPEN PR at another head is never this
+// round's either, and with nothing ahead a CLOSED one at another head is the last round's: nothing to land. A read that doesn't show the PR at the
+// worktree's head is tried again LookupTries times. Once land.sh has run, the PR is read by its number, since land.sh may update its branch.
+//
+// It stops for a person only where one must decide: review findings that wait for a person (reapply.sh exits 4), a PR that doesn't land, a reapply
+// or review session that fails, a PR it can't read. TicketManager stopping holds the rest; one of the rest stopping is reported and the round goes
+// on. Each stop prints the command that decides it, and the round ends with the command that resumes it: rollout.sh --auto again, which picks up
+// where it stopped (a repo already reapplied finds nothing new to push, and its open PR is landed). An open Advisory finding doesn't stop it: once a
+// review is recorded, the round prints the ones it left open (scripts/review.sh advisory) before the push, files no issue, and the person files the
+// follow-up.
+//
+// This file holds the round itself (auto_rollout.py's gh_pr to run): Drive, Round and Run. How a child runs is AutoRolloutGroups.cs's, the review
+// session AutoRolloutReview.cs's, what it may read and run AutoRolloutSandbox.cs's, what it may not change AutoRolloutGuard.cs's, how its findings
+// are recorded AutoRolloutRecord.cs's, and the preflight AutoRolloutPreflight.cs's.
 using System.Text;
 
 // How one repo's reapply ended: "ok" (pushed, or nothing new), "person" (a decision waits for a person) or "failed", with what to do next.
