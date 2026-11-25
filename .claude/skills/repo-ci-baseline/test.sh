@@ -154,11 +154,13 @@ scripts_tests_run() {
 }
 # Copies the skill into folder argument 1, as <argument 1>/.claude/skills/repo-ci-baseline with the Factory's CLAUDE.md at <argument 1>, for a check on a
 # copy of the C# scripts' test project, and prints the copy's project folder: the project compiles the scripts in the skill's github/ and its tests read
-# the skill's files, and the Factory's checkout three folders above the skill (AutoRollout.Factory), so a copy builds and passes only in that layout.
+# the skill's files, and the Factory's checkout three folders above the skill (AutoRollout.Factory: its CLAUDE.md, and ADR 0016 in its docs/adr/), so
+# a copy builds and passes only in that layout.
 # What a build wrote into the project's folder (bin/, obj/, TestResults/) is left out.
 scripts_tests_copy() {
   local copy="$1/.claude/skills/repo-ci-baseline"
-  mkdir -p "$copy" && cp -R "$skill_dir/." "$copy" && cp "$skill_dir/../../../CLAUDE.md" "$1/" || return 1
+  mkdir -p "$copy" "$1/docs/adr" && cp -R "$skill_dir/." "$copy" && cp "$skill_dir/../../../CLAUDE.md" "$1/" \
+    && cp "$skill_dir"/../../../docs/adr/0016-*.md "$1/docs/adr/" || return 1
   rm -rf "$copy/tests/Scripts.Tests/bin" "$copy/tests/Scripts.Tests/obj" "$copy/tests/Scripts.Tests/TestResults"
   printf '%s\n' "$copy/tests/Scripts.Tests"
 }
