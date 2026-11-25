@@ -173,7 +173,7 @@ public class PreflightTests : IDisposable
 		var all = string.Join("\n", problems);
 		Assert.True(!Env(environ).Values.Any(value => value.Contains('@') && all.Contains(value)), "never the value");
 		var env = AutoRollout.SessionEnv(WithPath(environ), tmp);
-		Assert.Empty(refused.Where(env.ContainsKey));
+		Assert.DoesNotContain(refused, env.ContainsKey);
 		// A value with no scheme is a sign-in only in a proxy variable: MIRROR=u:p@mirror:1 is no URL, and is kept.
 		Assert.All(Env(environ).Where(pair => !refused.Contains(pair.Key) && !pair.Value.Contains("://", StringComparison.Ordinal)),
 				pair => Assert.True(env.ContainsKey(pair.Key), pair.Key));

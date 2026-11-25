@@ -132,15 +132,18 @@ static class Signals
 		});
 	}
 
+	// The handler runs with Gate held, so installing or removing a hold waits for a signal being dispatched: one can't be handed to the
+	// round's handler (which ends the process) after a hold was installed and a child started, nor to a hold's after it was removed and
+	// its Got read. Neither handler takes Gate on another thread (Lock is reentrant on this one), so holding it can't deadlock.
 	static void OnSignal(int signum, PosixSignalContext context)
 	{
-		Action<int>? handler;
 		lock (Gate)
-			handler = Handlers.TryGetValue(signum, out var stack) && stack.Count > 0 ? stack[^1] : null;
-		if (handler is null)
-			return;
-		context.Cancel = true;
-		handler(signum);
+		{
+			if (!Handlers.TryGetValue(signum, out var stack) || stack.Count == 0)
+				return;
+			context.Cancel = true;
+			stack[^1](signum);
+		}
 	}
 
 	sealed class Release(Action release) : IDisposable
