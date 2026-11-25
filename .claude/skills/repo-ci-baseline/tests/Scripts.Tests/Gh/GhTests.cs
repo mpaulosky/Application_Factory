@@ -135,7 +135,6 @@ public class GhTests
 		new[] { "--interval", "-.5" },
 		new[] { "--interval", "-0" },
 		new[] { "--interval", "-." },
-		new[] { "--interval", "-5x" },
 		new[] { "--interval", "-\u0665" },
 		new[] { "-\u0665" },
 		// float() and \d read any Unicode decimal digit, an astral one (a surrogate pair here) too.
@@ -181,6 +180,8 @@ public class GhTests
 	[InlineData(new[] { "-5x" }, 0, "[[\"-5x\"],false,false,false,\"60\",\"180\",\"15\"]")]
 	[InlineData(new[] { "-1e3", "o/app" }, 0, "[[\"-1e3\",\"o/app\"],false,false,false,\"60\",\"180\",\"15\"]")]
 	[InlineData(new[] { "-x5" }, 2, "")]
+	// A value refused either way: 3.14 reads -5x as a value float() refuses, 3.12 as an option, so --interval has none.
+	[InlineData(new[] { "--interval", "-5x" }, 2, "")]
 	public void A_negative_number_with_more_after_it_is_read_as_python_314_reads_it(string[] args, int wantCode, string wantParsed)
 	{
 		var (code, parsed, _) = Parse(args);
