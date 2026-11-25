@@ -505,5 +505,6 @@ F3c, the first library under the rule above. `auto_rollout.py`'s `run_text` to `
   parameters, and `RecordReview` takes its bounded runner as one. Their two pytest tests that run a real process group move to xUnit with the cut-over. The other 68
   tests of these functions are in `tests/Scripts.Tests/AutoRollout/`, under the naming rule.
 - **What it reads as Python reads it.** A staged findings file is strict UTF-8 JSON, nested at most 1,000 deep. An object's repeated key keeps its first place and its last
-  value, as a `dict` does. Python's `NaN` and `Infinity` literals, which `json.loads()` takes, are refused, so a file holding one breaks a Rule. The findings are written again
+  value, as a `dict` does. Python's `NaN` and `Infinity` literals, which `json.loads()` takes, are refused, so a file holding one breaks a Rule, and so is a lone surrogate
+  (`\ud800`) in a string or a name, which a .NET string can't hold. The findings are written again
   with `Py.Dumps`, so the kept copy is byte for byte what `json.dumps()` writes. `mkdir`'s error reads as Python's `OSError` does (`[Errno 17] File exists: '<path>'`).

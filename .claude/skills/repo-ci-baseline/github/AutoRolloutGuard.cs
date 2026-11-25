@@ -35,8 +35,9 @@ static class SessionGuard
 	public static int RecordLimit { get; set; } = 16 * 1024 * 1024;
 
 	// A command's stdout, a trailing line break or more dropped, or null when it fails or can't run. The program is found in PATH's
-	// absolute folders only (Gh.Which); it reads no stdin and runs for 120 s at most.
-	public static string? RunText(IReadOnlyList<string> command, string? cwd = null)
+	// absolute folders only (Gh.Which); it reads no stdin and runs for 120 s at most, counting the reads of its output, which a child it
+	// leaves behind can hold open: past the limit it gives null.
+	public static string? RunText(IReadOnlyList<string> command, string? cwd = null, double timeoutSeconds = 120)
 	{
 		var start = new ProcessStartInfo
 		{
@@ -64,16 +65,20 @@ static class SessionGuard
 		using (run)
 		{
 			run!.StandardInput.Close();
+			var limit = TimeSpan.FromSeconds(timeoutSeconds);
+			var clock = Stopwatch.StartNew();
 			var output = run.StandardOutput.ReadToEndAsync();
 			var err = run.StandardError.ReadToEndAsync();
-			if (!run.WaitForExit(TimeSpan.FromSeconds(120)))
+			if (!run.WaitForExit(limit))
 			{
 				run.Kill(entireProcessTree: true);
 				run.WaitForExit();
 				return null;
 			}
 			run.WaitForExit();
-			Task.WaitAll(output, err);
+			var left = limit - clock.Elapsed;
+			if (!Task.WaitAll([output, err], left > TimeSpan.Zero ? left : TimeSpan.Zero))
+				return null;
 			return run.ExitCode == 0 ? output.Result.TrimEnd('\n') : null;
 		}
 	}

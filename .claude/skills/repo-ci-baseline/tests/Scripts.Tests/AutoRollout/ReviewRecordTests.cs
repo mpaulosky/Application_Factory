@@ -129,6 +129,20 @@ public sealed class ReviewRecordTests : IDisposable
 		SameJson(security ? null : Array(dismissed), findings);
 	}
 
+	[Theory]
+	[InlineData("""[{"id": "\ud800", "status": "open"}]""")]
+	[InlineData("""[{"id": "R1", "status": "open", "lens": ["\udc00"]}]""")]
+	[InlineData("""[{"id": "R1", "status": "open", "\ud800": 1}]""")]
+	public void Staged_findings_with_a_lone_surrogate_in_a_string_or_a_name_break_a_rule(string raw)
+	{
+		var run = P("run");
+		Directory.CreateDirectory(run);
+		File.WriteAllBytes(Path.Combine(run, ReviewRecord.StagedFile), Encoding.ASCII.GetBytes(raw));
+		var (findings, broke) = ReviewRecord.StagedFindings(run);
+		Assert.Null(findings);
+		Assert.Equal([$"{Path.Combine(run, ReviewRecord.StagedFile)} isn't the JSON array of findings scripts/review.sh stage writes"], broke);
+	}
+
 	public static TheoryData<string> NotFindings() => new(["{", "{}", """{"findings": []}""", "5", """["x"]""", "[[]]", "\xff", new string('[', 100000)]);
 
 	[Theory]

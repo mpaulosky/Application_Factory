@@ -791,6 +791,15 @@ public sealed class SessionGuardTests : IDisposable
 	}
 
 	[Fact]
+	public void Run_text_gives_none_once_its_limit_passes_while_a_child_left_behind_holds_its_output()
+	{
+		var clock = System.Diagnostics.Stopwatch.StartNew();
+		var text = SessionGuard.RunText(["sh", "-c", "sleep 30 & echo a"], timeoutSeconds: 1);
+		Assert.Null(text);
+		Assert.True(clock.Elapsed < TimeSpan.FromSeconds(20), $"took {clock.Elapsed}");
+	}
+
+	[Fact]
 	public void The_guard_of_a_linked_worktree_reads_the_primary_checkouts_ledgers()
 	{
 		var primary = P("Repo");

@@ -97,12 +97,14 @@ static class ReviewRecord
 			using var document = JsonDocument.Parse(text, new JsonDocumentOptions { MaxDepth = 1000 });
 			return Node(document.RootElement);
 		}
-		catch (Exception error) when (error is JsonException or ArgumentException)
+		catch (Exception error) when (error is JsonException or ArgumentException or InvalidOperationException)
 		{
 			return null;
 		}
 	}
 
+	// Every string and name is decoded here, inside Parse's catch, so a lone surrogate (\ud800), which json.loads() takes but UTF-16 text
+	// can't hold, is refused as a file that breaks a Rule rather than throwing later, when a finding is shown or kept.
 	static JsonNode? Node(JsonElement element)
 	{
 		switch (element.ValueKind)
@@ -116,6 +118,8 @@ static class ReviewRecord
 				return obj;
 			case JsonValueKind.Null:
 				return null;
+			case JsonValueKind.String:
+				return JsonValue.Create(element.GetString());
 			default:
 				return JsonNode.Parse(element.GetRawText());
 		}
