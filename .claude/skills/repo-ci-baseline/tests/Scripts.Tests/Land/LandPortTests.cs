@@ -180,6 +180,10 @@ public class LandPortTests
 	[InlineData("2026-01-05T12:00:00+02:00", 1767607200.0)]
 	[InlineData("2026-01-05T10:00:00.5Z", 1767607200.5)]
 	[InlineData("2026-01-05T10:00Z", 1767607200.0)]
+	[InlineData("2026-01-05T10", 1767607200.0)]
+	[InlineData("2026-01-05T10Z", 1767607200.0)]
+	[InlineData("2026-01-05 10", 1767607200.0)]
+	[InlineData("2026-01-05T12+02:00", 1767607200.0)]
 	[InlineData("2026-01-05", 1767571200.0)]
 	[InlineData(null, null)]
 	[InlineData("", null)]
@@ -191,6 +195,39 @@ public class LandPortTests
 	[InlineData("2026-13-05T10:00:00Z", null)]
 	[InlineData("\u0662026-01-05T10:00:00Z", null)]
 	public void A_time_is_read_as_fromisoformat_read_it(string? text, double? epoch) => Assert.Equal(epoch, Landing.Epoch(text));
+
+	// Not a moved test: repos.txt is read only when it is needed (mpaulosky/Application_Factory#178): for the repos when none is named,
+	// and for a named repo's scope once its PRs are read. A run that stops before then doesn't read it; one that needs it fails with its error.
+	[Theory]
+	[InlineData(new[] { "--help" }, 0)]
+	[InlineData(new[] { "--interval", "x", "o/app" }, 2)]
+	[InlineData(new[] { "o/app#x" }, 2)]
+	public void A_run_that_stops_before_a_scope_doesnt_read_repos_txt(string[] argv, int want)
+	{
+		var read = 0;
+		Assert.Equal(want, Land.Run(argv, new StringWriter(), new StringWriter(), readRepoList: () => { read++; throw new FileNotFoundException("repos.txt"); }));
+		Assert.Equal(0, read);
+		Assert.Throws<FileNotFoundException>(() => Land.Run(["--once"], new StringWriter(), new StringWriter(), readRepoList: () => throw new FileNotFoundException("repos.txt")));
+	}
+
+	[Fact]
+	public void A_named_repos_scope_is_read_from_repos_txt_once_its_prs_are_read()
+	{
+		var read = 0;
+		var fail = true;
+		using var err = new StringWriter();
+		var lander = new Lander(Land.ParseTargets(["o/app"]), new LazyRepos(() => { read++; return new() { ["o/app"] = "full" }; }), new StringWriter(), err)
+		{
+			Fetch = (_, _) => fail ? throw new GhException("HTTP 502") : System.Text.Json.Nodes.JsonNode.Parse("""{"repository": {"pullRequests": {"nodes": []}}}""")!,
+		};
+
+		lander.Poll();
+		Assert.Equal(0, read);
+		fail = false;
+		lander.Poll();
+		lander.Poll();
+		Assert.Equal(1, read);
+	}
 
 	// Not a moved test: a repo answer without its PR list is a repo land can't read, not one with no open PRs.
 	[Theory]

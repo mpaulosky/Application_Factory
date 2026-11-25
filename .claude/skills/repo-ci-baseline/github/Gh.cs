@@ -25,8 +25,15 @@ sealed class Gh(Func<IReadOnlyList<string>, GhRun>? runner = null)
 
 	public static GhRun Process(IReadOnlyList<string> argv) => Process(argv, null);
 
+	// How long one gh call may take before it is killed: a hung gh would otherwise hang land's poll loop and a status or settings run.
+	public static readonly TimeSpan Timeout = TimeSpan.FromMinutes(2);
+
+	public static GhRun Process(IReadOnlyList<string> argv, string? input) => Process(argv, input, Timeout);
+
 	// One gh call with input written to its stdin and then closed; with none, gh reads the caller's stdin, as a call without input did.
-	public static GhRun Process(IReadOnlyList<string> argv, string? input)
+	// A call that runs past timeout is killed, with what it started, and fails: exit 124, as timeout(1) gives, with stderr saying so and
+	// no stdout, which the callers report as any failed call.
+	public static GhRun Process(IReadOnlyList<string> argv, string? input, TimeSpan timeout)
 	{
 		var start = new ProcessStartInfo(Which("gh", Environment.GetEnvironmentVariable("PATH")))
 		{
@@ -43,30 +50,33 @@ sealed class Gh(Func<IReadOnlyList<string>, GhRun>? runner = null)
 			start.ArgumentList.Add(arg);
 		using var run = System.Diagnostics.Process.Start(start)!;
 		var err = run.StandardError.ReadToEndAsync();
-		if (input is not null)
+		var output = run.StandardOutput.ReadToEndAsync();
+		// Written beside the reads, so a gh that answers before it has read all of a long body can't block on a full pipe. A gh that exits
+		// without reading it (not logged in, say) closes the pipe: the broken pipe is ignored, as Python's communicate() ignores it, so gh's
+		// own exit code and stderr say what went wrong.
+		var write = input is null ? Task.CompletedTask : Task.Run(() =>
 		{
-			// Written beside the reads above and below, so a gh that answers before it has read all of a long body can't block on a full pipe.
-			// A gh that exits without reading it (not logged in, say) closes the pipe: the broken pipe is ignored, as Python's communicate()
-			// ignores it, so gh's own exit code and stderr say what went wrong.
-			var write = Task.Run(() =>
+			try
 			{
-				try
-				{
-					run.StandardInput.Write(input);
-					run.StandardInput.Close();
-				}
-				catch (IOException)
-				{
-				}
-			});
-			var answer = run.StandardOutput.ReadToEnd();
+				run.StandardInput.Write(input);
+				run.StandardInput.Close();
+			}
+			catch (IOException)
+			{
+			}
+		});
+		if (!run.WaitForExit(timeout))
+		{
+			// The whole tree, so a child gh started can't hold the pipes open, and the reads and the write end; one that left the tree
+			// and still holds them is waited for a few seconds at most.
+			run.Kill(entireProcessTree: true);
 			run.WaitForExit();
-			write.Wait();
-			return new GhRun(run.ExitCode, answer, err.Result);
+			Task.WaitAll([err, output, write], TimeSpan.FromSeconds(5));
+			return new GhRun(124, "", $"gh didn't answer in {Script.G(timeout.TotalSeconds)} s, so it was stopped: gh {string.Join(" ", argv.Take(2))}\n");
 		}
-		var output = run.StandardOutput.ReadToEnd();
 		run.WaitForExit();
-		return new GhRun(run.ExitCode, output, err.Result);
+		write.Wait();
+		return new GhRun(run.ExitCode, output.Result, err.Result);
 	}
 
 	// The first executable file called name in a folder of path (PATH's form), as execvp finds it but for the folders that aren't

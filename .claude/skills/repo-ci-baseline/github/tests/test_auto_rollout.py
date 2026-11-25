@@ -140,7 +140,7 @@ ALL_TOOLS = auto.TOOLS + auto.SANDBOX_TOOLS + ("dotnet", "uvx")
 
 
 def fake_preflight(on_path=ALL_TOOLS, answers=None, global_json='{"sdk": {"version": "10.0.403"}}', tmp_path=None,
-                   environ=None, platform="linux"):
+                   environ=None, platform="linux", factory_global_json="/nonexistent/global.json"):
     answers = {"shfmt": (0, "v3.14.1\n", ""), "gh": (0, "", ""), "dotnet": (0, "10.0.404\n", ""), "bwrap": (0, "", ""),
                "claude": (0, "2.1.326 (Claude Code)\n", ""), "ruff": (0, "ruff 0.17.6\n", ""),
                "claude auth": (0, '{"loggedIn": true, "email": "someone@example.com"}\n', "")} | dict(answers or {})
@@ -151,13 +151,15 @@ def fake_preflight(on_path=ALL_TOOLS, answers=None, global_json='{"sdk": {"versi
         if cwd is not None and os.path.isfile(os.path.join(cwd, "global.json")):
             seen = Path(cwd, "global.json").read_text()
         calls.append({"command": tuple(command), "cwd": cwd, "env": env, "global.json": seen})
-        return answers["claude auth" if "auth" in command and command[0] == "claude" else command[0]]
+        answer = answers["claude auth" if "auth" in command and command[0] == "claude" else command[0]]
+        return answer(seen) if callable(answer) else answer
 
     path = os.path.join(tmp_path, "global.json") if tmp_path else "/nonexistent/global.json"
     if global_json is not None and tmp_path:
         Path(path).write_text(global_json)
     problems = auto.preflight(which=lambda tool: f"/bin/{tool}" if tool in on_path else None, run=run,
-                              template_global_json=path, environ=environ or {"PATH": "/bin"}, platform=platform)
+                              template_global_json=path, environ=environ or {"PATH": "/bin"}, platform=platform,
+                              factory_global_json=factory_global_json)
     return problems, calls
 
 
@@ -463,6 +465,35 @@ def test_preflight_says_why_dotnet_did_not_answer(code, error, tmp_path):
 def test_preflight_checks_the_real_templates_global_json_by_default():
     assert auto.TEMPLATE_GLOBAL_JSON == os.path.join(auto.OWNED, "global.json")
     assert os.path.isfile(auto.TEMPLATE_GLOBAL_JSON)
+
+
+def test_preflight_checks_the_factorys_global_json_too_when_its_pin_differs(tmp_path):
+    # land.sh runs on the Factory's global.json (mpaulosky/Application_Factory#178): a pin the installed SDKs don't satisfy is named,
+    # though the Template's is satisfied.
+    factory = tmp_path / "factory"
+    factory.mkdir()
+    (factory / "global.json").write_text('{"sdk": {"version": "11.0.100"}}')
+    installed = {"dotnet": lambda pin: (0, "10.0.404\n", "") if "10.0.403" in pin else (155, "", "A compatible .NET SDK was not found.")}
+    problems, calls = fake_preflight(answers=installed, tmp_path=tmp_path, factory_global_json=str(factory / "global.json"))
+    assert problems == ["no installed .NET SDK matches the Factory's global.json, which land.sh runs on (.NET SDK 11.0.100):"
+                        " dotnetup sdk install 11.0.100"]
+    assert [call["global.json"] for call in calls if call["command"][0] == "dotnet"] == [
+        '{"sdk": {"version": "10.0.403"}}', '{"sdk": {"version": "11.0.100"}}']
+    # The same pin in both is asked of dotnet once.
+    (factory / "global.json").write_text('{"sdk": {"version": "10.0.403"}}')
+    problems, calls = fake_preflight(answers=installed, tmp_path=tmp_path, factory_global_json=str(factory / "global.json"))
+    assert problems == [] and sum(call["command"][0] == "dotnet" for call in calls) == 1
+
+
+def test_preflight_checks_the_global_json_land_sh_runs_on_by_default(tmp_path):
+    assert auto.FACTORY_GLOBAL_JSON == auto.nearest_global_json(os.path.join(auto.SKILL_DIR, "github"))
+    assert os.path.isfile(auto.FACTORY_GLOBAL_JSON)
+    # The nearest one in the folder or above it, as dotnet finds it.
+    (tmp_path / "a" / "b").mkdir(parents=True)
+    (tmp_path / "global.json").write_text("{}")
+    assert auto.nearest_global_json(str(tmp_path / "a" / "b")) == str(tmp_path / "global.json")
+    (tmp_path / "a" / "global.json").write_text("{}")
+    assert auto.nearest_global_json(str(tmp_path / "a" / "b")) == str(tmp_path / "a" / "global.json")
 
 
 def test_run_quiet_reads_bytes_that_arent_utf_8():

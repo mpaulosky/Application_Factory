@@ -99,6 +99,9 @@ static class Landing
 	static readonly Regex IsoTime = new(
 			@"\A[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9]{2}(?::[0-9]{2}(?::[0-9]{2}(?:\.[0-9]{1,6})?)?)?(?:[+-][0-9]{2}:[0-9]{2})?)?\z", RegexOptions.CultureInvariant);
 
+	// The date and hour of an IsoTime that stops at the hour, before any offset.
+	static readonly Regex HourOnly = new(@"\A([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2})(?=[+-]|\z)", RegexOptions.CultureInvariant);
+
 	// An ISO-8601 time as epoch seconds, or null when it is missing or unreadable. Only the extended form datetime.fromisoformat() read
 	// (IsoTime) is taken, never the other forms DateTimeOffset.TryParse would guess at ("Jan 5 2026", "1/2/2026"); Python's basic and week
 	// forms aren't read either, and GitHub sends neither. A time with no offset is UTC, where the Python took the machine's zone: GitHub's
@@ -106,8 +109,11 @@ static class Landing
 	public static double? Epoch(string? text)
 	{
 		text = text?.Replace("Z", "+00:00", StringComparison.Ordinal);
-		if (text is null || !IsoTime.IsMatch(text)
-				|| !DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var at))
+		if (text is null || !IsoTime.IsMatch(text))
+			return null;
+		// A time to the hour alone (2026-01-05T10), which fromisoformat() read and DateTimeOffset.TryParse refuses, is read as its first minute.
+		text = HourOnly.Replace(text, "$1:00");
+		if (!DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var at))
 			return null;
 		return (at.UtcTicks - DateTimeOffset.UnixEpoch.UtcTicks) / (double)TimeSpan.TicksPerSecond;
 	}

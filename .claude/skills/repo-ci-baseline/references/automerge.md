@@ -335,7 +335,11 @@ Skill files (not copied into repos): `status.sh`, which runs `github/status.cs`,
 and the decision both act on, `github/Landing.cs`. They are C# file-based apps ([the Factory's ADR 0017](../../../../docs/adr/0017-the-factorys-and-the-templates-scripts-are-csharp-file-based-apps.md)):
 each entry file pulls in its logic with `#:include` (`StatusCore.cs`, `LandCore.cs`, `Landing.cs`, `Repos.cs`, which reads `github/repos.txt`, and `Gh.cs`,
 the `gh` runner, JSON helpers and argument parser they share), and the wrapper runs it with `dotnet run --file` from `github/`, so the Factory's `global.json`
-picks the SDK; the first run after a change builds it.
+picks the SDK; the first run after a change builds it. Each wrapper first runs its app with `--help` under a lock on `github/` (`flock`), so runs started at once
+(`github-settings.sh` too) build it one at a time and the rest find it built; on macOS, which has no `flock`, start one run first.
+`repos.txt` is read only when it is needed: for the repos when none is named, and for a named repo's scope once its PRs are read, so a usage error or a repo
+that can't be read doesn't need it; when it is needed and can't be read, the run fails with that error (a named repo isn't taken as `full`).
+Each `gh` call is given two minutes (`Gh.Timeout`); one that runs past them is killed, with what it started, and fails as any other call does.
 Tests: `tests/Scripts.Tests/Landing/`, `Status/` and `Land/` (xUnit), run by `test.sh`; none calls GitHub.
 The parity suites run `status.cs` and `land.cs` through their command lines only, against a fake `gh` (`tests/parity/fake-gh.sh`) that answers
 from fixture files, so the same cases can judge another implementation: `tests/parity.test.sh <suite> <command> [arg]...`, where the suite is `status` or

@@ -3,7 +3,8 @@
 Skill files (not copied into repos): `github-settings.sh`, which runs `github/settings.cs` (its logic is `SettingsCore.cs`) on the .NET SDK
 the Factory's `global.json` names, and the standard beside it in `github/`: `settings.json`, `main-rules.json`, `labels.json`, `legacy.json`,
 `repos.txt` and `repos/<repo>.json`. `github/settings.py` stays beside it, run by nothing, until `rollout.py`, which imports its `read_repo_list`,
-is ported (ADR 0017). Tests: `tests/Scripts.Tests/Settings/` and the `settings` parity suite, run by `test.sh`.
+is ported (ADR 0017). Each `gh` call is given two minutes, and the first build is locked as `status.sh`'s is ([automerge.md](automerge.md)).
+Tests: `tests/Scripts.Tests/Settings/` and the `settings` parity suite, run by `test.sh`.
 Decisions: [ADR 0003](../docs/adr/0003-github-settings-as-code.md).
 
 `apply.sh` copies the Baseline's files. Everything a file can't carry lives on GitHub: merge settings, the ruleset and its required checks,
