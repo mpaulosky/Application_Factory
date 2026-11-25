@@ -30,8 +30,9 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
 - `.github/workflows/template-tests.yml`: the Factory's own workflow (named `repo-ci-baseline Template`, the required job `Template tests`). It runs the gate one part per job in parallel
   (`GATE_PART`: `self`, `review`, `static`, `template`, `sandcastle`, ADR 0012), with `test.sh` in three shards (`TEST_SH_SHARD`, ADR 0013), and
   `Template tests` passes only when every part did. `.github/actions/template-tools/` installs the tools each job needs.
-- `.github/workflows/claude-issues.yml`: the Factory's own workflow (ADR 0018). Claude works the open issues labelled `claude`, one at a time and skipping blocked ones, and opens a draft
-  pull request for each; its header lists the labels it uses.
+- `.github/workflows/claude-issues.yml`: the Factory's own workflow (ADR 0018). Claude works the open issues labelled `claude`, up to three at once and skipping blocked ones, and opens a
+  draft pull request for each, with a comment naming the other open pull requests from this repository's branches that change the same files and the order to merge them (written
+  when its run ends, so an older pull request's comment doesn't learn of a newer one); its header lists the labels it uses.
 - `.github/hooks/` (`pre-commit`, `pre-push`, `post-checkout`), `scripts/check-branch-name.sh`, `.github/workflows/{claude-review,pr-automerge,pr-review-submitted}.yml` and
   `.github/scripts/post_claude_review.py`, and the issue and PR process (ADR 0009): `.github/ISSUE_TEMPLATE/*`, `.github/pull_request_template.md`, `.github/workflows/pr-title.yml` and
   `scripts/check-pr-title.sh`, and `.github/workflows/lint-{markdown,yaml,actions}.yml`, and the local review (ADR 0010): `scripts/review.sh`, five `.sandcastle/lib/` modules with three tests,
@@ -90,8 +91,9 @@ Branches are `feature/{issue}-{slug}`, `fix/{issue}-{slug}`, `hotfix/{issue}-{sl
 `<type>(<scope>): <Summary>`, with the scope `baseline` for the Template.
 
 Size each issue so its pull request stays small: 30 files and 3,000 changed lines at most, tests included (the line the pre-push review warns at), and at
-most one open decision, as the feature request template says. Claude Review reads only a diff's first 8 pieces (about 300 KB), so it reads a bigger pull
-request only in part, and each review round over it takes longer. Split a bigger issue into smaller ones before work starts, ordered with "blocked by"
+most one open decision, as the feature request template says. Claude Review reads a big diff in up to four batches of 8 pieces (about 300 KB each), a review
+each, so a bigger pull request costs a review per batch and each review round over it takes longer; only pieces past the fourth batch go unread, and they
+hold the merge. Split a bigger issue into smaller ones before work starts, ordered with "blocked by"
 links, rather than opening one large pull request.
 
 Commit in a linked worktree under `../Application_Factory-worktrees/`: `pre-commit` refuses a commit in the primary checkout, and `pre-push` refuses a push

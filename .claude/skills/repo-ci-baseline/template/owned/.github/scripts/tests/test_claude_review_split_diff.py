@@ -47,6 +47,7 @@ MAX_PIECE_BYTES = constant("MAX_PIECE_BYTES")
 MAX_PIECE_LINES = constant("MAX_PIECE_LINES")
 MAX_READ_PIECES = constant("MAX_READ_PIECES")
 MAX_READ_BYTES = constant("MAX_READ_BYTES")
+MAX_BATCHES = constant("MAX_BATCHES")
 
 
 class Repo:
@@ -87,14 +88,33 @@ class Repo:
         step_env.update(env or {})
         done = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", script or step_script()], cwd=self.path,
                               env=step_env, check=True, capture_output=True)
-        found = re.fullmatch(r"pieces<<(EOF_[0-9a-f]{16})\n(.*)\n\1\nskipped=(.*)\nlisted=(.*)\nheld=(\d+)\n"
-                             r"context<<\1\n(.*)\n\1\n", output.read_text(), re.S)
-        assert found, output.read_text()
-        self.skipped, self.listed, self.held, self.context = found[3], found[4], int(found[5]), found[6]
+        self.outputs = outputs_of(output.read_text())
+        batch_outputs = [f"{name}_{number}" for number in range(1, MAX_BATCHES + 1)
+                         for name in ("pieces", "listed", "note")]
+        assert list(self.outputs) == [*batch_outputs, "batches", "skipped", "held", "context"], self.outputs
+        self.batches = int(self.outputs["batches"])
+        self.skipped, self.held, self.context = self.outputs["skipped"], int(self.outputs["held"]), self.outputs["context"]
+        # Every batch's pieces, in order.
+        self.listed = " ".join(self.outputs[f"listed_{n}"] for n in range(1, MAX_BATCHES + 1) if self.outputs[f"listed_{n}"])
         self.context_folder = runner_temp / "claude-review" / "context"
         self.log = done.stdout.decode("utf-8", "replace")
         folder = runner_temp / "claude-review" / "diff"
-        return found[2], folder, (runner_temp / "claude-review" / "pr.diff").read_bytes()
+        return self.outputs["pieces_1"], folder, (runner_temp / "claude-review" / "pr.diff").read_bytes()
+
+
+def outputs_of(text):
+    """The step's outputs, {name: value} in the order written; a heredoc's delimiter is EOF_ and 16 hex digits."""
+    outputs, lines = {}, iter(text.split("\n"))
+    for line in lines:
+        if not line:
+            continue
+        found = re.fullmatch(r"(\w+)<<(EOF_[0-9a-f]{16})", line)
+        if found:
+            outputs[found[1]] = "\n".join(iter(lambda: next(lines), found[2]))
+        else:
+            name, value = line.split("=", 1)
+            outputs[name] = value
+    return outputs
 
 
 @pytest.fixture
@@ -366,28 +386,170 @@ def test_an_empty_diff(repo, tmp_path):
     assert (folder / "INDEX").read_text() == "The diff is empty.\n"
 
 
-def test_past_the_read_budget_the_rest_are_named_and_workflows_come_first(repo, tmp_path):
-    # Each file's diff is about 30 KB, so one fits a piece, and only MAX_READ_PIECES of them are asked for.
-    files = {f"docs/f{i:02d}.md": "".join(f"name_{i}_{n} = {n:020d}\n" for n in range(900))
-             for i in range(MAX_READ_PIECES + 2)}
+def big_files(count, prefix="docs/f", suffix=".md"):
+    """count files whose diffs are about 30 KB each, so each fills a piece of its own."""
+    return {f"{prefix}{i:02d}{suffix}": "".join(f"name_{i}_{n} = {n:020d}\n" for n in range(900)) for i in range(count)}
+
+
+def batch_of(folder):
+    """{piece: its INDEX status}: "read", "read in batch N of M" or "not read"."""
+    return {name: flag for name, (_, flag, _) in index(folder).items()}
+
+
+def test_a_diff_within_one_batch_is_one_review(repo, tmp_path):
+    head = repo.commit(big_files(MAX_READ_PIECES))
+    text, folder, _ = repo.split(repo.base, head, tmp_path)
+    assert repo.batches == 1 and set(batch_of(folder).values()) == {"read"}
+    assert len(text.splitlines()) == MAX_READ_PIECES and repo.outputs["note_1"] == ""
+    assert all(repo.outputs[f"{name}_{n}"] == "" for n in range(2, MAX_BATCHES + 1) for name in ("pieces", "listed", "note"))
+
+
+def test_past_one_batch_the_rest_are_read_in_more_batches_and_workflows_come_first(repo, tmp_path):
+    # MAX_READ_PIECES + 3 pieces: the workflow and MAX_READ_PIECES - 1 docs in batch 1, the last 3 docs in batch 2.
+    files = big_files(MAX_READ_PIECES + 2)
     files[".github/workflows/z.yml"] = "".join(f"# {n:028d}\n" for n in range(900))
     files["package-lock.json"] = "{}\n"
     head = repo.commit(files)
     text, folder, _ = repo.split(repo.base, head, tmp_path)
     assert excluded_of(folder) == ["package-lock.json"]
     pieces = index(folder)
-    read = [name for name, (_, flag, _) in pieces.items() if flag == "read"]
-    assert len(read) == MAX_READ_PIECES
-    assert sum((folder / name).stat().st_size for name in read) <= MAX_READ_BYTES
     assert pieces["001.diff"][2] == [("workflow", ".github/workflows/z.yml")]
-    unread = {path for _, flag, files in pieces.values() if flag == "not read" for _, path in files}
-    assert unread == {f"docs/f{i:02d}.md" for i in range(MAX_READ_PIECES - 1, MAX_READ_PIECES + 2)}
+    names = list(pieces)
+    first, second = names[:MAX_READ_PIECES], names[MAX_READ_PIECES:]
+    assert len(second) == 3 and repo.batches == 2
+    assert batch_of(folder) == {**{name: "read in batch 1 of 2" for name in first},
+                                **{name: "read in batch 2 of 2" for name in second}}
+    for number, batch in ((1, first), (2, second)):
+        assert repo.outputs[f"listed_{number}"].split() == batch
+        assert [line.split()[1].rsplit("/", 1)[1] for line in repo.outputs[f"pieces_{number}"].splitlines()] == batch
+        assert f"batch {number} of 2" in repo.outputs[f"note_{number}"]
+        assert sum((folder / name).stat().st_size for name in batch) <= MAX_READ_BYTES
+    assert "Not asked for" not in text and repo.skipped == ""
+    assert repo.outputs["pieces_3"] == repo.outputs["listed_3"] == repo.outputs["note_3"] == ""
+    assert "2 review(s) read" in repo.log
+
+
+def test_a_batch_ends_at_its_byte_budget(repo, tmp_path):
+    # Diffs of about 39 KB: MAX_READ_PIECES of them pass MAX_READ_BYTES, so batch 1 ends a piece early.
+    files = {f"docs/f{i:02d}.md": "".join(f"n{i}_{n} = {n:030d}\n" for n in range(950)) for i in range(MAX_READ_PIECES)}
+    head = repo.commit(files)
+    _, folder, _ = repo.split(repo.base, head, tmp_path)
+    sizes = [(folder / name).stat().st_size for name in index(folder)]
+    assert len(sizes) == MAX_READ_PIECES and sum(sizes) > MAX_READ_BYTES and max(sizes) <= MAX_PIECE_BYTES
+    first = repo.outputs["listed_1"].split()
+    assert sum((folder / name).stat().st_size for name in first) <= MAX_READ_BYTES
+    assert len(first) < MAX_READ_PIECES and repo.batches == 2 and repo.skipped == ""
+
+
+def test_past_the_last_batch_the_rest_are_named(repo, tmp_path):
+    files = big_files(MAX_READ_PIECES * MAX_BATCHES + 2)
+    head = repo.commit(files)
+    text, folder, _ = repo.split(repo.base, head, tmp_path)
+    flags = batch_of(folder)
+    assert repo.batches == MAX_BATCHES
+    unread = [name for name, flag in flags.items() if flag == "not read"]
+    assert unread == list(flags)[-2:]
+    # Every unread piece is named for the hold, and batch 1's prompt names them; the read ones are listed.
+    assert repo.skipped.split() == unread
     listed, _, rest = text.partition("\nNot asked for")
-    assert len(listed.splitlines()) == MAX_READ_PIECES
-    assert all(name in rest for name, (_, flag, _) in pieces.items() if flag == "not read")
-    # Every unread piece is named for the hold; the read ones are listed.
-    assert repo.skipped.split() == [name for name, (_, flag, _) in pieces.items() if flag == "not read"]
-    assert repo.listed.split() == read
+    assert len(listed.splitlines()) == MAX_READ_PIECES and all(name in rest for name in unread)
+    assert all("Not asked for" not in repo.outputs[f"pieces_{n}"] for n in range(2, MAX_BATCHES + 1))
+    assert repo.listed.split() == [name for name, flag in flags.items() if flag != "not read"]
+    assert f"past what {MAX_BATCHES} reviews read" in repo.log
+
+
+def with_constant(name, value):
+    """The step's script with constant name set to value."""
+    script = step_script()
+    assert len(re.findall(rf"^\s*{name} = [\d_]+", script, re.M)) == 1
+    return re.sub(rf"^(\s*{name} = )[\d_]+", rf"\g<1>{value}", script, flags=re.M)
+
+
+def listed_of(repo):
+    return [repo.outputs[f"listed_{n}"].split() for n in range(1, repo.batches + 1)]
+
+
+@pytest.mark.parametrize("over, first", [(-1, ["001.diff"]), (0, ["001.diff", "002.diff"]), (1, ["001.diff", "002.diff"])],
+                         ids=["n-1", "n", "n+1"])
+def test_a_batch_takes_pieces_up_to_exactly_its_byte_budget(repo, tmp_path, over, first):
+    head = repo.commit(big_files(3))
+    for name in ("measure", "run"):
+        (tmp_path / name).mkdir()
+    repo.split(repo.base, head, tmp_path / "measure")
+    sizes = [(tmp_path / "measure" / "runner" / "claude-review" / "diff" / f"00{n}.diff").stat().st_size for n in (1, 2, 3)]
+    assert len(set(sizes)) == 1  # alike, so the third piece never fits beside the second at n-1
+    budget = sizes[0] + sizes[1] + over
+    repo.split(repo.base, head, tmp_path / "run", script=with_constant("MAX_READ_BYTES", budget))
+    batches = listed_of(repo)
+    # The piece that passed the budget starts the next batch, and every piece is read, in order.
+    assert batches[0] == first and batches[1][0] == f"00{len(first) + 1}.diff"
+    assert [name for batch in batches for name in batch] == ["001.diff", "002.diff", "003.diff"] and repo.skipped == ""
+
+
+@pytest.mark.parametrize("count, batches", [(MAX_READ_PIECES - 1, 1), (MAX_READ_PIECES, 1), (MAX_READ_PIECES + 1, 2)])
+def test_a_batch_takes_at_most_max_read_pieces(repo, tmp_path, count, batches):
+    head = repo.commit(big_files(count))
+    repo.split(repo.base, head, tmp_path)
+    assert [len(batch) for batch in listed_of(repo)] == [min(count, MAX_READ_PIECES), *([1] if batches == 2 else [])]
+    assert repo.batches == batches and repo.skipped == ""
+
+
+@pytest.mark.parametrize("over", [-1, 0, 1], ids=["n-1", "n", "n+1"])
+def test_the_last_batch_takes_pieces_up_to_exactly_max_batches_reviews(repo, tmp_path, over):
+    count = MAX_READ_PIECES * MAX_BATCHES + over
+    head = repo.commit(big_files(count))
+    text, folder, _ = repo.split(repo.base, head, tmp_path)
+    assert repo.batches == MAX_BATCHES
+    unread = [name for name, flag in batch_of(folder).items() if flag == "not read"]
+    assert unread == ([f"{count:03d}.diff"] if over > 0 else []) and repo.skipped.split() == unread
+    assert ("Not asked for" in text) is (over > 0)
+
+
+def test_past_the_last_batch_no_later_piece_is_read_even_one_that_would_fit(repo, tmp_path):
+    # MAX_BATCHES - 1 batches of MAX_READ_PIECES pieces of about 30 KB, then a last batch of 7 pieces of about 39 KB,
+    # one more 39 KB piece that doesn't fit beside them, and a 15 KB one that would: the unread pieces stay the tail.
+    files = big_files(MAX_READ_PIECES * (MAX_BATCHES - 1))
+    files |= {f"docs/g{i:02d}.md": "".join(f"n{i}_{n} = {n:030d}\n" for n in range(950)) for i in range(8)}
+    files["docs/g08.md"] = "".join(f"name_8_{n} = {n:020d}\n" for n in range(450))
+    head = repo.commit(files)
+    _, folder, _ = repo.split(repo.base, head, tmp_path)
+    names = list(index(folder))
+    last = repo.outputs[f"listed_{MAX_BATCHES}"].split()
+    sizes = {name: (folder / name).stat().st_size for name in names}
+    assert len(last) == 7 < MAX_READ_PIECES and last == names[-9:-2]
+    # The test's premise: the small piece would have fit in the last batch.
+    assert sum(sizes[name] for name in last) + sizes[names[-1]] <= MAX_READ_BYTES
+    assert sum(sizes[name] for name in last) + sizes[names[-2]] > MAX_READ_BYTES
+    assert repo.skipped.split() == names[-2:]
+    assert [name for name, flag in batch_of(folder).items() if flag == "not read"] == names[-2:]
+
+
+def context_log(repo):
+    """(the context's bytes, the files left out of it, the biggest batch's bytes), from the step's log."""
+    found = re.search(r"Wrote \d+ context piece\(s\) of whole files \((\d+) bytes\); left out (\d+) file\(s\)", repo.log)
+    biggest = re.search(r"\(at most (\d+) bytes in one\)", repo.log)
+    return int(found[1]), int(found[2]), int(biggest[1])
+
+
+@pytest.mark.parametrize("over, left_out", [(-1, 1), (0, 0)], ids=["n-1", "n"])
+def test_the_context_fits_beside_the_biggest_batch_not_every_piece(repo, tmp_path, over, left_out):
+    # One piece a batch: a 30 KB file and a smaller one. Each review reads one batch and the context, so the
+    # context gets what MAX_TOTAL_BYTES leaves beside the biggest batch, not beside both.
+    files = big_files(1) | {"docs/small.md": "".join(f"small_{n} = {n:020d}\n" for n in range(300))}
+    head = repo.commit(files)
+    one_each = with_constant("MAX_READ_PIECES", 1)
+    for name in ("measure", "run"):
+        (tmp_path / name).mkdir()
+    repo.split(repo.base, head, tmp_path / "measure", script=one_each)
+    context, none_left, biggest = context_log(repo)
+    assert repo.batches == 2 and none_left == 0 and context > 0
+    sizes = [(tmp_path / "measure" / "runner" / "claude-review" / "diff" / name).stat().st_size
+             for name in ("001.diff", "002.diff")]
+    assert biggest == max(sizes) and min(sizes) > 1
+    total = biggest + context + over
+    repo.split(repo.base, head, tmp_path / "run", script=one_each.replace(
+        re.search(r"MAX_TOTAL_BYTES = [\d_]+", one_each)[0], f"MAX_TOTAL_BYTES = {total}"))
+    assert context_log(repo)[1] == left_out
 
 
 # Copilot code review's exclusions, as https://docs.github.com/en/copilot/reference/review-excluded-files lists them
@@ -1359,7 +1521,7 @@ OTHER = ".github/workflows/y.yml"
 
 
 def reads_of(folder):
-    """{path: "read" or "not read"} for every file's diff in a piece."""
+    """{path: its piece's INDEX status ("read", "read in batch N of M" or "not read")} for every file's diff in a piece."""
     return {path: read for path, (_, read) in files_of(folder).items()}
 
 
@@ -1536,14 +1698,14 @@ def test_ac3_leaving_copies_out_brings_a_big_pr_within_the_read_budget(repo, tmp
 
 
 def test_ac3_a_pr_too_big_after_the_copies_are_left_out_still_gets_the_not_read_finding(repo, tmp_path):
-    paths = [f".github/scripts/s{i}.py" for i in range(MAX_READ_PIECES)]
+    paths = [f".github/scripts/s{i}.py" for i in range(MAX_READ_PIECES * MAX_BATCHES)]
     big = {path: "".join(f"name_{i}_{n} = {n:020d}\n" for n in range(900)) for i, path in enumerate(paths)}
     repo.base = repo.commit({path: "x = 0\n" for path in paths} | {TEMPLATE + path: "x = 0\n" for path in paths})
     head = repo.commit(big | {TEMPLATE + path: content for path, content in big.items()}
                        | {"docs/extra.md": "".join(f"name_x_{n} = {n:020d}\n" for n in range(900))})
     _, folder, _ = repo.split(repo.base, head, tmp_path)
     assert len(copies_of(folder)) == len(paths)
-    # The Template's files and the extra doc make MAX_READ_PIECES + 1 pieces: the last isn't asked for.
+    # The Template's files and the extra doc make one piece past every batch: the last isn't asked for.
     assert repo.skipped.split() == [list(index(folder))[-1]]
     assert reads_of(folder)["docs/extra.md"] == "not read"
 
