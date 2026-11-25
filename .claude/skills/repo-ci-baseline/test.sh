@@ -1165,7 +1165,7 @@ if in_shard checks; then
   fi
   [[ ! -e "$owned/LICENSE" ]] || fail "LICENSE must be a Seed file, not Owned: Apply would overwrite an existing project's copyright year"
   grep -qxF 'Copyright (c) {{YEAR}} mpaulosky' "$seed/LICENSE" || fail "the Seed LICENSE must read 'Copyright (c) {{YEAR}} mpaulosky': Apply fills in the year it writes the file, and never changes an existing one"
-  for template in bug_report.md feature_request.md; do
+  for template in bug_report.md feature_request.md chore_request.md; do
     grep -qxF 'assignees: mpaulosky' "$owned/.github/ISSUE_TEMPLATE/$template" \
       || fail "the Owned $template must carry 'assignees: mpaulosky': an Owned file has no {{OWNER}} to fill"
   done

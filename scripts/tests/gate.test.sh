@@ -20,6 +20,8 @@
 # It also checks the issue worker's workflow: its Claude runs with background tasks off, and every job in it with needs: names always(), !cancelled() or failure()
 # in its if:, so a skipped queue job doesn't skip the jobs below it (#185), with fixtures for the check itself (success() alone, no if:, no job with needs:, an unreadable
 # file, a failed awk, quoted and commented status functions, a commented job key, a later top-level key, a blank line in a folded if: and CRLF).
+# It also checks the size step (issue 176): review.sh size's warning, for HEAD's diff against its merge base, is printed by a full gate, --quick and the static part,
+# and neither it nor a failed review.sh size fails the gate; with no origin/main, or one that shares no history, the step is skipped.
 #
 #   scripts/tests/gate.test.sh
 set -euo pipefail
@@ -29,7 +31,7 @@ work="$(mktemp -d)"
 # a case that makes a folder read-only is cleaned up even when it is interrupted
 trap 'chmod -R u+w "$work" 2>/dev/null || true; rm -rf "$work"' EXIT
 # a caller's GATE_NO_CACHE=1 must not reach the stub gate runs; the tests set it themselves where they need it
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH GATE_PART STUB_SANDCASTLE_EXIT RUN_PART TEST_SH_SHARD RUN_SHARD STUB_DURING MKDIR_LOG MKDIR_FAIL_ONCE MKDIR_RELEASE CAT_MARK RMDIR_MARK RMDIR_SIG RMDIR_TAKE RMDIR_WAIT
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH GATE_PART STUB_SANDCASTLE_EXIT RUN_PART TEST_SH_SHARD RUN_SHARD STUB_DURING MKDIR_LOG MKDIR_FAIL_ONCE MKDIR_RELEASE CAT_MARK RMDIR_MARK RMDIR_SIG RMDIR_TAKE RMDIR_WAIT SIZE_OUT SIZE_EXIT
 
 pass=0
 failed=0
@@ -61,7 +63,7 @@ for checker in check-issue-refs check-git-status; do
     exit 1
   }
 done
-copies=(.github/hooks/pre-commit .github/hooks/pre-push .github/hooks/post-checkout scripts/check-branch-name.sh .github/workflows/claude-review.yml .github/workflows/pr-automerge.yml .github/workflows/pr-review-submitted.yml .github/scripts/post_claude_review.py .github/ISSUE_TEMPLATE/bug_report.md .github/ISSUE_TEMPLATE/feature_request.md .github/ISSUE_TEMPLATE/config.yml .github/pull_request_template.md .github/workflows/pr-title.yml scripts/check-pr-title.sh .github/workflows/lint-markdown.yml .github/workflows/lint-yaml.yml .github/workflows/lint-actions.yml scripts/review.sh scripts/lint-edited-file.sh .sandcastle/lib/review-ledger.mts .sandcastle/lib/security-record.mts .sandcastle/lib/errors.mts .sandcastle/lib/host-limit.mts .sandcastle/lib/plain-text.mts .sandcastle/lib/review-ledger.test.mts .sandcastle/lib/security-record.test.mts .sandcastle/lib/plain-text.test.mts .claude/skills/pre-push-review/SKILL.md .claude/skills/pre-push-review/lenses.md .claude/skills/pre-push-review/review-bar.md .claude/agents/pre-push-reviewer.md .security/README.md .editorconfig .claude/rules/script-edits.md global.json)
+copies=(.github/hooks/pre-commit .github/hooks/pre-push .github/hooks/post-checkout scripts/check-branch-name.sh .github/workflows/claude-review.yml .github/workflows/pr-automerge.yml .github/workflows/pr-review-submitted.yml .github/scripts/post_claude_review.py .github/ISSUE_TEMPLATE/bug_report.md .github/ISSUE_TEMPLATE/feature_request.md .github/ISSUE_TEMPLATE/chore_request.md .github/ISSUE_TEMPLATE/config.yml .github/pull_request_template.md .github/workflows/pr-title.yml scripts/check-pr-title.sh .github/workflows/lint-markdown.yml .github/workflows/lint-yaml.yml .github/workflows/lint-actions.yml scripts/review.sh scripts/lint-edited-file.sh .sandcastle/lib/review-ledger.mts .sandcastle/lib/security-record.mts .sandcastle/lib/errors.mts .sandcastle/lib/host-limit.mts .sandcastle/lib/plain-text.mts .sandcastle/lib/review-ledger.test.mts .sandcastle/lib/security-record.test.mts .sandcastle/lib/plain-text.test.mts .claude/skills/pre-push-review/SKILL.md .claude/skills/pre-push-review/lenses.md .claude/skills/pre-push-review/review-bar.md .claude/agents/pre-push-reviewer.md .security/README.md .editorconfig .claude/rules/script-edits.md global.json)
 
 # A repo shaped like the Factory: gate.sh, the Template's Owned originals, matching copies, and a stub test.sh that records
 # that it ran and exits with $STUB_EXIT.
@@ -110,12 +112,18 @@ STUB
 }
 
 # stub_review <repo>: replaces scripts/review.sh, in the repo and in the Template's originals so the copy check still passes, with a stub that
-# records its arguments in <repo>/review-args and exits with $REVIEW_EXIT.
+# records its arguments in <repo>/review-args and exits with $REVIEW_EXIT. Its size command, the gate's size warning, is apart from that: it records
+# its arguments in <repo>/.git/size-args (inside .git, so the tree stays clean), prints $SIZE_OUT and exits with $SIZE_EXIT.
 stub_review() {
   local repo="$1" f
   for f in "$repo/scripts/review.sh" "$repo/$skill/template/owned/scripts/review.sh"; do
     cat > "$f" << 'STUB'
 #!/usr/bin/env bash
+if [[ "${1:-}" == size ]]; then
+  printf '%s\n' "$*" > "$(dirname "${BASH_SOURCE[0]}")/../.git/size-args"
+  [[ -z "${SIZE_OUT:-}" ]] || printf '%s\n' "$SIZE_OUT"
+  exit "${SIZE_EXIT:-0}"
+fi
 printf '%s\n' "$*" > "$(dirname "${BASH_SOURCE[0]}")/../review-args"
 exit "${REVIEW_EXIT:-0}"
 STUB
@@ -140,7 +148,7 @@ with_origin() {
 # run <repo>: the gate's exit status in $status, and whether the stub ran in $ran. GATE_SKIP_REVIEW is 1 unless $REVIEW_SKIP is set:
 # to a value, which is passed as it is, or to nothing, which leaves GATE_SKIP_REVIEW unset.
 run() {
-  rm -f "$1/$skill/ran" "$1/review-args" "$1/.git/ran-sandcastle"
+  rm -f "$1/$skill/ran" "$1/review-args" "$1/.git/ran-sandcastle" "$1/.git/size-args"
   status=0
   local skip=(GATE_SKIP_REVIEW=1)
   if [[ -n "${REVIEW_SKIP+x}" ]]; then
@@ -2512,6 +2520,38 @@ sed 's/\\"\$CLAUDE_PROJECT_DIR\\"/$CLAUDE_PROJECT_DIR/' "$here/.claude/settings.
 check "the settings check fails on a command without the quotes around CLAUDE_PROJECT_DIR" "$(settings_ok "$settings_root" && echo 1 || echo 0)"
 printf '{' > "$settings_root/.claude/settings.json"
 check "the settings check fails on a file that is not JSON" "$(settings_ok "$settings_root" && echo 1 || echo 0)"
+
+# The size step (issue 176): review.sh size's warning, for HEAD's diff against its merge base with origin/main, is printed and never fails the gate.
+repo="$(new_repo size-past)"
+stub_review "$repo"
+with_origin "$repo"
+SIZE_OUT="⚠ this branch changes 31 files" run "$repo"
+check "a branch past the line passes the gate" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
+check "a branch past the line prints review.sh size's warning" "$(grep -q '^⚠ this branch changes 31 files$' "$repo/out" && echo 0 || echo 1)"
+check "review.sh is called as size <merge base with origin/main>" "$([[ "$(cat "$repo/.git/size-args" 2> /dev/null)" == "size $base" ]] && echo 0 || echo 1)"
+GATE_ARGS=--quick SIZE_OUT="⚠ this branch changes 31 files" run "$repo"
+check "--quick prints the size warning" "$([[ $status == 0 ]] && grep -q '^⚠ this branch changes 31 files$' "$repo/out" && echo 0 || echo 1)"
+RUN_PART=static SIZE_OUT="⚠ this branch changes 31 files" run "$repo"
+check "the static part prints the size warning" "$([[ $status == 0 ]] && grep -q '^⚠ this branch changes 31 files$' "$repo/out" && echo 0 || echo 1)"
+RUN_PART=template run "$repo"
+check "the template part doesn't measure the branch" "$([[ $status == 0 && ! -e $repo/.git/size-args ]] && echo 0 || echo 1)"
+run "$repo"
+check "a branch under the line says so" "$([[ $status == 0 ]] && grep -q 'under the line (30 files, 3,000 lines)' "$repo/out" && ! grep -q '^⚠' "$repo/out" && echo 0 || echo 1)"
+SIZE_EXIT=1 run "$repo"
+check "a failed review.sh size doesn't fail the gate, and says the size was not measured" "$([[ $status == 0 && $ran == yes ]] && grep -q 'size was not measured' "$repo/out" && echo 0 || echo 1)"
+
+repo="$(new_repo size-noorigin)"
+stub_review "$repo"
+tcommit "$repo" base
+run "$repo"
+check "with no origin/main the size step is skipped and review.sh size isn't called" "$([[ $status == 0 && ! -e $repo/.git/size-args ]] && grep -q 'to measure the branch from' "$repo/out" && echo 0 || echo 1)"
+
+repo="$(new_repo size-unrelated)"
+stub_review "$repo"
+tcommit "$repo" base
+git -C "$repo" update-ref refs/remotes/origin/main "$(git -C "$repo" -c user.name=t -c user.email=t@example.com commit-tree -m other "$(git -C "$repo" hash-object -t tree -w /dev/null)")"
+run "$repo"
+check "with an origin/main that shares no history the size step is skipped" "$([[ $status == 0 && ! -e $repo/.git/size-args ]] && grep -q 'to measure the branch from' "$repo/out" && echo 0 || echo 1)"
 
 echo
 echo "gate.test.sh: $pass passed, $failed failed"
