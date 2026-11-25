@@ -11,12 +11,16 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   `template/seed/` (written only if missing) hold the Template's files; `references/` and its own `docs/adr/` describe the parts;
   `github/repos.txt` is the Fleet registry; `apply.sh`, `reapply.sh`, `rollout.sh`, `status.sh`, `land.sh` and `github-settings.sh` are the scripts;
   `status.sh`, `land.sh` and `github-settings.sh` run the C# file-based apps `github/status.cs`, `github/land.cs` and `github/settings.cs`, which include
-  `Landing.cs`, `StatusCore.cs`, `LandCore.cs`, `SettingsCore.cs`, `Repos.cs` and `Gh.cs` (ADR 0017); `rollout.py` and `auto_rollout.py` are still Python,
+  `Landing.cs`, `StatusCore.cs`, `LandCore.cs`, `SettingsCore.cs`, `Py.cs`, `Repos.cs` and `Gh.cs` (ADR 0017); `rollout.py` and `auto_rollout.py` are still Python,
   and `settings.py` stays, run by nothing, for the `read_repo_list` that `rollout.py` imports. `github/rollout.cs` is the entry file of their port, which nothing runs
   yet: it includes `Gh.cs` and the `AutoRollout*.cs` library, which gains `auto_rollout.py`'s logic a part at a time (ADR 0017's library-first Update).
+  `bench/` holds the Claude Review benchmark, the C# file-based app
+  `claude-review-bench.cs` (with `ReviewBench.cs`, `Yaml.cs`, and `Gh.cs` and `Py.cs` from `github/`), which reads `claude-review.yml` with YamlDotNet, its one package,
+  pinned in its own `packages.lock.json` and restored from nuget.org alone by its own `NuGet.config` (ADR 0017's Update for mpaulosky/Application_Factory#161);
+  `bench/tests/rescore.test.sh` is its `--rescore` parity suite.
   `test.sh` and `tests/` test all of it. The gate and `test.sh` run two checkers in `tests/`: `check-issue-refs.sh` and `check-git-status.sh` run the C# file-based apps
   `check-issue-refs.cs` and `check-git-status.cs`, which include `IssueRefs.cs`, `GitStatusGuards.cs` and `Checker.cs`, each judged by its parity suite (`<checker>.test.sh`).
-  `tests/Scripts.Tests/` is the xUnit v3 project for the C# scripts (ADR 0017); it, `tests/` and `github/` each hold three empty shield
+  `tests/Scripts.Tests/` is the xUnit v3 project for the C# scripts (ADR 0017); it, `tests/`, `github/` and `bench/` each hold three empty shield
   files (`Directory.Build.props`, `Directory.Build.targets`, `Directory.Packages.props`), which are not Owned. The test project also holds its own `NuGet.config`
   (nuget.org alone) and `packages.lock.json`, which `test.sh` restores against in locked mode (ADR 0017's Update on hardening the C# step).
 - `.claude/skills/`: also the shared skills (`build-repair`, `dotnet-*`, `remove-squad`, `review-changes`), and `starting-points/`: the optional app-stack files
@@ -46,8 +50,9 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   `pnpm-lock.yaml` and the `.gitignore` lines for `node_modules/` and `.security/`.
 - `.claude/settings.json` and `scripts/lint-edited-file.sh` (a copy of the Template's Owned file): the edit-time lint (ADR 0011). The settings file holds one `PostToolUse` hook
   that lints each Markdown, YAML, shell or Python file Claude writes; the Template carries the script but not the settings file.
-- `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too; its header lists the steps (its test and the review's three tests, the copies' drift check, the bare-`#N` check,
-  the Git-status check, lint, shellcheck of the changed shell files, shfmt of every shell file, ruff of every Python file, `dotnet format whitespace` of every C# file and a build
+- `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too; its header lists the steps (its test and the review's three tests,
+  a warning for a branch past the review's size line, the copies' drift check, the bare-`#N` check, the Git-status check, lint, shellcheck of the changed shell files,
+  shfmt of every shell file, ruff of every Python file, `dotnet format whitespace` of every C# file and a build
   of every C# script with warnings as errors but CA2266 and NU1900 (ADR 0017), the local review check, then `test.sh`, which it skips for a tree and .NET SDK that already passed it, then
   the Sandcastle check when the branch changed a file it reads).
   `GATE_PART=<part>` runs one part (CI's jobs; the pre-push hook drops it), and `TEST_SH_SHARD` one shard of `test.sh` in the `template` part only.
@@ -92,10 +97,10 @@ you changed anything it applies or tests (`template/`, `apply.sh`, `SKILL.md`, `
 Branches are `feature/{issue}-{slug}`, `fix/{issue}-{slug}`, `hotfix/{issue}-{slug}` or `chore/{slug}`. Commit subjects are
 `<type>(<scope>): <Summary>`, with the scope `baseline` for the Template.
 
-Size each issue so its pull request stays small: 30 files and 3,000 changed lines at most, tests included (the line the pre-push review warns at), and at
-most one open decision, as the feature request template says. Claude Review reads a big diff in up to four batches of 8 pieces (about 300 KB each), a review
-each, so a bigger pull request costs a review per batch and each review round over it takes longer; only pieces past the fourth batch go unread, and they
-hold the merge. Split a bigger issue into smaller ones before work starts, ordered with "blocked by"
+Size each issue so its pull request stays small: 30 files and 3,000 changed lines at most, tests included (the line the pre-push review and the gate warn at), and at
+most one open decision, as the feature request and chore templates say, with the expected size and, past the line, the pull requests it splits into.
+Claude Review reads a big diff in up to four batches of 8 pieces (about 300 KB each), a review each, so a bigger pull request costs a review per batch
+and each review round over it takes longer; only pieces past the fourth batch go unread, and they hold the merge. Split a bigger issue into smaller ones before work starts, ordered with "blocked by"
 links, rather than opening one large pull request.
 
 Commit in a linked worktree under `../Application_Factory-worktrees/`: `pre-commit` refuses a commit in the primary checkout, and `pre-push` refuses a push

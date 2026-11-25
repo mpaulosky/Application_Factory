@@ -1,0 +1,2 @@
+^rollout\.sh: shfmt is v3\.13\.1; the gate needs v3\.14 or a later v3 release$
+^rollout\.sh: nothing run; fix those first, then run: rollout\.sh --auto --brings '#80'$

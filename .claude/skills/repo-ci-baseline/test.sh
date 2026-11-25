@@ -7,7 +7,8 @@
 # Runs the Template's own tests (hook suites, auto-merge script tests,
 # the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle and the GitHub scripts' pytest
 # (rollout) with the parity suites (status, land, settings, check_gh_repo, the release scripts and rollout), the Claude Review
-# benchmark's tests and the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land, settings, the AutoRollout library of rollout.cs, what they share, and the two checkers in tests/), lints its workflows, YAML, shell
+# benchmark's --rescore parity suite and the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land, settings, the AutoRollout library of
+# rollout.cs, what they share, the two checkers in tests/ and the benchmark), lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
 # Owned files carry no {{PLACEHOLDER}} and that the Owned scripts, and this repo's own
 # scripts and skills, tell every gh command its repository, checks the Seed Sandcastle files, and smoke-tests apply.sh and
@@ -848,21 +849,63 @@ if in_shard scripts; then
   GIT_DIR="$decoy/.git" GIT_WORK_TREE="$decoy" GIT_INDEX_FILE="$decoy/.git/index" \
     bash "$skill_dir/tests/parity-runner.test.sh" > /dev/null || fail "parity-runner.test.sh with a hook's GIT_DIR set"
   [[ -z "$("${decoy_git[@]}" -C "$decoy" ls-files)" && ! -e "$decoy/cases" ]] || fail "parity-runner.test.sh staged files in the caller's repository"
-  # The rollout suite has a runner of its own (a temporary copy of the skill folder with stub reapply.sh and land.sh, and a HOME per case):
-  # its cases against rollout.sh, then the runner's own tests.
+  # The rollout suite has a runner of its own (a temporary copy of the skill folder with stub reapply.sh and land.sh, a stand-in Template,
+  # a HOME per case and a PATH of fakes): its plain-mode and --auto cases against rollout.sh, then the runner's own tests.
   [[ -f "$skill_dir/tests/rollout-parity/README.md" ]] || fail "tests/rollout-parity has no README.md saying what its cases cover and leave out"
   bash "$skill_dir/tests/rollout-parity.test.sh" || fail "rollout-parity.test.sh"
   bash "$skill_dir/tests/rollout-parity-runner.test.sh" || fail "rollout-parity-runner.test.sh"
 
-  step "Claude Review benchmark tests (scoring, arguments, config swap, the workflow it reads)"
-  # PyYAML lets the test that reads the Template's claude-review.yml run instead of skipping.
-  if python3 -c 'import pytest, yaml' &> /dev/null; then
-    bench_cmd=(python3 -m pytest)
-  else
-    need uvx
-    bench_cmd=(uvx --with pyyaml pytest)
+  step "Claude Review benchmark tests (its --rescore parity suite; its scoring, arguments, config swap and the workflow it reads are in tests/Scripts.Tests/Bench)"
+  # The bench is a C# file-based app (ADR 0017, Update for mpaulosky/Application_Factory#161): the suite builds it once and holds what --rescore prints and
+  # writes back to what the Python did. Its one package, YamlDotNet, restores from nuget.org alone (its own NuGet.config), against its lock file.
+  need dotnet
+  need git
+  bash "$skill_dir/bench/tests/rescore.test.sh" || fail "bench/tests/rescore.test.sh"
+  # The suite can fail: against an implementation that prints and writes nothing it must, and it never records from one under test.
+  printf '#!/bin/sh\nexit 0\n' > "$md_tmp/rescore-silent"
+  chmod +x "$md_tmp/rescore-silent"
+  code=0
+  bash "$skill_dir/bench/tests/rescore.test.sh" "$md_tmp/rescore-silent" > "$md_tmp/rescore-silent.out" 2>&1 || code=$?
+  if [[ $code -ne 1 ]] || ! grep -q '^FAIL - it prints what the Python printed' "$md_tmp/rescore-silent.out"; then
+    fail "rescore.test.sh against a bench that does nothing exited $code, not 1 with its stdout check failed: $(tail -3 "$md_tmp/rescore-silent.out")"
   fi
-  (cd "$skill_dir" && "${bench_cmd[@]}" -q -p no:cacheprovider -rs bench/tests) || fail "benchmark pytest"
+  code=0
+  RESCORE_RECORD=1 bash "$skill_dir/bench/tests/rescore.test.sh" "$md_tmp/rescore-silent" > /dev/null 2>&1 || code=$?
+  [[ $code -eq 2 ]] || fail "rescore.test.sh with RESCORE_RECORD and a command exited $code, not 2"
+  # Again as a hook would run it, with GIT_DIR naming a decoy repo: the bench's git show must read the fixture clone, not the decoy.
+  rescore_decoy="$md_tmp/rescore-decoy"
+  "${decoy_git[@]}" init -q "$rescore_decoy"
+  GIT_DIR="$rescore_decoy/.git" GIT_WORK_TREE="$rescore_decoy" GIT_INDEX_FILE="$rescore_decoy/.git/index" \
+    bash "$skill_dir/bench/tests/rescore.test.sh" > /dev/null || fail "rescore.test.sh with a hook's GIT_DIR set"
+  [[ -z "$("${decoy_git[@]}" -C "$rescore_decoy" ls-files)" ]] || fail "rescore.test.sh staged files in the caller's repository"
+  # On a copy of bench/ under a folder whose NuGet.config adds another feed, which the bench's own must clear.
+  mkdir -p "$md_tmp/bench-sources"
+  printf '<configuration><packageSources><add key="other" value="https://other.invalid/v3/index.json" /></packageSources></configuration>\n' > "$md_tmp/bench-sources/NuGet.config"
+  cp -R "$skill_dir/bench" "$md_tmp/bench-sources/bench" || fail "can't copy bench/ under $md_tmp/bench-sources"
+  bench_sources="$(cd "$md_tmp/bench-sources/bench" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 dotnet nuget list source --format short)" \
+    || fail "dotnet nuget list source failed in the copy of bench/"
+  [[ "$bench_sources" == "E https://api.nuget.org/v3/index.json" ]] \
+    || fail "the bench must restore from nuget.org alone, whatever a NuGet.config above says; it sees: ${bench_sources//$'\n'/ | }"
+  audit="$(audit_sources_nuget_only "$skill_dir/bench/NuGet.config")" \
+    || fail "bench/NuGet.config must clear its auditSources and add nuget.org alone (found: ${audit:-none})"
+  # A feed that can't be reached (NU1900, and NU1905 since its audit source, nuget.org alone, gave no data) leaves the bench building as the gate builds it,
+  # with scripts/gate.sh's properties, once the package is in the cache (the restore of tests/Scripts.Tests below and the gate's build put it there).
+  bench_offline="$md_tmp/bench-offline"
+  mkdir -p "$bench_offline"
+  if ! cp "$skill_dir/../../../global.json" "$bench_offline/" || ! cp -R "$skill_dir/bench" "$skill_dir/github" "$bench_offline/"; then
+    fail "can't copy bench/ and github/ under $bench_offline"
+  fi
+  sed -i.bak 's#https://api.nuget.org/v3/index.json#https://nuget.invalid/v3/index.json#g' "$bench_offline/bench/NuGet.config"
+  ! cmp -s "$bench_offline/bench/NuGet.config" "$bench_offline/bench/NuGet.config.bak" \
+    || fail "the bench's offline check couldn't point its copy at an unreachable feed"
+  rm -f "$bench_offline/bench/NuGet.config.bak"
+  bench_rc=0
+  (cd "$bench_offline/bench" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 \
+    dotnet build claude-review-bench.cs --no-incremental --disable-build-servers --artifacts-path "$bench_offline/out" \
+    -p:TreatWarningsAsErrors=true -p:WarningsNotAsErrors=CA2266%3BNU1900%3BNU1905) > "$bench_offline/build.log" 2>&1 || bench_rc=$?
+  if ((bench_rc != 0)) || ! grep -q 'warning NU1900' "$bench_offline/build.log" || ! grep -q 'warning NU1905' "$bench_offline/build.log"; then
+    fail "the bench must build as the gate builds it, with NU1900 and NU1905 warnings, when its feed can't be reached (exit $bench_rc): $(grep -m 3 -E 'error|NU1' "$bench_offline/build.log" | tr '\n' ' ')"
+  fi
 
   step "C# script tests (tests/Scripts.Tests, xUnit v3)"
   # The white-box tests of the C# scripts (ADR 0017), on Microsoft Testing Platform (the Factory's global.json). The build output and results go to md_tmp,
@@ -991,9 +1034,9 @@ HALF
     printf '<Project>\n<PropertyGroup>\n%s\n</PropertyGroup>\n</Project>\n' "$wrong" > "$md_tmp/tfm.csproj"
     ! targets_net_major "$md_tmp/tfm.csproj" 11 > /dev/null || fail "the target framework check passes for SDK 11: $wrong"
   done
-  # The shields (ADR 0017): an empty Directory.Build.props, Directory.Build.targets and Directory.Packages.props in github/, in tests/ (the two checkers) and
-  # in the test project, so the files of those names above them never reach their builds.
-  for shielded in github tests tests/Scripts.Tests; do
+  # The shields (ADR 0017): an empty Directory.Build.props, Directory.Build.targets and Directory.Packages.props in github/, in tests/ (the two checkers), in
+  # bench/ and in the test project, so the files of those names above them never reach their builds.
+  for shielded in github tests bench tests/Scripts.Tests; do
     for shield in Directory.Build.props Directory.Build.targets Directory.Packages.props; do
       is_empty_shield "$skill_dir/$shielded/$shield" || fail "$shielded/$shield must be the empty shield, <Project />"
     done
@@ -1073,6 +1116,7 @@ if in_shard checks; then
     "$skill_dir/tests/sandcastle-check.test.sh" "$skill_dir/tests/repos-scope.test.sh"
     "$skill_dir/tests/parity.test.sh" "$skill_dir/tests/parity/fake-gh.sh" "$skill_dir/tests/parity/stderr.sh" "$skill_dir/tests/parity-runner.test.sh"
     "$skill_dir/tests/rollout-parity.test.sh" "$skill_dir/tests/rollout-parity/fake-tool.sh" "$skill_dir/tests/rollout-parity-runner.test.sh"
+    "$skill_dir"/tests/rollout-parity/defaults/fakes/*.sh
     "$skill_dir/tests/parity/check_gh_repo/shfmt-shim.sh" "$skill_dir/tests/shfmt-shim.test.sh"
     "$skill_dir/tests/check-git-status.sh" "$skill_dir/tests/check-git-status.test.sh" "$skill_dir/tests/check-issue-refs.sh" "$skill_dir/tests/check-issue-refs.test.sh"
     "$skill_dir/tests/mutations/check-spec.test.sh"
@@ -1121,7 +1165,7 @@ if in_shard checks; then
   fi
   [[ ! -e "$owned/LICENSE" ]] || fail "LICENSE must be a Seed file, not Owned: Apply would overwrite an existing project's copyright year"
   grep -qxF 'Copyright (c) {{YEAR}} mpaulosky' "$seed/LICENSE" || fail "the Seed LICENSE must read 'Copyright (c) {{YEAR}} mpaulosky': Apply fills in the year it writes the file, and never changes an existing one"
-  for template in bug_report.md feature_request.md; do
+  for template in bug_report.md feature_request.md chore_request.md; do
     grep -qxF 'assignees: mpaulosky' "$owned/.github/ISSUE_TEMPLATE/$template" \
       || fail "the Owned $template must carry 'assignees: mpaulosky': an Owned file has no {{OWNER}} to fill"
   done

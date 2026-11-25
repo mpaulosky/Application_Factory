@@ -32,7 +32,8 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   Where a person said to fix every finding, the review-only round gives way to further rounds, each cheaper (one reviewer, the gate started beside it, `prepare <run> last`) and ending the same way.
   The fixer checks its own fix before it commits (boundary tests, a mutation check, the edge-case
   checklist), and replaces a function that two rounds in a row fixed instead of patching it again. A branch past 30 files or 3,000 lines (a file and its Template mirror
-  counting once) gets a warning in round 1 to consider splitting it; the review goes on.
+  counting once) gets a warning in round 1 to consider splitting it; the review goes on. `scripts/review.sh size [<base>]` prints the same warning, or nothing, for HEAD's diff
+  against `<base>` (its merge base with origin/main by default) and exits 0 either way, so a gate can warn while a branch grows; the Factory's gate runs it in its static part.
 - The reviewers read less than the key covers. `prepare` leaves out of `diff.patch` and `fixes.patch` a Template mirror that is a verbatim copy of a root file in the same
   patch (the same after-blob and mode, or both deleted; a path git writes two sections for, such as a symlink that
   becomes a file, must match section for section); a mirror that differs from its root copy, has no root section, or has a quoted or unreadable header stays. The key
@@ -101,7 +102,7 @@ where `.sandcastle/lib/review-ledger.mts` is missing.
   [apply.md](apply.md#retired-owned-files)). Any other deleted Owned file, a symlink, a submodule, a file of the repo's own, a Seed file the re-Apply writes because the repo lacked it, or one of
   the Owned files that carry behaviour (`REVIEWED_ON_REAPPLY`: `.github/ci/coverage-threshold`, which ci.yml enforces at any value,
   `.claude/rules/sandcastle-hand-off.md` and `.claude/rules/markdown-and-yaml-edits.md`, which load into every session, `.claude/rules/script-edits.md`, which loads into every session
-  that works on a script, the three `.github/ISSUE_TEMPLATE/` files, whose front matter sets labels and assignees,
+  that works on a script, the four `.github/ISSUE_TEMPLATE/` files, whose front matter sets labels and assignees,
   `.claude/agents/pre-push-reviewer.md`, whose `tools:` front matter keeps reviewers read-only, the `pre-push-review` skill's `SKILL.md`, `lenses.md` and `review-bar.md`,
   which the host reads into the unattended reviewers' prompts (the bar, the lenses and the severities), `.sandcastle/critique-prompt.md` and `intake-prompt.md`,
   and `plan-prompt.md`, `review-prompt.md` and the role prompts under `.sandcastle/roles/`
