@@ -159,32 +159,41 @@ static partial class AutoRollout
 	public static readonly IReadOnlyList<string> HomebrewPrefixes = ["/home/linuxbrew/.linuxbrew"];
 	public static readonly IReadOnlyList<string> HomebrewParts = ["bin", "sbin", "Cellar", "opt", "lib", "libexec", "share", "include", "etc/gitconfig"];
 
+	// A word character as Python's re reads one in a str: a letter, a number or _. .NET's \w also takes the marks (U+0301 after a $
+	// would make $\u0301hunter2 name a variable) and connector punctuation, and its \b turns on that \w, so neither is used in the
+	// patterns below. A character past U+FFFF is two UTF-16 units that \p{L} and \p{N} don't match: it counts as no word character,
+	// which finds more, not less.
+	public const string PyWord = @"[\p{L}\p{N}_]";
+	// \b before a word character and after one, as Python reads them.
+	const string WordStart = "(?<!" + PyWord + ")";
+	const string WordEnd = "(?!" + PyWord + ")";
+
 	// A URL with a sign-in in it: userinfo after any scheme; a bare user is no secret, but over http(s) or ftp(s) the user may be the
 	// token. A scheme takes no dot here, so url.https://<token>@host/.insteadOf, a key naming a URL, is read as https.
-	public static readonly Regex UrlUserinfo = new(@"\b([a-z][a-z0-9+-]*)://([^/@\s]+)@", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+	public static readonly Regex UrlUserinfo = new(WordStart + @"([a-z][a-z0-9+-]*)://([^/@\s]+)@", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 	// The last part of a git config key that holds a password or a token as its value.
 	public static readonly Regex SecretKey = new(
 		@"\.(?:[a-z0-9-]*(?:token|secret|password|passwd|passphrase|apikey)"
 		+ @"|(?:[a-z0-9-]*-)?(?:smtp)?pass|[a-z0-9-]*(?:api|secret|access)-?key)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 	// What a value that names a variable starts with: $NAME, ${NAME} or $1, bare or in double quotes, or a command substitution that
 	// fetches it from a secret store or a file. It holds no token: it is read when the command runs.
-	public const string NamesAVariable = @"""?(?:\$\{?\w|(?:\$\(|`)\s*(?:pass|gopass|op|bw|lpass|gpg|secret-tool|security|vault|keyring"
-		+ @"|cat)\b)";
+	public const string NamesAVariable = @"""?(?:\$\{?" + PyWord + @"|(?:\$\(|`)\s*(?:pass|gopass|op|bw|lpass|gpg|secret-tool|security|vault|keyring"
+		+ @"|cat)" + WordEnd + ")";
 	// A token's own shape, wherever in a value it is, unless it names a variable (NamesAVariable). Only these known forms are found.
 	public static readonly Regex TokenShape = new(
-		@"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|glpat-[\w-]{20,}|xox[abprs]-[\w-]{10,}"
-		+ @"|sk-[\w-]{20,}|AKIA[0-9A-Z]{16})"
-		+ @"|(?i:\bauthorization:\s*(?!(?:\w+\s+)?" + NamesAVariable + @")[^\s""']"
-		+ @"|\bbearer\s+(?!" + NamesAVariable + @")\S{8,}"
-		+ @"|\bsshpass\s+-p\s*(?!" + NamesAVariable + @")\S)", RegexOptions.CultureInvariant);
+		WordStart + @"(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_" + PyWord + @"{20,}|glpat-[\p{L}\p{N}_-]{20,}|xox[abprs]-[\p{L}\p{N}_-]{10,}"
+		+ @"|sk-[\p{L}\p{N}_-]{20,}|AKIA[0-9A-Z]{16})"
+		+ @"|(?i:" + WordStart + @"authorization:\s*(?!(?:" + PyWord + @"+\s+)?" + NamesAVariable + @")[^\s""']"
+		+ @"|" + WordStart + @"bearer\s+(?!" + NamesAVariable + @")\S{8,}"
+		+ @"|" + WordStart + @"sshpass\s+-p\s*(?!" + NamesAVariable + @")\S)", RegexOptions.CultureInvariant);
 	// A credential helper that holds the password itself or names a file it is kept in.
 	public static readonly Regex HelperSecret = new(
 		@"password\s*=\s*(?!" + NamesAVariable + @")[""']?[^\s""';]"
-		+ @"|--pass(?:word)?(?:=|\s+)(?!" + NamesAVariable + @")\S|--file(?![\w-])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+		+ @"|--pass(?:word)?(?:=|\s+)(?!" + NamesAVariable + @")\S|--file(?![\p{L}\p{N}_-])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
-	// (exit code, stdout, stderr) of a command; 127 when it can't start, 124 when it runs past two minutes. The program is found in
+	// (exit code, stdout, stderr) of a command; 127 when it can't start, 124 when it runs past two minutes (seconds), or its output stays open that long. The program is found in
 	// PATH's absolute folders only, as Gh.Which finds gh.
-	public static Ran RunQuiet(IReadOnlyList<string> command, string? cwd = null, IReadOnlyDictionary<string, string>? env = null)
+	public static Ran RunQuiet(IReadOnlyList<string> command, string? cwd = null, IReadOnlyDictionary<string, string>? env = null, int seconds = 120)
 	{
 		Process? run;
 		try
@@ -220,13 +229,21 @@ static partial class AutoRollout
 			run.StandardInput.Close();
 			var err = run.StandardError.ReadToEndAsync();
 			var output = run.StandardOutput.ReadToEndAsync();
-			if (!run.WaitForExit(TimeSpan.FromSeconds(120)))
+			var limit = TimeSpan.FromSeconds(seconds);
+			var clock = Stopwatch.StartNew();
+			if (!run.WaitForExit(limit))
 			{
 				run.Kill(entireProcessTree: true);
 				run.WaitForExit();
-				return new Ran(124, "", $"{command[0]} didn't answer in 120 s");
+				return new Ran(124, "", $"{command[0]} didn't answer in {seconds} s");
 			}
 			run.WaitForExit();
+			// The pipes close when every process holding them has, so a child the command left running keeps them open past its exit:
+			// the time left bounds the reads too, as Python's subprocess.run(timeout=) does. Elapsed is read once, so the span can't go
+			// below zero between two reads.
+			var left = limit - clock.Elapsed;
+			if (!Task.WaitAll([output, err], left < TimeSpan.Zero ? TimeSpan.Zero : left))
+				return new Ran(124, "", $"{command[0]} didn't answer in {seconds} s");
 			return new Ran(run.ExitCode, output.Result, err.Result);
 		}
 	}
@@ -799,7 +816,9 @@ static class PyLib
 	// loop left unresolved where it starts.
 	public static string RealPath(string path)
 	{
-		var rest = new Stack<string>(AbsPath(path).Split('/', StringSplitOptions.RemoveEmptyEntries).Reverse());
+		// Made absolute but not normalised, as Python's realpath does: a .. is taken after the links before it are resolved, so
+		// <link>/.. is the link target's parent, not the link's.
+		var rest = new Stack<string>((IsAbs(path) ? path : Join(Environment.CurrentDirectory, path)).Split('/', StringSplitOptions.RemoveEmptyEntries).Reverse());
 		var resolved = "/";
 		var hops = 0;
 		while (rest.TryPop(out var part))
