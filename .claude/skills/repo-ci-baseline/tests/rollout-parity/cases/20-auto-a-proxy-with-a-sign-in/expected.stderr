@@ -1,0 +1,2 @@
+^rollout\.sh: HTTPS_PROXY holds a URL with a sign-in, which the review session is never given \(its shell would see it\), so its claude would run without it: for the round, set it to a URL with no sign-in in it \(one that takes it from a file of its own\), or unset it \(env -u HTTPS_PROXY before the command, for one round\)$
+^rollout\.sh: nothing run; fix those first, then run: rollout\.sh --auto --brings '#80'$

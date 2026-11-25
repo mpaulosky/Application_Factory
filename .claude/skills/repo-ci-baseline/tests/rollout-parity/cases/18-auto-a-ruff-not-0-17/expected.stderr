@@ -1,0 +1,2 @@
+^rollout\.sh: ruff is 'ruff 0\.16\.2' \(exit 0\), not a 0\.17 release, and uv isn't installed for the gate to run the pinned one: install uv \(https://docs\.astral\.sh/uv/\), or put a ruff 0\.17 first on PATH \(uv tool install ruff@0\.17\.6 once uv is there\)$
+^rollout\.sh: nothing run; fix those first, then run: rollout\.sh --auto --brings '#80'$

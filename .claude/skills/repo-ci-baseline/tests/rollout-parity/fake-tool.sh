@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # A fake for every command but gh that the rollout parity suite (tests/rollout-parity.test.sh) puts in a run's way: the stub
-# reapply.sh and land.sh in its temporary skill folder (rollout calls them by absolute path, not through PATH), and git and
-# claude on PATH. tests/parity/fake-gh.sh fakes gh. The runner links this file under each name, and the name it was called
-# by is the tool.
+# reapply.sh and land.sh in its temporary skill folder (rollout calls them by absolute path, not through PATH), the tools on
+# PATH (git, claude, and the rest --auto's preflight looks for), and the scripts/review.sh a case's fixture writes into a
+# re-Apply worktree. tests/parity/fake-gh.sh fakes gh. The runner links this file under each stub's name, and the name it
+# was called by is the tool; a tool on PATH is a wrapper script that runs it with FAKE_TOOL_NAME set instead, so its real
+# path (which --auto asks of git and node) is its own and not this file's.
 #
+#   FAKE_TOOL_NAME the tool's name, when it isn't the name this file was called by (unset here before a fixture runs, so a
+#                  tool the fixture calls gets its own)
 #   FAKE_TOOL_DIR  the case's fakes/ folder (required)
 #   FAKE_GH_LOG    the run's call log (required), which the fake gh writes too, so the log holds every call in order
 #   FAKE_HOME      the case's HOME (required), written ~ in the log, so a path under it reads the same in every run
@@ -23,7 +27,8 @@ if [[ -z "${FAKE_TOOL_DIR:-}" || -z "${FAKE_GH_LOG:-}" || -z "${FAKE_HOME:-}" ]]
   echo "fake tool: FAKE_TOOL_DIR, FAKE_GH_LOG and FAKE_HOME must all be set." >&2
   exit 97
 fi
-tool="$(basename -- "$0")"
+tool="${FAKE_TOOL_NAME:-$(basename -- "$0")}"
+unset FAKE_TOOL_NAME
 base="${tool%.sh}"
 
 plain='^[A-Za-z0-9_./:@,+=#~-]+$'

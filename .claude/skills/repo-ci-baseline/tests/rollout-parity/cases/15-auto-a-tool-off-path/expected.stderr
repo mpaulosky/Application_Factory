@@ -1,0 +1,2 @@
+^rollout\.sh: pnpm isn't on PATH$
+^rollout\.sh: nothing run; fix those first, then run: rollout\.sh --auto --brings '#80'$

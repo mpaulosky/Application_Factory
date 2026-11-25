@@ -1,0 +1,2 @@
+^rollout\.sh: CLAUDE_CODE_OAUTH_TOKEN is set, and the review session's shell would see it: unset it for the round \(env -u CLAUDE_CODE_OAUTH_TOKEN before the command\), and sign Claude Code in with its own credentials file \(claude /login\) or the cloud's profile files, which the sandbox keeps from the shell$
+^rollout\.sh: nothing run; fix those first, then run: rollout\.sh --auto --brings '#80'$

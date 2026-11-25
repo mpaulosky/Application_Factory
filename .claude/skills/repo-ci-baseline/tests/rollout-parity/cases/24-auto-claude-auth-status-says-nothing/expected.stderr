@@ -1,0 +1,2 @@
+^rollout\.sh: claude --setting-sources '' auth status --json doesn't say whether claude is signed in \(no loggedIn in what it prints\): update claude, or run rollout\.sh without --auto$
+^rollout\.sh: nothing run; fix those first, then run: rollout\.sh --auto --brings '#80'$

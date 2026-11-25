@@ -718,6 +718,11 @@ fake 97 '' "a list without --jq" pr list -R o/app --json number
 fake 97 '' "a list's flag on another subcommand" pr view 7 -R o/app --head x --json state --jq .state
 fake 97 '' "a list with --head and no value" pr list -R o/app --json number --jq . --head
 fake 97 '' "a call with no fixture" pr ready 8 -R o/app && logged "a gh pr call with no fixture" "UNMATCHED pr.ready.o.app.8"
+# gh auth status, which rollout.sh --auto's preflight asks, is keyed auth.status; a .fail is gh signed out.
+echo 'You are not logged into any GitHub hosts.' > "$gh_dir/auth.status.fail"
+fake 1 '' "gh auth status" auth status && logged "gh auth status" "auth.status"
+fake 97 '' "gh auth with another subcommand" auth login
+fake 97 '' "gh auth status with an argument" auth status --hostname github.com
 
 # The nth call with a key gets <key>.<n>.json or .fail when there is one, else <key>.json or .fail.
 seq_dir="$work/seq"

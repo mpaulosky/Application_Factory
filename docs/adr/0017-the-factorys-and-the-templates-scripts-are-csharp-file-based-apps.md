@@ -292,6 +292,16 @@ of its own, and `git` and `claude` are fakes on `PATH` beside the fake `gh`. A c
 finds the stubs as the reference does. The two runners share the fake `gh` and the stderr match (`tests/parity/stderr.sh`), not their case loops.
 The plain-mode cases come first; `--auto`'s follow in mpaulosky/Application_Factory#156.
 
+## Update (mpaulosky/Application_Factory#156): the rollout suite's `--auto` cases
+
+The `--auto` cases needed more of the runner than plain mode. `--auto` checks its tools on `PATH`, so the run's `PATH` holds only the fakes (each tool the
+preflight looks for) and links to the host's own commands; a case's `missing` takes a fake off it, and a host's own `pnpm` can't stand in. The copy of the skill
+folder sits where it does in the Factory, so the Factory checkout `--auto` derives is the same each run, and it holds a stand-in Template whose skill text the
+review session's prompt carries. Suite-wide defaults answer the preflight and a review session. A case's `setup.sh` and `after.sh` hold the lock and check that
+a child's group is gone, its `ignore` starts the run with a signal ignored, and fixtures signal the wrapper's PID. The random names `--auto` makes are written
+`XXXXXXXX`, and a `.git` in HOME is left out. The 27 cases pass against `rollout.py` and `auto_rollout.py`, with no change to either; the port in
+mpaulosky/Application_Factory#122 runs against the same cases.
+
 ## Update (mpaulosky/Application_Factory#123): the gate's two checkers are C#
 
 `tests/check-issue-refs.py` and `tests/check-git-status.py`, the Factory's test helpers that the gate and `test.sh` run, are C# file-based apps, and the `.py` files and the

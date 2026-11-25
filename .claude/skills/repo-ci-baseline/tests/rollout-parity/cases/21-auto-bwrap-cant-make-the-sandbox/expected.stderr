@@ -1,0 +1,2 @@
+^rollout\.sh: bubblewrap can't make the review session's sandbox here \(exit 1\): bwrap: setting up uid map: Permission denied; try it with: bwrap --unshare-all --ro-bind / / --dev /dev true\. The host may refuse unprivileged user namespaces \(Ubuntu's sysctl kernel\.apparmor_restrict_unprivileged_userns, kernel\.unprivileged_userns_clone, a container without them\); where it can't allow them, run rollout\.sh without --auto and the review by hand$
+^rollout\.sh: nothing run; fix those first, then run: rollout\.sh --auto --brings '#80'$
