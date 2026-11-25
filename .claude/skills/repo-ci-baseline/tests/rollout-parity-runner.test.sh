@@ -189,13 +189,13 @@ echo 'signed out' > "$cases/one/gh/auth.status.fail"
 run_runner 1 "a case's .fail over a default .json" -- && said "a case's .fail over a default .json" "-default auth"
 rm "$cases/one/gh/auth.status.fail"
 # A case's numbered fixture hides the default too: with only a second call's, the first call has no answer, not the default's.
-for fixture in auth.status.2.fail auth.status.2.json; do
+for fixture in auth.status.2.fail auth.status.2.json auth.status.12.json; do
   echo 'numbered auth' > "$cases/one/gh/$fixture"
   run_runner 1 "a case's $fixture over a default .json" -- && said "a case's $fixture over a default .json" "UNMATCHED"
   rm "$cases/one/gh/$fixture"
 done
 # A fixture of another key that starts the same way doesn't hide it.
-for fixture in auth.status.x1.json auth.status.2x.fail; do
+for fixture in auth.status.x1.json auth.status.x1.fail auth.status.2x.fail auth.status.2.json.bak; do
   echo 'other key' > "$cases/one/gh/$fixture"
   run_runner 0 "a case's $fixture beside a default .json" --
   rm "$cases/one/gh/$fixture"
