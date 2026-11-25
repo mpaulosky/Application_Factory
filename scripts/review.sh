@@ -3,6 +3,7 @@
 # and what became of each finding. The gate refuses a diff without a clean
 # review (the "Local review" step of scripts/gate.sh).
 #   scripts/review.sh report                 the review of HEAD's diff
+#   scripts/review.sh size                   the warning prepare gives for a branch past the review's size line, or nothing
 #   scripts/review.sh accept R3 "<reason>"   the person accepts a finding (never on their behalf)
 #   scripts/review.sh accept-open            list the open findings; with ids (R3="<reason>", --reason, --fix R4) the person
 #                                            accepts the ids named or asks for them to be fixed, every id at once or none
