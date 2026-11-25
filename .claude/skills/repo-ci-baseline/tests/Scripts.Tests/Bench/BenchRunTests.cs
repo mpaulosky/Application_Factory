@@ -126,6 +126,78 @@ public partial class BenchTests
 		Assert.True(started.Elapsed < TimeSpan.FromSeconds(20), $"took {started.Elapsed}");
 	}
 
+	// Whether pid has ended: no process, or one ended that nothing has reaped yet (a container's first process may never reap it).
+	static bool Ended(string pid)
+	{
+		var shown = Bench.Exec(["ps", "-o", "stat=", "-p", pid]);
+		return shown.Code != 0 || shown.Text.Trim().StartsWith('Z');
+	}
+
+	[Theory]
+	[InlineData("sleep 30 & echo $! > \"$0\"; exit 0")]
+	[InlineData("sleep 30 & echo $! > \"$0\"; wait")]
+	public void A_child_the_call_leaves_running_is_killed_with_its_group_when_the_time_is_up(string script)
+	{
+		var pid = Path.Combine(temp, "pid");
+
+		Assert.Throws<TimeoutException>(() => Bench.Exec(["sh", "-c", script, pid], timeout: 1));
+
+		var started = System.Diagnostics.Stopwatch.StartNew();
+		while (!Ended(File.ReadAllText(pid).Trim()) && started.Elapsed < TimeSpan.FromSeconds(10))
+			Thread.Sleep(100);
+		Assert.True(Ended(File.ReadAllText(pid).Trim()), "the child runs on");
+	}
+
+	[Fact]
+	public void A_stdout_past_its_bytes_stops_the_call_and_one_at_them_is_read_whole()
+	{
+		var error = Assert.Throws<OutputPastLimit>(() => Bench.Exec(["head", "-c", "1000001", "/dev/zero"], maxOutput: 1_000_000));
+
+		Assert.Equal("Command ['head', '-c', '1000001', '/dev/zero'] wrote more than 1000000 bytes, so it was stopped", error.Message);
+		Assert.Equal(1_000_000, Bench.Exec(["head", "-c", "1000000", "/dev/zero"], maxOutput: 1_000_000).Stdout.Length);
+		// Stopped, not read to its end: yes never ends by itself.
+		Assert.Throws<OutputPastLimit>(() => Bench.Exec(["yes"], maxOutput: 1000));
+	}
+
+	[Fact]
+	public void A_call_past_its_time_says_which_command_it_was()
+	{
+		Assert.Equal("Command ['sleep', '30'] timed out after 1 seconds", Assert.Throws<TimeoutException>(() => Bench.Exec(["sleep", "30"], timeout: 1)).Message);
+	}
+
+	// -- A head's nested Claude Code config --
+
+	[Fact]
+	public void Nested_claude_config_is_removed_and_the_roots_and_links_targets_are_kept()
+	{
+		void Put(string path, string text)
+		{
+			Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(temp, "tree", path))!);
+			File.WriteAllText(Path.Combine(temp, "tree", path), text);
+		}
+		Put("CLAUDE.md", "root\n");
+		Put(".claude/skills/s/CLAUDE.md", "the base's skill\n");
+		Put(".git/CLAUDE.md", "not a folder Claude reads\n");
+		Put("sub/CLAUDE.md", "nested\n");
+		Put("sub/.claude/settings.json", "{}\n");
+		Put("a/b/claude.local.md", "nested\n");
+		Put("a/b/kept.md", "kept\n");
+		Put("a/.CLAUDE", "a file named as the folder\n");
+		Directory.CreateDirectory(Path.Combine(temp, "outside"));
+		File.WriteAllText(Path.Combine(temp, "outside", "CLAUDE.md"), "a link's target\n");
+		Directory.CreateSymbolicLink(Path.Combine(temp, "tree", "a", "linked"), Path.Combine(temp, "outside"));
+		Directory.CreateSymbolicLink(Path.Combine(temp, "tree", "a", ".claude"), Path.Combine(temp, "outside"));
+
+		Bench.RemoveNestedConfig(Path.Combine(temp, "tree"));
+
+		// The listing follows a/linked to the target's CLAUDE.md, which stays.
+		var left = Directory.EnumerateFileSystemEntries(Path.Combine(temp, "tree"), "*", new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = 0 })
+				.Select(path => Path.GetRelativePath(Path.Combine(temp, "tree"), path)).Order(StringComparer.Ordinal);
+		Assert.Equal([".claude", ".claude/skills", ".claude/skills/s", ".claude/skills/s/CLAUDE.md", ".git", ".git/CLAUDE.md", "CLAUDE.md", "a", "a/b", "a/b/kept.md", "a/linked",
+				"a/linked/CLAUDE.md", "sub"], left);
+		Assert.Equal("a link's target\n", File.ReadAllText(Path.Combine(temp, "outside", "CLAUDE.md")));
+	}
+
 	[Theory]
 	[InlineData(-1L, 0L)]
 	[InlineData(0L, 0L)]
@@ -620,7 +692,7 @@ public partial class BenchTests
 
 // The parts that need PATH changed, which is the process's own, so they run alone with the other PATH tests.
 [Collection(nameof(GhLookupTests))]
-public sealed class BenchPathTests : IDisposable
+public sealed partial class BenchPathTests : IDisposable
 {
 	readonly string temp = Directory.CreateTempSubdirectory("bench-path-test.").FullName;
 	readonly string? path = Environment.GetEnvironmentVariable("PATH");
