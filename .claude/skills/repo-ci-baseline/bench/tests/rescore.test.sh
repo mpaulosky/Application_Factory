@@ -11,7 +11,11 @@
 #
 # Each run is from a folder holding a copy of rescore/input/, with --root naming a folder that holds one clone, fixture/, built here (two commits),
 # so a finding's line is checked against a real head; a case whose repo isn't there gets bad_lines null. The cases file is the bench's own.
+# shellcheck disable=SC2016 # each check is single-quoted on purpose, for eval to expand its paths
 set -uo pipefail
+# A hook's GIT_DIR and the rest would point the bench's git show (bad_lines) at the caller's repository, not the fixture clone.
+# shellcheck disable=SC2046 # git prints one variable name per line, none with a space
+unset $(git rev-parse --local-env-vars)
 
 here="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 bench="$(dirname -- "$here")"
@@ -90,10 +94,11 @@ if [[ -n "${RESCORE_RECORD:-}" ]]; then
   exit 0
 fi
 
-check "--rescore exits 0 with nothing on stderr" "[[ \$st == 0 && ! -s '$work/stderr' ]]"
-check "it prints what the Python printed, byte for byte" "cmp -s '$work/stdout' '$here/rescore/expected.stdout'"
+# The checks' paths are expanded by eval itself, so a checkout path holding a quote, $ or ` stays one word.
+check "--rescore exits 0 with nothing on stderr" '[[ $st == 0 && ! -s "$work/stderr" ]]'
+check "it prints what the Python printed, byte for byte" 'cmp -s "$work/stdout" "$here/rescore/expected.stdout"'
 for name in "${names[@]}"; do
-  check "it writes $name back as the Python did, byte for byte" "cmp -s '$work/run/$name' '$here/rescore/expected/$name'"
+  check "it writes $name back as the Python did, byte for byte" 'cmp -s "$work/run/$name" "$here/rescore/expected/$name"'
 done
 cmp -s "$work/stdout" "$here/rescore/expected.stdout" || diff "$here/rescore/expected.stdout" "$work/stdout" | head -20
 
@@ -102,11 +107,11 @@ for bad in "--rescore" "--timeout x --rescore a.json" "--bogus" "stray"; do
   read -ra words <<< "$bad"
   st=0
   (cd -- "$work/run" && "${bench_cmd[@]}" "${words[@]}" > /dev/null 2> "$work/stderr" < /dev/null) || st=$?
-  check "$bad is a usage error (exit 2)" "[[ \$st == 2 ]] && grep -q '^usage: ' '$work/stderr'"
+  check "$bad is a usage error (exit 2)" '[[ $st == 2 ]] && grep -q "^usage: " "$work/stderr"'
 done
 st=0
-(cd -- "$work/run" && "${bench_cmd[@]}" --root "$work/root" --rescore missing.json > /dev/null 2>&1 < /dev/null) || st=$?
-check "a results file that isn't there is exit 1" "[[ \$st == 1 ]]"
+(cd -- "$work/run" && "${bench_cmd[@]}" --root "$work/root" --rescore missing.json > /dev/null 2> "$work/stderr" < /dev/null) || st=$?
+check "a results file that isn't there is exit 1, naming it" '[[ $st == 1 ]] && grep -q "missing\.json" "$work/stderr" && [[ ! -e "$work/run/missing.json" ]]'
 
 echo "rescore.test.sh: $PASSED passed, $FAILED failed"
 ((FAILED == 0))

@@ -456,6 +456,11 @@ A Factory-only port, as the ones above are, so `bench/claude-review-bench.py` an
   into the folder it copied the action to and passed it to `git` as it was. The programs the bench runs (`git`, `tar`, `python3`, `claude`) are found in `PATH`'s absolute
   folders only, as `Gh.Which` finds `gh`. A linked `.claude`, `.mcp.json`, `CLAUDE.md` or `CLAUDE.local.md` in the head is removed itself, where the Python's `rmtree`
   failed on a linked folder and left a dangling link in place. A failed call's error names the command and its exit status, as Python's `CalledProcessError` did, in
-  words of its own. The run mode, which runs Claude on the cases' clones, has no parity suite: `Scripts.Tests` tests its parts, and a run on the maintainer's machine the whole.
+  words of its own. A program in `PATH` that can't be run fails its case, as the Python's `OSError` did, rather than the run. `Yaml.Load` refuses a text past
+  100,000 nodes or 100 levels deep once its aliases are read in (YamlDotNet hands back each alias as a copy to convert, where PyYAML shared one object), so a
+  head's workflow built as an alias bomb pins no action instead of ending the run. Claude's `stream-json` output is split at `\n` alone, where the Python's
+  `splitlines()` also broke at the U+2028, U+2029 and U+0085 that JSON writes raw inside a string and so lost such a review. A `--prompt-file` reads `\r\n` and
+  `\r` as `\n`, as `read_text()` did. The run mode, which runs Claude on the cases' clones, has no parity suite: `Scripts.Tests` tests its parts (`BenchRunTests.cs`:
+  each outcome a finished call gives, the `--max-turns` cap, the timeout, the YAML budget), and a run on the maintainer's machine the whole.
 - **The pytest suite.** `bench/tests/test_claude_review_bench.py` is deleted, its 26 tests moved to `tests/Scripts.Tests/Bench/BenchTests.cs` under the rule above, a
   `Bench/` folder beside the others; `BenchPortTests.cs` holds the port's own. `Scripts.Tests` compiles every `.cs` in `bench/` but the entry file.

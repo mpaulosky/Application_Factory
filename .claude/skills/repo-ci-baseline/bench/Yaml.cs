@@ -25,7 +25,7 @@ static class Yaml
 	// The most nodes, and the deepest nesting, a text may hold once its aliases are read in. YamlDotNet hands back an alias as the node it names,
 	// so a node aliased many times is converted that many times: a few lines of aliases of aliases (an alias bomb) would otherwise grow without
 	// bound, where PyYAML shared the one object. A case's head is read through here too, so a workflow past either is refused, as one YAML can't parse.
-	// The Template's claude-review.yml holds a few thousand nodes, nested less than twenty deep.
+	// The Template's claude-review.yml holds about 300 nodes, nested 7 deep.
 	public const int MaxNodes = 100_000;
 	public const int MaxDepth = 100;
 

@@ -861,6 +861,19 @@ if in_shard scripts; then
   need dotnet
   need git
   bash "$skill_dir/bench/tests/rescore.test.sh" || fail "bench/tests/rescore.test.sh"
+  # The suite can fail: against an implementation that prints and writes nothing it must, and it never records from one under test.
+  printf '#!/bin/sh\nexit 0\n' > "$md_tmp/rescore-silent"
+  chmod +x "$md_tmp/rescore-silent"
+  ! bash "$skill_dir/bench/tests/rescore.test.sh" "$md_tmp/rescore-silent" > /dev/null 2>&1 || fail "rescore.test.sh passed against a bench that does nothing"
+  code=0
+  RESCORE_RECORD=1 bash "$skill_dir/bench/tests/rescore.test.sh" "$md_tmp/rescore-silent" > /dev/null 2>&1 || code=$?
+  [[ $code -eq 2 ]] || fail "rescore.test.sh with RESCORE_RECORD and a command exited $code, not 2"
+  # Again as a hook would run it, with GIT_DIR naming a decoy repo: the bench's git show must read the fixture clone, not the decoy.
+  rescore_decoy="$md_tmp/rescore-decoy"
+  "${decoy_git[@]}" init -q "$rescore_decoy"
+  GIT_DIR="$rescore_decoy/.git" GIT_WORK_TREE="$rescore_decoy" GIT_INDEX_FILE="$rescore_decoy/.git/index" \
+    bash "$skill_dir/bench/tests/rescore.test.sh" > /dev/null || fail "rescore.test.sh with a hook's GIT_DIR set"
+  [[ -z "$("${decoy_git[@]}" -C "$rescore_decoy" ls-files)" ]] || fail "rescore.test.sh staged files in the caller's repository"
   # On a copy of bench/ under a folder whose NuGet.config adds another feed, which the bench's own must clear.
   mkdir -p "$md_tmp/bench-sources"
   printf '<configuration><packageSources><add key="other" value="https://other.invalid/v3/index.json" /></packageSources></configuration>\n' > "$md_tmp/bench-sources/NuGet.config"
