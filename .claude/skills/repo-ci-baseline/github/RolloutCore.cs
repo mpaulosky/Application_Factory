@@ -102,8 +102,11 @@ static class Rollout
 	}
 
 	// (number, state) of repo's newest re-Apply PR from repo itself (not a fork's of the same branch name), or null; --auto's lookup, so
-	// both modes read the same PR.
-	public static (long Number, string State)? GhLatestPr(string repo) => AutoRound.GhPr(repo) is { } found ? (found.Number, found.State) : null;
+	// both modes read the same PR. run stands in for gh, for the tests.
+	public static (long Number, string State)? GhLatestPr(string repo) => GhLatestPr(repo, null);
+
+	public static (long Number, string State)? GhLatestPr(string repo, Runner? run) =>
+			AutoRound.GhPr(repo, run) is { } found ? (found.Number, found.State) : null;
 
 	// rollout.sh's command line. listed, reapply, latestPr, exists, auto and ahead stand in for repos.txt, reapply.sh, gh, the checkouts, the
 	// --auto round's outside world and whether the checkout at a path has a re-Apply worktree with commits main lacks (throws when git can't

@@ -67,12 +67,16 @@ static class ReviewFixtures
 
 	// RunReview of TicketManager's re-Apply worktree with every outside part faked, as review_once runs it: (exit code, log, what was seen,
 	// the worktree). GATE_SKIP_REVIEW is set while it runs, as the pytest's monkeypatch set it, so a test sees it left out of the session's
-	// environment. listdir, which and secrets default to NO_LISTING's (nothing listed, no tool found, no secret).
+	// environment. listdir, which and secrets default to NO_LISTING's (nothing listed, no tool found, no secret). err, when given, is the
+	// round's stderr (so a test reads it after RunReview throws), and makeTempFolder what makes the session's folder (makeTemp its log);
+	// agents, the agent definition (Agents), which a test makes throw.
 	public static (int Code, string Log, ReviewSeen Seen, string Worktree) ReviewOnce(string tmp, Spawner? popen = null,
 			Func<string, IReadOnlyList<string>>? changes = null, string? worktree = null, IGroupChild? session = null, Func<IGroupChild, bool>? end = null,
 			IEnumerable<string>? broke = null, Func<double>? clock = null, Func<string, Guard>? guard = null, Recorder? record = null,
 			Func<Guard, List<string>>? check = null, Func<string, IEnumerable<string>>? listdir = null, Func<string, string?>? which = null,
-			Func<string, string, List<string>>? secrets = null, double timeout = ReviewSession.ReviewTimeoutMinutes * 60)
+			Func<string, string, List<string>>? secrets = null, double timeout = ReviewSession.ReviewTimeoutMinutes * 60, StringWriter? err = null,
+			Func<string, string, string>? makeTempFolder = null, Func<string, string, string, (FileStream File, string Path)>? makeTemp = null,
+			Func<JsonNode>? agents = null)
 	{
 		var seen = new ReviewSeen();
 		session ??= new FakeSession();
@@ -107,7 +111,7 @@ static class ReviewFixtures
 			worktree = DefaultWorktree(tmp);
 			Directory.CreateDirectory(worktree);
 		}
-		var err = new StringWriter();
+		err ??= new StringWriter();
 		var skip = Environment.GetEnvironmentVariable("GATE_SKIP_REVIEW");
 		Environment.SetEnvironmentVariable("GATE_SKIP_REVIEW", "1");
 		try
@@ -125,8 +129,8 @@ static class ReviewFixtures
 						seen.Guarded ??= path;
 						return FakeGuard(tmp);
 					}),
-					check ?? (_ => [.. brokeList]), () => SkillText, Agents, record ?? FakeRecord, listdir ?? (_ => []), which ?? (_ => null),
-					secrets ?? ((_, _) => []), err);
+					check ?? (_ => [.. brokeList]), () => SkillText, agents ?? Agents, record ?? FakeRecord, listdir ?? (_ => []), which ?? (_ => null),
+					secrets ?? ((_, _) => []), err, makeTempFolder, makeTemp);
 			seen.Broke = broken;
 			return (code, log, seen, worktree);
 		}

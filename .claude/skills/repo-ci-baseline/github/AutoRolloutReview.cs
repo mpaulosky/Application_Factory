@@ -57,13 +57,15 @@ static class ReviewSession
 	// whenever the session ends, never one that was at its path before (WriteSettings refuses it), and one a killed run left beside its log
 	// is removed first (SweepSettings). A clone whose git folder holds a sign-in secret (ConfigSecrets) isn't reviewed, and entries made
 	// beside the session's folders while it ran, which it could read, and secrets added to the clone's git folder meanwhile are named
-	// (AfterSession). A null argument is its default; err is the round's stderr.
+	// (AfterSession). A null argument is its default; err is the round's stderr, and makeTempFolder (Files.MakeTempFolder) what makes the
+	// session's temporary folder, and makeTemp (Files.MakeTemp) what makes its log, which a test replaces.
 	public static (int Code, string Log, List<string> Broke) RunReview(string repo, string worktree, Spawner? popen = null,
 			Func<string, IReadOnlyList<string>>? changes = null, double timeout = ReviewTimeoutMinutes * 60, string? logDir = null,
 			string? sessionDir = null, Func<IGroupChild, bool>? end = null, Func<double>? clock = null, Func<string, Guard>? guard = null,
 			Func<Guard, List<string>>? check = null, Func<string>? skill = null, Func<JsonNode>? agents = null, Recorder? record = null,
 			Func<string, IEnumerable<string>>? listdir = null, Func<string, string?>? which = null, Func<string, string, List<string>>? secrets = null,
-			TextWriter? err = null)
+			TextWriter? err = null, Func<string, string, string>? makeTempFolder = null,
+			Func<string, string, string, (FileStream File, string Path)>? makeTemp = null)
 	{
 		logDir ??= AutoRollout.LogDir;
 		sessionDir ??= AutoRollout.SessionDir;
@@ -78,13 +80,15 @@ static class ReviewSession
 		which ??= PyLib.Which;
 		secrets ??= (path, common) => AutoRollout.ConfigSecrets(path, common);
 		err ??= Console.Error;
+		makeTempFolder ??= Files.MakeTempFolder;
+		makeTemp ??= Files.MakeTemp;
 		FileStream out_;
 		string log;
 		try
 		{
 			AutoRollout.OwnLogDir(logDir);
 			AutoRollout.SweepSettings(logDir);
-			(out_, log) = Files.MakeTemp(logDir, $"review-{AutoRollout.ShortName(repo)}.", ".log");
+			(out_, log) = makeTemp(logDir, $"review-{AutoRollout.ShortName(repo)}.", ".log");
 		}
 		catch (Exception error) when (error is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
 		{
@@ -97,7 +101,7 @@ static class ReviewSession
 			{
 				AutoRollout.OwnLogDir(sessionDir);
 				AutoRollout.SweepSessions(sessionDir);
-				tmp = Files.MakeTempFolder(sessionDir, "rollout-session.");
+				tmp = makeTempFolder(sessionDir, "rollout-session.");
 			}
 			catch (Exception error) when (error is IOException or UnauthorizedAccessException)
 			{
@@ -192,7 +196,7 @@ static class ReviewSession
 			return Stop(error.Message);
 		}
 		catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException
-				or UnnameableError or ConfigUnreadable or System.Text.Json.JsonException)
+				or UnnameableError or ConfigUnreadable or System.Text.Json.JsonException or InvalidDataException) // a skill or agent that doesn't read
 		{
 			return Stop($"can't set the session up: {error.Message}");
 		}
