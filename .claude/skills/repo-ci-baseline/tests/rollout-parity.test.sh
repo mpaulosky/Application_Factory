@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The rollout parity suite: rollout.sh's behaviour through its command line only, so the same cases judge rollout.py with
-# auto_rollout.py and their C# port (ADR 0017). It has a runner of its own, beside tests/parity.test.sh's, because rollout
+# The rollout parity suite: rollout.sh's behaviour through its command line only, so the same cases that judged rollout.py with
+# auto_rollout.py judge their C# port, github/rollout.cs (ADR 0017). It has a runner of its own, beside tests/parity.test.sh's, because rollout
 # calls reapply.sh and land.sh by absolute path beside itself and keeps its lock, logs and sessions under ~: each run is of a
 # temporary copy of the skill folder, holding stubs for those two, with a HOME of its own. Its cases are in
 # tests/rollout-parity/cases/, and tests/rollout-parity/README.md says what they cover and leave out on purpose, --auto's
@@ -9,7 +9,7 @@
 #   tests/rollout-parity.test.sh                    run the cases against the copy's rollout.sh (the reference: whatever
 #                                                   the skill's rollout.sh runs)
 #   tests/rollout-parity.test.sh <command> [arg]... run them against another implementation; a word that names a file
-#                                                   in the skill folder (github/rollout.py, say) names the copy's, so it
+#                                                   in the skill folder (github/rollout.cs, say) names the copy's, so it
 #                                                   finds the stubs and the fixed repos.txt as the reference does
 #   PARITY_RECORD=1 tests/rollout-parity.test.sh   record the cases from the reference (no command is accepted, so a port
 #                                                   under test never records its own oracle); review the diff before
@@ -79,8 +79,14 @@
 # folder is made absolute first, as is the value of a later --option=value word; the first word is looked up on the
 # caller's PATH unless it holds a /, so a dotnet there isn't the fake one.
 #
+# The copy's rollout.sh builds the copy's github/rollout.cs and runs the dll it built (ADR 0017), with the run's dotnet, the
+# fake: so when the copy has that file the runner builds it once with the caller's dotnet before the first case, and the fake
+# dotnet hands those two calls alone (dotnet build of that file, dotnet of that dll) to the caller's, logging neither, the
+# build with the caller's HOME and a TMPDIR of the runner's own so it finds that build and writes nothing in the case's HOME.
+#
 # Exit 0 when every case passes, 1 when one fails, 2 on a usage or setup error (a case missing a file or holding a bad one,
-# a setup.sh that fails, a command that can't be run, a temporary folder that can't be made). Needs bash 4.4 or later,
+# a setup.sh that fails, a command that can't be run, a temporary folder that can't be made, a build of the copy's
+# github/rollout.cs that fails or with no dotnet on the caller's PATH). Needs bash 4.4 or later, the .NET SDK for the C#,
 # python3 (the launcher; the reference needs it too), coreutils (mktemp, mkdir, rm, ln, cp, mv, cat, tr, env, basename,
 # dirname, timeout, and GNU sort for -z), GNU findutils (find with -printf), a diff with --no-dereference (GNU
 # diffutils 3.3 or later), grep and sed; the cases' fixtures need jq, flock (util-linux) and Linux's /proc too.

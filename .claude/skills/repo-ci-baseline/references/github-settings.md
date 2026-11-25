@@ -2,8 +2,7 @@
 
 Skill files (not copied into repos): `github-settings.sh`, which runs `github/settings.cs` (its logic is `SettingsCore.cs`) on the .NET SDK
 the Factory's `global.json` names, and the standard beside it in `github/`: `settings.json`, `main-rules.json`, `labels.json`, `legacy.json`,
-`repos.txt` and `repos/<repo>.json`. `github/settings.py` stays beside it, run by nothing, until `rollout.py`, which imports its `read_repo_list`,
-is ported (ADR 0017). Each `gh` call is given two minutes, and the first build is locked as `status.sh`'s is ([automerge.md](automerge.md)).
+`repos.txt` and `repos/<repo>.json` (ADR 0017). Each `gh` call is given two minutes, and the first build is locked as `status.sh`'s is ([automerge.md](automerge.md)).
 Tests: `tests/Scripts.Tests/Settings/` and the `settings` parity suite, run by `test.sh`.
 Decisions: [ADR 0003](../docs/adr/0003-github-settings-as-code.md).
 
@@ -97,8 +96,9 @@ the app comparison, the active guard, the pinning guard, the legacy flag, the su
 in the paths they go into, which statuses each refused read takes as an answer, `--fix` with `--json`, a failed write and `--all`, a `gh` that exits
 before reading its body, the `gh api` call's argv and body, and the
 Python readings the output depends on (`repr`, `str`, `json.dumps`, `sorted`, `==`, `splitlines`, `strip`, `b64decode` and the workflow and branch
-readers), each checked against `settings.py` run by `python3` while it is left. The `settings` parity suite (`tests/parity/settings/`) runs the
-command line against a fake `gh`, on the suite's own standard: the Python is its reference, and `test.sh` runs it against `github-settings.sh` too.
+readers), each checked against `python3`'s own, or for the workflow and branch readers against what `settings.py` read, recorded from it before it was deleted.
+The `settings` parity suite (`tests/parity/settings/`) runs the command line against a fake `gh`, on the suite's own standard: `github/settings.cs` is its
+reference, and `test.sh` runs it against `github-settings.sh` too.
 
 ## Verify live
 

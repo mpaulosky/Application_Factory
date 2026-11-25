@@ -1,8 +1,8 @@
 # The settings parity suite
 
-`github/settings.py` through its command line: `tests/parity.test.sh settings [command...]`. The runner's header says what a case holds.
-The cases were recorded from the Python script, which stays the reference while `rollout.py` still imports it (ADR 0017); `test.sh` runs them
-against `github-settings.sh` too, which runs the C# port.
+`github/settings.cs` through its command line: `tests/parity.test.sh settings [command...]`. The runner's header says what a case holds.
+The cases were recorded from `github/settings.py`, which was their reference until it was deleted with `rollout.py` (ADR 0017,
+mpaulosky/Application_Factory#122); the C# is now, and `test.sh` runs them against `github-settings.sh` too.
 
 The suite carries its own `github/`: a small standard (`settings.json`, `main-rules.json`, `labels.json`, `legacy.json`), a `repos.txt` with each
 scope, and two per-repo files (`repos/lib.json` adds a check and a label; `repos/loose.json` tries to loosen the standard). The runner lays it over a
