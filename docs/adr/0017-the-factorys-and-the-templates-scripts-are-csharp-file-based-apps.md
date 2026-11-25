@@ -528,3 +528,6 @@ F3c, the third library under the rule above, after F3a's and F3b's. `auto_rollou
   with `Py.Dumps`, so the kept copy is byte for byte what `json.dumps()` writes. `mkdir`'s error reads as Python's `OSError` does (`[Errno 17] File exists: '<path>'`).
 - **One deadline over the exit and the reads.** `SessionGuard.RunText`, as F3a's `RunQuiet`, counts its 120 s over the command's exit and both pipes' reads, so a
   child left holding its output can't stall the guard past the limit.
+- **A name that isn't UTF-8 fails closed.** .NET lists such a name with U+FFFD, and its path then names nothing, where `os.walk` kept the bytes. So `TreeState`,
+  `FolderState` and `TreeHashes` read a name they can't reach as different every time: the session guard breaks a Rule on a tree that holds one, rather than missing a
+  change made under it.

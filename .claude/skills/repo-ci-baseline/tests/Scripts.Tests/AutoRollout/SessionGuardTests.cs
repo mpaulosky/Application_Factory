@@ -799,10 +799,29 @@ public sealed class SessionGuardTests : IDisposable
 	}
 
 	[Fact]
+	public void Run_text_gives_none_for_a_program_not_on_path()
+	{
+		Assert.Null(SessionGuard.RunText(["no-such-tool-xyz"]));
+	}
+
+	[Fact]
+	public void A_name_that_isnt_utf8_reads_as_changed_every_time()
+	{
+		Directory.CreateDirectory(P("tree"));
+		Run("sh", ["-c", "touch \"$(printf 'a\\377b')\"", "sh"], cwd: P("tree"));
+		var name = "a\uFFFDb";
+		Assert.Equal([name], SessionGuard.TreeChanges(SessionGuard.TreeState(P("tree")), SessionGuard.TreeState(P("tree"))));
+		Assert.Single(SessionGuard.FolderChanges(P("tree"), SessionGuard.FolderState(P("tree")), "the review ledgers"));
+		Assert.NotEqual(SessionGuard.TreeHashes(P("tree"))[name], SessionGuard.TreeHashes(P("tree"))[name]);
+		// .NET can't name the file to delete it either.
+		Run("rm", ["-rf", P("tree")]);
+	}
+
+	[Fact]
 	public void Run_text_gives_none_once_its_limit_passes_while_a_child_left_behind_holds_its_output()
 	{
 		var clock = System.Diagnostics.Stopwatch.StartNew();
-		var text = SessionGuard.RunText(["sh", "-c", "sleep 30 & echo a"], timeoutSeconds: 1);
+		var text = SessionGuard.RunText(["sh", "-c", "sleep 5 & echo a"], timeoutSeconds: 1);
 		Assert.Null(text);
 		Assert.True(clock.Elapsed < TimeSpan.FromSeconds(20), $"took {clock.Elapsed}");
 	}

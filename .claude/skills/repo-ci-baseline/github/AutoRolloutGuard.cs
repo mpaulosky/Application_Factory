@@ -110,12 +110,20 @@ static class SessionGuard
 				if (Posix.LStat(child) is { IsDir: true })
 					Walk(child, rel + "/");
 				else if (!Directory.Exists(child))
-					hashes[rel] = FileHash(child);
+					hashes[rel] = Unreachable(child, name) ? Unseen() : FileHash(child);
 			}
 		}
 		Walk(folder, "");
 		return hashes;
 	}
+
+	// Whether name, just listed in a folder, can't be reached by path: .NET decodes a name that isn't UTF-8 with U+FFFD, so its path names
+	// nothing, where os.walk kept the bytes (surrogateescape). Such a name reads as a change every time (Unseen), so a file the session made
+	// or changed under it still breaks a Rule; the round fails closed on a tree that holds one.
+	static bool Unreachable(string path, string name) => name.Contains('\uFFFD') && Posix.LStat(path) is null;
+
+	// What a read gives a name it can't reach: different every time, so no two reads match.
+	static string Unseen() => $"unseen {Guid.NewGuid():N}";
 
 	// The names in a folder, sorted by code point, every one of them (dot files too); none when it can't be listed.
 	static List<string> List(string folder)
@@ -176,7 +184,7 @@ static class SessionGuard
 		foreach (var name in List(folder))
 		{
 			var path = Path.Combine(folder, name);
-			state[name] = Identity(path, RecordBytes(path));
+			state[name] = Unreachable(path, name) ? Unseen() : Identity(path, RecordBytes(path));
 		}
 		return state;
 	}
@@ -420,7 +428,7 @@ static class SessionGuard
 			{
 				var path = Path.Combine(folder, name);
 				if (prefix.Length > 0 || !skip.Contains(name))
-					state[prefix + name] = EntryState(path);
+					state[prefix + name] = Unreachable(path, name) ? new Entry(Unseen(), 0) : EntryState(path);
 				if (Posix.LStat(path) is { IsDir: true })
 					Walk(path, prefix + name + "/");
 			}
