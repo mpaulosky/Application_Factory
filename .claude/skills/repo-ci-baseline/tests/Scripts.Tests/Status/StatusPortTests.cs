@@ -93,6 +93,39 @@ public partial class StatusTests
 		Assert.Equal("repos.txt: not owner/repo: x/..\n", err.ToString());
 	}
 
+	// Not a moved test: repos.txt is read only when it is needed (mpaulosky/Application_Factory#178): for the repos when none is named,
+	// and for a named repo's scope once its PRs are read. A run that stops before then doesn't read it; one that needs it fails with its error.
+	[Theory]
+	[InlineData(new[] { "--help" }, 0)]
+	[InlineData(new[] { "--bogus", "owner/app" }, 2)]
+	[InlineData(new[] { "owner/app", "x/.." }, 2)]
+	[InlineData(new[] { "owner/gone" }, 1)]
+	public void A_run_that_needs_no_scope_doesnt_read_repos_txt(string[] argv, int want)
+	{
+		var read = 0;
+		using var output = new StringWriter();
+		using var err = new StringWriter();
+		var code = Status.Run(argv, output, err, (_, name) => name == "gone" ? throw new GhException("HTTP 404") : Repo(),
+				() => { read++; throw new FileNotFoundException("repos.txt"); });
+
+		Assert.Equal(want, code);
+		Assert.Equal(0, read);
+	}
+
+	[Fact]
+	public void A_run_that_needs_a_scope_reads_repos_txt_once_and_fails_with_its_error()
+	{
+		var read = 0;
+		using var output = new StringWriter();
+		using var err = new StringWriter();
+		OrderedDictionary<string, string> Fleet() { read++; return new() { ["owner/app"] = "full" }; }
+
+		Assert.Equal(0, Status.Run(["owner/app", "owner/lib"], output, err, (_, _) => Repo(PrNode()), Fleet));
+		Assert.Equal(1, read);
+		Assert.Throws<FileNotFoundException>(() => Status.Run(["owner/app"], output, err, (_, _) => Repo(PrNode()), () => throw new FileNotFoundException("repos.txt")));
+		Assert.Throws<FileNotFoundException>(() => Status.Run([], output, err, (_, _) => Repo(), () => throw new FileNotFoundException("repos.txt")));
+	}
+
 	// Not a moved test: an answer gh gave that isn't an object (the Python's .get raised on it) leaves the permission unread, and
 	// isn't kept.
 	[Theory]
