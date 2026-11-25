@@ -12,7 +12,8 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   `github/repos.txt` is the Fleet registry; `apply.sh`, `reapply.sh`, `rollout.sh`, `status.sh`, `land.sh` and `github-settings.sh` are the scripts;
   `status.sh`, `land.sh` and `github-settings.sh` run the C# file-based apps `github/status.cs`, `github/land.cs` and `github/settings.cs`, which include
   `Landing.cs`, `StatusCore.cs`, `LandCore.cs`, `SettingsCore.cs`, `Repos.cs` and `Gh.cs` (ADR 0017); `rollout.py` and `auto_rollout.py` are still Python,
-  and `settings.py` stays, run by nothing, for the `read_repo_list` that `rollout.py` imports.
+  and `settings.py` stays, run by nothing, for the `read_repo_list` that `rollout.py` imports. `auto_rollout`'s C# lands ahead of its cut-over as libraries
+  (`AutoRollout*.cs`) that `github/rollout.cs` includes and nothing runs yet (ADR 0017's library-first Update).
   `test.sh` and `tests/` test all of it. The gate and `test.sh` run two checkers in `tests/`: `check-issue-refs.sh` and `check-git-status.sh` run the C# file-based apps
   `check-issue-refs.cs` and `check-git-status.cs`, which include `IssueRefs.cs`, `GitStatusGuards.cs` and `Checker.cs`, each judged by its parity suite (`<checker>.test.sh`).
   `tests/Scripts.Tests/` is the xUnit v3 project for the C# scripts (ADR 0017); it, `tests/` and `github/` each hold three empty shield

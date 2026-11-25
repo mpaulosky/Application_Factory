@@ -414,3 +414,23 @@ it, and each part is shown in the note.
 
 What this leaves to F3a to F3c and the cut-over: the exact names, the tests that hold each part (a test of the lock against `flock -n`, a spawned child that holds it after
 the round's SIGKILL, a leader that stays a zombie until the kill, SIGHUP under `nohup`), and the parity cases for `--auto` (mpaulosky/Application_Factory#156).
+
+## Update (mpaulosky/Application_Factory#160): the session guard and the review record are a library
+
+F3c, the first library under the rule above. `auto_rollout.py`'s `run_text` to `record_review` is C#, run by nothing; the `.py`, its pytest and `rollout.sh` are unchanged.
+
+- **The files.** `github/rollout.cs` is the entry file. Until the cut-over it writes to stderr that `rollout.sh` still runs `rollout.py`, and exits 2. It includes `Gh.cs`,
+  `Repos.cs`, `SettingsCore.cs` (for `Py`: `repr()`, `json.dumps()`, `str.strip()` and the code point sort) and two libraries. `AutoRolloutGuard.cs` holds the `Guard`, `SessionGuard`
+  (`session_guard`, `broken_rules` and the file and tree snapshots they compare), `PyText` (`ascii()`, a bytes `repr()`, `shlex.quote()` and `shlex.join()`) and `Posix`.
+  `AutoRolloutRecord.cs` holds `ReviewRecord` (`staged_findings` to `record_review`, with `run_bounded` and `wait_for`) and `GroupLeft`. Each library's classes have
+  names of their own, not a shared `partial` class, so F3a and F3b can land beside them in any order.
+- **The file reads go through libc.** The BCL has no `lstat` that gives the inode and the mtime in nanoseconds, no open that follows no symlink and never waits on a FIFO,
+  and no `mkdir` that fails on a folder already there. So `Posix` calls `statx`, whose layout is the same on every Linux architecture, and `open`, `read`, `close`, `mkdir`
+  and `access` through `DllImport`. `O_NOFOLLOW` is the one flag whose value differs between x64 and arm64. `--auto` is Linux only, so this is too.
+- **The process group is the cut-over's.** `run_bounded` starts its command with `posix_spawnp` in a group of its own, and that spawner lands with the rest of the
+  groups and signals. So `RunBounded` takes the spawner (it returns an `IGroupChild`: its pid, and its exit code once it exits, unreaped) and the group's end as
+  parameters, and `RecordReview` takes its bounded runner as one. Their two pytest tests that run a real process group move to xUnit with the cut-over. The other 68
+  tests of these functions are in `tests/Scripts.Tests/AutoRollout/`, under the naming rule.
+- **What it reads as Python reads it.** A staged findings file is strict UTF-8 JSON, nested at most 1,000 deep. An object's repeated key keeps its first place and its last
+  value, as a `dict` does. Python's `NaN` and `Infinity` literals, which `json.loads()` takes, are refused, so a file holding one breaks a Rule. The findings are written again
+  with `Py.Dumps`, so the kept copy is byte for byte what `json.dumps()` writes. `mkdir`'s error reads as Python's `OSError` does (`[Errno 17] File exists: '<path>'`).
