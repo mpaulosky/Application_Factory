@@ -19,8 +19,9 @@
 # telemetry off, no first-run setup and no logo; and that a pass is remembered per .NET SDK as well as per tree.
 # It also checks the issue worker's workflow: its Claude runs with background tasks off, and every job in it with needs: names always(), !cancelled() or failure()
 # in its if:, so a skipped queue job doesn't skip the jobs below it (#185), with fixtures for the check itself (success() alone, no if:, no job with needs:, an unreadable
-# file, a failed awk, quoted and commented status functions, a commented job key, a later top-level key, a blank line in a folded if: and CRLF), and that its pick step takes `claude:blocked` off every issue nothing blocks any more, even with every slot taken,
-# and runs on a closed issue or a `blocked` label taken off.
+# file, a failed awk, quoted and commented status functions, a commented job key, a later top-level key, a blank line in a folded if: and CRLF), and that its pick
+# step takes `claude:blocked` off every issue nothing blocks any more, even with every slot taken, counts a closed issue still being worked as holding its slot,
+# and runs when the owner closes an issue or takes a `blocked` label off, but not when anyone else does.
 # It also checks the size step (issue 176): review.sh size's warning, for HEAD's diff against its merge base, is printed by a full gate, --quick and the static part,
 # and neither it nor a failed review.sh size fails the gate; with no origin/main, or one that shares no history, the step is skipped.
 #
@@ -1242,7 +1243,8 @@ check "the pick step fills the free slots under the cap, oldest first, queuing a
 check "the pick step goes by the latest \"Claude started\" comment from the workflow, not an earlier one or anyone else's" \
   "$(grep -qF '#1 is being worked by run 101 (in_progress)' "$pick/log" && echo 0 || echo 1)"
 # The working list and every run's status are read before the queue, so an issue a run finishes in between is either counted or not queued.
-read_working="$(read_at 'issues?state=open&labels=claude:working')" read_runs="$(read_at actions/runs/)"
+# Closed ones too (state=all): the owner can close an issue while its run is going, and that run still holds a slot.
+read_working="$(read_at 'issues?state=all&labels=claude:working')" read_runs="$(read_at actions/runs/)"
 read_queue="$(read_at 'issues?state=open&labels=claude&sort')"
 check "the pick step reads the issues being worked and their runs before the queue" \
   "$([[ -n $read_working && -n $read_runs && -n $read_queue ]] && ((read_working < read_runs && read_runs < read_queue)) && echo 0 || echo 1)"
@@ -1335,8 +1337,15 @@ issues_fx 'issues@claude' "$(issue 3 claude,Blocked)" "$(issue 4 claude)"
 fx issues.3.dependencies.blocked_by '[]'
 pick_case 1
 check "the \`blocked\` label holds an issue in any case" "$(picked '[4]' && grep -qF "#3 is blocked by the \`blocked\` label" "$pick/log" && echo 0 || echo 1)"
+issues_fx 'issues@claude' "$(issue 3 claude)" "$(issue 4 claude)"
+touch "$api/issues.3.dependencies.blocked_by.fail"
+pick_case 1
+check "a queued issue whose blockers can't be read is skipped this run, and the next one is picked" \
+  "$(picked '[4]' && ! labelled 3 && grep -qF "::warning::Couldn't read what blocks #3; skipping it this run." "$pick/log" && echo 0 || echo 1)"
+rm -f "$api/issues.3.dependencies.blocked_by.fail"
 # `claude:blocked` comes off every issue nothing blocks any more, even with every slot taken: here the one slot is held by #1, still being worked. #5's
-# blocker closed, #6 still has an open one, #7 carries the `blocked` label, #8 lost its `claude` label, and #9's dependencies can't be read.
+# blocker closed, #6 still has an open one, #7 carries the `blocked` label, #8 lost its `claude` label, #9's dependencies can't be read, #10 is a pull
+# request and #11 carries the label as `Blocked`.
 blocked_sweep_fx() {
   api_reset
   issues_fx 'issues@claude:working' "$(issue 1 claude,claude:working)"
@@ -1344,7 +1353,7 @@ blocked_sweep_fx() {
   fx actions.runs.101 '{"status": "in_progress"}'
   issues_fx 'issues@claude' "$(issue 1 claude,claude:working)" "$(issue 5 claude,claude:blocked)" "$(issue 6 claude,claude:blocked)" "$(issue 7 claude,claude:blocked,blocked)"
   issues_fx 'issues@claude:blocked' "$(issue 5 claude,claude:blocked)" "$(issue 6 claude,claude:blocked)" "$(issue 7 claude,claude:blocked,blocked)" \
-    "$(issue 8 claude:blocked)" "$(issue 9 claude,claude:blocked)" "$(issue 10 claude:blocked pr)"
+    "$(issue 8 claude:blocked)" "$(issue 9 claude,claude:blocked)" "$(issue 10 claude:blocked pr)" "$(issue 11 claude,claude:blocked,Blocked)"
   fx issues.5.dependencies.blocked_by '[{"number": 2, "state": "closed"}]'
   fx issues.6.dependencies.blocked_by '[{"number": 2, "state": "closed"}, {"number": 3, "state": "open"}]'
   touch "$api/issues.9.dependencies.blocked_by.fail"
@@ -1354,8 +1363,14 @@ unblocked() { calls | grep -qF "DELETE repos/o/r/issues/$1/labels/claude:blocked
 blocked_sweep_fx
 pick_case 1
 check "with every slot taken, the pick step takes claude:blocked off the issues nothing blocks any more, and leaves it on the rest" \
-  "$(picked '[]' && unblocked 5 && unblocked 8 && ! unblocked 6 && ! unblocked 7 && ! unblocked 9 && ! unblocked 10 \
+  "$(picked '[]' && unblocked 5 && unblocked 8 && ! unblocked 6 && ! unblocked 7 && ! unblocked 9 && ! unblocked 10 && ! unblocked 11 \
     && grep -qF "::warning::Couldn't read what blocks #9; it keeps claude:blocked this run." "$pick/log" && echo 0 || echo 1)"
+blocked_sweep_fx
+STUB_FAIL='DELETE repos/o/r/issues/5/labels/claude:blocked' pick_case 1
+check "a claude:blocked label the sweep can't take off is warned about, and the sweep and the pick go on" \
+  "$(picked '[]' && unblocked 5 && unblocked 8 \
+    && grep -qF "::warning::Couldn't take claude:blocked off #5; the next run tries again." "$pick/log" \
+    && ! grep -qF "Couldn't take claude:blocked off #8" "$pick/log" && echo 0 || echo 1)"
 check "the pick step takes claude:blocked off before it reads the queue" \
   "$(read_sweep="$(read_at 'issues?state=open&labels=claude:blocked')" read_queue="$(read_at 'issues?state=open&labels=claude&sort')" \
     && [[ -n $read_sweep && -n $read_queue ]] && ((read_sweep < read_queue)) && echo 0 || echo 1)"
@@ -1365,13 +1380,18 @@ issues_fx 'issues@claude:working'
 pick_case 1
 check "when the issues labelled claude:blocked can't be listed, the pick step warns and still picks" \
   "$(picked '[1]' && ! unblocked 5 && grep -qF "::warning::Couldn't list the issues labelled claude:blocked" "$pick/log" && echo 0 || echo 1)"
-# A closed issue, or a `blocked` label taken off, starts a pick, so an issue nothing blocks any more doesn't wait for the hourly schedule.
-pick_if="$(sed -n '/^  pick:$/,/^    runs-on:/p' "$issues_wf")"
-check "a closed issue or a \`blocked\` label taken off starts the pick job" \
-  "$(grep -qE '^    types: \[labeled, unlabeled, closed\]$' "$issues_wf" \
-    && grep -qF "github.event.action == 'unlabeled' && github.event.label.name == 'blocked'" <<< "$pick_if" \
-    && grep -qF "github.event.action == 'closed'" <<< "$pick_if" \
-    && grep -qF "github.event.action == 'labeled' && github.event.label.name == 'claude'" <<< "$pick_if" && echo 0 || echo 1)"
+# The owner closing an issue, or taking a `blocked` label off, starts a pick, so an issue nothing blocks any more doesn't wait for the hourly schedule;
+# anyone else's close or unlabel starts nothing. The pick job's whole if: is compared, with its whitespace collapsed, so a clause can't move out of its group.
+pick_if="$(sed -n '/^  pick:$/,/^    runs-on:/p' "$issues_wf" | sed -n '/^    if: >-$/,/^    runs-on:/p' | sed '1d;$d' | tr -s ' \n' '  ' | sed 's/^ //;s/ $//')"
+pick_if_want="!cancelled() && needs.queue.result != 'failure'"
+pick_if_want+=" && ((github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'claude')"
+pick_if_want+=" || (github.event_name == 'issues' && github.event.action == 'unlabeled' && github.event.label.name == 'blocked'"
+pick_if_want+=" && github.event.sender.login == github.repository_owner)"
+pick_if_want+=" || (github.event_name == 'issues' && github.event.action == 'closed' && github.event.sender.login == github.repository_owner)"
+pick_if_want+=" || (github.event_name == 'issue_comment' && needs.queue.result == 'success')"
+pick_if_want+=" || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')"
+check "the owner closing an issue or taking a \`blocked\` label off starts the pick job, and no one else's close or unlabel does" \
+  "$(grep -qE '^    types: \[labeled, unlabeled, closed\]$' "$issues_wf" && [[ $pick_if == "$pick_if_want" ]] && echo 0 || echo 1)"
 api_reset
 issues_fx 'issues@claude' "$(issue 3 claude)" "$(issue 4 claude)"
 owner_labelled 3 4

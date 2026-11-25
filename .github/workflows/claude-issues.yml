@@ -9,10 +9,12 @@ name: Claude Issues
 # concurrency group, so two runs never pick the same issue: it labels each pick `claude:working` before it ends, and
 # the next pick counts those as taken. A run that waits in that group is replaced by a newer one, which is fine,
 # because every run reads the queue afresh. That holds for an `@claude` comment too: its label is added by the queue
-# job, which has no concurrency group, before the pick job waits. A closed issue, or a `blocked` label taken off,
-# starts a run too, so an issue that nothing blocks any more is picked up at once; the hourly schedule catches a
-# "blocked by" link taken off, which starts no workflow. Only a `claude` label the owner added (or this workflow, for
-# the owner's comment) counts.
+# job, which has no concurrency group, before the pick job waits. The owner closing an issue, or taking a `blocked`
+# label off, starts a run too, so an issue that nothing blocks any more is usually picked up at once. The hourly
+# schedule catches the rest: a "blocked by" link taken off, which starts no workflow; an issue someone else closed;
+# one a workflow's own token closed (a pull request merged without a personal token), which starts none either; and
+# a dependency listing that hadn't caught up with the close yet. Only a `claude` label the owner added (or this
+# workflow, for the owner's comment) counts.
 #
 # Issues worked at once can change the same files, so each run comments on its pull request naming the open pull
 # requests from this repository's branches that change the same files, and the order to merge them in: the oldest pull
@@ -22,7 +24,8 @@ name: Claude Issues
 # An issue is blocked while GitHub's issue dependencies list an open issue it is blocked by, or while it carries the
 # `blocked` label (in any case). A blocked issue keeps its `claude` label and gets `claude:blocked` and one comment
 # naming its blockers; it starts by itself once they close. Every pick takes `claude:blocked` off each issue that
-# nothing blocks any more, even when every slot is taken, so the label never outlives its blockers.
+# nothing blocks any more, even when every slot is taken, so the label stays only until the next pick after its
+# blockers go (the hourly schedule at the latest).
 #
 # Claude's labels:
 #   claude              queued for Claude (the owner adds it; the run removes it when it finishes)
@@ -80,13 +83,17 @@ jobs:
     needs: [queue]
     # A label other than `claude` added, a label other than `blocked` taken off, or a comment that isn't the owner's
     # `@claude` on an open issue, starts nothing, so it never joins the concurrency group below and can't replace a
-    # waiting run. A closed issue can be the last blocker of another, so it starts a pick. The queue job is skipped on
-    # every other event, so this job runs unless it was cancelled or failed.
+    # waiting run. A closed issue can be the last blocker of another, so the owner closing one, or taking `blocked` off
+    # one, starts a pick. Anyone can close an issue they opened, and a run's actor is whoever acted, so a close or an
+    # unlabel by anyone else starts nothing: it would put that actor's run in the group and on the owner's queue. The
+    # queue job is skipped on every other event, so this job runs unless it was cancelled or failed.
     if: >-
       !cancelled() && needs.queue.result != 'failure'
       && ((github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'claude')
-          || (github.event_name == 'issues' && github.event.action == 'unlabeled' && github.event.label.name == 'blocked')
-          || (github.event_name == 'issues' && github.event.action == 'closed')
+          || (github.event_name == 'issues' && github.event.action == 'unlabeled' && github.event.label.name == 'blocked'
+              && github.event.sender.login == github.repository_owner)
+          || (github.event_name == 'issues' && github.event.action == 'closed'
+              && github.event.sender.login == github.repository_owner)
           || (github.event_name == 'issue_comment' && needs.queue.result == 'success')
           || github.event_name == 'schedule'
           || github.event_name == 'workflow_dispatch')
@@ -139,14 +146,14 @@ jobs:
           ensure_label claude:needs-human b60205 "Claude's run ended without a pull request"
 
           owner="${GITHUB_REPOSITORY_OWNER}"
-          # An open issue labelled `claude:working` holds a slot while the run named in its latest "Claude started"
+          # An issue labelled `claude:working`, open or closed (the owner may close one mid-run), holds a slot while the run named in its latest "Claude started"
           # comment is still going, whether or not it still carries `claude`. A run that died before its Finish step left
           # the label behind: when its run has ended, was deleted (HTTP 404), or no "Claude started" comment names one, the
           # label is taken off, and the issue is queued again if it still carries `claude`. When the comments or the run's
           # status can't be read, the issue keeps its slot, to be safe. Read in full first, so a failed call fails the run
           # instead of freeing every slot. The slots are counted before the queue is read: the Finish step takes `claude`
           # off before `claude:working`, so an issue a run finishes in between is either counted here or not queued.
-          working_issues="$(gh api --paginate "repos/$GH_REPO/issues?state=open&labels=claude:working&per_page=100" \
+          working_issues="$(gh api --paginate "repos/$GH_REPO/issues?state=all&labels=claude:working&per_page=100" \
             --jq '.[] | select(.pull_request == null) | .number')"
           busy=0
           declare -A working=()
@@ -206,7 +213,8 @@ jobs:
               }
               if [ -z "$blockers" ]; then
                 echo "#$number is no longer blocked; taking claude:blocked off."
-                gh api --silent -X DELETE "repos/$GH_REPO/issues/$number/labels/claude:blocked" || true
+                gh api --silent -X DELETE "repos/$GH_REPO/issues/$number/labels/claude:blocked" ||
+                  echo "::warning::Couldn't take claude:blocked off #$number; the next run tries again."
               fi
             done <<<"$blocked_issues"
           else
