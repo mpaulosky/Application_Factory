@@ -503,3 +503,49 @@ A Factory-only port, as the ones above are, so `bench/claude-review-bench.py` an
     starts after the call has exited. A call past its time, or one that exits but leaves a child holding its pipes when its time is up, has its group killed, where
     the child ran on before (the Python waited for it instead). The terminal's Ctrl-C no longer reaches a call in its own session, so the bench kills every live group
     on SIGINT, SIGTERM, SIGHUP and SIGQUIT before it ends as the signal would end it.
+
+## Update (mpaulosky/Application_Factory#158): the first AutoRollout library, the preflight, sign-in and lock
+
+F3a, the first library under the library-first rule above. Nothing runs it: `rollout.sh` still runs `rollout.py`, and `auto_rollout.py` and its pytest are unchanged.
+
+- **The files.** `github/rollout.cs` is the entry file; until the cut-over it writes to stderr that `rollout.sh` still runs the Python, and exits 2. It includes `Gh.cs`,
+  `AutoRollout.cs` (where the round's files are, as a `Folders` record of the skill folder; `short_name`, `review_worktree`, `run_quiet`, the lock, `retired_paths`,
+  `owned_changes`, `front_matter`, `read_skill`, and the Python readings they need) and `AutoRolloutPreflight.cs` (the preflight and the sign-in checks).
+  `Scripts.Tests` leaves `rollout.cs` out of its `Compile` items, and its copies of the pytest tests are in `tests/Scripts.Tests/AutoRollout/`. A copy whose original also
+  checks `session_env`, which mpaulosky/Application_Factory#159 ports, keeps the preflight's assertions; the rest joins it with that port.
+- **The lock** is as the Update above decides. Held is an `IOException` of that exact type whose errno is EWOULDBLOCK (11 on Linux); any other error is "can't take it"
+  and propagates. Tests hold it against `flock -n` and `auto_rollout.py`'s own `take_lock`, both ways.
+- **What the port changes on purpose.** The preflight's `which` and `run_quiet` find a program in `PATH`'s absolute folders only, as `Gh.cs` finds `gh` (`shutil.which`
+  and `subprocess` took a relative folder too). `TakeLock` refuses to run when .NET's file locking is turned off (`DOTNET_SYSTEM_IO_DISABLEFILELOCKING`,
+  `System.IO.DisableFileLocking`), where a `FileStream` would take no lock and a second round would run beside the first.
+- **What it keeps of the Python that .NET doesn't give for free.** `Folders.Default` resolves the entry file's folder through its symlinks first, as `SKILL_DIR` reads
+  `os.path.realpath(__file__)`, so a run through `~/.claude/skills/repo-ci-baseline` still finds the Factory's checkout. `RunQuiet` holds one deadline over the exit and
+  both pipes' reads, as `subprocess.run(timeout=)` does, so a command that exits but leaves a child holding its output still ends in 124 at the limit.
+
+## Update (mpaulosky/Application_Factory#160): the session guard and the review record are a library
+
+F3c, the third library under the rule above, after F3a's and F3b's. `auto_rollout.py`'s `run_text` to `record_review` is C#, run by nothing; the `.py`, its pytest and `rollout.sh` are unchanged.
+
+- **The files.** `github/rollout.cs`, F3a's entry file, also includes `Repos.cs`, `Py.cs` (`Py`: `repr()`, `json.dumps()`, `str.strip()` and the code point sort) and
+  two more libraries. `AutoRolloutGuard.cs` holds the `Guard`, `SessionGuard`
+  (`session_guard`, `broken_rules` and the file and tree snapshots they compare), `PyText` (`ascii()`, a bytes `repr()`, `shlex.quote()` and `shlex.join()`) and `Posix`.
+  `AutoRolloutRecord.cs` holds `ReviewRecord` (`staged_findings` to `record_review`, with `run_bounded` and `wait_for`) and `GroupLeft`. Each library's classes have
+  names of their own, not a shared `partial` class, so F3a and F3b can land beside them in any order.
+- **The file reads go through libc.** The BCL has no `lstat` that gives the inode and the mtime in nanoseconds, no open that follows no symlink and never waits on a FIFO,
+  and no `mkdir` that fails on a folder already there. So `Posix` calls `statx`, whose layout is the same on every Linux architecture, and `open`, `read`, `close`, `mkdir`
+  and `access` through `DllImport`. `O_NOFOLLOW` is the one flag whose value differs between x64 and arm64. `--auto` is Linux only, so this is too.
+- **The process group is the cut-over's.** `run_bounded` starts its command with `posix_spawnp` in a group of its own, and that spawner lands with the rest of the
+  groups and signals. So `RunBounded` takes the spawner (it returns an `IGroupChild`: its pid, and its exit code once it exits, unreaped) and the group's end as
+  parameters, and `RecordReview` takes its bounded runner as one. Their two pytest tests that run a real process group move to xUnit with the cut-over. The other 68
+  tests of these functions are in `tests/Scripts.Tests/AutoRollout/`, under the naming rule.
+- **What it reads as Python reads it.** A staged findings file is strict UTF-8 JSON, nested at most 1,000 deep. An object's repeated key keeps its first place and its last
+  value, as a `dict` does. Python's `NaN` and `Infinity` literals, which `json.loads()` takes, are refused, so a file holding one breaks a Rule, and so is a lone surrogate
+  (`\ud800`) in a string or a name, which a .NET string can't hold. The findings are written again
+  with `Py.Dumps`, so the kept copy is byte for byte what `json.dumps()` writes. `mkdir`'s error reads as Python's `OSError` does (`[Errno 17] File exists: '<path>'`).
+- **One deadline over the exit and the reads.** `SessionGuard.RunText`, as F3a's `RunQuiet`, counts its 120 s over the command's exit and both pipes' reads, so a
+  child left holding its output can't stall the guard past the limit.
+- **A name that isn't UTF-8 fails closed.** .NET lists such a name with U+FFFD, and its path then names nothing, where `os.walk` kept the bytes. So `TreeState`,
+  `FolderState` and `TreeHashes` read a name they can't reach as different every time: the session guard breaks a Rule on a tree that holds one, rather than missing a
+  change made under it. A name listed twice (one that isn't UTF-8 decoded to the same text as one that is) reads the same way.
+- **`FileHash` never waits or reads without end.** It hashes a regular file of at most `RecordLimit` bytes, opened without waiting, a symlink followed; a FIFO, a device
+  or a bigger file gives null, no Template hash, where Python's `open().read()` would have hung or filled memory.
