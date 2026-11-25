@@ -18,6 +18,10 @@ interface IGroupChild
 	int Pid { get; }
 
 	int? Exit(double seconds);
+
+	// Reap the leader once its group is killed: whether it was within seconds (Groups.EndGroup). A child that isn't left unreaped is
+	// reaped by its Exit.
+	bool Reap(double seconds) => Exit(seconds) is not null;
 }
 
 // Where a bounded command runs and what it reads and writes: its folder, its stdin (null: /dev/null), its stdout, its stderr (null: its

@@ -6,9 +6,14 @@
 #:include AutoRolloutSandbox.cs
 #:include AutoRolloutGuard.cs
 #:include AutoRolloutRecord.cs
+#:include AutoRolloutGroups.cs
+#:include AutoRolloutReview.cs
+#:include AutoRolloutRound.cs
+#:include RolloutCore.cs
 #:property PublishAot=false
-// rollout.sh's C#, landing a library at a time (ADR 0017's Update for mpaulosky/Application_Factory#157): AutoRollout*.cs hold auto_rollout.py's logic
-// as it is ported. Nothing runs this file until the cut-over (mpaulosky/Application_Factory#122), which fills it in: rollout.sh still runs
-// rollout.py, and this only says so.
-Console.Error.WriteLine("rollout.cs: not yet the rollout; rollout.sh runs github/rollout.py until the cut-over (mpaulosky/Application_Factory#122)");
-return 2;
+// Roll a re-Apply round out across the Baseline repos. RolloutCore.cs holds the plain mode and its contract, AutoRollout*.cs the --auto
+// round (ADR 0016); rollout.sh builds this and runs the built dll, so a signal sent to rollout.sh reaches the round (ADR 0017).
+//
+//     dotnet run --file github/rollout.cs -- --brings <prs> [--root dir] [--dry-run] [--auto]
+Signals.Init();
+return Script.Run((stdout, stderr) => Rollout.Run(args, stdout, stderr));

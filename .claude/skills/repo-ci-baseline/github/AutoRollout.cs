@@ -354,6 +354,41 @@ static partial class AutoRollout
 		return FrontMatter(text, path) is { } parts ? parts.Body.TrimStart('\n') : text;
 	}
 
+	// The reviewer agent, for --agents: {name: {description, prompt, tools, model}} from its file's front matter (a flat `key: value` list,
+	// with `>-`, `>` or `|` folding the lines indented under it) and body. Throws InvalidDataException when a part is missing.
+	public static System.Text.Json.Nodes.JsonObject AgentDefinition(string? path = null)
+	{
+		path ??= Folders.Default.AgentFile;
+		var text = ReadText(path);
+		var (head, body) = FrontMatter(text, path) ?? throw new InvalidDataException($"{path} has no front matter");
+		Dictionary<string, string> fields = [];
+		string? key = null;
+		foreach (var line in SplitLines(head.Trim('\n'), keepEnds: false))
+		{
+			if ((line.StartsWith(' ') || line.StartsWith('\t')) && key is not null)
+				fields[key] = PyStrip(fields[key] + " " + PyStrip(line));
+			else if (line.Contains(':'))
+			{
+				var cut = line.IndexOf(':');
+				(key, var value) = (PyStrip(line[..cut]), PyStrip(line[(cut + 1)..]));
+				fields[key] = value is ">-" or ">" or "|" ? "" : value;
+			}
+		}
+		foreach (var needed in new[] { "name", "description", "tools" })
+			if (fields.GetValueOrDefault(needed) is null or "")
+				throw new InvalidDataException($"{path} has no {needed}");
+		var definition = new System.Text.Json.Nodes.JsonObject
+		{
+			["description"] = fields["description"],
+			["prompt"] = body.TrimStart('\n'),
+			["tools"] = new System.Text.Json.Nodes.JsonArray([.. fields["tools"].Split(',').Select(PyStrip).Where(tool => tool.Length > 0)
+					.Select(tool => (System.Text.Json.Nodes.JsonNode?)tool)]),
+		};
+		if (fields.GetValueOrDefault("model") is { Length: > 0 } model)
+			definition["model"] = model;
+		return new System.Text.Json.Nodes.JsonObject { [fields["name"]] = definition };
+	}
+
 	// ── Python's readings ───────────────────────────────────────────────────
 
 	// What str.isspace() calls space, for a regex's character class: Python's \s on a str, which .NET's \s isn't (\x1c to \x1f).
