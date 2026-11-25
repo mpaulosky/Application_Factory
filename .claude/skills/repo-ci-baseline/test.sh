@@ -7,7 +7,7 @@
 # Runs the Template's own tests (hook suites, auto-merge script tests,
 # the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle and the GitHub scripts' pytest
 # (rollout) with the parity suites (status, land, settings, check_gh_repo, the release scripts and rollout), the Claude Review
-# benchmark's tests and the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land, settings and what they share), lints its workflows, YAML, shell
+# benchmark's tests and the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land, settings, what they share, and the two checkers in tests/), lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
 # Owned files carry no {{PLACEHOLDER}} and that the Owned scripts, and this repo's own
 # scripts and skills, tell every gh command its repository, checks the Seed Sandcastle files, and smoke-tests apply.sh and
@@ -967,9 +967,9 @@ HALF
     printf '<Project>\n<PropertyGroup>\n%s\n</PropertyGroup>\n</Project>\n' "$wrong" > "$md_tmp/tfm.csproj"
     ! targets_net_major "$md_tmp/tfm.csproj" 11 > /dev/null || fail "the target framework check passes for SDK 11: $wrong"
   done
-  # The shields (ADR 0017): an empty Directory.Build.props, Directory.Build.targets and Directory.Packages.props in github/ and in the test project, so the
-  # files of those names above them never reach their builds.
-  for shielded in github tests/Scripts.Tests; do
+  # The shields (ADR 0017): an empty Directory.Build.props, Directory.Build.targets and Directory.Packages.props in github/, in tests/ (the two checkers) and
+  # in the test project, so the files of those names above them never reach their builds.
+  for shielded in github tests tests/Scripts.Tests; do
     for shield in Directory.Build.props Directory.Build.targets Directory.Packages.props; do
       is_empty_shield "$skill_dir/$shielded/$shield" || fail "$shielded/$shield must be the empty shield, <Project />"
     done
@@ -1050,7 +1050,8 @@ if in_shard checks; then
     "$skill_dir/tests/parity.test.sh" "$skill_dir/tests/parity/fake-gh.sh" "$skill_dir/tests/parity/stderr.sh" "$skill_dir/tests/parity-runner.test.sh"
     "$skill_dir/tests/rollout-parity.test.sh" "$skill_dir/tests/rollout-parity/fake-tool.sh" "$skill_dir/tests/rollout-parity-runner.test.sh"
     "$skill_dir/tests/parity/check_gh_repo/shfmt-shim.sh" "$skill_dir/tests/shfmt-shim.test.sh"
-    "$skill_dir/tests/check-git-status.sh" "$skill_dir/tests/check-git-status.test.sh" "$skill_dir/tests/mutations/check-spec.test.sh"
+    "$skill_dir/tests/check-git-status.sh" "$skill_dir/tests/check-git-status.test.sh" "$skill_dir/tests/check-issue-refs.sh" "$skill_dir/tests/check-issue-refs.test.sh"
+    "$skill_dir/tests/mutations/check-spec.test.sh"
     "$owned/scripts/gate.sh" "$owned/scripts/check-branch-name.sh" "$owned/scripts/tests/check-branch-name.test.sh"
     "$owned/scripts/check-pr-title.sh" "$owned/scripts/tests/check-pr-title.test.sh"
     "$owned/scripts/sync-copilot-review.sh" "$owned/scripts/tests/sync-copilot-review.test.sh"
@@ -1109,21 +1110,23 @@ if in_shard checks; then
   # HTML entities (&#9;) and the exact examples in EXAMPLES, so an example
   # hides nothing else on its line. A Sandcastle *.test.mts carries fixture
   # data in its strings, so only its // comment lines are checked for a bare
-  # #N. Python, not grep -P, which BSD grep lacks.
-  # The rule is tests/check-issue-refs.py (its EXAMPLES list is there, and its pytest in tests/issue_refs/); the Factory's scripts/gate.sh runs it too,
+  # #N. C#, not grep -P, which BSD grep lacks.
+  # The rule is tests/IssueRefs.cs (its Examples list is there), which tests/check-issue-refs.sh runs (ADR 0017): its parity suite is
+  # tests/check-issue-refs.test.sh and its xUnit tests are in tests/Scripts.Tests/IssueRefs/. The Factory's scripts/gate.sh runs it too,
   # so --quick catches a bare #N before this step does.
-  (cd "$skill_dir/tests" && "${pytest_cmd[@]}" -q -p no:cacheprovider -rs issue_refs) || fail "issue_refs pytest"
+  need dotnet
+  bash "$skill_dir/tests/check-issue-refs.test.sh" || fail "check-issue-refs.test.sh"
   refs_rc=0
-  python3 -I "$skill_dir/tests/check-issue-refs.py" "$owned" || refs_rc=$?
+  bash "$skill_dir/tests/check-issue-refs.sh" "$owned" || refs_rc=$?
   if ((refs_rc == 1)); then
     fail "write issue references in Owned files as mpaulosky/dotfiles#N (or <Repo>#N), not a bare #N"
   elif ((refs_rc != 0)); then
-    fail "check-issue-refs.py failed (exit $refs_rc) without checking: see its output above"
+    fail "check-issue-refs.sh failed (exit $refs_rc) without checking: see its output above"
   fi
 
   step "git status guards in Owned scripts name their untracked-files setting"
-  # A guard that reads git status --porcelain without --untracked-files is weakened by a user's status.showUntrackedFiles=no. The rule is tests/check-git-status.sh (its own tests are
-  # tests/check-git-status.test.sh); the Factory's scripts/gate.sh runs it too, so --quick catches it before this step does.
+  # A guard that reads git status --porcelain without --untracked-files is weakened by a user's status.showUntrackedFiles=no. The rule is tests/GitStatusGuards.cs, which
+  # tests/check-git-status.sh runs (ADR 0017; its parity suite is tests/check-git-status.test.sh); the Factory's scripts/gate.sh runs it too, so --quick catches it before this step does.
   bash "$skill_dir/tests/check-git-status.test.sh" || fail "check-git-status.test.sh"
   status_rc=0
   bash "$skill_dir/tests/check-git-status.sh" "$owned" || status_rc=$?
@@ -1132,6 +1135,34 @@ if in_shard checks; then
   elif ((status_rc != 0)); then
     fail "check-git-status.sh failed (exit $status_rc) without checking: see its output above"
   fi
+  # The two wrappers run their C# from its own folder, so a global.json in the caller's folder that pins an SDK nobody has installed changes
+  # nothing, and a relative folder is the caller's: each finds its finding in a relative folder from under such a global.json (dotnet itself
+  # fails there, which shows the global.json is read). check-issue-refs prints paths below the folder, check-git-status the folder made absolute.
+  wrappers="$md_tmp/checker-wrappers"
+  mkdir -p "$wrappers/owned/scripts"
+  printf '{"sdk": {"version": "8.0.1", "rollForward": "disable"}}\n' > "$wrappers/global.json"
+  # shellcheck disable=SC2016 # the fixture's own text
+  printf '%s\n' 'See #5 for why.' '[[ -z "$(git status --porcelain)" ]]' > "$wrappers/owned/scripts/a.sh"
+  ! (cd "$wrappers" && dotnet --version) > /dev/null 2>&1 || fail "dotnet ran in a folder whose global.json pins SDK 8.0.1, so the wrappers' check below proves nothing"
+  code=0
+  said="$(cd "$wrappers" && bash "$skill_dir/tests/check-issue-refs.sh" owned 2>&1)" || code=$?
+  [[ $code -eq 1 && "$said" == "scripts/a.sh:1: See #5 for why." ]] \
+    || fail "check-issue-refs.sh on a relative folder under a global.json that pins another SDK exited $code, not 1 with its finding: $said"
+  code=0
+  said="$(cd "$wrappers" && bash "$skill_dir/tests/check-git-status.sh" owned 2> /dev/null)" || code=$?
+  [[ $code -eq 1 && "$said" == "$wrappers/owned/scripts/a.sh:2:"* ]] \
+    || fail "check-git-status.sh on a relative folder under a global.json that pins another SDK exited $code, not 1 with its finding: $said"
+  # With no dotnet on PATH (only bash and dirname, which the wrappers need first), each wrapper exits 2, nothing checked, and says so.
+  no_dotnet="$md_tmp/checker-no-dotnet"
+  mkdir -p "$no_dotnet"
+  ln -sf "$(command -v bash)" "$no_dotnet/bash"
+  ln -sf "$(command -v dirname)" "$no_dotnet/dirname"
+  for wrapper in check-issue-refs check-git-status; do
+    code=0
+    said="$(PATH="$no_dotnet" "$no_dotnet/bash" "$skill_dir/tests/$wrapper.sh" "$owned" 2>&1)" || code=$?
+    [[ $code -eq 2 && "$said" == "$wrapper.sh: dotnet isn't on PATH; tests/$wrapper.cs runs on the .NET SDK"* ]] \
+      || fail "$wrapper.sh with no dotnet on PATH exited $code, not 2 with its message: $said"
+  done
 
   step "the mutation specs still fit the code"
   # tests/mutations/*.json are specs for the hardening-review skill's mutate.py (a run edits the tree one mutation at a time: see CLAUDE.md for each spec's time). This only checks that each

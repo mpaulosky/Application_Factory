@@ -13,7 +13,9 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   `status.sh`, `land.sh` and `github-settings.sh` run the C# file-based apps `github/status.cs`, `github/land.cs` and `github/settings.cs`, which include
   `Landing.cs`, `StatusCore.cs`, `LandCore.cs`, `SettingsCore.cs`, `Repos.cs` and `Gh.cs` (ADR 0017); `rollout.py` and `auto_rollout.py` are still Python,
   and `settings.py` stays, run by nothing, for the `read_repo_list` that `rollout.py` imports.
-  `test.sh` and `tests/` test all of it. `tests/Scripts.Tests/` is the xUnit v3 project for the C# scripts (ADR 0017); it and `github/` each hold three empty shield
+  `test.sh` and `tests/` test all of it. The gate and `test.sh` run two checkers in `tests/`: `check-issue-refs.sh` and `check-git-status.sh` run the C# file-based apps
+  `check-issue-refs.cs` and `check-git-status.cs`, which include `IssueRefs.cs`, `GitStatusGuards.cs` and `Checker.cs`, each judged by its parity suite (`<checker>.test.sh`).
+  `tests/Scripts.Tests/` is the xUnit v3 project for the C# scripts (ADR 0017); it, `tests/` and `github/` each hold three empty shield
   files (`Directory.Build.props`, `Directory.Build.targets`, `Directory.Packages.props`), which are not Owned. The test project also holds its own `NuGet.config`
   (nuget.org alone) and `packages.lock.json`, which `test.sh` restores against in locked mode (ADR 0017's Update on hardening the C# step).
 - `.claude/skills/`: also the shared skills (`build-repair`, `dotnet-*`, `remove-squad`, `review-changes`), and `starting-points/`: the optional app-stack files
@@ -61,7 +63,7 @@ Don't add more without an ADR.
 
 ```bash
 scripts/gate.sh --sync                                        # copy the Template's files over the Factory's copies of them (after editing the Template)
-scripts/gate.sh --quick                                       # while iterating: the gate up to and including shellcheck of the shell files the branch changed, shfmt of every shell file, ruff of every Python file and the C# check, without the local review check, test.sh and the Sandcastle check (about a minute); never for a push
+scripts/gate.sh --quick                                       # while iterating: the gate up to and including shellcheck of the shell files the branch changed, shfmt of every shell file, ruff of every Python file and the C# check, without the local review check, test.sh and the Sandcastle check (about a minute, a few seconds more on its first run in a worktree, which builds the two C# checkers); never for a push
 scripts/gate.sh                                               # the pre-push gate (needs pnpm on the first run, test.sh's tools, shfmt and the .NET SDK among them, and ruff 0.17: uv tool install ruff@0.17.6); GATE_NO_CACHE=1 runs test.sh and the Sandcastle check again on a tree that already passed them
 GATE_PART=sandcastle scripts/gate.sh                          # one part alone (self, review, static, template, sandcastle), as a CI job runs it; the Sandcastle check needs pnpm and the network
 .claude/skills/repo-ci-baseline/test.sh                       # all the Template's tests (TEST_SH_SHARD=hooks|scripts|checks runs one shard); needs actionlint, zizmor, yamllint, shellcheck, shfmt (v3.14 or a later v3), markdownlint-cli2, node, git, jq, and the .NET SDK global.json names for the scripts shard
