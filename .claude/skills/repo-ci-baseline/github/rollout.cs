@@ -1,6 +1,6 @@
 #:include Gh.cs
 #:include Repos.cs
-#:include SettingsCore.cs
+#:include Py.cs
 #:include AutoRolloutGuard.cs
 #:include AutoRolloutRecord.cs
 #:property PublishAot=false

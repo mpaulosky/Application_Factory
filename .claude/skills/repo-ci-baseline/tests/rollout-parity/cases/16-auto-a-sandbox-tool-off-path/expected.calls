@@ -1,0 +1,6 @@
+bwrap --unshare-all --ro-bind / / --dev /dev true
+claude --version
+claude --setting-sources "" auth status --json
+shfmt --version
+auth.status
+dotnet --version

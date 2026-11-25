@@ -1,5 +1,6 @@
 #:include Gh.cs
 #:include Repos.cs
+#:include Py.cs
 #:include SettingsCore.cs
 #:property PublishAot=false
 // Check, and with --fix apply, the Baseline's GitHub settings on a repo. SettingsCore.cs holds the logic and its contract;

@@ -1,0 +1,10 @@
+bwrap --unshare-all --ro-bind / / --dev /dev true
+claude --version
+claude --setting-sources "" auth status --json
+shfmt --version
+auth.status
+dotnet --version
+git -C ~/github/TicketManager rev-parse --path-format=absolute --git-common-dir
+reapply.sh --brings #80 ~/github/TicketManager
+git -C ~/github/TicketManager rev-parse --path-format=absolute --git-common-dir
+git -C ~/github/TicketManager-worktrees/chore-reapply-baseline rev-parse HEAD
