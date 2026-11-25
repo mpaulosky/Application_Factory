@@ -150,6 +150,49 @@ public class SessionEnvTests
 		Assert.False(Directory.Exists(Path.Combine(tmp, "rollout-session.old")));
 	}
 
+	// Not moved tests (Claude Review on mpaulosky/Application_Factory#193): shutil.rmtree removes the links in a tree and never follows
+	// them, and refuses a link at its top, which ignore_errors leaves in place.
+	[Fact]
+	public void A_link_inside_a_leftover_is_removed_and_where_it_leads_is_left()
+	{
+		var tmp = TempDir();
+		var data = Path.Combine(tmp, "data");
+		Directory.CreateDirectory(data);
+		File.WriteAllText(Path.Combine(data, "keep.txt"), "mine");
+		var leftover = Path.Combine(tmp, "rollout-session.old");
+		Directory.CreateDirectory(Path.Combine(leftover, "nested", "deeper"));
+		File.WriteAllText(Path.Combine(leftover, "nested", "deeper", "f.txt"), "");
+		File.CreateSymbolicLink(Path.Combine(leftover, "to-folder"), data);
+		File.CreateSymbolicLink(Path.Combine(leftover, "nested", "to-file"), Path.Combine(data, "keep.txt"));
+		AutoRollout.SweepSessions(tmp);
+		Assert.False(Directory.Exists(leftover) || File.Exists(leftover), "the leftover, nested folders and links among it, is removed");
+		Assert.Equal("mine", File.ReadAllText(Path.Combine(data, "keep.txt")));
+	}
+
+	[Fact]
+	public void A_leftover_that_is_a_link_is_left_and_where_it_leads_too()
+	{
+		var tmp = TempDir();
+		var data = Path.Combine(tmp, "data");
+		Directory.CreateDirectory(data);
+		File.WriteAllText(Path.Combine(data, "keep.txt"), "mine");
+		var link = Path.Combine(tmp, "rollout-session.link");
+		File.CreateSymbolicLink(link, data);
+		AutoRollout.SweepSessions(tmp);
+		Assert.True(PyLib.IsLink(link));
+		Assert.Equal("mine", File.ReadAllText(Path.Combine(data, "keep.txt")));
+	}
+
+	// As os.listdir does, a sweep of a folder that isn't there throws (an OSError the round catches); the round makes both folders
+	// with OwnLogDir before it sweeps them.
+	[Fact]
+	public void A_sweep_of_a_missing_folder_throws_as_the_Python_does()
+	{
+		var missing = Path.Combine(TempDir(), "missing");
+		Assert.Throws<DirectoryNotFoundException>(() => AutoRollout.SweepSessions(missing));
+		Assert.Throws<DirectoryNotFoundException>(() => AutoRollout.SweepSettings(missing));
+	}
+
 	[Fact]
 	public void Another_users_leftover_in_the_session_folder_is_left()
 	{

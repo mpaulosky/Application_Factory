@@ -8,7 +8,7 @@ using static SandboxFixtures;
 public class PortReadingTests
 {
 	// U+0301, a combining mark: a word character to .NET's \w, not to Python's re.
-	const string Mark = "́";
+	const string Mark = "\u0301";
 
 	[Fact]
 	public void A_mark_after_a_dollar_names_no_variable_so_the_password_is_found()
