@@ -1,0 +1,2 @@
+^rollout\.sh: claude isn't signed in, as claude --setting-sources '' auth status --json says: sign it in with claude /login \(the review session reads no settings file, so an apiKeyHelper in one isn't used\)$
+^rollout\.sh: nothing run; fix those first, then run: rollout\.sh --auto --brings '#80'$

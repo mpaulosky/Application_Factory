@@ -1,0 +1,5 @@
+bwrap --unshare-all --ro-bind / / --dev /dev true
+claude --version
+shfmt --version
+auth.status
+dotnet --version

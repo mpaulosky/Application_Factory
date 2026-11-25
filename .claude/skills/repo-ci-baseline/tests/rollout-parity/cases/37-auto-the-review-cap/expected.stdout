@@ -1,0 +1,12 @@
+── rollout: TicketManager
+reapply.sh: working on TicketManager
+── rollout: TicketManager: the gate asks for a review; running /pre-push-review headless in ~/github/TicketManager-worktrees/chore-reapply-baseline
+── rollout: TicketManager: review session exited 0; log: ~/.cache/repo-ci-baseline/logs/review-TicketManager.XXXXXXXX.log
+── rollout: TicketManager
+reapply.sh: working on TicketManager
+── rollout: TicketManager: the gate asks for a review; running /pre-push-review headless in ~/github/TicketManager-worktrees/chore-reapply-baseline
+── rollout: TicketManager: review session exited 0; log: ~/.cache/repo-ci-baseline/logs/review-TicketManager.XXXXXXXX.log
+── rollout: TicketManager
+reapply.sh: working on TicketManager
+rollout: TicketManager: the gate still asks for a review after 2 review session(s): main or the Template may have moved since the last one (see ~/.cache/repo-ci-baseline/logs/review-TicketManager.XXXXXXXX.log); run /pre-push-review in ~/github/TicketManager-worktrees/chore-reapply-baseline, then resume; held: Alpha, Zed
+  resume with: rollout.sh --auto --brings '#80'

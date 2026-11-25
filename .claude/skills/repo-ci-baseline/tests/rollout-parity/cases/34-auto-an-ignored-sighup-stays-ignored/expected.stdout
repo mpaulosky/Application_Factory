@@ -1,0 +1,9 @@
+── rollout: TicketManager
+reapply.sh: working on TicketManager
+reapply.sh: SIGHUP is ignored here too
+── rollout: TicketManager already matches the Template: nothing to land, so the rest go on
+── rollout: Alpha
+reapply.sh: working on Alpha
+── rollout: Zed
+reapply.sh: working on Zed
+rollout: TicketManager and 2 of 2 other repo(s) done

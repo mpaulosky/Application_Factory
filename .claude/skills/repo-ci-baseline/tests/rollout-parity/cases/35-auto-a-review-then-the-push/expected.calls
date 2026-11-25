@@ -1,0 +1,47 @@
+bwrap --unshare-all --ro-bind / / --dev /dev true
+claude --version
+claude --setting-sources "" auth status --json
+shfmt --version
+auth.status
+dotnet --version
+git -C ~/github/TicketManager rev-parse --path-format=absolute --git-common-dir
+reapply.sh --brings #80 ~/github/TicketManager
+git -C ~/github/TicketManager-worktrees/chore-reapply-baseline diff --no-renames --name-only -z origin/main...HEAD
+git -C ~/github/TicketManager-worktrees/chore-reapply-baseline ls-remote origin refs/heads/chore/reapply-baseline
+git -C ~/github/TicketManager-worktrees/chore-reapply-baseline rev-parse --path-format=absolute --git-common-dir
+git -C ~/github/TicketManager-worktrees/chore-reapply-baseline rev-parse --path-format=absolute --git-dir
+git -C ~/github/TicketManager-worktrees/chore-reapply-baseline rev-parse HEAD
+git -C ~/github/TicketManager-worktrees/chore-reapply-baseline rev-parse --verify --quiet refs/heads/chore/reapply-baseline
+git -C ~/github/TicketManager-worktrees/chore-reapply-baseline status --porcelain=v1 -z --untracked-files=all
+node -p process.execPath
+git --exec-path
+claude -p "You are running the pre-push-review skill, unattended, for rollout.sh --auto, in ~/github/TicketManager-worktrees/chore-reapply-baseline, the re-Apply worktree of mpaulosky/TicketManager. The skill's instructions are below, from the Factory's Template; its base directory is ~/github/TicketManager-worktrees/chore-reapply-baseline/.claude/skills/pre-push-review, the worktree's copy of the same files. Follow them, with these changes.\nNobody will answer a question: never ask one or wait for a reply; where the skill says to ask the person or show them text first, don't, and say so in your last message.\nReview only: this session changes nothing in the repository. Don't edit, fix or commit anything, and don't run the gate (reapply.sh runs it on the push). Run one round over the whole branch, as the skill's last, review-only round: stage open every finding the skill's triage doesn't dismiss, with its suggested fix, and the person fixes or accepts them; a finding the triage dismisses, with the skill's reason, is staged dismissed only when it isn't a security one. Never dismiss a security finding (one the skill's triage marks security): stage it open, a repeat of a fixed .security entry too, with that entry's number in the summary. Give every finding you stage its security mark, as the skill's triage says: true, or false only once you have read the code and it isn't a security weakness; rollout.sh takes a dismissed finding without \"security\": false for a security one, and stops the round. Leave out every finding's repeats field, whatever entry it would name (fixed, open or accepted): rollout.sh drops it, and the record matches a finding to an entry by its path and summary.\nYour run folder is ~/.cache/repo-ci-baseline-sessions/rollout-session.XXXXXXXX/run, made for you: use it where the skill says to make one with mktemp -d, and write nothing anywhere else. The worktree, the clone's git folder, its review ledgers and the .security record are read-only to you.\nStage the round's findings with scripts/review.sh stage ~/.cache/repo-ci-baseline-sessions/rollout-session.XXXXXXXX/run <file> as the skill's step 5 says, as an empty array [] when it keeps none, and stop there: don't run scripts/review.sh record. rollout.sh records what you staged once the session ends, with the key and HEAD of this code.\nThese files the branch changes are Owned Baseline files, which the next Apply overwrites: none. A finding in one says, in its fix, what to change in the Factory's template/owned/.\nDon't push, don't file the follow-up issue, and don't edit a PR.\nYour shell runs in a sandbox with no network and no GitHub sign-in: skip the skill's GitHub reads (the PR's threads, the issue) and its git fetch, and say you did. reapply.sh has just fetched origin, so go on with origin/main as it is.\nEnd with a list of the findings you staged: each one's id, severity, path and line.\n\n# Pre-push review (stand-in)\n\nReview the branch and stage what you find. A review session's prompt carries this text, so a case pins it.\n" --permission-mode dontAsk --settings ~/.cache/repo-ci-baseline/logs/review-TicketManager.XXXXXXXX.settings.json --setting-sources "" --strict-mcp-config --tools Read,Write,Edit,Glob,Grep,Bash,Agent,TodoWrite,SendMessage --agents "{\"pre-push-reviewer\": {\"description\": \"The rollout parity suite's stand-in for the Template's pre-push-reviewer agent, which the runner copies into its stand-in Template.\", \"prompt\": \"# Pre-push reviewer (stand-in)\\n\\nReview the diff through one lens.\\n\", \"tools\": [\"Read\", \"Grep\", \"Glob\"], \"model\": \"sonnet\"}}" --disallowedTools "Bash(git push:*)" "Bash(scripts/review.sh accept:*)" "Bash(scripts/review.sh accept-open:*)" "Bash(gh pr create:*)" "Bash(gh pr edit:*)" "Bash(gh pr comment:*)" "Bash(gh pr review:*)" "Bash(gh pr merge:*)" "Bash(gh pr ready:*)" "Bash(gh pr close:*)" "Bash(gh issue create:*)" "Bash(gh issue comment:*)" "Bash(gh issue edit:*)" "Bash(gh issue close:*)" "Bash(gh label:*)" "Bash(gh release:*)" "Bash(gh repo:*)" "Bash(gh secret:*)" "Bash(gh workflow:*)" "Edit(/<tmp>/factory/**)" "Edit(~/.claude/**)"
+git -C ~/github/TicketManager-worktrees/chore-reapply-baseline ls-remote origin refs/heads/chore/reapply-baseline
+git -C ~/github/TicketManager-worktrees/chore-reapply-baseline rev-parse HEAD
+git -C ~/github/TicketManager-worktrees/chore-reapply-baseline rev-parse --verify --quiet refs/heads/chore/reapply-baseline
+git -C ~/github/TicketManager-worktrees/chore-reapply-baseline status --porcelain=v1 -z --untracked-files=all
+git -C ~/github/TicketManager-worktrees/chore-reapply-baseline diff --no-renames --name-only -z origin/main...HEAD
+review.sh prepare <tmp>/run/tmp/rollout-record.XXXXXXXX/prepare
+review.sh record - --staged <tmp>/run/tmp/rollout-record.XXXXXXXX/staged
+review.sh advisory
+reapply.sh --brings #80 ~/github/TicketManager
+git -C ~/github/TicketManager rev-parse --path-format=absolute --git-common-dir
+git -C ~/github/TicketManager-worktrees/chore-reapply-baseline rev-parse HEAD
+git -C ~/github/TicketManager-worktrees/chore-reapply-baseline merge-base --is-ancestor HEAD origin/main
+pr.list.mpaulosky.TicketManager gh pr list -R mpaulosky/TicketManager --head chore/reapply-baseline --state all --limit 100 --json number,state,headRefOid,isCrossRepository --jq "[.[] | select(.isCrossRepository == false)][0] // empty | \"\\(.number) \\(.state) \\(.headRefOid)\""
+land.sh mpaulosky/TicketManager#7
+pr.view.mpaulosky.TicketManager.7.state gh pr view 7 -R mpaulosky/TicketManager --json state --jq .state
+git -C ~/github/Alpha rev-parse --path-format=absolute --git-common-dir
+reapply.sh --brings #80 ~/github/Alpha
+git -C ~/github/Alpha rev-parse --path-format=absolute --git-common-dir
+git -C ~/github/Alpha-worktrees/chore-reapply-baseline rev-parse HEAD
+git -C ~/github/Alpha-worktrees/chore-reapply-baseline merge-base --is-ancestor HEAD origin/main
+pr.list.mpaulosky.Alpha gh pr list -R mpaulosky/Alpha --head chore/reapply-baseline --state all --limit 100 --json number,state,headRefOid,isCrossRepository --jq "[.[] | select(.isCrossRepository == false)][0] // empty | \"\\(.number) \\(.state) \\(.headRefOid)\""
+git -C ~/github/Zed rev-parse --path-format=absolute --git-common-dir
+reapply.sh --brings #80 ~/github/Zed
+git -C ~/github/Zed rev-parse --path-format=absolute --git-common-dir
+git -C ~/github/Zed-worktrees/chore-reapply-baseline rev-parse HEAD
+git -C ~/github/Zed-worktrees/chore-reapply-baseline merge-base --is-ancestor HEAD origin/main
+pr.list.mpaulosky.Zed gh pr list -R mpaulosky/Zed --head chore/reapply-baseline --state all --limit 100 --json number,state,headRefOid,isCrossRepository --jq "[.[] | select(.isCrossRepository == false)][0] // empty | \"\\(.number) \\(.state) \\(.headRefOid)\""
+land.sh mpaulosky/Alpha#8
+pr.view.mpaulosky.Alpha.8.state gh pr view 8 -R mpaulosky/Alpha --json state --jq .state

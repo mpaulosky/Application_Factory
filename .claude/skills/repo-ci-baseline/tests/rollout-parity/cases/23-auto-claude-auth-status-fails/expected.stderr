@@ -1,0 +1,2 @@
+^rollout\.sh: claude --setting-sources '' auth status --json failed \(exit 1\), so whether claude is signed in can't be told: run it to see why, and sign claude in with claude /login if it says you're signed out$
+^rollout\.sh: nothing run; fix those first, then run: rollout\.sh --auto --brings '#80'$
