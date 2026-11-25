@@ -50,7 +50,7 @@ public class AutoRolloutTests : IDisposable
 	[Fact]
 	public void The_paths_it_runs_exist()
 	{
-		// The original's REAPPLY is rollout.py's, which joins this library with rollout's own port.
+		// The original's REAPPLY is rollout.py's: Rollout.RunReapply runs the same Folders.Reapply.
 		static bool Executable(string path) => !OperatingSystem.IsWindows() && File.Exists(path) && (File.GetUnixFileMode(path) & UnixFileMode.UserExecute) != 0;
 		var folders = new Folders(Skill.Dir);
 		Assert.True(Executable(folders.Land));
@@ -80,11 +80,15 @@ public class AutoRolloutTests : IDisposable
 	[Fact]
 	public void The_exit_codes_and_worktree_agree_with_reapply_sh()
 	{
-		// The original's part this library holds: the branch and the worktree's folder. The exit codes join it with the round's port.
 		var script = File.ReadAllLines(Skill.Path("reapply.sh"));
 		string Constant(string name) => script.First(line => line.StartsWith($"{name}=", StringComparison.Ordinal)).Split('=', 2)[1].Trim('"');
+		Assert.Equal(Constant("review_needed_exit"), AutoRound.ReviewNeeded.ToString(System.Globalization.CultureInfo.InvariantCulture));
+		Assert.Equal(Constant("findings_wait_exit"), AutoRound.FindingsWait.ToString(System.Globalization.CultureInfo.InvariantCulture));
 		Assert.Equal(AutoRollout.Worktree, Constant("worktree_name"));
 		Assert.Equal(AutoRollout.Branch, Constant("branch"));
+		Assert.Equal(AutoRollout.Branch, Rollout.Branch);
+		// rollout.sh's hints, by the same codes.
+		Assert.Equal([AutoRound.ReviewNeeded, AutoRound.FindingsWait], Rollout.ReapplyStops.Keys.Order());
 	}
 
 	// ── The worktree, the lock, the Owned files ─────────────────────────
