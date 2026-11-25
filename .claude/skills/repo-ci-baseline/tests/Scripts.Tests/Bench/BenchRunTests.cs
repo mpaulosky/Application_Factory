@@ -214,6 +214,25 @@ public partial class BenchTests
 		Assert.Equal("a link's target\n", File.ReadAllText(Path.Combine(temp, "outside", "CLAUDE.md")));
 	}
 
+	[Fact]
+	public void A_root_folder_named_as_claude_in_another_case_is_searched()
+	{
+		var tree = Directory.CreateDirectory(Path.Combine(temp, "tree")).FullName;
+		Directory.CreateDirectory(Path.Combine(tree, ".claude"));
+		// A case-insensitive file system has one folder for both names, which UseBaseSettings has made the base's.
+		if (Directory.Exists(Path.Combine(tree, ".Claude")))
+			return;
+		Directory.CreateDirectory(Path.Combine(tree, ".claude", "sub"));
+		File.WriteAllText(Path.Combine(tree, ".claude", "sub", "CLAUDE.md"), "the base's\n");
+		Directory.CreateDirectory(Path.Combine(tree, ".Claude", "sub"));
+		File.WriteAllText(Path.Combine(tree, ".Claude", "sub", "CLAUDE.md"), "the head's\n");
+
+		Bench.RemoveNestedConfig(tree);
+
+		Assert.True(File.Exists(Path.Combine(tree, ".claude", "sub", "CLAUDE.md")), "the root's .claude lost the base's config");
+		Assert.False(File.Exists(Path.Combine(tree, ".Claude", "sub", "CLAUDE.md")), "the head's .Claude kept its nested config");
+	}
+
 	[Theory]
 	[InlineData(-1L, 0L)]
 	[InlineData(0L, 0L)]
