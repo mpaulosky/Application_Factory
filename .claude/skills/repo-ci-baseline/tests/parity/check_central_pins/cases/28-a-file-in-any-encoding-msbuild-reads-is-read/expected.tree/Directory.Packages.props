@@ -1,6 +1,6 @@
 <Project>
   <PropertyGroup><CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled></PropertyGroup>
   <ItemGroup>
-<PackageVersion Include="Bom" Version="1.0.0" /><PackageVersion Include="Utf16" Version="1.0.0" /><PackageVersion Include="Latin1" Version="1.0.0" /><PackageVersion Include="Crlf" Version="1.0.0" />
+<PackageVersion Include="Bom" Version="1.0.0" /><PackageVersion Include="Latin1" Version="1.0.0" /><PackageVersion Include="Crlf" Version="1.0.0" />
   </ItemGroup>
 </Project>

@@ -21,7 +21,8 @@ The cases cover:
   marker; no colon; the marker not first; a dotless i, which Python's lowering doesn't turn into `i`.
 - **References.** Ids ignoring case (23); `Update`, `GlobalPackageReference`, `PackageDownload` and a lower-case tag (24); every MSBuild extension and five names that
   aren't one (25); SDKs in a `Project`, an `Sdk` element, an `Import` and `global.json` (26); the legacy namespace, a prefix and an undeclared one (27); a byte order mark,
-  UTF-16, ISO-8859-1 and CRLF inside a tag (28); `bin/`, `obj/`, `node_modules/` and dot-folders not walked (29); a folder named like a project walked (56).
+  ISO-8859-1 and CRLF inside a tag (28: UTF-16 is `CheckCentralPinsTests`', since the local review refuses a UTF-16 file in a diff, which git shows only as
+  binary); `bin/`, `obj/`, `node_modules/` and dot-folders not walked (29); a folder named like a project walked (56).
 - **Properties.** A reference built from one (30), one with several values (31), a pin built from one (32) and resolving to several ids, reported in order (33); references
   that can't be read making the pins warnings, listed once and sorted (34); a pin that can't be read left alone (35); `MaxExpansions` combinations, one past them (36) and
   at them, two properties multiplied (37); a name past `MaxValue` once substituted (38); an id past `MaxId`, written or resolved (39), counted in code points (40); a value
