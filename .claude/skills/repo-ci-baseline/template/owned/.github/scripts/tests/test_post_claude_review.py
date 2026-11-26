@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 import random
@@ -667,12 +668,13 @@ def test_thread_links_match_by_path_and_body_and_fall_back_to_order():
 
 
 def longest_body(tmp_path, threads):
-    """The longest summary the workflow's batch join can produce, and the findings in the review that hold it."""
-    answers = [{"summary": "z" * 100_000, "findings": []} for _ in range(4)]
+    """The longest report the workflow's batch join can produce, and the findings in the review that hold it."""
+    answers = [{"overview": "z" * 100_000, "changes": ["c" * 3_000] * 3, "files": [{"path": "f" * 100, "description": "d" * 3_000}] * 3,
+                "advisory": ["a" * 3_000] * 3, "not_reviewed": "n" * 100_000, "findings": []} for _ in range(4)]
     listed = ["001.diff", "002.diff", "003.diff", "004.diff"]
     reads = {n: read_whole_of(tmp_path, name, f"r{n}") for n, name in enumerate(listed, 1)}
     _, answer, _ = batched(tmp_path, answers, listed, reads)
-    return json.dumps({"summary": answer["summary"],
+    return json.dumps({**{key: value for key, value in answer.items() if key != "findings"},
                        "findings": [{"path": "src/app.py", "line": 2, "body": f"**{'t' * 300}**", "severity": "high"}
                                     for _ in range(threads)] +
                                    [{"path": "README.md", "line": 1, "body": "Off the diff, whole."}]})
@@ -889,6 +891,38 @@ def test_only_the_schemas_fields_are_passed_on(tmp_path):
     assert outputs["redacted"] == "0"
 
 
+def test_the_structured_fields_and_severity_are_passed_on_and_nothing_else(tmp_path):
+    answer = {**GOOD_ANSWER, "files": [{"path": "a.py", "description": "d", "extra": [115, 107]}],
+              "findings": [{**GOOD_ANSWER["findings"][0], "extra": "e"}]}
+
+    _, outputs, _ = check(tmp_path, answer, [SECRET])
+
+    assert json.loads(outputs["findings"]) == GOOD_ANSWER
+
+
+def test_a_credential_in_any_structured_field_is_redacted(tmp_path):
+    answer = {"overview": "o " + TOKENS[1], "changes": ["Uses " + JWT], "advisory": ["a " + TOKENS[1]],
+              "not_reviewed": "n " + JWT, "files": [{"path": "src/" + TOKENS[1], "description": "Holds " + TOKENS[1]}],
+              "findings": [{"path": "a.py", "line": 1, "severity": "low", "body": "b"}]}
+
+    code, outputs, _ = check(tmp_path, answer, [SECRET])
+
+    posted = json.loads(outputs["findings"])
+    assert code == 0 and outputs["redacted"] == "6"
+    assert TOKENS[1] not in outputs["findings"] and JWT not in outputs["findings"]
+    assert posted["changes"] == ["Uses " + pcr.REDACTED] and posted["files"][0]["description"] == "Holds " + pcr.REDACTED
+    assert posted["files"][0]["path"] == "src/" + pcr.REDACTED
+
+
+@pytest.mark.parametrize("field, leak", [
+    ("overview", "o " + SECRET), ("changes", ["c " + SECRET]), ("advisory", ["a " + SECRET]),
+    ("not_reviewed", "n " + SECRET), ("files", [{"path": "a.py", "description": SECRET}]),
+    ("files", [{"path": "src/" + SECRET, "description": "d"}]),
+], ids=["overview", "changes", "advisory", "not_reviewed", "files-description", "files-path"])
+def test_a_secret_in_a_structured_field_withholds_the_answer(tmp_path, field, leak):
+    assert withheld(tmp_path, {**GOOD_ANSWER, field: leak}, [SECRET])
+
+
 @pytest.mark.parametrize("answer", [
     {"summary": "s", "findings": "none"},
     {"summary": "s", "findings": ["not a finding"]},
@@ -902,6 +936,20 @@ def test_only_the_schemas_fields_are_passed_on(tmp_path):
     {"summary": "s", "findings": [{"path": "a", "line": [115, 107], "body": "b"}]},
     {"summary": {TOKENS[1]: [115, 107]}, "findings": []},
     [{TOKENS[1]: "x"}],
+    {"overview": [115, 107], "findings": []},
+    {"summary": "s", "overview": [115, 107], "findings": []},
+    {"overview": "o", "summary": 5, "findings": []},
+    {"overview": "o", "files": ["a.py"], "findings": []},
+    {"overview": "o", "files": [{"path": 1, "description": "d"}], "findings": []},
+    {"overview": "o", "not_reviewed": [115, 107], "findings": []},
+    {"overview": "o", "changes": "c", "findings": []},
+    {"overview": "o", "changes": [115, 107], "findings": []},
+    {"overview": "o", "advisory": [{TOKENS[1]: 1}], "findings": []},
+    {"overview": "o", "files": [{"path": "a.py"}], "findings": []},
+    {"overview": "o", "files": [{"path": "a.py", "description": [115, 107]}], "findings": []},
+    {"overview": "o", "files": {"a.py": "d"}, "findings": []},
+    {"overview": "o", "findings": [{"path": "a.py", "line": 1, "severity": "critical", "body": "b"}]},
+    {"overview": "o", "findings": [{"path": "a.py", "line": 1, "severity": [115, 107], "body": "b"}]},
 ])
 def test_a_malformed_answer_becomes_a_placeholder_the_post_script_rejects(tmp_path, answer):
     _, outputs, out = check(tmp_path, answer, [SECRET])
@@ -1075,9 +1123,10 @@ def post_step_script():
     return textwrap.dedent("\n".join(lines[run + 1:end])) + "\n"
 
 
-def stub_script(name):
-    """A post_claude_review.py that only says which copy ran, and with what."""
-    return f'import sys\nprint("{name} copy ran with", " ".join(sys.argv[1:]))\n'
+def stub_script(name, effort=True):
+    """A post_claude_review.py that only says which copy ran, and with what; effort=False is one from before --effort."""
+    accepts = "# Takes --effort.\n" if effort else ""
+    return f'{accepts}import sys\nprint("{name} copy ran with", " ".join(sys.argv[1:]))\n'
 
 
 def git(repo, *args):
@@ -1111,12 +1160,19 @@ def merge_repo(tmp_path, base, pr):
     return repo
 
 
-def run_post_step(repo, tmp_path, findings="{}"):
+def post_step_env():
+    yaml = pytest.importorskip("yaml")
+    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["post"]["steps"]
+    return next(step for step in steps if step["name"] == "Post the review on the head commit")["env"]
+
+
+def run_post_step(repo, tmp_path, findings="{}", batches=None):
     runner_temp = tmp_path / "runner-temp"
     runner_temp.mkdir()
     env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "RUNNER_TEMP": str(runner_temp),
            "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "FINDINGS": findings, "REDACTED": "0",
-           "REPOSITORY": "octo/demo", "PR_NUMBER": "7", "HEAD_SHA": HEAD}
+           "REPOSITORY": "octo/demo", "PR_NUMBER": "7", "HEAD_SHA": HEAD, "REVIEW_EFFORT": "high (claude-sonnet-5-5)",
+           **({"BATCHES": batches} if batches is not None else {})}
     return subprocess.run(["bash", "-e", "-c", post_step_script()], cwd=repo, env=env, capture_output=True, text=True)
 
 
@@ -1126,7 +1182,80 @@ def test_the_post_step_runs_the_bases_script_not_the_prs(tmp_path):
     done = run_post_step(repo, tmp_path)
 
     assert done.returncode == 0, done.stderr
-    assert done.stdout.strip() == f"base copy ran with --repo octo/demo --pr 7 --head {HEAD}"
+    assert done.stdout.strip() == (f"base copy ran with --repo octo/demo --pr 7 --head {HEAD} "
+                                   "--effort high (claude-sonnet-5-5), 1 batch")
+
+
+@pytest.mark.parametrize("batches, effort", [("1", "1 batch"), ("2", "2 batches"), ("4", "4 batches"), ("", "1 batch"),
+                                             ("0", "1 batch"), ("x", "1 batch"), ("-2", "1 batch"),
+                                             ("10", "10 batches"), ("04", "1 batch")])
+def test_the_effort_footer_names_the_batch_count(tmp_path, batches, effort):
+    repo = merge_repo(tmp_path, stub_script("base"), stub_script("pr"))
+
+    done = run_post_step(repo, tmp_path, batches=batches)
+
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip().endswith(f"--effort high (claude-sonnet-5-5), {effort}")
+
+
+def test_the_effort_footer_names_the_review_steps_effort_and_model():
+    yaml = pytest.importorskip("yaml")
+    args = yaml.safe_load(WORKFLOW.read_text())["jobs"]["review"]["steps"]
+    claude_args = next(step for step in args if step.get("id") == "claude_1")["with"]["claude_args"]
+    model, effort = re.search(r"--model (\S+)", claude_args)[1], re.search(r"--effort (\S+)", claude_args)[1]
+
+    env = post_step_env()
+
+    assert env["REVIEW_EFFORT"] == f"{effort} ({model})"
+    assert env["BATCHES"] == "${{ needs.review.outputs.batches }}"
+
+
+def test_the_review_job_passes_on_its_batch_count():
+    yaml = pytest.importorskip("yaml")
+    outputs = yaml.safe_load(WORKFLOW.read_text())["jobs"]["review"]["outputs"]
+    assert outputs["batches"] == "${{ steps.diff.outputs.batches }}"
+
+
+def test_a_base_script_from_before_the_structured_answer_warns_and_posts_nothing(tmp_path):
+    repo = merge_repo(tmp_path, stub_script("base", effort=False), stub_script("pr"))
+
+    done = run_post_step(repo, tmp_path)
+
+    assert done.returncode == 0
+    assert "::warning::The base's .github/scripts/post_claude_review.py predates the answer" in done.stdout
+    assert "copy ran" not in done.stdout
+
+
+def test_a_base_script_from_before_the_structured_answer_fails_on_withheld_findings(tmp_path):
+    repo = merge_repo(tmp_path, stub_script("base", effort=False), stub_script("pr"))
+
+    done = run_post_step(repo, tmp_path, findings="")
+
+    assert done.returncode == 1
+    assert "::error::Claude's answer was withheld for quoting a secret" in done.stdout
+    assert "copy ran" not in done.stdout
+
+
+@pytest.mark.parametrize("base", [None, stub_script("base", effort=False)], ids=["no-script", "old-script"])
+def test_a_malformed_answer_fails_the_post_step_on_a_base_that_cant_post_it(tmp_path, base):
+    repo = merge_repo(tmp_path, base, stub_script("pr"))
+    malformed = json.dumps({"malformed": "Claude's answer was withheld: findings is not a list"})
+
+    done = run_post_step(repo, tmp_path, findings=malformed)
+
+    assert done.returncode == 1
+    assert "::error::Claude's answer didn't fit the schema" in done.stdout
+    assert "::warning::" not in done.stdout and "copy ran" not in done.stdout
+
+
+def test_the_post_step_tells_a_malformed_answer_by_the_answer_checks_placeholder(tmp_path):
+    # The step matches the placeholder's text, so the check's json.dumps must still write it that way.
+    _, outputs, _ = check(tmp_path, {"summary": "s", "findings": "none"}, [SECRET])
+    assert outputs["findings"].startswith('{"malformed": ')
+
+
+def test_the_real_post_script_is_one_the_post_step_passes_the_effort_to():
+    assert "--effort" in Path(pcr.__file__).read_text()
 
 
 def test_a_base_without_the_script_warns_and_posts_nothing(tmp_path):
@@ -1217,7 +1346,7 @@ def test_pieces_read_whole_hold_nothing(tmp_path):
 def test_a_listed_piece_not_read_whole_holds_the_merge(tmp_path, reads):
     folder = tmp_path / "claude-review" / "diff"
     added, out = hold(tmp_path, [*read_of(folder, "001.diff", "a"), *reads(folder)], listed="001.diff 002.diff")
-    assert [(f["path"], f["line"]) for f in added] == [("diff", 0)]
+    assert [(f["path"], f["line"], f["severity"]) for f in added] == [("diff", 0, "high")]
     assert "didn't read all of diff pieces 002.diff:" in added[0]["body"] and "merge by hand" in added[0]["body"]
     # The log names the piece's files, with workflow commands stopped around the PR's paths.
     token = re.search(r"^::stop-commands::([0-9a-f]{32})$", out, re.M)[1]
@@ -1236,14 +1365,14 @@ def test_two_results_in_one_message_dont_count_as_read_whole(tmp_path):
 def test_pieces_past_the_budget_hold_the_merge(tmp_path):
     folder = tmp_path / "claude-review" / "diff"
     added, out = hold(tmp_path, read_of(folder, "001.diff", "a"), listed="001.diff", skipped="003.diff")
-    assert "pieces 003.diff:" in added[0]["body"]
+    assert "pieces 003.diff:" in added[0]["body"] and added[0]["severity"] == "high"
     assert "README.md" in out and "src/app.py" not in out
 
 
 def test_files_nobody_read_hold_the_merge(tmp_path):
     folder = tmp_path / "claude-review" / "diff"
     added, out = hold(tmp_path, read_of(folder, "001.diff", "a"), listed="001.diff", held="2")
-    assert [(f["path"], f["line"]) for f in added] == [("diff", 0)]
+    assert [(f["path"], f["line"], f["severity"]) for f in added] == [("diff", 0, "high")]
     assert "didn't read 2 changed file(s)" in added[0]["body"] and "merge by hand" in added[0]["body"]
     token = re.search(r"^::stop-commands::([0-9a-f]{32})$", out, re.M)[1]
     listed = out[out.index(f"::stop-commands::{token}"):out.index(f"::{token}::")]
@@ -1299,18 +1428,60 @@ def read_whole_of(tmp_path, names, tag):
 
 
 def test_batches_answers_are_posted_as_one_review(tmp_path):
-    answers = [{"summary": "first", "findings": [{"path": "a.py", "line": 1, "body": "one"}]},
-               {"summary": "second", "findings": [{"path": "b.py", "line": 2, "body": "two"}]}]
+    answers = [{"overview": "first", "changes": ["c1"], "files": [{"path": "a.py", "description": "d1"}],
+                "advisory": ["v1"], "findings": [{"path": "a.py", "line": 1, "severity": "high", "body": "one"}]},
+               {"overview": "second", "changes": ["c2", "c3"], "files": [{"path": "a.py", "description": "d2"}],
+                "not_reviewed": "n2", "findings": [{"path": "b.py", "line": 2, "severity": "low", "body": "two"}]}]
     listed = ["001.diff 002.diff", "003.diff"]
     reads = {1: read_whole_of(tmp_path, listed[0], "a"), 2: read_whole_of(tmp_path, listed[1], "b")}
 
     code, answer, out = batched(tmp_path, answers, listed, reads)
 
     assert code == 0 and "::warning::" not in out
-    assert answer["findings"] == [{"path": "a.py", "line": 1, "body": "one"}, {"path": "b.py", "line": 2, "body": "two"}]
-    summary = answer["summary"]
-    assert summary.startswith("Claude Review read this PR's diff in 2 batches")
-    assert summary.index("### Batch 1 of 2\n\nfirst") < summary.index("### Batch 2 of 2\n\nsecond")
+    assert answer == {
+        "overview": "Claude Review read this PR's diff in 2 batches, a review each.\n\n"
+                    "**Batch 1 of 2**\n\nfirst\n\n**Batch 2 of 2**\n\nsecond",
+        "changes": ["c1", "c2", "c3"],
+        # A path in two batches keeps both rows.
+        "files": [{"path": "a.py", "description": "d1"}, {"path": "a.py", "description": "d2"}],
+        "advisory": ["v1"],
+        "not_reviewed": "**Batch 2 of 2**\n\nn2",
+        "findings": [{"path": "a.py", "line": 1, "severity": "high", "body": "one"},
+                     {"path": "b.py", "line": 2, "severity": "low", "body": "two"}]}
+    report, _ = pcr.parse_findings(json.dumps(answer))
+    assert report["overview"] == answer["overview"]
+
+
+def test_a_joined_review_leaves_out_the_rows_no_batch_gave(tmp_path):
+    answers = [{"overview": "first", "changes": [], "files": [], "findings": []},
+               {"overview": "second", "changes": [], "files": [], "findings": []}]
+    listed = ["001.diff", "002.diff"]
+    reads = {1: read_whole_of(tmp_path, listed[0], "a"), 2: read_whole_of(tmp_path, listed[1], "b")}
+
+    _, answer, _ = batched(tmp_path, answers, listed, reads)
+
+    assert set(answer) == {"overview", "findings"}
+
+
+def test_a_batch_without_an_overview_gets_no_heading_in_it(tmp_path):
+    answers = [{"overview": "", "findings": []}, {"overview": "second", "findings": []}]
+    listed = ["001.diff", "002.diff"]
+    reads = {1: read_whole_of(tmp_path, listed[0], "a"), 2: read_whole_of(tmp_path, listed[1], "b")}
+
+    _, answer, _ = batched(tmp_path, answers, listed, reads)
+
+    assert "Batch 1 of 2" not in answer["overview"] and "**Batch 2 of 2**\n\nsecond" in answer["overview"]
+
+
+def test_a_batch_that_answered_with_a_summary_has_it_as_its_overview(tmp_path):
+    # An answer from before the structured fields joins as today's does.
+    answers = [{"summary": "old", "findings": []}, {"overview": "new", "findings": []}]
+    listed = ["001.diff", "002.diff"]
+    reads = {1: read_whole_of(tmp_path, listed[0], "a"), 2: read_whole_of(tmp_path, listed[1], "b")}
+
+    _, answer, _ = batched(tmp_path, answers, listed, reads)
+
+    assert "summary" not in answer and batch_sections(answer["overview"], 2) == {1: "old", 2: "new"}
 
 
 def test_one_batch_posts_its_answer_as_it_is(tmp_path):
@@ -1324,9 +1495,10 @@ def test_a_batch_that_didnt_answer_holds_the_merge_on_its_pieces(tmp_path):
     code, answer, out = batched(tmp_path, [ANSWER, None], listed, {1: read_whole_of(tmp_path, listed[0], "a")})
 
     assert code == 0
-    assert "### Batch 2 of 2\n\nThis batch's review ended without an answer" in answer["summary"]
+    assert answer["not_reviewed"] == "**Batch 2 of 2**\n\nThis batch's review ended without an answer, so its pieces weren't reviewed."
+    assert "Batch 2" not in answer["overview"]
     assert answer["findings"][0] == ANSWER["findings"][0]
-    assert [(f["path"], f["line"]) for f in answer["findings"][1:]] == [("diff", 0)]
+    assert [(f["path"], f["line"], f["severity"]) for f in answer["findings"][1:]] == [("diff", 0, "high")]
     assert "pieces 002.diff, 003.diff:" in answer["findings"][1]["body"]
     assert "src/002.diff.py" in out and "src/001.diff.py" not in out
 
@@ -1411,9 +1583,11 @@ def test_the_review_has_a_section_for_each_counted_batch_and_no_more(tmp_path, b
 
     _, outputs, _ = check(tmp_path, ANSWER, [SECRET], extra={"BATCHES": batches, "PIECES_DIR": str(tmp_path), **answered})
 
-    summary = json.loads(outputs["findings"])["summary"]
-    assert summary.startswith(f"Claude Review read this PR's diff in {counted} batches")
-    assert f"### Batch {counted} of {counted}" in summary and f"### Batch {counted + 1} " not in summary
+    posted = json.loads(outputs["findings"])
+    assert posted["overview"].startswith(f"Claude Review read this PR's diff in {counted} batches")
+    assert batch_sections(posted["overview"], counted) == {1: "s"}
+    assert batch_sections(posted["not_reviewed"], counted) == {
+        n: "This batch's review ended without an answer, so its pieces weren't reviewed." for n in range(2, counted + 1)}
 
 
 def test_a_finding_two_batches_both_report_is_posted_once(tmp_path):
@@ -1433,6 +1607,28 @@ def test_a_finding_two_batches_both_report_is_posted_once(tmp_path):
                                                 {"path": "a.py", "line": 2, "body": "one"}]
 
 
+def test_a_finding_two_batches_grade_differently_is_posted_once_with_the_first_batchs_severity(tmp_path):
+    first = {"path": "a.py", "line": 1, "severity": "high", "body": "one"}
+    answers = [{**GOOD_ANSWER, "findings": [first]}, {**GOOD_ANSWER, "findings": [{**first, "severity": "low"}]}]
+    listed = ["001.diff", "002.diff"]
+    reads = {1: read_whole_of(tmp_path, listed[0], "a"), 2: read_whole_of(tmp_path, listed[1], "b")}
+
+    code, answer, _ = batched(tmp_path, answers, listed, reads)
+
+    assert code == 0 and answer["findings"] == [first]
+
+
+def test_a_finding_with_another_path_than_an_earlier_batchs_is_posted(tmp_path):
+    first = {"path": "a.py", "line": 1, "severity": "high", "body": "one"}
+    answers = [{**GOOD_ANSWER, "findings": [first]}, {**GOOD_ANSWER, "findings": [{**first, "path": "b.py"}]}]
+    listed = ["001.diff", "002.diff"]
+    reads = {1: read_whole_of(tmp_path, listed[0], "a"), 2: read_whole_of(tmp_path, listed[1], "b")}
+
+    code, answer, _ = batched(tmp_path, answers, listed, reads)
+
+    assert code == 0 and answer["findings"] == [first, {**first, "path": "b.py"}]
+
+
 def test_a_finding_one_batch_reports_twice_is_kept_as_it_was(tmp_path):
     # One batch alone is posted as it answered, as before batches.
     same = {"path": "a.py", "line": 1, "body": "one"}
@@ -1449,8 +1645,8 @@ def summary_share():
 
 
 def batch_sections(summary, count):
-    """{number: the text of its section} in a joined review's summary."""
-    parts = re.split(rf"(?:\n\n)?### Batch (\d+) of {count}\n\n", summary)
+    """{number: the text of its section} in a joined review's overview or not_reviewed."""
+    parts = re.split(rf"(?:\n\n)?\*\*Batch (\d+) of {count}\*\*\n\n", summary)
     return {int(number): text for number, text in zip(parts[1::2], parts[2::2], strict=True)}
 
 
@@ -1465,7 +1661,7 @@ def test_a_batchs_summary_is_cut_to_its_share_with_a_note_and_only_past_it(tmp_p
 
     code, answer, _ = batched(tmp_path, answers, listed, reads)
 
-    sections = batch_sections(answer["summary"], 2)
+    sections = batch_sections(answer["overview"], 2)
     assert code == 0 and sections[2] == "second" and answer["findings"] == findings
     if extra <= 0:
         assert sections[1] == long
@@ -1484,7 +1680,7 @@ def test_the_joined_summary_leaves_room_for_the_findings_under_githubs_limit(tmp
 
     code, answer, _ = batched(tmp_path, answers, listed, reads)
 
-    assert code == 0 and len(answer["summary"]) <= 4 * summary_share() + 200 <= 65_536 - 20_000
+    assert code == 0 and len(answer["overview"]) <= 4 * summary_share() + 200 <= 65_536 - 20_000
 
 
 CUT = "\n\n_This batch"
@@ -1502,7 +1698,7 @@ def cut(tmp_path, summary):
     reads = {1: read_whole_of(tmp_path, listed[0], "a"), 2: read_whole_of(tmp_path, listed[1], "b")}
     code, answer, _ = batched(tmp_path, answers, listed, reads)
     assert code == 0
-    sections = batch_sections(answer["summary"], 2)
+    sections = batch_sections(answer["overview"], 2)
     assert sections[2] == "second" and "was cut" in sections[1]
     # Room is kept for a comment's closer, so a section without one is that much shorter.
     closed = quoted_part(sections[1]).endswith(" -->")
@@ -1565,7 +1761,7 @@ def test_a_summary_within_the_share_once_its_line_ends_are_one_character_is_post
 
     code, answer, _ = batched(tmp_path, answers, listed, reads)
 
-    assert code == 0 and batch_sections(answer["summary"], 2)[1] == "a\n" * 4_000
+    assert code == 0 and batch_sections(answer["overview"], 2)[1] == "a\n" * 4_000
 
 
 def test_quoting_counts_toward_the_share(tmp_path):
@@ -1583,6 +1779,200 @@ def test_a_cut_inside_an_html_comment_closes_it_before_the_note(tmp_path):
 def test_a_comment_closed_before_the_cut_gets_no_closer(tmp_path, comment):
     part = quoted_part(cut(tmp_path, f"{comment}\n" + "plain\n" * 3_000))
     assert part.count("-->") == 1 and not part.endswith(" -->")
+
+
+ROWS_CUT = "later Changes, File and Advisory rows were left out"
+
+
+def joined_first(tmp_path, first):
+    """The joined review of two batches, the first answering first; the second's fields are tiny."""
+    answers = [{"findings": [], **first}, {"overview": "second", "changes": ["s"], "findings": []}]
+    listed = ["001.diff", "002.diff"]
+    reads = {1: read_whole_of(tmp_path, listed[0], "a"), 2: read_whole_of(tmp_path, listed[1], "b")}
+    code, answer, _ = batched(tmp_path, answers, listed, reads)
+    assert code == 0 and batch_sections(answer["overview"], 2)[2] == "second" and answer["changes"][-1] == "s"
+    return answer
+
+
+def batch_size(answer, overview):
+    """The characters of batch 1's fields in a joined answer, its overview given."""
+    return (len(overview) + sum(len(row) for row in answer.get("changes", [])[:-1])
+            + sum(len(row) for row in answer.get("advisory", []))
+            + sum(len(row["path"]) + len(row["description"]) for row in answer.get("files", [])))
+
+
+def test_rows_past_a_batchs_share_go_files_first_last_first_with_a_note(tmp_path):
+    share = summary_share()
+    files = [{"path": f"f{n}.py", "description": "d" * 2_000} for n in range(4)]
+    first = {"overview": "o", "changes": ["c" * 2_000] * 2, "files": files, "advisory": ["a" * 1_000]}
+
+    answer = joined_first(tmp_path, first)
+
+    overview = batch_sections(answer["overview"], 2)[1]
+    assert overview.startswith("o\n\n") and ROWS_CUT in overview
+    assert [row["path"] for row in answer["files"]] == ["f0.py", "f1.py"]
+    assert answer["changes"][:-1] == first["changes"] and answer["advisory"] == first["advisory"]
+    assert batch_size(answer, overview) <= share
+
+
+@pytest.mark.parametrize("advisory, kept", [(2, 2), (3, 2)])
+def test_changes_then_advisory_go_once_no_files_are_left(tmp_path, advisory, kept):
+    first = {"overview": "o", "changes": ["c" * 4_000] * 3, "files": [{"path": "f.py", "description": "d" * 4_000}],
+             "advisory": ["a" * 4_000] * advisory}
+
+    answer = joined_first(tmp_path, first)
+
+    overview = batch_sections(answer["overview"], 2)[1]
+    assert "files" not in answer and answer["changes"] == ["s"] and answer["advisory"] == first["advisory"][:kept]
+    assert ROWS_CUT in overview and batch_size(answer, overview) <= summary_share()
+
+
+def test_fields_within_a_batchs_share_are_kept_whole(tmp_path):
+    first = {"overview": "o", "changes": ["c" * 3_000], "files": [{"path": "f.py", "description": "d" * 3_000}],
+             "advisory": ["a" * 3_000]}
+
+    answer = joined_first(tmp_path, first)
+
+    assert ROWS_CUT not in answer["overview"] and answer["files"] == first["files"] and answer["advisory"] == first["advisory"]
+
+
+def test_a_long_overview_and_not_reviewed_are_cut_once_no_rows_are_left(tmp_path):
+    share = summary_share()
+    first = {"overview": "o\n" * share, "changes": ["c" * 100], "not_reviewed": "n\n" * share}
+
+    answer = joined_first(tmp_path, first)
+
+    overview, not_reviewed = batch_sections(answer["overview"], 2)[1], batch_sections(answer["not_reviewed"], 2)[1]
+    assert answer["changes"] == ["s"] and overview.endswith(ROWS_CUT_TAIL)
+    assert "was cut" in overview and "was cut" in not_reviewed
+    assert len(not_reviewed) <= share // 4 and len(overview) + len(not_reviewed) <= share
+    assert quoted_part(not_reviewed).startswith("> n")
+
+
+ROWS_CUT_TAIL = "its findings are whole._"
+
+
+def rows_cut_note():
+    """The workflow's ROWS_CUT_NOTE, which a batch whose rows were cut ends its overview with."""
+    literal = re.search(r'ROWS_CUT_NOTE = (\((?:\s*"[^"\n]*")+\))', WORKFLOW.read_text())[1]
+    return ast.literal_eval(literal)
+
+
+@pytest.mark.parametrize("extra", [0, 1])
+def test_a_batch_answering_a_summary_and_an_overview_gets_both_in_its_section(tmp_path, extra):
+    share = summary_share()
+    first = {"summary": "s" * 10, "overview": "o" * (share - 13 + extra), "changes": ["c"]}
+
+    answer = joined_first(tmp_path, first)
+
+    # Both count toward the share, with the blank line between them: one more character and the row goes.
+    section = batch_sections(answer["overview"], 2)[1]
+    if extra == 0:
+        assert section == "s" * 10 + "\n\n" + first["overview"] and answer["changes"] == ["c", "s"]
+    else:
+        # The overview, one line too long to fit quoted after the summary, is left out whole.
+        assert quoted_part(section) == "> " + "s" * 10 + "\n>" and ROWS_CUT in section and answer["changes"] == ["s"]
+
+
+@pytest.mark.parametrize("extra", [-1, 0, 1])
+def test_a_batch_is_kept_whole_up_to_its_share_and_loses_a_row_past_it(tmp_path, extra):
+    share = summary_share()
+    first = {"overview": "o", "changes": ["c" * (share - 1 + extra)]}
+
+    answer = joined_first(tmp_path, first)
+
+    overview = batch_sections(answer["overview"], 2)[1]
+    if extra <= 0:
+        assert overview == "o" and answer["changes"] == [first["changes"][0], "s"]
+    else:
+        assert overview == "o" + rows_cut_note() and answer["changes"] == ["s"]
+
+
+@pytest.mark.parametrize("extra", [-1, 0, 1])
+def test_a_kept_row_leaves_room_for_the_rows_note(tmp_path, extra):
+    share, note = summary_share(), rows_cut_note()
+    kept = "c" * (share - 1 - len(note) + extra)
+    first = {"overview": "o", "changes": [kept, "d" * share]}
+
+    answer = joined_first(tmp_path, first)
+
+    overview = batch_sections(answer["overview"], 2)[1]
+    assert overview == "o" + note
+    assert answer["changes"] == ([kept, "s"] if extra <= 0 else ["s"])
+    assert batch_size(answer, overview) <= share
+
+
+@pytest.mark.parametrize("extra", [-1, 0, 1])
+def test_an_overview_is_cut_only_past_what_the_rows_note_leaves(tmp_path, extra):
+    share, note = summary_share(), rows_cut_note()
+    long = "o" * (share - len(note) + extra)
+    first = {"overview": long, "changes": ["c" * share]}
+
+    answer = joined_first(tmp_path, first)
+
+    overview = batch_sections(answer["overview"], 2)[1]
+    assert answer["changes"] == ["s"] and overview.endswith(note)
+    if extra <= 0:
+        assert overview == long + note
+    else:
+        assert quoted_part(overview).startswith("> o") and "was cut" in overview
+        assert len(overview) <= share
+
+
+@pytest.mark.parametrize("extra", [-1, 0, 1])
+def test_not_reviewed_is_cut_to_a_quarter_of_the_share_before_rows_go(tmp_path, extra):
+    share = summary_share()
+    quarter = share // 4
+    not_reviewed = "n" * (quarter + extra)
+    # A batch that fits its share keeps not_reviewed whole; one past it, by not_reviewed alone, has it cut and keeps
+    # the rest.
+    first = {"overview": "o" * (share - quarter - 1), "changes": ["c"], "not_reviewed": not_reviewed}
+
+    answer = joined_first(tmp_path, first)
+
+    section = batch_sections(answer["not_reviewed"], 2)[1]
+    assert batch_sections(answer["overview"], 2)[1] == first["overview"]
+    assert answer["changes"] == ["c", "s"]
+    if extra <= 0:
+        assert section == not_reviewed
+    else:
+        # Cut to the quarter: one line longer than it keeps all it can, room left only for a comment's closer.
+        assert quoted_part(section).startswith("> n") and "was cut" in section
+        assert len(section) == quarter - len(" -->")
+
+
+def test_a_not_reviewed_past_a_quarter_in_a_batch_within_its_share_is_kept_whole(tmp_path):
+    first = {"overview": "o", "changes": ["c"], "not_reviewed": "n" * (summary_share() // 4 + 500)}
+
+    answer = joined_first(tmp_path, first)
+
+    assert batch_sections(answer["not_reviewed"], 2)[1] == first["not_reviewed"] and answer["changes"] == ["c", "s"]
+
+
+def test_a_long_not_reviewed_is_cut_and_short_rows_are_kept(tmp_path):
+    share = summary_share()
+    first = {"overview": "o", "changes": ["c" * 100], "files": [{"path": "f.py", "description": "d"}],
+             "not_reviewed": "n\n" * share}
+
+    answer = joined_first(tmp_path, first)
+
+    assert answer["changes"] == ["c" * 100, "s"] and answer["files"] == first["files"]
+    assert ROWS_CUT not in answer["overview"] and "was cut" in batch_sections(answer["not_reviewed"], 2)[1]
+
+
+def test_an_unread_piece_reaches_the_off_diff_section_with_its_marker_on_line_2(tmp_path):
+    # Batch 2 didn't answer, so its piece holds the merge: the post script puts the finding under the off-diff marker.
+    listed = ["001.diff", "002.diff"]
+    answer = {**GOOD_ANSWER, "findings": [{"path": "src/app.py", "line": 2, "severity": "low", "body": "**On the diff**"}]}
+
+    code, posted, _ = batched(tmp_path, [answer, None], listed, {1: read_whole_of(tmp_path, listed[0], "a")})
+
+    assert code == 0 and posted["findings"][-1]["severity"] == "high"
+    body = run(json.dumps(posted)).posted[0][1]["body"]
+    assert body.split("\n")[:2] == [pcr.MARKER, pcr.OFF_DIFF_MARKER]
+    tail = body[body.index(pcr.OFF_DIFF_HEADER):]
+    assert [line for line in tail.split("\n") if line.startswith("- ")] == [
+        "- `diff:0`: " + posted["findings"][-1]["body"]]
 
 
 def review_steps():
@@ -1872,11 +2262,72 @@ def test_header_names_pr_automerge_among_what_adds_review_claude():
     assert any("PR Auto-Merge" in s for s in adders), adders
 
 
-def test_the_prompt_asks_for_a_structured_summary_and_titled_findings():
+def answer_schema():
+    """The --json-schema the Review steps give Claude."""
+    yaml = pytest.importorskip("yaml")
+    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["review"]["steps"]
+    claude_args = next(step for step in steps if step.get("id") == "claude_1")["with"]["claude_args"]
+    return json.loads(re.search(r"--json-schema '([^']*)'", claude_args)[1])
+
+
+def test_the_schema_asks_for_the_structured_fields_and_a_severity_on_each_finding():
+    schema = answer_schema()
+
+    assert schema["required"] == ["overview", "changes", "files", "findings"]
+    assert set(schema["properties"]) == {"overview", "changes", "files", "advisory", "not_reviewed", "findings"}
+    files, finding = schema["properties"]["files"]["items"], schema["properties"]["findings"]["items"]
+    assert files["required"] == ["path", "description"] and set(files["properties"]) == {"path", "description"}
+    assert finding["required"] == ["path", "line", "severity", "body"]
+    assert finding["properties"]["severity"] == {"type": "string", "enum": list(pcr.SEVERITIES)}
+    # The types, pinned here since the jsonschema test below doesn't run in CI.
+    strings = {"type": "array", "items": {"type": "string"}}
+    assert schema["properties"]["overview"] == schema["properties"]["not_reviewed"] == {"type": "string"}
+    assert schema["properties"]["changes"] == schema["properties"]["advisory"] == strings
+    assert schema["properties"]["files"]["type"] == schema["properties"]["findings"]["type"] == "array"
+    assert files["type"] == finding["type"] == "object"
+    assert files["properties"] == {"path": {"type": "string"}, "description": {"type": "string"}}
+    assert finding["properties"]["path"] == finding["properties"]["body"] == {"type": "string"}
+    assert finding["properties"]["line"] == {"type": "integer", "minimum": 0, "maximum": 1_000_000}
+    # Claude may answer only in the fields that get posted.
+    assert all(part["additionalProperties"] is False for part in (schema, files, finding))
+
+
+GOOD_ANSWER = {"overview": "o", "changes": ["c"], "files": [{"path": "a.py", "description": "d"}],
+               "advisory": ["v"], "not_reviewed": "n",
+               "findings": [{"path": "a.py", "line": 1, "severity": "medium", "body": "**T**\n\nb"}]}
+
+
+@pytest.mark.parametrize("answer, valid", [
+    (GOOD_ANSWER, True),
+    ({key: value for key, value in GOOD_ANSWER.items() if key not in ("advisory", "not_reviewed")}, True),
+    ({**GOOD_ANSWER, "findings": [{"path": "a.py", "line": 1, "body": "b"}]}, False),
+    ({**GOOD_ANSWER, "findings": [{"path": "a.py", "line": 1, "severity": "critical", "body": "b"}]}, False),
+    ({**GOOD_ANSWER, "summary": "s"}, False),
+    ({key: value for key, value in GOOD_ANSWER.items() if key != "files"}, False),
+    ({**GOOD_ANSWER, "files": [{"path": "a.py"}]}, False),
+])
+def test_the_schema_accepts_a_structured_answer_and_refuses_a_finding_without_a_severity(answer, valid):
+    jsonschema = pytest.importorskip("jsonschema")
+    errors = list(jsonschema.Draft202012Validator(answer_schema()).iter_errors(answer))
+    assert not errors if valid else errors
+
+
+def test_an_answer_the_schema_accepts_passes_the_check_and_the_post_script(tmp_path):
+    code, outputs, _ = check(tmp_path, GOOD_ANSWER, [SECRET])
+
+    assert code == 0 and json.loads(outputs["findings"]) == GOOD_ANSWER
+    report, findings = pcr.parse_findings(outputs["findings"])
+    assert findings == GOOD_ANSWER["findings"] and report["files"] == GOOD_ANSWER["files"]
+
+
+def test_the_prompt_asks_for_the_structured_fields_severities_and_titled_findings():
     prompt = " ".join(WORKFLOW.read_text().split())
 
-    for section in ("**Overview**", "**Changes**", "**Advisory (not blocking)**", "**Not reviewed**"):
-        assert section in prompt
+    for field in ("- overview:", "- changes:", "- files:", "- advisory:", "- not_reviewed:"):
+        assert field in prompt
+    assert "Give no verdict" in prompt
+    for level in pcr.SEVERITIES:
+        assert f"- {level}:" in prompt
     assert "Start each finding's body with a bold one-line title" in prompt
     # The posting script that vets suggestions reaches a repo with the re-Apply, but a PR's review
     # runs the base's script: the prompt asks for suggestions only in a later change.

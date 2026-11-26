@@ -416,7 +416,8 @@ Since Claude Review first shipped, `--allowedTools "Read,Glob,Grep"` granted tho
   through pieces joined by accented letters, keeping the base letter between them (Claude Review, dotfiles #137). Pieces
   split by letters or digits aren't caught, an accepted limit.
 - **Only the schema's fields are passed on.** The check drops every key but the summary and each finding's path, line and
-  body, and the schema sets `additionalProperties: false`, so an extra field, never posted but printed by the post job's log,
+  body (since mpaulosky/Application_Factory#202, the structured fields and each finding's severity, below),
+  and the schema sets `additionalProperties: false`, so an extra field, never posted but printed by the post job's log,
   is gone (Claude Review, IssueManager#274). An answer of the wrong shape, judged as `parse_findings` judges it, becomes a fixed
   placeholder holding none of it, so nothing the check didn't compare reaches the log, and `post_claude_review.py` still
   rejects it rather than posting "No findings". The check prints why as an error, since the post job's message can't
@@ -453,7 +454,8 @@ Since Claude Review first shipped, `--allowedTools "Read,Glob,Grep"` granted tho
   review Claude never wrote, which PR Auto-Merge would accept (Claude Review on #134). The first parent is the base the
   workflow was merged against; the event's `base.sha` can be older. A PR that changes the script is posted by the base's
   copy until it merges, so a PR that changes the script's interface together with the workflow's call fails its own post
-  job: land such a change in two steps, the script accepting both first. A base with no script yet warns and posts nothing.
+  job: land such a change in two steps, the script accepting both first. A base with no script yet warns and posts nothing, unless the
+  answer was withheld (below) or doesn't fit the schema, which fails the post job as the script would (since mpaulosky/Application_Factory#202).
 - **A quoted secret can't skip the post job.** A withheld answer, by that check or by GitHub withholding a job output that holds a
   masked secret, reaches the post job as empty findings. The post job is gated on a `reviewed` flag that can't hold a secret,
   not on the findings, so it still runs, and `post_claude_review.py` fails on empty findings with an error to rotate the token.
@@ -481,7 +483,8 @@ The Seed is written once, so a repo that already has a `repo-config.mts` keeps i
 
 With the review before the push ([ADR 0008](0008-review-before-the-push.md)), Claude Review is a backstop for what a local review can't check.
 The prompt asks for findings only on bugs in code that runs, security weaknesses, tests and GitHub's own behaviour, and has Claude list
-docs, comments and conventions under "Advisory" in its summary, since a finding holds the merge and these shouldn't.
+docs, comments and conventions in its answer's `advisory` (its summary's "Advisory" section before mpaulosky/Application_Factory#202), since a finding
+holds the merge and these shouldn't.
 The local review's reviewers are asked at least what Claude Review is, plus those, so `review-bar.md`'s second paragraph is the wider version of Claude Review's.
 
 It reads the PR description's `## Review notes` as accepted findings, between the markers on lines of their own, indented between nonce lines like the resolved threads.
@@ -513,6 +516,8 @@ rules, and a delta would need the same rules applied to a second diff, so it is 
 The owner found Copilot's reviews easier to read than Claude's one dense paragraph, so the prompt asks for the same shape: a summary in short Markdown sections
 (Overview, a Changes table of file and what changed, Advisory, Not reviewed) and findings whose body starts with a bold title, then what goes wrong and the fix.
 The model's answer is still the schema's `summary` string and each finding's `body` string, so the schema and the checks that hold a merge don't change.
+(Updated by mpaulosky/Application_Factory#202: the sections are now fields of the answer's schema, and each finding has a severity; see
+[The structured answer](#the-structured-answer-mpauloskyapplication_factory202).)
 The posting script changes only in how it handles suggestions, below, and in indenting an off-diff finding's body under its bullet so its paragraphs stay with it.
 
 A finding may carry a GitHub `suggestion` block, which a reader applies to the commented line with one click, only when the fix replaces that one line.
@@ -551,7 +556,7 @@ and its not-read finding held the merge for the owner to review the rest by hand
 - **The diff is read in batches, a review each.** The diff step packs consecutive pieces into batches within the same 8 pieces and 300,000 bytes one review
   reads, at most four batches (`MAX_BATCHES`), and writes each batch's piece list (`pieces_N`), names (`listed_N`) and a note for the prompt (`note_N`).
   The Review step reads batch 1, and "Review batch 2" to "Review batch 4" run only when the diff has that many. Every batch's review also reads every context
-  piece, so it sees the code around its change; the prompt's note says which batch it reads and keeps its Changes table to that batch's files.
+  piece, so it sees the code around its change; the prompt's note says which batch it reads and keeps its changes and files to that batch's files.
 - **The owner's limit holds per review.** Each batch's review is held to one turn of reads and `--max-turns 30` like the single review it was, so a
   batch is the same review the bench measured, on less of the diff. Raising the turn limit for one review to read everything was not chosen: it would read
   all the pieces into one context, past what the bench measured, where the limit was set because more turns didn't find more.
@@ -570,6 +575,8 @@ and its not-read finding held the merge for the owner to review the rest by hand
   open is closed. A cut summary's `\r\n` and lone `\r` become `\n` first, since Markdown ends a line at each
   and every line needs its quote marker. Parsing the summary's Markdown to close each block was tried and dropped: it missed fences in lists and quotes.
   One batch alone is posted as it answered.
+  (Updated by mpaulosky/Application_Factory#202: the join keeps the structured fields, a finding repeats an earlier batch's whatever its severity, and
+  the 10,000 characters are a batch's share over all its fields; see [The structured answer](#the-structured-answer-mpauloskyapplication_factory202).)
 - **The steps share their inputs through a YAML anchor** (`with: &review`, then `with: *review`), and the prompt takes the batch's pieces and note from the
   step's own `env` (`REVIEW_PIECES`, `REVIEW_BATCH`), so the prompt and the Read restrictions are written once. zizmor warns that it audits anchored
   inputs less precisely; actionlint and GitHub read them. A test keeps the four steps' inputs equal and the three `MAX_BATCHES` (the diff step, the
@@ -582,3 +589,29 @@ and its not-read finding held the merge for the owner to review the rest by hand
   in another job through artifacts.
 
 The benchmark runs the Review step's prompt on one batch, the first; it has not been rerun for this change.
+
+## The structured answer (mpaulosky/Application_Factory#202)
+
+So that Claude Review's comment reads like Copilot's (mpaulosky/Application_Factory#200), the post script renders a headline, the top finding, the open
+issues with a severity badge each and a folded What changed (mpaulosky/Application_Factory#201). This change has the Review step ask for what that layout needs:
+
+- **The schema.** Claude answers an `overview` (two or three sentences, no verdict, since the headline is computed), `changes` (short bullets), `files`
+  (`{path, description}`, a file or group of related files each), `advisory` and `not_reviewed` (both optional), and a required `severity` on each finding:
+  `high` for wrong behaviour, data loss or a security weakness in a likely situation, `medium` for one in a narrower situation or a missing test of changed
+  behaviour, `low` for a real but minor problem. The `summary` string is dropped from the schema; the answer check and the post script still accept one,
+  so an answer from before the change posts as it did.
+- **The answer check** passes on only those fields (each `files` entry's path and description, each finding's path, line, severity and body), judges their
+  types as `parse_findings` does, and redacts credentials in every string of them, a file's path as a path. The secret check already read every string.
+  The findings it adds for unread pieces and held files are `high`.
+- **The batch join** keeps the fields: the overviews, one per batch under a `**Batch N of M**` line after a sentence on the batch count; `changes`, `files`
+  and `advisory` concatenated (a path two batches name keeps both rows); and each batch's `not_reviewed`, or the line saying its review didn't answer,
+  under the same kind of line. A finding an earlier batch reported (the same path, line and body) is posted once, with the first batch's severity.
+  Each batch keeps its 10,000-character share over all its fields: past it, its `not_reviewed` is cut to a quarter of the share first, then its `files`
+  rows go, last first, then `changes`, then `advisory`, with a note, and only then is its overview cut, each cut quoted as the summary's was.
+- **The post job** passes `--effort`, such as `high (claude-sonnet-5-5), 2 batches`, from the review job's batch count and the Review step's `--effort` and
+  `--model` (a test keeps them equal). It runs the base's script, and a base script from before mpaulosky/Application_Factory#201 would refuse both the
+  answer and the argument, so a base whose script doesn't take `--effort` warns and posts nothing, like a base without the script. On both bases a withheld
+  answer (empty findings) or the answer check's `malformed` placeholder fails the post job instead, as the script would. The script's change
+  therefore reaches the Fleet first and this one in a later re-Apply round, the two-step rule above.
+
+Copilot's New and Still open tags are left out: the review knows only which threads were resolved, not which of its findings are new.
