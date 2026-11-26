@@ -454,7 +454,8 @@ Since Claude Review first shipped, `--allowedTools "Read,Glob,Grep"` granted tho
   review Claude never wrote, which PR Auto-Merge would accept (Claude Review on #134). The first parent is the base the
   workflow was merged against; the event's `base.sha` can be older. A PR that changes the script is posted by the base's
   copy until it merges, so a PR that changes the script's interface together with the workflow's call fails its own post
-  job: land such a change in two steps, the script accepting both first. A base with no script yet warns and posts nothing.
+  job: land such a change in two steps, the script accepting both first. A base with no script yet warns and posts nothing, unless the
+  answer was withheld (below) or doesn't fit the schema, which fails the post job as the script would (since mpaulosky/Application_Factory#202).
 - **A quoted secret can't skip the post job.** A withheld answer, by that check or by GitHub withholding a job output that holds a
   masked secret, reaches the post job as empty findings. The post job is gated on a `reviewed` flag that can't hold a secret,
   not on the findings, so it still runs, and `post_claude_review.py` fails on empty findings with an error to rotate the token.
@@ -609,7 +610,8 @@ issues with a severity badge each and a folded What changed (mpaulosky/Applicati
   rows go, last first, then `changes`, then `advisory`, with a note, and only then is its overview cut, each cut quoted as the summary's was.
 - **The post job** passes `--effort`, such as `high (claude-sonnet-5-5), 2 batches`, from the review job's batch count and the Review step's `--effort` and
   `--model` (a test keeps them equal). It runs the base's script, and a base script from before mpaulosky/Application_Factory#201 would refuse both the
-  answer and the argument, so a base whose script doesn't take `--effort` warns and posts nothing, like a base without the script. The script's change
+  answer and the argument, so a base whose script doesn't take `--effort` warns and posts nothing, like a base without the script. On both bases a withheld
+  answer (empty findings) or the answer check's `malformed` placeholder fails the post job instead, as the script would. The script's change
   therefore reaches the Fleet first and this one in a later re-Apply round, the two-step rule above.
 
 Copilot's New and Still open tags are left out: the review knows only which threads were resolved, not which of its findings are new.

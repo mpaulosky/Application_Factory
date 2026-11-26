@@ -2510,8 +2510,9 @@ jobs:
           else:
               # GitHub refuses a review body over 65,536 characters, and the findings outside the diff go in it
               # after the fields that describe the PR, whole. So each batch's fields keep at most its quarter of
-              # 40,000 characters: past that, its files rows go first, last first, then its changes, then its
-              # advisory, saying so, and then its overview and not_reviewed are cut, saying so. A cut can leave a
+              # 40,000 characters: past that, its not_reviewed is cut to a quarter of the share first, then its
+              # files rows go, last first, then its changes, then its advisory, saying so, and only then is its
+              # overview cut, saying so. A cut can leave a
               # code fence, a <details> or an HTML comment open, which would turn the note and the later
               # sections into code or hide them. So the part kept is posted as a quote: Markdown ends a fence
               # (however indented, in a list or not) with the quote that holds it, and the HTML parser ends a
@@ -2785,8 +2786,10 @@ jobs:
 
       # A review posted with GITHUB_TOKEN starts no workflows, so PR Auto-Merge
       # follows this workflow's completion instead (its workflow_run trigger).
-      # A base without the script (a PR that brings Claude Review to a repo)
-      # warns and posts nothing, like a review that didn't run.
+      # A base without the script (a PR that brings Claude Review to a repo),
+      # or with one from before --effort, warns and posts nothing, like a
+      # review that didn't run, unless the review job withheld the answer
+      # (a quoted secret, or one that doesn't fit the schema): that fails.
       - name: Post the review on the head commit
         env:
           GH_TOKEN: ${{ github.token }}

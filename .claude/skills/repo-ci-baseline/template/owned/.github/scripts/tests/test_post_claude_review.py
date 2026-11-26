@@ -1618,6 +1618,17 @@ def test_a_finding_two_batches_grade_differently_is_posted_once_with_the_first_b
     assert code == 0 and answer["findings"] == [first]
 
 
+def test_a_finding_with_another_path_than_an_earlier_batchs_is_posted(tmp_path):
+    first = {"path": "a.py", "line": 1, "severity": "high", "body": "one"}
+    answers = [{**GOOD_ANSWER, "findings": [first]}, {**GOOD_ANSWER, "findings": [{**first, "path": "b.py"}]}]
+    listed = ["001.diff", "002.diff"]
+    reads = {1: read_whole_of(tmp_path, listed[0], "a"), 2: read_whole_of(tmp_path, listed[1], "b")}
+
+    code, answer, _ = batched(tmp_path, answers, listed, reads)
+
+    assert code == 0 and answer["findings"] == [first, {**first, "path": "b.py"}]
+
+
 def test_a_finding_one_batch_reports_twice_is_kept_as_it_was(tmp_path):
     # One batch alone is posted as it answered, as before batches.
     same = {"path": "a.py", "line": 1, "body": "one"}
@@ -1925,7 +1936,17 @@ def test_not_reviewed_is_cut_to_a_quarter_of_the_share_before_rows_go(tmp_path, 
     if extra <= 0:
         assert section == not_reviewed
     else:
-        assert quoted_part(section).startswith("> n") and "was cut" in section and len(section) <= quarter
+        # Cut to the quarter: one line longer than it keeps all it can, room left only for a comment's closer.
+        assert quoted_part(section).startswith("> n") and "was cut" in section
+        assert len(section) == quarter - len(" -->")
+
+
+def test_a_not_reviewed_past_a_quarter_in_a_batch_within_its_share_is_kept_whole(tmp_path):
+    first = {"overview": "o", "changes": ["c"], "not_reviewed": "n" * (summary_share() // 4 + 500)}
+
+    answer = joined_first(tmp_path, first)
+
+    assert batch_sections(answer["not_reviewed"], 2)[1] == first["not_reviewed"] and answer["changes"] == ["c", "s"]
 
 
 def test_a_long_not_reviewed_is_cut_and_short_rows_are_kept(tmp_path):

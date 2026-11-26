@@ -282,7 +282,8 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
   the most severe finding, a list of the open issues (a shields.io severity badge, High, Medium or Low, and a link to each thread, High first) and a folded
   "What changed in this PR" (the summary as it is, or the structured overview, changes and files), then the advisory and unreviewed notes, the findings
   outside the diff (the last section with bullets) and a `<sub>` footer naming the review effort (`--effort`, which the post job gives as the Review step's
-  effort and model and the batch count; a base script that doesn't take it predates the structured answer, so the post job warns and posts nothing). The thread links exist only once the review
+  effort and model and the batch count; a base script that doesn't take it predates the structured answer, so the post job warns and posts nothing, or fails on a withheld or malformed answer).
+  The thread links exist only once the review
   is posted, so the script then edits the body to add them (`PUT` on the review, which fires `pull_request_review` `edited`, which PR Review Submitted ignores);
   if that fails it warns and the body keeps the titles unlinked. Both bodies carry the same markers and off-diff section. Past GitHub's 65,536-character limit,
   What changed is left out first, then Advisory and Not reviewed, then the open issues past what fits; the markers and the findings outside the diff are never cut.
