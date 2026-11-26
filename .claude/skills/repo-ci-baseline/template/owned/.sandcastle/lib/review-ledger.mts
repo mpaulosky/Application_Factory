@@ -218,7 +218,7 @@ export const REVIEWED_ON_REAPPLY: ReadonlySet<string> = new Set([
 // shipped (the Factory's retired.txt, which test.sh holds this list to). A re-Apply that deletes one of them, a regular
 // file the repository doesn't list as its own, passes without a review, as one that writes an Owned file does: the
 // Template's own review covered the retirement.
-export const RETIRED_PATHS: ReadonlySet<string> = new Set<string>([".github/scripts/tests/test_detect_changes.py"]);
+export const RETIRED_PATHS: ReadonlySet<string> = new Set<string>([".github/scripts/tests/test_detect_changes.py", ".github/scripts/tests/test_discover_tests.py", ".github/scripts/tests/test_load_test_env.py"]);
 
 // The files under an Owned pattern that the Template doesn't supply: its Seed
 // repo-config.mts, and the files the repository lists in repo-config.mts's
