@@ -464,13 +464,24 @@ jobs:
         with:
           persist-credentials: false
 
+      # discover_tests.cs is a C# file-based app (ADR 0017 in the Application Factory): built in a step of its own and then run with
+      # --no-build, so the run's log holds only what the script prints.
+      - name: Setup .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+
+      - name: Build the test discovery
+        run: dotnet build .github/scripts/discover_tests.cs
+
       - name: Discover test projects
         id: discover
-        # discover_tests.py (tested in .github/scripts/tests) resolves
-        # IsTestProject for each project under tests/ and appends the matrix
-        # and has_tests. It fails when projects exist but none is a test
-        # project, since a skipped matrix would pass "Test Suite".
-        run: python3 .github/scripts/discover_tests.py --output "$GITHUB_OUTPUT"
+        # discover_tests.cs (its parity suite and tests are in the Application
+        # Factory) resolves IsTestProject for each project under tests/ and
+        # appends the matrix and has_tests. It fails when projects exist but
+        # none is a test project, since a skipped matrix would pass "Test Suite".
+        # discover_tests.py, beside it, is the same script in Python, kept for one Rollout: running it here instead reverts the port.
+        run: dotnet run --no-build --file .github/scripts/discover_tests.cs -- --output "$GITHUB_OUTPUT"
 
   # Each matrix job restores and builds its own test project. Measured on
   # IssueTracker#144: sharing the build job's output (with --no-build) saved nothing,
@@ -522,16 +533,22 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore
 
+      # load_test_env.cs is a C# file-based app (ADR 0017 in the Application Factory), built here in a step without the secret, so the
+      # build never runs with TEST_ENV in its environment, and then run with --no-build.
+      - name: Build the test secrets loader
+        run: dotnet build .github/scripts/load_test_env.cs
+
       # The repo's optional TEST_ENV secret holds NAME=value lines, such as
-      # MongoDB__ConnectionString=...; load_test_env.py (tested in
-      # .github/scripts/tests) masks each value and exports it to the later
-      # steps. One fixed secret keeps repo values out of this Owned file.
-      # Unset, as on every Dependabot run, it exports nothing, and the
-      # fixtures that need a secret fall back to fake settings.
+      # MongoDB__ConnectionString=...; load_test_env.cs (its parity suite and
+      # tests are in the Application Factory) masks each value and exports it
+      # to the later steps. One fixed secret keeps repo values out of this
+      # Owned file. Unset, as on every Dependabot run, it exports nothing, and
+      # the fixtures that need a secret fall back to fake settings.
+      # load_test_env.py, beside it, is the same script in Python, kept for one Rollout: running it here instead reverts the port.
       - name: Load test secrets
         env:
           TEST_ENV: ${{ secrets.TEST_ENV }}
-        run: python3 .github/scripts/load_test_env.py --output "$GITHUB_ENV"
+        run: dotnet run --no-build --file .github/scripts/load_test_env.cs -- --output "$GITHUB_ENV"
 
       # Repo-specific setup for this test project (a Seed file the repo
       # owns), such as publishing a project or pulling images it needs.
