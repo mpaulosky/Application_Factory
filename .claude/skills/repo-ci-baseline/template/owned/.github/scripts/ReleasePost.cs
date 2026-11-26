@@ -229,14 +229,8 @@ static class ReleasePost
 		}
 	}
 
-	// int() of decimal digits, any Unicode decimal digit among them.
-	static BigInteger ParseInt(string digits)
-	{
-		BigInteger value = 0;
-		foreach (var c in digits)
-			value = value * 10 + (int)char.GetNumericValue(c);
-		return value;
-	}
+	// int() of a run of decimal digits, any Unicode decimal digit among them, astral ones too; past int()'s 4,300 digits, its ValueError.
+	static BigInteger ParseInt(string digits) => Py.Int(digits) ?? throw new FormatException($"int() refused the digits {Py.Repr(digits)}");
 
 	// The text with CRLF and CR as LF, as Python reads text in universal newlines mode.
 	public static string Universal(string text) => text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
@@ -295,12 +289,25 @@ static class ReleasePost
 		return slug.Length > 0 ? slug : "pr-update";
 	}
 
-	static readonly Regex Version = At(@"v?(\d+)\.(\d+)\.(\d+)");
-
-	public static (BigInteger, BigInteger, BigInteger) VersionKey(string? tag) =>
-			Match(Version, tag ?? "") is { } version
-					? (ParseInt(version.Groups[1].Value), ParseInt(version.Groups[2].Value), ParseInt(version.Groups[3].Value))
-					: (0, 0, 0);
+	// re.match(r"v?(\d+)\.(\d+)\.(\d+)", tag): a v or none, then three runs of decimal digits (DigitsAt's, as Python's \d reads them) with
+	// a . between each, at the tag's start; anything may follow. Their values, or (0, 0, 0) when the tag doesn't start so.
+	public static (BigInteger, BigInteger, BigInteger) VersionKey(string? tag)
+	{
+		tag ??= "";
+		var at = tag.StartsWith('v') ? 1 : 0;
+		var parts = new BigInteger[3];
+		for (var part = 0; part < 3; part++)
+		{
+			if (part > 0 && (at >= tag.Length || tag[at++] != '.'))
+				return (0, 0, 0);
+			var length = DigitsAt(tag, at);
+			if (length == 0)
+				return (0, 0, 0);
+			parts[part] = ParseInt(tag.Substring(at, length));
+			at += length;
+		}
+		return (parts[0], parts[1], parts[2]);
+	}
 
 	// Post sections
 
@@ -1938,11 +1945,31 @@ static class ReleasePost
 
 	// Release tables
 
-	static readonly Regex SourcePr = R(@"Source PR: #(\d+)");
+	const string SourcePr = "Source PR: #";
 
-	// The PR number in the release body's "Source PR: #n" line, or null.
-	public static BigInteger? SourcePrOf(JsonNode? release) =>
-			SourcePr.Match(Text(Get(release, "body")) ?? "") is { Success: true } match ? ParseInt(match.Groups[1].Value) : null;
+	// The length of the run of decimal digits at text[at], astral ones too, as Python's \d reads them: .NET's \d sees an astral digit (𝟒)
+	// as two code units, neither a digit.
+	public static int DigitsAt(string text, int at)
+	{
+		var end = at;
+		while (end < text.Length && Rune.TryGetRuneAt(text, end, out var rune) && Rune.GetUnicodeCategory(rune) == UnicodeCategory.DecimalDigitNumber)
+			end += rune.Utf16SequenceLength;
+		return end - at;
+	}
+
+	// The PR number in the release body's "Source PR: #n" line, or null: re.search(r"Source PR: #(\d+)"), so the first marker with digits
+	// after it, read by their value. draft_release's markers are read the same way, so every parser agrees on which PR a body names.
+	public static BigInteger? SourcePrOf(JsonNode? release)
+	{
+		var body = Text(Get(release, "body")) ?? "";
+		for (var at = body.IndexOf(SourcePr, StringComparison.Ordinal); at >= 0; at = body.IndexOf(SourcePr, at, StringComparison.Ordinal))
+		{
+			at += SourcePr.Length;
+			if (DigitsAt(body, at) is var length and > 0)
+				return ParseInt(body.Substring(at, length));
+		}
+		return null;
+	}
 
 	// The docs/blogs posts for a PR, sorted by name (so by date).
 	public static List<string> PostsForPr(string blogDir, string prNumber)

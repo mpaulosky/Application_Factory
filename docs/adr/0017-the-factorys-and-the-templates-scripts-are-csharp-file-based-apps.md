@@ -757,6 +757,10 @@ T3c. `release.yml`'s plan and docs jobs and `backfill-blog-posts.yml` run `relea
   posts and tables with it. `ReleaseQueue.cs`'s `QueueGitHub` adds the closed-PR listing to those calls, with the page call virtual, so a test pages over canned
   data as the pytest overrode `_closed_pulls_page`. Each entry file reads the environment through a lookup it is handed, so a test sets a variable without
   touching the process's. The seven files join `OWNED` and `owned-paths.test.mts`, as the workflows run them with their tokens.
+- **A digit is Python's again where a number is read.** The Update for mpaulosky/Application_Factory#164 left .NET's `\d` in the patterns that read a release
+  number. Once the planner reads the markers with `ReleasePost.SourcePrOf`, that is no longer safe: a `Source PR: #𝟒𝟐` marker named PR 42 to `draft_release.cs`
+  and to Python's `source_pr_of()`, and no PR to the C#. `SourcePrOf`, `VersionKey` and release_queue's `vX.Y.Z` test now read a run of digits as `DigitsAt`
+  does (any Unicode decimal digit, astral ones too) and its value with `Py.Int`. The gap stays only where an astral letter or digit shapes an excerpt.
 - **The workflows.** The plan job and the docs job each gain `setup-dotnet` and a step that builds their script, which then runs with `dotnet run --no-build --file`,
   so `PRS=$(...)` is the JSON alone on a cold build; `backfill-blog-posts.yml` does the same. A file-based app's build output is under the temporary folder, so
   the docs jobs' `git status` still sees only `README.md` and `docs/`; `test.sh` fails a build of an Owned entry file that writes anything under the Template's

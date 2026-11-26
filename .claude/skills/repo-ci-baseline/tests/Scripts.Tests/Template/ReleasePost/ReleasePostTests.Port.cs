@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
 
@@ -122,5 +123,35 @@ public sealed partial class ReleasePostTests
 		Assert.Contains($"post_date: \"{date}\"", Read(post));
 		Assert.Contains(date, Read(Path.Join(root, "README.md")));
 		Assert.DoesNotContain("2026-09-24", Read(post));
+	}
+
+	// What Python's \d reads in a marker and a tag, astral digits among them, which .NET's \d doesn't: the planner reads the markers with
+	// SourcePrOf since the cut-over (mpaulosky/Application_Factory#128), and must name the PR draft_release names. Each expected value is
+	// what release_post.py's source_pr_of() and version_key() gave.
+	[Theory]
+	[InlineData("Source PR: #\U0001D7D2\U0001D7D0", "42")]
+	[InlineData("Source PR: # 5 Source PR: #٤", "4")]
+	[InlineData("Source PR: #12a", "12")]
+	[InlineData("Source PR: #x", null)]
+	[InlineData("", null)]
+	public void A_marker_is_read_as_pythons_backslash_d_and_int_read_it(string body, string? expected)
+	{
+		Assert.Equal(expected, ReleasePost.SourcePrOf(J($$"""{"body": {{System.Text.Json.JsonSerializer.Serialize(body)}}}"""))?.ToString());
+		// draft_release reads the markers the same way.
+		Assert.Equal(expected, DraftRelease.NamedPrs(body).Select(n => n.ToString()).FirstOrDefault());
+	}
+
+	[Theory]
+	[InlineData("v\U0001D7CF.\U0001D7D0.\U0001D7D1", 1, 2, 3)]
+	[InlineData("v١.10.0", 1, 10, 0)]
+	[InlineData("1.2.3-rc1", 1, 2, 3)]
+	[InlineData("v1.2.3\n", 1, 2, 3)]
+	[InlineData("v1.2", 0, 0, 0)]
+	[InlineData("vv1.2.3", 0, 0, 0)]
+	[InlineData("v1..2.3", 0, 0, 0)]
+	[InlineData("x1.2.3", 0, 0, 0)]
+	public void A_version_is_read_as_pythons_backslash_d_and_int_read_it(string tag, int major, int minor, int patch)
+	{
+		Assert.Equal(((BigInteger)major, (BigInteger)minor, (BigInteger)patch), ReleasePost.VersionKey(tag));
 	}
 }

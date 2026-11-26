@@ -368,8 +368,12 @@ public sealed class ReleaseQueueTests
 	[InlineData("1.2.3", false)]
 	[InlineData("v1.2.3-rc1", false)]
 	[InlineData("v1.2.3\n", false)]
+	[InlineData("v\U0001D7CF.\u0661.0", true)]
+	[InlineData("v1..2", false)]
+	[InlineData("V1.2.3", false)]
 	public void A_cutoff_tag_is_vmajor_minor_patch_and_nothing_more(string tag, bool cutoff)
 	{
+		// re.fullmatch(r"v\d+\.\d+\.\d+"): Python's \d reads astral and Arabic-Indic digits too.
 		JsonObject release = new() { ["tag_name"] = tag, ["body"] = "Source PR: #4\n" };
 
 		Assert.Equal(cutoff, ReleaseQueue.CutoffRelease([release]).Tag is not null);

@@ -4,7 +4,6 @@
 using System.Globalization;
 using System.Numerics;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 
 namespace Baseline;
 
@@ -83,7 +82,24 @@ static class ReleaseQueue
 
 	public const string Usage = "[-h] --repo REPO [--pr PR]";
 
-	static readonly Regex ReleaseTag = new(@"\Av\d+\.\d+\.\d+\z", RegexOptions.CultureInvariant);
+	// re.fullmatch(r"v\d+\.\d+\.\d+", tag): a v, then three runs of decimal digits (astral ones too, as Python's \d reads them) with a .
+	// between each, and nothing else.
+	public static bool IsReleaseTag(string tag)
+	{
+		if (!tag.StartsWith('v'))
+			return false;
+		var at = 1;
+		for (var part = 0; part < 3; part++)
+		{
+			if (part > 0 && (at >= tag.Length || tag[at++] != '.'))
+				return false;
+			var length = ReleasePost.DigitsAt(tag, at);
+			if (length == 0)
+				return false;
+			at += length;
+		}
+		return at == tag.Length;
+	}
 
 	// A PR's number, as the JSON holds it.
 	public static BigInteger Number(JsonNode? pr) => BigInteger.Parse(ReleasePost.Get(pr, "number")!.ToJsonString(), CultureInfo.InvariantCulture);
@@ -95,7 +111,7 @@ static class ReleaseQueue
 		foreach (var release in releases)
 		{
 			var tag = ReleasePost.Text(ReleasePost.Get(release, "tag_name")) ?? "";
-			if (!ReleaseTag.IsMatch(tag) || ReleasePost.SourcePrOf(release) is not { } pr)
+			if (!IsReleaseTag(tag) || ReleasePost.SourcePrOf(release) is not { } pr)
 				continue;
 			// max() keeps the first of equal keys.
 			if (newest.Tag is null || ReleasePost.VersionKey(tag).CompareTo(ReleasePost.VersionKey(newest.Tag)) > 0)
