@@ -1,0 +1,1 @@
+^post_claude_review\.(py|cs): Claude Review's findings are malformed: finding 0 needs a string path, an integer line and a string body$

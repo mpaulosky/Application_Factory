@@ -79,7 +79,7 @@
 # then changes to its .cs's folder, which is why its suite's cases may have none of those), with
 # stdin from /dev/null or the case's stdin, the fake gh first on PATH, no GitHub token in its environment and GH_CONFIG_DIR
 # a new empty folder (nothing an earlier case wrote is left), no repository, Anthropic key or model the caller set (REPOSITORY, GITHUB_REPOSITORY, ANTHROPIC_API_KEY,
-# ANTHROPIC_MODEL: a case's env sets them), not under GitHub Actions whether or not the caller is (GITHUB_ACTIONS unset: a case's env sets it), no git repository or config the caller set (GIT_DIR and the rest unset,
+# ANTHROPIC_MODEL: a case's env sets them), no Claude Review findings or redaction count the caller set (FINDINGS, REDACTED: a case's env or env.d/ sets them), not under GitHub Actions whether or not the caller is (GITHUB_ACTIONS unset: a case's env sets it), no git repository or config the caller set (GIT_DIR and the rest unset,
 # GIT_CONFIG_GLOBAL=/dev/null, GIT_CONFIG_NOSYSTEM=1), no colour or terminal width the caller set (NO_COLOR=1, TERM=dumb),
 # LC_ALL=C.UTF-8 (best-effort: macOS has no such locale, so PYTHONUTF8=1 is set too), PYTHONDONTWRITEBYTECODE=1 (so a
 # script's imports leave no __pycache__ beside it), TZ=UTC, dotnet's CLI usage data, first-run setup and logo off
@@ -345,7 +345,7 @@ for case_dir in "${cases[@]}"; do
   code=0
   (cd "$run" && timeout -k 5 "$limit" env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN \
     -u FORCE_COLOR -u CLICOLOR_FORCE -u PYTHON_COLORS -u COLUMNS -u LINES \
-    -u REPOSITORY -u GITHUB_REPOSITORY -u ANTHROPIC_API_KEY -u ANTHROPIC_MODEL -u GITHUB_ACTIONS "${git_env[@]}" NO_COLOR=1 TERM=dumb \
+    -u REPOSITORY -u GITHUB_REPOSITORY -u ANTHROPIC_API_KEY -u ANTHROPIC_MODEL -u GITHUB_ACTIONS -u FINDINGS -u REDACTED "${git_env[@]}" NO_COLOR=1 TERM=dumb \
     PATH="$tmp/bin:$PATH" GH_CONFIG_DIR="$tmp/ghconfig" LC_ALL=C.UTF-8 PYTHONUTF8=1 PYTHONDONTWRITEBYTECODE=1 TZ=UTC \
     DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 \
     FAKE_GH_DIR="$case_dir/gh" FAKE_GH_LOG="$tmp/calls" ${case_env[@]+"${case_env[@]}"} \

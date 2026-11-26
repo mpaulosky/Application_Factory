@@ -24,24 +24,26 @@ Then what a port is likely to get wrong:
   65,536 characters and is kept; 52's is one more and is cut. Each answer is under the kernel's 128 KB limit on one environment variable.
 - 17 and 18: a failed file listing or post (exit 1, with a traceback the pattern takes from either). 19 to 24: the linking step's failures (a comment
   read or edit that fails, a post with no id, one that isn't an object or is empty, comments that aren't JSON), each a warning with the first body kept.
-- 09 to 15, 29, 32, 35 and 37 to 48: the exits for findings that aren't JSON or name another severity (null among them), each other way an answer is
-  malformed (no summary or overview, a field of the wrong type, a line of `true`, `2.0` or `"3"`, no body), empty findings (a secret withheld), no head,
-  a PR of 0 or not a number, an unknown option, a `REDACTED` that isn't a number, a positional argument and a malformed file listing.
+- 09 to 15, 29, 32, 35, 37 to 48, 69 and 70: the exits for findings that aren't JSON or name another severity (null among them), each other way an
+  answer is malformed (one that isn't an object, no summary or overview, a summary that isn't a string with no overview, a field of the wrong type, a file
+  with no description, a line of `true`, `2.0` or `"3"`, a finding with no body after a good one), empty findings (a secret withheld), no head, a PR of 0
+  or not a number, an unknown option, a `REDACTED` that isn't a number, a positional argument and a malformed file listing.
 - 53 and 54: a file's length is its newlines counted in bytes (an empty file, a last line with no newline, CRLF, a lone CR and bytes that aren't UTF-8),
   a line equal to it stays in the body and one past it moves, as does a negative line; a tie for the nearest line takes the lower.
 - 55: every shape of credential, the 35 and 36 characters of a classic token, a run of 128 and 129 characters with a credential's start and one of 129
   without, a path of 1,024 and 1,025 characters, and a credential in every field of the answer and in a suggestion, which is then defused.
 - 56: every rule a suggestion is vetted by, kept (a `~~~` fence, spaces after the info string, a tab) or defused (the legacy form, empty, blank, a blank
   filler or a combining mark alone, a line that closes the fence, a format, separator or control character, `[redacted]`, two fences).
-- 57 and 58: comments with no `https` URL (or none that is an object) leave the body unedited; identical comments take their URLs in the order listed.
+- 57: comments whose URL isn't `https` (`javascript:`, a number) or that aren't objects (`null`) leave the body unedited. 58: identical comments take
+  their URLs in the order listed, past a `null` and a string among them.
 - 59: a `\ No newline at end of file` row isn't a line, a null patch has none, a header that isn't a hunk's starts none and a `+++` row in a hunk is one.
 - 60 to 62: an effort of 200 characters is kept, one of 201 is cut and a blank one is none; titles of 200 and 201 characters, one cut after a space,
   one of `**` markers alone and an empty body. 63: a path's characters quoted in the contents URL. 64 to 68: `--pr -3` sent as it is, an option with
   no value, an empty `REDACTED` (0), findings with a byte-order mark (not JSON) and unset findings (withheld).
 
 The usage lines name the script as `post_claude_review.py` or `post_claude_review.cs`, and a traceback's last line may name Python's exception or the port's
-(`CalledProcessError`, `ValueError` or `KeyError` as `PyError`): a crash's text is no contract a port should copy, only its exit code, so 17, 18, 29 and
-35 pin its type and no more.
+(`CalledProcessError`, `ValueError` or `KeyError` as `PyError`): a crash's text is no contract a port should copy, only its exit code, so 29 and 35 pin
+its type and no more, and 17 and 18 its type and that the command exited 1.
 
 Not covered, on purpose:
 

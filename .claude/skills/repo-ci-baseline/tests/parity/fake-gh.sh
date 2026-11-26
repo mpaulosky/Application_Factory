@@ -42,7 +42,7 @@
 # real jq over it and prints each result as gh does (a string raw, null as an empty line, anything else as compact JSON
 # with sorted keys and Go's escapes; see the jq call for the one exception), so the calls that read one path through different
 # expressions share its fixture; --paginate is taken as given, the fixture being every page at once (with --slurp, the list
-# of pages it prints: [page, ...], which the fake checks a fixture that is JSON is, with jq).
+# of pages it prints: [page, ...], which the fake checks a fixture that holds JSON is, with jq).
 #
 # Each call is logged as its key; a `gh pr` call, and a REST call with --paginate, --jq, -X, --method or -H, as its key, a space and its whole
 # argv, each argument as it is or, when it
@@ -287,9 +287,10 @@ for fixture in "$key.$n.json" "$key.$n.fail" "$key.json" "$key.fail"; do
   fi
   if [[ "$fixture" == *.json && -n "${slurp:-}" ]]; then
     # --slurp prints the list of pages, so a fixture that is JSON must be one: a page alone would pass for the pages it
-    # holds. One that isn't JSON at all stands for an answer cut short, which a script must survive.
+    # holds. One that isn't JSON at all, or holds no value (empty or blank), stands for an answer cut short, which a
+    # script must survive.
     command -v jq > /dev/null || unmatched "$key (jq, which a call with --slurp needs, is not on PATH)"
-    if jq -e -s . < "$file" > /dev/null 2>&1; then
+    if jq -e -s 'length > 0' < "$file" > /dev/null 2>&1; then
       jq -e -s 'length == 1 and (.[0] | type == "array" and all(.[]; type == "array"))' < "$file" > /dev/null \
         || unmatched "$key (its --slurp fixture $fixture is not a list of pages)"
     fi
