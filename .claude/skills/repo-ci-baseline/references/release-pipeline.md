@@ -87,7 +87,10 @@ and GitHub Pages publishes it through Jekyll and kramdown, so `release_post.py` 
   comments outside code are dropped. A description's `<details>` therefore shows as text.
 - **Links:** a destination after `](` or `]:` whose scheme isn't `http`, `https` or `mailto` gets a `#` in front, so it
   becomes a fragment link. Entities and control characters are read the way browsers read them, so `java&#9;script:` counts,
-  however much padding pushes the scheme along. An entity's leading zeros are dropped before decoding: Python refuses
+  however much padding pushes the scheme along. A literal tab, line break, other C0 control or DEL doesn't end the scheme, nor does a
+  space before it: kramdown writes them into the `href` as they are, and browsers drop them, so `<\x01javascript:x>` counts too.
+  A line break does end a reference definition's (`]:`) scheme, as it ends the destination in kramdown and on GitHub, so
+  `[a]: foo.md` followed by a line starting `Note:` keeps its link. An entity's leading zeros are dropped before decoding: Python refuses
   numbers over 4300 digits, so `&#000…9;` would otherwise stop the release before its post was written.
   Only a footnote definition alone at the start of its line, with kramdown's footnote ID (`[^note-1]: …`), is exempt;
   any other `[^…]:`, such as `[^!]:` or a label holding an escaped `\[^`, is a reference definition to kramdown.
@@ -164,7 +167,8 @@ approval. The blog PR's lookups and its `docs-only` label use `GITHUB_TOKEN`, wh
   repo's releases and `docs/blogs`). The docs job writes every missing one on its first run. If there are old ones, run
   the repo's "Backfill blog posts" workflow first (`gh workflow run backfill-blog-posts.yml --ref main`), so they
   arrive in a deliberate PR. atelier-store had 8 from before its blog automation.
-- A post counts only when its file name has `-pr-<n>-` (`posts_for_pr`). Posts named another way (IssueManager's `<date>-release-vX.md`)
+- A post counts only when its file name has `-pr-<n>-` (`posts_for_pr`), and it is PR n's only when that is the name's first `-pr-…-`:
+  `2026-01-02-pr-7-revert-pr-4-changes.md` is PR 7's, so a re-run for PR 4 neither removes it nor links to it. Posts named another way (IssueManager's `<date>-release-vX.md`)
   look missing, and the first run writes a second post for each. Rename them to `<date>-pr-<n>-release-vX.md`, taking `<n>` from each
   Release's `Source PR` line, and update the links to them.
 - A `docs/index.html` Pages site needs the `RELEASES_HTML_START`/`END` and `BLOGS_HTML_START`/`END` markers that `update_tables` fills;
