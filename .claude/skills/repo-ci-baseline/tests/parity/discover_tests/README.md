@@ -23,7 +23,8 @@ The cases cover:
   `PropertyGroup` directly under the project, in any case, counted (20); a file that isn't XML (37, exit 1); bytes that aren't UTF-8 (39).
 - **The matrix.** Each entry's settings: an E2E folder in either case, Playwright, `_` and `.` in `test_id` (21); no projects, and no `tests/` (22, 23: `has_tests=false`);
   projects but no test project (24: exit 1, nothing appended); the output appended after what the file held (25); an output in a missing folder (38: exit 1, after the notice);
-  `json.dumps`'s escapes, a quote, a backslash, a tab, a newline, DEL, non-ASCII and an astral character as `\uXXXX` and a surrogate pair (30).
+  `json.dumps`'s escapes, a quote, a backslash, a tab, DEL, non-ASCII and an astral character as `\uXXXX` and a surrogate pair (30; a name with a line break, which
+  `parity-runner.test.sh`'s line-ending check can't read from git's file list, is `DiscoverTestsTests`' instead).
 - **Finding the projects.** Any depth, a `.csproj` in `tests/` itself and a hidden folder (26); none (27); none that is a test project (28: exit 1, stdout empty); pathlib's
   order (29: by path part, so `a/x/x.csproj` before `a-b/x.csproj`, and by code point, so U+FF21 before U+1F600, the reverse of an ordinal sort of UTF-16); only names
   ending in `.csproj`, in that case, `.csproj` alone among them (31); a symlinked folder not searched but a symlinked `.csproj` read (32).

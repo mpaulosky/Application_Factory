@@ -347,6 +347,17 @@ public sealed class DiscoverTestsTests : IDisposable
 		Assert.False(File.Exists(Path.Join(tmp, "out")));
 	}
 
+	[Fact]
+	public void The_matrix_escapes_what_json_dumps_escapes()
+	{
+		// A name with a line break, which the parity suite can't hold (its line-ending check reads git's file list a line at a time).
+		var entry = new MatrixEntry("tests/a\nb\r\"\\\t\b\f\x01\x7f~é😀/x.csproj", "", "", false, false, false, "minimal");
+
+		Assert.Equal("{\"include\": [{\"project_path\": \"tests/a\\nb\\r\\\"\\\\\\t\\b\\f\\u0001\\u007f~\\u00e9\\ud83d\\ude00/x.csproj\", \"test_name\": \"\", \"test_id\": \"\", " +
+				"\"build_before_test\": false, \"no_build\": false, \"requires_playwright\": false, \"verbosity\": \"minimal\"}]}", DiscoverTests.Matrix([entry]));
+		Assert.Equal("{\"include\": []}", DiscoverTests.Matrix([]));
+	}
+
 	[Theory]
 	[InlineData("/", "/")]
 	[InlineData("/a/./b/", "/a/b")]
