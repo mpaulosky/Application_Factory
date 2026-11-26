@@ -335,15 +335,32 @@ public sealed partial class ReleasePostTests
 		ReleasePost.UpdateBlogIndex(blogDir, "2026-09-23", "Old title", stale);
 		Write(Path.Join(blogDir, "2026-09-23-pr-420-other.md"), "other\n");
 		ReleasePost.UpdateBlogIndex(blogDir, "2026-09-23", "Other", "2026-09-23-pr-420-other.md");
+		// PR 7's post, whose title slug names PR 42 (mpaulosky/Application_Factory#211).
+		Write(Path.Join(blogDir, "2026-09-24-pr-7-revert-pr-42-changes.md"), "revert\n");
 
 		Run(tmp);
 
 		Assert.False(File.Exists(Path.Join(blogDir, stale)));
 		Assert.True(File.Exists(Path.Join(blogDir, "2026-09-23-pr-420-other.md")));
+		Assert.True(File.Exists(Path.Join(blogDir, "2026-09-24-pr-7-revert-pr-42-changes.md")));
 		var index = Read(Path.Join(blogDir, "README.md"));
 		Assert.DoesNotContain(stale, index);
 		Assert.Contains("2026-09-23-pr-420-other.md", index);
 		Assert.Equal(1, Count(index, "pr-42-"));
+	}
+
+	[Fact]
+	public void A_post_belongs_to_the_pr_its_name_starts_with()
+	{
+		// The title slug after "-pr-N-" can name another PR (mpaulosky/Application_Factory#211).
+		string own = "2026-09-20-pr-7-fix-a.md", other = "2026-09-24-pr-8-revert-pr-7-changes.md";
+		foreach (var name in new[] { own, other, "2026-09-25-pr-70-x.md", "2026-09-26-pr-17-y.md" })
+			Write(Path.Join(tmp, name), "x\n");
+		Assert.Equal([own], ReleasePost.PostsForPr(tmp, "7").Select(Path.GetFileName));
+		Assert.Equal([other], ReleasePost.PostsForPr(tmp, "8").Select(Path.GetFileName));
+		Assert.Empty(ReleasePost.PostsForPr(tmp, "4"));
+		var entries = ReleasePost.ReleaseEntries(new FakeGitHub(), Repo, tmp);
+		Assert.Equal([ReleasePost.PostUrl(Repo, own)], entries.Where(entry => entry.Pr == "7").Select(entry => entry.PostUrl));
 	}
 
 	[Fact]
@@ -513,6 +530,12 @@ public sealed partial class ReleasePostTests
 		{ "[a](java&#" + Times("0", 250) + "9;script:x)", "[a](#java&#" + Times("0", 250) + "9;script:x)" },
 		{ "![a](data:text/html,x)", "![a](#data:text/html,x)" },
 		{ "[a](<vbscript:x>)", "[a](#vbscript:x)" },
+		// Browsers drop a control character or DEL, so none ends the scheme's read (mpaulosky/Application_Factory#211).
+		{ "[a](<\x01javascript:x>)", "[a](#\x01javascript:x)" },
+		{ "[a](\x01javascript:x)", "[a](#\x01javascript:x)" },
+		{ "[a](java\x7fscript:x)", "[a](#java\x7fscript:x)" },
+		{ "[a]: \x1fjavascript:x", "[a]: #\x1fjavascript:x" },
+		{ "[a](<\x01https://example.com>)", "[a](\x01https://example.com)" },
 		{ "[a]: javascript:x", "[a]: #javascript:x" },
 		{ "> [a]:\n> javascript:x", "> [a]:\n> #javascript:x" },
 		{ "[a](https://example.com) [b](mailto:a@b.c) [c](#top) [d](docs/x.md)",
@@ -536,6 +559,36 @@ public sealed partial class ReleasePostTests
 	public void Link_destinations_with_unsafe_schemes_are_neutralized(string text, string expected)
 	{
 		Assert.Equal(expected, ReleasePost.SanitizeMarkdown(text));
+	}
+
+	// A tab, line break, other C0 control or DEL inside the scheme, or a space before it, doesn't end its read
+	// (mpaulosky/Application_Factory#211): kramdown writes them into the href, and browsers drop them.
+	[Theory]
+	[InlineData("[a](<\x01javascript:alert(1)>)", "[a](<#\x01javascript:alert(1)>)")]
+	[InlineData("[a](<java\tscript:alert(1)>)", "[a](<#java\tscript:alert(1)>)")]
+	[InlineData("[a](<java\nscript:x>)", "[a](<#java\nscript:x>)")]
+	[InlineData("[a](<java\rscript:x>)", "[a](<#java\rscript:x>)")]
+	[InlineData("[a](< \x01 javascript:x>)", "[a](<# \x01 javascript:x>)")]
+	[InlineData("[a](<\x01 \x7fhttps://example.com>) [b](<\tdocs/x.md>)", "[a](<\x01 \x7fhttps://example.com>) [b](<\tdocs/x.md>)")]
+	public void Controls_in_a_scheme_dont_hide_it(string text, string expected)
+	{
+		Assert.Equal(expected, ReleasePost.NeutralizeLinks(text));
+	}
+
+	// A line break ends a reference definition's destination in kramdown and on GitHub, so the scheme's read stops there and doesn't take
+	// the next line's "Note:" for it. An inline link's doesn't: kramdown keeps the break.
+	[Theory]
+	[InlineData("[a]: foo.md\nNote: see above", "[a]: foo.md\nNote: see above")]
+	[InlineData("[a]: foo.md\r\nNote: see above", "[a]: foo.md\r\nNote: see above")]
+	[InlineData("[ref]: page\n\nFootnote: x", "[ref]: page\n\nFootnote: x")]
+	[InlineData("> [a]: docs/x.md\n> Note: x", "> [a]: docs/x.md\n> Note: x")]
+	[InlineData("[a]: java\nscript:x", "[a]: java\nscript:x")]
+	[InlineData("[a]: \x01javascript:x\nNote: x", "[a]: #\x01javascript:x\nNote: x")]
+	[InlineData("[a]:\njavascript:x", "[a]:\n#javascript:x")]
+	[InlineData("[a](java\nscript:x)", "[a](#java\nscript:x)")]
+	public void A_line_break_ends_a_reference_definitions_scheme(string text, string expected)
+	{
+		Assert.Equal(expected, ReleasePost.NeutralizeLinks(text));
 	}
 
 	[Fact]
