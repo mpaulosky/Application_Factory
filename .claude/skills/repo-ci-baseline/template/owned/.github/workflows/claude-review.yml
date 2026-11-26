@@ -2512,9 +2512,9 @@ jobs:
               # after the fields that describe the PR, whole. So each batch's fields keep at most its quarter of
               # 40,000 characters: past that, its not_reviewed is cut to a quarter of the share first, then its
               # files rows go, last first, then its changes, then its advisory, saying so, and only then is its
-              # overview cut, saying so. A cut can leave a
-              # code fence, a <details> or an HTML comment open, which would turn the note and the later
-              # sections into code or hide them. So the part kept is posted as a quote: Markdown ends a fence
+              # overview cut, saying so. A cut can leave a code fence, a <details> or an HTML comment open,
+              # which would turn the note and the later sections into code or hide them. So the part kept is
+              # posted as a quote: Markdown ends a fence
               # (however indented, in a list or not) with the quote that holds it, and the HTML parser ends a
               # <details> at the quote's end tag. A comment hides everything up to its end, so one the part
               # leaves open is closed. The cut is at a line's end, except in a first line too long to fit the
