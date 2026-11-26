@@ -2514,12 +2514,12 @@ jobs:
               # files rows go, last first, then its changes, then its advisory, saying so, and only then is its
               # overview cut, saying so. A cut can leave a code fence, a <details> or an HTML comment open,
               # which would turn the note and the later sections into code or hide them. So the part kept is
-              # posted as a quote: Markdown ends a fence
-              # (however indented, in a list or not) with the quote that holds it, and the HTML parser ends a
-              # <details> at the quote's end tag. A comment hides everything up to its end, so one the part
-              # leaves open is closed. The cut is at a line's end, except in a first line too long to fit the
-              # share quoted. Markdown also ends a line at "\r\n" and at a lone "\r", so a cut text's lines end
-              # in "\n" alone first: a line Markdown sees without its "> " would end the quote early.
+              # posted as a quote: Markdown ends a fence (however indented, in a list or not) with the quote
+              # that holds it, and the HTML parser ends a <details> at the quote's end tag. A comment hides
+              # everything up to its end, so one the part leaves open is closed. The cut is at a line's end,
+              # except in a first line too long to fit the share quoted. Markdown also ends a line at "\r\n"
+              # and at a lone "\r", so a cut text's lines end in "\n" alone first: a line Markdown sees
+              # without its "> " would end the quote early.
               MAX_SUMMARY_CHARS = 10_000
               CUT_NOTE = ("\n\n_This batch's text was cut here to fit GitHub's limit on a review's length; "
                           "its findings are whole._")
