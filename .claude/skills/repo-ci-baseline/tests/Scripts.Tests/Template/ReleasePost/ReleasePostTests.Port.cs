@@ -96,4 +96,31 @@ public sealed partial class ReleasePostTests
 		Assert.Equal(text, sanitized);
 		Assert.Equal(text, rebased);
 	}
+
+	[Theory]
+	[InlineData("missing")]
+	[InlineData("null")]
+	[InlineData("empty")]
+	public void A_pr_with_no_merged_at_is_dated_today_in_utc_everywhere(string shape)
+	{
+		// (pr.get("merged_at") or "")[:10] or today's UTC date: the post's name, its front matter and the release table all carry that one date.
+		var gh = new FakeGitHub();
+		switch (shape)
+		{
+			case "missing": gh.Pulls[42].Remove("merged_at"); break;
+			case "null": gh.Pulls[42]["merged_at"] = null; break;
+			default: gh.Pulls[42]["merged_at"] = ""; break;
+		}
+		var root = MakeRepo(tmp);
+		var before = DateTime.UtcNow.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+		Run(root, gh);
+		var after = DateTime.UtcNow.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+
+		var post = Assert.Single(Directory.GetFiles(Path.Join(root, "docs", "blogs"), "*-pr-42-*.md"));
+		var date = Path.GetFileName(post)[..10];
+		Assert.Contains(date, (string[])[before, after]);
+		Assert.Contains($"post_date: \"{date}\"", Read(post));
+		Assert.Contains(date, Read(Path.Join(root, "README.md")));
+		Assert.DoesNotContain("2026-09-24", Read(post));
+	}
 }
