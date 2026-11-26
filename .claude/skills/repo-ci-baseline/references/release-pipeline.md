@@ -1,8 +1,10 @@
 # Serialized releases
 
 Template files (Owned): `.github/workflows/release.yml`, `backfill-blog-posts.yml`, and `.github/scripts/`
-(`release_queue.py`, `draft_release.py`, `release_post.py`, `backfill_blog_posts.py`) with their tests under
-`.github/scripts/tests/`. History: IssueTracker #172, with the fixes from atelier-store #90's review (IssueTracker #184).
+(`release_queue.py`, `draft_release.cs` with `DraftRelease.cs` and `Gh.cs`, `release_post.py`, `backfill_blog_posts.py`) with the Python's tests under
+`.github/scripts/tests/`; `draft_release.cs`'s are the Factory's (`tests/Scripts.Tests/Template/DraftRelease/` and the `draft_release` parity suite), and
+`draft_release.py`, the same script in Python, ships beside it for one Rollout (ADR 0017 in the Factory, mpaulosky/Application_Factory#163). History:
+IssueTracker #172, with the fixes from atelier-store #90's review (IssueTracker #184).
 
 ## What it guarantees
 
@@ -45,7 +47,7 @@ do nothing. The group expression repeats the `plan` job's `if`; keep the two in 
 **`release` job:** a matrix over the list with `max-parallel: 1` and `fail-fast: false`, using `contents: write` and
 `pull-requests: read`. Per PR it resolves the PR, skips `[skip-release]`, checks for an existing non-draft Release (the
 idempotency check), reserves a tag by pushing it (the push is the lock), and creates the Release. If it finds a draft
-Release for its tag, it publishes it with the body `draft_release.py` returns: the draft's own text, plus the release
+Release for its tag, it publishes it with the body `draft_release.cs` returns: the draft's own text, plus the release
 notes unless the draft already has this PR's `Source PR: #n` on a line of its own. The planner and the ordering guard
 recognise a Release only by that marker, so a draft published without it would stay "owed" forever and block every later
 PR. A draft that names a *different* PR fails the job instead, because publishing it would give one Release two sources.
@@ -139,7 +141,8 @@ directory up, with the text unchanged. Add a shape to its grid whenever a review
 against the Python. A case holds the arguments, stdin, environment, the files the run starts with and the fake `gh`'s
 fixtures, and for `release_queue` a `setup.sh` that builds main's history with a local origin. The case then checks stdout, the exit code,
 the shape of stderr, the `gh` calls, and every file the run leaves (`expected.tree/`), byte for byte. The fake runs real jq over the fixture for
-a REST call's `--jq` and prints each result as gh does. A case with a `setup.sh` needs git 2.32 or later. `test.sh` runs them against the Python.
+a REST call's `--jq` and prints each result as gh does. A case with a `setup.sh` needs git 2.32 or later. `test.sh` runs them against the Python, and
+`draft_release`'s against `draft_release.cs` too, built once and run with `dotnet run --no-build --file`, as the release job runs it after its Setup .NET.
 Each suite's `tests/parity/<suite>/README.md` says what its cases leave out:
 the Anthropic call, the half-minute `--wait-for-prs` limit and the "today" fallback for a PR with no merge time are left to unit tests.
 

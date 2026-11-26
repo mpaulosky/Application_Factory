@@ -479,11 +479,13 @@ def test_the_templates_owned_list_reports_a_changed_shield(tmp_path, shield, cha
 
 
 @pytest.mark.parametrize("script", [".github/scripts/Gh.cs", ".github/scripts/discover_tests.cs", ".github/scripts/DiscoverTests.cs",
-                                    ".github/scripts/load_test_env.cs", ".github/scripts/LoadTestEnv.cs"])
+                                    ".github/scripts/load_test_env.cs", ".github/scripts/LoadTestEnv.cs", ".github/scripts/draft_release.cs",
+                                    ".github/scripts/DraftRelease.cs"])
 def test_the_templates_owned_list_reports_a_changed_csharp_script(tmp_path, script):
     # Arrange: the Template's own checker as the base's, and one of the C# scripts ci.yml runs edited. load_test_env.cs runs with the
     # TEST_ENV secret, so it, the script that finds what the test jobs run and the Gh.cs both include are Owned
-    # (mpaulosky/Application_Factory#162): only a Rollout changes them.
+    # (mpaulosky/Application_Factory#162), and so is draft_release's, which the release job runs with its tokens
+    # (mpaulosky/Application_Factory#163): only a Rollout changes them.
     real_checker = (SCRIPT.parent / "check_gh_repo.py").read_text()
     work = tmp_path / "work"
     work.mkdir()

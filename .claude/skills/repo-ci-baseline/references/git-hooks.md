@@ -228,8 +228,8 @@ CI's hook-tests job runs every Owned test suite under `.github/hooks/tests/` and
 names: `pre-push.test.sh` stubs `dotnet` but hands the gate's C# scripts step (`dotnet format whitespace`, and `dotnet build` of a `.cs`) and its runs of the
 central pins check and the test discovery (`dotnet run --no-build --file .github/scripts/<script>.cs`) to the real one when it runs that SDK, so its cases build
 the Owned scripts as the gate does, refuse a warning or a format problem in one, and test only the paths the discovery's first run prints; without that SDK the
-stub answers the central pins check from `check_central_pins.py` and the discovery with the fixture's one test project, and the build cases and those that read
-what the discovery found are skipped, saying so.
+stub answers the central pins check with a pass and the discovery with the fixture's one test project, and the build cases and those that read
+what the check or the discovery found are skipped, saying so.
 
 ## Session-start check
 

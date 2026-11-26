@@ -875,7 +875,8 @@ def untold(path):
 # same list, so an entry outside SCOPE (global.json, the SDK pin the Factory moves: mpaulosky/Application_Factory#103,
 # the three empty shields beside the C# scripts, which keep the repo's own Directory.* files from reaching their
 # build: mpaulosky/Application_Factory#125, and the C# of discover_tests and load_test_env, the second of which runs with
-# the TEST_ENV secret, with the Gh.cs both include: mpaulosky/Application_Factory#162) is there only for the Owned-files check.
+# the TEST_ENV secret, with the Gh.cs both include: mpaulosky/Application_Factory#162, and the C# of draft_release, which the
+# release job runs with its tokens: mpaulosky/Application_Factory#163) is there only for the Owned-files check.
 OWNED = (
     "global.json",
     ".github/scripts/Directory.Build.props",
@@ -886,6 +887,8 @@ OWNED = (
     ".github/scripts/DiscoverTests.cs",
     ".github/scripts/load_test_env.cs",
     ".github/scripts/LoadTestEnv.cs",
+    ".github/scripts/draft_release.cs",
+    ".github/scripts/DraftRelease.cs",
     "scripts/gate.sh",
     "scripts/check-branch-name.sh",
     "scripts/check-pr-title.sh",

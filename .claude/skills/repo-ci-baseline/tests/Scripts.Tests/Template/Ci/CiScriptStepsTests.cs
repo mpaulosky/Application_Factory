@@ -4,19 +4,19 @@ using YamlDotNet.RepresentationModel;
 
 namespace Baseline.Tests;
 
-// The Template's ci.yml runs each Owned C# script as ADR 0017 asks: built in an earlier step of its job, after the job's setup-dotnet,
-// then run with dotnet run --no-build, so the run's log (and a captured stdout) holds only what the script prints. A build step never has
-// TEST_ENV, the secret load_test_env.cs reads, in its environment, and no step runs a ported script's .py.
+// The Template's ci.yml and release.yml run each Owned C# script as ADR 0017 asks: built in an earlier step of its job, after the job's
+// setup-dotnet, then run with dotnet run --no-build, so the run's log (and a captured stdout, as release.yml's BODY) holds only what the
+// script prints. A build step never has TEST_ENV, the secret load_test_env.cs reads, in its environment, and no step runs a ported script's .py.
 public partial class CiScriptStepsTests
 {
 	[GeneratedRegex(@"dotnet run --no-build --file \.github/scripts/(?<script>[A-Za-z_]+)\.cs --")]
 	private static partial Regex RunsScript();
 
-	// Each job of ci.yml: its name, its env's names, and its steps in order (each step's run, its env's names, and whether it is setup-dotnet).
-	static List<(string Job, HashSet<string> Env, List<(string Run, HashSet<string> Env, bool SetupDotnet)> Steps)> Jobs()
+	// Each job of the workflow: its name, its env's names, and its steps in order (each step's run, its env's names, and whether it is setup-dotnet).
+	static List<(string Job, HashSet<string> Env, List<(string Run, HashSet<string> Env, bool SetupDotnet)> Steps)> Jobs(string workflow = "ci.yml")
 	{
 		var yaml = new YamlStream();
-		yaml.Load(new StringReader(Skill.Workflow("ci.yml")));
+		yaml.Load(new StringReader(Skill.Workflow(workflow)));
 		static HashSet<string> Names(YamlMappingNode node, string key) =>
 				node.Children.TryGetValue(new YamlScalarNode(key), out var env) && env is YamlMappingNode map ? [.. map.Children.Keys.Select(k => ((YamlScalarNode)k).Value!)] : [];
 		static string Text(YamlMappingNode node, string key) =>
@@ -31,11 +31,14 @@ public partial class CiScriptStepsTests
 		})];
 	}
 
-	[Fact]
-	public void Each_script_ci_runs_is_built_first_in_a_step_without_test_env()
+	// ci.yml runs detect_changes, discover_tests, load_test_env and check_central_pins; release.yml draft_release.
+	[Theory]
+	[InlineData("ci.yml", 4)]
+	[InlineData("release.yml", 1)]
+	public void Each_script_a_workflow_runs_is_built_first_in_a_step_without_test_env(string workflow, int expected)
 	{
 		var runs = 0;
-		foreach (var (job, jobEnv, steps) in Jobs())
+		foreach (var (job, jobEnv, steps) in Jobs(workflow))
 		{
 			for (var i = 0; i < steps.Count; i++)
 			{
@@ -51,19 +54,20 @@ public partial class CiScriptStepsTests
 				}
 			}
 		}
-		// detect_changes, discover_tests, load_test_env and check_central_pins.
-		Assert.Equal(4, runs);
+		Assert.Equal(expected, runs);
 	}
 
 	[Theory]
-	[InlineData("detect_changes")]
-	[InlineData("discover_tests")]
-	[InlineData("load_test_env")]
-	[InlineData("check_central_pins")]
-	public void No_step_runs_a_ported_scripts_py(string script)
+	[InlineData("ci.yml", "detect_changes")]
+	[InlineData("ci.yml", "discover_tests")]
+	[InlineData("ci.yml", "load_test_env")]
+	[InlineData("ci.yml", "check_central_pins")]
+	[InlineData("release.yml", "draft_release")]
+	public void No_step_runs_a_ported_scripts_py(string workflow, string script)
 	{
-		Assert.All(Jobs().SelectMany(job => job.Steps), step => Assert.DoesNotContain($".github/scripts/{script}.py", step.Run));
-		Assert.Contains(Jobs().SelectMany(job => job.Steps), step => step.Run.Contains($"--file .github/scripts/{script}.cs --", StringComparison.Ordinal));
+		var steps = Jobs(workflow).SelectMany(job => job.Steps).ToList();
+		Assert.All(steps, step => Assert.DoesNotContain($".github/scripts/{script}.py", step.Run));
+		Assert.Contains(steps, step => step.Run.Contains($"--file .github/scripts/{script}.cs --", StringComparison.Ordinal));
 	}
 
 	[Fact]

@@ -1,8 +1,8 @@
 # The check_central_pins parity suite
 
-The Template's `.github/scripts/check_central_pins.py` through its command line: `tests/parity.test.sh check_central_pins [command...]`. The runner's header says what a
-case holds. `test.sh` runs it against the `.py`, its reference while the `.py` ships, and against `check_central_pins.cs`, built once first and run with
-`dotnet run --no-build --file`, as ci.yml's Build Solution job and the Template's gate run it.
+The Template's `.github/scripts/check_central_pins.cs` through its command line: `tests/parity.test.sh check_central_pins [command...]`. The runner's header says what a
+case holds. The cases were recorded from `check_central_pins.py`, which shipped beside the C# for one Rollout and has retired (mpaulosky/Application_Factory#163); the
+`.cs` is the reference now, built once first and run with `dotnet run --no-build --file`, as ci.yml's Build Solution job and the Template's gate run it.
 
 Each case's `tree/` is the repo the script reads, and the run's folder is its root (`--root` is left out but in cases 72 to 78), so `expected.tree/` holds the tree as it
 was: the script writes nothing. A `setup.sh` makes what git can't store: a symlink (52 to 54, 74) or a FIFO (55). No case makes a `gh` call, so each `gh/` holds only
