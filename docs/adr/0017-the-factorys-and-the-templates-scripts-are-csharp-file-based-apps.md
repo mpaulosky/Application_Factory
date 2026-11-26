@@ -108,7 +108,8 @@ Each of these is decided in its increment, and recorded as an Update below:
   a test the Template carries is still open).
   The Factory's Python test helpers move with them: `tests/check-issue-refs.py` and `tests/check-git-status.py` (which the gate and `test.sh` run; both C#
   now, Update for mpaulosky/Application_Factory#123),
-  `tests/mutations/check-spec.py` and `tests/render_oracle/`.
+  `tests/mutations/check-spec.py` and `tests/render_oracle/` (which stays a pytest suite over cmark-gfm and kramdown, and judges the C# too: Update for
+  mpaulosky/Application_Factory#164).
 - The checkers' cut-over: how the workflow steps build them in a temp folder with the base's `global.json`, where the `OWNED` list lives once `check_owned_files` can't import
   `check_gh_repo`, which checker judges the PR that replaces the checker, and for how many Applies both names are honoured.
 - `check_central_pins`. CI runs the PR's own copy, from the PR's checkout, in the job that then builds the PR. So it runs nothing that job doesn't already run, and needs no
@@ -690,3 +691,35 @@ to `retired.txt`. T1's three `.py` files retire now.
   cases that read what it found; its ruff case lints `check_gh_repo.py`.
 - **The Seed's `CHECK_PATHS`** names `check_central_pins.cs`, `CheckCentralPins.cs` and `Gh.cs` where it named the `.py`; each Sandcastle Application makes that edit by
   hand, a Seed file being written only when missing.
+
+## Update (mpaulosky/Application_Factory#164): release_post's logic is a library, and the render oracle stays on cmark-gfm and kramdown
+
+T3b, split from mpaulosky/Application_Factory#128 under the library-first rule above. Nothing in the workflows changes: `release.yml` and `backfill-blog-posts.yml` run
+`release_post.py`, `release_queue.py` and `backfill_blog_posts.py` until T3c, the cut-over (mpaulosky/Application_Factory#128).
+
+- **The files.** `.github/scripts/ReleasePost.cs` holds `release_post.py`'s logic, a method for each function and of the same name, with `HtmlEntities.cs` beside it:
+  the 2,231 HTML5 names `html.unescape()` decodes, which .NET's `WebUtility.HtmlDecode` (HTML4's, and only with their `;`) doesn't. `release_post.cs` is the entry
+  file: it includes both and `Gh.cs`, writes to stderr that the `.py` still runs, and exits 2. `test.sh`'s `library_first` list holds it to exactly that instead of running
+  it against the `release_post` parity suite, and fails once the list names an entry file with no `.py` beside it; T3c takes it off. None of the three is in `OWNED`: Apply
+  copies them, but nothing in an Application runs them until T3c, which adds them.
+- **How it reads text as the Python did.** Lengths, cuts and `ord()` count code points; `\s`, `\S` and `\w` are Python's (`str.isspace()` counts `\x1c` to `\x1f`, and
+  `isalnum()` the letter and number categories); a tab expands by code point columns, starting again after a CR as `expandtabs()` does; `str.lower()` lowers U+0130 to
+  two code points; `re.IGNORECASE` matches `i` to U+0130 and U+0131, `s` to U+017F and `k` to the Kelvin sign where the pattern isn't `re.ASCII`, and only ASCII cases
+  where it is; `pattern.match(text, pos, endpos)` is an anchored match on the range; `date.fromisoformat()` reads Python 3.12's six forms and lengths; a file is read as
+  strict UTF-8 with universal newlines and its BOM kept, as `Path.read_text()` reads it; `Path.glob()` lists hidden entries and folders too. An astral letter or digit
+  is a word character to Python's `\w` and `\d` but not to .NET's, which matches UTF-16 units: in a pattern that only shapes an excerpt or a release number, that
+  difference is left. A differential run of 25,000 random Markdown documents through both found no output apart, and the oracle below checks its grid each run.
+- **The tests.** `test_release_post.py`'s 132 tests are copied, one method each under their names and in their order, with the same 454 cases, into
+  `tests/Scripts.Tests/Template/ReleasePost/`, with seven of the port's own after them. The pytest stays until T3c, judging the `.py`; a PR that changes the `.py`'s logic
+  meanwhile changes the library and its copy too, as the rule above says.
+- **The render oracle** (Still open: the tests, until now). Its renderers stay what publishes the output: cmark-gfm through the `cmarkgfm` package (GitHub, the README)
+  and kramdown with kramdown-parser-gfm through Ruby, a local one with the pinned gems or else Docker (GitHub Pages, the posts), at the github-pages gem's versions. No .NET
+  library renders as either: Markdig is a third CommonMark reading, and a grid passing it would say nothing about GitHub or Pages. Its runner stays pytest, in the skill's
+  `tests/` and never in the Template: the renderers need Python and Ruby whatever runs them, so a C# runner would add a layer and remove no toolchain, and the Baseline still
+  drops Python at T4. What changes is what it judges: `tests/render_oracle/release_post.cs` includes the library and prints `RenderCommits` and `RebaseReadmeLinks` for the
+  grid as JSON, so each grid case runs against both implementations, and a test holds the C#'s output to the Python's case for case. At T3c the Python leaves the grid and
+  the oracle judges the C# alone. `test.sh`'s oracle step needs `dotnet` now.
+- **Considered for the oracle.** Markdig in xUnit (rejected, above); binding cmark-gfm's C library from .NET (rejected: a native build the Factory would keep, and kramdown
+  would still need Ruby); dropping the oracle with `release_post.py` (rejected: run against two earlier versions of it, it failed 110 and 130 cases the unit tests
+  passed, as the skill's `references/release-pipeline.md` records).
+- **Rollout.** None of its own: the three files reach each Application with the next Apply and run nowhere there. T3c's Rollout brings the cut-over.

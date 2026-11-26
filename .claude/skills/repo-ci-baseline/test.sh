@@ -745,8 +745,10 @@ if in_shard scripts; then
   (cd "$skill_dir/tests" && "${pytest_cmd[@]}" -q -p no:cacheprovider hardening) || fail "hardening pytest"
 
   step "Renderer oracle"
-  # release_post.py's output rendered by cmark-gfm (GitHub) and kramdown (GitHub
-  # Pages); kramdown runs from a local Ruby with its pinned gems, else Docker.
+  # release_post.py's output, and ReleasePost.cs's through tests/render_oracle/release_post.cs, rendered by cmark-gfm (GitHub)
+  # and kramdown (GitHub Pages); kramdown runs from a local Ruby with its pinned gems, else Docker. The C# must write what the
+  # Python writes, case for case (ADR 0017's Update for mpaulosky/Application_Factory#164).
+  need dotnet
   if python3 -c 'import cmarkgfm, pytest' &> /dev/null; then
     oracle_cmd=(python3 -m pytest)
   else
