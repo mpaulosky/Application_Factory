@@ -5,6 +5,7 @@
 // compile it beside the Factory's own Gh.cs, whose classes have the same names.
 using System.Diagnostics;
 using System.Globalization;
+using System.Numerics;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -13,13 +14,14 @@ namespace Baseline;
 // argparse's part the scripts use: options with one value (--name value or --name=value), required ones among them, flags, a long option
 // given by any unique prefix of its name (--help's too), -h and --help, and -- ending the options. An argument that matches no option is a
 // value when it looks like a negative number (argparse's -\.?\d) or holds a space. A script with no positional arguments refuses one as
-// argparse does. OneOf is a required mutually exclusive group. A usage error exits 2 with the usage and the error on stderr, as argparse does.
+// argparse does. OneOf is a required mutually exclusive group, and IntOption argparse's type=int. A usage error exits 2 with the usage and the error on stderr, as argparse does.
 sealed class Arguments(string prog, string usage, string description, bool positionals = false)
 {
 	const string HelpName = "--help";
 	readonly List<(string Name, bool TakesValue, string Help)> options = [];
 	readonly List<string> required = [];
 	readonly List<string[]> groups = [];
+	readonly HashSet<string> ints = [];
 	public readonly Dictionary<string, string?> Values = [];
 	public readonly List<string> Positional = [];
 
@@ -40,6 +42,14 @@ sealed class Arguments(string prog, string usage, string description, bool posit
 	{
 		required.Add(name);
 		return Option(name, help);
+	}
+
+	// An option whose value must be one Python's int() reads, as argparse's type=int: one that isn't is a usage error as soon as it is
+	// read, before an unknown or missing option is reported. Required, as Required is, when required is set.
+	public Arguments IntOption(string name, string help, bool required = false)
+	{
+		ints.Add(name);
+		return required ? Required(name, help) : Option(name, help);
 	}
 
 	// Options already added of which exactly one must be given, as argparse's add_mutually_exclusive_group(required=True): giving a second
@@ -114,6 +124,8 @@ sealed class Arguments(string prog, string usage, string description, bool posit
 					return Error($"argument {option.Name}: expected one argument", err);
 				value = rest[++i];
 			}
+			if (ints.Contains(option.Name) && Py.Int(value) is null)
+				return Error($"argument {option.Name}: invalid int value: {Py.Repr(value)}", err);
 			if (Conflict(option.Name) is { } conflict)
 				return Error($"argument {option.Name}: not allowed with argument {conflict}", err);
 			Values[option.Name] = value;
@@ -136,6 +148,9 @@ sealed class Arguments(string prog, string usage, string description, bool posit
 
 	// An option's value, else its default.
 	public string Value(string name, string fallback) => Values.TryGetValue(name, out var value) && value is not null ? value : fallback;
+
+	// An IntOption's value as int() reads it, else its default.
+	public BigInteger IntValue(string name, BigInteger fallback) => Values.TryGetValue(name, out var value) && value is not null ? Py.Int(value)!.Value : fallback;
 
 	// A usage error: the usage and the error on stderr, exit 2.
 	public int Error(string message, TextWriter err)
@@ -341,7 +356,7 @@ static class SurrogateEscape
 	}
 }
 
-// Python's str methods the scripts read text with: str.strip(), str.splitlines() and str.lower().
+// Python's str methods the scripts read text with: str.strip(), str.splitlines() and str.lower(), and int() and repr() of a str.
 static class Py
 {
 	// The characters str.isspace() counts, and Python's \s in a str pattern: char.IsWhiteSpace's, and the four separators \x1c to \x1f.
@@ -419,6 +434,64 @@ static class Py
 
 	// str.lower(): .NET's invariant lowering, one code point at a time, as the Factory's own Py.Lower is.
 	public static string Lower(string text) => text.ToLowerInvariant();
+
+	// int(text), or null where it raises ValueError: blanks around (str.isspace()'s), a sign, then decimal digits, any Unicode decimal
+	// digit among them (an astral one too), with a single underscore only between two. A number of any size, as Python's, up to its
+	// default limit of 4,300 digits (sys.get_int_max_str_digits()), past which int() refuses one.
+	public static BigInteger? Int(string text)
+	{
+		const int MaxDigits = 4300;
+		var digits = Strip(text);
+		var negative = digits.StartsWith('-');
+		if (negative || digits.StartsWith('+'))
+			digits = digits[1..];
+		BigInteger value = 0;
+		bool any = false, underscore = false;
+		var count = 0;
+		foreach (var rune in digits.EnumerateRunes())
+		{
+			if (rune.Value == '_' && any && !underscore)
+			{
+				underscore = true;
+				continue;
+			}
+			if (Rune.GetUnicodeCategory(rune) != UnicodeCategory.DecimalDigitNumber || ++count > MaxDigits)
+				return null;
+			value = value * 10 + (int)Rune.GetNumericValue(rune);
+			(any, underscore) = (true, false);
+		}
+		return any && !underscore ? negative ? -value : value : null;
+	}
+
+	// repr() of a str: in single quotes, or double ones when it holds a ' and no ", with a backslash, that quote, \t, \n and \r escaped,
+	// and each character str.isprintable() refuses (a control, format, private use, unassigned or surrogate code point, or a separator
+	// but the space) written as \xhh, \uhhhh or \Uhhhhhhhh.
+	public static string Repr(string text)
+	{
+		var quote = text.Contains('\'') && !text.Contains('"') ? '"' : '\'';
+		var repr = new StringBuilder().Append(quote);
+		for (var i = 0; i < text.Length; i++)
+		{
+			// A lone surrogate is a code point of its own, as Python reads it.
+			var rune = char.IsSurrogatePair(text, i) ? new Rune(text[i], text[++i]) : (Rune?)null;
+			int code = rune?.Value ?? text[i];
+			var category = rune is { } pair ? Rune.GetUnicodeCategory(pair) : char.GetUnicodeCategory(text[i]);
+			repr.Append(code switch
+			{
+				'\\' => @"\\",
+				'\t' => @"\t",
+				'\n' => @"\n",
+				'\r' => @"\r",
+				_ when code == quote => $"\\{quote}",
+				_ when category is UnicodeCategory.Control or UnicodeCategory.Format or UnicodeCategory.PrivateUse or UnicodeCategory.OtherNotAssigned
+						or UnicodeCategory.Surrogate or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator
+						|| (category == UnicodeCategory.SpaceSeparator && code != ' ') =>
+						code <= 0xff ? $"\\x{code:x2}" : code <= 0xffff ? $"\\u{code:x4}" : $"\\U{code:x8}",
+				_ => rune?.ToString() ?? text[i].ToString(),
+			});
+		}
+		return repr.Append(quote).ToString();
+	}
 }
 
 // pathlib's Path.resolve() and its sort, which the scripts that walk a tree share.

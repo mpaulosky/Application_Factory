@@ -1,0 +1,2 @@
+^usage: draft_release\.(py|cs) \[-h\] --pr PR --notes-file NOTES_FILE \[--tag TAG\]$
+^draft_release\.(py|cs): error: argument --pr: invalid int value: "it's"$
