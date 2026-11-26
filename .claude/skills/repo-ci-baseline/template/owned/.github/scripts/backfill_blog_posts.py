@@ -11,7 +11,7 @@ run just released:
     python3 .github/scripts/backfill_blog_posts.py --wait-for-prs "187, 188"
 
 Every non-draft GitHub Release names its source PR in a "Source PR: #n"
-line. For each release whose PR has no docs/blogs/*-pr-{n}-*.md post (or
+line. For each release whose PR has no docs/blogs/<date>-pr-{n}-*.md post (or
 every release with --regenerate), it writes the post with release_post.py
 under the release's existing tag. It never creates tags or Releases. Then
 the README, docs/README.md and docs/index.html tables are rebuilt once, even

@@ -946,6 +946,10 @@ static class ReleasePost
 	static readonly Regex Scheme = At(@"([a-z][a-z0-9+.\-]*):");
 	// Besides letters and digits, what a scheme can be written with: its own symbols, the colon, entities (&#9; &colon;) and backslash escapes.
 	const string SchemeText = "+.-:&#;\\";
+	// The C0 controls and DEL, which don't end a scheme's read: a browser drops them, and the space, from a URL's start, and tabs and line
+	// breaks from anywhere in it, and a safe scheme can't hold any of them.
+	static bool IsUrlControl(char c) => c < ' ' || c == '\x7f';
+	static bool IsUrlDropped(char c) => c <= ' ' || c == '\x7f';
 	// Only these autolinks keep their angle brackets; any other "<" is escaped.
 	static readonly Regex Autolink = At($@"<(?:{Unicode("https?://|mailto:")})[^\s\x1c-\x1f<>""'`\\]*>");
 	static readonly Regex LinkDestinationStart = R(@"\]\(|\]:");
@@ -1013,21 +1017,24 @@ static class ReleasePost
 	// Browsers drop control characters and whitespace from a URL and decode entities, so "java&#9;script:" is still a javascript: link. The
 	// whole destination's scheme is read however long it is: padding ("j&#9;&#9;...avascript:", or an entity's leading zeros) can push it
 	// arbitrarily far from the start. The read stops at the first character that can't be part of a scheme, an entity or an escape, so it
-	// never runs into the next "](".
+	// never runs into the next "](". A control character or DEL (a tab or line break among them) doesn't stop it, nor does a space before
+	// the scheme: browsers drop those too, and kramdown writes them into the href as they are ("<\x01javascript:x>").
 	static bool SafeDestination(string text, int start)
 	{
 		var end = start;
+		while (end < text.Length && IsUrlDropped(text[end]))
+			end++;
 		while (end < text.Length)
 		{
 			if (IsAlnumAt(text, end, out var width))
 				end += width;
-			else if (SchemeText.Contains(text[end]))
+			else if (SchemeText.Contains(text[end]) || IsUrlControl(text[end]))
 				end++;
 			else
 				break;
 		}
 		var candidate = SafeUnescape(Cut(text, start, end)).Replace("\\", "", StringComparison.Ordinal);
-		candidate = PyLower(new string([.. candidate.Where(c => c > ' ' && c != '\x7f')]));
+		candidate = PyLower(new string([.. candidate.Where(c => !IsUrlDropped(c))]));
 		var scheme = Match(Scheme, candidate);
 		return scheme is null || SafeSchemes.Contains(scheme.Groups[1].Value);
 	}
@@ -1945,13 +1952,12 @@ static class ReleasePost
 	public static BigInteger? SourcePrOf(JsonNode? release) =>
 			SourcePr.Match(Text(Get(release, "body")) ?? "") is { Success: true } match ? ParseInt(match.Groups[1].Value) : null;
 
-	// The docs/blogs posts for a PR, sorted by name (so by date).
-	public static List<string> PostsForPr(string blogDir, string prNumber)
-	{
-		var token = $"-pr-{prNumber}-";
-		return [.. Glob(blogDir, name => name.EndsWith(".md", StringComparison.Ordinal) && name[..^3].Contains(token, StringComparison.Ordinal))
+	// The docs/blogs posts for a PR, sorted by name (so by date). A post belongs to the PR its name's first "-pr-N-" names, as ReadBlogPosts
+	// reads it: the title slug after it can hold another ("...-pr-7-revert-pr-4-changes.md" is PR 7's, not PR 4's).
+	public static List<string> PostsForPr(string blogDir, string prNumber) =>
+			[.. Glob(blogDir, name => name.EndsWith(".md", StringComparison.Ordinal) && PrOfName.Match(name) is { Success: true } pr
+					&& pr.Groups[1].Value == prNumber)
 				.Order(Py.Order)];
-	}
 
 	public static string PostUrl(string repository, string name) => $"https://github.com/{repository}/blob/main/docs/blogs/{name}";
 

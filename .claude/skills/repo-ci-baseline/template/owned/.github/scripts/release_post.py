@@ -632,6 +632,11 @@ SCHEME = re.compile(r"([a-z][a-z0-9+.\-]*):")
 # Besides letters and digits, what a scheme can be written with: its own
 # symbols, the colon, entities (&#9; &colon;) and backslash escapes.
 SCHEME_TEXT = set("+.-:&#;\\")
+# The C0 controls and DEL, which don't end a scheme's read: a browser drops
+# them, and the space, from a URL's start, and tabs and line breaks from
+# anywhere in it, and a safe scheme can't hold any of them.
+URL_CONTROLS = {chr(code) for code in range(0x20)} | {"\x7f"}
+URL_DROPPED = URL_CONTROLS | {" "}
 # Only these autolinks keep their angle brackets; any other "<" is escaped.
 AUTOLINK = re.compile(r"<(?:https?://|mailto:)[^\s<>\"'`\\]*>", re.I)
 LINK_DESTINATION_START = re.compile(r"\]\(|\]:")
@@ -713,12 +718,17 @@ def safe_destination(text, start):
     avascript:", or an entity's leading zeros) can push it arbitrarily far
     from the start. The read stops at the first character that can't be part
     of a scheme, an entity or an escape, so it never runs into the next "](".
+    A control character or DEL (a tab or line break among them) doesn't stop
+    it, nor does a space before the scheme: browsers drop those too, and
+    kramdown writes them into the href as they are ("<\x01javascript:x>").
     """
     end = start
-    while end < len(text) and (text[end].isalnum() or text[end] in SCHEME_TEXT):
+    while end < len(text) and text[end] in URL_DROPPED:
+        end += 1
+    while end < len(text) and (text[end].isalnum() or text[end] in SCHEME_TEXT or text[end] in URL_CONTROLS):
         end += 1
     candidate = safe_unescape(text[start:end]).replace("\\", "")
-    candidate = "".join(char for char in candidate if char > " " and char != "\x7f").lower()
+    candidate = "".join(char for char in candidate if char not in URL_DROPPED).lower()
     scheme = SCHEME.match(candidate)
     return not scheme or scheme.group(1) in SAFE_SCHEMES
 
@@ -1385,10 +1395,16 @@ def update_blog_index(blog_dir, merged_date, title_line, post_name):
     )
 
 
+def pr_of_name(name):
+    """The PR number a post's name gives (its first "-pr-N-"), as text, or None."""
+    pr = re.search(r"-pr-(\d+)-", name)
+    return pr.group(1) if pr else None
+
+
 def read_blog_posts(blog_dir):
     posts = []
     for path in blog_dir.glob("*.md"):
-        pr = re.search(r"-pr-(\d+)-", path.name)
+        pr = pr_of_name(path.name)
         if not pr:
             continue
         text = path.read_text(encoding="utf-8")
@@ -1401,7 +1417,7 @@ def read_blog_posts(blog_dir):
         posts.append(
             {
                 "file": path.name,
-                "pr": pr.group(1),
+                "pr": pr,
                 "title": title.group(1).replace('\\"', '"') if title else path.stem,
                 "date": date.group(1) if date else path.name[:10],
                 "tag": tag.group(1) if tag else "",
@@ -1516,8 +1532,13 @@ def source_pr_of(release):
 
 
 def posts_for_pr(blog_dir, pr_number):
-    """The docs/blogs posts for a PR, sorted by name (so by date)."""
-    return sorted(blog_dir.glob(f"*-pr-{pr_number}-*.md"))
+    """The docs/blogs posts for a PR, sorted by name (so by date).
+
+    A post belongs to the PR its name's first "-pr-N-" names, as
+    read_blog_posts reads it: the title slug after it can hold another
+    ("...-pr-7-revert-pr-4-changes.md" is PR 7's, not PR 4's).
+    """
+    return sorted(path for path in blog_dir.glob("*.md") if pr_of_name(path.name) == str(pr_number))
 
 
 def post_url(repository, name):

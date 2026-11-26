@@ -982,15 +982,30 @@ def test_rewriting_a_post_under_a_new_name_drops_the_old_one(tmp_path):
     rp.update_blog_index(blog_dir, "2026-09-23", "Old title", stale)
     (blog_dir / "2026-09-23-pr-420-other.md").write_text("other\n", encoding="utf-8")
     rp.update_blog_index(blog_dir, "2026-09-23", "Other", "2026-09-23-pr-420-other.md")
+    # PR 7's post, whose title slug names PR 42 (mpaulosky/Application_Factory#211).
+    (blog_dir / "2026-09-24-pr-7-revert-pr-42-changes.md").write_text("revert\n", encoding="utf-8")
 
     run(tmp_path)
 
     assert not (blog_dir / stale).exists()
     assert (blog_dir / "2026-09-23-pr-420-other.md").exists()
+    assert (blog_dir / "2026-09-24-pr-7-revert-pr-42-changes.md").exists()
     index = (blog_dir / "README.md").read_text(encoding="utf-8")
     assert stale not in index
     assert "2026-09-23-pr-420-other.md" in index
     assert index.count("pr-42-") == 1
+
+
+def test_a_post_belongs_to_the_pr_its_name_starts_with(tmp_path):
+    # The title slug after "-pr-N-" can name another PR (mpaulosky/Application_Factory#211).
+    own, other = "2026-09-20-pr-7-fix-a.md", "2026-09-24-pr-8-revert-pr-7-changes.md"
+    for name in [own, other, "2026-09-25-pr-70-x.md", "2026-09-26-pr-17-y.md"]:
+        (tmp_path / name).write_text("x\n", encoding="utf-8")
+    assert [path.name for path in rp.posts_for_pr(tmp_path, 7)] == [own]
+    assert [path.name for path in rp.posts_for_pr(tmp_path, "8")] == [other]
+    assert rp.posts_for_pr(tmp_path, 4) == []
+    entries = rp.release_entries(FakeGitHub(), REPO, tmp_path)
+    assert [entry["post_url"] for entry in entries if entry["pr"] == "7"] == [rp.post_url(REPO, own)]
 
 
 def test_update_tables_without_a_new_release_lists_existing_releases(tmp_path):
@@ -1145,6 +1160,12 @@ def test_html_comments_are_dropped():
         ("[a](java&#" + "0" * 250 + "9;script:x)", "[a](#java&#" + "0" * 250 + "9;script:x)"),
         ("![a](data:text/html,x)", "![a](#data:text/html,x)"),
         ("[a](<vbscript:x>)", "[a](#vbscript:x)"),
+        # Browsers drop a control character or DEL, so none ends the scheme's read (mpaulosky/Application_Factory#211).
+        ("[a](<\x01javascript:x>)", "[a](#\x01javascript:x)"),
+        ("[a](\x01javascript:x)", "[a](#\x01javascript:x)"),
+        ("[a](java\x7fscript:x)", "[a](#java\x7fscript:x)"),
+        ("[a]: \x1fjavascript:x", "[a]: #\x1fjavascript:x"),
+        ("[a](<\x01https://example.com>)", "[a](\x01https://example.com)"),
         ("[a]: javascript:x", "[a]: #javascript:x"),
         ("> [a]:\n> javascript:x", "> [a]:\n> #javascript:x"),
         ("[a](https://example.com) [b](mailto:a@b.c) [c](#top) [d](docs/x.md)",
@@ -1165,6 +1186,24 @@ def test_html_comments_are_dropped():
 )
 def test_link_destinations_with_unsafe_schemes_are_neutralized(text, expected):
     assert rp.sanitize_markdown(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # A tab, line break, other C0 control or DEL inside the scheme, or a space before it, doesn't end its read
+        # (mpaulosky/Application_Factory#211): kramdown writes them into the href, and browsers drop them.
+        ("[a](<\x01javascript:alert(1)>)", "[a](<#\x01javascript:alert(1)>)"),
+        ("[a](<java\tscript:alert(1)>)", "[a](<#java\tscript:alert(1)>)"),
+        ("[a](<java\nscript:x>)", "[a](<#java\nscript:x>)"),
+        ("[a](<java\rscript:x>)", "[a](<#java\rscript:x>)"),
+        ("[a](< \x01 javascript:x>)", "[a](<# \x01 javascript:x>)"),
+        ("[a](<\x01 \x7fhttps://example.com>) [b](<\tdocs/x.md>)", "[a](<\x01 \x7fhttps://example.com>) [b](<\tdocs/x.md>)"),
+    ],
+)
+def test_controls_in_a_scheme_dont_hide_it(text, expected):
+    assert rp.neutralize_links(text) == expected
+    assert rp.safe_destination(text, text.index("<") + 1) == (text == expected)
 
 
 def test_autolinks_keep_working():
