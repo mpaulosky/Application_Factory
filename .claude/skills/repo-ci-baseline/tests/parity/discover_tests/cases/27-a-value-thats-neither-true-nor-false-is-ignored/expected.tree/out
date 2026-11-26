@@ -1,4 +1,0 @@
-matrix<<EOF
-{"include": [{"project_path": "tests/A.Tests/A.Tests.csproj", "test_name": "A.Tests", "test_id": "a-tests", "build_before_test": false, "no_build": false, "requires_playwright": false, "verbosity": "minimal"}, {"project_path": "tests/B.Tests/B.Tests.csproj", "test_name": "B.Tests", "test_id": "b-tests", "build_before_test": false, "no_build": false, "requires_playwright": false, "verbosity": "minimal"}]}
-EOF
-has_tests=true

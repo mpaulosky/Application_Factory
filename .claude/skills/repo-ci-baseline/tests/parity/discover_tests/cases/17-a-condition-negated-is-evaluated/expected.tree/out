@@ -1,4 +1,0 @@
-matrix<<EOF
-{"include": [{"project_path": "tests/Web.Tests.Unit/Web.Tests.Unit.csproj", "test_name": "Web.Tests.Unit", "test_id": "web-tests-unit", "build_before_test": false, "no_build": false, "requires_playwright": false, "verbosity": "minimal"}]}
-EOF
-has_tests=true
