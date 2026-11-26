@@ -52,3 +52,14 @@ check that does turns the required `Build Solution` job red.
 - A pin kept with a reason is never checked again: deleting it once the package that brings it in moves past the version is a person's job.
 - A pin may be reported though a reference names it, when that reference is in a file the check skipped; the notice names the file. A pin may pass
   with a warning though nothing references it, when a reference can't be read; the warning names the reference.
+
+## Update (mpaulosky/Application_Factory#126): the check is C#, and runs after Setup .NET
+
+The check is `.github/scripts/check_central_pins.cs` now, a C# file-based app (the Factory's ADR 0017), with `check_central_pins.py` beside it for one Rollout.
+The rule, the two places it runs and the two directions it fails in are unchanged; where `Build Solution` runs it is not.
+
+- **`Build Solution` runs it after Setup .NET, not first.** As C# it needs the SDK, so the job's order is the checkout, Setup .NET, a step that builds the
+  check, the check (`dotnet run --no-build --file`), then the cache, the restore and the build. It still runs before the restore, which would fail with
+  NU1109 on the pin it reports, and still on the PR's own copy, which runs nothing the job doesn't build and run anyway: the job builds the PR. What it
+  loses is the few seconds by which a bad pin failed before the SDK was installed.
+- **The gate builds it, then runs it**, before the solution's build, as it does the test discovery.

@@ -37,7 +37,11 @@ describe("the places the gate's checks are read from (mpaulosky/dotfiles#339)", 
 
     assert.notEqual(declaration, "", "the Seed has no CHECK_PATHS list");
     assert.ok(listed.includes(".github/scripts/check_gh_repo.py"), `the Seed CHECK_PATHS ${JSON.stringify(listed)} lacks the checker`);
-    assert.ok(listed.includes(".github/scripts/check_central_pins.py"), `the Seed CHECK_PATHS ${JSON.stringify(listed)} lacks the central pins check`);
+    // The central pins check is C# (mpaulosky/Application_Factory#126): its entry file and the two files it includes.
+    for (const file of [".github/scripts/check_central_pins.cs", ".github/scripts/CheckCentralPins.cs", ".github/scripts/Gh.cs"]) {
+      assert.ok(listed.includes(file), `the Seed CHECK_PATHS ${JSON.stringify(listed)} lacks ${file}, which the central pins check runs`);
+    }
+    assert.ok(!listed.includes(".github/scripts/check_central_pins.py"), `the Seed CHECK_PATHS ${JSON.stringify(listed)} still names the Python the gate no longer runs`);
     assert.ok(listed.includes(".claude/skills/"), `the Seed CHECK_PATHS ${JSON.stringify(listed)} lacks .claude/skills/`);
   });
 
@@ -45,7 +49,9 @@ describe("the places the gate's checks are read from (mpaulosky/dotfiles#339)", 
     const step = stepNine();
 
     assert.match(step, /check_gh_repo\.py/);
-    assert.match(step, /check_central_pins\.py/);
+    assert.match(step, /check_central_pins\.cs/);
+    assert.match(step, /CheckCentralPins\.cs/);
+    assert.doesNotMatch(step, /check_central_pins\.py/);
     assert.match(step, /\.claude\/skills\//);
   });
 });

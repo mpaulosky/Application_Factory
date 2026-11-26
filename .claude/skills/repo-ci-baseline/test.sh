@@ -6,7 +6,7 @@
 #
 # Runs the Template's own tests (hook suites, auto-merge script tests,
 # the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle, the parity suites
-# (status, land, settings, check_gh_repo, the release scripts, detect_changes, discover_tests, load_test_env and rollout), the Claude Review benchmark's --rescore parity suite and
+# (status, land, settings, check_gh_repo, the release scripts, detect_changes, discover_tests, load_test_env, check_central_pins and rollout), the Claude Review benchmark's --rescore parity suite and
 # the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land, settings, rollout and its AutoRollout libraries,
 # what they share, the two checkers in tests/ and the benchmark), lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
@@ -755,7 +755,7 @@ if in_shard scripts; then
   fi
   (cd "$skill_dir/tests/render_oracle" && "${oracle_cmd[@]}" -q -p no:cacheprovider .) || fail "renderer oracle"
 
-  step "Parity suites (status.cs, land.cs, settings.cs, check_gh_repo.py, the release scripts, detect_changes, discover_tests and load_test_env as .py and .cs, and rollout.sh through their command lines, against a fake gh) and their runners' tests"
+  step "Parity suites (status.cs, land.cs, settings.cs, check_gh_repo.py, the release scripts, detect_changes.cs, discover_tests.cs, load_test_env.cs, check_central_pins as .py and .cs, and rollout.sh through their command lines, against a fake gh) and their runners' tests"
   # The fake gh runs jq for a REST call's --jq, which the release scripts' suites make, and for a REST call's --input body, which the
   # settings suite's make. The status, land and settings suites' reference is the C# (github/status.cs, github/land.cs, github/settings.cs),
   # which the runner builds once before its cases (ADR 0017); the settings suite runs against github-settings.sh below too.
@@ -786,6 +786,7 @@ if in_shard scripts; then
   # An Owned script's C# ships beside its .py for one Rollout (ADR 0017), and the .py stays its suite's reference until then, so each Owned
   # entry file (a .cs in .github/scripts/ whose first line is a #: directive) is run against its suite too: built once from the Template's
   # folder, whose global.json picks the SDK, then run as ci.yml runs it, with dotnet run --no-build --file. An entry file with no suite fails.
+  # Once its .py has retired the .cs is the suite's reference, which the loop above ran, so it isn't run again.
   owned_entries=0
   for owned_cs in "$owned"/.github/scripts/*.cs; do
     [[ -f "$owned_cs" ]] && IFS= read -r first_line < "$owned_cs" && [[ "$first_line" == '#:'* ]] || continue
@@ -795,12 +796,13 @@ if in_shard scripts; then
       fail "template/owned/.github/scripts/$suite.cs is an Owned script with no parity suite (tests/parity/$suite/)"
       continue
     fi
+    [[ -f "${owned_cs%.cs}.py" ]] || continue
     (cd "$owned" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 \
       UseSharedCompilation=false dotnet build "$owned_cs" < /dev/null > "$md_tmp/owned-cs-build.log" 2>&1) \
       || fail "dotnet build template/owned/.github/scripts/$suite.cs failed: $(tail -5 "$md_tmp/owned-cs-build.log")"
     bash "$skill_dir/tests/parity.test.sh" "$suite" dotnet run --no-build --file "$owned_cs" -- || fail "parity.test.sh $suite against $suite.cs"
   done
-  ((owned_entries >= 3)) || fail "found $owned_entries Owned C# script(s) in template/owned/.github/scripts/, expected detect_changes.cs, discover_tests.cs and load_test_env.cs at least"
+  ((owned_entries >= 4)) || fail "found $owned_entries Owned C# script(s) in template/owned/.github/scripts/, expected detect_changes.cs, discover_tests.cs, load_test_env.cs and check_central_pins.cs at least"
   # status.sh and land.sh run their C# from its own folder, so a global.json in the caller's folder that pins an SDK nobody has installed
   # changes nothing: the status suite passes against status.sh with one above every case's folder (the runner's TMPDIR), and land.sh
   # answers --help from such a folder. dotnet itself fails there, which shows the global.json is read.

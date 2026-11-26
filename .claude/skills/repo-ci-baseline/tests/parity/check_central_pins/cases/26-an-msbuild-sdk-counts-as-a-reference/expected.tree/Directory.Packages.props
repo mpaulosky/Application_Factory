@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup><CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled></PropertyGroup>
+  <ItemGroup>
+<PackageVersion Include="Aspire.AppHost.Sdk" Version="1.0.0" /><PackageVersion Include="MSTest.Sdk" Version="1.0.0" /><PackageVersion Include="Other.Sdk" Version="1.0.0" /><PackageVersion Include="Json.Sdk" Version="1.0.0" /><PackageVersion Include="Unused.Sdk" Version="1.0.0" />
+  </ItemGroup>
+</Project>

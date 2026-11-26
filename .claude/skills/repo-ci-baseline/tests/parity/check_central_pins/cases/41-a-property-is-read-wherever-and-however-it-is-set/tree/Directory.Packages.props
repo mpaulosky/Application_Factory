@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup><CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled></PropertyGroup><PropertyGroup><P>
+  Acme  
+</P><Q>Bc&#109;e</Q><R>Cc<!-- why -->me</R></PropertyGroup><Target Name="T"><PropertyGroup><S>Dcme</S></PropertyGroup></Target><Choose><When Condition="x"><PropertyGroup><U>Ec<![CDATA[me]]></U></PropertyGroup></When></Choose>
+  <ItemGroup>
+<PackageVersion Include="Acme.Core" Version="1.0.0" /><PackageVersion Include="Bcme.Core" Version="1.0.0" /><PackageVersion Include="Ccme.Core" Version="1.0.0" /><PackageVersion Include="Dcme.Core" Version="1.0.0" /><PackageVersion Include="Ecme.Core" Version="1.0.0" />
+  </ItemGroup>
+</Project>

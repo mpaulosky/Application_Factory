@@ -10,9 +10,10 @@
 # scripts and skills tell every gh command its repository, that
 # .github/copilot-instructions.md matches the repo's code-review skill (when
 # it has one), runs the repo's own checks in .github/ci/gate-checks.sh, checks
-# that every central NuGet pin is referenced (check_central_pins.py), builds
-# the solution, then runs each test project CI's discover_tests.cs finds under
-# tests/ (built first, then run with --no-build). Exits non-zero on the first
+# that every central NuGet pin is referenced (check_central_pins.cs, built
+# first, then run with --no-build), builds the solution, then runs each test
+# project CI's discover_tests.cs finds under tests/ (built first, then run with
+# --no-build). Exits non-zero on the first
 # failing gate. GATE_SKIP_REVIEW=1 skips the review check, for gate runs before
 # the push (the review's own, and while iterating), never for a push.
 # The Application Factory owns this file and tests it: the Factory's own .claude/skills/repo-ci-baseline/tests/owned-gate-files.test.sh
@@ -381,10 +382,16 @@ if [[ -f .github/ci/gate-checks.sh ]]; then
 fi
 
 # A central NuGet pin no project references holds the package back wherever it comes in through another one, under transitive
-# pinning, and Dependabot's bumps don't raise it, so restore fails with NU1109. Checked before the build; CI checks it first, right
-# after the checkout.
-step "Central package pins (.github/scripts/check_central_pins.py)"
-python3 -I .github/scripts/check_central_pins.py --root "$ROOT"
+# pinning, and Dependabot's bumps don't raise it, so restore fails with NU1109. Checked before the build, as CI checks it right
+# after its SDK setup. check_central_pins.cs is a C# file-based app (ADR 0017 in the Application Factory), built first, its build's
+# output on stderr, then run with --no-build.
+step "Central package pins (.github/scripts/check_central_pins.cs)"
+export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1
+if ! dotnet build .github/scripts/check_central_pins.cs >&2; then
+  echo "❌ dotnet build .github/scripts/check_central_pins.cs failed (shown above): the check is the Application Factory's Template's, so take its copy again." >&2
+  exit 1
+fi
+dotnet run --no-build --file .github/scripts/check_central_pins.cs -- --root "$ROOT"
 
 step "Build"
 mapfile -t SOLUTIONS < <(find . -maxdepth 1 -name '*.slnx')

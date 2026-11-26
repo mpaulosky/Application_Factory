@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup><PackageReference Include="@(Z)" /><PackageReference Include="A" /></ItemGroup>
+</Project>

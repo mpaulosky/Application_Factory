@@ -1,0 +1,2 @@
+^usage: check_central_pins\.(py|cs) \[-h\] \[--root ROOT\]$
+^check_central_pins\.(py|cs): error: unrecognized arguments: --roots \.$

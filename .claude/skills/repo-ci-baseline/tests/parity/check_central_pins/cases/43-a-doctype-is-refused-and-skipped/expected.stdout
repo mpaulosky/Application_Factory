@@ -1,0 +1,3 @@
+ℹ️  Bomb.csproj was skipped: it isn't well-formed MSBuild XML (a DOCTYPE or entity declaration, which an MSBuild file never needs). A reference or property in it wasn't seen.
+ℹ️  Entity.props was skipped: it isn't well-formed MSBuild XML (a DOCTYPE or entity declaration, which an MSBuild file never needs). A reference or property in it wasn't seen.
+❌ A is pinned in Directory.Packages.props but no project references it

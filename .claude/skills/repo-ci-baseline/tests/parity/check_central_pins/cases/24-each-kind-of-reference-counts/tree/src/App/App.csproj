@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup><PackageReference Update="A" /><GlobalPackageReference Include="B" Version="1" /><PackageDownload Include="C" Version="[1]" /><packagereference Include="D" /></ItemGroup>
+</Project>

@@ -1,0 +1,5 @@
+::notice file=Directory.Packages.props::Directory.Packages.props sets CentralPackageTransitivePinningEnabled to $(X), which this check can't read without evaluating MSBuild, so it counts transitive pinning as on.
+::notice file=Skipped.props::Skipped.props was skipped: it isn't well-formed MSBuild XML (a DOCTYPE or entity declaration, which an MSBuild file never needs). A reference or property in it wasn't seen.
+::notice file=global.json::global.json was skipped: it isn't JSON the .NET host reads. A reference or property in it wasn't seen.
+::warning file=Directory.Packages.props::A is pinned in Directory.Packages.props but no project references it
+Reported as warnings: a reference this check can't read without evaluating MSBuild (@(Packages)) may name any of the pins above.

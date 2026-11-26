@@ -30,7 +30,6 @@
 // Exit 0 once the matrix is appended or the paths printed; 1 when projects exist but none is a test project, or a project file isn't XML
 // or the output can't be appended (the exception on stderr); 2 on a usage error (argparse's, as discover_tests.py gave: exactly one of
 // --output and --list, an option may be given by a unique prefix of its name). The standard library only.
-// discover_tests.py, beside it, is the same script in Python, kept for one Rollout so a revert is one workflow line.
 using Baseline;
 
 return Script.Run((stdout, stderr) => DiscoverTests.Run(args, stdout, stderr));

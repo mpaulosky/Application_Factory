@@ -1,0 +1,2 @@
+⚠️  B is pinned in Directory.Packages.props but no project references it
+Reported as warnings: a reference this check can't read without evaluating MSBuild ($(Nested), $(Unset), %(Name), @(Z)) may name any of the pins above.

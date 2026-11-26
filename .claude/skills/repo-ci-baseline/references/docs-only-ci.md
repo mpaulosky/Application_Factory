@@ -1,9 +1,9 @@
 # Docs-only CI skip
 
 Template files (Owned): `ci.yml`, `codeql-analysis.yml`, `.github/scripts/detect_changes.cs` (with `DetectChanges.cs`, `Gh.cs` and the three
-empty `Directory.*` shields beside it) and `detect_changes.py`, the same script in Python, shipped beside it for one Rollout. History:
-IssueTracker #175; atelier-store #95's review moved the classifier into a tested script, IssueTracker #188 took it
-back, and mpaulosky/Application_Factory#125 ported it to C# (ADR 0017).
+empty `Directory.*` shields beside it). History: IssueTracker #175; atelier-store #95's review moved the classifier into a tested script, IssueTracker #188
+took it back, mpaulosky/Application_Factory#125 ported it to C# (ADR 0017), and mpaulosky/Application_Factory#126 retired `detect_changes.py`, which had shipped
+beside it for one Rollout (Apply removes it).
 
 ## Why jobs skip themselves
 
@@ -27,7 +27,7 @@ PR that took about 4 minutes and 17 runner-minutes merges in about 1 minute.
   The script also writes `skip_reason` (`docs-only`, `actions-bump`, or empty), so the Test Suite summary names which
   skip it was rather than calling an Actions bump docs-only (Copilot on TicketManager #113). The rule decides whether required checks run, so it lives in a script with tests,
   not inline shell: Copilot asks for this every time. Its tests are the Factory's: the `detect_changes` parity suite
-  (`tests/parity/detect_changes/`, real git repos, run against the `.py` and the `.cs`) and the xUnit tests in
+  (`tests/parity/detect_changes/`, real git repos, recorded from the `.py` and run against the `.cs`) and the xUnit tests in
   `tests/Scripts.Tests/Template/` that replaced `test_detect_changes.py`, which Apply now removes.
 - **`docs-only` label:** the `docs-label` job (`Docs-only label`) mirrors `code` as the `docs-only` label on every
   same-repo PR, adding it for docs-only and removing it otherwise. Nothing reads it: the diff decides what runs, and the

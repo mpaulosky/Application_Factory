@@ -24,7 +24,6 @@
 // Exit 0 once the output is appended; 2 on a usage error (argparse's, as detect_changes.py gave: --base and --output are required, an option
 // may be given by a unique prefix of its name); 1 when git fails (an unknown base, say: the error names the command, its exit status and
 // what git said) or the output can't be appended. The standard library only; git, found in PATH's absolute folders only, does the rest.
-// detect_changes.py, beside it, is the same script in Python, kept for one Rollout so a revert is one workflow line.
 using Baseline;
 
 return Script.Run((stdout, stderr) => DetectChanges.Run(args, stdout, stderr));

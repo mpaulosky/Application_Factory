@@ -1,0 +1,3 @@
+⚠️  AB is pinned in Directory.Packages.props but no project references it
+⚠️  CD is pinned in Directory.Packages.props but no project references it
+Reported as warnings: a reference this check can't read without evaluating MSBuild ($(P)$(Q)) may name any of the pins above.

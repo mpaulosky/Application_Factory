@@ -1,0 +1,6 @@
+<Project>
+  
+  <ItemGroup>
+<PackageVersion Include="Polly" Version="1.0.0" />
+  </ItemGroup>
+</Project>

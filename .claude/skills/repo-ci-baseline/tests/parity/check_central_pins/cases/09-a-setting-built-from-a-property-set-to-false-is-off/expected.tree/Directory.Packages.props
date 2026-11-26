@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup><CentralPackageTransitivePinningEnabled>$(PinTransitive)</CentralPackageTransitivePinningEnabled><PinTransitive>false</PinTransitive></PropertyGroup>
+  <ItemGroup>
+<PackageVersion Include="Polly" Version="1.0.0" />
+  </ItemGroup>
+</Project>

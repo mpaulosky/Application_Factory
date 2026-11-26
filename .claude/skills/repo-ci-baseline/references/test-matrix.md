@@ -1,9 +1,9 @@
 # Per-project test matrix
 
 Template files (Owned): `ci.yml` (the `discover-tests`, `test` and `coverage` jobs), `.github/scripts/discover_tests.cs` (with `DiscoverTests.cs` and `Gh.cs`),
-`.github/scripts/load_test_env.cs` (with `LoadTestEnv.cs`), `discover_tests.py` and `load_test_env.py`, the same scripts in Python, shipped beside them for one
-Rollout, `global.json`, `.github/ci/coverage-threshold`, and the Seed `.github/ci/prepare.sh`. History: IssueTracker #178; mpaulosky/Application_Factory#162 ported
-the two scripts to C# (ADR 0017 in the Factory).
+`.github/scripts/load_test_env.cs` (with `LoadTestEnv.cs`), `global.json`, `.github/ci/coverage-threshold`, and the Seed `.github/ci/prepare.sh`. History:
+IssueTracker #178; mpaulosky/Application_Factory#162 ported the two scripts to C# (ADR 0017 in the Factory), and mpaulosky/Application_Factory#126 retired
+`discover_tests.py` and `load_test_env.py`, which had shipped beside them for one Rollout (Apply removes them).
 
 ## The rule
 
@@ -34,7 +34,7 @@ The Owned C# scripts in `.github/scripts/` (`detect_changes.cs`, `discover_tests
 project and under no `tests/`, so discovery never lists them and the solution's build never builds them: the gate's C# scripts step and the job that runs one build
 them. Each job builds its script in a step of its own and runs it with `dotnet run --no-build`, so the log, and the gate's captured `--list`, holds only what the
 script prints; the test job builds `load_test_env.cs` in a step without the `TEST_ENV` secret. The parity suites `tests/parity/discover_tests/` and
-`tests/parity/load_test_env/` (run against the `.py` and the `.cs`) and the xUnit tests in `tests/Scripts.Tests/Template/`, which replaced
+`tests/parity/load_test_env/` (recorded from the `.py`, run against the `.cs`) and the xUnit tests in `tests/Scripts.Tests/Template/`, which replaced
 `test_discover_tests.py` and `test_load_test_env.py` (Apply now removes them), are the Factory's. The three
 empty `Directory.*` shields beside them keep the repo's own `Directory.Build.props`, `Directory.Build.targets` and `Directory.Packages.props` (an
 `IsTestProject` rule, central package management, analyzers) out of their build, so a script builds the same in every Application.

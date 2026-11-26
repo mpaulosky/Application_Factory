@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup><CentralPackageTransitivePinningEnabled>$(NotSetAnywhere)</CentralPackageTransitivePinningEnabled></PropertyGroup><PropertyGroup><CentralPackageTransitivePinningEnabled>$(A)$(B)</CentralPackageTransitivePinningEnabled><A>tr</A><B>UE</B></PropertyGroup>
+  <ItemGroup>
+<PackageVersion Include="Polly" Version="1.0.0" />
+  </ItemGroup>
+</Project>

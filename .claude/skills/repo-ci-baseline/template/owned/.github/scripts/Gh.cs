@@ -1,7 +1,7 @@
 // What the C# scripts in .github/scripts/ share (ADR 0017 in the Application Factory): the argument parser (Arguments, held to argparse,
 // which the Python scripts parsed with), Script.Run, which turns an uncaught exception into exit 1 with a message rather than .NET's abort
 // (exit 134), Script.Which, which finds a program in PATH's absolute folders only, and SurrogateEscape, Python's reading of bytes that aren't
-// UTF-8, and Py, Python's str methods the scripts read text with. The gh runner joins it with the first script here that calls gh. In a namespace of its own, so the Factory's test project can
+// UTF-8, Py, Python's str methods the scripts read text with, and PyPath, pathlib's resolve() and sort order. The gh runner joins it with the first script here that calls gh. In a namespace of its own, so the Factory's test project can
 // compile it beside the Factory's own Gh.cs, whose classes have the same names.
 using System.Diagnostics;
 using System.Globalization;
@@ -344,8 +344,49 @@ static class SurrogateEscape
 // Python's str methods the scripts read text with: str.strip(), str.splitlines() and str.lower().
 static class Py
 {
-	// The characters str.isspace() counts: char.IsWhiteSpace's, and the four separators \x1c to \x1f.
-	static bool IsSpace(char c) => char.IsWhiteSpace(c) || c is >= '\x1c' and <= '\x1f';
+	// The characters str.isspace() counts, and Python's \s in a str pattern: char.IsWhiteSpace's, and the four separators \x1c to \x1f.
+	public static bool IsSpace(char c) => char.IsWhiteSpace(c) || c is >= '\x1c' and <= '\x1f';
+
+	// len(): the code points, a surrogate pair being one and a lone surrogate one too.
+	public static int Len(string text)
+	{
+		var length = text.Length;
+		for (var i = 0; i + 1 < text.Length; i++)
+		{
+			if (char.IsSurrogatePair(text[i], text[i + 1]))
+			{
+				length--;
+				i++;
+			}
+		}
+		return length;
+	}
+
+	// text[:count]: the first count code points.
+	public static string Head(string text, int count)
+	{
+		var end = 0;
+		for (var taken = 0; taken < count && end < text.Length; taken++)
+			end += end + 1 < text.Length && char.IsSurrogatePair(text[end], text[end + 1]) ? 2 : 1;
+		return text[..end];
+	}
+
+	// Two strings in Python's order: by code point, so an astral character sorts after U+FFFF (an ordinal sort compares UTF-16 units).
+	public static int CompareCodePoints(string a, string b)
+	{
+		var (x, y) = (a.EnumerateRunes().GetEnumerator(), b.EnumerateRunes().GetEnumerator());
+		while (true)
+		{
+			bool more = x.MoveNext(), other = y.MoveNext();
+			if (!more || !other)
+				return more == other ? 0 : more ? 1 : -1;
+			if (x.Current != y.Current)
+				return x.Current.Value.CompareTo(y.Current.Value);
+		}
+	}
+
+	// sorted() of strings: Python's order above.
+	public static readonly Comparer<string> Order = Comparer<string>.Create((a, b) => CompareCodePoints(a!, b!));
 
 	public static string Strip(string text)
 	{
@@ -378,4 +419,59 @@ static class Py
 
 	// str.lower(): .NET's invariant lowering, one code point at a time, as the Factory's own Py.Lower is.
 	public static string Lower(string text) => text.ToLowerInvariant();
+}
+
+// pathlib's Path.resolve() and its sort, which the scripts that walk a tree share.
+static class PyPath
+{
+	// Path.resolve() of the root: absolute, each symlink on the way followed in turn, as far as the path exists.
+	public static string Resolve(string path)
+	{
+		List<string> pending = [.. (Path.IsPathRooted(path) ? path : Path.Join(Directory.GetCurrentDirectory(), path)).Split('/', StringSplitOptions.RemoveEmptyEntries)];
+		var resolved = "/";
+		var hops = 0;
+		for (var i = 0; i < pending.Count; i++)
+		{
+			if (pending[i] == ".")
+				continue;
+			if (pending[i] == "..")
+			{
+				resolved = Path.GetDirectoryName(resolved) ?? "/";
+				continue;
+			}
+			var next = Path.Join(resolved, pending[i]);
+			string? target;
+			try
+			{
+				target = new FileInfo(next).LinkTarget;
+			}
+			catch (IOException)
+			{
+				target = null;
+			}
+			if (target is null)
+			{
+				resolved = next;
+				continue;
+			}
+			if (++hops > 40)
+				throw new IOException($"Symlink loop from '{next}'");
+			if (target.StartsWith('/'))
+				resolved = "/";
+			pending.InsertRange(i + 1, target.Split('/', StringSplitOptions.RemoveEmptyEntries));
+		}
+		return resolved;
+	}
+
+	// Paths in pathlib's order: by their /-separated parts, each part by code point, so a/x sorts before a-b/x.
+	public static readonly Comparer<string> Order = Comparer<string>.Create((a, b) =>
+	{
+		var (x, y) = (a!.Split('/'), b!.Split('/'));
+		for (var i = 0; i < Math.Min(x.Length, y.Length); i++)
+		{
+			if (Py.CompareCodePoints(x[i], y[i]) is var order and not 0)
+				return order;
+		}
+		return x.Length.CompareTo(y.Length);
+	});
 }

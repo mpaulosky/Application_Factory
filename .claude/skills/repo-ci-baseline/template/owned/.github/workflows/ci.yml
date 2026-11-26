@@ -108,7 +108,6 @@ jobs:
           # detect_changes.cs (its parity suite and tests are in the Application Factory) lists the
           # changed files against the base and appends code=true|false.
           # A Dependabot GitHub Actions bump skips them too (see the script).
-          # detect_changes.py, beside it, is the same script in Python, kept for one Rollout: running it here instead reverts the port.
           dotnet run --no-build --file .github/scripts/detect_changes.cs -- --base "$BASE_SHA" --output "$GITHUB_OUTPUT" \
             --author "$AUTHOR" --head-ref "$HEAD_REF"
 
@@ -255,16 +254,22 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
-      # A central pin no project references holds its package back under transitive pinning, and Dependabot's bumps
-      # don't raise it, so restore would fail with NU1109 (.github/scripts/check_central_pins.py says why and what to do).
-      # It needs only the checkout and the runner's python3, so it runs first and a bad pin fails fast.
-      - name: Check central package pins
-        run: python3 -I .github/scripts/check_central_pins.py --root .
-
       - name: Setup .NET
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           global-json-file: global.json
+
+      # A central pin no project references holds its package back under transitive pinning, and Dependabot's bumps
+      # don't raise it, so restore would fail with NU1109 (.github/scripts/check_central_pins.cs says why and what to do).
+      # A C# file-based app (ADR 0017 in the Application Factory), so it runs once the SDK is set up, before the restore: the
+      # PR's own copy, which runs nothing this job doesn't build and run anyway. Built in a step of its own, then run with
+      # --no-build, so the check's log holds only what it prints.
+      # check_central_pins.py, beside it, is the same script in Python, kept for one Rollout: running it here instead reverts the port.
+      - name: Build the central package pins check
+        run: dotnet build .github/scripts/check_central_pins.cs
+
+      - name: Check central package pins
+        run: dotnet run --no-build --file .github/scripts/check_central_pins.cs -- --root .
 
       - name: Cache NuGet packages
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -309,9 +314,9 @@ jobs:
 
   # Unit tests for the scripts in .github/scripts (the release blog generator,
   # Claude Review's script and the rest), among them the gh check
-  # (check_gh_repo.py), the Owned files check (check_owned_files.py), the
-  # gh-repo job that runs them, the central pins check (check_central_pins.py)
-  # and the Build Solution step that runs it, and ruff over the Template's Python. Deliberately
+  # (check_gh_repo.py), the Owned files check (check_owned_files.py) and the
+  # gh-repo job that runs them, and ruff over the Template's Python (the C#
+  # scripts' tests are the Application Factory's, ADR 0017). Deliberately
   # not a required status check on main's ruleset.
   python-tests:
     name: Python tests
@@ -480,7 +485,6 @@ jobs:
         # Factory) resolves IsTestProject for each project under tests/ and
         # appends the matrix and has_tests. It fails when projects exist but
         # none is a test project, since a skipped matrix would pass "Test Suite".
-        # discover_tests.py, beside it, is the same script in Python, kept for one Rollout: running it here instead reverts the port.
         run: dotnet run --no-build --file .github/scripts/discover_tests.cs -- --output "$GITHUB_OUTPUT"
 
   # Each matrix job restores and builds its own test project. Measured on
@@ -544,7 +548,6 @@ jobs:
       # to the later steps. One fixed secret keeps repo values out of this
       # Owned file. Unset, as on every Dependabot run, it exports nothing, and
       # the fixtures that need a secret fall back to fake settings.
-      # load_test_env.py, beside it, is the same script in Python, kept for one Rollout: running it here instead reverts the port.
       - name: Load test secrets
         env:
           TEST_ENV: ${{ secrets.TEST_ENV }}

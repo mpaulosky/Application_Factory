@@ -1,8 +1,9 @@
 # The discover_tests parity suite
 
-The Template's `.github/scripts/discover_tests.py` through its command line: `tests/parity.test.sh discover_tests [command...]`. The runner's header says what a case holds.
-`test.sh` runs it against the `.py`, its reference while the `.py` ships, and against `discover_tests.cs`, built once first and run with `dotnet run --no-build --file`,
-as ci.yml's Discover Test Projects job and the Template's gate run it. The first case after that build is a cold first run, so its stdout shows the build left nothing there.
+The Template's `.github/scripts/discover_tests.cs` through its command line: `tests/parity.test.sh discover_tests [command...]`. The runner's header says what a case holds.
+The cases were recorded from `discover_tests.py`, which shipped beside the C# for one Rollout and has retired (mpaulosky/Application_Factory#126); the `.cs` is the
+reference now, built once first and run with `dotnet run --no-build --file`, as ci.yml's Discover Test Projects job and the Template's gate run it. The first case
+after that build is a cold first run, so its stdout shows the build left nothing there.
 
 Each case's `tree/` is the repo the script reads: its `tests/` and any `Directory.Build.props` above them. The run's folder is the repo's root (`--root` is left out but in
 cases 09, 33 to 36 and 47 to 49), so `expected.tree/` holds the tree as it was and `out`, the file `--output` names, with the bytes the run appended to it. No case makes a `gh`

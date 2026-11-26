@@ -65,7 +65,7 @@ for repo in "$@"; do
     ceiling) if git rev-parse --show-toplevel > /dev/null 2>&1; then echo "$repo in a repo"; else echo "$repo ok"; fi ;;
     emptydir) mkdir -p left/inner && echo "$repo ok" ;;
     litter) [[ -z "$(ls -A .)" && -z "$(ls -A "$GH_CONFIG_DIR")" ]] && echo "$repo ok" && : > left-here && : > "$GH_CONFIG_DIR/left-here" ;;
-    env) echo "$repo ${CASE_VAR-unset} ${REPOSITORY-unset} ${GITHUB_REPOSITORY-unset} ${ANTHROPIC_API_KEY-unset} ${ANTHROPIC_MODEL-unset}" ;;
+    env) echo "$repo ${CASE_VAR-unset} ${REPOSITORY-unset} ${GITHUB_REPOSITORY-unset} ${ANTHROPIC_API_KEY-unset} ${ANTHROPIC_MODEL-unset} ${GITHUB_ACTIONS-unset}" ;;
     write | write-other)
       [[ ! -e in.txt ]] || cp in.txt copied.txt
       [[ $mode == write ]] && echo "$repo" > out.txt || echo "elsewhere" > out.txt
@@ -214,11 +214,11 @@ runner() {
 runner 2 "no suite named" "name a suite"
 runner 2 "a suite that doesn't exist" "no suite 'other'" other ./stub.sh
 runner 2 "a suite name that could name a path" "'../stub' is not a suite name" ../stub ./stub.sh
-# A suite's reference is github/<suite>.py, else the Template's .github/scripts/<suite>.py.
+# A suite's reference is github/<suite>.py, else the Template's .github/scripts/<suite>.py (the Template's .cs is tested below).
 mkdir -p "$skill/tests/parity/tpl/cases" "$skill/template/owned/.github/scripts"
 new_case c1
 cp -R "$cases/c1" "$skill/tests/parity/tpl/cases/"
-runner 2 "a suite with no script" "no script for suite 'tpl': none of github/tpl.py, github/tpl.cs and template/owned/.github/scripts/tpl.py is a file." tpl
+runner 2 "a suite with no script" "no script for suite 'tpl': none of github/tpl.py, github/tpl.cs, template/owned/.github/scripts/tpl.py and template/owned/.github/scripts/tpl.cs is a file." tpl
 cp "$skill/github/stub.py" "$skill/template/owned/.github/scripts/tpl.py"
 runner 0 "a suite whose script is the Template's" "tpl: 1 case(s) pass against: python3 $skill/template/owned/.github/scripts/tpl.py" tpl
 rm -rf "$skill/tests/parity/tpl" "$skill/template" "$cases/c1"
@@ -258,6 +258,33 @@ rm "$skill/tests/parity/cs/cases/c1"/expected.* "$skill/tests/parity/cs/cases/c2
 (cd "$work" && PATH="$work/dotnet-stub:$PATH" PARITY_RECORD=1 bash "$runner" cs < /dev/null > "$work/out" 2>&1) || fail "record mode from a C# reference failed: $(cat "$work/out")"
 [[ "$(cat "$skill/tests/parity/cs/cases/c1/expected.stdout" 2> /dev/null)" == "o/app ok" ]] || fail "record mode didn't record from the C# reference: $(cat "$work/out")"
 grep -qF "cs: 2 case(s) recorded from dotnet run --no-build --file $skill/github/cs.cs --" "$work/out" || fail "record mode doesn't name the C# reference: $(cat "$work/out")"
+# Once an Owned script's .py has retired, the reference is the Template's .github/scripts/<suite>.cs: built once from the Template's folder,
+# whose global.json picks the SDK, and run from each case's folder, as ci.yml runs it from the Application's checkout, so its cases may
+# hold a tree/. The .py, while it ships, is still the reference.
+mkdir -p "$skill/tests/parity/owned/cases" "$skill/template/owned/.github/scripts"
+: > "$skill/template/owned/.github/scripts/owned.cs"
+new_case c1
+mkdir "$cases/c1/tree"
+echo "in the case" > "$cases/c1/tree/in.txt"
+mkdir "$cases/c1/expected.tree"
+cp "$cases/c1/tree/in.txt" "$cases/c1/expected.tree/"
+cp -R "$cases/c1" "$skill/tests/parity/owned/cases/c1"
+cp -R "$cases/c1" "$skill/tests/parity/owned/cases/c2"
+: > "$work/dotnet.log"
+PATH="$work/dotnet-stub:$PATH" runner 0 "a suite whose script is the Template's .cs" \
+  "owned: 2 case(s) pass against: dotnet run --no-build --file $skill/template/owned/.github/scripts/owned.cs --" owned
+[[ "$(grep -c '|build ' "$work/dotnet.log")" == 1 ]] || fail "the Template's C# reference wasn't built exactly once: $(cat "$work/dotnet.log")"
+grep -qxF "$skill/template/owned|build $skill/template/owned/.github/scripts/owned.cs" "$work/dotnet.log" \
+  || fail "the Template's C# reference wasn't built from the Template's folder: $(cat "$work/dotnet.log")"
+[[ "$(head -1 "$work/dotnet.log")" == *"|build "* ]] || fail "the Template's C# reference was run before it was built: $(cat "$work/dotnet.log")"
+[[ "$(grep '|run ' "$work/dotnet.log" | grep -c "/run/cwd|run --no-build --file $skill/template/owned/.github/scripts/owned.cs -- ")" == 2 ]] \
+  || fail "the Template's C# reference's cases didn't each run from the case's folder: $(cat "$work/dotnet.log")"
+PATH="$work/dotnet-stub:$PATH" STUB_BUILD_FAILS=1 runner 2 "a Template C# reference whose build fails" \
+  "dotnet build $skill/template/owned/.github/scripts/owned.cs failed:" owned
+cp "$skill/github/stub.py" "$skill/template/owned/.github/scripts/owned.py"
+runner 0 "the Template's .py stays the reference while it ships beside the .cs" \
+  "owned: 2 case(s) pass against: python3 $skill/template/owned/.github/scripts/owned.py" owned
+rm -rf "$skill/tests/parity/owned" "$skill/template" "$cases/c1"
 # A C# reference runs from its .cs's folder, so a case of its suite that puts files in its own folder, or expects some there, is refused.
 for file in tree setup.sh expected.tree; do
   if [[ "$file" == *.sh ]]; then : > "$skill/tests/parity/cs/cases/c2/$file"; else mkdir "$skill/tests/parity/cs/cases/c2/$file"; fi
@@ -413,16 +440,21 @@ suite 1 "LF output against a CR in expected.stdout fails" -- ./stub.sh && says "
 
 new_case c1
 printf '%s\n' "CASE_VAR=a value=with=signs" "" > "$cases/c1/env"
-echo "o/app a value=with=signs unset unset unset unset" > "$cases/c1/expected.stdout"
-suite 0 "the case's env is set, and a caller's repository and Anthropic key and model are not passed on" STUB_MODE=env \
-  REPOSITORY=caller/repo GITHUB_REPOSITORY=caller/repo ANTHROPIC_API_KEY=secret ANTHROPIC_MODEL=model -- ./stub.sh || true
+echo "o/app a value=with=signs unset unset unset unset unset" > "$cases/c1/expected.stdout"
+suite 0 "the case's env is set, and a caller's repository, Anthropic key and model and GitHub Actions are not passed on" STUB_MODE=env \
+  REPOSITORY=caller/repo GITHUB_REPOSITORY=caller/repo ANTHROPIC_API_KEY=secret ANTHROPIC_MODEL=model GITHUB_ACTIONS=true -- ./stub.sh || true
+# A case's env sets GITHUB_ACTIONS, so the suite holds a script's output under GitHub Actions too.
+new_case c1
+echo "GITHUB_ACTIONS=true" > "$cases/c1/env"
+echo "o/app unset unset unset unset unset true" > "$cases/c1/expected.stdout"
+suite 0 "a case's env sets GITHUB_ACTIONS" STUB_MODE=env -- ./stub.sh || true
 
 # env.d/ sets a variable to a file's bytes, line breaks, a carriage return and the trailing newline kept, after env's lines.
 new_case c1
 echo "CASE_VAR=from env" > "$cases/c1/env"
 mkdir "$cases/c1/env.d"
 printf 'a\r\nb\n\n' > "$cases/c1/env.d/CASE_VAR"
-printf 'o/app a\r\nb\n\n unset unset unset unset\n' > "$cases/c1/expected.stdout"
+printf 'o/app a\r\nb\n\n unset unset unset unset unset\n' > "$cases/c1/expected.stdout"
 suite 0 "a case's env.d/ file is its variable's value, byte for byte" STUB_MODE=env -- ./stub.sh || true
 broken "an env.d/ that isn't a folder" "c1/env.d is not a folder" touch "$cases/c1/env.d"
 broken "an env.d/ file not named for a variable" "c1/env.d/1-A is not named for a variable" eval "mkdir '$cases/c1/env.d' && touch '$cases/c1/env.d/1-A'"
@@ -485,6 +517,19 @@ suite 0 "record mode writes expected.tree/" PARITY_RECORD=1 STUB_MODE=write || t
 rm -rf "$cases/c1/tree"
 suite 0 "record mode removes expected.tree/ when the run leaves no file" PARITY_RECORD=1 || true
 [[ ! -e "$cases/c1/expected.tree" ]] || fail "record mode kept an expected.tree/ the run no longer leaves"
+
+# A FIFO a case's setup.sh makes, which git can't store, is left out of the comparison and of what record mode writes; the rest is held as ever.
+new_case c1
+printf '%s\n' 'set -euo pipefail' 'mkdir sub' 'mkfifo pipe sub/pipe' ': > sub/kept' > "$cases/c1/setup.sh"
+mkdir -p "$cases/c1/expected.tree/sub"
+: > "$cases/c1/expected.tree/sub/kept"
+suite 0 "a run whose folder holds a FIFO matches an expected.tree/ without it" -- ./stub.sh || true
+rm "$cases/c1/expected.tree/sub/kept"
+suite 1 "a FIFO doesn't hide another difference" -- ./stub.sh && says "a FIFO beside a difference" "Only in"
+rm -rf "$cases/c1/expected.tree"
+suite 0 "record mode leaves a FIFO out of expected.tree/" PARITY_RECORD=1 || true
+[[ "$(cd "$cases/c1/expected.tree" && find . | sort | tr '\n' ' ')" == ". ./sub ./sub/kept " ]] \
+  || fail "record mode wrote a FIFO into expected.tree/: $(cd "$cases/c1/expected.tree" && find . | sort)"
 
 # A symlink the run leaves is compared by its target, not followed: one to nothing, or out of the folder, is held to where it points.
 new_case c1

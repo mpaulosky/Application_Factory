@@ -1,0 +1,2 @@
+ℹ️  Directory.Build.props was skipped: it isn't well-formed MSBuild XML (a DOCTYPE or entity declaration, which an MSBuild file never needs). A reference or property in it wasn't seen.
+Transitive pinning is off in every MSBuild file read (or there is no central package management): no pin found can hold a package back.

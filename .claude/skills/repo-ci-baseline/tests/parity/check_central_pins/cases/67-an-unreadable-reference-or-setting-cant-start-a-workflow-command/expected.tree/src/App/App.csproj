@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup><PackageReference Include="$(X&#10;::add-mask::y&#13;::stop-commands::t)" /></ItemGroup>
+</Project>
