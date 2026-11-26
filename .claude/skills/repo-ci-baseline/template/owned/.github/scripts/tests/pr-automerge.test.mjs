@@ -123,21 +123,23 @@ function copilotReviewsOf(...commits) {
 // { oid, at } was submitted at that time (default: the Nth minute of 2026-01-02).
 // { oid, findings: [bullet, ...] } is an off-diff review whose "Findings outside
 // the diff" section holds those bullets (as post_claude_review.py writes them),
-// and { oid, threads: n } raised n inline threads (comments.totalCount), which
+// { oid, body } is a review with that body, and { oid, threads: n } raised n inline threads (comments.totalCount), which
 // makes the round dirty (mpaulosky/dotfiles#375).
 function claudeReviewsOf(...commits) {
   return {
     nodes: commits.map((commit, index) => {
-      const { oid, merge, marked, offDiff, at, threads, findings } = typeof commit === "string" ? { oid: commit } : commit;
-      const body = marked === false
-        ? "Some other workflow's review."
-        : findings
-          ? CLAUDE_MARKER + "\n" + OFF_DIFF_MARKER + "\n**Claude Review**\n\nSummary.\n\n" +
-            "Findings outside the diff (no thread to resolve, so they hold the merge until the next push gets a fresh review):\n\n" +
-            findings.join("\n")
-          : offDiff
-            ? CLAUDE_MARKER + "\n" + OFF_DIFF_MARKER + "\n**Claude Review**"
-            : CLAUDE_MARKER + "\nNo findings.";
+      const { oid, merge, marked, offDiff, at, threads, findings, body: given } = typeof commit === "string" ? { oid: commit } : commit;
+      const body = given !== undefined
+        ? given
+        : marked === false
+          ? "Some other workflow's review."
+          : findings
+            ? CLAUDE_MARKER + "\n" + OFF_DIFF_MARKER + "\n**Claude Review**\n\nSummary.\n\n" +
+              "Findings outside the diff (no thread to resolve, so they hold the merge until the next push gets a fresh review):\n\n" +
+              findings.join("\n")
+            : offDiff
+              ? CLAUDE_MARKER + "\n" + OFF_DIFF_MARKER + "\n**Claude Review**"
+              : CLAUDE_MARKER + "\nNo findings.";
       const submittedAt = at ?? `2026-01-02T00:${String(index).padStart(2, "0")}:00Z`;
       return {
         id: `claude-${index + 1}`,
@@ -3295,6 +3297,44 @@ test("the exhaustion comment lists the off-diff findings of Claude's review of t
   assert.ok(bullets.some((bullet) => bullet.includes("src/a.py:4") && bullet.includes("A thread too")), bullets.join("\n"));
   assert.equal(bullets.length, 3, bullets.join("\n"));
   assert.ok(!body.includes("second line of the finding") && !body.includes("old/file.py"), body);
+});
+
+// The body post_claude_review.py's build_review writes for the given FINDINGS, every section in it.
+function postedBody(findings) {
+  const scripts = new URL("..", import.meta.url).pathname;
+  const done = spawnSync("python3", ["-I", "-c", [
+    "import json, sys",
+    "sys.path.insert(0, sys.argv[1])",
+    "import post_claude_review as pcr",
+    "report, findings = pcr.parse_findings(sys.argv[2])",
+    "review, _ = pcr.build_review(report, findings, {'src/a.py': {1, 2}}, 'abc123', effort='high (a model), 1 batch')",
+    "print(review['body'], end='')"
+  ].join("\n"), scripts, JSON.stringify(findings)], { encoding: "utf8" });
+  assert.equal(done.status, 0, done.stderr);
+  return done.stdout;
+}
+
+test("offDiffFindings reads exactly the off-diff bullets of a body in post_claude_review.py's layout", async () => {
+  const body = postedBody({
+    overview: "Adds a cache.",
+    changes: ["Adds the cache.", "- Starts like a bullet."],
+    files: [{ path: "src/a.py", description: "The cache." }],
+    advisory: ["A stale comment."],
+    not_reviewed: "- The vendored code.",
+    findings: [
+      { path: "src/a.py", line: 1, body: "**On the diff**\n\nA thread.", severity: "high" },
+      { path: "src/x.py", line: 9, body: "Leaks the handle\n- A second line that looks like a bullet.", severity: "low" },
+      { path: "src/y.py", line: 2, body: "Wrong default" }
+    ]
+  });
+  assert.ok(body.startsWith(CLAUDE_MARKER + "\n" + OFF_DIFF_MARKER + "\n"), body);
+  assert.ok(body.includes("open issue") && body.includes("What changed in this PR") && body.includes("<sub>"), body);
+
+  const claude = claudeReviewsOf(dirty("one"), dirty("two"), { oid: HEAD, body });
+  const pr = readyPr({ copilotReviews: copilotReviewsOf(), claudeReviews: claude, labels: labelled(CLAUDE_LABEL) });
+  const bullets = bulletsOf(exhaustionBody(await evaluate(pr)));
+
+  assert.deepEqual(bullets, ["- `src/x.py:9`: Leaks the handle", "- `src/y.py:2`: Wrong default"]);
 });
 
 test("the exhaustion comment has no bullets when nothing is left open, and ends with the marker naming the head (mpaulosky/dotfiles#375)", async () => {

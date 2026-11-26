@@ -273,6 +273,13 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
   The markers must sit on lines of their own outside a code fence. A PR opened with the owner's token, Sandcastle's included, counts as the owner's.
   A second job runs `post_claude_review.py`, which posts one `COMMENT` review pinned to the head,
   each finding an inline thread, and a finding outside the diff in the body (GitHub rejects a whole review over one such comment).
+  The body reads like Copilot's review: the markers, a headline (`🟡 Changes recommended` with findings, `🟢 No changes recommended` without), the title of
+  the most severe finding, a list of the open issues (a shields.io severity badge, High, Medium or Low, and a link to each thread, High first) and a folded
+  "What changed in this PR" (the summary as it is, or the structured overview, changes and files), then the advisory and unreviewed notes, the findings
+  outside the diff (the last section with bullets) and a `<sub>` footer naming the review effort (`--effort`). The thread links exist only once the review
+  is posted, so the script then edits the body to add them (`PUT` on the review, which fires `pull_request_review` `edited`, which PR Review Submitted ignores);
+  if that fails it warns and the body keeps the titles unlinked. Both bodies carry the same markers and off-diff section. Past GitHub's 65,536-character limit,
+  What changed is left out first, then the open issues past what fits; the markers and the findings outside the diff are never cut.
   A finding at a line its changed file doesn't have is a wrong number, so it goes on the file's nearest diff line instead, as a thread.
   A body finding opens no thread, so the review's body carries a second marker, `<!-- claude-review:off-diff -->`, and this workflow holds the merge
   while that review is Claude's latest of the newest commit it reviewed that covers the head

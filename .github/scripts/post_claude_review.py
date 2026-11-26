@@ -8,7 +8,20 @@ reviewed the PR:
         python3 .github/scripts/post_claude_review.py --repo owner/name --pr 42 --head <sha>
 
 FINDINGS is the review step's structured output: a summary, plus a path,
-line and body for each finding. Claude never holds a write token; this
+line and body for each finding. It may instead, or as well, describe the PR in
+parts, each optional: an overview, changes (strings), files ({path,
+description}), advisory (strings) and not_reviewed, and give each finding a
+severity (high, medium or low). --effort, optional, is free text for the body's
+footer.
+
+The body reads like Copilot's review: a headline (Changes recommended or No
+changes recommended), the title of the most severe finding, the open issues
+(a severity badge and a link to each thread, High first), What changed in this
+PR folded (the summary as it is, then the parts), the advisory and unreviewed
+notes, the findings outside the diff, and a <sub> footer. The thread links
+exist only once the review is posted, so the body is then edited to add them;
+if reading the threads or the edit fails, the step warns and the first body,
+with the titles unlinked, stays. Claude never holds a write token; this
 script, in its own job, is what posts. It posts one COMMENT review pinned to
 the head commit, each finding an inline comment on the new side of the
 diff, so the PR records it the same way it records Copilot's.
@@ -175,23 +188,68 @@ class GitHub:
         return [file for page in json.loads(output) for file in page]
 
     def create_review(self, number, review):
-        subprocess.run(
+        """Posts the review and returns it as GitHub answered (its id among it)."""
+        output = subprocess.run(
             ["gh", "api", "--method", "POST", f"repos/{self.repository}/pulls/{number}/reviews", "--input", "-"],
             input=json.dumps(review),
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        return json.loads(output or "{}")
+
+    def review_comments(self, number, review_id):
+        output = subprocess.run(
+            ["gh", "api", "--paginate", "--slurp",
+             f"repos/{self.repository}/pulls/{number}/reviews/{review_id}/comments?per_page=100"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        return [comment for page in json.loads(output) for comment in page]
+
+    def update_review(self, number, review_id, body):
+        subprocess.run(
+            ["gh", "api", "--method", "PUT", f"repos/{self.repository}/pulls/{number}/reviews/{review_id}", "--input", "-"],
+            input=json.dumps({"body": body}),
             check=True,
             capture_output=True,
             text=True,
         )
 
 
+SEVERITIES = ("high", "medium", "low")
+
+
+def is_strings(value):
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
 def parse_findings(text):
-    """The summary and findings from the review step's JSON, or MalformedFindings."""
+    """The report and findings from the review step's JSON, or MalformedFindings.
+
+    The report is the fields that describe the PR, each optional: today's summary (Markdown, posted
+    as it is), or the structured overview, changes, files, advisory and not_reviewed. An answer
+    needs a summary or an overview. A finding may carry a severity.
+    """
     try:
         data = json.loads(text)
     except json.JSONDecodeError as error:
         raise MalformedFindings(f"not JSON ({error})") from error
-    if not isinstance(data, dict) or not isinstance(data.get("summary"), str):
+    if not isinstance(data, dict) or not (isinstance(data.get("summary"), str) or isinstance(data.get("overview"), str)):
         raise MalformedFindings("no summary string")
+    for key in ("summary", "overview", "not_reviewed"):
+        if key in data and not isinstance(data[key], str):
+            raise MalformedFindings(f"{key} is not a string")
+    for key in ("changes", "advisory"):
+        if key in data and not is_strings(data[key]):
+            raise MalformedFindings(f"{key} is not a list of strings")
+    if "files" in data and not (
+        isinstance(data["files"], list)
+        and all(isinstance(file, dict) and isinstance(file.get("path"), str) and isinstance(file.get("description"), str)
+                for file in data["files"])
+    ):
+        raise MalformedFindings("files is not a list of {path, description} strings")
     findings = data.get("findings")
     if not isinstance(findings, list):
         raise MalformedFindings("findings is not a list")
@@ -203,7 +261,10 @@ def parse_findings(text):
             and isinstance(finding.get("body"), str)
         ):
             raise MalformedFindings(f"finding {index} needs a string path, an integer line and a string body")
-    return data["summary"], findings
+        if "severity" in finding and finding["severity"] not in SEVERITIES:
+            raise MalformedFindings(f"finding {index} has a severity other than high, medium or low")
+    report = {key: data[key] for key in ("summary", "overview", "changes", "files", "advisory", "not_reviewed") if key in data}
+    return report, findings
 
 
 def diff_lines(files):
@@ -225,10 +286,18 @@ def diff_lines(files):
 
 
 def redact(summary, findings):
-    """The summary and findings with credential-shaped text replaced, and how many were replaced."""
+    """The summary and findings with credential-shaped text replaced, and how many were replaced.
+
+    The summary is a string or the report parse_findings returns, whose every string is cleaned
+    (a file's path as a path).
+    """
     count = 0
     def clean(text, scan=redact_credentials):
         nonlocal count
+        if isinstance(text, list):
+            return [clean(item, scan) for item in text]
+        if isinstance(text, dict):
+            return {key: clean(value, redact_path if key == "path" else redact_credentials) for key, value in text.items()}
         text, n = scan(text)
         count += n
         return text
@@ -278,39 +347,184 @@ def vet_suggestions(body):
     return defuse_suggestions(body)
 
 
-def build_review(summary, findings, commentable, head, line_count=lambda path: None):
-    """The review to post: inline comments for findings on the diff, the rest in the body.
+CHANGES_RECOMMENDED = "### 🟡 Changes recommended"
+NO_CHANGES_RECOMMENDED = "### 🟢 No changes recommended"
+OFF_DIFF_HEADER = ("Findings outside the diff (no thread to resolve, so they hold the merge until the next "
+                   "push gets a fresh review):")
+# A shields.io badge for each severity, in Copilot's pill colours (red, amber, blue). GitHub
+# serves the image through its camo proxy, so a reader's browser never contacts shields.io, and
+# the URL carries only the level; the alt text is the level, so the list reads without the image.
+BADGE_COLOURS = {"high": "d1242f", "medium": "bf8700", "low": "0969da"}
+MAX_TITLE = 200
+# GitHub refuses a review body over 65,536 characters. The markers and the findings outside the
+# diff are never cut: What changed goes first, then the open issues past what fits.
+MAX_BODY = 65_536
+WHAT_CHANGED_CUT = "_What changed in this PR was left out to fit GitHub's limit on a review's length._"
+
+
+def badge(severity):
+    """The severity's badge and a space, or nothing for a finding without one."""
+    if severity not in BADGE_COLOURS:
+        return ""
+    level = severity.capitalize()
+    return f"![{level}](https://img.shields.io/badge/{level}-{BADGE_COLOURS[severity]}?style=flat-square) "
+
+
+def title_of(body):
+    """A finding's title: the bold first line Claude starts it with, without the **, else its first line.
+
+    On one line, and at most MAX_TITLE characters.
+    """
+    first = body.strip().split("\n", 1)[0]
+    bold = re.match(r"\s*\*\*(.+?)\*\*", first)
+    title = " ".join((bold.group(1) if bold else first).split())
+    return title if len(title) <= MAX_TITLE else title[: MAX_TITLE - 1].rstrip() + "…"
+
+
+def by_severity(items, severity=lambda item: item.get("severity")):
+    """The items sorted High, Medium, Low, then unrated, keeping their order within each."""
+    rank = {level: index for index, level in enumerate(SEVERITIES)}
+    return sorted(items, key=lambda item: rank.get(severity(item), len(SEVERITIES)))
+
+
+def escape_link_text(text):
+    return re.sub(r"([\\\[\]])", r"\\\1", text)
+
+
+def cell(text):
+    """Text that stays in one cell of a Markdown table."""
+    return " ".join(text.split()).replace("|", "\\|")
+
+
+def bullets(items):
+    """A Markdown list, each item's later lines indented under its bullet."""
+    return "\n".join("- " + item.strip().replace("\n", "\n  ") for item in items)
+
+
+def what_changed(report):
+    """The What changed part: today's summary as it is, then the structured overview, changes and files."""
+    parts = [report.get("summary", "").strip(), report.get("overview", "").strip()]
+    if report.get("changes"):
+        parts.append("**Changes:**\n\n" + bullets(report["changes"]))
+    if report.get("files"):
+        rows = [f"| `{cell(file['path'])}` | {cell(file['description'])} |" for file in report["files"]]
+        parts.append("\n".join(["| File | Description |", "| --- | --- |", *rows]))
+    return "\n\n".join(part for part in parts if part)
+
+
+def place_findings(findings, commentable, line_count=lambda path: None):
+    """The inline comments (with the finding each is for) and the off-diff bullets.
 
     line_count(path) is the file's length at the head, or None if unknown.
     """
-    comments = []
+    threads = []
     off_diff = []
     for finding in findings:
         path, line, body = finding["path"], finding["line"], finding["body"]
         lines = commentable.get(path, ())
         if line in lines:
-            comments.append({"path": path, "line": line, "side": "RIGHT", "body": vet_suggestions(body)})
+            threads.append((finding, {"path": path, "line": line, "side": "RIGHT", "body": vet_suggestions(body)}))
         elif lines and (line < 1 or (length := line_count(path)) is not None and line > length):
             # Not a line of the file: Claude got the number wrong.
             nearest = min(lines, key=lambda n: (abs(n - line), n))
             note = f"_Claude cited line {line}, which isn't a line of this file, so this is on the nearest line in the diff._"
             # A suggestion would replace the nearest line, not the one Claude meant.
-            comments.append({"path": path, "line": nearest, "side": "RIGHT", "body": f"{note}\n\n{defuse_suggestions(body)}"})
+            threads.append((finding, {"path": path, "line": nearest, "side": "RIGHT",
+                                      "body": f"{note}\n\n{defuse_suggestions(body)}"}))
         else:
             # In the review body a suggestion can't be applied, and a body of several
             # paragraphs stays under its bullet when indented.
             indented = defuse_suggestions(body).replace("\n", "\n  ")
             off_diff.append(f"- `{path}:{line}`: {indented}")
+    return threads, off_diff
 
-    parts = ["**Claude Review**", summary.strip()]
-    if not findings:
-        parts.append("No findings.")
-    if off_diff:
-        parts.append("Findings outside the diff (no thread to resolve, so they hold the merge until the next "
-                     "push gets a fresh review):\n\n" + "\n".join(off_diff))
-    body = "\n\n".join(part for part in parts if part)
-    markers = f"{MARKER}\n{OFF_DIFF_MARKER}" if off_diff else MARKER
-    return {"commit_id": head, "event": "COMMENT", "body": f"{markers}\n{body}", "comments": comments}
+
+def render_body(report, findings, threads, off_diff, effort=None, notes=(), links=None):
+    """The review's body in Copilot's layout, within MAX_BODY when the markers and off-diff findings allow.
+
+    links[i] is the URL of threads[i]'s thread, or None; without links the titles aren't linked.
+    """
+    links = links or [None] * len(threads)
+    issues = [f"{badge(finding.get('severity'))}" + (f"[{escape_link_text(title_of(finding['body']))}]({url})" if url
+                                                     else title_of(finding["body"]))
+              for (finding, _), url in by_severity(list(zip(threads, links, strict=True)),
+                                                   lambda pair: pair[0][0].get("severity"))]
+    changed = what_changed(report)
+    footer = f"Claude Review · Review effort: {' '.join(effort.split())}" if effort and effort.strip() else "Claude Review"
+    footer = footer.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    def compose(changed, shown):
+        parts = [CHANGES_RECOMMENDED if findings else NO_CHANGES_RECOMMENDED]
+        if findings:
+            parts.append(title_of(by_severity(findings)[0]["body"]))
+        if issues:
+            count = f"{len(issues)} open issue" + ("" if len(issues) == 1 else "s")
+            listed = "\n".join(f"- {issue}" for issue in issues[:shown])
+            if shown < len(issues):
+                listed += f"\n\n_{len(issues) - shown} more in the threads below, left out to fit GitHub's limit._"
+            parts.append(f"<details open><summary><b>{count}</b></summary>\n\n{listed}\n\n</details>")
+        if changed:
+            parts.append(f"<details><summary><b>What changed in this PR</b></summary>\n\n{changed}\n\n</details>")
+        if report.get("advisory"):
+            parts.append("**Advisory (not blocking)**\n\n" + bullets(report["advisory"]))
+        if report.get("not_reviewed", "").strip():
+            parts.append("**Not reviewed**\n\n" + report["not_reviewed"].strip())
+        parts += notes
+        if off_diff:
+            # The last section with bullets: PR Auto-Merge reads every "- " line after its header as a finding.
+            parts.append(OFF_DIFF_HEADER + "\n\n" + "\n".join(off_diff))
+        parts.append(f"<sub>{footer}</sub>")
+        markers = f"{MARKER}\n{OFF_DIFF_MARKER}" if off_diff else MARKER
+        return f"{markers}\n" + "\n\n".join(parts)
+
+    body = compose(changed, len(issues))
+    if len(body) > MAX_BODY and changed:
+        changed = WHAT_CHANGED_CUT
+        body = compose(changed, len(issues))
+    shown = len(issues)
+    while len(body) > MAX_BODY and shown:
+        shown -= 1
+        body = compose(changed, shown)
+    return body
+
+
+def build_review(report, findings, commentable, head, line_count=lambda path: None, effort=None, notes=()):
+    """The review to post, and its threads: inline comments for findings on the diff, the rest in the body.
+
+    report is what parse_findings returns (a summary string alone is taken as {"summary": ...});
+    line_count(path) is the file's length at the head, or None if unknown; notes are paragraphs
+    for the body, before the findings outside the diff.
+    """
+    if isinstance(report, str):
+        report = {"summary": report}
+    threads, off_diff = place_findings(findings, commentable, line_count)
+    body = render_body(report, findings, threads, off_diff, effort, notes)
+    review = {"commit_id": head, "event": "COMMENT", "body": body, "comments": [comment for _, comment in threads]}
+    return review, lambda links: render_body(report, findings, threads, off_diff, effort, notes, links)
+
+
+def thread_links(comments, posted):
+    """The URL of each comment's thread, from the review's comments as GitHub lists them, or None.
+
+    A comment is matched by its path and body; one left unmatched takes the URL at its place when
+    GitHub lists as many comments as were posted (it lists them in the order they were made).
+    """
+    urls = [c.get("html_url") if isinstance(c, dict) and str(c.get("html_url", "")).startswith("https://") else None
+            for c in posted]
+    by_key = {}
+    for c, url in zip(posted, urls, strict=True):
+        if url and isinstance(c, dict):
+            by_key.setdefault((c.get("path"), c.get("body")), []).append(url)
+    links = []
+    for index, comment in enumerate(comments):
+        matched = by_key.get((comment["path"], comment["body"]))
+        if matched:
+            links.append(matched.pop(0))
+        elif len(posted) == len(comments):
+            links.append(urls[index])
+        else:
+            links.append(None)
+    return links
 
 
 def main(argv=None, gh=None, findings=None):
@@ -318,6 +532,7 @@ def main(argv=None, gh=None, findings=None):
     parser.add_argument("--repo", help="owner/name")
     parser.add_argument("--pr", type=int, help="the PR to review")
     parser.add_argument("--head", help="the head commit Claude reviewed")
+    parser.add_argument("--effort", help="the review effort for the body's footer, such as 'high (claude-sonnet-5-5), 2 batches'")
     args = parser.parse_args(argv)
     if not (args.repo and args.pr and args.head):
         parser.error("--repo, --pr and --head are required to post")
@@ -332,21 +547,33 @@ def main(argv=None, gh=None, findings=None):
               "the job): check the PR and the review job's log, and rotate CLAUDE_CODE_OAUTH_TOKEN.")
         sys.exit(1)
     try:
-        summary, parsed = parse_findings(text)
+        report, parsed = parse_findings(text)
     except MalformedFindings as error:
         print(f"post_claude_review.py: Claude Review's findings are malformed: {error}", file=sys.stderr)
         sys.exit(1)
 
-    summary, parsed, redacted = redact(summary, parsed)
+    report, parsed, redacted = redact(report, parsed)
     # The review job's check redacts first; this counts what it did too.
     redacted += int(os.environ.get("REDACTED") or 0)
-    if redacted:
-        summary += f"\n\n{redacted} credential-shaped string(s) were redacted from this review."
+    notes = [f"{redacted} credential-shaped string(s) were redacted from this review."] if redacted else []
 
     gh = gh or GitHub(args.repo)
-    review = build_review(summary, parsed, diff_lines(gh.pull_files(args.pr)), args.head,
-                          lambda path: gh.line_count(path, args.head))
-    gh.create_review(args.pr, review)
+    review, linked = build_review(report, parsed, diff_lines(gh.pull_files(args.pr)), args.head,
+                                  lambda path: gh.line_count(path, args.head), args.effort, notes)
+    posted = gh.create_review(args.pr, review)
+    if review["comments"]:
+        # The threads' URLs exist only once the review is posted, so the body is edited to link them.
+        # The edit fires pull_request_review "edited", which PR Review Submitted ignores, and the
+        # markers and off-diff findings are the same in both bodies.
+        try:
+            links = thread_links(review["comments"], gh.review_comments(args.pr, posted["id"]))
+            body = linked(links)
+            if any(links) and body != review["body"]:
+                gh.update_review(args.pr, posted["id"], body)
+                review["body"] = body
+        except (subprocess.CalledProcessError, OSError, ValueError, KeyError, TypeError) as error:
+            print(f"::warning::Couldn't link the review's threads from its body ({type(error).__name__}), so it "
+                  "lists their titles without links.")
     in_body = len(parsed) - len(review["comments"])
     print(f"Posted Claude's review of {args.head} on PR #{args.pr}: {len(review['comments'])} inline, {in_body} in the body.")
     if in_body:
