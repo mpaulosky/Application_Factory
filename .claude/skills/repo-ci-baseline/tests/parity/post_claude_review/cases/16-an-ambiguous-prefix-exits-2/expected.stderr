@@ -1,0 +1,3 @@
+^usage: post_claude_review\.(py|cs) \[-h\] \[--repo REPO\] \[--pr PR\] \[--head HEAD\]( \[--effort EFFORT\])?$
+...
+^post_claude_review\.(py|cs): error: ambiguous option: --he(=abc123)? could match --help, --head$

@@ -1,0 +1,1 @@
+[[{"filename": "docs/a b.md", "patch": "@@ -1 +1,2 @@\n+x\fy\n+\u00e9\u2028z"}, {"filename": "logo.png"}, {"filename": "doc.txt", "patch": "@@ -1,2 +1,3 @@\n page one\fpage two\n+added\u0085text\n context"}]]

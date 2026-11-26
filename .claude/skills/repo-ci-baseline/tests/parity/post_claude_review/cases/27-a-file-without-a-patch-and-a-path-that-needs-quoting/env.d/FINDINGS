@@ -1,0 +1,1 @@
+{"summary": "Looked at the diff.", "findings": [{"path": "docs/a b.md", "line": 9, "body": "Off."}, {"path": "logo.png", "line": 1, "body": "Binary."}, {"path": "doc.txt", "line": 3, "body": "On."}]}

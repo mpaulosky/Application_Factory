@@ -1,0 +1,1 @@
+{"summary": "Looked at the diff.", "findings": [{"path": "a.py", "line": 5, "body": "On."}, {"path": "a.py", "line": 1, "body": "Second hunk."}]}

@@ -650,7 +650,7 @@ fake 97 '' "an unknown variable" api graphql -f query="$repo_q" -F owner=o -F na
 [[ "$(cat "$gh_log")" == "UNMATCHED gh api graphql "*"number=7" ]] || fail "fake gh: an unknown variable was answered: $(cat "$gh_log")"
 fake 97 '' "a flag with no value" api graphql -f
 fake 97 '' "a command other than api" pr list && logged "a command other than api" "UNMATCHED gh pr list"
-fake 97 '' "a REST call with more arguments" api repos/o/app --method POST
+fake 97 '' "a REST call with more arguments" api repos/o/app --hostname example.com
 
 # A REST call of any method (-X), with headers (-H) and a body on stdin (--input -): keyed by its method unless GET, logged with its whole
 # argv, and its body as canonical JSON, so two serializations of one body log the same line.
@@ -690,6 +690,19 @@ logged "--input with no jq" "UNMATCHED rest.PATCH.repos_o_app (jq, which a call 
 fake 97 '' "two paths" api repos/o/app repos/o/lib
 fake 97 '' "no path" api -X GET
 fake 97 '' "a method with no fixture" api -X DELETE repos/o/app && logged "a method with no fixture" "UNMATCHED rest.DELETE.repos_o_app"
+# --method is -X's long form, keyed and logged the same way but for the argv it was given.
+fake 0 '{"id":1}' "--method" api --method PATCH repos/o/app --input - <<< '{"a": 1}'
+logged "--method" 'rest.PATCH.repos_o_app gh api --method PATCH repos/o/app --input - <<< "{\"a\":1}"'
+fake 97 '' "--method and -X" api --method PATCH -X PUT repos/o/app
+fake 97 '' "--method with no value" api repos/o/app --method
+# --slurp, with --paginate and without --jq as gh takes it: the fixture is the list of pages it prints, and the argv is logged.
+printf '%s\n' '[[{"filename":"a"}],[{"filename":"b"}]]' > "$gh_dir/rest.repos_o_app_pulls_1_files?per_page=100.json"
+files="repos/o/app/pulls/1/files?per_page=100"
+fake 0 '[[{"filename":"a"}],[{"filename":"b"}]]' "--paginate --slurp" api --paginate --slurp "$files"
+logged "--paginate --slurp" "rest.repos_o_app_pulls_1_files?per_page=100 gh api --paginate --slurp \"$files\""
+fake 97 '' "--slurp without --paginate" api --slurp "$files"
+fake 97 '' "--slurp with --jq" api --paginate --slurp "$files" --jq .
+fake 97 '' "--slurp twice" api --paginate --slurp --slurp "$files"
 
 # A REST call with --paginate and --jq: real jq over the fixture, each result printed as gh prints it, and the whole argv logged.
 printf '%s\n' '[{"n":1,"draft":false,"t":"a\u2028b"},{"n":2,"draft":true,"t":"c"}]' > "$gh_dir/rest.repos_o_app_releases?per_page=100.json"
