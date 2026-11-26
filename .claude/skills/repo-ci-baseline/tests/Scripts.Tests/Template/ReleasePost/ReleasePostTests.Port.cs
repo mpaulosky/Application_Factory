@@ -82,4 +82,18 @@ public sealed partial class ReleasePostTests
 		File.WriteAllBytes(readme, [0xff, (byte)'x']);
 		Assert.Throws<DecoderFallbackException>(() => ReleasePost.UpdateTables(Repo, new FakeGitHub(), tmp, log: new StringWriter()));
 	}
+
+	[Theory(Timeout = 10000)]
+	[InlineData("[")]
+	[InlineData("[\\")] // an escaped first code point
+	public async Task A_malformed_label_of_astral_characters_is_read_without_backtracking(string opener)
+	{
+		// Each surrogate pair could match as one code point or as two lone units, so a label that never closes with "]:" made the match
+		// try every split (exponential in the pairs). The Python reads a code point one way only, and leaves the text as it is.
+		var text = opener + string.Concat(Enumerable.Repeat("\U0001f600", 32)) + "[]: x";
+		var sanitized = await Task.Run(() => ReleasePost.SanitizeMarkdown(text), TestContext.Current.CancellationToken);
+		var rebased = await Task.Run(() => ReleasePost.RebaseReadmeLinks(text), TestContext.Current.CancellationToken);
+		Assert.Equal(text, sanitized);
+		Assert.Equal(text, rebased);
+	}
 }

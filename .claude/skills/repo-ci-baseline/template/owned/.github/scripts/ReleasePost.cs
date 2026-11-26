@@ -972,8 +972,9 @@ static class ReleasePost
 	const string Pair = @"[\uD800-\uDBFF][\uDC00-\uDFFF]";
 	// A reference definition's label and colon, read once its line's containers are skipped. A label with a footnote ID, as in
 	// FootnoteDefinition, is a footnote's, which GitHub and kramdown read as one, not as a link; any other "[^...]" label is a link's. Its
-	// 999 counts code points.
-	static readonly Regex LinkDefinitionLabel = At($@"[ \t]*\[(?!\^[A-Za-z0-9_][A-Za-z0-9_-]*\])((?:{Pair}|[^\[\]\\\n]|\\(?:{Pair}|.)){{1,999}})\]:[ \t]*");
+	// 999 counts code points. Each code point is matched atomically, so a surrogate pair is never retried as two lone units: without that, a
+	// label that doesn't close backtracks through every split of its pairs.
+	static readonly Regex LinkDefinitionLabel = At($@"[ \t]*\[(?!\^[A-Za-z0-9_][A-Za-z0-9_-]*\])((?>{Pair}|[^\[\]\\\n]|\\(?>{Pair}|.)){{1,999}})\]:[ \t]*");
 	// What may follow a definition's destination: a title, on its line or the next, then nothing on the title's last line. A title may hold
 	// line endings, but not a blank line. A backslash before one is a literal backslash.
 	const string LinkTitleLineEnding = @"\\?\r?\n(?![ \t>]*\r?$)";
