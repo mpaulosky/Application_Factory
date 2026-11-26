@@ -1,22 +1,16 @@
-"""release_post.py's output, and its C# port's, checked against the renderers that publish it, not against its own model of Markdown.
+"""release_post's output, through its C# (ReleasePost.cs), checked against the renderers that publish it, not against its own model of Markdown.
 
 Each case is a grid: every container prefix with every tricky body. The
 scanner's unit tests pin the cases someone thought of; these catch the shape
 nobody did, as Copilot found one per review round on the last re-Apply.
-Both implementations run the grid, and the C# must write what the Python
-writes; the cut-over (mpaulosky/Application_Factory#128) drops the Python
-(ADR 0017's Update for mpaulosky/Application_Factory#164).
+The grid ran against release_post.py and the C# until the cut-over
+(mpaulosky/Application_Factory#128), which left the C# alone to judge
+(ADR 0017's Updates for mpaulosky/Application_Factory#164 and #128).
 """
-
-import sys
-from pathlib import Path
 
 import pytest
 
 from renderers import cmark, kramdown, read, release_post_cs
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "template/owned/.github/scripts"))
-import release_post as rp  # noqa: E402
 
 SHA = "abc1234"
 
@@ -70,27 +64,16 @@ README_BODIES = [
 README_CASES = [first + body.format(c=later) + "\n" for first, later in README_CONTAINERS for body in README_BODIES]
 
 
-IMPLEMENTATIONS = ["release_post.py", "ReleasePost.cs"]
+@pytest.fixture(scope="module")
+def outputs():
+    """ReleasePost.cs's Commits section for every commit case and rebased text for every README case."""
+    commits = [[{"sha": SHA + "def", "commit": {"message": case}}] for case in COMMIT_CASES]
+    return release_post_cs(commits, README_CASES)
 
 
 @pytest.fixture(scope="module")
-def outputs():
-    """Each implementation's Commits section for every commit case and rebased text for every README case."""
-    commits = [[{"sha": SHA + "def", "commit": {"message": case}}] for case in COMMIT_CASES]
-    python = [rp.render_commits(commit) for commit in commits], [rp.rebase_readme_links(case) for case in README_CASES]
-    return {"release_post.py": python, "ReleasePost.cs": release_post_cs(commits, README_CASES)}
-
-
-def test_the_csharp_port_writes_what_the_python_writes(outputs):
-    python, csharp = outputs["release_post.py"], outputs["ReleasePost.cs"]
-    cases = [*COMMIT_CASES, *README_CASES]
-    differ = [repr(case) for case, py, cs in zip(cases, [*python[0], *python[1]], [*csharp[0], *csharp[1]], strict=True) if py != cs]
-    assert not differ, f"ReleasePost.cs writes {len(differ)} case(s) apart from release_post.py: {', '.join(differ)}"
-
-
-@pytest.fixture(scope="module", params=IMPLEMENTATIONS)
-def commit_lines(request, outputs):
-    return outputs[request.param][0]
+def commit_lines(outputs):
+    return outputs[0]
 
 
 @pytest.fixture(scope="module", params=[cmark, kramdown], ids=["cmark-gfm", "kramdown"])
@@ -118,9 +101,9 @@ def test_no_commit_holds_a_script_link(rendered_commits, index):
     assert not [href for href in hrefs if href.startswith(("javascript:", "vbscript:", "data:"))]
 
 
-@pytest.fixture(scope="module", params=IMPLEMENTATIONS)
-def rendered_readmes(request, outputs):
-    return cmark(README_CASES), cmark(outputs[request.param][1])
+@pytest.fixture(scope="module")
+def rendered_readmes(outputs):
+    return cmark(README_CASES), cmark(outputs[1])
 
 
 @pytest.mark.parametrize("index", range(len(README_CASES)), ids=[repr(case) for case in README_CASES])

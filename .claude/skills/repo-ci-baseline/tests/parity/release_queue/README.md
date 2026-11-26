@@ -1,6 +1,7 @@
 # The release_queue parity suite
 
 The Template's `.github/scripts/release_queue.py` through its command line: `tests/parity.test.sh release_queue [command...]`. The runner's header says what a case holds.
+The cases were recorded from the `.py` and pass against `release_queue.cs` too, which `test.sh` runs them against while the `.py` ships beside it.
 
 Each case but the usage errors (13 to 15) has a `setup.sh` that builds main's history in the run's folder, one empty commit per merge with the Release tags on theirs, and a local bare origin. Its commits
 get the same hashes on every run, and the `gh` fixtures' `merge_commit_sha` names them. Cases 04 to 08 push one merge to origin after the checkout, so the queue
@@ -22,5 +23,5 @@ Python's `int()` reads as 5.
 
 Not covered, on purpose:
 
-- The other exits 1: a `git` failure, and a merge commit missing from the fetched main. The unit tests in the Template's `.github/scripts/tests/` cover the
+- The other exits 1: a `git` failure, and a merge commit missing from the fetched main. The unit tests in `tests/Scripts.Tests/Template/ReleaseQueue/` cover the
   missing merge commit.

@@ -1,10 +1,14 @@
 # Serialized releases
 
-Template files (Owned): `.github/workflows/release.yml`, `backfill-blog-posts.yml`, and `.github/scripts/`
-(`release_queue.py`, `draft_release.cs` with `DraftRelease.cs` and `Gh.cs`, `release_post.py`, `backfill_blog_posts.py`) with the Python's tests under
-`.github/scripts/tests/`; `draft_release.cs`'s are the Factory's (`tests/Scripts.Tests/Template/DraftRelease/` and the `draft_release` parity suite), and
-`draft_release.py`, the same script in Python, ships beside it for one Rollout (ADR 0017 in the Factory, mpaulosky/Application_Factory#163). History:
-IssueTracker #172, with the fixes from atelier-store #90's review (IssueTracker #184).
+Template files (Owned): `.github/workflows/release.yml`, `backfill-blog-posts.yml`, and `.github/scripts/`: the C# file-based apps
+`release_queue.cs` (with `ReleaseQueue.cs`), `draft_release.cs` (with `DraftRelease.cs`), `release_post.cs` (with `ReleasePost.cs` and
+`HtmlEntities.cs`) and `backfill_blog_posts.cs` (with `BackfillBlogPosts.cs`), each with `Gh.cs`, and the first three's logic shared through
+`ReleasePost.cs`. Their tests are the Factory's: `tests/Scripts.Tests/Template/` and the parity suites (ADR 0017 in the Factory). Each workflow
+job that runs one sets up .NET from `global.json`, builds it in a step of its own and runs it with `dotnet run --no-build --file`, so a captured
+stdout (`PRS=$(...)`, `BODY=$(...)`) is the script's output alone even on a cold build, and the build's output stays outside the checkout.
+`release_queue.py`, `draft_release.py`, `release_post.py` and `backfill_blog_posts.py`, the same scripts in Python, ship beside them for one
+Rollout (mpaulosky/Application_Factory#163 and #128); running one in a workflow instead reverts its port. History: IssueTracker #172, with the
+fixes from atelier-store #90's review (IssueTracker #184).
 
 ## What it guarantees
 
@@ -26,7 +30,7 @@ releases. That's why each run releases everything owed, not just its own PR. A r
 closing, a dispatch from a branch) gets `release-ignored-<run id>`, so it can't replace a pending release run and then
 do nothing. The group expression repeats the `plan` job's `if`; keep the two in step.
 
-**`plan` job** (read-only) runs `release_queue.py --repo <repo> --pr <trigger>` and outputs a JSON list:
+**`plan` job** (read-only) runs `release_queue.cs --repo <repo> --pr <trigger>` and outputs a JSON list:
 
 - **Cutoff:** the newest *published* GitHub Release, meaning a `vX.Y.Z` tag with a `Source PR: #n` line, highest by
   version. Never the newest git tag: a run that pushed its tag and then failed before creating the Release would
@@ -58,7 +62,7 @@ caught; every parser must agree on which markers count.
   Release*. A tag alone isn't enough. If one is missing, fail, and the next run releases both in order.
 
 **`docs` job** (`needs: [plan, release]`, `if: always() && needs.plan.result == 'success'`) runs
-`backfill_blog_posts.py`, which writes a post for every Release that `main` has no post for, then rebuilds the README
+`backfill_blog_posts.cs`, which writes a post for every Release that `main` has no post for, then rebuilds the README
 and blog tables once. It then force-pushes the result to a single branch, `docs/release-notes`, and creates or updates
 one PR titled `docs: Add release blog for PR #N [skip-release]` (`release blogs for PR #A, #B` when a run covers
 several), with auto-merge enabled. A still-open blog PR gets folded into the next run's PR instead of conflicting with
@@ -80,7 +84,7 @@ else syncs it. The docs job then opens `docs: Refresh release tables and docs/RE
 nothing to change leaves the tree clean, so no PR.
 
 **Untrusted text.** A post is built from the PR title, description and commit subjects, the AI summary and file names,
-and GitHub Pages publishes it through Jekyll and kramdown, so `release_post.py` makes each one safe first
+and GitHub Pages publishes it through Jekyll and kramdown, so `release_post` makes each one safe first
 (mpaulosky/dotfiles#48, from Copilot's review of Articles#280):
 
 - **HTML:** every `<` outside code becomes `&lt;`, except `<https://…>`, `<http://…>` and `<mailto:…>` autolinks. HTML
@@ -137,22 +141,23 @@ Template) renders a grid of container prefixes and tricky bodies with the two re
 cmark-gfm (GitHub, the README) and kramdown's GFM parser (GitHub Pages, the posts), at the github-pages gem's versions.
 Every commit must stay visible, with no stray backslash, and every `docs/README.md` link must be the README's, one
 directory up, with the text unchanged. Add a shape to its grid whenever a review finds one. Run against the
-`release_post.py` from before #80 and #79, it fails 110 and 130 cases. The grid runs against both `release_post.py` and its C#
-port, `.github/scripts/ReleasePost.cs` (through `tests/render_oracle/release_post.cs`), and the C# must write what the Python
-writes, case for case; the cut-over drops the Python (ADR 0017's Update for mpaulosky/Application_Factory#164).
+`release_post.py` from before #80 and #79, it fails 110 and 130 cases. The grid judges `.github/scripts/ReleasePost.cs` (through
+`tests/render_oracle/release_post.cs`); it judged `release_post.py` too, and held the C# to it case for case, until the cut-over
+(ADR 0017's Updates for mpaulosky/Application_Factory#164 and #128).
 
 **The C# port.** `ReleasePost.cs` holds `release_post.py`'s logic, a method for each function, with `HtmlEntities.cs`
-(`html.unescape()`'s HTML5 names) beside it; `tests/Scripts.Tests/Template/ReleasePost/` copies `test_release_post.py`'s
-tests. Nothing runs it yet: its entry file, `release_post.cs`, exits 2 saying the `.py` still runs. Until the cut-over, a
-change to `release_post.py`'s logic changes `ReleasePost.cs` and its xUnit copy in the same pull request.
+(`html.unescape()`'s HTML5 names) beside it; `ReleaseQueue.cs` and `BackfillBlogPosts.cs` hold `release_queue.py`'s and
+`backfill_blog_posts.py`'s on it. `tests/Scripts.Tests/Template/` holds the pytest files' tests, one method each, in `ReleasePost/`,
+`ReleaseQueue/` and `BackfillBlogPosts/`, and the pytest files are retired (`retired.txt`). While the `.py` files ship, a change to one's
+logic changes its C# in the same pull request, and its parity suite holds the two together.
 
 **Parity suites.** `tests/parity.test.sh <suite> [command...]` (in the skill, not the Template) runs `release_queue`, `draft_release`,
-`release_post` and `backfill_blog_posts` through their command lines only, so the same cases judge a port of them (ADR 0017)
+`release_post` and `backfill_blog_posts` through their command lines only, so the same cases judge the C# (ADR 0017)
 against the Python. A case holds the arguments, stdin, environment, the files the run starts with and the fake `gh`'s
 fixtures, and for `release_queue` a `setup.sh` that builds main's history with a local origin. The case then checks stdout, the exit code,
 the shape of stderr, the `gh` calls, and every file the run leaves (`expected.tree/`), byte for byte. The fake runs real jq over the fixture for
 a REST call's `--jq` and prints each result as gh does. A case with a `setup.sh` needs git 2.32 or later. `test.sh` runs them against the Python, and
-`draft_release`'s against `draft_release.cs` too, built once and run with `dotnet run --no-build --file`, as the release job runs it after its Setup .NET.
+against each `.cs` too, built once and run with `dotnet run --no-build --file`, as the workflows run it after their Setup .NET.
 Each suite's `tests/parity/<suite>/README.md` says what its cases leave out:
 the Anthropic call, the half-minute `--wait-for-prs` limit and the "today" fallback for a PR with no merge time are left to unit tests.
 
@@ -163,21 +168,21 @@ approval. The blog PR's lookups and its `docs-only` label use `GITHUB_TOKEN`, wh
 
 ## Adapting
 
-- Check which Releases lack a post *before* the Standardize PR merges (`backfill_blog_posts.select_releases` with the
+- Check which Releases lack a post *before* the Standardize PR merges (`BackfillBlogPosts.SelectReleases` with the
   repo's releases and `docs/blogs`). The docs job writes every missing one on its first run. If there are old ones, run
   the repo's "Backfill blog posts" workflow first (`gh workflow run backfill-blog-posts.yml --ref main`), so they
   arrive in a deliberate PR. atelier-store had 8 from before its blog automation.
-- A post counts only when its file name has `-pr-<n>-` (`posts_for_pr`), and it is PR n's only when that is the name's first `-pr-…-`:
+- A post counts only when its file name has `-pr-<n>-` (`PostsForPr`), and it is PR n's only when that is the name's first `-pr-…-`:
   `2026-01-02-pr-7-revert-pr-4-changes.md` is PR 7's, so a re-run for PR 4 neither removes it nor links to it. Posts named another way (IssueManager's `<date>-release-vX.md`)
   look missing, and the first run writes a second post for each. Rename them to `<date>-pr-<n>-release-vX.md`, taking `<n>` from each
   Release's `Source PR` line, and update the links to them.
-- A `docs/index.html` Pages site needs the `RELEASES_HTML_START`/`END` and `BLOGS_HTML_START`/`END` markers that `update_tables` fills;
-  without them `test_release_post.py` fails on the repo's own page. `update_index_html` only replaces what's between existing markers, so
+- A `docs/index.html` Pages site needs the `RELEASES_HTML_START`/`END` and `BLOGS_HTML_START`/`END` markers that `UpdateTables` fills;
+  without them the docs job leaves that table alone, with a notice. `UpdateIndexHtml` only replaces what's between existing markers, so
   add both pairs by hand (empty), with styles for the generated post cards (`post-grid`, `post-card`, …), then fill them once with
-  `update_index_html`. Drop any script that rebuilt the tables in the browser.
-- A repo's `release_post.py` is Owned now. A fix it carries that the Template lacks shows up as drift: move it into
+  a backfill run (`release_post.cs` for one Release, or the "Backfill blog posts" workflow). Drop any script that rebuilt the tables in the browser.
+- A repo's release scripts are Owned now. A fix it carries that the Template lacks shows up as drift: move it into
   the Template first.
-- Dry-run the planner against the real repo before pushing: `python3 .github/scripts/release_queue.py --repo
+- Dry-run the planner against the real repo before pushing: `dotnet run --file .github/scripts/release_queue.cs -- --repo
   <owner/name> --pr <last merged PR>`. It must print `[]` and name the newest Release as the cutoff. Any other result
   means the switch would release something unexpected.
 - Create the `semver:minor` and `semver:major` labels if they're missing ([gotchas.md](gotchas.md#repo-drift)).

@@ -1,9 +1,9 @@
-"""The two renderers a release post and the docs/README.md copy meet, as test oracles, and the C# port they judge.
+"""The two renderers a release post and the docs/README.md copy meet, as test oracles, and the C# they judge.
 
 GitHub renders Markdown with cmark-gfm; GitHub Pages publishes the posts with
 kramdown's GFM parser. Each function renders a list of documents in one call.
 release_post_cs runs the Template's ReleasePost.cs through release_post.cs
-beside this file (ADR 0017's Update for mpaulosky/Application_Factory#164).
+beside this file (ADR 0017's Updates for mpaulosky/Application_Factory#164 and #128).
 """
 
 import json

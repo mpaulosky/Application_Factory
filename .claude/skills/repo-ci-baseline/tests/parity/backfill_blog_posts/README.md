@@ -2,7 +2,8 @@
 
 The Template's `.github/scripts/backfill_blog_posts.py` through its command line: `tests/parity.test.sh backfill_blog_posts [command...]`. The runner's header
 says what a case holds. It writes its posts with `release_post.py`, whose own suite covers what a post holds; these cases cover which posts are written, and
-the tables refreshed once after them.
+the tables refreshed once after them. The cases were recorded from the `.py` and pass against `backfill_blog_posts.cs` too, which `test.sh` runs them against
+while the `.py` ships beside it.
 
 The cases cover the missing posts written oldest first, every release with a post (the tables only), `--regenerate` (`" TRUE "` is true, `yes` isn't),
 `--pr-numbers` with `#`, spaces and an empty part, an unmarked Release (skipped with a notice) and a draft (not listed), `--wait-for-prs` listed at once and on the

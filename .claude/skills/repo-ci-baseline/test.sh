@@ -6,7 +6,7 @@
 #
 # Runs the Template's own tests (hook suites, auto-merge script tests,
 # the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle, the parity suites
-# (status, land, settings, check_gh_repo, the release scripts, draft_release as .py and .cs, detect_changes, discover_tests, load_test_env, check_central_pins and rollout), the Claude Review benchmark's --rescore parity suite and
+# (status, land, settings, check_gh_repo, the release scripts and draft_release as .py and .cs, detect_changes, discover_tests, load_test_env, check_central_pins and rollout), the Claude Review benchmark's --rescore parity suite and
 # the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land, settings, rollout and its AutoRollout libraries,
 # what they share, the two checkers in tests/ and the benchmark), lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
@@ -745,9 +745,9 @@ if in_shard scripts; then
   (cd "$skill_dir/tests" && "${pytest_cmd[@]}" -q -p no:cacheprovider hardening) || fail "hardening pytest"
 
   step "Renderer oracle"
-  # release_post.py's output, and ReleasePost.cs's through tests/render_oracle/release_post.cs, rendered by cmark-gfm (GitHub)
-  # and kramdown (GitHub Pages); kramdown runs from a local Ruby with its pinned gems, else Docker. The C# must write what the
-  # Python writes, case for case (ADR 0017's Update for mpaulosky/Application_Factory#164).
+  # ReleasePost.cs's output, through tests/render_oracle/release_post.cs, rendered by cmark-gfm (GitHub) and kramdown (GitHub
+  # Pages); kramdown runs from a local Ruby with its pinned gems, else Docker. The C# alone since the cut-over (ADR 0017's Updates
+  # for mpaulosky/Application_Factory#164 and #128).
   need dotnet
   if python3 -c 'import cmarkgfm, pytest' &> /dev/null; then
     oracle_cmd=(python3 -m pytest)
@@ -757,7 +757,7 @@ if in_shard scripts; then
   fi
   (cd "$skill_dir/tests/render_oracle" && "${oracle_cmd[@]}" -q -p no:cacheprovider .) || fail "renderer oracle"
 
-  step "Parity suites (status.cs, land.cs, settings.cs, check_gh_repo.py, the release scripts, draft_release as .py and .cs, detect_changes.cs, discover_tests.cs, load_test_env.cs, check_central_pins.cs, and rollout.sh through their command lines, against a fake gh) and their runners' tests"
+  step "Parity suites (status.cs, land.cs, settings.cs, check_gh_repo.py, the release scripts and draft_release as .py and .cs, detect_changes.cs, discover_tests.cs, load_test_env.cs, check_central_pins.cs, and rollout.sh through their command lines, against a fake gh) and their runners' tests"
   # The fake gh runs jq for a REST call's --jq, which the release scripts' suites make, and for a REST call's --input body, which the
   # settings suite's make. The status, land and settings suites' reference is the C# (github/status.cs, github/land.cs, github/settings.cs),
   # which the runner builds once before its cases (ADR 0017); the settings suite runs against github-settings.sh below too.
@@ -790,9 +790,16 @@ if in_shard scripts; then
   # folder, whose global.json picks the SDK, then run as ci.yml runs it, with dotnet run --no-build --file. An entry file with no suite fails.
   # Once its .py has retired the .cs is the suite's reference, which the loop above ran, so it isn't run again.
   # An entry file in library_first landed ahead of its cut-over (ADR 0017's library first): it only says the .py still runs, and exits 2,
-  # so it isn't run against its suite; it must still do just that, and its .py must still be there. Its cut-over takes it off the list.
-  library_first=(release_post)
+  # so it isn't run against its suite; it must still do just that, and its .py must still be there. Its cut-over takes it off the list,
+  # as mpaulosky/Application_Factory#128 took release_post off it.
+  library_first=()
   owned_entries=0
+  # A workflow builds an entry file in the Application's checkout and then reads git status (release.yml's docs job and
+  # backfill-blog-posts.yml commit what it lists), so a build must write nothing under .github/: a file-based app's output is under
+  # the temporary folder. Anything newer than this marker after the builds, a folder a build made a file in among them, fails.
+  build_marker="$md_tmp/owned-cs-build.marker"
+  touch "$build_marker"
+  sleep 1
   for owned_cs in "$owned"/.github/scripts/*.cs; do
     [[ -f "$owned_cs" ]] && IFS= read -r first_line < "$owned_cs" && [[ "$first_line" == '#:'* ]] || continue
     owned_entries=$((owned_entries + 1))
@@ -814,11 +821,13 @@ if in_shard scripts; then
     fi
     bash "$skill_dir/tests/parity.test.sh" "$suite" dotnet run --no-build --file "$owned_cs" -- || fail "parity.test.sh $suite against $suite.cs"
   done
+  built_files="$(find "$owned/.github" -newer "$build_marker" -print)"
+  [[ -z "$built_files" ]] || fail "building the Owned entry files wrote into the Template's .github/, which a workflow's git status would list: $built_files"
   for suite in "${library_first[@]}"; do
     [[ -f "$owned/.github/scripts/$suite.cs" && -f "$owned/.github/scripts/$suite.py" ]] \
       || fail "library_first names $suite, but the Template ships no $suite.cs beside a $suite.py: take it off the list at the cut-over"
   done
-  ((owned_entries >= 6)) || fail "found $owned_entries Owned C# script(s) in template/owned/.github/scripts/, expected detect_changes.cs, discover_tests.cs, load_test_env.cs, check_central_pins.cs, draft_release.cs and release_post.cs at least"
+  ((owned_entries >= 8)) || fail "found $owned_entries Owned C# script(s) in template/owned/.github/scripts/, expected detect_changes.cs, discover_tests.cs, load_test_env.cs, check_central_pins.cs, draft_release.cs, release_post.cs, release_queue.cs and backfill_blog_posts.cs at least"
   # status.sh and land.sh run their C# from its own folder, so a global.json in the caller's folder that pins an SDK nobody has installed
   # changes nothing: the status suite passes against status.sh with one above every case's folder (the runner's TMPDIR), and land.sh
   # answers --help from such a folder. dotnet itself fails there, which shows the global.json is read.

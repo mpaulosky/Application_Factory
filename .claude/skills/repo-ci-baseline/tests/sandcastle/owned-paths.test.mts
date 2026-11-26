@@ -287,6 +287,7 @@ const EXEMPT_GLOBS_AUDITED: Readonly<Record<string, GlobEntry>> = {
       ".github/hooks/tests/pre-push.test.sh",
     ], why: "the bash hook tests and shellcheck run over them; they run on the host, so a new hook is a decision" },
   ".github/scripts/**": { files: [
+      ".github/scripts/BackfillBlogPosts.cs",
       ".github/scripts/CheckCentralPins.cs",
       ".github/scripts/DetectChanges.cs",
       ".github/scripts/Directory.Build.props",
@@ -298,6 +299,8 @@ const EXEMPT_GLOBS_AUDITED: Readonly<Record<string, GlobEntry>> = {
       ".github/scripts/HtmlEntities.cs",
       ".github/scripts/LoadTestEnv.cs",
       ".github/scripts/ReleasePost.cs",
+      ".github/scripts/ReleaseQueue.cs",
+      ".github/scripts/backfill_blog_posts.cs",
       ".github/scripts/backfill_blog_posts.py",
       ".github/scripts/check_central_pins.cs",
       ".github/scripts/check_gh_repo.py",
@@ -310,11 +313,11 @@ const EXEMPT_GLOBS_AUDITED: Readonly<Record<string, GlobEntry>> = {
       ".github/scripts/post_claude_review.py",
       ".github/scripts/release_post.cs",
       ".github/scripts/release_post.py",
+      ".github/scripts/release_queue.cs",
       ".github/scripts/release_queue.py",
       ".github/scripts/requirements-tests.txt",
       ".github/scripts/tests/conftest.py",
       ".github/scripts/tests/pr-automerge.test.mjs",
-      ".github/scripts/tests/test_backfill_blog_posts.py",
       ".github/scripts/tests/test_check_gh_repo.py",
       ".github/scripts/tests/test_check_owned_files.py",
       ".github/scripts/tests/test_ci_gh_repo_job.py",
@@ -326,8 +329,6 @@ const EXEMPT_GLOBS_AUDITED: Readonly<Record<string, GlobEntry>> = {
       ".github/scripts/tests/test_pat_calls.py",
       ".github/scripts/tests/test_post_claude_review.py",
       ".github/scripts/tests/test_pr_automerge_triggers.py",
-      ".github/scripts/tests/test_release_post.py",
-      ".github/scripts/tests/test_release_queue.py",
     ], why: "pytest, node --test and the Factory's parity suites and xUnit tests run over them; they run in CI with tokens, so a new script is a decision. " +
       "requirements-tests.txt runs nothing: it is the python-tests job's pin list, which test.sh holds to exact, hashed pins installed as wheels only. " +
       "The three Directory.* shields are empty, and the Owned files check holds them so: they keep the repo's own Directory.* files out of the C# scripts' build" },

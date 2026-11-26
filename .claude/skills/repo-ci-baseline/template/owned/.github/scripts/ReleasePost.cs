@@ -1,6 +1,5 @@
-// release_post.py's logic in C#, landed ahead of its cut-over (ADR 0017's library first, in the Application Factory): release.yml and
-// backfill-blog-posts.yml still run the .py, and nothing runs this yet. release_post.cs is its entry file. Its contract is release_post.py's
-// docstring until the cut-over gives release_post.cs one.
+// release_post.py's logic in C# (ADR 0017 in the Application Factory). release_post.cs is its entry file, and its header the contract;
+// backfill_blog_posts.cs writes its posts and tables through it, and release_queue.cs reads the Releases with it.
 //
 // It writes the release blog post for a merged PR (docs/blogs/{merged-date}-pr-{n}-{slug}.md), the docs/blogs/README.md index, the
 // RELEASES_START/END table in README.md (copied to docs/README.md with its relative links rebased), and in the GitHub Pages site
@@ -230,14 +229,8 @@ static class ReleasePost
 		}
 	}
 
-	// int() of decimal digits, any Unicode decimal digit among them.
-	static BigInteger ParseInt(string digits)
-	{
-		BigInteger value = 0;
-		foreach (var c in digits)
-			value = value * 10 + (int)char.GetNumericValue(c);
-		return value;
-	}
+	// int() of a run of decimal digits, any Unicode decimal digit among them, astral ones too; past int()'s 4,300 digits, its ValueError.
+	static BigInteger ParseInt(string digits) => Py.Int(digits) ?? throw new FormatException($"int() refused the digits {Py.Repr(digits)}");
 
 	// The text with CRLF and CR as LF, as Python reads text in universal newlines mode.
 	public static string Universal(string text) => text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
@@ -274,13 +267,13 @@ static class ReleasePost
 	static string Join(string folder, string name) => folder == "." ? name : folder.EndsWith('/') ? folder + name : folder + "/" + name;
 
 	// The value at key in a dict, or null when there's no such key (or the value isn't a dict).
-	static JsonNode? Get(JsonNode? node, string key) => node is JsonObject obj && obj.TryGetPropertyValue(key, out var value) ? value : null;
+	public static JsonNode? Get(JsonNode? node, string key) => node is JsonObject obj && obj.TryGetPropertyValue(key, out var value) ? value : null;
 
 	// A value used as a string: a JSON string, else null (None, and what "or" would skip).
-	static string? Text(JsonNode? node) => node is JsonValue value && value.GetValueKind() == JsonValueKind.String ? value.GetValue<string>() : null;
+	public static string? Text(JsonNode? node) => node is JsonValue value && value.GetValueKind() == JsonValueKind.String ? value.GetValue<string>() : null;
 
 	// str() of a JSON value, as an f-string writes it.
-	static string Str(JsonNode? node) => node switch
+	public static string Str(JsonNode? node) => node switch
 	{
 		null => "None",
 		JsonValue value when value.GetValueKind() == JsonValueKind.String => value.GetValue<string>(),
@@ -296,12 +289,25 @@ static class ReleasePost
 		return slug.Length > 0 ? slug : "pr-update";
 	}
 
-	static readonly Regex Version = At(@"v?(\d+)\.(\d+)\.(\d+)");
-
-	public static (BigInteger, BigInteger, BigInteger) VersionKey(string? tag) =>
-			Match(Version, tag ?? "") is { } version
-					? (ParseInt(version.Groups[1].Value), ParseInt(version.Groups[2].Value), ParseInt(version.Groups[3].Value))
-					: (0, 0, 0);
+	// re.match(r"v?(\d+)\.(\d+)\.(\d+)", tag): a v or none, then three runs of decimal digits (DigitsAt's, as Python's \d reads them) with
+	// a . between each, at the tag's start; anything may follow. Their values, or (0, 0, 0) when the tag doesn't start so.
+	public static (BigInteger, BigInteger, BigInteger) VersionKey(string? tag)
+	{
+		tag ??= "";
+		var at = tag.StartsWith('v') ? 1 : 0;
+		var parts = new BigInteger[3];
+		for (var part = 0; part < 3; part++)
+		{
+			if (part > 0 && (at >= tag.Length || tag[at++] != '.'))
+				return (0, 0, 0);
+			var length = DigitsAt(tag, at);
+			if (length == 0)
+				return (0, 0, 0);
+			parts[part] = ParseInt(tag.Substring(at, length));
+			at += length;
+		}
+		return (parts[0], parts[1], parts[2]);
+	}
 
 	// Post sections
 
@@ -1951,11 +1957,31 @@ static class ReleasePost
 
 	// Release tables
 
-	static readonly Regex SourcePr = R(@"Source PR: #(\d+)");
+	const string SourcePr = "Source PR: #";
 
-	// The PR number in the release body's "Source PR: #n" line, or null.
-	public static BigInteger? SourcePrOf(JsonNode? release) =>
-			SourcePr.Match(Text(Get(release, "body")) ?? "") is { Success: true } match ? ParseInt(match.Groups[1].Value) : null;
+	// The length of the run of decimal digits at text[at], astral ones too, as Python's \d reads them: .NET's \d sees an astral digit (𝟒)
+	// as two code units, neither a digit.
+	public static int DigitsAt(string text, int at)
+	{
+		var end = at;
+		while (end < text.Length && Rune.TryGetRuneAt(text, end, out var rune) && Rune.GetUnicodeCategory(rune) == UnicodeCategory.DecimalDigitNumber)
+			end += rune.Utf16SequenceLength;
+		return end - at;
+	}
+
+	// The PR number in the release body's "Source PR: #n" line, or null: re.search(r"Source PR: #(\d+)"), so the first marker with digits
+	// after it, read by their value. draft_release's markers are read the same way, so every parser agrees on which PR a body names.
+	public static BigInteger? SourcePrOf(JsonNode? release)
+	{
+		var body = Text(Get(release, "body")) ?? "";
+		for (var at = body.IndexOf(SourcePr, StringComparison.Ordinal); at >= 0; at = body.IndexOf(SourcePr, at, StringComparison.Ordinal))
+		{
+			at += SourcePr.Length;
+			if (DigitsAt(body, at) is var length and > 0)
+				return ParseInt(body.Substring(at, length));
+		}
+		return null;
+	}
 
 	// The docs/blogs posts for a PR, sorted by name (so by date). A post belongs to the PR its name's first "-pr-N-" names, as ReadBlogPosts
 	// reads it: the title slug after it can hold another ("...-pr-7-revert-pr-4-changes.md" is PR 7's, not PR 4's).
@@ -2497,6 +2523,36 @@ static class ReleasePost
 		// This runs before "Create tag and release", so the new release is passed in.
 		ReleaseEntry current = new() { Tag = tag, Date = mergedDate, Pr = prNumber.ToString(CultureInfo.InvariantCulture), Title = titleLine };
 		UpdateTables(repository, gh, root, current, log);
+	}
+
+	public const string Usage = "[-h] --pr PR --tag TAG [--repo REPO]";
+
+	// The repository named by REPOSITORY, else GITHUB_REPOSITORY (an empty one counts as unset), as the scripts' --repo default. getenv
+	// reads a variable (the process's environment, or a test's).
+	public static string? DefaultRepository(Func<string, string?> getenv) => getenv("REPOSITORY") is { Length: > 0 } repository ? repository : getenv("GITHUB_REPOSITORY");
+
+	// A variable stripped of its blanks, or null when it is unset or only blanks.
+	public static string? Setting(string name, Func<string, string?> getenv) => Py.Strip(getenv(name) ?? "") is { Length: > 0 } value ? value : null;
+
+	// release_post.py's main(): the command line, then Run with the gh CLI, the key and the model from the environment. Its log is stdout.
+	// gh and getenv stand in for the gh CLI and the environment in a test, and root for the current folder.
+	public static int Command(IEnumerable<string> args, TextWriter stdout, TextWriter stderr, Func<string, IReleaseGitHub>? gh = null,
+			Func<string, string?>? getenv = null, string root = ".")
+	{
+		getenv ??= Environment.GetEnvironmentVariable;
+		var parser = new Arguments("release_post.cs", Usage, "Write the release blog post for a merged PR and refresh the release tables.")
+				.IntOption("--pr", "merged PR number", required: true)
+				.Required("--tag", "release tag for the PR, e.g. v0.0.32")
+				.Option("--repo", "owner/name (default: $REPOSITORY or $GITHUB_REPOSITORY)");
+		if (parser.Parse(args, stdout, stderr) is int exit)
+			return exit;
+		var repository = parser.Has("--repo") ? parser.Value("--repo", "") : DefaultRepository(getenv);
+		if (string.IsNullOrEmpty(repository))
+			return parser.Error("--repo is required when REPOSITORY and GITHUB_REPOSITORY are unset", stderr);
+
+		Run(repository, (long)parser.IntValue("--pr", 0), Py.Strip(parser.Value("--tag", "")), (gh ?? (name => new ReleaseGitHub(name)))(repository), root,
+				apiKey: Setting("ANTHROPIC_API_KEY", getenv), model: Setting("ANTHROPIC_MODEL", getenv) ?? DefaultModel, log: stdout);
+		return 0;
 	}
 }
 

@@ -875,8 +875,10 @@ def untold(path):
 # same list, so an entry outside SCOPE (global.json, the SDK pin the Factory moves: mpaulosky/Application_Factory#103,
 # the three empty shields beside the C# scripts, which keep the repo's own Directory.* files from reaching their
 # build: mpaulosky/Application_Factory#125, and the C# of discover_tests and load_test_env, the second of which runs with
-# the TEST_ENV secret, with the Gh.cs both include: mpaulosky/Application_Factory#162, and the C# of draft_release, which the
-# release job runs with its tokens: mpaulosky/Application_Factory#163) is there only for the Owned-files check.
+# the TEST_ENV secret, with the Gh.cs both include: mpaulosky/Application_Factory#162, the C# of draft_release, which the
+# release job runs with its tokens: mpaulosky/Application_Factory#163, and the C# of release_post, release_queue and
+# backfill_blog_posts, which release.yml's plan and docs jobs and backfill-blog-posts.yml run with theirs:
+# mpaulosky/Application_Factory#128) is there only for the Owned-files check.
 OWNED = (
     "global.json",
     ".github/scripts/Directory.Build.props",
@@ -889,6 +891,13 @@ OWNED = (
     ".github/scripts/LoadTestEnv.cs",
     ".github/scripts/draft_release.cs",
     ".github/scripts/DraftRelease.cs",
+    ".github/scripts/release_post.cs",
+    ".github/scripts/ReleasePost.cs",
+    ".github/scripts/HtmlEntities.cs",
+    ".github/scripts/release_queue.cs",
+    ".github/scripts/ReleaseQueue.cs",
+    ".github/scripts/backfill_blog_posts.cs",
+    ".github/scripts/BackfillBlogPosts.cs",
     "scripts/gate.sh",
     "scripts/check-branch-name.sh",
     "scripts/check-pr-title.sh",
