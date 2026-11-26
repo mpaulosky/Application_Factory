@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
@@ -218,8 +217,8 @@ public sealed partial class ReleasePostTests
 		Assert.EndsWith("- ### Context", ReleasePost.NestHeadings(string.Concat(Enumerable.Repeat("- ", 1100)) + "# Context"));
 	}
 
-	// The pytest's shape lambdas, by their index.
-	static readonly Func<int, string>[] Shapes =
+	// The pytest's shape lambdas, by their index: ReleasePostTimingTests times them.
+	internal static readonly Func<int, string>[] Shapes =
 	[
 		n => Times("- ", n) + "# Context",
 		n => Times("> ", n) + "# Context",
@@ -227,32 +226,7 @@ public sealed partial class ReleasePostTests
 		n => "> x\n" + Times("lazy\n", n),
 	];
 
-	[Theory]
-	[InlineData(0)]
-	[InlineData(1)]
-	[InlineData(2)]
-	[InlineData(3)]
-	public void Scanning_stays_linear_in_nesting_depth_and_length(int shape)
-	{
-		// Time the same shape at two sizes; a quadratic scan takes ~16x longer at 4x
-		// the size (measured before the fix), a linear one ~4x. The best of three
-		// runs keeps scheduling noise out, and the 10x bound leaves plenty of slack.
-		double Best(int n)
-		{
-			var text = Shapes[shape](n);
-			List<double> runs = [];
-			for (var i = 0; i < 3; i++)
-			{
-				var start = Stopwatch.GetTimestamp();
-				ReleasePost.NestHeadings(text);
-				runs.Add(Stopwatch.GetElapsedTime(start).TotalSeconds);
-			}
-			return runs.Min();
-		}
-
-		double small = Best(2_000), large = Best(8_000);
-		Assert.True(large < Math.Max(small, 0.001) * 10, $"{large} >= {Math.Max(small, 0.001) * 10}");
-	}
+	public static readonly TheoryData<int> SectionShapeIndexes = [.. Enumerable.Range(0, Shapes.Length)];
 
 	[Theory]
 	// A "#" line inside a raw HTML block is text: GitHub renders it literally.

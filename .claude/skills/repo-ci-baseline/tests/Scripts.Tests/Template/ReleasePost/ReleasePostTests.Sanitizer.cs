@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
@@ -200,8 +199,8 @@ public sealed partial class ReleasePostTests
 		Assert.EndsWith("](p.md) | release,automation |", row, StringComparison.Ordinal);
 	}
 
-	// The pytest's shapes, by their index in its list.
-	static readonly Func<int, string>[] CodeFindingShapes =
+	// The pytest's shapes, by their index in its list: ReleasePostTimingTests times them.
+	internal static readonly Func<int, string>[] CodeFindingShapes =
 	[
 		n => Times("[a](", n),
 		n => Times("](", n) + "`",
@@ -221,29 +220,6 @@ public sealed partial class ReleasePostTests
 	];
 
 	public static readonly TheoryData<int> CodeFindingShapeIndexes = [.. Enumerable.Range(0, CodeFindingShapes.Length)];
-
-	[Theory]
-	[MemberData(nameof(CodeFindingShapeIndexes))]
-	public void Finding_code_stays_linear(int shape)
-	{
-		// As in test_scanning_stays_linear_in_nesting_depth_and_length: 4x the size, well under 16x the time.
-		double Best(int n)
-		{
-			var text = CodeFindingShapes[shape](n);
-			List<double> runs = [];
-			for (var i = 0; i < 3; i++)
-			{
-				var start = Stopwatch.GetTimestamp();
-				ReleasePost.SanitizeMarkdown(text);
-				ReleasePost.RebaseReadmeLinks(text);
-				runs.Add(Stopwatch.GetElapsedTime(start).TotalSeconds);
-			}
-			return runs.Min();
-		}
-
-		double small = Best(2_000), large = Best(8_000);
-		Assert.True(large < Math.Max(small, 0.001) * 10, $"{large} >= {Math.Max(small, 0.001) * 10}");
-	}
 
 	[Theory]
 	// No "[" opens a label, so "](" starts no link and the backticks pair as a code span.
