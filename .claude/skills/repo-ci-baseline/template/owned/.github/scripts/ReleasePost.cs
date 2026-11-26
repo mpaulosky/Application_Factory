@@ -70,7 +70,7 @@ sealed record SummaryRequest(string Url, IReadOnlyDictionary<string, string> Hea
 delegate byte[] UrlOpen(SummaryRequest request, int timeout);
 
 // A row of the releases tables: release_entries()'s dicts.
-sealed class Entry
+sealed class ReleaseEntry
 {
 	public string Tag = "";
 	public string Date = "";
@@ -82,14 +82,14 @@ sealed class Entry
 }
 
 // A blog post card: read_blog_posts()'s dicts.
-sealed record Post(string File, string Pr, string Title, string Date, string Tag, string Excerpt = "");
+sealed record BlogPost(string File, string Pr, string Title, string Date, string Tag, string Excerpt = "");
 
 // A heading scan_blocks() found: its line, everything before its "#"s, its level and the rest of its line.
-readonly record struct Heading(int Index, string Prefix, int Level, string Rest);
+readonly record struct MarkdownHeading(int Index, string Prefix, int Level, string Rest);
 
 // A code block scan_blocks() found: a fence, with its info string and indent, or an indented code line (Joins: only blank lines in the same
 // containers separate it from the indented code line before it). Lines are the block's line indexes, Content its text.
-sealed class Block
+sealed class CodeBlock
 {
 	public required string Kind;
 	public required List<int> Lines;
@@ -102,7 +102,7 @@ sealed class Block
 
 // What inline_code() yields: a code span (Content its text), an HTML comment, a link's <destination> or bare destination, or the rest of a
 // reference definition (its label, before the destination, and its title, after it).
-enum Inline
+enum InlineKind
 {
 	Span,
 	Comment,
@@ -111,7 +111,7 @@ enum Inline
 	DefinitionText,
 }
 
-readonly record struct Code(int Start, int End, Inline Kind, string? Content = null);
+readonly record struct InlineItem(int Start, int End, InlineKind Kind, string? Content = null);
 
 static class ReleasePost
 {
@@ -687,7 +687,7 @@ static class ReleasePost
 
 	// A fenced code line's text, from the raw line, with its containers and the opener's indent removed. rest is the tab-expanded line from
 	// column offset, after its containers.
-	static string FenceContent(string raw, int offset, string rest, Block block)
+	static string FenceContent(string raw, int offset, string rest, CodeBlock block)
 	{
 		var spaces = rest.Length - rest.TrimStart(' ').Length;
 		return FromColumn(raw, offset + Math.Min(spaces, block.Indent));
@@ -715,7 +715,7 @@ static class ReleasePost
 	// open paragraph, then opens new containers before its content is read. Columns are measured with tabs expanded to CommonMark's 4-column
 	// stops, and a blank line holds only spaces and tabs (a non-breaking space is text). A code block's Content is taken from the raw lines,
 	// tabs and all (mpaulosky/dotfiles#58).
-	public static void ScanBlocks(List<string?> lines, List<Heading> headings, HashSet<int>? code = null, List<Block>? blocks = null,
+	public static void ScanBlocks(List<string?> lines, List<MarkdownHeading> headings, HashSet<int>? code = null, List<CodeBlock>? blocks = null,
 			HashSet<int>? continued = null, Dictionary<int, int>? prefixes = null)
 	{
 		code ??= [];
@@ -726,7 +726,7 @@ static class ReleasePost
 		List<int> quoteLevels = [];
 		List<(int Index, string Prefix, string Text)>? paragraph = null;
 		string? fence = null;
-		Block? fenceBlock = null;
+		CodeBlock? fenceBlock = null;
 		HtmlEnd? htmlEnd = null;
 		var codeRun = false; // whether indented code, then only blank lines, came last in these containers
 
@@ -871,7 +871,7 @@ static class ReleasePost
 					fence = fenceMatch.Groups[1].Value;
 					if (blocks is not null)
 					{
-						fenceBlock = new Block
+						fenceBlock = new CodeBlock
 						{
 							Kind = "fence",
 							Lines = [index],
@@ -891,7 +891,7 @@ static class ReleasePost
 			var heading = AtxHeading.Match(rest);
 			if (heading.Success)
 			{
-				headings.Add(new Heading(index, Cut(line, 0, offset) + heading.Groups[1].Value, heading.Groups[2].Length, rest[(heading.Index + heading.Length)..]));
+				headings.Add(new MarkdownHeading(index, Cut(line, 0, offset) + heading.Groups[1].Value, heading.Groups[2].Length, rest[(heading.Index + heading.Length)..]));
 				paragraph = null;
 				continue;
 			}
@@ -902,7 +902,7 @@ static class ReleasePost
 				{
 					var (first, firstPrefix, _) = paragraph[0];
 					var text = string.Join(" ", paragraph.Select(part => part.Text.Trim(' ')));
-					headings.Add(new Heading(first, firstPrefix, underline.Groups[1].Value[0] == '=' ? 1 : 2, " " + text));
+					headings.Add(new MarkdownHeading(first, firstPrefix, underline.Groups[1].Value[0] == '=' ? 1 : 2, " " + text));
 					foreach (var (later, _, _) in paragraph.Skip(1))
 						lines[later] = null;
 					lines[index] = null;
@@ -924,7 +924,7 @@ static class ReleasePost
 				{
 					var content = FromColumn(raw, offset + 4);
 					var joins = followsCode && !closed && stack.Count == opened;
-					blocks.Add(new Block { Kind = "indented", Lines = [index], Content = [content], Nested = stack.Count > 0, Joins = joins });
+					blocks.Add(new CodeBlock { Kind = "indented", Lines = [index], Content = [content], Nested = stack.Count > 0, Joins = joins });
 				}
 				codeRun = true;
 				continue;
@@ -1377,7 +1377,7 @@ static class ReleasePost
 	// and only that is skipped.
 	//
 	// Runs and paragraph ends are indexed once, and BareDestinationEnd() caps how far a link is read, so the scan stays linear.
-	public static IEnumerable<Code> InlineCode(string text, IReadOnlyList<bool>? continues = null, bool html = false, bool definitions = true,
+	public static IEnumerable<InlineItem> InlineCode(string text, IReadOnlyList<bool>? continues = null, bool html = false, bool definitions = true,
 			IReadOnlyList<int>? prefixes = null)
 	{
 		var breaks = ParagraphBreaks(text.Split('\n'), continues);
@@ -1407,9 +1407,9 @@ static class ReleasePost
 			if (nextDefinition < found.Count && (!mark.Success || found[nextDefinition].Start <= mark.Index))
 			{
 				var (start, destination, end, next) = found[nextDefinition];
-				yield return new Code(start, destination, Inline.DefinitionText);
-				yield return new Code(destination, end, text[destination] == '<' ? Inline.AngleDestination : Inline.BareDestination);
-				yield return new Code(end, next, Inline.DefinitionText);
+				yield return new InlineItem(start, destination, InlineKind.DefinitionText);
+				yield return new InlineItem(destination, end, text[destination] == '<' ? InlineKind.AngleDestination : InlineKind.BareDestination);
+				yield return new InlineItem(end, next, InlineKind.DefinitionText);
 				pos = next;
 				nextDefinition++;
 				continue;
@@ -1447,7 +1447,7 @@ static class ReleasePost
 					if (!image)
 						inactiveBelow = labels.Count;
 					pos = link.Tail;
-					yield return new Code(link.Start, link.End, text[link.Start] == '<' ? Inline.AngleDestination : Inline.BareDestination);
+					yield return new InlineItem(link.Start, link.End, text[link.Start] == '<' ? InlineKind.AngleDestination : InlineKind.BareDestination);
 				}
 			}
 			else if (token == "<")
@@ -1479,7 +1479,7 @@ static class ReleasePost
 					commentsCanClose = false;
 					continue;
 				}
-				yield return new Code(markStart, close + 3, Inline.Comment);
+				yield return new InlineItem(markStart, close + 3, InlineKind.Comment);
 				pos = close + 3;
 			}
 			else
@@ -1500,7 +1500,7 @@ static class ReleasePost
 				if (index < candidates.Count && candidates[index] < paragraphEnd)
 				{
 					var closer = candidates[index];
-					yield return new Code(start, closer + length, Inline.Span, text[after..closer]);
+					yield return new InlineItem(start, closer + length, InlineKind.Span, text[after..closer]);
 					pos = closer + length;
 				}
 			}
@@ -1508,8 +1508,8 @@ static class ReleasePost
 	}
 
 	// Each code span in Markdown text, as InlineCode() finds them.
-	static IEnumerable<Code> CodeSpans(string text, IReadOnlyList<bool>? continues = null) =>
-			InlineCode(text, continues).Where(code => code.Kind == Inline.Span);
+	static IEnumerable<InlineItem> CodeSpans(string text, IReadOnlyList<bool>? continues = null) =>
+			InlineCode(text, continues).Where(code => code.Kind == InlineKind.Span);
 
 	// Sanitized Markdown made safe as a link's text: brackets outside code spans become entities.
 	//
@@ -1520,7 +1520,7 @@ static class ReleasePost
 	{
 		StringBuilder out_ = new();
 		var done = 0;
-		foreach (var (start, end, _, _) in CodeSpans(markdown).Append(new Code(markdown.Length, markdown.Length, Inline.Span, "")))
+		foreach (var (start, end, _, _) in CodeSpans(markdown).Append(new InlineItem(markdown.Length, markdown.Length, InlineKind.Span, "")))
 		{
 			out_.Append(markdown[done..start].Replace("[", "&#91;", StringComparison.Ordinal)).Append(markdown, start, end - start);
 			done = end;
@@ -1544,17 +1544,17 @@ static class ReleasePost
 		{
 			prose.Append(text, done, start - done);
 			done = end;
-			if (kind == Inline.AngleDestination)
+			if (kind == InlineKind.AngleDestination)
 			{
 				prose.Append(BareDestination(text[(start + 1)..(end - 1)]));
 				continue;
 			}
-			if (kind is Inline.BareDestination or Inline.DefinitionText)
+			if (kind is InlineKind.BareDestination or InlineKind.DefinitionText)
 			{
 				prose.Append(text, start, end - start);
 				continue;
 			}
-			if (kind == Inline.Comment)
+			if (kind == InlineKind.Comment)
 				continue;
 			out_.Append(EscapeText(NeutralizeLinks(prose.ToString(), atLineStart), liquid));
 			out_.Append(CodeSpanRisk.IsMatch(content!) ? CodeHtml(SpanText(content!)) : text[start..end]);
@@ -1595,11 +1595,11 @@ static class ReleasePost
 
 	// The fenced and indented code blocks in Markdown lines, as ScanBlocks() lists them. Indented code lines separated only by blank lines in
 	// their quotes and list items are one block, the blank lines included. continued is passed on to ScanBlocks().
-	static List<Block> CodeBlocks(IReadOnlyList<string> lines, HashSet<int>? continued = null)
+	static List<CodeBlock> CodeBlocks(IReadOnlyList<string> lines, HashSet<int>? continued = null)
 	{
-		List<Block> blocks = [];
+		List<CodeBlock> blocks = [];
 		ScanBlocks([.. lines], [], blocks: blocks, continued: continued);
-		List<Block> merged = [];
+		List<CodeBlock> merged = [];
 		foreach (var block in blocks)
 		{
 			var last = merged.Count > 0 ? merged[^1] : null;
@@ -1626,7 +1626,7 @@ static class ReleasePost
 	{
 		var lines = LineEnding.Split(markdown);
 		HashSet<int> continued = [];
-		Dictionary<int, Block> starts = [];
+		Dictionary<int, CodeBlock> starts = [];
 		foreach (var block in CodeBlocks(lines, continued))
 			starts[block.Lines[0]] = block;
 
@@ -1666,7 +1666,7 @@ static class ReleasePost
 	public static string NestHeadings(string markdown)
 	{
 		List<string?> lines = [.. LineEnding.Split(markdown)]; // CommonMark's three line endings; PR bodies often use CRLF
-		List<Heading> headings = []; // in document order
+		List<MarkdownHeading> headings = []; // in document order
 		ScanBlocks(lines, headings);
 		var rank = headings.Select(h => h.Level).Distinct().Order().Select((level, i) => (level, i)).ToDictionary(p => p.level, p => p.i);
 		var previous = SectionLevel;
@@ -1791,9 +1791,9 @@ static class ReleasePost
 		return dot > 0 && dot < name.Length - 1 ? name[..dot] : name;
 	}
 
-	public static List<Post> ReadBlogPosts(string blogDir)
+	public static List<BlogPost> ReadBlogPosts(string blogDir)
 	{
-		List<Post> posts = [];
+		List<BlogPost> posts = [];
 		foreach (var path in Glob(blogDir, name => name.EndsWith(".md", StringComparison.Ordinal)))
 		{
 			var name = Path.GetFileName(path);
@@ -1806,7 +1806,7 @@ static class ReleasePost
 			var date = PostDate.Match(front);
 			var tag = PostTag.Match(front);
 			var summary = PostSummary.Match(front);
-			posts.Add(new Post(
+			posts.Add(new BlogPost(
 					name,
 					pr.Groups[1].Value,
 					title.Success ? title.Groups[1].Value.Replace("\\\"", "\"", StringComparison.Ordinal) : Stem(name),
@@ -1932,9 +1932,9 @@ static class ReleasePost
 			Comparer<(string Date, (BigInteger, BigInteger, BigInteger) Version)>.Create((a, b) =>
 					Py.CompareCodePoints(a.Date, b.Date) is var order and not 0 ? order : a.Version.CompareTo(b.Version));
 
-	public static List<Post> NewestFirst(IEnumerable<Post> posts) => [.. posts.OrderByDescending(p => (p.Date, VersionKey(p.Tag)), Newest)];
+	public static List<BlogPost> NewestFirst(IEnumerable<BlogPost> posts) => [.. posts.OrderByDescending(p => (p.Date, VersionKey(p.Tag)), Newest)];
 
-	static List<Entry> NewestFirst(IEnumerable<Entry> entries) => [.. entries.OrderByDescending(e => (e.Date, VersionKey(e.Tag)), Newest)];
+	static List<ReleaseEntry> NewestFirst(IEnumerable<ReleaseEntry> entries) => [.. entries.OrderByDescending(e => (e.Date, VersionKey(e.Tag)), Newest)];
 
 	// Release tables
 
@@ -1958,16 +1958,16 @@ static class ReleasePost
 
 	// The newest releases, newest first. current is a release that is being created now and so isn't in the Releases API response yet (its
 	// Tag, Date, Pr and Title).
-	public static List<Entry> ReleaseEntries(IReleaseGitHub gh, string repository, string blogDir, Entry? current = null)
+	public static List<ReleaseEntry> ReleaseEntries(IReleaseGitHub gh, string repository, string blogDir, ReleaseEntry? current = null)
 	{
-		List<Entry> entries = current is null ? [] : [new Entry { Tag = current.Tag, Date = current.Date, Pr = current.Pr, Title = current.Title }];
+		List<ReleaseEntry> entries = current is null ? [] : [new ReleaseEntry { Tag = current.Tag, Date = current.Date, Pr = current.Pr, Title = current.Title }];
 		foreach (var release in gh.Releases())
 		{
 			// On a re-run the release being created is already in the response.
 			if (current is not null && TagName(release) == current.Tag)
 				continue;
 			var sourcePr = SourcePrOf(release);
-			entries.Add(new Entry
+			entries.Add(new ReleaseEntry
 			{
 				Tag = TagName(release),
 				Date = Py.Head(Text(Get(release, "published_at")) ?? "", 10),
@@ -2002,7 +2002,7 @@ static class ReleasePost
 		return entries;
 	}
 
-	public static string RenderReleasesMarkdown(IEnumerable<Entry> entries)
+	public static string RenderReleasesMarkdown(IEnumerable<ReleaseEntry> entries)
 	{
 		List<string> rows = [];
 		foreach (var entry in entries)
@@ -2042,7 +2042,7 @@ static class ReleasePost
 		return lines;
 	}
 
-	public static List<string> RenderReleasesHtml(IEnumerable<Entry> entries) =>
+	public static List<string> RenderReleasesHtml(IEnumerable<ReleaseEntry> entries) =>
 			RenderTable(["Version", "Date", "Title", "Blog post"],
 					[.. entries.Select(e => new[] { Link(e.Url, e.Tag), Html.Escape(e.Date), Html.Escape(e.Title), e.PostUrl.Length > 0 ? Link(e.PostUrl, "Post") : "—" })],
 					"No releases yet.");
@@ -2122,7 +2122,7 @@ static class ReleasePost
 	}
 
 	// The newest posts as cards: date, release, linked title, excerpt and source PR.
-	public static List<string> RenderBlogsHtml(IEnumerable<Post> posts, string repository)
+	public static List<string> RenderBlogsHtml(IEnumerable<BlogPost> posts, string repository)
 	{
 		var newest = NewestFirst(posts).Take(TableSize).ToList();
 		if (newest.Count == 0)
@@ -2207,7 +2207,7 @@ static class ReleasePost
 	}
 
 	// path is the file, and shown is how a message names it (str() of the Python's Path).
-	static void UpdateIndexHtml(string path, string shown, List<Entry> entries, List<Post> posts, string repository, TextWriter log)
+	static void UpdateIndexHtml(string path, string shown, List<ReleaseEntry> entries, List<BlogPost> posts, string repository, TextWriter log)
 	{
 		if (!Exists(path))
 		{
@@ -2372,9 +2372,9 @@ static class ReleasePost
 		foreach (var (start, end, kind, _) in InlineCode(text, continues, html: true, prefixes: prefixes))
 		{
 			out_.Append(RebaseHtmlAttributes(text[done..start]));
-			if (kind == Inline.AngleDestination)
+			if (kind == InlineKind.AngleDestination)
 				out_.Append('<').Append(RebaseLink(text[(start + 1)..(end - 1)])).Append('>');
-			else if (kind == Inline.BareDestination)
+			else if (kind == InlineKind.BareDestination)
 				out_.Append(RebaseLink(text[start..end]));
 			else
 				out_.Append(text, start, end - start);
@@ -2392,7 +2392,7 @@ static class ReleasePost
 	{
 		var lines = markdown.Split('\n');
 		HashSet<int> raw = [];
-		List<Block> blocks = [];
+		List<CodeBlock> blocks = [];
 		HashSet<int> continued = [];
 		Dictionary<int, int> prefixes = [];
 		ScanBlocks([.. lines], [], raw, blocks, continued, prefixes);
@@ -2459,7 +2459,7 @@ static class ReleasePost
 	}
 
 	// Rewrite the README, docs/README.md and docs/index.html release and blog tables.
-	public static void UpdateTables(string repository, IReleaseGitHub gh, string root = ".", Entry? current = null, TextWriter? log = null)
+	public static void UpdateTables(string repository, IReleaseGitHub gh, string root = ".", ReleaseEntry? current = null, TextWriter? log = null)
 	{
 		log ??= Console.Out;
 		var blogDir = Path.Combine(root, "docs", "blogs");
@@ -2483,7 +2483,7 @@ static class ReleasePost
 	{
 		var (mergedDate, titleLine) = WritePost(gh, prNumber, tag, root, apiKey, model, urlopen, log);
 		// This runs before "Create tag and release", so the new release is passed in.
-		Entry current = new() { Tag = tag, Date = mergedDate, Pr = prNumber.ToString(CultureInfo.InvariantCulture), Title = titleLine };
+		ReleaseEntry current = new() { Tag = tag, Date = mergedDate, Pr = prNumber.ToString(CultureInfo.InvariantCulture), Title = titleLine };
 		UpdateTables(repository, gh, root, current, log);
 	}
 }
