@@ -266,7 +266,12 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
   and tells it not to raise a resolved thread's problem again unless the code has changed in a way that brings it back,
   so a finding a maintainer declined doesn't come back on every push (auth0-management-app#59 had one four times).
   The author's local review ([pre-push-review.md](pre-push-review.md)) has already reviewed the whole branch, so the prompt asks for findings (each of which holds the merge)
-  only for bugs in code that runs, security weaknesses, tests and how GitHub itself behaves, and has docs, comments and conventions go under "Advisory" in the summary.
+  only for bugs in code that runs, security weaknesses, tests and how GitHub itself behaves, and has docs, comments and conventions go in the answer's `advisory`.
+  Claude answers in fields (ADR 0004's "The structured answer"): an `overview` with no verdict, `changes` bullets, `files` rows (`{path, description}`),
+  optional `advisory` and `not_reviewed`, and findings that each carry a `severity` (`high`, `medium` or `low`); the findings the answer check adds for
+  unread pieces and held files are `high`. A diff read in batches joins them: each batch's overview and `not_reviewed` under a `**Batch N of M**` line,
+  the rows concatenated, a finding an earlier batch reported (same path, line and body) once, and each batch held to its share of the body: its
+  `not_reviewed` cut to a quarter of the share first, then its `files` rows, then `changes`, then `advisory`, and only then its overview.
   It also holds the findings the author accepted, from the PR description's `## Review notes`, as decisions like a resolved thread's; they count only on a same-repo PR
   whose author is the `OWNER` (a `MEMBER` or `COLLABORATOR` may have read access only). The step reads the description from the API as it runs.
   The prompt tells Claude that a note never covers a security weakness, which is an instruction, not an enforced rule.
@@ -276,8 +281,10 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
   The body reads like Copilot's review: the markers, a headline (`🟡 Changes recommended` with findings, `🟢 No changes recommended` without), the title of
   the most severe finding, a list of the open issues (a shields.io severity badge, High, Medium or Low, and a link to each thread, High first) and a folded
   "What changed in this PR" (the summary as it is, or the structured overview, changes and files), then the advisory and unreviewed notes, the findings
-  outside the diff (the last section with bullets) and a `<sub>` footer naming the review effort (`--effort`). The thread links exist only once the review
-  is posted, so the script then edits the body to add them (`PUT` on the review, which fires `pull_request_review` `edited`, which PR Review Submitted ignores);
+  outside the diff (the last section with bullets) and a `<sub>` footer naming the review effort (`--effort`, which the post job gives as the Review step's
+  effort and model and the batch count; a base script that doesn't take it predates the structured answer, so the post job warns and posts nothing,
+  or fails on a withheld or malformed answer). The thread links exist only once the review is posted, so the script then edits the body to add them
+  (`PUT` on the review, which fires `pull_request_review` `edited`, which PR Review Submitted ignores);
   if that fails it warns and the body keeps the titles unlinked. Both bodies carry the same markers and off-diff section. Past GitHub's 65,536-character limit,
   What changed is left out first, then Advisory and Not reviewed, then the open issues past what fits; the markers and the findings outside the diff are never cut.
   The effort in the footer is capped at 200 characters.
