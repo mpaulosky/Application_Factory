@@ -947,9 +947,12 @@ static class ReleasePost
 	// Besides letters and digits, what a scheme can be written with: its own symbols, the colon, entities (&#9; &colon;) and backslash escapes.
 	const string SchemeText = "+.-:&#;\\";
 	// The C0 controls and DEL, which don't end a scheme's read: a browser drops them, and the space, from a URL's start, and tabs and line
-	// breaks from anywhere in it, and a safe scheme can't hold any of them.
+	// breaks from anywhere in it, and a safe scheme can't hold any of them. A line break does end a reference definition's read (IsLineBreak).
 	static bool IsUrlControl(char c) => c < ' ' || c == '\x7f';
 	static bool IsUrlDropped(char c) => c <= ' ' || c == '\x7f';
+	// What ends a reference definition's destination, though not an inline link's: kramdown keeps a line break in "[a](java\nscript:x)"'s
+	// href, and browsers drop it.
+	static bool IsLineBreak(char c) => c is '\n' or '\r';
 	// Only these autolinks keep their angle brackets; any other "<" is escaped.
 	static readonly Regex Autolink = At($@"<(?:{Unicode("https?://|mailto:")})[^\s\x1c-\x1f<>""'`\\]*>");
 	static readonly Regex LinkDestinationStart = R(@"\]\(|\]:");
@@ -1018,13 +1021,15 @@ static class ReleasePost
 	// whole destination's scheme is read however long it is: padding ("j&#9;&#9;...avascript:", or an entity's leading zeros) can push it
 	// arbitrarily far from the start. The read stops at the first character that can't be part of a scheme, an entity or an escape, so it
 	// never runs into the next "](". A control character or DEL (a tab or line break among them) doesn't stop it, nor does a space before
-	// the scheme: browsers drop those too, and kramdown writes them into the href as they are ("<\x01javascript:x>").
-	static bool SafeDestination(string text, int start)
+	// the scheme: browsers drop those too, and kramdown writes them into the href as they are ("<\x01javascript:x>"). lineEnds is true for a
+	// reference definition's destination, which a line break does end: kramdown and GitHub both stop it there, so the read must not run into
+	// the next line's "Note:" and take it for the scheme.
+	static bool SafeDestination(string text, int start, bool lineEnds = false)
 	{
 		var end = start;
-		while (end < text.Length && IsUrlDropped(text[end]))
+		while (end < text.Length && IsUrlDropped(text[end]) && !(lineEnds && IsLineBreak(text[end])))
 			end++;
-		while (end < text.Length)
+		while (end < text.Length && !(lineEnds && IsLineBreak(text[end])))
 		{
 			if (IsAlnumAt(text, end, out var width))
 				end += width;
@@ -1062,7 +1067,7 @@ static class ReleasePost
 				start++;
 			if (start < text.Length && text[start] == '<')
 				start++;
-			if (start >= done && !SafeDestination(text, start))
+			if (start >= done && !SafeDestination(text, start, lineEnds: match.Value == "]:"))
 			{
 				out_.Append(text, done, start - done).Append('#');
 				done = start;

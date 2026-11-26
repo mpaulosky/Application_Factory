@@ -575,6 +575,22 @@ public sealed partial class ReleasePostTests
 		Assert.Equal(expected, ReleasePost.NeutralizeLinks(text));
 	}
 
+	// A line break ends a reference definition's destination in kramdown and on GitHub, so the scheme's read stops there and doesn't take
+	// the next line's "Note:" for it. An inline link's doesn't: kramdown keeps the break.
+	[Theory]
+	[InlineData("[a]: foo.md\nNote: see above", "[a]: foo.md\nNote: see above")]
+	[InlineData("[a]: foo.md\r\nNote: see above", "[a]: foo.md\r\nNote: see above")]
+	[InlineData("[ref]: page\n\nFootnote: x", "[ref]: page\n\nFootnote: x")]
+	[InlineData("> [a]: docs/x.md\n> Note: x", "> [a]: docs/x.md\n> Note: x")]
+	[InlineData("[a]: java\nscript:x", "[a]: java\nscript:x")]
+	[InlineData("[a]: \x01javascript:x\nNote: x", "[a]: #\x01javascript:x\nNote: x")]
+	[InlineData("[a]:\njavascript:x", "[a]:\n#javascript:x")]
+	[InlineData("[a](java\nscript:x)", "[a](#java\nscript:x)")]
+	public void A_line_break_ends_a_reference_definitions_scheme(string text, string expected)
+	{
+		Assert.Equal(expected, ReleasePost.NeutralizeLinks(text));
+	}
+
 	[Fact]
 	public void Autolinks_keep_working()
 	{

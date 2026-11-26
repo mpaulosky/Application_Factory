@@ -1206,6 +1206,25 @@ def test_controls_in_a_scheme_dont_hide_it(text, expected):
     assert rp.safe_destination(text, text.index("<") + 1) == (text == expected)
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # A line break ends a reference definition's destination in kramdown and on GitHub, so the scheme's read stops
+        # there and doesn't take the next line's "Note:" for it. An inline link's doesn't: kramdown keeps the break.
+        ("[a]: foo.md\nNote: see above", "[a]: foo.md\nNote: see above"),
+        ("[a]: foo.md\r\nNote: see above", "[a]: foo.md\r\nNote: see above"),
+        ("[ref]: page\n\nFootnote: x", "[ref]: page\n\nFootnote: x"),
+        ("> [a]: docs/x.md\n> Note: x", "> [a]: docs/x.md\n> Note: x"),
+        ("[a]: java\nscript:x", "[a]: java\nscript:x"),
+        ("[a]: \x01javascript:x\nNote: x", "[a]: #\x01javascript:x\nNote: x"),
+        ("[a]:\njavascript:x", "[a]:\n#javascript:x"),
+        ("[a](java\nscript:x)", "[a](#java\nscript:x)"),
+    ],
+)
+def test_a_line_break_ends_a_reference_definitions_scheme(text, expected):
+    assert rp.neutralize_links(text) == expected
+
+
 def test_autolinks_keep_working():
     assert rp.sanitize_markdown("See <https://example.com/a?b=1> or <mailto:a@b.c>, not <a@b.c>.") == (
         "See <https://example.com/a?b=1> or <mailto:a@b.c>, not &lt;a@b.c>."

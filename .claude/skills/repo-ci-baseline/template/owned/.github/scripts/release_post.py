@@ -634,9 +634,13 @@ SCHEME = re.compile(r"([a-z][a-z0-9+.\-]*):")
 SCHEME_TEXT = set("+.-:&#;\\")
 # The C0 controls and DEL, which don't end a scheme's read: a browser drops
 # them, and the space, from a URL's start, and tabs and line breaks from
-# anywhere in it, and a safe scheme can't hold any of them.
+# anywhere in it, and a safe scheme can't hold any of them. A line break does end a
+# reference definition's read (LINE_BREAKS).
 URL_CONTROLS = {chr(code) for code in range(0x20)} | {"\x7f"}
 URL_DROPPED = URL_CONTROLS | {" "}
+# What ends a reference definition's destination, though not an inline link's: kramdown
+# keeps a line break in "[a](java\nscript:x)"'s href, and browsers drop it.
+LINE_BREAKS = {"\n", "\r"}
 # Only these autolinks keep their angle brackets; any other "<" is escaped.
 AUTOLINK = re.compile(r"<(?:https?://|mailto:)[^\s<>\"'`\\]*>", re.I)
 LINK_DESTINATION_START = re.compile(r"\]\(|\]:")
@@ -709,7 +713,7 @@ def safe_unescape(text):
     return html.unescape(OVERSIZED_REFERENCE.sub("\ufffd", text))
 
 
-def safe_destination(text, start):
+def safe_destination(text, start, line_ends=False):
     """Whether the link destination starting at text[start] has no scheme, or one in SAFE_SCHEMES.
 
     Browsers drop control characters and whitespace from a URL and decode
@@ -721,11 +725,17 @@ def safe_destination(text, start):
     A control character or DEL (a tab or line break among them) doesn't stop
     it, nor does a space before the scheme: browsers drop those too, and
     kramdown writes them into the href as they are ("<\x01javascript:x>").
+    line_ends is True for a reference definition's destination, which a line
+    break does end: kramdown and GitHub both stop it there, so the read must
+    not run into the next line's "Note:" and take it for the scheme.
     """
+    stops = LINE_BREAKS if line_ends else ()
     end = start
-    while end < len(text) and text[end] in URL_DROPPED:
+    while end < len(text) and text[end] in URL_DROPPED and text[end] not in stops:
         end += 1
-    while end < len(text) and (text[end].isalnum() or text[end] in SCHEME_TEXT or text[end] in URL_CONTROLS):
+    while end < len(text) and text[end] not in stops and (
+        text[end].isalnum() or text[end] in SCHEME_TEXT or text[end] in URL_CONTROLS
+    ):
         end += 1
     candidate = safe_unescape(text[start:end]).replace("\\", "")
     candidate = "".join(char for char in candidate if char not in URL_DROPPED).lower()
@@ -756,7 +766,7 @@ def neutralize_links(text, at_line_start=True):
             start += 1
         if start < len(text) and text[start] == "<":
             start += 1
-        if start >= done and not safe_destination(text, start):
+        if start >= done and not safe_destination(text, start, line_ends=match.group() == "]:"):
             out.append(text[done:start] + "#")
             done = start
     return "".join(out) + text[done:]

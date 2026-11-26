@@ -88,7 +88,9 @@ and GitHub Pages publishes it through Jekyll and kramdown, so `release_post.py` 
 - **Links:** a destination after `](` or `]:` whose scheme isn't `http`, `https` or `mailto` gets a `#` in front, so it
   becomes a fragment link. Entities and control characters are read the way browsers read them, so `java&#9;script:` counts,
   however much padding pushes the scheme along. A literal tab, line break, other C0 control or DEL doesn't end the scheme, nor does a
-  space before it: kramdown writes them into the `href` as they are, and browsers drop them, so `<\x01javascript:x>` counts too. An entity's leading zeros are dropped before decoding: Python refuses
+  space before it: kramdown writes them into the `href` as they are, and browsers drop them, so `<\x01javascript:x>` counts too.
+  A line break does end a reference definition's (`]:`) scheme, as it ends the destination in kramdown and on GitHub, so
+  `[a]: foo.md` followed by a line starting `Note:` keeps its link. An entity's leading zeros are dropped before decoding: Python refuses
   numbers over 4300 digits, so `&#000…9;` would otherwise stop the release before its post was written.
   Only a footnote definition alone at the start of its line, with kramdown's footnote ID (`[^note-1]: …`), is exempt;
   any other `[^…]:`, such as `[^!]:` or a label holding an escaped `\[^`, is a reference definition to kramdown.
