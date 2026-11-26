@@ -38,11 +38,15 @@ def findings_json(*findings, summary="Looked at the diff."):
 
 
 class FakeGitHub:
-    def __init__(self, files=None, lengths=None):
+    """GitHub for main(): the review posted, and its comments read back with a URL each, unless fail names a call."""
+
+    def __init__(self, files=None, lengths=None, fail=None):
         self.files = files if files is not None else [{"filename": "src/app.py", "patch": PATCH}]
         # src/app.py runs to line 30: lines 5-20 and 23-30 are real but outside the diff.
         self.lengths = lengths if lengths is not None else {"src/app.py": 30}
+        self.fail = fail
         self.posted = []
+        self.updates = []
 
     def line_count(self, path, ref):
         assert ref == HEAD
@@ -52,7 +56,23 @@ class FakeGitHub:
         return self.files
 
     def create_review(self, number, review):
-        self.posted.append((number, review))
+        # A copy: posted holds the first body, as GitHub got it, even after main edits the review.
+        self.posted.append((number, {**review}))
+        return {"id": 99, "body": review["body"]}
+
+    def review_comments(self, number, review_id):
+        assert (number, review_id) == (7, 99)
+        if self.fail == "read":
+            raise subprocess.CalledProcessError(1, ["gh", "api"])
+        _, review = self.posted[-1]
+        return [{**comment, "html_url": f"https://github.com/octo/demo/pull/7#discussion_r{index}"}
+                for index, comment in enumerate(review["comments"], 1)]
+
+    def update_review(self, number, review_id, body):
+        assert (number, review_id) == (7, 99)
+        if self.fail == "update":
+            raise subprocess.CalledProcessError(1, ["gh", "api"])
+        self.updates.append(body)
 
 
 def run(findings, gh=None):
@@ -364,6 +384,17 @@ def test_a_credential_is_redacted_everywhere_and_warns(token, capsys):
     assert "::warning::Redacted 3" in capsys.readouterr().out
 
 
+def test_a_credential_in_the_structured_fields_is_redacted_too(capsys):
+    token = TOKENS[1]
+    findings = json.dumps({"overview": token, "changes": [token], "files": [{"path": f"docs/{token}", "description": token}],
+                           "advisory": [token], "not_reviewed": token, "findings": []})
+
+    _, review = run(findings).posted[0]
+
+    assert token not in review["body"] and review["body"].count(pcr.REDACTED) == 6
+    assert "6 credential-shaped string(s) were redacted" in review["body"]
+
+
 def test_the_review_jobs_redactions_are_counted(monkeypatch, capsys):
     monkeypatch.setenv("REDACTED", "2")
     _, review = run(findings_json(("src/app.py", 2, "Was [redacted]."))).posted[0]
@@ -410,7 +441,307 @@ def test_no_findings_says_so():
     _, review = run(findings_json()).posted[0]
 
     assert review["comments"] == []
-    assert "No findings." in review["body"]
+    assert review["body"].split("\n")[1] == pcr.NO_CHANGES_RECOMMENDED == "### 🟢 No changes recommended"
+    assert "open issue" not in review["body"]
+
+
+# The body's layout
+
+
+def structured(*findings, **report):
+    """FINDINGS in the structured shape: findings are (path, line, body, severity or None)."""
+    report.setdefault("overview", "An overview.")
+    return json.dumps({**report, "findings": [{"path": p, "line": n, "body": b, **({"severity": s} if s else {})}
+                                              for p, n, b, s in findings]})
+
+
+def sections(body):
+    """The body's parts, as the blank lines between them split it (a <details> block is one part)."""
+    parts, current, depth = [], [], 0
+    for line in body.split("\n"):
+        depth += line.count("<details") - line.count("</details>")
+        if line == "" and depth == 0 and current:
+            parts.append("\n".join(current))
+            current = []
+        elif line != "" or depth:
+            current.append(line)
+    return parts + (["\n".join(current)] if current else [])
+
+
+def test_a_string_summary_renders_the_new_layout_with_the_summary_folded_as_it_is():
+    summary = "**Overview**\n\nAdds a cache.\n\n**Advisory (not blocking)**\n\n- A doc nit."
+    gh = run(findings_json(("src/app.py", 2, "**Off by one**\n\nThe loop stops early."), summary=summary))
+
+    _, review = gh.posted[0]
+    lines = review["body"].split("\n")
+    assert lines[0] == pcr.MARKER and lines[1] == "### 🟡 Changes recommended"
+    assert lines[3] == "Off by one"
+    assert "<details open><summary><b>1 open issue</b></summary>\n\n- Off by one\n\n</details>" in review["body"]
+    assert (f"<details><summary><b>What changed in this PR</b></summary>\n\n{summary}\n\n</details>"
+            in review["body"])
+    assert lines[-1] == "<sub>Claude Review</sub>"
+    assert "**Claude Review**" not in review["body"]
+
+
+def test_the_structured_input_renders_each_section():
+    findings = structured(
+        ("src/app.py", 2, "**Cache init can delete another run's cache**\n\nDetail.", "high"),
+        ("src/app.py", 22, "**Child outlives the command**\n\nDetail.", "medium"),
+        overview="Adds a shared cache.",
+        changes=["Adds `cache.sh`.", "Wires it into CI."],
+        files=[{"path": "src/app.py", "description": "The cache | its setup"}],
+        advisory=["A comment is stale."],
+        not_reviewed="The vendored code.",
+    )
+
+    gh = FakeGitHub()
+    pcr.main(["--repo", "octo/demo", "--pr", "7", "--head", HEAD, "--effort", "high (claude-sonnet-5-5), 2 batches"],
+             gh=gh, findings=findings)
+
+    first = gh.posted[0][1]["body"]
+    assert sections(first) == [
+        f"{pcr.MARKER}\n### 🟡 Changes recommended",
+        "Cache init can delete another run's cache",
+        "<details open><summary><b>2 open issues</b></summary>\n\n"
+        "- ![High](https://img.shields.io/badge/High-d1242f?style=flat-square) Cache init can delete another run's cache\n"
+        "- ![Medium](https://img.shields.io/badge/Medium-bf8700?style=flat-square) Child outlives the command\n\n"
+        "</details>",
+        "<details><summary><b>What changed in this PR</b></summary>\n\nAdds a shared cache.\n\n**Changes:**\n\n"
+        "- Adds `cache.sh`.\n- Wires it into CI.\n\n| File | Description |\n| --- | --- |\n"
+        "| `src/app.py` | The cache \\| its setup |\n\n</details>",
+        "**Advisory (not blocking)**",
+        "- A comment is stale.",
+        "**Not reviewed**",
+        "The vendored code.",
+        "<sub>Claude Review · Review effort: high (claude-sonnet-5-5), 2 batches</sub>",
+    ]
+
+
+def test_a_section_left_out_of_the_input_is_left_out_of_the_body():
+    _, review = run(structured(("src/app.py", 2, "**T**", None), overview="Only an overview.")).posted[0]
+
+    body = review["body"]
+    assert "Only an overview." in body
+    for absent in ("**Changes:**", "| File |", "**Advisory", "**Not reviewed**", "Findings outside the diff"):
+        assert absent not in body
+
+
+@pytest.mark.parametrize("effort", [None, "", "  "])
+def test_without_an_effort_the_footer_says_only_claude_review(effort):
+    argv = ["--repo", "octo/demo", "--pr", "7", "--head", HEAD] + ([] if effort is None else ["--effort", effort])
+    gh = FakeGitHub()
+    pcr.main(argv, gh=gh, findings=findings_json())
+
+    assert gh.posted[0][1]["body"].endswith("\n\n<sub>Claude Review</sub>")
+
+
+def test_the_effort_is_kept_on_one_line_and_cant_open_a_tag():
+    gh = FakeGitHub()
+    pcr.main(["--repo", "octo/demo", "--pr", "7", "--head", HEAD, "--effort", "high\n- <b>x</b>"], gh=gh, findings=findings_json())
+
+    assert gh.posted[0][1]["body"].endswith("\n\n<sub>Claude Review · Review effort: high - &lt;b&gt;x&lt;/b&gt;</sub>")
+
+
+@pytest.mark.parametrize(("severities", "top"), [
+    ((None, "low", "medium"), "two"),
+    (("low", "high", "high"), "one"),
+    ((None, None, None), "zero"),
+    (("medium", "medium", "low"), "zero"),
+])
+def test_the_top_finding_is_the_most_severe_first_on_a_tie(severities, top):
+    names = ("zero", "one", "two")
+    findings = structured(*[("src/app.py", 2, f"**{name}**\n\nBody.", s) for name, s in zip(names, severities, strict=True)])
+
+    _, review = run(findings).posted[0]
+
+    assert sections(review["body"])[1] == top
+
+
+def test_open_issues_sort_high_medium_low_then_unrated_keeping_claudes_order_within_each():
+    order = [("a", None), ("b", "low"), ("c", "high"), ("d", "medium"), ("e", "high"), ("f", None), ("g", "low")]
+    findings = structured(*[("src/app.py", 2, f"**{name}**", s) for name, s in order])
+
+    _, review = run(findings).posted[0]
+
+    listed = [line.rsplit(" ", 1)[-1].strip("[]").split("](")[0] for line in review["body"].split("\n")
+              if line.startswith("- ")]
+    assert listed == ["c", "e", "d", "b", "g", "a", "f"]
+
+
+def test_a_finding_without_a_severity_has_no_badge():
+    _, review = run(structured(("src/app.py", 2, "**Plain**", None))).posted[0]
+
+    assert "- Plain\n" in review["body"] and "img.shields.io" not in review["body"]
+
+
+@pytest.mark.parametrize(("body", "title"), [
+    ("**Bold title.** Then the rest.\n\nMore.", "Bold title."),
+    ("No bold title here.\n\nSecond paragraph.", "No bold title here."),
+    ("\n  Leading blank line, **not bold at the start**", "Leading blank line, **not bold at the start**"),
+    ("**  Spaced   title  **", "Spaced title"),
+])
+def test_a_findings_title_is_its_bold_first_line_or_else_its_first_line(body, title):
+    assert pcr.title_of(body) == title
+
+
+def test_a_long_title_is_cut_with_an_ellipsis():
+    title = pcr.title_of("**" + "word " * 100 + "**")
+
+    assert len(title) <= pcr.MAX_TITLE and title.endswith("…")
+
+
+def test_the_markers_and_the_off_diff_section_are_as_before_and_last_with_bullets():
+    findings = structured(("src/app.py", 2, "**On**\n\nText.", "high"), ("README.md", 1, "**Off one**\n\nLine two.", "low"),
+                          ("src/app.py", 10, "Off two", None), overview="O.", changes=["c"], advisory=["a"],
+                          not_reviewed="n")
+
+    _, review = run(findings).posted[0]
+
+    lines = review["body"].split("\n")
+    assert lines[0] == pcr.MARKER and lines[1] == pcr.OFF_DIFF_MARKER
+    header = lines.index("Findings outside the diff (no thread to resolve, so they hold the merge until the next push "
+                         "gets a fresh review):")
+    after = lines[header + 1:]
+    assert [line for line in after if line.startswith("- ")] == ["- `README.md:1`: **Off one**", "- `src/app.py:10`: Off two"]
+    assert "  Line two." in after and after[-1].startswith("<sub>")
+
+
+def test_the_thread_links_are_added_by_editing_the_posted_review():
+    gh = run(structured(("src/app.py", 2, "**Low one**", "low"), ("src/app.py", 22, "**High [one]**", "high"),
+                        ("README.md", 1, "Off.", None)))
+
+    first = gh.posted[0][1]["body"]
+    assert "discussion_r" not in first
+    assert len(gh.updates) == 1
+    linked = gh.updates[0]
+    assert "- ![High](https://img.shields.io/badge/High-d1242f?style=flat-square) " \
+           "[High \\[one\\]](https://github.com/octo/demo/pull/7#discussion_r2)" in linked
+    assert "- ![Low](https://img.shields.io/badge/Low-0969da?style=flat-square) " \
+           "[Low one](https://github.com/octo/demo/pull/7#discussion_r1)" in linked
+    # PR Auto-Merge reads the same markers and off-diff section before and after the edit.
+    assert linked.split("\n")[:2] == first.split("\n")[:2]
+    assert linked[linked.index("Findings outside"):] == first[first.index("Findings outside"):]
+
+
+def test_no_edit_when_no_thread_was_opened():
+    gh = run(findings_json(("README.md", 1, "Off.")))
+
+    assert gh.updates == []
+
+
+@pytest.mark.parametrize("fail", ["read", "update"])
+def test_a_failed_link_read_or_update_warns_and_keeps_the_first_body(fail, capsys):
+    gh = FakeGitHub(fail=fail)
+    review = pcr.main(["--repo", "octo/demo", "--pr", "7", "--head", HEAD], gh=gh,
+                      findings=findings_json(("src/app.py", 2, "**Title**")))
+
+    assert gh.updates == [] and review["body"] == gh.posted[0][1]["body"]
+    assert "- Title\n" in review["body"]
+    assert "::warning::Couldn't link the review's threads" in capsys.readouterr().out
+
+
+def test_a_post_that_returns_no_id_warns_and_keeps_the_first_body(capsys):
+    class NoId(FakeGitHub):
+        def create_review(self, number, review):
+            super().create_review(number, review)
+            return {}
+
+    gh = NoId()
+    run(findings_json(("src/app.py", 2, "**Title**")), gh)
+
+    assert gh.updates == [] and "::warning::Couldn't link" in capsys.readouterr().out
+
+
+def test_thread_links_match_by_path_and_body_and_fall_back_to_order():
+    comments = [{"path": "a", "body": "x"}, {"path": "a", "body": "y"}]
+
+    assert pcr.thread_links(comments, [{"path": "a", "body": "y", "html_url": "https://g/2"},
+                                       {"path": "a", "body": "x", "html_url": "https://g/1"}]) == ["https://g/1", "https://g/2"]
+    # GitHub changed a body: it takes the URL at its place.
+    assert pcr.thread_links(comments, [{"path": "a", "body": "x\r\n", "html_url": "https://g/1"},
+                                       {"path": "a", "body": "y", "html_url": "https://g/2"}]) == ["https://g/1", "https://g/2"]
+    # A different count, or a URL that isn't https, links nothing it can't match.
+    assert pcr.thread_links(comments, [{"path": "a", "body": "q", "html_url": "https://g/1"}]) == [None, None]
+    assert pcr.thread_links(comments, [{"path": "a", "body": "x", "html_url": "javascript:x"},
+                                       {"path": "a", "body": "y"}]) == [None, None]
+
+
+def longest_body(tmp_path, threads):
+    """The longest summary the workflow's batch join can produce, and the findings in the review that hold it."""
+    answers = [{"summary": "z" * 100_000, "findings": []} for _ in range(4)]
+    listed = ["001.diff", "002.diff", "003.diff", "004.diff"]
+    reads = {n: read_whole_of(tmp_path, name, f"r{n}") for n, name in enumerate(listed, 1)}
+    _, answer, _ = batched(tmp_path, answers, listed, reads)
+    return json.dumps({"summary": answer["summary"],
+                       "findings": [{"path": "src/app.py", "line": 2, "body": f"**{'t' * 300}**", "severity": "high"}
+                                    for _ in range(threads)] +
+                                   [{"path": "README.md", "line": 1, "body": "Off the diff, whole."}]})
+
+
+def test_the_longest_joined_summary_fits_githubs_limit_with_the_wrappers_and_links(tmp_path):
+    gh = run(longest_body(tmp_path, 20))
+
+    first, linked = gh.posted[0][1]["body"], gh.updates[0]
+    assert len(first) <= pcr.MAX_BODY and len(linked) <= pcr.MAX_BODY
+    assert "What changed in this PR" in linked and pcr.WHAT_CHANGED_CUT not in linked
+
+
+def test_a_body_past_githubs_limit_cuts_what_changed_and_keeps_the_markers_and_off_diff(tmp_path):
+    gh = run(longest_body(tmp_path, 120))
+
+    for body in (gh.posted[0][1]["body"], gh.updates[0]):
+        assert len(body) <= pcr.MAX_BODY
+        assert body.startswith(f"{pcr.MARKER}\n{pcr.OFF_DIFF_MARKER}\n")
+        assert pcr.WHAT_CHANGED_CUT in body and "zzzz" not in body
+        assert "- `README.md:1`: Off the diff, whole." in body
+        assert "120 open issues" in body
+
+
+def test_open_issues_past_the_limit_are_left_out_with_a_note():
+    findings = [{"path": "src/app.py", "line": 2, "body": f"**{'t' * 199}**", "severity": "high"} for _ in range(400)]
+    _, review = run(json.dumps({"summary": "s" * 1000, "findings": findings})).posted[0]
+
+    assert len(review["body"]) <= pcr.MAX_BODY and pcr.WHAT_CHANGED_CUT in review["body"]
+    assert re.search(r"_\d+ more in the threads below, left out to fit GitHub's limit\._", review["body"])
+    assert "400 open issues" in review["body"]
+
+
+@pytest.mark.parametrize("extras", [{"not_reviewed": "n" * 70_000}, {"advisory": ["a" * 1000] * 70}])
+def test_long_advisory_or_not_reviewed_is_left_out_to_fit_and_keeps_the_off_diff(extras):
+    answer = {"overview": "Short.", "findings": [{"path": "README.md", "line": 1, "body": "Off the diff, whole."}]} | extras
+    _, review = run(json.dumps(answer)).posted[0]
+
+    assert len(review["body"]) <= pcr.MAX_BODY
+    assert pcr.EXTRAS_CUT in review["body"] and pcr.WHAT_CHANGED_CUT in review["body"]
+    assert review["body"].startswith(f"{pcr.MARKER}\n{pcr.OFF_DIFF_MARKER}\n")
+    assert "- `README.md:1`: Off the diff, whole." in review["body"]
+
+
+def test_short_advisory_and_not_reviewed_are_kept():
+    answer = {"overview": "Short.", "advisory": ["Rename it."], "not_reviewed": "The lock file.", "findings": []}
+    _, review = run(json.dumps(answer)).posted[0]
+
+    assert pcr.EXTRAS_CUT not in review["body"]
+    assert "- Rename it." in review["body"] and "The lock file." in review["body"]
+
+
+def test_a_long_effort_is_capped_in_the_footer():
+    gh = FakeGitHub()
+    pcr.main(["--repo", "octo/demo", "--pr", "7", "--head", HEAD, "--effort", "e" * 70_000], gh=gh, findings=findings_json())
+
+    body = gh.posted[0][1]["body"]
+    assert len(body) <= pcr.MAX_BODY
+    assert body.endswith(f"<sub>Claude Review · Review effort: {'e' * (pcr.MAX_EFFORT - 1)}…</sub>")
+
+
+def test_a_files_entry_keeps_only_path_and_description():
+    answer = {"overview": "o", "files": [{"path": "src/a.py", "description": "d", "additions": 1}], "findings": []}
+
+    report, _ = pcr.parse_findings(json.dumps(answer))
+    _, review = run(json.dumps(answer)).posted[0]
+
+    assert report["files"] == [{"path": "src/a.py", "description": "d"}]
+    assert "`src/a.py`" in review["body"]
 
 
 @pytest.mark.parametrize(
@@ -422,6 +753,18 @@ def test_no_findings_says_so():
         json.dumps({"summary": "s", "findings": [{"path": "a.py", "body": "no line"}]}),
         json.dumps({"summary": "s", "findings": [{"path": "a.py", "line": "2", "body": "b"}]}),
         json.dumps({"summary": "s", "findings": "none"}),
+        json.dumps({"summary": "s", "findings": [{"path": "a.py", "line": 2, "body": "b", "severity": "critical"}]}),
+        json.dumps({"summary": "s", "findings": [{"path": "a.py", "line": 2, "body": "b", "severity": "High"}]}),
+        json.dumps({"summary": "s", "findings": [{"path": "a.py", "line": 2, "body": "b", "severity": None}]}),
+        json.dumps({"summary": "s", "changes": "one change", "findings": []}),
+        json.dumps({"summary": "s", "changes": ["ok", 3], "findings": []}),
+        json.dumps({"summary": "s", "files": [{"path": "a.py"}], "findings": []}),
+        json.dumps({"summary": "s", "files": {"path": "a.py", "description": "d"}, "findings": []}),
+        json.dumps({"summary": "s", "files": [{"path": 1, "description": "d"}], "findings": []}),
+        json.dumps({"summary": "s", "advisory": "a", "findings": []}),
+        json.dumps({"summary": "s", "not_reviewed": ["n"], "findings": []}),
+        json.dumps({"overview": 3, "findings": []}),
+        json.dumps({"summary": 3, "overview": "o", "findings": []}),
     ],
 )
 def test_malformed_findings_fail_with_a_clear_message_and_post_nothing(findings, capsys):
