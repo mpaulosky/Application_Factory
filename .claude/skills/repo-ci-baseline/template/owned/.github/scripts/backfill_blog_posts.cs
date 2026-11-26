@@ -15,7 +15,7 @@
 //     dotnet run --no-build --file .github/scripts/backfill_blog_posts.cs -- --wait-for-prs "187, 188"
 //
 // Every non-draft GitHub Release names its source PR in a "Source PR: #n" line. For each release whose PR has no
-// docs/blogs/*-pr-{n}-*.md post (or every release with --regenerate true, read without its blanks and in any case), it writes the post as
+// docs/blogs/<date>-pr-{n}-*.md post (or every release with --regenerate true, read without its blanks and in any case), it writes the post as
 // release_post.cs does, under the release's existing tag, oldest version first. It never creates tags or Releases. Then the README,
 // docs/README.md and docs/index.html tables are rebuilt once, even when no post was written, so docs/README.md follows a README-only
 // [skip-release] merge. When main is already up to date, no file changes. The build's output is under the temporary folder, not the

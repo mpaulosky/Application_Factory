@@ -27,6 +27,10 @@ COMMIT_BODIES = [
     "<!--x-->[zq]: x",
     "[Use `zq<T>`]: s",
     "[docs](https://x.test) zq",
+    # A control character or DEL hides no script link (mpaulosky/Application_Factory#211).
+    "[zq](\x01javascript:x)",
+    "[zq](<\x01javascript:x>)",
+    "[zq](java\x7fscript:x)",
     "[WIP] zq",
     "zq plain",
 ]
@@ -84,6 +88,17 @@ def test_every_commit_stays_visible(rendered_commits, index):
     assert "zq" in text.lower()
     assert SHA in text
     assert "\\" not in text
+
+
+# What a browser drops from a URL before reading its scheme: C0 controls and spaces at its start, tabs and line breaks anywhere.
+URL_START_DROPPED = "".join(chr(code) for code in range(0x21))
+
+
+@pytest.mark.parametrize("index", range(len(COMMIT_CASES)), ids=[repr(case) for case in COMMIT_CASES])
+def test_no_commit_holds_a_script_link(rendered_commits, index):
+    links, _ = read(rendered_commits[index])
+    hrefs = [link.lstrip(URL_START_DROPPED).translate({ord(c): None for c in "\t\n\r\x7f"}).lower() for link in links]
+    assert not [href for href in hrefs if href.startswith(("javascript:", "vbscript:", "data:"))]
 
 
 @pytest.fixture(scope="module")
