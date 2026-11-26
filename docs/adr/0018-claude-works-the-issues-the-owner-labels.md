@@ -68,8 +68,8 @@ The Factory's issues are now split small, with "blocked by" links that keep depe
 chose to work up to three at once (`CLAUDE_ISSUES_CAP` in the pick step). This replaces the Decision's "One issue is worked at a time", the chosen option's one at a time, and the
 Consequence that issues are worked one after another.
 
-- A short pick job holds the `claude-issues` concurrency group, so two runs never pick the same issue. It counts the open issues labelled `claude:working` (with `claude` or without it;
-  closed ones too since the Update on `claude:blocked`, below) whose run, the one the workflow's latest "Claude started" comment names, is still going, picks the oldest
+- A short pick job holds the `claude-issues` concurrency group, so two runs never pick the same issue. It counts the issues labelled `claude:working`, open or closed (the closed ones
+  since the Update on `claude:blocked`, below), with `claude` or without it, whose run, the one the workflow's latest "Claude started" comment names, is still going, picks the oldest
   unblocked issues up to the free slots, and labels and comments on each before it ends; one it can't label or comment on is left for the next run. A `claude:working` label
   left by a run that has ended or is gone, or with no "Claude started" comment, is taken off, and the issue is queued again if it still carries `claude`; one whose comments
   or run can't be read keeps its slot. The Finish step takes `claude` off before `claude:working`, so a finished issue isn't left queued with its slot freed, where another run's pick could take it again.

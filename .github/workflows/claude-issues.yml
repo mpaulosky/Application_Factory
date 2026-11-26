@@ -148,12 +148,12 @@ jobs:
           owner="${GITHUB_REPOSITORY_OWNER}"
           # An issue labelled `claude:working`, open or closed (closing an issue doesn't stop its run), holds a slot while
           # the run named in its latest "Claude started" comment is still going, whether or not it still carries `claude`.
-          # A run that died before its Finish step left
-          # the label behind: when its run has ended, was deleted (HTTP 404), or no "Claude started" comment names one, the
-          # label is taken off, and the issue is queued again if it still carries `claude`. When the comments or the run's
-          # status can't be read, the issue keeps its slot, to be safe. Read in full first, so a failed call fails the run
-          # instead of freeing every slot. The slots are counted before the queue is read: the Finish step takes `claude`
-          # off before `claude:working`, so an issue a run finishes in between is either counted here or not queued.
+          # A run that died before its Finish step left the label behind: when its run has ended, was deleted (HTTP 404),
+          # or no "Claude started" comment names one, the label is taken off, and the issue is queued again if it still
+          # carries `claude`. When the comments or the run's status can't be read, the issue keeps its slot, to be safe.
+          # Read in full first, so a failed call fails the run instead of freeing every slot. The slots are counted before
+          # the queue is read: the Finish step takes `claude` off before `claude:working`, so an issue a run finishes in
+          # between is either counted here or not queued.
           working_issues="$(gh api --paginate "repos/$GH_REPO/issues?state=all&labels=claude:working&per_page=100" \
             --jq '.[] | select(.pull_request == null) | .number')"
           busy=0

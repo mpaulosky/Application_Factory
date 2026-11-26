@@ -1136,7 +1136,8 @@ check "a failed token exchange fails the Publish step without a push, saving the
 # $STUB_API/<key>.json (`[]` when there's none) through the call's own --jq filter, so the filters are tested too: an array in pages of 100, each
 # page filtered on its own as gh does, and only the first page without --paginate. It fails with HTTP 500 when <key>.fail exists and with HTTP 404
 # when <key>.404 does. <key> is the path after repos/o/r/, with `/` as `.`, and `@<labels>` added for a `labels=` query; a `state=open` query leaves
-# out the items whose state is another (an item with no state is open), as GitHub does. Each read's path is recorded in $STUB_API/reads. A write (-X) or any other gh command is recorded in $STUB_API/calls, and fails when it matches the extended regex $STUB_FAIL.
+# out the items whose state is another (an item with no state is open), as GitHub does. Each read's path is recorded in $STUB_API/reads.
+# A write (-X) or any other gh command is recorded in $STUB_API/calls, and fails when it matches the extended regex $STUB_FAIL.
 api="$work/api"
 api_bin="$work/api-bin"
 mkdir -p "$api_bin"
