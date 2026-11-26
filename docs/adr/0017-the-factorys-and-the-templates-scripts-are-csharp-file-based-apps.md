@@ -692,6 +692,27 @@ to `retired.txt`. T1's three `.py` files retire now.
 - **The Seed's `CHECK_PATHS`** names `check_central_pins.cs`, `CheckCentralPins.cs` and `Gh.cs` where it named the `.py`; each Sandcastle Application makes that edit by
   hand, a Seed file being written only when missing.
 
+## Update (mpaulosky/Application_Factory#163): draft_release, and T2's Python retires
+
+T3a, split from mpaulosky/Application_Factory#128 so one run can finish it. `release.yml`'s release job runs `draft_release` as C#, and `draft_release.py` ships beside
+it for this one Rollout; T4a (mpaulosky/Application_Factory#129) adds it to `retired.txt`. `check_central_pins.py` retires now.
+
+- **The files.** `draft_release.cs` includes `DraftRelease.cs` (the logic) and `Gh.cs`. Both join `OWNED`, as the release job runs them with its tokens. `Gh.cs`'s
+  `Arguments` gains `IntOption`, argparse's `type=int`: a value `int()` refuses is a usage error the moment it is read, quoted as `repr()` quotes it, so before a missing
+  or unknown option is reported. `Py` gains `Int`, `int()` of a str (blanks around, a sign, any Unicode decimal digit, an underscore only between two, any size up to
+  Python's 4,300 digits), and `Repr`. A marker's number is any run of Unicode decimal digits, an astral one too, read by its value, as Python's `\d` and `int()` read it,
+  so the markers are found by a scan rather than .NET's `\d`, which sees an astral digit as two code units, and the numbers are `BigInteger`s.
+- **The workflow.** The release job gains `setup-dotnet` and a step that builds the script, both on the condition Create release has, so only a PR it releases pays
+  for them. Create release runs `dotnet run --no-build --file`, so `BODY=$(...)` is the body alone on a cold build. `CiScriptStepsTests` holds `release.yml` to the
+  build-first rule too, and to no step running `draft_release.py`.
+- **The tests.** `test_draft_release.py`'s 10 tests (17 with parameters) are `DraftReleaseTests.cs` in `tests/Scripts.Tests/Template/DraftRelease/`, one method each,
+  with tests of the port's own. The two that hold the markers to `release_post.source_pr_of()` ask the Template's `release_post.py`, which is still Python. The pytest
+  file is deleted and in `retired.txt` and `RETIRED_PATHS`. `TemplateGhTests` holds `IntOption` to argparse, `Py.Int` to `int()` and `Py.Repr` to `repr()`.
+- **The parity suite.** `tests/parity/draft_release/` had 26 cases, recorded from the `.py`; five more (astral digits, a byte order mark in the notes, a number past
+  64 bits, a quoted `--pr`, a negative `--pr`) make 31, which pass against both.
+- **T2's Python retires.** `check_central_pins.py` is deleted, and both versions the Factory's history holds are in `retired.txt` and `RETIRED_PATHS`. Its suite's
+  reference is the `.cs` now. Without the SDK, `pre-push.test.sh`'s `dotnet` stub answers the check with a pass and skips the two cases that read what it found.
+
 ## Update (mpaulosky/Application_Factory#164): release_post's logic is a library, and the render oracle stays on cmark-gfm and kramdown
 
 T3b, split from mpaulosky/Application_Factory#128 under the library-first rule above. Nothing in the workflows changes: `release.yml` and `backfill-blog-posts.yml` run

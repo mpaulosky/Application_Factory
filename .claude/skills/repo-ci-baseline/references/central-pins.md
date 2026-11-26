@@ -2,9 +2,9 @@
 
 Template files (Owned): `.github/scripts/check_central_pins.cs`, a C# file-based app that includes `CheckCentralPins.cs` (the logic) and `Gh.cs`, run by
 `scripts/gate.sh` right before the build and by `ci.yml`'s `Build Solution` job right after Setup .NET, before the restore; each builds it in a step of
-its own, then runs it with `dotnet run --no-build --file`. `check_central_pins.py`, the same check in Python, ships beside it for one Rollout, so a revert
-is one workflow line. Its tests are the Factory's (`tests/Scripts.Tests/Template/CheckCentralPins/` and the `check_central_pins` parity suite), and they
-pin both places. mpaulosky/Application_Factory#105 and mpaulosky/Application_Factory#126; the decision is
+its own, then runs it with `dotnet run --no-build --file`. `check_central_pins.py`, the same check in Python, shipped beside it for one Rollout and has
+retired (mpaulosky/Application_Factory#163): Apply removes an unchanged copy. Its tests are the Factory's (`tests/Scripts.Tests/Template/CheckCentralPins/`
+and the `check_central_pins` parity suite), and they pin both places. mpaulosky/Application_Factory#105 and mpaulosky/Application_Factory#126; the decision is
 [ADR 0012](../docs/adr/0012-an-unreferenced-central-pin-fails-the-gate-and-build-solution.md), and the port the Factory's ADR 0017.
 
 ## Why

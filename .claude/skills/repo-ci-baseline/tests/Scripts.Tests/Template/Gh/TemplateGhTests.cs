@@ -6,8 +6,9 @@ using System.Text.Json.Nodes;
 namespace Baseline.Tests;
 
 // The Template's .github/scripts/Gh.cs, what its C# scripts share: the argument parser, held to argparse by running both on the same
-// arguments with detect_changes.py's options and with discover_tests.py's, a required mutually exclusive group among them; SurrogateEscape,
-// held to Python's surrogateescape the same way; Py, held to Python's str methods; Script.Write, Script.Which and Script.Run.
+// arguments with detect_changes.py's options, with discover_tests.py's, a required mutually exclusive group among them, and with
+// draft_release.py's, an int among them; SurrogateEscape, held to Python's surrogateescape the same way; Py, held to Python's str methods,
+// int() and repr(); Script.Write, Script.Which and Script.Run.
 public class TemplateGhTests
 {
 	// detect_changes.py's options, as it declares them to argparse and DetectChanges.cs to Arguments.
@@ -168,6 +169,146 @@ public class TemplateGhTests
 	[Theory]
 	[MemberData(nameof(DiscoverTestsArguments))]
 	public void Arguments_parse_a_required_mutually_exclusive_group_as_argparse_does(string[] args) => Assert.Equal(ArgparseDiscover(args), ParseDiscover(args));
+
+	// draft_release.py's options, as it declares them to argparse and DraftRelease.cs to Arguments: --pr an int.
+	const string ArgparseDraftRelease = """
+		import argparse, json, sys
+		parser = argparse.ArgumentParser(prog="draft_release")
+		parser.add_argument("--pr", type=int, required=True)
+		parser.add_argument("--notes-file", required=True)
+		parser.add_argument("--tag", default="the draft")
+		try:
+		    args = parser.parse_args(json.loads(sys.argv[1]))
+		except SystemExit as stop:
+		    sys.exit(stop.code)
+		print(json.dumps([str(args.pr), args.notes_file, args.tag], separators=(",", ":")))
+		""";
+
+	public static TheoryData<string[]> DraftReleaseArguments => new()
+	{
+		new[] { "--pr", "42", "--notes-file", "n" },
+		new[] { "--pr=42", "--notes-file=n", "--tag=v1" },
+		new[] { "--p", " +0_42 ", "--n", "n", "--t", "v1" },
+		new[] { "--pr", "-5", "--notes-file", "n" },
+		new[] { "--pr", "\u0664\u0662", "--notes-file", "n" },
+		new[] { "--pr", "123456789012345678901234567890", "--notes-file", "n" },
+		new[] { "--pr", "x", "--notes-file", "n" },
+		new[] { "--pr", "", "--notes-file", "n" },
+		new[] { "--pr", "4 2", "--notes-file", "n" },
+		new[] { "--pr", "_42", "--notes-file", "n" },
+		new[] { "--pr", "42_", "--notes-file", "n" },
+		new[] { "--pr", "4__2", "--notes-file", "n" },
+		new[] { "--pr", "+-4", "--notes-file", "n" },
+		new[] { "--pr", "4.0", "--notes-file", "n" },
+		new[] { "--pr", "it's", "--notes-file", "n" },
+		new[] { "--pr", "x" },
+		new[] { "--pr", "x", "--bogus" },
+		new[] { "--bogus", "--pr", "x" },
+		new[] { "--pr", "42", "--pr", "x", "--notes-file", "n" },
+		new[] { "--pr", "x", "--pr", "42", "--notes-file", "n" },
+		new[] { "--notes-file", "n" },
+		new[] { "--pr", "42" },
+		new[] { "--pr" },
+		new string[] { },
+	};
+
+	// (exit code, what it parsed as JSON, or the error line) from argparse and from Arguments, with draft_release.py's options.
+	static (int Code, string Parsed) ArgparseDraft(string[] args)
+	{
+		var (code, stdout, stderr) = Python(ArgparseDraftRelease, JsonSerializer.Serialize(args));
+		return (code, code == 2 ? stderr.Split('\n', StringSplitOptions.RemoveEmptyEntries)[^1] : stdout.Trim());
+	}
+
+	static (int Code, string Parsed) ParseDraft(string[] args)
+	{
+		var parser = new Arguments("draft_release", "[-h] --pr PR --notes-file NOTES_FILE [--tag TAG]", "")
+				.IntOption("--pr", "", required: true).Required("--notes-file", "").Option("--tag", "");
+		var err = new StringWriter();
+		if (parser.Parse(args, new StringWriter(), err) is int exit)
+			return (exit, err.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries)[^1]);
+		var parsed = new JsonArray(parser.IntValue("--pr", 0).ToString(System.Globalization.CultureInfo.InvariantCulture), parser.Value("--notes-file", ""),
+				parser.Value("--tag", "the draft"));
+		return (0, JsonSerializer.Serialize(JsonSerializer.Deserialize<string[]>(parsed.ToJsonString())));
+	}
+
+	[Theory]
+	[MemberData(nameof(DraftReleaseArguments))]
+	public void Arguments_parse_an_int_option_as_argparse_does(string[] args) => Assert.Equal(ArgparseDraft(args), ParseDraft(args));
+
+	// Text int() reads, and text it refuses: blanks str.isspace() counts, signs, underscores, Unicode and astral digits, and the digit limit.
+	public static TheoryData<string> IntTexts => new()
+	{
+		"0",
+		"042",
+		"-0",
+		" +0_42 ",
+		"\u3000\u001f7\u00a0",
+		"\u3000\t\n\v\f\r 7\u0085\u00a0",
+		"\u001c7",
+		"\u0664\u0662",
+		"\U0001D7D2\U0001D7D0",
+		"1_000_000",
+		"123456789012345678901234567890",
+		new string('9', 4300),
+		new string('9', 4301),
+		"",
+		" ",
+		"+",
+		"-",
+		"_1",
+		"1_",
+		"1__0",
+		"+_1",
+		"1 0",
+		"\u200b1",
+		"0x10",
+		"1e3",
+		"1.0",
+		"\u00b2",
+		"\u2167",
+	};
+
+	[Theory]
+	[MemberData(nameof(IntTexts))]
+	public void Py_int_reads_as_python_does(string text)
+	{
+		var (code, stdout, _) = Python("import json, sys\ntry:\n    print(int(json.loads(sys.argv[1])))\nexcept ValueError:\n    print('ValueError')",
+				JsonSerializer.Serialize(text));
+
+		Assert.Equal(0, code);
+		Assert.Equal(stdout.Trim(), Py.Int(text)?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "ValueError");
+	}
+
+	// Text with each quote, the escapes repr() writes by name, and characters str.isprintable() refuses: controls, a format character, a
+	// separator but the space, a private use one, an unassigned one, and a lone surrogate, which only surrogateescape gives a str.
+	public static TheoryData<string> ReprTexts => new()
+	{
+		"",
+		"x",
+		"it's",
+		"say \"hi\"",
+		"it's \"both\"",
+		"a\\b\t\n\r",
+		"\x00\x1b\x7f\x85\u00a0\u00ad",
+		"\u2028\u2029\u3000 ",
+		"\ue000\U000F0000",
+		"\u0378",
+		"\u00e9\U0001F600",
+		"\udcff",
+	};
+
+	[Theory]
+	[MemberData(nameof(ReprTexts))]
+	public void Py_repr_quotes_as_python_does(string text)
+	{
+		// Both cross as UTF-16 hex, which a lone surrogate can cross as and JSON can't.
+		static string Hex(string text) => string.Concat(text.Select(c => ((int)c).ToString("x4", System.Globalization.CultureInfo.InvariantCulture)));
+		var (code, stdout, _) = Python("import sys\ns = bytes.fromhex(sys.argv[1]).decode('utf-16-be', 'surrogatepass')\nprint(repr(s).encode('utf-16-be', 'surrogatepass').hex())",
+				Hex(text));
+
+		Assert.Equal(0, code);
+		Assert.Equal(stdout.Trim(), Hex(Py.Repr(text)));
+	}
 
 	// Text with each line break str.splitlines() knows, a CRLF, blanks str.isspace() counts (\x1f, U+00A0, U+3000 among them) and some
 	// it doesn't (U+200B), and a trailing break.

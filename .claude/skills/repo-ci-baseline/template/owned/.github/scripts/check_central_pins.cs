@@ -70,8 +70,7 @@
 //
 // Exit 0 on a pass; 1 on an unreferenced pin, a file or folder that can't be checked, or a repo past the run's budget; 2 on a usage
 // error (argparse's, as check_central_pins.py gave: a --root that isn't a folder, an option may be given by a unique prefix of its
-// name). The standard library only, and libc's open. check_central_pins.py, beside it, is the same script in Python, kept for one
-// Rollout so a revert is one workflow line.
+// name). The standard library only, and libc's open.
 using Baseline;
 
 return Script.Run((stdout, stderr) => new CentralPins().Run(args, stdout, stderr));
