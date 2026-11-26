@@ -152,7 +152,14 @@ Hooks live in `.github/hooks/` and are switched on once per clone with `git conf
   ruff and flags and up to five files shell-quoted (`<file>...` for more), so the fix reads no config either; any other status stops the gate as a failed ruff.
   `py312` is the Python CI's `python-tests` job runs, so newer syntax is refused by design; `test.sh` keeps the two equal,
   and fails when this file or ADR 0011 names a `py3NN` other than the gate's, or none.
-  Unlike shell format it runs without an `origin/main` too, on every tracked Python file, as the shell lint does. `tests/owned-gate-files.test.sh` (the Factory's) runs those lines in a throwaway
+  Unlike shell format it runs without an `origin/main` too, on every tracked Python file, as the shell lint does. The **C# scripts** step then checks the Owned
+  C# file-based apps in `.github/scripts/`
+  ([the Factory's ADR 0017](../../../../docs/adr/0017-the-factorys-and-the-templates-scripts-are-csharp-file-based-apps.md))
+  when the branch changes a `.cs` there,
+  and without an `origin/main`: `dotnet format whitespace .github/scripts --folder --verify-no-changes` under `.editorconfig`, then `dotnet build` of each script (a `.cs`
+  no `.cs` there pulls in with `#:include`) from the root, whose `global.json` picks the SDK, with `--no-incremental`, warnings as errors but CA2266 and NU1900, into a
+  folder of the run's own that the gate removes however it ends. Without `dotnet` it stops, saying so. The repo's own C# is built by the Build step.
+  `tests/owned-gate-files.test.sh` (the Factory's) runs those lines in a throwaway
   repo, in a UTF-8 locale and in C, the YAML, shell lint, shell format and Python lint steps with stubs, and the Markdown step with a stub and, when installed, the real tool;
   `.github/hooks/tests/pre-push.test.sh` runs the whole gate with the real shfmt, and shows it reads the repo's `.editorconfig`. Then build and run each test
   project, where the stack allows it locally. Which steps it runs depends on the repo; what's standard is that
@@ -217,7 +224,9 @@ a `claude/...` branch refused, and other `docs/` names refused.
 
 CI's hook-tests job runs every Owned test suite under `.github/hooks/tests/` and `scripts/tests/`: this suite, `pre-commit.test.sh`, `check-branch-name.test.sh`,
 `check-pr-title.test.sh`, `sync-copilot-review.test.sh`, `watch-pr.test.sh`, `cleanup.test.sh`, `work-issue.test.sh`, `check-git-hooks.test.sh` and
-`lint-edited-file.test.sh`. `test.sh` fails when one of them has no `run:` step there, so a new suite can't be left out.
+`lint-edited-file.test.sh`. `test.sh` fails when one of them has no `run:` step there, so a new suite can't be left out. The job sets up the SDK `global.json`
+names: `pre-push.test.sh` stubs `dotnet` but hands the gate's C# scripts step (`dotnet format whitespace`, and `dotnet build` of a `.cs`) to the real one when it
+runs that SDK, so its cases build the Owned scripts as the gate does, and refuse a warning or a format problem in one; without that SDK they are skipped, saying so.
 
 ## Session-start check
 

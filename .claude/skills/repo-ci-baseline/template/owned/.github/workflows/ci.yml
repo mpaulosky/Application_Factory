@@ -79,6 +79,19 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
+      # detect_changes.cs is a C# file-based app (ADR 0017 in the Application Factory), so every PR, a docs-only one too, sets up the SDK
+      # global.json names and pays a first build of it (about 12 s on a fresh runner). It is built in a step of its own and then run with
+      # --no-build, so the run's log holds only what the script prints.
+      - name: Setup .NET
+        if: github.event_name == 'pull_request'
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+
+      - name: Build the change detection
+        if: github.event_name == 'pull_request'
+        run: dotnet build .github/scripts/detect_changes.cs
+
       - name: Classify changed files
         id: diff
         env:
@@ -92,10 +105,11 @@ jobs:
             exit 0
           fi
 
-          # detect_changes.py (tested in .github/scripts/tests) lists the
+          # detect_changes.cs (its parity suite and tests are in the Application Factory) lists the
           # changed files against the base and appends code=true|false.
           # A Dependabot GitHub Actions bump skips them too (see the script).
-          python3 .github/scripts/detect_changes.py --base "$BASE_SHA" --output "$GITHUB_OUTPUT" \
+          # detect_changes.py, beside it, is the same script in Python, kept for one Rollout: running it here instead reverts the port.
+          dotnet run --no-build --file .github/scripts/detect_changes.cs -- --base "$BASE_SHA" --output "$GITHUB_OUTPUT" \
             --author "$AUTHOR" --head-ref "$HEAD_REF"
 
   # Mirrors Detect Changes' result as the docs-only label, so docs PRs are
@@ -370,6 +384,13 @@ jobs:
           echo "${SHFMT_SHA256}  shfmt" | sha256sum -c -
           sudo install -m 0755 shfmt /usr/local/bin/shfmt
           shfmt --version
+
+      # pre-push.test.sh stubs dotnet but hands the gate's C# step (dotnet format and the build of each script in .github/scripts/) to
+      # the real one, so its cases check the Owned C# scripts build as the gate builds them: that needs the SDK global.json names.
+      - name: Setup .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
 
       - name: Run pre-push hook tests
         run: bash .github/hooks/tests/pre-push.test.sh

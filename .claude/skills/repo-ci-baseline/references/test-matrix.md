@@ -28,6 +28,11 @@ Codecov's `patch` and `project` checks are informational (`codecov.yml`): they r
 gate is the only one. Their default targets compare against the base (100% on a fully covered repo, no drop at all), and
 PR Auto-Merge holds a PR with any failed check, so they blocked PRs that passed the gate (Blazor-Server #260, #184).
 
+The Owned C# scripts in `.github/scripts/` (`detect_changes.cs`, ADR 0017 in the Factory) are file-based apps, in no project and under no `tests/`,
+so discovery never lists them and the solution's build never builds them: the gate's C# scripts step and the job that runs one build them. The three
+empty `Directory.*` shields beside them keep the repo's own `Directory.Build.props`, `Directory.Build.targets` and `Directory.Packages.props` (an
+`IsTestProject` rule, central package management, analyzers) out of their build, so a script builds the same in every Application.
+
 Per-repo setup (publishing a project, pulling images, a build tool) goes in the Seed `.github/ci/prepare.sh`, which
 `ci.yml` calls as `prepare.sh build` and `prepare.sh test <test-name>` after the restore.
 

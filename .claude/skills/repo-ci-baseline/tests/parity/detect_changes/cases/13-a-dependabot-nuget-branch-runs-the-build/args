@@ -1,0 +1,8 @@
+--base
+base
+--output
+out
+--author
+dependabot[bot]
+--head-ref
+dependabot/nuget/all-nuget-1a2b3c
