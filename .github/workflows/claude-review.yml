@@ -107,8 +107,8 @@ name: Claude Review
 # The author's local review (the repo-ci-baseline skill's "Review before the
 # push") has already reviewed the whole branch, so Claude Review opens findings,
 # each of which holds the merge, only for bugs, security weaknesses, tests and
-# how GitHub behaves, and lists docs, comments and conventions under "Advisory"
-# in its summary. It also gets the findings the author accepted, from the PR
+# how GitHub behaves, and lists docs, comments and conventions in its answer's
+# advisory. It also gets the findings the author accepted, from the PR
 # description's Review notes, as decisions (see the step that reads them).
 #
 # Without the CLAUDE_CODE_OAUTH_TOKEN secret (from `claude setup-token`) the
@@ -554,6 +554,8 @@ jobs:
         || steps.claude_3.outputs.structured_output != '' || steps.claude_4.outputs.structured_output != '' }}
       stale: ${{ needs.merge-from-main.outputs.stale }}
       sha: ${{ needs.merge-from-main.outputs.sha }}
+      # How many batches the diff was read in, for the review's effort footer.
+      batches: ${{ steps.diff.outputs.batches }}
     steps:
       - name: Check for CLAUDE_CODE_OAUTH_TOKEN
         id: secret
@@ -1969,7 +1971,7 @@ jobs:
             Don't read the files INDEX lists as excluded or as identical copies. Then answer from what you have read;
             don't read again. If a diff piece wasn't read (one listed as not asked for, or one
             whose Read failed or came back cut short), name it and the files in it in your
-            summary, as not reviewed.
+            answer's not_reviewed.
 
             Your review may be the only one this PR gets before it merges on its own, so be
             thorough. For each change, ask what happens on the paths the author didn't test:
@@ -1993,8 +1995,8 @@ jobs:
             or wrong tests, and how GitHub itself behaves. Don't report style nits, praise, or
             the PR's scope (what it bundles together is the author's call). Anything else you
             notice, such as a doc or comment that no longer says what the code does, or a
-            departure from the repository's conventions, goes under an "Advisory" heading in
-            your summary and not in your findings: each finding holds the PR from merging until
+            departure from the repository's conventions, goes in your answer's advisory and
+            not in your findings: each finding holds the PR from merging until
             it is resolved, and these shouldn't.
 
             Earlier reviews of this PR raised these threads, which have since been resolved,
@@ -2029,16 +2031,25 @@ jobs:
             file (not in the diff) and make sure it is the line the finding is about. Say what
             goes wrong, in which situation, and how to fix it.
 
-            Answer with a summary and your findings. Write the summary in Markdown, as short
-            sections a reader can skim:
+            Answer with these fields, for a reader who skims, and your findings:
 
-            - **Overview**: two or three sentences on what the PR changes, and your verdict.
-            - **Changes**: a table with the columns File and What changed, one row for each
-              file or group of related files.
-            - **Advisory (not blocking)**: a bullet list of what the instructions above send
-              there. Leave the section out when there is nothing to list.
-            - **Not reviewed**: the diff pieces and files you couldn't read, as above. Leave
-              it out when you read everything.
+            - overview: two or three sentences on what the PR changes. Give no verdict: the
+              review's headline says whether it recommends changes.
+            - changes: short bullets, one line each, on what the PR changes.
+            - files: one entry for each file or group of related files, its path (for a group,
+              a folder or a glob) and a one-line description of what changed in it.
+            - advisory: what the instructions above send there, one string each. Leave it out
+              when there is nothing to list.
+            - not_reviewed: the diff pieces and files you couldn't read, as above. Leave it out
+              when you read everything.
+
+            Give each finding a severity:
+
+            - high: wrong behaviour, data loss or a security weakness in a situation that is
+              likely to happen.
+            - medium: wrong behaviour in a narrower situation, or a missing test of behaviour
+              the PR changes.
+            - low: a real but minor problem.
 
             Start each finding's body with a bold one-line title, then say what goes wrong and
             in which situation, then how to fix it.
@@ -2051,10 +2062,14 @@ jobs:
             --add-dir ${{ github.workspace }}/../../_actions
             --setting-sources user
             --disallowedTools "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Read(//proc/**),Read(**/.git/**)"
-            --json-schema '{"type": "object", "required": ["summary", "findings"], "additionalProperties": false, "properties": {
-            "summary": {"type": "string"},
-            "findings": {"type": "array", "items": {"type": "object", "required": ["path", "line", "body"], "additionalProperties": false,
-            "properties": {"path": {"type": "string"}, "line": {"type": "integer", "minimum": 0, "maximum": 1000000}, "body": {"type": "string"}}}}}}'
+            --json-schema '{"type": "object", "required": ["overview", "changes", "files", "findings"], "additionalProperties": false, "properties": {
+            "overview": {"type": "string"}, "changes": {"type": "array", "items": {"type": "string"}},
+            "files": {"type": "array", "items": {"type": "object", "required": ["path", "description"], "additionalProperties": false,
+            "properties": {"path": {"type": "string"}, "description": {"type": "string"}}}},
+            "advisory": {"type": "array", "items": {"type": "string"}}, "not_reviewed": {"type": "string"},
+            "findings": {"type": "array", "items": {"type": "object", "required": ["path", "line", "severity", "body"], "additionalProperties": false,
+            "properties": {"path": {"type": "string"}, "line": {"type": "integer", "minimum": 0, "maximum": 1000000},
+            "severity": {"type": "string", "enum": ["high", "medium", "low"]}, "body": {"type": "string"}}}}}}'
 
       # The action writes every review's transcript to one fixed path
       # ($RUNNER_TEMP/claude-execution-output.json at this pin, in its
@@ -2372,8 +2387,20 @@ jobs:
 
           def malformed(answer):
               """Why the answer doesn't fit the schema, as post_claude_review.py's parse_findings judges it, or None."""
-              if not isinstance(answer, dict) or not isinstance(answer.get("summary"), str):
-                  return "no summary string"
+              # Each reason is fixed text with at most an index, so it holds nothing from the answer.
+              if not isinstance(answer, dict) or not (isinstance(answer.get("summary"), str)
+                                                      or isinstance(answer.get("overview"), str)):
+                  return "no summary or overview string"
+              for key in ("summary", "overview", "not_reviewed"):
+                  if key in answer and not isinstance(answer[key], str):
+                      return f"{key} is not a string"
+              for key in ("changes", "advisory"):
+                  if key in answer and not (isinstance(answer[key], list) and all(isinstance(item, str) for item in answer[key])):
+                      return f"{key} is not a list of strings"
+              if "files" in answer and not (isinstance(answer["files"], list) and all(
+                      isinstance(file, dict) and isinstance(file.get("path"), str) and isinstance(file.get("description"), str)
+                      for file in answer["files"])):
+                  return "files is not a list of path and description strings"
               if not isinstance(answer.get("findings"), list):
                   return "findings is not a list"
               for index, finding in enumerate(answer["findings"]):
@@ -2382,11 +2409,20 @@ jobs:
                           and isinstance(finding.get("body"), str)):
                       # Bounded, so no single line can carry a token as one big number.
                       return f"finding {index} needs a string path, an integer line up to 1000000 and a string body"
+                  if "severity" in finding and finding["severity"] not in SEVERITIES:
+                      return f"finding {index} has a severity other than high, medium or low"
               return None
 
 
+          # The levels the schema allows, as post_claude_review.py's SEVERITIES.
+          SEVERITIES = ("high", "medium", "low")
+          # The fields that describe the PR: today's overview, changes, files, advisory and not_reviewed, or the
+          # summary of an answer from before them.
+          REPORT_FIELDS = ("summary", "overview", "changes", "advisory", "not_reviewed")
+
+
           def schema_fields(answer):
-              """Only what gets posted: the summary, and each finding's path, line and body.
+              """Only what gets posted: the fields that describe the PR, and each finding's path, line, severity and body.
 
               A malformed answer becomes a fixed placeholder holding none of it, so
               nothing the check didn't compare reaches the post job's log, and the
@@ -2399,9 +2435,12 @@ jobs:
                   print(f"::error::Claude's answer doesn't fit the schema ({reason}), so it is withheld "
                         "and the post job fails.")
                   return {"malformed": f"Claude's answer was withheld: {reason}"}
-              return {"summary": answer["summary"],
-                      "findings": [{key: finding[key] for key in ("path", "line", "body")}
-                                   for finding in answer["findings"]]}
+              fields = {key: answer[key] for key in REPORT_FIELDS if key in answer}
+              if "files" in answer:
+                  fields["files"] = [{"path": file["path"], "description": file["description"]} for file in answer["files"]]
+              fields["findings"] = [{key: finding[key] for key in ("path", "line", "severity", "body") if key in finding}
+                                    for finding in answer["findings"]]
+              return fields
 
 
           def redact(value, key=None):
@@ -2470,27 +2509,59 @@ jobs:
               answer = fields[1]
           else:
               # GitHub refuses a review body over 65,536 characters, and the findings outside the diff go in it
-              # after the summary, whole. So each batch's summary keeps at most its quarter of 40,000 characters,
-              # and a longer one is cut, saying so. A cut can leave a code fence, a <details> or an HTML comment
-              # open, which would turn the note and the later sections into code or hide them. So the part kept
-              # is posted as a quote: Markdown ends a fence (however indented, in a list or not) with the quote
-              # that holds it, and the HTML parser ends a <details> at the quote's end tag. A comment hides
-              # everything up to its end, so one the part leaves open is closed. The cut is at a line's end,
-              # except in a first line too long to fit the share quoted. Markdown also ends a line at "\r\n"
-              # and at a lone "\r", so a cut summary's lines end in "\n" alone first: a line Markdown sees
-              # without its "> " would end the quote early.
+              # after the fields that describe the PR, whole. So each batch's fields keep at most its quarter of
+              # 40,000 characters: past that, its files rows go first, last first, then its changes, then its
+              # advisory, saying so, and then its overview and not_reviewed are cut, saying so. A cut can leave a
+              # code fence, a <details> or an HTML comment open, which would turn the note and the later
+              # sections into code or hide them. So the part kept is posted as a quote: Markdown ends a fence
+              # (however indented, in a list or not) with the quote that holds it, and the HTML parser ends a
+              # <details> at the quote's end tag. A comment hides everything up to its end, so one the part
+              # leaves open is closed. The cut is at a line's end, except in a first line too long to fit the
+              # share quoted. Markdown also ends a line at "\r\n" and at a lone "\r", so a cut text's lines end
+              # in "\n" alone first: a line Markdown sees without its "> " would end the quote early.
               MAX_SUMMARY_CHARS = 10_000
               CUT_NOTE = ("\n\n_This batch's summary was cut here to fit GitHub's limit on a review's length; "
                           "its findings are whole._")
+              ROWS_CUT_NOTE = ("\n\n_This batch's later Changes, File and Advisory rows were left out to fit GitHub's "
+                               "limit on a review's length; its findings are whole._")
               CLOSE_COMMENT = " -->"
+              NO_ANSWER = "This batch's review ended without an answer, so its pieces weren't reviewed."
 
-              def within_share(summary):
-                  if len(summary) <= MAX_SUMMARY_CHARS:
+              def size(batch):
+                  return (len(batch["overview"]) + len(batch.get("not_reviewed", ""))
+                          + sum(len(item) for key in ("changes", "advisory") for item in batch.get(key, []))
+                          + sum(len(file["path"]) + len(file["description"]) for file in batch.get("files", [])))
+
+              def within_share(fields):
+                  """A batch's fields, its summary and overview as one overview, cut to MAX_SUMMARY_CHARS."""
+                  batch = {"overview": "\n\n".join(fields[key] for key in ("summary", "overview") if fields.get(key))}
+                  batch |= {key: list(fields[key]) for key in ("changes", "files", "advisory") if fields.get(key)}
+                  if fields.get("not_reviewed"):
+                      batch["not_reviewed"] = fields["not_reviewed"]
+                  if size(batch) <= MAX_SUMMARY_CHARS:
+                      return batch
+                  rows_cut = 0
+                  for key in ("files", "changes", "advisory"):
+                      while batch.get(key) and size(batch) + len(ROWS_CUT_NOTE) > MAX_SUMMARY_CHARS:
+                          batch[key].pop()
+                          rows_cut = len(ROWS_CUT_NOTE)
+                  if size(batch) + rows_cut > MAX_SUMMARY_CHARS:
+                      # No rows are left: the texts share what's left, not_reviewed at most a quarter of it.
+                      if "not_reviewed" in batch:
+                          batch["not_reviewed"] = quoted_within(batch["not_reviewed"], MAX_SUMMARY_CHARS // 4)
+                      batch["overview"] = quoted_within(
+                          batch["overview"], MAX_SUMMARY_CHARS - rows_cut - len(batch.get("not_reviewed", "")))
+                  if rows_cut:
+                      batch["overview"] += ROWS_CUT_NOTE
+                  return batch
+
+              def quoted_within(summary, share):
+                  if len(summary) <= share:
                       return summary
                   summary = re.sub(r"\r\n?", "\n", summary)
-                  if len(summary) <= MAX_SUMMARY_CHARS:
+                  if len(summary) <= share:
                       return summary
-                  budget = MAX_SUMMARY_CHARS - len(CUT_NOTE) - len(CLOSE_COMMENT)
+                  budget = share - len(CUT_NOTE) - len(CLOSE_COMMENT)
                   quoted, size = [], 0
                   # Quoting only adds characters, so the summary's lines run past the budget before they end.
                   for line in summary.split("\n"):
@@ -2506,10 +2577,18 @@ jobs:
                       kept += CLOSE_COMMENT
                   return kept + CUT_NOTE
 
-              sections = [f"### Batch {number} of {count}\n\n" + (
-                  within_share(fields[number]["summary"]) if number in fields
-                  else "This batch's review ended without an answer, so its pieces weren't reviewed.")
-                          for number in range(1, count + 1)]
+              # Each batch's overview and not_reviewed under its own heading, its rows concatenated (a path in
+              # two batches keeps both rows), and a batch that didn't answer in not_reviewed.
+              shares = {number: within_share(fields[number]) for number in fields}
+              heading = "**Batch {} of {}**\n\n{}".format
+              overview = "\n\n".join([f"Claude Review read this PR's diff in {count} batches, a review each."] + [
+                  heading(number, count, shares[number]["overview"]) for number in sorted(shares)
+                  if shares[number]["overview"]])
+              not_reviewed = "\n\n".join(
+                  heading(number, count, shares[number]["not_reviewed"] if number in shares else NO_ANSWER)
+                  for number in range(1, count + 1) if number not in shares or "not_reviewed" in shares[number])
+              rows = {key: [row for number in sorted(shares) for row in shares[number].get(key, [])]
+                      for key in ("changes", "files", "advisory")}
               # A finding an earlier batch already reported (the same path, line and body) is posted once, the
               # first's; one batch's own findings are kept as it answered.
               joined, seen = [], set()
@@ -2517,9 +2596,8 @@ jobs:
                   keys = [json.dumps(finding, sort_keys=True) for finding in fields[number]["findings"]]
                   joined += [finding for finding, key in zip(fields[number]["findings"], keys) if key not in seen]
                   seen |= set(keys)
-              answer = {"summary": f"Claude Review read this PR's diff in {count} batches, a review each.\n\n"
-                                   + "\n\n".join(sections),
-                        "findings": joined}
+              answer = {"overview": overview, **{key: value for key, value in rows.items() if value},
+                        **({"not_reviewed": not_reviewed} if not_reviewed else {}), "findings": joined}
           answer, redacted = redact(answer)
           # Pieces past the last batch, and listed ones Claude didn't read whole
           # (a Read that failed, came back cut at the token cap or in part, or
@@ -2535,7 +2613,7 @@ jobs:
           if unread and "findings" in answer:
               # Not on a line of the diff, so the post script puts it in the body
               # under the off-diff marker, and PR Auto-Merge holds the merge.
-              answer["findings"].append({"path": "diff", "line": 0, "body": (
+              answer["findings"].append({"path": "diff", "line": 0, "severity": "high", "body": (
                   f"Claude Review didn't read all of diff pieces {', '.join(unread)}: they're past what "
                   f"{MAX_BATCHES} reviews read, their batch's review ended without an answer, or a Read of them failed "
                   "or came back in part. The log of the review job's \"Check Claude's answer for secrets\" step lists "
@@ -2551,7 +2629,7 @@ jobs:
           # Excluded code, binaries, submodule bumps, symlinks and LFS pointers, which nobody read.
           held = os.environ.get("HELD", "")
           if held.isdigit() and int(held) and "findings" in answer:
-              answer["findings"].append({"path": "diff", "line": 0, "body": (
+              answer["findings"].append({"path": "diff", "line": 0, "severity": "high", "body": (
                   f"Claude Review didn't read {held} changed file(s): files Copilot code review excludes (such as dist, "
                   "bin, vendor or generated files, build configs or lockfiles), files the diff shows only as binary, "
                   "submodule bumps, symlinks or Git LFS pointers. The log "
@@ -2713,6 +2791,9 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ needs.review.outputs.sha || github.event.pull_request.head.sha }}
+          BATCHES: ${{ needs.review.outputs.batches }}
+          # The Review step's --effort and --model; a test keeps them equal.
+          REVIEW_EFFORT: high (claude-sonnet-5-5)
         run: |
           script="${RUNNER_TEMP}/post_claude_review.py"
           if ! git rev-parse --verify -q "HEAD^2" >/dev/null; then
@@ -2731,4 +2812,22 @@ jobs:
             exit 0
           fi
           git show "HEAD^1:.github/scripts/post_claude_review.py" > "$script"
-          python3 -I "$script" --repo "$REPOSITORY" --pr "$PR_NUMBER" --head "$HEAD_SHA"
+          # A base script from before the structured answer (it has no --effort) would refuse this one, so
+          # the answer waits, like a base without the script, for the next Apply to bring the base the script.
+          if ! grep -q -e '--effort' "$script"; then
+            if [ -z "$FINDINGS" ]; then
+              echo "::error::Claude's answer was withheld for quoting a secret of the review job. Check the PR and the" \
+                "review job's log, and rotate CLAUDE_CODE_OAUTH_TOKEN."
+              exit 1
+            fi
+            echo "::warning::The base's .github/scripts/post_claude_review.py predates the answer this workflow asks" \
+              "Claude for, so Claude's review isn't posted. Merge the newer script first; until then the PR needs" \
+              "Copilot's review, or a merge by hand."
+            exit 0
+          fi
+          batches="${BATCHES:-1}"
+          [[ $batches =~ ^[1-9][0-9]*$ ]] || batches=1
+          unit="batches"
+          [[ $batches == 1 ]] && unit="batch"
+          python3 -I "$script" --repo "$REPOSITORY" --pr "$PR_NUMBER" --head "$HEAD_SHA" \
+            --effort "${REVIEW_EFFORT}, ${batches} ${unit}"

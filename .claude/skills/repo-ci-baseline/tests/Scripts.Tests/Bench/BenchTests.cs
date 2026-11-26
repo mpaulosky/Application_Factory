@@ -284,7 +284,7 @@ public partial class BenchTests : IDisposable
 		Assert.False(J.Has(J.Req(checkout, "with"), "ref"));
 		// And Claude may answer only in the fields that get posted.
 		var claudeArgs = Py.Text(J.Req(J.Req(steps[^1], "with"), "claude_args"));
-		Assert.Equal(2, Count(claudeArgs, "\"additionalProperties\": false"));
+		Assert.Equal(3, Count(claudeArgs, "\"additionalProperties\": false"));
 	}
 
 	// -- BadLines (mpaulosky/Application_Factory#122) --
@@ -343,6 +343,7 @@ public partial class BenchTests : IDisposable
 			["PR_NUMBER"] = "7",
 			["HEAD_SHA"] = "abc",
 			["FINDINGS"] = findings,
+			["REVIEW_EFFORT"] = "high (claude-sonnet-5-5)",
 		};
 		return Run(["bash", "-e", "-c", run], repo, env, mayFail: true);
 	}
@@ -350,10 +351,11 @@ public partial class BenchTests : IDisposable
 	[Fact]
 	public void The_post_step_runs_the_bases_script_not_the_prs()
 	{
-		var (code, stdout) = RunPostStep("import sys\nprint('the base script', *sys.argv[1:])\n");
+		// A script that takes --effort: the step passes one an older script would refuse (mpaulosky/Application_Factory#202).
+		var (code, stdout) = RunPostStep("# Takes --effort.\nimport sys\nprint('the base script', *sys.argv[1:])\n");
 
 		Assert.Equal(0, code);
-		Assert.Equal("the base script --repo o/r --pr 7 --head abc", stdout.Trim());
+		Assert.Equal("the base script --repo o/r --pr 7 --head abc --effort high (claude-sonnet-5-5), 1 batch", stdout.Trim());
 	}
 
 	[Fact]

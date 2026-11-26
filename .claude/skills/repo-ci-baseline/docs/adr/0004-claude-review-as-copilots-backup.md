@@ -416,7 +416,8 @@ Since Claude Review first shipped, `--allowedTools "Read,Glob,Grep"` granted tho
   through pieces joined by accented letters, keeping the base letter between them (Claude Review, dotfiles #137). Pieces
   split by letters or digits aren't caught, an accepted limit.
 - **Only the schema's fields are passed on.** The check drops every key but the summary and each finding's path, line and
-  body, and the schema sets `additionalProperties: false`, so an extra field, never posted but printed by the post job's log,
+  body (since mpaulosky/Application_Factory#202, the structured fields and each finding's severity, below),
+  and the schema sets `additionalProperties: false`, so an extra field, never posted but printed by the post job's log,
   is gone (Claude Review, IssueManager#274). An answer of the wrong shape, judged as `parse_findings` judges it, becomes a fixed
   placeholder holding none of it, so nothing the check didn't compare reaches the log, and `post_claude_review.py` still
   rejects it rather than posting "No findings". The check prints why as an error, since the post job's message can't
@@ -582,3 +583,27 @@ and its not-read finding held the merge for the owner to review the rest by hand
   in another job through artifacts.
 
 The benchmark runs the Review step's prompt on one batch, the first; it has not been rerun for this change.
+
+## The structured answer (mpaulosky/Application_Factory#202)
+
+So that Claude Review's comment reads like Copilot's (mpaulosky/Application_Factory#200), the post script renders a headline, the top finding, the open
+issues with a severity badge each and a folded What changed (mpaulosky/Application_Factory#201). This change has the Review step ask for what that layout needs:
+
+- **The schema.** Claude answers an `overview` (two or three sentences, no verdict, since the headline is computed), `changes` (short bullets), `files`
+  (`{path, description}`, a file or group of related files each), `advisory` and `not_reviewed` (both optional), and a required `severity` on each finding:
+  `high` for wrong behaviour, data loss or a security weakness in a likely situation, `medium` for one in a narrower situation or a missing test of changed
+  behaviour, `low` for a real but minor problem. The `summary` string is dropped from the schema; the answer check and the post script still accept one,
+  so an answer from before the change posts as it did.
+- **The answer check** passes on only those fields (each `files` entry's path and description, each finding's path, line, severity and body), judges their
+  types as `parse_findings` does, and redacts credentials in every string of them, a file's path as a path. The secret check already read every string.
+  The findings it adds for unread pieces and held files are `high`.
+- **The batch join** keeps the fields: the overviews, one per batch under a `**Batch N of M**` line after a sentence on the batch count; `changes`, `files`
+  and `advisory` concatenated (a path two batches name keeps both rows); and each batch's `not_reviewed`, or the line saying its review didn't answer,
+  under the same kind of line. Each batch keeps its 10,000-character share over all its fields: its `files` rows go first, last first, then `changes`, then
+  `advisory`, with a note, and only then are its overview and its `not_reviewed` (at most a quarter of the share) cut as the summary was, quoted.
+- **The post job** passes `--effort`, such as `high (claude-sonnet-5-5), 2 batches`, from the review job's batch count and the Review step's `--effort` and
+  `--model` (a test keeps them equal). It runs the base's script, and a base script from before mpaulosky/Application_Factory#201 would refuse both the
+  answer and the argument, so a base whose script doesn't take `--effort` warns and posts nothing, like a base without the script. The script's change
+  therefore reaches the Fleet first and this one in a later re-Apply round, the two-step rule above.
+
+Copilot's New and Still open tags are left out: the review knows only which threads were resolved, not which of its findings are new.
