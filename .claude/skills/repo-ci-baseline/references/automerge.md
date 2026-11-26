@@ -279,7 +279,8 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
   outside the diff (the last section with bullets) and a `<sub>` footer naming the review effort (`--effort`). The thread links exist only once the review
   is posted, so the script then edits the body to add them (`PUT` on the review, which fires `pull_request_review` `edited`, which PR Review Submitted ignores);
   if that fails it warns and the body keeps the titles unlinked. Both bodies carry the same markers and off-diff section. Past GitHub's 65,536-character limit,
-  What changed is left out first, then the open issues past what fits; the markers and the findings outside the diff are never cut.
+  What changed is left out first, then Advisory and Not reviewed, then the open issues past what fits; the markers and the findings outside the diff are never cut.
+  The effort in the footer is capped at 200 characters.
   A finding at a line its changed file doesn't have is a wrong number, so it goes on the file's nearest diff line instead, as a thread.
   A body finding opens no thread, so the review's body carries a second marker, `<!-- claude-review:off-diff -->`, and this workflow holds the merge
   while that review is Claude's latest of the newest commit it reviewed that covers the head

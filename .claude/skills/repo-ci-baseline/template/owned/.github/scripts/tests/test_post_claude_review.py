@@ -706,6 +706,44 @@ def test_open_issues_past_the_limit_are_left_out_with_a_note():
     assert "400 open issues" in review["body"]
 
 
+@pytest.mark.parametrize("extras", [{"not_reviewed": "n" * 70_000}, {"advisory": ["a" * 1000] * 70}])
+def test_long_advisory_or_not_reviewed_is_left_out_to_fit_and_keeps_the_off_diff(extras):
+    answer = {"overview": "Short.", "findings": [{"path": "README.md", "line": 1, "body": "Off the diff, whole."}]} | extras
+    _, review = run(json.dumps(answer)).posted[0]
+
+    assert len(review["body"]) <= pcr.MAX_BODY
+    assert pcr.EXTRAS_CUT in review["body"] and pcr.WHAT_CHANGED_CUT in review["body"]
+    assert review["body"].startswith(f"{pcr.MARKER}\n{pcr.OFF_DIFF_MARKER}\n")
+    assert "- `README.md:1`: Off the diff, whole." in review["body"]
+
+
+def test_short_advisory_and_not_reviewed_are_kept():
+    answer = {"overview": "Short.", "advisory": ["Rename it."], "not_reviewed": "The lock file.", "findings": []}
+    _, review = run(json.dumps(answer)).posted[0]
+
+    assert pcr.EXTRAS_CUT not in review["body"]
+    assert "- Rename it." in review["body"] and "The lock file." in review["body"]
+
+
+def test_a_long_effort_is_capped_in_the_footer():
+    gh = FakeGitHub()
+    pcr.main(["--repo", "octo/demo", "--pr", "7", "--head", HEAD, "--effort", "e" * 70_000], gh=gh, findings=findings_json())
+
+    body = gh.posted[0][1]["body"]
+    assert len(body) <= pcr.MAX_BODY
+    assert body.endswith(f"<sub>Claude Review · Review effort: {'e' * (pcr.MAX_EFFORT - 1)}…</sub>")
+
+
+def test_a_files_entry_keeps_only_path_and_description():
+    answer = {"overview": "o", "files": [{"path": "src/a.py", "description": "d", "additions": 1}], "findings": []}
+
+    report, _ = pcr.parse_findings(json.dumps(answer))
+    _, review = run(json.dumps(answer)).posted[0]
+
+    assert report["files"] == [{"path": "src/a.py", "description": "d"}]
+    assert "`src/a.py`" in review["body"]
+
+
 @pytest.mark.parametrize(
     "findings",
     [

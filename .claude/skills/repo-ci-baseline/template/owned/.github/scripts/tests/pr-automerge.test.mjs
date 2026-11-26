@@ -8,6 +8,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mock, test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 const WORKFLOW = new URL("../../workflows/pr-automerge.yml", import.meta.url);
 const OWNER = "octo";
@@ -3301,7 +3302,8 @@ test("the exhaustion comment lists the off-diff findings of Claude's review of t
 
 // The body post_claude_review.py's build_review writes for the given FINDINGS, every section in it.
 function postedBody(findings) {
-  const scripts = new URL("..", import.meta.url).pathname;
+  // fileURLToPath decodes the path: URL.pathname keeps a space as %20.
+  const scripts = fileURLToPath(new URL("..", import.meta.url));
   const done = spawnSync("python3", ["-I", "-c", [
     "import json, sys",
     "sys.path.insert(0, sys.argv[1])",

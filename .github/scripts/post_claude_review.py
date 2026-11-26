@@ -263,7 +263,10 @@ def parse_findings(text):
             raise MalformedFindings(f"finding {index} needs a string path, an integer line and a string body")
         if "severity" in finding and finding["severity"] not in SEVERITIES:
             raise MalformedFindings(f"finding {index} has a severity other than high, medium or low")
-    report = {key: data[key] for key in ("summary", "overview", "changes", "files", "advisory", "not_reviewed") if key in data}
+    report = {key: data[key] for key in ("summary", "overview", "changes", "advisory", "not_reviewed") if key in data}
+    if "files" in data:
+        # Only the validated fields: an extra one of another type would break the redaction.
+        report["files"] = [{"path": file["path"], "description": file["description"]} for file in data["files"]]
     return report, findings
 
 
@@ -357,9 +360,12 @@ OFF_DIFF_HEADER = ("Findings outside the diff (no thread to resolve, so they hol
 BADGE_COLOURS = {"high": "d1242f", "medium": "bf8700", "low": "0969da"}
 MAX_TITLE = 200
 # GitHub refuses a review body over 65,536 characters. The markers and the findings outside the
-# diff are never cut: What changed goes first, then the open issues past what fits.
+# diff are never cut: What changed goes first, then Advisory and Not reviewed, then the open
+# issues past what fits. The effort in the footer is capped at MAX_EFFORT.
 MAX_BODY = 65_536
+MAX_EFFORT = 200
 WHAT_CHANGED_CUT = "_What changed in this PR was left out to fit GitHub's limit on a review's length._"
+EXTRAS_CUT = "_Advisory and Not reviewed were left out to fit GitHub's limit on a review's length._"
 
 
 def badge(severity):
@@ -450,10 +456,14 @@ def render_body(report, findings, threads, off_diff, effort=None, notes=(), link
               for (finding, _), url in by_severity(list(zip(threads, links, strict=True)),
                                                    lambda pair: pair[0][0].get("severity"))]
     changed = what_changed(report)
-    footer = f"Claude Review · Review effort: {' '.join(effort.split())}" if effort and effort.strip() else "Claude Review"
+    effort = " ".join(effort.split()) if effort else ""
+    if len(effort) > MAX_EFFORT:
+        effort = effort[:MAX_EFFORT - 1] + "…"
+    footer = f"Claude Review · Review effort: {effort}" if effort else "Claude Review"
     footer = footer.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    has_extras = bool(report.get("advisory") or report.get("not_reviewed", "").strip())
 
-    def compose(changed, shown):
+    def compose(changed, shown, extras=True):
         parts = [CHANGES_RECOMMENDED if findings else NO_CHANGES_RECOMMENDED]
         if findings:
             parts.append(title_of(by_severity(findings)[0]["body"]))
@@ -465,10 +475,13 @@ def render_body(report, findings, threads, off_diff, effort=None, notes=(), link
             parts.append(f"<details open><summary><b>{count}</b></summary>\n\n{listed}\n\n</details>")
         if changed:
             parts.append(f"<details><summary><b>What changed in this PR</b></summary>\n\n{changed}\n\n</details>")
-        if report.get("advisory"):
-            parts.append("**Advisory (not blocking)**\n\n" + bullets(report["advisory"]))
-        if report.get("not_reviewed", "").strip():
-            parts.append("**Not reviewed**\n\n" + report["not_reviewed"].strip())
+        if not extras:
+            parts.append(EXTRAS_CUT)
+        else:
+            if report.get("advisory"):
+                parts.append("**Advisory (not blocking)**\n\n" + bullets(report["advisory"]))
+            if report.get("not_reviewed", "").strip():
+                parts.append("**Not reviewed**\n\n" + report["not_reviewed"].strip())
         parts += notes
         if off_diff:
             # The last section with bullets: PR Auto-Merge reads every "- " line after its header as a finding.
@@ -481,10 +494,14 @@ def render_body(report, findings, threads, off_diff, effort=None, notes=(), link
     if len(body) > MAX_BODY and changed:
         changed = WHAT_CHANGED_CUT
         body = compose(changed, len(issues))
+    extras = True
+    if len(body) > MAX_BODY and has_extras:
+        extras = False
+        body = compose(changed, len(issues), extras)
     shown = len(issues)
     while len(body) > MAX_BODY and shown:
         shown -= 1
-        body = compose(changed, shown)
+        body = compose(changed, shown, extras)
     return body
 
 
