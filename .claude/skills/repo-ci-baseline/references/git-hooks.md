@@ -225,8 +225,10 @@ a `claude/...` branch refused, and other `docs/` names refused.
 CI's hook-tests job runs every Owned test suite under `.github/hooks/tests/` and `scripts/tests/`: this suite, `pre-commit.test.sh`, `check-branch-name.test.sh`,
 `check-pr-title.test.sh`, `sync-copilot-review.test.sh`, `watch-pr.test.sh`, `cleanup.test.sh`, `work-issue.test.sh`, `check-git-hooks.test.sh` and
 `lint-edited-file.test.sh`. `test.sh` fails when one of them has no `run:` step there, so a new suite can't be left out. The job sets up the SDK `global.json`
-names: `pre-push.test.sh` stubs `dotnet` but hands the gate's C# scripts step (`dotnet format whitespace`, and `dotnet build` of a `.cs`) to the real one when it
-runs that SDK, so its cases build the Owned scripts as the gate does, and refuse a warning or a format problem in one; without that SDK they are skipped, saying so.
+names: `pre-push.test.sh` stubs `dotnet` but hands the gate's C# scripts step (`dotnet format whitespace`, and `dotnet build` of a `.cs`) and its run of the test
+discovery (`dotnet run --no-build --file .github/scripts/discover_tests.cs`) to the real one when it runs that SDK, so its cases build the Owned scripts as the gate
+does, refuse a warning or a format problem in one, and test only the paths the discovery's first run prints; without that SDK the stub answers the discovery from
+`discover_tests.py` and the build cases are skipped, saying so.
 
 ## Session-start check
 

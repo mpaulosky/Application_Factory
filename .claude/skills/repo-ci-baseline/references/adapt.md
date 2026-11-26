@@ -58,7 +58,7 @@ Move whatever the old `ci.yml` did for this repo alone into `.github/ci/prepare.
 - Tools the build runs: atelier-store's Tailwind build needs pnpm, so `corepack enable` (pnpm's version comes from `packageManager` in `package.json`).
 - Test fixtures: IssueTracker's `AppHost.Tests` needs the UI published and the Mongo and Redis images pulled, plus `ConnectionStrings__mongodb=mongodb://localhost:27017` appended to `$GITHUB_ENV`.
 - Secrets: the test jobs get only the repo's optional `TEST_ENV` secret, one `NAME=value` line per variable
-  (`MongoDB__ConnectionString=...`), masked and exported by `load_test_env.py`.
+  (`MongoDB__ConnectionString=...`), masked and exported by `load_test_env.cs`.
   Move any secret the old `ci.yml` passed to the tests into it (`gh secret set TEST_ENV < file`), and delete the old secret once CI passes.
   Check the names as well as the values: the old `ci.yml` may have mapped a secret to a different variable name. Articles' old CI
   exported `AUTH0_ADMIN_USERNAME` as `Auth0__E2E__Admin__Username`, while `TEST_ENV` held `Auth0__Admin__Username`, so 9 of 10 E2E tests

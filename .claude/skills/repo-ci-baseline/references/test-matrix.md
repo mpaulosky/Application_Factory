@@ -1,7 +1,9 @@
 # Per-project test matrix
 
-Template files (Owned): `ci.yml` (the `discover-tests`, `test` and `coverage` jobs), `.github/scripts/discover_tests.py`, `global.json`, `.github/ci/coverage-threshold`, and the Seed
-`.github/ci/prepare.sh`. History: IssueTracker #178.
+Template files (Owned): `ci.yml` (the `discover-tests`, `test` and `coverage` jobs), `.github/scripts/discover_tests.cs` (with `DiscoverTests.cs` and `Gh.cs`),
+`.github/scripts/load_test_env.cs` (with `LoadTestEnv.cs`), `discover_tests.py` and `load_test_env.py`, the same scripts in Python, shipped beside them for one
+Rollout, `global.json`, `.github/ci/coverage-threshold`, and the Seed `.github/ci/prepare.sh`. History: IssueTracker #178; mpaulosky/Application_Factory#162 ported
+the two scripts to C# (ADR 0017 in the Factory).
 
 ## The rule
 
@@ -12,9 +14,9 @@ parent props file counts only when the nearest one imports it. A `Condition` on 
 evaluated against the project name when it tests `$(MSBuildProjectName)` with `.Contains`, `.StartsWith`, `.EndsWith`,
 `==` or `!=`: Blazor-Server sets `IsTestProject` in its root `Directory.Build.props` only where
 `$(MSBuildProjectName.Contains('.Tests'))`, so a helper library under `tests/` stays out of the matrix. Any other
-`Condition` is logged and counts as holding. `scripts/gate.sh` runs `discover_tests.py --list`, so the pre-push gate
+`Condition` is logged and counts as holding. `scripts/gate.sh` builds `discover_tests.cs` and runs it with `--no-build --list`, so the pre-push gate
 tests the same projects (it used to test every `.csproj` two levels under `tests/`, and failed on IssueTracker's
-`TestingSupport.Library`). `discover_tests.py` fails
+`TestingSupport.Library`). `discover_tests.cs` fails
 the job when `tests/` has projects but none of them is a test project: `Test Suite` passes a skipped matrix, so a
 discovery miss would otherwise pass every PR with no tests run (atelier-store's first Standardize run did). The build job caches no `bin/` or
 `obj/`: nothing restored that cache, so the step only cost time.
@@ -28,8 +30,12 @@ Codecov's `patch` and `project` checks are informational (`codecov.yml`): they r
 gate is the only one. Their default targets compare against the base (100% on a fully covered repo, no drop at all), and
 PR Auto-Merge holds a PR with any failed check, so they blocked PRs that passed the gate (Blazor-Server #260, #184).
 
-The Owned C# scripts in `.github/scripts/` (`detect_changes.cs`, ADR 0017 in the Factory) are file-based apps, in no project and under no `tests/`,
-so discovery never lists them and the solution's build never builds them: the gate's C# scripts step and the job that runs one build them. The three
+The Owned C# scripts in `.github/scripts/` (`detect_changes.cs`, `discover_tests.cs` and `load_test_env.cs`, ADR 0017 in the Factory) are file-based apps, in no
+project and under no `tests/`, so discovery never lists them and the solution's build never builds them: the gate's C# scripts step and the job that runs one build
+them. Each job builds its script in a step of its own and runs it with `dotnet run --no-build`, so the log, and the gate's captured `--list`, holds only what the
+script prints; the test job builds `load_test_env.cs` in a step without the `TEST_ENV` secret. The parity suites `tests/parity/discover_tests/` and
+`tests/parity/load_test_env/` (run against the `.py` and the `.cs`) and the xUnit tests in `tests/Scripts.Tests/Template/`, which replaced
+`test_discover_tests.py` and `test_load_test_env.py` (Apply now removes them), are the Factory's. The three
 empty `Directory.*` shields beside them keep the repo's own `Directory.Build.props`, `Directory.Build.targets` and `Directory.Packages.props` (an
 `IsTestProject` rule, central package management, analyzers) out of their build, so a script builds the same in every Application.
 

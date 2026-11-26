@@ -628,3 +628,28 @@ script), so a revert is one workflow line; T2 adds it to `retired.txt`.
   a name that isn't UTF-8, and argparse's errors and forms.
 - **What the port changes on purpose.** `git` is found in `PATH`'s absolute folders only (above), and a failed `git` call's message carries what git said, where the
   Python's traceback named only its exit status. The usage line names `detect_changes.cs`.
+
+## Update (mpaulosky/Application_Factory#162): discover_tests and load_test_env
+
+T1b, on what T1a brought. `ci.yml`'s Discover Test Projects job and each test job run the C#, and `discover_tests.py` and `load_test_env.py` ship beside it for this
+one Rollout; T2 (mpaulosky/Application_Factory#126) adds them to `retired.txt`.
+
+- **The files.** `discover_tests.cs` pulls in `DiscoverTests.cs`, and `load_test_env.cs` `LoadTestEnv.cs`, each with `Gh.cs`. `Gh.cs`'s `Arguments` gains `OneOf`,
+  argparse's required mutually exclusive group (`--output` or `--list`: a second is "not allowed with" the first, none is "one of the arguments ... is required"), and a
+  `Py` class with `str.strip()`, `str.splitlines()` and `str.lower()`, as the Factory's `Py.cs` has them. The four files and `Gh.cs` join `OWNED`, as the issue asked:
+  `load_test_env.cs` runs with the `TEST_ENV` secret, and the Owned files check now reports a PR that edits one of them. `detect_changes.cs` and `DetectChanges.cs` aren't
+  in it yet.
+- **The workflow and the gate.** Each script is built in a step of its own, then run with `dotnet run --no-build --file`, so the log holds only what it prints: the
+  Discover Test Projects job gains `setup-dotnet`, and the test job, which has it, builds `load_test_env.cs` in a step without `TEST_ENV`, so the secret reaches only the
+  run. The Template gate's Tests step builds `discover_tests.cs` (its output on stderr) and runs it with `--no-build --list`, so the paths it reads are a first run's
+  stdout alone. `pre-push.test.sh`'s `dotnet` stub hands that run to the real SDK, and without one answers it from the `.py`; its cases check the build comes first, that
+  only the printed paths are tested, and that a failed build or run refuses the push. A Factory xUnit test holds `ci.yml` to the build-first rule.
+- **The pytest files retire now,** as `test_detect_changes.py` did: `test_discover_tests.py` and `test_load_test_env.py` are `DiscoverTestsTests.cs` and
+  `LoadTestEnvTests.cs` in `tests/Scripts.Tests/Template/`, one method each, with tests of the port's own beside them, and every version the Factory's history holds is in
+  `retired.txt` and `RETIRED_PATHS`.
+- **The parity suites.** `tests/parity/discover_tests/` (49 cases, each a repo in `tree/`) and `tests/parity/load_test_env/` (37 cases) compare stdout, the exit code and
+  the bytes appended to `--output`. They pin pathlib's sort by path part and code point, `json.dumps`'s spacing and `\uXXXX` escapes, `str.splitlines()`'s separators and
+  `str.strip()`'s blanks, ElementTree's reading of a value, `Path.resolve()` through a symlink, argparse's group errors, and that a malformed `TEST_ENV` prints no value.
+  `TEST_ENV` holds line breaks one `env` line can't, so the runner gains `env.d/`: a file per variable whose bytes are its value.
+- **What the port leaves different, on purpose.** A name under `tests/` that isn't UTF-8 (.NET can't open it), names whose lower case Python's full case mapping gives
+  differently, and an XML file with a DTD; each suite's README lists them. The usage lines name the `.cs`.
