@@ -2,7 +2,7 @@
 
 Every reviewer the `pre-push-review` skill starts reads this first. The first paragraph is Claude Review's own, from the
 prompt in `.github/workflows/claude-review.yml`, and the second is the local review's wider version of its second: Claude Review opens findings
-for bugs, security weaknesses, tests and how GitHub behaves and lists docs, comments and conventions as Advisory in its summary, while this review
+for bugs, security weaknesses, tests and how GitHub behaves and lists docs, comments and conventions in its answer's advisory, while this review
 reports all of them as findings, so the local review asks at least what GitHub's will. One sentence is adapted:
 GitHub's reviewer reads pinned actions' source from the runner, and a local one reads what the agent running the review
 fetched into the run folder. The rest is adapted from the same

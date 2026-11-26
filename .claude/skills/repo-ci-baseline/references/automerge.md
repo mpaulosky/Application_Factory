@@ -270,7 +270,8 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
   Claude answers in fields (ADR 0004's "The structured answer"): an `overview` with no verdict, `changes` bullets, `files` rows (`{path, description}`),
   optional `advisory` and `not_reviewed`, and findings that each carry a `severity` (`high`, `medium` or `low`); the findings the answer check adds for
   unread pieces and held files are `high`. A diff read in batches joins them: each batch's overview and `not_reviewed` under a `**Batch N of M**` line,
-  the rows concatenated, and each batch held to its share of the body, its `files` rows cut first, then `changes`, then `advisory`.
+  the rows concatenated, a finding an earlier batch reported (same path, line and body) once, and each batch held to its share of the body: its
+  `not_reviewed` cut to a quarter of the share first, then its `files` rows, then `changes`, then `advisory`, and only then its overview.
   It also holds the findings the author accepted, from the PR description's `## Review notes`, as decisions like a resolved thread's; they count only on a same-repo PR
   whose author is the `OWNER` (a `MEMBER` or `COLLABORATOR` may have read access only). The step reads the description from the API as it runs.
   The prompt tells Claude that a note never covers a security weakness, which is an instruction, not an enforced rule.

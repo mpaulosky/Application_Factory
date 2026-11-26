@@ -482,7 +482,8 @@ The Seed is written once, so a repo that already has a `repo-config.mts` keeps i
 
 With the review before the push ([ADR 0008](0008-review-before-the-push.md)), Claude Review is a backstop for what a local review can't check.
 The prompt asks for findings only on bugs in code that runs, security weaknesses, tests and GitHub's own behaviour, and has Claude list
-docs, comments and conventions under "Advisory" in its summary, since a finding holds the merge and these shouldn't.
+docs, comments and conventions in its answer's `advisory` (its summary's "Advisory" section before mpaulosky/Application_Factory#202), since a finding
+holds the merge and these shouldn't.
 The local review's reviewers are asked at least what Claude Review is, plus those, so `review-bar.md`'s second paragraph is the wider version of Claude Review's.
 
 It reads the PR description's `## Review notes` as accepted findings, between the markers on lines of their own, indented between nonce lines like the resolved threads.
@@ -514,6 +515,8 @@ rules, and a delta would need the same rules applied to a second diff, so it is 
 The owner found Copilot's reviews easier to read than Claude's one dense paragraph, so the prompt asks for the same shape: a summary in short Markdown sections
 (Overview, a Changes table of file and what changed, Advisory, Not reviewed) and findings whose body starts with a bold title, then what goes wrong and the fix.
 The model's answer is still the schema's `summary` string and each finding's `body` string, so the schema and the checks that hold a merge don't change.
+(Updated by mpaulosky/Application_Factory#202: the sections are now fields of the answer's schema, and each finding has a severity; see
+[The structured answer](#the-structured-answer-mpauloskyapplication_factory202).)
 The posting script changes only in how it handles suggestions, below, and in indenting an off-diff finding's body under its bullet so its paragraphs stay with it.
 
 A finding may carry a GitHub `suggestion` block, which a reader applies to the commented line with one click, only when the fix replaces that one line.
@@ -552,7 +555,7 @@ and its not-read finding held the merge for the owner to review the rest by hand
 - **The diff is read in batches, a review each.** The diff step packs consecutive pieces into batches within the same 8 pieces and 300,000 bytes one review
   reads, at most four batches (`MAX_BATCHES`), and writes each batch's piece list (`pieces_N`), names (`listed_N`) and a note for the prompt (`note_N`).
   The Review step reads batch 1, and "Review batch 2" to "Review batch 4" run only when the diff has that many. Every batch's review also reads every context
-  piece, so it sees the code around its change; the prompt's note says which batch it reads and keeps its Changes table to that batch's files.
+  piece, so it sees the code around its change; the prompt's note says which batch it reads and keeps its changes and files to that batch's files.
 - **The owner's limit holds per review.** Each batch's review is held to one turn of reads and `--max-turns 30` like the single review it was, so a
   batch is the same review the bench measured, on less of the diff. Raising the turn limit for one review to read everything was not chosen: it would read
   all the pieces into one context, past what the bench measured, where the limit was set because more turns didn't find more.
@@ -571,6 +574,8 @@ and its not-read finding held the merge for the owner to review the rest by hand
   open is closed. A cut summary's `\r\n` and lone `\r` become `\n` first, since Markdown ends a line at each
   and every line needs its quote marker. Parsing the summary's Markdown to close each block was tried and dropped: it missed fences in lists and quotes.
   One batch alone is posted as it answered.
+  (Updated by mpaulosky/Application_Factory#202: the join keeps the structured fields, a finding repeats an earlier batch's whatever its severity, and
+  the 10,000 characters are a batch's share over all its fields; see [The structured answer](#the-structured-answer-mpauloskyapplication_factory202).)
 - **The steps share their inputs through a YAML anchor** (`with: &review`, then `with: *review`), and the prompt takes the batch's pieces and note from the
   step's own `env` (`REVIEW_PIECES`, `REVIEW_BATCH`), so the prompt and the Read restrictions are written once. zizmor warns that it audits anchored
   inputs less precisely; actionlint and GitHub read them. A test keeps the four steps' inputs equal and the three `MAX_BATCHES` (the diff step, the
@@ -599,8 +604,9 @@ issues with a severity badge each and a folded What changed (mpaulosky/Applicati
   The findings it adds for unread pieces and held files are `high`.
 - **The batch join** keeps the fields: the overviews, one per batch under a `**Batch N of M**` line after a sentence on the batch count; `changes`, `files`
   and `advisory` concatenated (a path two batches name keeps both rows); and each batch's `not_reviewed`, or the line saying its review didn't answer,
-  under the same kind of line. Each batch keeps its 10,000-character share over all its fields: its `files` rows go first, last first, then `changes`, then
-  `advisory`, with a note, and only then are its overview and its `not_reviewed` (at most a quarter of the share) cut as the summary was, quoted.
+  under the same kind of line. A finding an earlier batch reported (the same path, line and body) is posted once, with the first batch's severity.
+  Each batch keeps its 10,000-character share over all its fields: past it, its `not_reviewed` is cut to a quarter of the share first, then its `files`
+  rows go, last first, then `changes`, then `advisory`, with a note, and only then is its overview cut, each cut quoted as the summary's was.
 - **The post job** passes `--effort`, such as `high (claude-sonnet-5-5), 2 batches`, from the review job's batch count and the Review step's `--effort` and
   `--model` (a test keeps them equal). It runs the base's script, and a base script from before mpaulosky/Application_Factory#201 would refuse both the
   answer and the argument, so a base whose script doesn't take `--effort` warns and posts nothing, like a base without the script. The script's change
