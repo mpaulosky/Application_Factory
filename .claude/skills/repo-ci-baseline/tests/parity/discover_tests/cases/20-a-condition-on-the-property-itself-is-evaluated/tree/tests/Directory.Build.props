@@ -1,0 +1,4 @@
+<Project>
+  
+  <PropertyGroup><IsTestProject Condition="$(MSBuildProjectName.Contains('.Tests'))">true</IsTestProject></PropertyGroup>
+</Project>

@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup></PropertyGroup><PropertyGroup Condition="'$(MSBuildProjectName)' == 'Other'"><IsTestProject Condition="'$(Configuration)' == 'Debug'">true</IsTestProject></PropertyGroup>
+</Project>

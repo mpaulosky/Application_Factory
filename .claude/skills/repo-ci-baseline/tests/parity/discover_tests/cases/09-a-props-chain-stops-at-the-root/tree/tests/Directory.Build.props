@@ -1,0 +1,4 @@
+<Project>
+  <import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+  <PropertyGroup><Nullable>enable</Nullable></PropertyGroup>
+</Project>

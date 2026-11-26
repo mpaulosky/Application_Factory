@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><ISTESTPROJECT>
+	FALSE
+</ISTESTPROJECT></PropertyGroup>
+</Project>

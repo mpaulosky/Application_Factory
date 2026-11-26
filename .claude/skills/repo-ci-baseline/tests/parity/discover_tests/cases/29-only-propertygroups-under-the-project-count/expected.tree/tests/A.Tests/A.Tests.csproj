@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup></PropertyGroup><Choose><When Condition="true"><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup></When></Choose>
+</Project>

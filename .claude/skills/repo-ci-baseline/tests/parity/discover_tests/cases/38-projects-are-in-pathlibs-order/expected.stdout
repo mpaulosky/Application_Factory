@@ -1,0 +1,7 @@
+tests/B/B.csproj
+tests/a/x/x.csproj
+tests/a-b/x.csproj
+tests/a.b/a.b.csproj
+tests/é/E.csproj
+tests/Ａ/A.csproj
+tests/😀/S.csproj

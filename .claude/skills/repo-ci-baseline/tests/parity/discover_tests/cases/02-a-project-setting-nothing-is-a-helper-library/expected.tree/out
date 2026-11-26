@@ -1,0 +1,4 @@
+matrix<<EOF
+{"include": [{"project_path": "tests/App.Tests/App.Tests.csproj", "test_name": "App.Tests", "test_id": "app-tests", "build_before_test": false, "no_build": false, "requires_playwright": false, "verbosity": "minimal"}]}
+EOF
+has_tests=true

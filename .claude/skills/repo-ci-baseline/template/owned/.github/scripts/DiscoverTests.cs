@@ -65,7 +65,7 @@ static class DiscoverTests
 	static string ReadText(string path, bool sig = false)
 	{
 		var bytes = File.ReadAllBytes(path).AsSpan();
-		if (sig && bytes.StartsWith("\xEF\xBB\xBF"u8))
+		if (sig && bytes.StartsWith((ReadOnlySpan<byte>)[0xEF, 0xBB, 0xBF]))
 			bytes = bytes[3..];
 		return new UTF8Encoding(false, false).GetString(bytes);
 	}

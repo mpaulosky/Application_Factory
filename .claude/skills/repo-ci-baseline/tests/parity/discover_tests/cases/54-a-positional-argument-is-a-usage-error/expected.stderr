@@ -1,0 +1,2 @@
+^usage: discover_tests\.(py|cs) \[-h\] \[--root ROOT\] \(--output OUTPUT \| --list\)$
+^discover_tests\.(py|cs): error: unrecognized arguments: tests$

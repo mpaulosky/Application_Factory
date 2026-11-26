@@ -1,0 +1,2 @@
+^usage: load_test_env\.(py|cs) \[-h\] --output OUTPUT$
+^load_test_env\.(py|cs): error: unrecognized arguments: --env x$
