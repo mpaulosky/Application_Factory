@@ -787,6 +787,9 @@ if in_shard scripts; then
   # entry file (a .cs in .github/scripts/ whose first line is a #: directive) is run against its suite too: built once from the Template's
   # folder, whose global.json picks the SDK, then run as ci.yml runs it, with dotnet run --no-build --file. An entry file with no suite fails.
   # Once its .py has retired the .cs is the suite's reference, which the loop above ran, so it isn't run again.
+  # An entry file in library_first landed ahead of its cut-over (ADR 0017's library first): it only says the .py still runs, and exits 2,
+  # so it isn't run against its suite; it must still do just that, and its .py must still be there. Its cut-over takes it off the list.
+  library_first=(release_post)
   owned_entries=0
   for owned_cs in "$owned"/.github/scripts/*.cs; do
     [[ -f "$owned_cs" ]] && IFS= read -r first_line < "$owned_cs" && [[ "$first_line" == '#:'* ]] || continue
@@ -800,9 +803,20 @@ if in_shard scripts; then
     (cd "$owned" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 \
       UseSharedCompilation=false dotnet build "$owned_cs" < /dev/null > "$md_tmp/owned-cs-build.log" 2>&1) \
       || fail "dotnet build template/owned/.github/scripts/$suite.cs failed: $(tail -5 "$md_tmp/owned-cs-build.log")"
+    if [[ " ${library_first[*]} " == *" $suite "* ]]; then
+      library_rc=0
+      library_err="$(cd "$owned" && dotnet run --no-build --file "$owned_cs" -- 2>&1 > /dev/null < /dev/null)" || library_rc=$?
+      [[ $library_rc -eq 2 && "$library_err" == "$suite.cs: not cut over yet; "*"$suite.py"* ]] \
+        || fail "$suite.cs is in library_first, so it must exit 2 saying $suite.py still runs; it exited $library_rc: $library_err"
+      continue
+    fi
     bash "$skill_dir/tests/parity.test.sh" "$suite" dotnet run --no-build --file "$owned_cs" -- || fail "parity.test.sh $suite against $suite.cs"
   done
-  ((owned_entries >= 4)) || fail "found $owned_entries Owned C# script(s) in template/owned/.github/scripts/, expected detect_changes.cs, discover_tests.cs, load_test_env.cs and check_central_pins.cs at least"
+  for suite in "${library_first[@]}"; do
+    [[ -f "$owned/.github/scripts/$suite.cs" && -f "$owned/.github/scripts/$suite.py" ]] \
+      || fail "library_first names $suite, but the Template ships no $suite.cs beside a $suite.py: take it off the list at the cut-over"
+  done
+  ((owned_entries >= 5)) || fail "found $owned_entries Owned C# script(s) in template/owned/.github/scripts/, expected detect_changes.cs, discover_tests.cs, load_test_env.cs, check_central_pins.cs and release_post.cs at least"
   # status.sh and land.sh run their C# from its own folder, so a global.json in the caller's folder that pins an SDK nobody has installed
   # changes nothing: the status suite passes against status.sh with one above every case's folder (the runner's TMPDIR), and land.sh
   # answers --help from such a folder. dotnet itself fails there, which shows the global.json is read.
