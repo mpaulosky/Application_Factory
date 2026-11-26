@@ -309,6 +309,19 @@ jobs:
             echo "tag=$NEXT_TAG"
           } >> "$GITHUB_OUTPUT"
 
+      # draft_release.cs is a C# file-based app (ADR 0017 in the Application Factory): built in a step of its own and then run with
+      # --no-build, so the BODY it prints is the body alone even on a cold build. Only for a PR this job releases, as Create release runs.
+      # draft_release.py, beside it, is the same script in Python, kept for one Rollout: running it there instead reverts the port.
+      - name: Setup .NET
+        if: steps.files.outputs.eligible == 'true' && steps.idempotency.outputs.already_released != 'true'
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+
+      - name: Build the draft release script
+        if: steps.files.outputs.eligible == 'true' && steps.idempotency.outputs.already_released != 'true'
+        run: dotnet build .github/scripts/draft_release.cs
+
       - name: Create release
         if: steps.files.outputs.eligible == 'true' && steps.idempotency.outputs.already_released != 'true'
         env:
@@ -332,12 +345,12 @@ jobs:
           IS_DRAFT=$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null || echo "none")
           if [ "$IS_DRAFT" = "true" ]; then
             # A draft doesn't count as released anywhere in this workflow, so
-            # publish it rather than leave the PR owed forever. draft_release.py
+            # publish it rather than leave the PR owed forever. draft_release.cs
             # appends these notes unless the draft already names the PR, and
             # fails on a draft that names another one.
             printf '%s\n' "$EXTRA_NOTES" > "$RUNNER_TEMP/release-notes.txt"
             gh release view "$TAG" --json body --jq '.body' > "$RUNNER_TEMP/draft-body.txt"
-            BODY=$(python3 .github/scripts/draft_release.py --pr "$PR_NUMBER" --tag "$TAG" \
+            BODY=$(dotnet run --no-build --file .github/scripts/draft_release.cs -- --pr "$PR_NUMBER" --tag "$TAG" \
               --notes-file "$RUNNER_TEMP/release-notes.txt" < "$RUNNER_TEMP/draft-body.txt")
             gh release edit "$TAG" --draft=false --notes "$BODY"
             echo "Published the draft Release ${TAG}."

@@ -264,7 +264,6 @@ jobs:
       # A C# file-based app (ADR 0017 in the Application Factory), so it runs once the SDK is set up, before the restore: the
       # PR's own copy, which runs nothing this job doesn't build and run anyway. Built in a step of its own, then run with
       # --no-build, so the check's log holds only what it prints.
-      # check_central_pins.py, beside it, is the same script in Python, kept for one Rollout: running it here instead reverts the port.
       - name: Build the central package pins check
         run: dotnet build .github/scripts/check_central_pins.cs
 
