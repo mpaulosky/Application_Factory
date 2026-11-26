@@ -417,6 +417,18 @@ echo "o/app a value=with=signs unset unset unset unset" > "$cases/c1/expected.st
 suite 0 "the case's env is set, and a caller's repository and Anthropic key and model are not passed on" STUB_MODE=env \
   REPOSITORY=caller/repo GITHUB_REPOSITORY=caller/repo ANTHROPIC_API_KEY=secret ANTHROPIC_MODEL=model -- ./stub.sh || true
 
+# env.d/ sets a variable to a file's bytes, line breaks, a carriage return and the trailing newline kept, after env's lines.
+new_case c1
+echo "CASE_VAR=from env" > "$cases/c1/env"
+mkdir "$cases/c1/env.d"
+printf 'a\r\nb\n\n' > "$cases/c1/env.d/CASE_VAR"
+printf 'o/app a\r\nb\n\n unset unset unset unset\n' > "$cases/c1/expected.stdout"
+suite 0 "a case's env.d/ file is its variable's value, byte for byte" STUB_MODE=env -- ./stub.sh || true
+broken "an env.d/ that isn't a folder" "c1/env.d is not a folder" touch "$cases/c1/env.d"
+broken "an env.d/ file not named for a variable" "c1/env.d/1-A is not named for a variable" eval "mkdir '$cases/c1/env.d' && touch '$cases/c1/env.d/1-A'"
+broken "an env.d/ entry that isn't a file" "c1/env.d/A is not a file" mkdir -p "$cases/c1/env.d/A"
+broken "a NUL in an env.d/ file" "c1/env.d/A holds a NUL byte" eval "mkdir '$cases/c1/env.d' && printf 'a\\0b' > '$cases/c1/env.d/A'"
+
 # The rest of what the runner sets and unsets for a run, each against a caller's value that would show.
 new_case c1
 echo "o/app 1 0 unset unset unset unset" > "$cases/c1/expected.stdout"

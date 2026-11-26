@@ -1,7 +1,7 @@
 // What the C# scripts in .github/scripts/ share (ADR 0017 in the Application Factory): the argument parser (Arguments, held to argparse,
 // which the Python scripts parsed with), Script.Run, which turns an uncaught exception into exit 1 with a message rather than .NET's abort
 // (exit 134), Script.Which, which finds a program in PATH's absolute folders only, and SurrogateEscape, Python's reading of bytes that aren't
-// UTF-8. The gh runner joins it with the first script here that calls gh. In a namespace of its own, so the Factory's test project can
+// UTF-8, and Py, Python's str methods the scripts read text with. The gh runner joins it with the first script here that calls gh. In a namespace of its own, so the Factory's test project can
 // compile it beside the Factory's own Gh.cs, whose classes have the same names.
 using System.Diagnostics;
 using System.Globalization;
@@ -13,12 +13,13 @@ namespace Baseline;
 // argparse's part the scripts use: options with one value (--name value or --name=value), required ones among them, flags, a long option
 // given by any unique prefix of its name (--help's too), -h and --help, and -- ending the options. An argument that matches no option is a
 // value when it looks like a negative number (argparse's -\.?\d) or holds a space. A script with no positional arguments refuses one as
-// argparse does. A usage error exits 2 with the usage and the error on stderr, as argparse does.
+// argparse does. OneOf is a required mutually exclusive group. A usage error exits 2 with the usage and the error on stderr, as argparse does.
 sealed class Arguments(string prog, string usage, string description, bool positionals = false)
 {
 	const string HelpName = "--help";
 	readonly List<(string Name, bool TakesValue, string Help)> options = [];
 	readonly List<string> required = [];
+	readonly List<string[]> groups = [];
 	public readonly Dictionary<string, string?> Values = [];
 	public readonly List<string> Positional = [];
 
@@ -39,6 +40,14 @@ sealed class Arguments(string prog, string usage, string description, bool posit
 	{
 		required.Add(name);
 		return Option(name, help);
+	}
+
+	// Options already added of which exactly one must be given, as argparse's add_mutually_exclusive_group(required=True): giving a second
+	// is a usage error naming it and the first, and giving none is one naming them all.
+	public Arguments OneOf(params string[] names)
+	{
+		groups.Add(names);
+		return this;
 	}
 
 	public string Usage => $"usage: {prog} {usage}\n";
@@ -94,6 +103,8 @@ sealed class Arguments(string prog, string usage, string description, bool posit
 			{
 				if (value is not null)
 					return Error($"argument {option.Name}: ignored explicit argument '{value}'", err);
+				if (Conflict(option.Name) is { } flagConflict)
+					return Error($"argument {option.Name}: not allowed with argument {flagConflict}", err);
 				Values[option.Name] = null;
 				continue;
 			}
@@ -103,17 +114,25 @@ sealed class Arguments(string prog, string usage, string description, bool posit
 					return Error($"argument {option.Name}: expected one argument", err);
 				value = rest[++i];
 			}
+			if (Conflict(option.Name) is { } conflict)
+				return Error($"argument {option.Name}: not allowed with argument {conflict}", err);
 			Values[option.Name] = value;
 		}
 		// argparse names the required options left out before the arguments it didn't recognize.
 		if (required.Where(name => !Values.ContainsKey(name)).ToList() is { Count: > 0 } missing)
 			return Error($"the following arguments are required: {string.Join(", ", missing)}", err);
+		if (groups.Find(group => !group.Any(Values.ContainsKey)) is { } none)
+			return Error($"one of the arguments {string.Join(" ", none)} is required", err);
 		if (unknown.Count > 0)
 			return Error($"unrecognized arguments: {string.Join(" ", unknown)}", err);
 		return null;
 	}
 
 	public bool Has(string name) => Values.ContainsKey(name);
+
+	// The option given before this one that shares a OneOf group with it, or null.
+	string? Conflict(string name) =>
+			groups.Where(group => group.Contains(name)).SelectMany(group => group).FirstOrDefault(other => other != name && Values.ContainsKey(other));
 
 	// An option's value, else its default.
 	public string Value(string name, string fallback) => Values.TryGetValue(name, out var value) && value is not null ? value : fallback;
@@ -320,4 +339,43 @@ static class SurrogateEscape
 		}
 		return [.. bytes];
 	}
+}
+
+// Python's str methods the scripts read text with: str.strip(), str.splitlines() and str.lower().
+static class Py
+{
+	// The characters str.isspace() counts: char.IsWhiteSpace's, and the four separators \x1c to \x1f.
+	static bool IsSpace(char c) => char.IsWhiteSpace(c) || c is >= '\x1c' and <= '\x1f';
+
+	public static string Strip(string text)
+	{
+		int start = 0, end = text.Length;
+		while (end > 0 && IsSpace(text[end - 1]))
+			end--;
+		while (start < end && IsSpace(text[start]))
+			start++;
+		return text[start..end];
+	}
+
+	// The line breaks str.splitlines() splits on, "\r\n" being one.
+	public static List<string> SplitLines(string text)
+	{
+		List<string> lines = [];
+		var start = 0;
+		for (var i = 0; i < text.Length; i++)
+		{
+			if (text[i] is not ('\n' or '\r' or '\v' or '\f' or '\x1c' or '\x1d' or '\x1e' or '\x85' or '\u2028' or '\u2029'))
+				continue;
+			lines.Add(text[start..i]);
+			if (text[i] == '\r' && i + 1 < text.Length && text[i + 1] == '\n')
+				i++;
+			start = i + 1;
+		}
+		if (start < text.Length)
+			lines.Add(text[start..]);
+		return lines;
+	}
+
+	// str.lower(): .NET's invariant lowering, one code point at a time, as the Factory's own Py.Lower is.
+	public static string Lower(string text) => text.ToLowerInvariant();
 }
