@@ -18,8 +18,8 @@
 //   stderr, for a person to sort out.
 //
 // Markers count anywhere in a line, the same pattern release_post's source_pr_of() uses, so every parser agrees on which PRs a body names.
-// Their number is any run of Unicode decimal digits, read by its value, as Python's \d and int() read it: "#042" and Arabic-Indic digits
-// are PR 42, but not its marker, which is ASCII digits with no leading zero. --pr is read as int() reads it too (blanks, a sign and
+// Their number is any run of Unicode decimal digits, read by its value, as Python's \d and int() read it: 042 and Arabic-Indic digits
+// name PR 42, but aren't its marker, which is ASCII digits with no leading zero. --pr is read as int() reads it too (blanks, a sign and
 // underscores between digits).
 //
 // The draft is read from stdin as its bytes (a byte that isn't UTF-8 is written back as itself, and CRLF line endings are kept); the notes
