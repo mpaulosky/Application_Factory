@@ -435,13 +435,21 @@ static class Py
 	// str.lower(): .NET's invariant lowering, one code point at a time, as the Factory's own Py.Lower is.
 	public static string Lower(string text) => text.ToLowerInvariant();
 
-	// int(text), or null where it raises ValueError: blanks around (str.isspace()'s), a sign, then decimal digits, any Unicode decimal
+	// int(text), or null where it raises ValueError: blanks around (str.isspace()'s, but only \t, \n, \v, \f, \r and the space below
+	// U+0080, so not \x1c to \x1f), a sign, then decimal digits, any Unicode decimal
 	// digit among them (an astral one too), with a single underscore only between two. A number of any size, as Python's, up to its
 	// default limit of 4,300 digits (sys.get_int_max_str_digits()), past which int() refuses one.
 	public static BigInteger? Int(string text)
 	{
 		const int MaxDigits = 4300;
-		var digits = Strip(text);
+		static bool Blank(char c) => c < '\x80' ? c is ' ' or (>= '\t' and <= '\r') : IsSpace(c);
+		var start = 0;
+		var end = text.Length;
+		while (end > 0 && Blank(text[end - 1]))
+			end--;
+		while (start < end && Blank(text[start]))
+			start++;
+		var digits = text[start..end];
 		var negative = digits.StartsWith('-');
 		if (negative || digits.StartsWith('+'))
 			digits = digits[1..];
