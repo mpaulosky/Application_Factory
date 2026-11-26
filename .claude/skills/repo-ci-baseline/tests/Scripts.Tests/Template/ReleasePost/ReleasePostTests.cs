@@ -111,6 +111,17 @@ public sealed partial class ReleasePostTests : IDisposable
 	static SortedDictionary<string, string> ReadAll(string root) =>
 			new(Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).ToDictionary(path => Path.GetRelativePath(root, path), Read), StringComparer.Ordinal);
 
+	// "text" * n.
+	static string Times(string text, int n) => string.Concat(Enumerable.Repeat(text, n));
+
+	// str.index(): where part first is in text, failing the test when it isn't.
+	static int Index(string text, string part)
+	{
+		var at = text.IndexOf(part, StringComparison.Ordinal);
+		Assert.True(at >= 0, $"substring not found: {part}");
+		return at;
+	}
+
 	static int Count(string text, string part)
 	{
 		var count = 0;
