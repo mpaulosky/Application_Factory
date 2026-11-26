@@ -1,8 +1,11 @@
 # Central package pins
 
-Template files (Owned): `.github/scripts/check_central_pins.py` and its tests, run by `scripts/gate.sh` right before the build and by `ci.yml`'s
-`Build Solution` job right after the checkout, before Setup .NET. Its tests pin both places. mpaulosky/Application_Factory#105; the decision is
-[ADR 0012](../docs/adr/0012-an-unreferenced-central-pin-fails-the-gate-and-build-solution.md).
+Template files (Owned): `.github/scripts/check_central_pins.cs`, a C# file-based app that includes `CheckCentralPins.cs` (the logic) and `Gh.cs`, run by
+`scripts/gate.sh` right before the build and by `ci.yml`'s `Build Solution` job right after Setup .NET, before the restore; each builds it in a step of
+its own, then runs it with `dotnet run --no-build --file`. `check_central_pins.py`, the same check in Python, ships beside it for one Rollout, so a revert
+is one workflow line. Its tests are the Factory's (`tests/Scripts.Tests/Template/CheckCentralPins/` and the `check_central_pins` parity suite), and they
+pin both places. mpaulosky/Application_Factory#105 and mpaulosky/Application_Factory#126; the decision is
+[ADR 0012](../docs/adr/0012-an-unreferenced-central-pin-fails-the-gate-and-build-solution.md), and the port the Factory's ADR 0017.
 
 ## Why
 
@@ -38,12 +41,13 @@ is on anyway (another setting, in any file, is `true` or resolves to `true`). Th
 under such a setting an unreferenced pin either holds a package back or does nothing, so deleting it, or keeping it with a reason, is safe
 either way.
 
-The check needs Python 3.11 or later: CI's `Build Solution` step and the gate run the host's `python3`, and an older one stops it with a message
-saying so.
+The check needs the .NET SDK the repo's `global.json` names, which `Build Solution` sets up before it and the gate's build needs anyway. As Python it
+ran first, before Setup .NET, so a bad pin failed a few seconds sooner; as C# it runs after it, still before the restore.
 
 Files are read as bytes, so a byte-order mark or an XML declaration's encoding (UTF-16, say) is honoured. The check reads only a regular file, not a
 symlink: an MSBuild file of at most 4 MiB, holding well-formed XML without a `DOCTYPE` (which no MSBuild file needs, and entity expansion would),
-nested at most 256 elements deep, in an encoding Python decodes, and a `global.json` of at most 64 KiB. What happens to a file it can't read depends
+nested at most 256 elements deep, in an encoding .NET decodes without a code page provider (UTF-8, UTF-16, UTF-32, ASCII and ISO-8859-1), and a
+`global.json` of at most 64 KiB, nested at most 1,000 deep. What happens to a file it can't read depends
 on what the file could hide:
 
 - An MSBuild file that may hold pins or turn transitive pinning on fails the check, naming the file and why: a `Directory.Packages.props`, one whose
@@ -60,7 +64,8 @@ on what the file could hide:
 
 A run with a file or folder that fails the check (the first bullet) never prints a line saying the pins are fine: its last line on stdout is
 `Not a pass: ...`, after any pins it found (the hints go to stderr). A run that only skipped files with a notice ends as it would without them.
-Only the file itself is opened without following a symlink: a folder swapped for one between the walk and the read is followed, which needs a
+Only the file itself is opened without following a symlink or waiting on a FIFO (`open`'s `O_NOFOLLOW` and `O_NONBLOCK`, called through libc, since the
+.NET base library has neither), then checked again as the open file: a folder swapped for one between the walk and the read is followed, which needs a
 process writing to the tree while the check runs, not a change in a pull request.
 
 `bin/`, `obj/`, `node_modules/` and dot-folders (`.git`, CI's `.nuget` package cache) aren't walked. The whole run reads at most 50,000 files, 64 MiB,
@@ -90,13 +95,13 @@ the package that brings it in moves past the version.
 
 `Directory.Packages.props` belongs to the Application, so a Rollout can't clean it. Before the Rollout that brings the check, each Application with
 transitive pinning deletes its unreferenced pins, or marks the ones it keeps, in a PR of its own; run
-`python3 -I <Factory>/.claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_central_pins.py --root .` in its checkout to list them.
+`dotnet run --file <Factory>/.claude/skills/repo-ci-baseline/template/owned/.github/scripts/check_central_pins.cs -- --root "$PWD"` in its checkout to list them.
 An Application the Rollout reaches first gets a red `Build Solution` on its Rollout PR, and on every PR after it that runs the build: the step's
 annotations name each pin to delete or mark. A PR that skips the build (a docs-only PR, a Dependabot Actions bump; [docs-only-ci.md](docs-only-ci.md))
 skips the check too, but the gate still runs it before every branch push from a clone with the hooks on.
 The same command lists any MSBuild file or folder the check can't read (a symlinked `.props` or folder, a malformed file that names
 `PackageVersion`); there is no comment that exempts one, so the Application fixes, moves or deletes it in the same PR.
 
-The Seed `.sandcastle/lib/repo-config.mts` lists the script in `CHECK_PATHS`, so a Sandcastle branch that changes it says so in its PR body. A Seed file is
-written only when missing, so an Application with Sandcastle adds `".github/scripts/check_central_pins.py"` to its own `CHECK_PATHS` by hand
-([sandcastle.md](sandcastle.md), step 9).
+The Seed `.sandcastle/lib/repo-config.mts` lists the check's files in `CHECK_PATHS` (`check_central_pins.cs`, `CheckCentralPins.cs` and `Gh.cs`), so a
+Sandcastle branch that changes one says so in its PR body. A Seed file is written only when missing, so an Application with Sandcastle makes that change
+in its own `CHECK_PATHS` by hand, replacing `".github/scripts/check_central_pins.py"` ([sandcastle.md](sandcastle.md), step 9).

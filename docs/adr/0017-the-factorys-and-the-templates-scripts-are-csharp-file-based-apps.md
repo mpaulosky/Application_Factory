@@ -112,7 +112,8 @@ Each of these is decided in its increment, and recorded as an Update below:
 - The checkers' cut-over: how the workflow steps build them in a temp folder with the base's `global.json`, where the `OWNED` list lives once `check_owned_files` can't import
   `check_gh_repo`, which checker judges the PR that replaces the checker, and for how many Applies both names are honoured.
 - `check_central_pins`. CI runs the PR's own copy, from the PR's checkout, in the job that then builds the PR. So it runs nothing that job doesn't already run, and needs no
-  checker layout. But as C# it needs the SDK set up before it, where today it runs first, on the runner's `python3`, so a bad pin fails fast.
+  checker layout. But as C# it needs the SDK set up before it, where today it runs first, on the runner's `python3`, so a bad pin fails fast. (Decided in the Update for
+  mpaulosky/Application_Factory#126: it runs after Setup .NET.)
 - The Python heredocs in `claude-review.yml`, and the `python3` calls inside the bash (`lint-edited-file.sh`, the test scripts, the Seed Dockerfile), likely `jq` where a hook can't
   pay a `dotnet` start.
 - Mutation testing: `mutate.py` and its specs, which mutate bash too.
@@ -653,3 +654,39 @@ one Rollout; T2 (mpaulosky/Application_Factory#126) adds them to `retired.txt`.
   `TEST_ENV` holds line breaks one `env` line can't, so the runner gains `env.d/`: a file per variable whose bytes are its value.
 - **What the port leaves different, on purpose.** A name under `tests/` that isn't UTF-8 (.NET can't open it), names whose lower case Python's full case mapping gives
   differently, and an XML file with a DTD; each suite's README lists them. The usage lines name the `.cs`.
+
+## Update (mpaulosky/Application_Factory#126): check_central_pins, and T1's Python retires
+
+T2. `ci.yml`'s Build Solution job and the Template gate run `check_central_pins` as C#, and `check_central_pins.py` ships beside it for this one Rollout; T3 adds it
+to `retired.txt`. T1's three `.py` files retire now.
+
+- **Where CI runs it** (Still open, above, until now): after Setup .NET, not first. The job's order is the checkout, Setup .NET, a step that builds the check, the
+  check (`dotnet run --no-build --file`), then the NuGet cache, the restore and the build. It runs the PR's own copy in the job that builds the PR, so it needs no
+  checker layout; it loses only the seconds by which a bad pin failed before the SDK was installed. The skill's ADR 0012, whose rule this is, has the same Update.
+  The gate builds it (its output on stderr) and runs it with `--no-build` before the solution's build, as it does the test discovery.
+- **The files.** `check_central_pins.cs` includes `CheckCentralPins.cs` (the logic) and `Gh.cs`, which gains `PyPath` (`Path.resolve()` and pathlib's sort, moved
+  from `DiscoverTests.cs`) and `Py.IsSpace`, `Py.Len`, `Py.Head`, `Py.CompareCodePoints` and `Py.Order`, so a length, a cut and a sort count code points as Python's do.
+  The caps are a `Caps` record, and the reads go through a `Files` class, so a test lowers a cap or stands in for a failing call as the pytest patched a constant or
+  `os.lstat`, `os.open`, `os.fstat` and `os.scandir`. `GITHUB_ACTIONS` is read once, by the constructor, so tests running in parallel can each set it.
+- **How it reads what Python read.** expat becomes `XmlTextReader` with namespaces off (a prefix needs no declaration, as without expat's namespace processing),
+  normalization on and undeclared entities an error; a DOCTYPE is parsed only to be refused, before any entity it declares is used, and nothing is fetched.
+  `global.json`'s comments and trailing commas go in a linear two-pass scanner that does what the two possessive regular expressions did (.NET has no possessive
+  repeats), and `System.Text.Json` reads the rest, nested at most 1,000 deep. Files are opened through libc's `open` with `O_NOFOLLOW`, `O_NONBLOCK` and
+  `O_CLOEXEC`, since the BCL has none of them and opening a FIFO with it waits for a writer; `SafeFileHandle.Type` (.NET 11) is the `fstat` check after it. The
+  reason marker and the setting's `true` are compared in ASCII, the only letters Python's `lower()` turns into theirs, where .NET's invariant casing would match a
+  dotless i. A path that isn't UTF-8 can't be opened, as for `discover_tests`.
+- **The tests.** `test_check_central_pins.py`'s 125 tests are `CheckCentralPinsTests.cs` in `tests/Scripts.Tests/Template/CheckCentralPins/`, one method each, but
+  `test_an_older_python_is_refused_with_a_message`, whose check went with the Python, and six of the port's own (os.walk's order of problems, a file gone since the
+  walk, the errno a .NET exception gives, the real `open` on a symlink and a FIFO, the ASCII reason marker, code point lengths). The step-order test is inverted:
+  `Setup .NET`, the build, the check, then `Restore dependencies`. The pytest file is deleted and in `retired.txt` and `RETIRED_PATHS`, as T1's were.
+- **The parity suite.** `tests/parity/check_central_pins/`, 80 cases, each a repo in `tree/` (a `setup.sh` makes the symlinks and FIFOs). Recorded from the `.py`,
+  they pass against it and the `.cs`. Every stdout line is equal; the README lists what no case holds because the two word it apart: expat's and `XmlReader`'s
+  reasons a file isn't well-formed, the encodings each decodes, and a `strerror` .NET reports with an exception of its own. The runner unsets `GITHUB_ACTIONS`, so a
+  case's `env` sets it and the plain lines are checked in CI too, and drops a FIFO from the run's folder before it compares or records, since git can't store one.
+- **T1's Python retires.** `detect_changes.py`, `discover_tests.py` and `load_test_env.py` are deleted, and every version the Factory's history holds is in
+  `retired.txt` and `RETIRED_PATHS`. Their suites' reference is the Template's `.cs` now: the runner builds it once from the Template's folder and runs it from each
+  case's, as ci.yml runs it from the Application's checkout, so those cases keep their `tree/` and `setup.sh`; `test.sh` no longer runs an entry file against its suite
+  a second time once its `.py` is gone. Without the SDK, `pre-push.test.sh`'s `dotnet` stub answers the discovery with the fixture's one test project and skips the two
+  cases that read what it found; its ruff case lints `check_gh_repo.py`.
+- **The Seed's `CHECK_PATHS`** names `check_central_pins.cs`, `CheckCentralPins.cs` and `Gh.cs` where it named the `.py`; each Sandcastle Application makes that edit by
+  hand, a Seed file being written only when missing.

@@ -94,13 +94,16 @@ export const GATE_SCRIPT = "scripts/gate.sh";
 // definition, and the workflows a `Sandcastle:local` build can change. An agent that edits one can make its own checks pass, so a PR
 // whose branch changes a file under them lists it in its body for the reviewer
 // (lib/build.mts#publish). Folders end in a slash. List every place the gate
-// reads its checks from, not only where its script sits.
+// reads its checks from, not only where its script sits: the central pins check is check_central_pins.cs and the two
+// files it includes.
 export const CHECK_PATHS: readonly string[] = [
   ".sandcastle/",
   "scripts/",
   ".github/ci/",
   ".github/workflows/",
-  ".github/scripts/check_central_pins.py",
+  ".github/scripts/check_central_pins.cs",
+  ".github/scripts/CheckCentralPins.cs",
+  ".github/scripts/Gh.cs",
   ".github/scripts/check_gh_repo.py",
   ".claude/skills/",
   "package.json",
