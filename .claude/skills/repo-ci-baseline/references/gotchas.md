@@ -8,7 +8,7 @@ Lessons that apply to every part of the Baseline, learned bringing repos onto it
   atelier-store refused `squad/86-...` because it allowed only `feature/`, `hotfix/` and `chore/`.
   `chore/standardize-baseline` passes every pattern seen so far ([git-hooks.md](git-hooks.md) has the standard).
 - **README links inside `docs/`.** A README copied into `docs/README.md` verbatim has every relative link one directory
-  too deep. `release_post.py` now rebases them ([release-pipeline.md](release-pipeline.md)); TicketManager #104 fixed it
+  too deep. `release_post` (`ReleasePost.cs`) now rebases them ([release-pipeline.md](release-pipeline.md)); TicketManager #104 fixed it
   first with its own `.github/scripts/docs_readme.py`, a Leftover after Apply: delete it, its test and
   `docs-readme-tests.yml`.
 - **Labels.** `release.yml` reads `semver:minor` and `semver:major` (and `release:*`). A repo without them silently

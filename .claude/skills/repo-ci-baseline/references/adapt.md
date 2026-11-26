@@ -42,7 +42,7 @@ Done when every item below is resolved for this repo and `scripts/gate.sh` passe
   format step; not an extensionless `scripts/` file, and not in CI), so each of the repo's own scripts takes the style when it is next touched: `shfmt -w` it then, or all of them at once.
 - **Unfilled placeholders.** Fill each `{{...}}` by hand.
 - **Sandcastle.** A repo that runs Sandcastle follows [sandcastle.md](sandcastle.md#migrating-a-repo) for its `.sandcastle/` drift and Seed files.
-- **Leftovers.** Delete `sync-readme.yml` (`release_post.py` already maintains `docs/README.md`) and `label-enforce.yml` (squad's triage labels).
+- **Leftovers.** Delete `sync-readme.yml` (`release_post` already maintains `docs/README.md`) and `label-enforce.yml` (squad's triage labels).
   Delete `automerge-decision.mjs`, its test and `automerge-tests.yml` (TicketManager, IssueManager): the Template's `pr-automerge.yml` keeps its decision inline, see [automerge.md](automerge.md).
   Keep repo features such as `generate-blog-posts-json.yml`, and check each kept workflow still passes actionlint and zizmor.
 - **Conflicts.** Delete any `.markdownlint.json`; its `{"default": false}` turned Markdown lint off.

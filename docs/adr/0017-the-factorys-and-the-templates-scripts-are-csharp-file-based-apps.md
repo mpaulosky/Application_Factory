@@ -109,7 +109,7 @@ Each of these is decided in its increment, and recorded as an Update below:
   The Factory's Python test helpers move with them: `tests/check-issue-refs.py` and `tests/check-git-status.py` (which the gate and `test.sh` run; both C#
   now, Update for mpaulosky/Application_Factory#123),
   `tests/mutations/check-spec.py` and `tests/render_oracle/` (which stays a pytest suite over cmark-gfm and kramdown, and judges the C# too: Update for
-  mpaulosky/Application_Factory#164).
+  mpaulosky/Application_Factory#164; the C# alone since the Update for mpaulosky/Application_Factory#128).
 - The checkers' cut-over: how the workflow steps build them in a temp folder with the base's `global.json`, where the `OWNED` list lives once `check_owned_files` can't import
   `check_gh_repo`, which checker judges the PR that replaces the checker, and for how many Applies both names are honoured.
 - `check_central_pins`. CI runs the PR's own copy, from the PR's checkout, in the job that then builds the PR. So it runs nothing that job doesn't already run, and needs no
@@ -744,3 +744,34 @@ T3b, split from mpaulosky/Application_Factory#128 under the library-first rule a
   would still need Ruby); dropping the oracle with `release_post.py` (rejected: run against two earlier versions of it, it failed 110 and 130 cases the unit tests
   passed, as the skill's `references/release-pipeline.md` records).
 - **Rollout.** None of its own: the three files reach each Application with the next Apply and run nowhere there. T3c's Rollout brings the cut-over.
+
+## Update (mpaulosky/Application_Factory#128): the release scripts' cut-over
+
+T3c. `release.yml`'s plan and docs jobs and `backfill-blog-posts.yml` run `release_queue`, `backfill_blog_posts` and, through it, `release_post` as C#.
+`release_queue.py`, `release_post.py` and `backfill_blog_posts.py` ship beside them for this one Rollout, as `draft_release.py` does; T4 adds the four to
+`retired.txt`. Their pytest files retire now.
+
+- **The files.** `release_post.cs` is `release_post.py`'s command line on `ReleasePost.cs` (`ReleasePost.Command`): it no longer exits 2, and `test.sh`'s
+  `library_first` list is empty. `release_queue.cs` includes `ReleaseQueue.cs`, and `backfill_blog_posts.cs` `BackfillBlogPosts.cs`; each also includes
+  `ReleasePost.cs`, `HtmlEntities.cs` and `Gh.cs`, since both read the Releases with `ReleasePost.cs`'s gh calls and `source_pr_of()`, and the backfill writes its
+  posts and tables with it. `ReleaseQueue.cs`'s `QueueGitHub` adds the closed-PR listing to those calls, with the page call virtual, so a test pages over canned
+  data as the pytest overrode `_closed_pulls_page`. Each entry file reads the environment through a lookup it is handed, so a test sets a variable without
+  touching the process's. The seven files join `OWNED` and `owned-paths.test.mts`, as the workflows run them with their tokens.
+- **The workflows.** The plan job and the docs job each gain `setup-dotnet` and a step that builds their script, which then runs with `dotnet run --no-build --file`,
+  so `PRS=$(...)` is the JSON alone on a cold build; `backfill-blog-posts.yml` does the same. A file-based app's build output is under the temporary folder, so
+  the docs jobs' `git status` still sees only `README.md` and `docs/`; `test.sh` fails a build of an Owned entry file that writes anything under the Template's
+  `.github/`. `CiScriptStepsTests` holds both workflows to the build-first rule, and to no step running the three `.py` files. Each release run gains about 12 s in
+  each of the two jobs.
+- **The tests.** `test_release_queue.py`'s 20 tests and `test_backfill_blog_posts.py`'s 18 (22 with parameters) are `ReleaseQueueTests.cs` and
+  `BackfillBlogPostsTests.cs` in `tests/Scripts.Tests/Template/`, one method each, with tests of the port's own after them (the queue's stdout and stderr, the
+  cutoff's tag and ties, argparse's errors; `str.isdigit()` against `int()` in `--pr-numbers`, the wrapped usage, the wait's messages).
+  `ReleasePostTests.Command.cs` covers `ReleasePost.Command`, which the pytest never called. `DraftReleaseTests` asks `ReleasePost.SourcePrOf` where it ran
+  `release_post.py` through `python3`. The three pytest files are deleted, and every version the Factory's history holds (`git log --full-history`, so the
+  versions before the skill moved under `.claude/skills/` count) is in `retired.txt` and `RETIRED_PATHS`.
+- **The parity suites.** The `release_post` (28 cases), `release_queue` (25) and `backfill_blog_posts` (25) suites pass against both the `.py` and the `.cs`,
+  and `test.sh` runs each entry file against its suite while its `.py` ships.
+- **The render oracle** judges the C# alone, as the Update for mpaulosky/Application_Factory#164 said it would: its grid no longer imports `release_post.py`,
+  and the test that held the C#'s output to the Python's goes with it.
+- **Rollout.** Re-Apply each Application: the two workflows, the seven C# files and `check_gh_repo.py` with its longer `OWNED` arrive, and Apply removes an unchanged
+  copy of each retired pytest file. Before the Rollout, a `regenerate` backfill dispatch in one Application should give an empty diff. After it, the next release's
+  queue and blog post are the first written by C#.

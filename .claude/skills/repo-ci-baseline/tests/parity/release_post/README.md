@@ -1,7 +1,8 @@
 # The release_post parity suite
 
 The Template's `.github/scripts/release_post.py` through its command line: `tests/parity.test.sh release_post [command...]`. The runner's header says what a
-case holds. A case's tree is the repo's docs before the run, and its `expected.tree/` every file after it.
+case holds. The cases were recorded from the `.py` and pass against `release_post.cs` too, which `test.sh` runs them against while the `.py` ships beside it.
+A case's tree is the repo's docs before the run, and its `expected.tree/` every file after it.
 
 The cases cover a first post into an empty repo, a full repo (the README's table between its markers, `docs/README.md` with its links rebased, the Pages site's
 table and cards, the blog index dropping a row for a deleted post, a draft Release left out), a re-run for a renamed PR (its old post removed), a README with no
