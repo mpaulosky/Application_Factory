@@ -5,6 +5,7 @@ namespace Baseline.Tests;
 
 // test_release_post.py's tests from the deterministic sections through the README's releases section: render_post, nest_headings and
 // the section readers, the commits and files sections, the diff, the marker rewriting, the docs/README.md links and the blog post cards.
+// test_scanning_stays_linear_in_nesting_depth_and_length is in ReleasePostTimingTests.cs, which runs alone; its shapes are here.
 public sealed partial class ReleasePostTests
 {
 	// Deterministic sections

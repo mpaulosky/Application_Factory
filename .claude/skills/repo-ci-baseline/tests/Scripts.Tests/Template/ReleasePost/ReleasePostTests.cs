@@ -6,8 +6,9 @@ namespace Baseline.Tests;
 // The Template's .github/scripts/ReleasePost.cs: test_release_post.py's tests, one method each under its name (ADR 0017's rule), with the
 // same cases and assertions, on throwaway folders. The pytest judged release_post.py beside them until the cut-over retired it
 // (mpaulosky/Application_Factory#128).
-// This file holds the module's helpers; the tests are in the partial class's other files, in the pytest's order. A pytest that patched
-// urlopen hands RequestSummary a stand-in UrlOpen, and capsys is the log writer the methods take.
+// This file holds the module's helpers; the tests are in the partial class's other files, in the pytest's order, except the two that
+// time the scanning, which are in ReleasePostTimingTests.cs so they run alone (their shapes stay here). A pytest that patched urlopen
+// hands RequestSummary a stand-in UrlOpen, and capsys is the log writer the methods take.
 public sealed partial class ReleasePostTests : IDisposable
 {
 	const string Repo = "octo/demo";

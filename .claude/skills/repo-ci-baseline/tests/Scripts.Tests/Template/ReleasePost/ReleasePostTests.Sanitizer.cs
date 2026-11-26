@@ -5,6 +5,7 @@ namespace Baseline.Tests;
 
 // test_release_post.py's tests from test_code_spans_may_cross_line_breaks to the last, in the pytest's order: code spans and paragraphs,
 // code found before every prose change, links and reference definitions in a post and in the docs README, and the Unicode line separators.
+// The code-finding timing test is in ReleasePostTimingTests.cs, which runs alone; its shapes are here.
 public sealed partial class ReleasePostTests
 {
 	// shape.format(a=..., b=...).
