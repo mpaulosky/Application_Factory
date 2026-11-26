@@ -43,7 +43,8 @@
 #                    A line that is exactly ... stands for any number of lines, none included, so a usage block whose
 #                    wrapping is the argument parser's own is matched by its first line and ... alone
 #   expected.calls   the fake's log of the `gh` calls made, in order: each call's fixture key, and for a `gh pr` call or a
-#                    REST call with --paginate, --jq, -X, -H or --input the key and the call's whole argv, then for --input
+#                    REST call with --paginate, --jq, -X, --method, -H or --input (--slurp comes with --paginate) the key and
+#                    the call's whole argv, then for --input
 #                    ` <<< ` and its body as canonical JSON; the queries a run costs, and what it writes, are behaviour too
 #
 # and, when the script reads more than its arguments and gh, any of:

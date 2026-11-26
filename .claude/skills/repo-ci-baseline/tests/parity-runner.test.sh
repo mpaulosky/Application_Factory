@@ -674,7 +674,7 @@ fake 97 '' "a body that isn't JSON" api -X PATCH repos/o/app --input - <<< 'not 
 logged "a body that isn't JSON" "UNMATCHED rest.PATCH.repos_o_app (its --input body is not one JSON value)"
 fake 97 '' "a body of two values" api -X PATCH repos/o/app --input - <<< '{} {}'
 fake 97 '' "a body from a file" api -X PATCH repos/o/app --input body.json
-fake 97 '' "-X twice" api -X PATCH -X PUT repos/o/app
+fake 97 '' "-X twice" api -X PATCH -X PATCH repos/o/app --input - <<< '{}'
 fake 97 '' "a lower-case method" api -X patch repos/o/app
 fake 97 '' "-H with no value" api repos/o/app -H
 fake 97 '' "an empty -H" api repos/o/app -H ''
@@ -693,7 +693,7 @@ fake 97 '' "a method with no fixture" api -X DELETE repos/o/app && logged "a met
 # --method is -X's long form, keyed and logged the same way but for the argv it was given.
 fake 0 '{"id":1}' "--method" api --method PATCH repos/o/app --input - <<< '{"a": 1}'
 logged "--method" 'rest.PATCH.repos_o_app gh api --method PATCH repos/o/app --input - <<< "{\"a\":1}"'
-fake 97 '' "--method and -X" api --method PATCH -X PUT repos/o/app
+fake 97 '' "--method and -X" api --method PATCH -X PATCH repos/o/app --input - <<< '{}'
 fake 97 '' "--method with no value" api repos/o/app --method
 # --slurp, with --paginate and without --jq as gh takes it: the fixture is the list of pages it prints, and the argv is logged.
 printf '%s\n' '[[{"filename":"a"}],[{"filename":"b"}]]' > "$gh_dir/rest.repos_o_app_pulls_1_files?per_page=100.json"
@@ -703,6 +703,18 @@ logged "--paginate --slurp" "rest.repos_o_app_pulls_1_files?per_page=100 gh api 
 fake 97 '' "--slurp without --paginate" api --slurp "$files"
 fake 97 '' "--slurp with --jq" api --paginate --slurp "$files" --jq .
 fake 97 '' "--slurp twice" api --paginate --slurp --slurp "$files"
+fake 0 - "--slurp before --paginate, with -H" api --slurp -H "$accept" --paginate "$files"
+logged "--slurp before --paginate, with -H" "rest.repos_o_app_pulls_1_files?per_page=100 gh api --slurp -H \"$accept\" --paginate \"$files\""
+# A --slurp fixture is the list of pages: one page alone, or anything but a list of lists, is refused.
+for page in '[{"filename":"a"}]' '{"filename":"a"}' '[[1], 2]' '[[]] [[]]'; do
+  printf '%s\n' "$page" > "$gh_dir/rest.repos_o_app_pulls_2_files.json"
+  fake 97 '' "a --slurp fixture of $page" api --paginate --slurp repos/o/app/pulls/2/files
+  logged "a --slurp fixture of $page" "UNMATCHED rest.repos_o_app_pulls_2_files (its --slurp fixture rest.repos_o_app_pulls_2_files.json is not a list of pages)"
+done
+# One that isn't JSON at all is an answer cut short, printed as it is.
+printf '%s\n' '[[{"filen' > "$gh_dir/rest.repos_o_app_pulls_2_files.json"
+fake 0 '[[{"filen' "a --slurp fixture cut short" api --paginate --slurp repos/o/app/pulls/2/files
+rm "$gh_dir/rest.repos_o_app_pulls_2_files.json"
 
 # A REST call with --paginate and --jq: real jq over the fixture, each result printed as gh prints it, and the whole argv logged.
 printf '%s\n' '[{"n":1,"draft":false,"t":"a\u2028b"},{"n":2,"draft":true,"t":"c"}]' > "$gh_dir/rest.repos_o_app_releases?per_page=100.json"

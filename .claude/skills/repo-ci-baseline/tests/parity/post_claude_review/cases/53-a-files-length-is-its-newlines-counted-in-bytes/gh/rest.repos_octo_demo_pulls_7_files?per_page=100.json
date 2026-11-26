@@ -1,0 +1,1 @@
+[[{"filename": "empty.txt", "patch": "@@ -9 +9 @@\n+z"}, {"filename": "no-newline.txt", "patch": "@@ -9 +9 @@\n+z"}, {"filename": "crlf.txt", "patch": "@@ -9 +9 @@\n+z"}, {"filename": "lone-cr.txt", "patch": "@@ -9 +9 @@\n+z"}, {"filename": "latin1.txt", "patch": "@@ -9 +9 @@\n+z"}, {"filename": "thirty.txt", "patch": "@@ -9 +9 @@\n+z"}]]

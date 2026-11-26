@@ -1,0 +1,3 @@
+Posted Claude's review of abc123 on PR #7: 1 inline, 2 in the body.
+::warning::2 finding(s) outside the diff are in the review body; its off-diff marker holds the merge until the next push gets a fresh review.
+::warning::Redacted 10 credential-shaped string(s) from Claude's review. They aren't this job's secrets (an answer quoting those is withheld), so they are most likely sample or placeholder tokens from the PR.
