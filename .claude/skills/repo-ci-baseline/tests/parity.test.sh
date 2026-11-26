@@ -46,6 +46,9 @@
 #
 #   stdin            the implementation's stdin, byte for byte (missing: /dev/null)
 #   env              NAME=value lines, set for the run on top of the fixed environment below (a blank line is ignored)
+#   env.d/           a file per variable, named for it, whose bytes (line breaks, a carriage return and a trailing newline
+#                    among them; no NUL, which no variable can hold) are its value, set after env's: a value one env line
+#                    can't hold
 #   tree/            files copied into the folder the implementation runs from (missing: it starts empty)
 #   setup.sh         a bash script run in that folder before the implementation, to build what a file can't hold (a git
 #                    repo with a local origin); a .sh, so the gate's shellcheck and shfmt read it. It runs with
@@ -57,7 +60,7 @@
 #                    so a script that writes no file is held to that
 #
 # Neither args, env nor an expected.* file but expected.stdout may hold a carriage return (a setup error, since each is read
-# line by line); stdin, a tree and expected.stdout, compared byte for byte, may, and
+# line by line); stdin, env.d/, a tree and expected.stdout, read or compared byte for byte, may, and
 # tests/parity/.gitattributes stores every case file as it is, so a clone keeps them, and tests/parity/.editorconfig keeps
 # an editor from trimming or converting them. Record mode writes
 # expected.stdout, expected.code, expected.calls and expected.tree/ (removed when the run leaves no file). It writes a
@@ -212,9 +215,17 @@ check_case() {
       setup_error "$name/$(basename -- "$file") holds a carriage return."
     fi
   done
-  for file in tree expected.tree; do
+  for file in tree expected.tree env.d; do
     [[ ! -e "$dir/$file" || -d "$dir/$file" ]] || setup_error "$name/$file is not a folder."
   done
+  if [[ -d "$dir/env.d" ]]; then
+    for file in "$dir"/env.d/* "$dir"/env.d/.[!.]*; do
+      [[ -e "$file" || -L "$file" ]] || continue
+      [[ "$(basename -- "$file")" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || setup_error "$name/env.d/$(basename -- "$file") is not named for a variable."
+      [[ -f "$file" && ! -L "$file" ]] || setup_error "$name/env.d/$(basename -- "$file") is not a file."
+      [[ "$(tr -d '\000' < "$file" | wc -c)" -eq "$(wc -c < "$file")" ]] || setup_error "$name/env.d/$(basename -- "$file") holds a NUL byte, which no variable can hold."
+    done
+  fi
   for file in stdin env setup.sh; do
     [[ ! -e "$dir/$file" || -f "$dir/$file" ]] || setup_error "$name/$file is not a file."
   done
@@ -290,6 +301,13 @@ for case_dir in "${cases[@]}"; do
     while IFS= read -r line || [[ -n "$line" ]]; do
       [[ -z "$line" ]] || case_env+=("$line")
     done < "$case_dir/env"
+  fi
+  if [[ -d "$case_dir/env.d" ]]; then
+    for file in "$case_dir"/env.d/*; do
+      # The x keeps the value's trailing newlines, which $(...) would drop.
+      value="$(cat -- "$file" && printf x)" || setup_error "can't read $name/env.d/$(basename -- "$file")."
+      case_env+=("$(basename -- "$file")=${value%x}")
+    done
   fi
   stdin=/dev/null
   [[ ! -f "$case_dir/stdin" ]] || stdin="$case_dir/stdin"

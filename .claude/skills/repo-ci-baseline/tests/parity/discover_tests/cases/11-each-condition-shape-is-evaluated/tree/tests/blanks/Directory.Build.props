@@ -1,0 +1,4 @@
+<Project>
+  <PropertyGroup Condition="  $(MSBuildProjectName.EndsWith('.Unit'))  "><IsTestProject>true</IsTestProject></PropertyGroup>
+  <PropertyGroup></PropertyGroup>
+</Project>

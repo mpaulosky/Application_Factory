@@ -1,0 +1,3 @@
+::add-mask::x
+::add-mask::y
+Exported 2 test secrets: github_client_id, runner_name

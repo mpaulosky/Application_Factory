@@ -1,0 +1,3 @@
+::add-mask::https://x.test/?a=1&b=2
+::add-mask::#not-a-comment
+Exported 2 test secrets: URL, TAG

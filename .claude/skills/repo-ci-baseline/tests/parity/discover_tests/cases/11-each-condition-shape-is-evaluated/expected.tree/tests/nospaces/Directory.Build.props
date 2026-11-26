@@ -1,0 +1,4 @@
+<Project>
+  <PropertyGroup Condition="'$(MSBuildProjectName)'=='WEB.TESTS.UNIT'"><IsTestProject>true</IsTestProject></PropertyGroup>
+  <PropertyGroup></PropertyGroup>
+</Project>

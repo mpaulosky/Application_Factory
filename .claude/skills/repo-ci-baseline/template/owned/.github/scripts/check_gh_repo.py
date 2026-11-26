@@ -873,13 +873,19 @@ def untold(path):
 
 # Repo-relative paths --repo skips (the Owned Baseline files); a trailing / is a folder. check_owned_files.py reads the
 # same list, so an entry outside SCOPE (global.json, the SDK pin the Factory moves: mpaulosky/Application_Factory#103,
-# and the three empty shields beside the C# scripts, which keep the repo's own Directory.* files from reaching their
-# build: mpaulosky/Application_Factory#125) is there only for the Owned-files check.
+# the three empty shields beside the C# scripts, which keep the repo's own Directory.* files from reaching their
+# build: mpaulosky/Application_Factory#125, and the C# of discover_tests and load_test_env, the second of which runs with
+# the TEST_ENV secret, with the Gh.cs both include: mpaulosky/Application_Factory#162) is there only for the Owned-files check.
 OWNED = (
     "global.json",
     ".github/scripts/Directory.Build.props",
     ".github/scripts/Directory.Build.targets",
     ".github/scripts/Directory.Packages.props",
+    ".github/scripts/Gh.cs",
+    ".github/scripts/discover_tests.cs",
+    ".github/scripts/DiscoverTests.cs",
+    ".github/scripts/load_test_env.cs",
+    ".github/scripts/LoadTestEnv.cs",
     "scripts/gate.sh",
     "scripts/check-branch-name.sh",
     "scripts/check-pr-title.sh",

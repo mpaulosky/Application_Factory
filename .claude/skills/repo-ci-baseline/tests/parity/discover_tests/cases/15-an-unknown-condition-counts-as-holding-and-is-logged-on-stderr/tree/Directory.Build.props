@@ -1,0 +1,4 @@
+<Project>
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'"><IsTestProject>true</IsTestProject></PropertyGroup>
+  <PropertyGroup></PropertyGroup>
+</Project>

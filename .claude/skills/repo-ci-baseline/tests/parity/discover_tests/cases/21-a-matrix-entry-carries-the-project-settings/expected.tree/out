@@ -1,0 +1,4 @@
+matrix<<EOF
+{"include": [{"project_path": "tests/Api.e2e_Smoke/Api.e2e_Smoke.csproj", "test_name": "Api.e2e_Smoke", "test_id": "api-e2e-smoke", "build_before_test": true, "no_build": true, "requires_playwright": false, "verbosity": "normal"}, {"project_path": "tests/Plain_Tests/Plain_Tests.csproj", "test_name": "Plain_Tests", "test_id": "plain-tests", "build_before_test": false, "no_build": false, "requires_playwright": false, "verbosity": "minimal"}, {"project_path": "tests/Ui.Tests/Ui.Tests.csproj", "test_name": "Ui.Tests", "test_id": "ui-tests", "build_before_test": true, "no_build": true, "requires_playwright": true, "verbosity": "minimal"}, {"project_path": "tests/Web.Tests.E2E/Web.Tests.E2E.csproj", "test_name": "Web.Tests.E2E", "test_id": "web-tests-e2e", "build_before_test": true, "no_build": true, "requires_playwright": true, "verbosity": "normal"}]}
+EOF
+has_tests=true

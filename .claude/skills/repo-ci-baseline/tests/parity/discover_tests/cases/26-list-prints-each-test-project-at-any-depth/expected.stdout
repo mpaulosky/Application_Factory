@@ -1,0 +1,4 @@
+tests/.hidden/Hidden.Tests.csproj
+tests/App.Tests/App.Tests.csproj
+tests/Integration/Api.Tests/Api.Tests.csproj
+tests/Top.csproj

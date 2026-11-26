@@ -6,8 +6,8 @@ using System.Text.Json.Nodes;
 namespace Baseline.Tests;
 
 // The Template's .github/scripts/Gh.cs, what its C# scripts share: the argument parser, held to argparse by running both on the same
-// arguments with detect_changes.py's options; SurrogateEscape, held to Python's surrogateescape the same way; Script.Write, Script.Which
-// and Script.Run.
+// arguments with detect_changes.py's options and with discover_tests.py's, a required mutually exclusive group among them; SurrogateEscape,
+// held to Python's surrogateescape the same way; Py, held to Python's str methods; Script.Write, Script.Which and Script.Run.
 public class TemplateGhTests
 {
 	// detect_changes.py's options, as it declares them to argparse and DetectChanges.cs to Arguments.
@@ -103,6 +103,99 @@ public class TemplateGhTests
 		Assert.Equal(2, Parser().Parse(["--output", "o"], new StringWriter(), err));
 		Assert.Equal("usage: detect_changes [-h] --base BASE [--head HEAD] --output OUTPUT [--author AUTHOR] [--head-ref HEAD_REF]\n"
 				+ "detect_changes: error: the following arguments are required: --base\n", err.ToString());
+	}
+
+	// discover_tests.py's options, as it declares them to argparse and DiscoverTests.cs to Arguments: --output and --list a required
+	// mutually exclusive group.
+	const string ArgparseDiscoverTests = """
+		import argparse, json, sys
+		parser = argparse.ArgumentParser(prog="discover_tests")
+		parser.add_argument("--root", default=".")
+		mode = parser.add_mutually_exclusive_group(required=True)
+		mode.add_argument("--output")
+		mode.add_argument("--list", action="store_true")
+		try:
+		    args = parser.parse_args(json.loads(sys.argv[1]))
+		except SystemExit as stop:
+		    sys.exit(stop.code)
+		print(json.dumps([args.root, args.output, args.list], separators=(",", ":")))
+		""";
+
+	public static TheoryData<string[]> DiscoverTestsArguments => new()
+	{
+		new[] { "--output", "o" },
+		new[] { "--list" },
+		new[] { "--root", "r", "--list" },
+		new[] { "--list", "--root=r" },
+		new[] { "--l", "--r", "r" },
+		new[] { "--o", "o" },
+		new string[] { },
+		new[] { "--root", "r" },
+		new[] { "--output", "o", "--list" },
+		new[] { "--list", "--output", "o" },
+		new[] { "--list", "--output" },
+		new[] { "--list", "--list" },
+		new[] { "--output", "o", "--output", "p" },
+		new[] { "--list=x" },
+		new[] { "--list", "--output=o" },
+		new[] { "--list", "extra" },
+		new[] { "--root", "r", "extra" },
+		new[] { "extra" },
+		new[] { "--list", "--bogus" },
+		new[] { "--output", "o", "--list", "--bogus" },
+		new[] { "--list", "-h" },
+		new[] { "--output", "" },
+	};
+
+	// (exit code, what it parsed as JSON, or the error line) from argparse and from Arguments, with discover_tests.py's options.
+	static (int Code, string Parsed) ArgparseDiscover(string[] args)
+	{
+		var (code, stdout, stderr) = Python(ArgparseDiscoverTests, JsonSerializer.Serialize(args));
+		return (code, code == 2 ? stderr.Split('\n', StringSplitOptions.RemoveEmptyEntries)[^1] : stdout.StartsWith("usage: ", StringComparison.Ordinal) ? "help" : stdout.Trim());
+	}
+
+	static (int Code, string Parsed) ParseDiscover(string[] args)
+	{
+		var parser = new Arguments("discover_tests", "[-h] [--root ROOT] (--output OUTPUT | --list)", "")
+				.Option("--root", "").Option("--output", "").Flag("--list", "").OneOf("--output", "--list");
+		var err = new StringWriter();
+		if (parser.Parse(args, new StringWriter(), err) is int exit)
+			return (exit, exit == 2 ? err.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries)[^1] : "help");
+		var parsed = new JsonArray(parser.Value("--root", "."), parser.Has("--output") ? parser.Value("--output", "") : null, parser.Has("--list"));
+		return (0, parsed.ToJsonString());
+	}
+
+	[Theory]
+	[MemberData(nameof(DiscoverTestsArguments))]
+	public void Arguments_parse_a_required_mutually_exclusive_group_as_argparse_does(string[] args) => Assert.Equal(ArgparseDiscover(args), ParseDiscover(args));
+
+	// Text with each line break str.splitlines() knows, a CRLF, blanks str.isspace() counts (\x1f, U+00A0, U+3000 among them) and some
+	// it doesn't (U+200B), and a trailing break.
+	public static TheoryData<string> PyTexts => new()
+	{
+		"",
+		"a",
+		"a\n",
+		"a\r\nb\rc\n\nd",
+		"a\vb\fc\x1cd\x1de\x1ef\x85g\u2028h\u2029i",
+		"\x1f a \u00a0\u3000\t",
+		"\u200b a \u200b",
+		"\n\n",
+		"\r\n\r",
+		" \x1c ",
+	};
+
+	[Theory]
+	[MemberData(nameof(PyTexts))]
+	public void Py_strips_and_splits_lines_as_python_does(string text)
+	{
+		var (code, stdout, _) = Python("import json, sys\ntext = json.loads(sys.argv[1])\nprint(json.dumps([text.strip(), text.splitlines()]))",
+				JsonSerializer.Serialize(text));
+
+		Assert.Equal(0, code);
+		var python = JsonNode.Parse(stdout)!.AsArray();
+		Assert.Equal(python[0]!.GetValue<string>(), Py.Strip(text));
+		Assert.Equal(python[1]!.AsArray().Select(line => line!.GetValue<string>()), Py.SplitLines(text));
 	}
 
 	// Bytes that are and aren't UTF-8: a lone continuation byte, a cut sequence, an overlong form, an encoded surrogate, a code point past

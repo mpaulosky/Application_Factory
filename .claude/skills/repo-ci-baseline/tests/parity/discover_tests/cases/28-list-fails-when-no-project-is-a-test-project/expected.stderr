@@ -1,0 +1,1 @@
+^None of the 1 projects under tests/ resolves IsTestProject to true\. Set it in each test \.csproj or in a Directory\.Build\.props above them\.$

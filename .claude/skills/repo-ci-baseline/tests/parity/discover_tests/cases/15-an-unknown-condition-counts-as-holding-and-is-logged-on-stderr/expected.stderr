@@ -1,0 +1,1 @@
+^::notice::App\.Tests: can't evaluate Condition "'\$\(Configuration\)' == 'Debug'" on IsTestProject in /.*/Directory\.Build\.props; counting it as holding$

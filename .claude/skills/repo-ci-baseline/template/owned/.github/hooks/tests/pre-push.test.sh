@@ -8,9 +8,11 @@
 # real build or network access is needed (the ruff stub answers --version with a 0.17 release, the one the gate's Python lint step accepts:
 # the repo tracks three Python files, which the gate lints when there is no origin/main to diff against, and CI's hook-tests job has no ruff or uv). check_gh_repo.py and the Shell format step run the real shfmt (v3.14 or a later v3), which must be on PATH;
 # the repo gets the Template's .editorconfig, so the scripts it is given are written in that style. The dotnet stub hands the gate's C#
-# scripts step (dotnet format whitespace, and dotnet build of a .cs) to the real dotnet when it runs the SDK global.json names, so those
-# cases check that the Owned scripts pass the step as the gate runs it; without one the stub logs them as it logs the rest, and the cases
-# that need a real build are skipped, saying so (CI's hook-tests job sets the SDK up). The case run by hand from a terminal
+# scripts step (dotnet format whitespace, and dotnet build of a .cs) and its run of a script (dotnet run --no-build --file <x>.cs, the
+# test discovery) to the real dotnet when it runs the SDK global.json names, so those cases check that the Owned scripts pass the step as
+# the gate runs it, and that the discovery's first run prints only paths; without one the stub logs them as it logs the rest, answers the
+# run of a script from the .py beside it (the same script in Python, which ships with it for one Rollout), and the cases that need a
+# real build are skipped, saying so (CI's hook-tests job sets the SDK up). The case run by hand from a terminal
 # needs python3 (its pty module), and is skipped, saying so, without it.
 # Usage: .github/hooks/tests/pre-push.test.sh
 set -uo pipefail
@@ -37,8 +39,9 @@ if [[ -n "$REAL_DOTNET" ]] && ! (cd "$SCRIPTS/.." && "$REAL_DOTNET" --version) >
   REAL_DOTNET=""
 fi
 
-# make_stub <dir> <tool>: a stub that logs its call and fails on a FAIL match. The dotnet stub then hands dotnet format whitespace and
-# dotnet build of a .cs (the gate's C# scripts step) to REAL_DOTNET, when there is one.
+# make_stub <dir> <tool>: a stub that logs its call and fails on a FAIL match. The dotnet stub then hands dotnet format whitespace,
+# dotnet build of a .cs (the gate's C# scripts step) and dotnet run --no-build --file of a .cs to REAL_DOTNET, when there is one; without
+# one, it answers the run from python3 and the .py beside the .cs.
 make_stub() {
   cat > "$1/$2" << EOF
 #!/usr/bin/env bash
@@ -51,6 +54,15 @@ EOF
   if [[ "$2" == dotnet && -n "$REAL_DOTNET" ]]; then
     cat >> "$1/$2" << EOF
 [[ "\$1 \${2:-}" != 'format whitespace' && ( "\$1" != build || "\${2:-}" != *.cs ) ]] || exec $(printf '%q' "$REAL_DOTNET") "\$@"
+[[ "\$1 \${2:-} \${3:-} \${5:-}" != 'run --no-build --file --' || "\${4:-}" != *.cs ]] || exec $(printf '%q' "$REAL_DOTNET") "\$@"
+EOF
+  elif [[ "$2" == dotnet ]]; then
+    cat >> "$1/$2" << 'EOF'
+if [[ "$1 ${2:-} ${3:-} ${5:-}" == 'run --no-build --file --' && "${4:-}" == *.cs ]]; then
+  py="${4%.cs}.py"
+  shift 5
+  exec python3 "$py" "$@"
+fi
 EOF
   fi
   chmod +x "$1/$2"
@@ -221,6 +233,28 @@ run_hook feature/1-x "refs/heads/feature/1-x @HEAD@ refs/heads/feature/1-x $ZERO
 expect "pushing a feature branch runs the gates" allowed tests-ran
 expect_log "the gate tests a project marked IsTestProject" ran 'dotnet test tests/Fake.Tests/Fake.Tests.csproj*'
 expect_log "the gate skips a helper library under tests/" not-ran 'dotnet test tests/Fake.Support/*'
+# The discovery is discover_tests.cs, built and then run with --no-build, whose stdout is only the paths: a line of the build's would be
+# tested as a project.
+expect_log "the gate builds the test discovery" ran 'dotnet build .github/scripts/discover_tests.cs'
+expect_log "the gate runs the test discovery without building it again" ran 'dotnet run --no-build --file .github/scripts/discover_tests.cs -- --list'
+discovery_built="$(grep -nxF 'dotnet build .github/scripts/discover_tests.cs' "$LOG" | head -1 | cut -d: -f1)"
+discovery_ran="$(grep -nxF 'dotnet run --no-build --file .github/scripts/discover_tests.cs -- --list' "$LOG" | head -1 | cut -d: -f1)"
+if [[ -n "$discovery_built" && -n "$discovery_ran" && "$discovery_built" -lt "$discovery_ran" ]]; then
+  pass "the gate builds the test discovery before it runs it"
+else
+  fail "the gate builds the test discovery before it runs it" "build at line '${discovery_built}', run at line '${discovery_ran}' of: $(tr '\n' ' ' < "$LOG")"
+fi
+if stray="$(grep '^dotnet test ' "$LOG" | grep -vxF 'dotnet test tests/Fake.Tests/Fake.Tests.csproj --configuration Release')"; then
+  fail "the gate tests only the paths the discovery printed" "also ran: $stray"
+else
+  pass "the gate tests only the paths the discovery printed"
+fi
+FAIL='dotnet build .github/scripts/discover_tests.cs*' run_hook feature/1-x "$(push_stdin feature/1-x)"
+expect "a test discovery that fails its build refuses the push" refused any "dotnet build .github/scripts/discover_tests.cs failed"
+expect_log "a test discovery that fails its build runs no test" not-ran 'dotnet test *'
+FAIL='dotnet run --no-build --file .github/scripts/discover_tests.cs*' run_hook feature/1-x "$(push_stdin feature/1-x)"
+expect "a test discovery that fails refuses the push" refused any
+expect_log "a test discovery that fails runs no test" not-ran 'dotnet test *'
 
 run_hook main "refs/heads/feature/1-x $SHA refs/heads/feature/1-x $ZERO"
 expect "pushing a branch that isn't checked out is refused" refused tests-skipped "is not the checked-out commit"

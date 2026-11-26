@@ -1,0 +1,4 @@
+<Project>
+  <PropertyGroup Condition="$(MSBuildProjectName.StartsWith('Web.'))"><IsTestProject>true</IsTestProject></PropertyGroup>
+  <PropertyGroup></PropertyGroup>
+</Project>

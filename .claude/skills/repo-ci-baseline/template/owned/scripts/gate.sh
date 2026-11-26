@@ -11,8 +11,8 @@
 # .github/copilot-instructions.md matches the repo's code-review skill (when
 # it has one), runs the repo's own checks in .github/ci/gate-checks.sh, checks
 # that every central NuGet pin is referenced (check_central_pins.py), builds
-# the solution, then runs each test project CI's discover_tests.py finds under
-# tests/. Exits non-zero on the first
+# the solution, then runs each test project CI's discover_tests.cs finds under
+# tests/ (built first, then run with --no-build). Exits non-zero on the first
 # failing gate. GATE_SKIP_REVIEW=1 skips the review check, for gate runs before
 # the push (the review's own, and while iterating), never for a push.
 # The Application Factory owns this file and tests it: the Factory's own .claude/skills/repo-ci-baseline/tests/owned-gate-files.test.sh
@@ -395,7 +395,14 @@ step "Tests"
 # IsTestProject resolves to true for it, at any depth under tests/. Helper
 # libraries such as TestingSupport.Library don't set it, and dotnet test on
 # Microsoft Testing Platform fails on them ("No test projects were found").
-TEST_LIST="$(python3 .github/scripts/discover_tests.py --list)"
+# discover_tests.cs is a C# file-based app (ADR 0017 in the Application Factory), built first, its build's output on stderr, and then run
+# with --no-build, so its stdout holds only the test projects' paths, a first run's too.
+export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1
+if ! dotnet build .github/scripts/discover_tests.cs >&2; then
+  echo "❌ dotnet build .github/scripts/discover_tests.cs failed (shown above): the test discovery is the Application Factory's Template's, so take its copy again." >&2
+  exit 1
+fi
+TEST_LIST="$(dotnet run --no-build --file .github/scripts/discover_tests.cs -- --list)"
 mapfile -t TEST_PROJECTS < <(grep . <<< "$TEST_LIST" || true)
 if [[ ${#TEST_PROJECTS[@]} -eq 0 ]]; then
   echo -e "${YELLOW}No test projects under tests/ — skipping.${RESET}"

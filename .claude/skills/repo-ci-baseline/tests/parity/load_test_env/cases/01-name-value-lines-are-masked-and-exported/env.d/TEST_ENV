@@ -1,0 +1,4 @@
+# MongoDB
+MongoDB__ConnectionString=mongodb://u:p@host/db?x=1
+
+  Auth0__Domain = example.test  

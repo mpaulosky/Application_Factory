@@ -1,0 +1,3 @@
+::add-mask::mongodb://u:p@host/db?x=1
+::add-mask::example.test
+Exported 2 test secrets: MongoDB__ConnectionString, Auth0__Domain
