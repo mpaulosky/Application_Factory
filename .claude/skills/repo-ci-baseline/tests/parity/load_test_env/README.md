@@ -1,8 +1,8 @@
 # The load_test_env parity suite
 
-The Template's `.github/scripts/load_test_env.py` through its command line: `tests/parity.test.sh load_test_env [command...]`. The runner's header says what a case holds.
-`test.sh` runs it against the `.py`, its reference while the `.py` ships, and against `load_test_env.cs`, built once first and run with `dotnet run --no-build --file`,
-as ci.yml's test jobs run it.
+The Template's `.github/scripts/load_test_env.cs` through its command line: `tests/parity.test.sh load_test_env [command...]`. The runner's header says what a case holds.
+The cases were recorded from `load_test_env.py`, which shipped beside the C# for one Rollout and has retired (mpaulosky/Application_Factory#126); the `.cs` is the
+reference now, built once first and run with `dotnet run --no-build --file`, as ci.yml's test jobs run it.
 
 A case's `TEST_ENV` is its `env.d/TEST_ENV`, byte for byte, so it can hold the line breaks a one-line `env` can't; cases 11, 27 and 31 set it in `env` instead, and case 10
 leaves it unset. `out`, the file `--output` names, is in the run's folder, so `expected.tree/out` is the bytes the run appended to it; a case with no `expected.tree/`

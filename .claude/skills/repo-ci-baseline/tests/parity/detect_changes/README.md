@@ -1,8 +1,8 @@
 # The detect_changes parity suite
 
-The Template's `.github/scripts/detect_changes.py` through its command line: `tests/parity.test.sh detect_changes [command...]`. The runner's header says what a case holds.
-`test.sh` runs it against the `.py`, its reference while the `.py` ships, and against `detect_changes.cs`, built once first and run with `dotnet run --no-build --file`,
-as ci.yml's Detect Changes job runs it.
+The Template's `.github/scripts/detect_changes.cs` through its command line: `tests/parity.test.sh detect_changes [command...]`. The runner's header says what a case holds.
+The cases were recorded from `detect_changes.py`, which shipped beside the C# for one Rollout and has retired (mpaulosky/Application_Factory#126); the `.cs` is the
+reference now, built once first and run with `dotnet run --no-build --file`, as ci.yml's Detect Changes job runs it.
 
 Each case but the usage errors (21 to 23, 25, 26, 30 and 31) has a `setup.sh` that builds a repo in the run's folder: a base commit with some code and some docs, tagged
 `base`, and the case's change committed on top. It then removes the files, so the run's folder holds only `out`, the file each case's `--output` names, and

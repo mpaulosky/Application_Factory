@@ -2,24 +2,24 @@
 # Tests for .github/hooks/pre-push.
 # Each case runs the hook in a throwaway repo, holding copies of
 # scripts/gate.sh, scripts/check-branch-name.sh,
-# .github/scripts/discover_tests.py, .github/scripts/check_gh_repo.py and .github/scripts/check_central_pins.py, and the C# scripts in
+# .github/scripts/check_gh_repo.py and .github/scripts/check_central_pins.py, and the C# scripts in
 # .github/scripts/ with their shields and global.json, with the refs git would pass on stdin. Stub `dotnet`, `pnpm`, `markdownlint-cli2`, `yamllint`,
 # `actionlint`, `zizmor`, `shellcheck` and `ruff` binaries log each call, and fail when the call matches the FAIL glob, so no
 # real build or network access is needed (the ruff stub answers --version with a 0.17 release, the one the gate's Python lint step accepts:
-# the repo tracks three Python files, which the gate lints when there is no origin/main to diff against, and CI's hook-tests job has no ruff or uv). check_gh_repo.py and the Shell format step run the real shfmt (v3.14 or a later v3), which must be on PATH;
+# the repo tracks two Python files, which the gate lints when there is no origin/main to diff against, and CI's hook-tests job has no ruff or uv). check_gh_repo.py and the Shell format step run the real shfmt (v3.14 or a later v3), which must be on PATH;
 # the repo gets the Template's .editorconfig, so the scripts it is given are written in that style. The dotnet stub hands the gate's C#
-# scripts step (dotnet format whitespace, and dotnet build of a .cs) and its run of a script (dotnet run --no-build --file <x>.cs, the
-# test discovery) to the real dotnet when it runs the SDK global.json names, so those cases check that the Owned scripts pass the step as
-# the gate runs it, and that the discovery's first run prints only paths; without one the stub logs them as it logs the rest, answers the
-# run of a script from the .py beside it (the same script in Python, which ships with it for one Rollout), and the cases that need a
-# real build are skipped, saying so (CI's hook-tests job sets the SDK up). The case run by hand from a terminal
+# scripts step (dotnet format whitespace, and dotnet build of a .cs) and its runs of a script (dotnet run --no-build --file <x>.cs, the
+# central pins check and the test discovery) to the real dotnet when it runs the SDK global.json names, so those cases check that the Owned
+# scripts pass the step as the gate runs it, and that the discovery's first run prints only paths; without one the stub logs them as it
+# logs the rest, answers the run of a script from the .py beside it when one ships (the same script in Python, kept for one Rollout:
+# check_central_pins.py) and the test discovery's with the fixture's one test project, and the cases that need a real build or read what
+# the discovery found are skipped, saying so (CI's hook-tests job sets the SDK up). The case run by hand from a terminal
 # needs python3 (its pty module), and is skipped, saying so, without it.
 # Usage: .github/hooks/tests/pre-push.test.sh
 set -uo pipefail
 
 HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/pre-push"
 SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/scripts"
-DISCOVER="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/discover_tests.py"
 CHECK_GH_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/check_gh_repo.py"
 CHECK_CENTRAL_PINS="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/check_central_pins.py"
 OWNED_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts"
@@ -41,7 +41,8 @@ fi
 
 # make_stub <dir> <tool>: a stub that logs its call and fails on a FAIL match. The dotnet stub then hands dotnet format whitespace,
 # dotnet build of a .cs (the gate's C# scripts step) and dotnet run --no-build --file of a .cs to REAL_DOTNET, when there is one; without
-# one, it answers the run from python3 and the .py beside the .cs.
+# one, it answers the run from python3 and the .py beside the .cs, or, for the test discovery, whose .py has retired, with the fixture's
+# test project.
 make_stub() {
   cat > "$1/$2" << EOF
 #!/usr/bin/env bash
@@ -61,6 +62,7 @@ EOF
 if [[ "$1 ${2:-} ${3:-} ${5:-}" == 'run --no-build --file --' && "${4:-}" == *.cs ]]; then
   py="${4%.cs}.py"
   shift 5
+  [[ -f "$py" || "$py" != */discover_tests.py ]] || { echo tests/Fake.Tests/Fake.Tests.csproj; exit 0; }
   exec python3 "$py" "$@"
 fi
 EOF
@@ -91,7 +93,7 @@ echo '<Project><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup
 mkdir -p "$REPO/tests/Fake.Support"
 echo '<Project />' > "$REPO/tests/Fake.Support/Fake.Support.csproj"
 cp "$SCRIPTS/gate.sh" "$SCRIPTS/check-branch-name.sh" "$REPO/scripts/"
-cp "$DISCOVER" "$CHECK_GH_REPO" "$CHECK_CENTRAL_PINS" "$REPO/.github/scripts/"
+cp "$CHECK_GH_REPO" "$CHECK_CENTRAL_PINS" "$REPO/.github/scripts/"
 # The C# scripts, their shields and the SDK pin, as an Application has them: the gate's C# scripts step checks them when a branch changes one.
 cp "$OWNED_SCRIPTS"/*.cs "$OWNED_SCRIPTS"/Directory.Build.props "$OWNED_SCRIPTS"/Directory.Build.targets "$OWNED_SCRIPTS"/Directory.Packages.props "$REPO/.github/scripts/"
 cp "$SCRIPTS/../global.json" "$REPO/global.json"
@@ -232,7 +234,11 @@ expect "pushing main is refused" refused tests-skipped "Direct pushes to 'main' 
 run_hook feature/1-x "refs/heads/feature/1-x @HEAD@ refs/heads/feature/1-x $ZERO"
 expect "pushing a feature branch runs the gates" allowed tests-ran
 expect_log "the gate tests a project marked IsTestProject" ran 'dotnet test tests/Fake.Tests/Fake.Tests.csproj*'
-expect_log "the gate skips a helper library under tests/" not-ran 'dotnet test tests/Fake.Support/*'
+if [[ -n "$REAL_DOTNET" ]]; then
+  expect_log "the gate skips a helper library under tests/" not-ran 'dotnet test tests/Fake.Support/*'
+else
+  skip "the gate skips a helper library under tests/" "no dotnet runs the SDK the Template's global.json names, so the stub answers the discovery"
+fi
 # The discovery is discover_tests.cs, built and then run with --no-build, whose stdout is only the paths: a line of the build's would be
 # tested as a project.
 expect_log "the gate builds the test discovery" ran 'dotnet build .github/scripts/discover_tests.cs'
@@ -244,7 +250,9 @@ if [[ -n "$discovery_built" && -n "$discovery_ran" && "$discovery_built" -lt "$d
 else
   fail "the gate builds the test discovery before it runs it" "build at line '${discovery_built}', run at line '${discovery_ran}' of: $(tr '\n' ' ' < "$LOG")"
 fi
-if stray="$(grep '^dotnet test ' "$LOG" | grep -vxF 'dotnet test tests/Fake.Tests/Fake.Tests.csproj --configuration Release')"; then
+if [[ -z "$REAL_DOTNET" ]]; then
+  skip "the gate tests only the paths the discovery printed" "no dotnet runs the SDK the Template's global.json names, so the stub answers the discovery"
+elif stray="$(grep '^dotnet test ' "$LOG" | grep -vxF 'dotnet test tests/Fake.Tests/Fake.Tests.csproj --configuration Release')"; then
   fail "the gate tests only the paths the discovery printed" "also ran: $stray"
 else
   pass "the gate tests only the paths the discovery printed"
@@ -388,7 +396,7 @@ expect_log "the C# scripts step builds the script that includes the changed file
   ran 'dotnet build .github/scripts/detect_changes.cs --no-incremental --disable-build-servers --artifacts-path * -p:TreatWarningsAsErrors=true -p:WarningsNotAsErrors=CA2266%3BNU1900'
 expect_log "the C# scripts step doesn't build an included file on its own" not-ran 'dotnet build .github/scripts/DetectChanges.cs*'
 expect_log "the C# scripts step doesn't build Gh.cs on its own" not-ran 'dotnet build .github/scripts/Gh.cs*'
-FAIL='dotnet build .github/scripts/*' run_hook feature/13-cs-script "$(push_stdin feature/13-cs-script)"
+FAIL='dotnet build .github/scripts/detect_changes.cs*' run_hook feature/13-cs-script "$(push_stdin feature/13-cs-script)"
 expect "a C# script that fails its build refuses the push" refused any "dotnet build .github/scripts/detect_changes.cs: fix each warning or error"
 expect_log "a C# script that fails its build stops the gate before the solution's build" not-ran 'dotnet build *--configuration Release*'
 FAIL='dotnet format*' run_hook feature/13-cs-script "$(push_stdin feature/13-cs-script)"
@@ -652,7 +660,23 @@ expect "a skill whose gh command gives --repo lets the push through" allowed tes
 git -C "$REPO" switch -q feature/1-x
 
 # Under transitive pinning a central pin no project references holds its package back, and a Dependabot bump then fails restore with
-# NU1109 (.github/scripts/check_central_pins.py): the gate refuses it, naming the pin, before the build.
+# NU1109 (.github/scripts/check_central_pins.cs): the gate refuses it, naming the pin, before the build. The check is C#, built first and
+# then run with --no-build, as the test discovery is.
+run_hook feature/1-x "$(push_stdin feature/1-x)"
+expect_log "the gate builds the central pins check" ran 'dotnet build .github/scripts/check_central_pins.cs'
+expect_log "the gate runs the central pins check without building it again" ran "dotnet run --no-build --file .github/scripts/check_central_pins.cs -- --root $REPO"
+pins_built="$(grep -nxF 'dotnet build .github/scripts/check_central_pins.cs' "$LOG" | head -1 | cut -d: -f1)"
+pins_ran="$(grep -nxF "dotnet run --no-build --file .github/scripts/check_central_pins.cs -- --root $REPO" "$LOG" | head -1 | cut -d: -f1)"
+solution_built="$(grep -n '^dotnet build .*--configuration Release' "$LOG" | head -1 | cut -d: -f1)"
+if [[ -n "$pins_built" && -n "$pins_ran" && -n "$solution_built" && "$pins_built" -lt "$pins_ran" && "$pins_ran" -lt "$solution_built" ]]; then
+  pass "the gate builds the central pins check, then runs it, then builds the solution"
+else
+  fail "the gate builds the central pins check, then runs it, then builds the solution" \
+    "check built at line '${pins_built}', run at '${pins_ran}', solution built at '${solution_built}' of: $(tr '\n' ' ' < "$LOG")"
+fi
+FAIL='dotnet build .github/scripts/check_central_pins.cs*' run_hook feature/1-x "$(push_stdin feature/1-x)"
+expect "a central pins check that fails its build refuses the push" refused any "dotnet build .github/scripts/check_central_pins.cs failed"
+expect_log "a central pins check that fails its build stops the gate before the solution's build" not-ran 'dotnet build *--configuration Release*'
 commit_on feature/18-unreferenced-pin Directory.Packages.props '<Project><PropertyGroup><CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled></PropertyGroup><ItemGroup><PackageVersion Include="Orphan.Package" Version="1.0.0" /></ItemGroup></Project>'
 run_hook feature/18-unreferenced-pin "$(push_stdin feature/18-unreferenced-pin)"
 expect "an unreferenced central pin refuses the push" refused any "Orphan.Package is pinned in Directory.Packages.props but no project references it"
@@ -702,10 +726,10 @@ git -C "$REPO" update-ref -d refs/remotes/origin/main
 run_hook feature/1-x "$(push_stdin feature/1-x)"
 expect "without an origin/main the check is skipped and the gate runs" allowed tests-ran "No origin/main"
 # There every tracked file counts as changed, the tracked Python files among them, so the gate's Python lint step runs on them.
-if grep -q '^ruff check .* -- .*discover_tests\.py' "$LOG"; then
+if grep -q '^ruff check .* -- .*check_gh_repo\.py' "$LOG"; then
   pass "without an origin/main the gate lints the tracked Python files"
 else
-  fail "without an origin/main the gate lints the tracked Python files" "no ruff check of discover_tests.py in: $(tr '\n' ' ' < "$LOG")"
+  fail "without an origin/main the gate lints the tracked Python files" "no ruff check of check_gh_repo.py in: $(tr '\n' ' ' < "$LOG")"
 fi
 git -C "$REPO" update-ref refs/remotes/origin/main "$MAIN_BEFORE"
 

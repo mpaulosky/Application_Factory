@@ -23,7 +23,6 @@
 //
 // Exit 0 once the lines are appended, or with nothing to export; 1 on a malformed secret, or an output that can't be appended (the
 // exception on stderr); 2 on a usage error (argparse's, as load_test_env.py gave: --output is required). The standard library only.
-// load_test_env.py, beside it, is the same script in Python, kept for one Rollout so a revert is one workflow line.
 using Baseline;
 
 return Script.Run((stdout, stderr) => LoadTestEnv.Run(args, stdout, stderr));

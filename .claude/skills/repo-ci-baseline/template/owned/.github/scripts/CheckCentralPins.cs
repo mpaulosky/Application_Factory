@@ -184,7 +184,8 @@ readonly record struct Problem(string Where, string Why, bool Blocks);
 // files and folders it couldn't read, and the settings it can't read that made transitive pinning count as on (file, value).
 sealed record Findings(bool Transitive, List<(string Path, string Name)> Unreferenced, List<string> Unreadable, List<Problem> Problems, List<(string Where, string Value)> UnreadSettings);
 
-sealed class CentralPins(Caps? caps = null, Files? files = null)
+// The check. environment reads a variable (GITHUB_ACTIONS), the process's unless a test gives its own.
+sealed class CentralPins(Caps? caps = null, Files? files = null, Func<string, string?>? environment = null)
 {
 	// The usage line argparse printed for check_central_pins.py.
 	const string Usage = "[-h] [--root ROOT]";
@@ -200,6 +201,7 @@ sealed class CentralPins(Caps? caps = null, Files? files = null)
 
 	public Caps Caps { get; } = caps ?? new Caps();
 	readonly Files files = files ?? new Files();
+	readonly bool actions = (environment ?? Environment.GetEnvironmentVariable)("GITHUB_ACTIONS") == "true";
 
 	static bool HoldsUnreadable(string text) => Unreadable.Any(marker => text.Contains(marker, StringComparison.Ordinal));
 
@@ -308,7 +310,7 @@ sealed class CentralPins(Caps? caps = null, Files? files = null)
 	void Report(TextWriter stdout, string kind, string where, string message)
 	{
 		where = Printable(where);
-		if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true")
+		if (actions)
 			stdout.Write($"::{kind} file={EscapeProperty(where)}::{EscapeData(message)}\n");
 		else
 			stdout.Write($"{kind switch { "error" => "❌", "warning" => "⚠️ ", _ => "ℹ️ " }} {message}\n");

@@ -51,14 +51,15 @@ public partial class CiScriptStepsTests
 				}
 			}
 		}
-		// detect_changes, discover_tests and load_test_env.
-		Assert.Equal(3, runs);
+		// detect_changes, discover_tests, load_test_env and check_central_pins.
+		Assert.Equal(4, runs);
 	}
 
 	[Theory]
 	[InlineData("detect_changes")]
 	[InlineData("discover_tests")]
 	[InlineData("load_test_env")]
+	[InlineData("check_central_pins")]
 	public void No_step_runs_a_ported_scripts_py(string script)
 	{
 		Assert.All(Jobs().SelectMany(job => job.Steps), step => Assert.DoesNotContain($".github/scripts/{script}.py", step.Run));
