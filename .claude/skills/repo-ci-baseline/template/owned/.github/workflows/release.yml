@@ -53,12 +53,23 @@ jobs:
       prs: ${{ steps.queue.outputs.prs }}
     steps:
       - name: Checkout main
-        # zizmor: ignore[artipacked] release_queue.py fetches main again with this read-only credential.
+        # zizmor: ignore[artipacked] release_queue.cs fetches main again with this read-only credential.
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           # Tags and history, to tell which merges the newest release holds.
           fetch-depth: 0
+
+      # release_queue.cs is a C# file-based app (ADR 0017 in the Application Factory): built in a step of its own and then run with
+      # --no-build, so the PRS it prints is the JSON alone even on a cold build. release_queue.py, beside it, is the same script in
+      # Python, kept for one Rollout: running it there instead reverts the port.
+      - name: Setup .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+
+      - name: Build the release queue script
+        run: dotnet build .github/scripts/release_queue.cs
 
       - name: List the PRs to release
         id: queue
@@ -78,7 +89,7 @@ jobs:
             echo "::error::pr_number must be a PR number, got '${PR_NUMBER}'."
             exit 1
           fi
-          PRS=$(python3 .github/scripts/release_queue.py --repo "$REPOSITORY" --pr "$PR_NUMBER")
+          PRS=$(dotnet run --no-build --file .github/scripts/release_queue.cs -- --repo "$REPOSITORY" --pr "$PR_NUMBER")
           echo "Releasing, in order: ${PRS}"
           echo "prs=${PRS}" >> "$GITHUB_OUTPUT"
 
@@ -411,6 +422,17 @@ jobs:
           # those checks wait for a manual "Approve and run".
           token: ${{ secrets.RELEASE_PR_PAT || secrets.GITHUB_TOKEN }}
 
+      # backfill_blog_posts.cs is a C# file-based app, built here and run with --no-build, as the plan job runs release_queue.cs. Its
+      # build output is outside the checkout, so the git status below sees only the docs. backfill_blog_posts.py, beside it, is the
+      # same script in Python, kept for one Rollout.
+      - name: Setup .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+
+      - name: Build the blog post script
+        run: dotnet build .github/scripts/backfill_blog_posts.cs
+
       - name: Write missing blog posts and release tables
         id: docs
         env:
@@ -424,7 +446,7 @@ jobs:
           # The release list can lag a Release published seconds ago, so name
           # the PRs this run released: the script lists again until each has
           # one, for up to half a minute.
-          python3 .github/scripts/backfill_blog_posts.py --wait-for-prs "$(jq -r 'join(",")' <<< "${QUEUE:-[]}")"
+          dotnet run --no-build --file .github/scripts/backfill_blog_posts.cs -- --wait-for-prs "$(jq -r 'join(",")' <<< "${QUEUE:-[]}")"
 
           # git status (not git diff) so brand-new, still-untracked files count.
           if [ -z "$(git status --porcelain -- docs/blogs README.md docs/README.md docs/index.html)" ]; then

@@ -2,8 +2,8 @@
 #:include ../../template/owned/.github/scripts/HtmlEntities.cs
 #:include ../../template/owned/.github/scripts/ReleasePost.cs
 #:property PublishAot=false
-// The renderer oracle's way into the Template's ReleasePost.cs (ADR 0017's Update for mpaulosky/Application_Factory#164), so the grid judges
-// the C# as it judges release_post.py. renderers.py builds it, then runs it with --no-build. It reads one JSON object on stdin,
+// The renderer oracle's way into the Template's ReleasePost.cs (ADR 0017's Update for mpaulosky/Application_Factory#164), which the grid
+// judges alone since the cut-over (mpaulosky/Application_Factory#128). renderers.py builds it, then runs it with --no-build. It reads one JSON object on stdin,
 //
 //     {"commits": [[commit, ...], ...], "readmes": [text, ...]}
 //

@@ -129,9 +129,10 @@ static class BackfillBlogPosts
 	public sealed record Inputs(string Repository, bool Regenerate, ISet<BigInteger>? Only, string? ApiKey, string Model, ISet<BigInteger>? WaitFor);
 
 	// backfill_blog_posts.py's main(): the command line, then Run with the gh CLI, the key and the model from the environment. Its log is
-	// stdout. run stands in for Run in a test.
-	public static int Command(IEnumerable<string> args, TextWriter stdout, TextWriter stderr, Action<Inputs>? run = null)
+	// stdout. run and getenv stand in for Run and the environment in a test.
+	public static int Command(IEnumerable<string> args, TextWriter stdout, TextWriter stderr, Action<Inputs>? run = null, Func<string, string?>? getenv = null)
 	{
+		getenv ??= Environment.GetEnvironmentVariable;
 		var parser = new Arguments("backfill_blog_posts.cs", Usage, "Write release blog posts for past releases and refresh the release tables.")
 				.Option("--regenerate", "'true' also rewrites posts that already exist (default: false)")
 				.Option("--pr-numbers", "comma-separated source PR numbers to limit the run to")
@@ -139,7 +140,7 @@ static class BackfillBlogPosts
 				.Option("--repo", "owner/name (default: $REPOSITORY or $GITHUB_REPOSITORY)");
 		if (parser.Parse(args, stdout, stderr) is int exit)
 			return exit;
-		var repository = parser.Has("--repo") ? parser.Value("--repo", "") : ReleasePost.DefaultRepository();
+		var repository = parser.Has("--repo") ? parser.Value("--repo", "") : ReleasePost.DefaultRepository(getenv);
 		if (string.IsNullOrEmpty(repository))
 			return parser.Error("--repo is required when REPOSITORY and GITHUB_REPOSITORY are unset", stderr);
 		HashSet<BigInteger>? only, waitFor;
@@ -153,8 +154,8 @@ static class BackfillBlogPosts
 			return parser.Error(error.Message, stderr);
 		}
 
-		Inputs inputs = new(repository, Py.Lower(Py.Strip(parser.Value("--regenerate", "false"))) == "true", only, ReleasePost.Setting("ANTHROPIC_API_KEY"),
-				ReleasePost.Setting("ANTHROPIC_MODEL") ?? ReleasePost.DefaultModel, waitFor);
+		Inputs inputs = new(repository, Py.Lower(Py.Strip(parser.Value("--regenerate", "false"))) == "true", only, ReleasePost.Setting("ANTHROPIC_API_KEY", getenv),
+				ReleasePost.Setting("ANTHROPIC_MODEL", getenv) ?? ReleasePost.DefaultModel, waitFor);
 		(run ?? (given => Run(given.Repository, new ReleaseGitHub(given.Repository), ".", given.Regenerate, given.Only, given.ApiKey, given.Model,
 				waitFor: given.WaitFor, log: stdout)))(inputs);
 		return 0;

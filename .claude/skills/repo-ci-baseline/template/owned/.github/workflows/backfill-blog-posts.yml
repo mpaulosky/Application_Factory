@@ -3,7 +3,7 @@
 name: Backfill blog posts
 
 # Writes release blog posts for past GitHub Releases with
-# .github/scripts/backfill_blog_posts.py and delivers them as one PR.
+# .github/scripts/backfill_blog_posts.cs and delivers them as one PR.
 # release.yml can't do this: its idempotency check sees the existing
 # Release and skips the docs step. Uses each Release's existing tag and
 # never creates tags or Releases.
@@ -54,6 +54,17 @@ jobs:
           # when the RELEASE_PR_PAT secret isn't configured.
           token: ${{ secrets.RELEASE_PR_PAT || secrets.GITHUB_TOKEN }}
 
+      # backfill_blog_posts.cs is a C# file-based app (ADR 0017 in the Application Factory): built in a step of its own and then run
+      # with --no-build, so the step's log holds only what it prints. Its build output is outside the checkout, so the git status below
+      # sees only the docs. backfill_blog_posts.py, beside it, is the same script in Python, kept for one Rollout.
+      - name: Setup .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+
+      - name: Build the blog post script
+        run: dotnet build .github/scripts/backfill_blog_posts.cs
+
       - name: Write blog posts and release tables
         id: docs
         env:
@@ -65,7 +76,7 @@ jobs:
           # without the AI Summary section.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          python3 .github/scripts/backfill_blog_posts.py \
+          dotnet run --no-build --file .github/scripts/backfill_blog_posts.cs -- \
             --regenerate "$REGENERATE" \
             --pr-numbers "$PR_NUMBERS"
 

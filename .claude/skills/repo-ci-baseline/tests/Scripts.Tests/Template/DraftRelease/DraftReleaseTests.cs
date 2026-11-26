@@ -1,11 +1,10 @@
-using System.Diagnostics;
 using System.Numerics;
 
 namespace Baseline.Tests;
 
 // The Template's .github/scripts/DraftRelease.cs: test_draft_release.py's tests, one method each under its name (ADR 0017's rule), with
 // the same cases and assertions, and the port's own after them. In Baseline's namespace, so Script and Arguments are the Template's. The
-// planner's source_pr_of() is still release_post.py's, so the tests that hold the markers to it ask Python.
+// tests that hold the markers to the planner's source_pr_of() ask ReleasePost.cs, which release_queue.cs reads them with.
 public sealed class DraftReleaseTests : IDisposable
 {
 	const string Notes = "Source PR: #15\nSource PR URL: https://example.test/pull/15";
@@ -15,20 +14,9 @@ public sealed class DraftReleaseTests : IDisposable
 
 	public void Dispose() => Directory.Delete(tmp, true);
 
-	// release_post.source_pr_of({"body": body}) from the Template's release_post.py: the PR number, or null for None.
-	static BigInteger? SourcePrOf(string body)
-	{
-		var scripts = Path.Join(Skill.Dir, "template", "owned", ".github", "scripts");
-		var start = new ProcessStartInfo("python3") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-		foreach (var arg in new[] { "-I", "-c", "import sys; sys.path.insert(0, sys.argv[1]); import release_post as rp; print(rp.source_pr_of({'body': sys.argv[2]}))", scripts, body })
-			start.ArgumentList.Add(arg);
-		using var run = Process.Start(start)!;
-		var err = run.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
-		var output = run.StandardOutput.ReadToEnd().Trim();
-		run.WaitForExit();
-		Assert.True(run.ExitCode == 0, err.Result);
-		return output == "None" ? null : BigInteger.Parse(output, System.Globalization.CultureInfo.InvariantCulture);
-	}
+	// release_post.source_pr_of({"body": body}), which the planner reads the markers with: ReleasePost.SourcePrOf since the cut-over
+	// (mpaulosky/Application_Factory#128). The PR number, or null for None.
+	static BigInteger? SourcePrOf(string body) => ReleasePost.SourcePrOf(new System.Text.Json.Nodes.JsonObject { ["body"] = body });
 
 	// main(args) with stdin's text: (exit code, stdout, stderr).
 	static (int Code, string Out, string Err) RunMain(string[] args, string stdin)

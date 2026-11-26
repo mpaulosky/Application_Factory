@@ -2489,29 +2489,31 @@ static class ReleasePost
 
 	public const string Usage = "[-h] --pr PR --tag TAG [--repo REPO]";
 
-	// The repository named by REPOSITORY, else GITHUB_REPOSITORY (an empty one counts as unset), as the scripts' --repo default.
-	public static string? DefaultRepository() =>
-			Environment.GetEnvironmentVariable("REPOSITORY") is { Length: > 0 } repository ? repository : Environment.GetEnvironmentVariable("GITHUB_REPOSITORY");
+	// The repository named by REPOSITORY, else GITHUB_REPOSITORY (an empty one counts as unset), as the scripts' --repo default. getenv
+	// reads a variable (the process's environment, or a test's).
+	public static string? DefaultRepository(Func<string, string?> getenv) => getenv("REPOSITORY") is { Length: > 0 } repository ? repository : getenv("GITHUB_REPOSITORY");
 
-	// An environment variable stripped of its blanks, or null when it is unset or only blanks.
-	public static string? Setting(string name) => Py.Strip(Environment.GetEnvironmentVariable(name) ?? "") is { Length: > 0 } value ? value : null;
+	// A variable stripped of its blanks, or null when it is unset or only blanks.
+	public static string? Setting(string name, Func<string, string?> getenv) => Py.Strip(getenv(name) ?? "") is { Length: > 0 } value ? value : null;
 
 	// release_post.py's main(): the command line, then Run with the gh CLI, the key and the model from the environment. Its log is stdout.
-	// gh stands in for the gh CLI in a test.
-	public static int Command(IEnumerable<string> args, TextWriter stdout, TextWriter stderr, Func<string, IReleaseGitHub>? gh = null)
+	// gh and getenv stand in for the gh CLI and the environment in a test, and root for the current folder.
+	public static int Command(IEnumerable<string> args, TextWriter stdout, TextWriter stderr, Func<string, IReleaseGitHub>? gh = null,
+			Func<string, string?>? getenv = null, string root = ".")
 	{
+		getenv ??= Environment.GetEnvironmentVariable;
 		var parser = new Arguments("release_post.cs", Usage, "Write the release blog post for a merged PR and refresh the release tables.")
 				.IntOption("--pr", "merged PR number", required: true)
 				.Required("--tag", "release tag for the PR, e.g. v0.0.32")
 				.Option("--repo", "owner/name (default: $REPOSITORY or $GITHUB_REPOSITORY)");
 		if (parser.Parse(args, stdout, stderr) is int exit)
 			return exit;
-		var repository = parser.Has("--repo") ? parser.Value("--repo", "") : DefaultRepository();
+		var repository = parser.Has("--repo") ? parser.Value("--repo", "") : DefaultRepository(getenv);
 		if (string.IsNullOrEmpty(repository))
 			return parser.Error("--repo is required when REPOSITORY and GITHUB_REPOSITORY are unset", stderr);
 
-		Run(repository, (long)parser.IntValue("--pr", 0), Py.Strip(parser.Value("--tag", "")), (gh ?? (name => new ReleaseGitHub(name)))(repository),
-				apiKey: Setting("ANTHROPIC_API_KEY"), model: Setting("ANTHROPIC_MODEL") ?? DefaultModel, log: stdout);
+		Run(repository, (long)parser.IntValue("--pr", 0), Py.Strip(parser.Value("--tag", "")), (gh ?? (name => new ReleaseGitHub(name)))(repository), root,
+				apiKey: Setting("ANTHROPIC_API_KEY", getenv), model: Setting("ANTHROPIC_MODEL", getenv) ?? DefaultModel, log: stdout);
 		return 0;
 	}
 }
