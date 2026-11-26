@@ -134,7 +134,14 @@ Template) renders a grid of container prefixes and tricky bodies with the two re
 cmark-gfm (GitHub, the README) and kramdown's GFM parser (GitHub Pages, the posts), at the github-pages gem's versions.
 Every commit must stay visible, with no stray backslash, and every `docs/README.md` link must be the README's, one
 directory up, with the text unchanged. Add a shape to its grid whenever a review finds one. Run against the
-`release_post.py` from before #80 and #79, it fails 110 and 130 cases.
+`release_post.py` from before #80 and #79, it fails 110 and 130 cases. The grid runs against both `release_post.py` and its C#
+port, `.github/scripts/ReleasePost.cs` (through `tests/render_oracle/release_post.cs`), and the C# must write what the Python
+writes, case for case; the cut-over drops the Python (ADR 0017's Update for mpaulosky/Application_Factory#164).
+
+**The C# port.** `ReleasePost.cs` holds `release_post.py`'s logic, a method for each function, with `HtmlEntities.cs`
+(`html.unescape()`'s HTML5 names) beside it; `tests/Scripts.Tests/Template/ReleasePost/` copies `test_release_post.py`'s
+tests. Nothing runs it yet: its entry file, `release_post.cs`, exits 2 saying the `.py` still runs. Until the cut-over, a
+change to `release_post.py`'s logic changes `ReleasePost.cs` and its xUnit copy in the same pull request.
 
 **Parity suites.** `tests/parity.test.sh <suite> [command...]` (in the skill, not the Template) runs `release_queue`, `draft_release`,
 `release_post` and `backfill_blog_posts` through their command lines only, so the same cases judge a port of them (ADR 0017)

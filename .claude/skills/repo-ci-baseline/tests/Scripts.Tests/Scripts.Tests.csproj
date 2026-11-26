@@ -34,7 +34,7 @@
     <Compile Include="../../bench/*.cs" Exclude="../../bench/claude-review-bench.cs" Link="bench/%(Filename)%(Extension)" />
     <!-- The Template's Owned scripts in .github/scripts/ (ADR 0017's Update for mpaulosky/Application_Factory#125): in the namespace Baseline, so
          their Gh.cs doesn't clash with github/'s, and tested from Template/ in that namespace. Its entry files are left out, as above. -->
-    <Compile Include="../../template/owned/.github/scripts/*.cs" Exclude="../../template/owned/.github/scripts/check_central_pins.cs;../../template/owned/.github/scripts/detect_changes.cs;../../template/owned/.github/scripts/draft_release.cs;../../template/owned/.github/scripts/discover_tests.cs;../../template/owned/.github/scripts/load_test_env.cs" Link="template/%(Filename)%(Extension)" />
+    <Compile Include="../../template/owned/.github/scripts/*.cs" Exclude="../../template/owned/.github/scripts/check_central_pins.cs;../../template/owned/.github/scripts/detect_changes.cs;../../template/owned/.github/scripts/draft_release.cs;../../template/owned/.github/scripts/discover_tests.cs;../../template/owned/.github/scripts/load_test_env.cs;../../template/owned/.github/scripts/release_post.cs" Link="template/%(Filename)%(Extension)" />
     <AssemblyMetadata Include="SkillDir" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))" />
   </ItemGroup>
 </Project>
