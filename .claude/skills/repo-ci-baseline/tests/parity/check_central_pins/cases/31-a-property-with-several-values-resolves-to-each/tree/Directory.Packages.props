@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup><CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled></PropertyGroup>
+  <ItemGroup>
+<PackageVersion Include="A.Core" Version="1.0.0" /><PackageVersion Include="B.Core" Version="1.0.0" /><PackageVersion Include="C.Core" Version="1.0.0" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,4 @@
+❌ Directory.Build.props can't be checked: it isn't well-formed MSBuild XML (a DOCTYPE or entity declaration, which an MSBuild file never needs). It may hold central pins, turn transitive pinning on or set a property a pin is built from.
+⚠️  A is pinned in Directory.Packages.props but no project references it
+Reported as warnings: a reference this check can't read without evaluating MSBuild (@(Z)) may name any of the pins above.
+Not a pass: the files and folders above couldn't be checked, and may hold what the check looks for.

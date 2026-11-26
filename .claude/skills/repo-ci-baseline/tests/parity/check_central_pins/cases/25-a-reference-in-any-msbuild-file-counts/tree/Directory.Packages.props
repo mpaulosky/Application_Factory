@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup><CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled></PropertyGroup>
+  <ItemGroup>
+<PackageVersion Include="Cs" Version="1.0.0" /><PackageVersion Include="Fs" Version="1.0.0" /><PackageVersion Include="Sql" Version="1.0.0" /><PackageVersion Include="Upper" Version="1.0.0" /><PackageVersion Include="Props" Version="1.0.0" /><PackageVersion Include="Targets" Version="1.0.0" /><PackageVersion Include="Json" Version="1.0.0" /><PackageVersion Include="User" Version="1.0.0" /><PackageVersion Include="Propsx" Version="1.0.0" /><PackageVersion Include="Target" Version="1.0.0" /><PackageVersion Include="Projects" Version="1.0.0" />
+  </ItemGroup>
+</Project>

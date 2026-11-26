@@ -1,0 +1,1 @@
+::error file=a%2Cb%3Ac%25d/Directory.Packages.props::A is pinned in a,b:c%25d/Directory.Packages.props but no project references it

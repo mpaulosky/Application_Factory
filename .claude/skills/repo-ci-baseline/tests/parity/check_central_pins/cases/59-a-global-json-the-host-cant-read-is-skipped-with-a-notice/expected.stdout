@@ -1,0 +1,7 @@
+ℹ️  a/global.json was skipped: it isn't JSON the .NET host reads. A reference or property in it wasn't seen.
+ℹ️  b/global.json was skipped: it isn't JSON the .NET host reads. A reference or property in it wasn't seen.
+ℹ️  c/global.json was skipped: it isn't JSON the .NET host reads. A reference or property in it wasn't seen.
+ℹ️  d/global.json was skipped: it isn't JSON the .NET host reads. A reference or property in it wasn't seen.
+ℹ️  e/global.json was skipped: it isn't JSON the .NET host reads. A reference or property in it wasn't seen.
+ℹ️  g/global.json was skipped: it isn't JSON the .NET host reads. A reference or property in it wasn't seen.
+❌ Json.Sdk is pinned in Directory.Packages.props but no project references it

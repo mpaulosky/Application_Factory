@@ -1,0 +1,1 @@
+Transitive pinning is off in every MSBuild file read (or there is no central package management): no pin found can hold a package back.

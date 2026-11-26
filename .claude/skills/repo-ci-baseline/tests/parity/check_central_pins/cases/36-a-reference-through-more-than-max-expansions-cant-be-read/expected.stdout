@@ -1,0 +1,2 @@
+⚠️  Orphan is pinned in Directory.Packages.props but no project references it
+Reported as warnings: a reference this check can't read without evaluating MSBuild ($(First)) may name any of the pins above.

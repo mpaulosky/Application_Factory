@@ -1,0 +1,2 @@
+ℹ️  global.json was skipped: it is over 65536 bytes. A reference or property in it wasn't seen.
+Every central pin is referenced by a project, or kept with a reason.

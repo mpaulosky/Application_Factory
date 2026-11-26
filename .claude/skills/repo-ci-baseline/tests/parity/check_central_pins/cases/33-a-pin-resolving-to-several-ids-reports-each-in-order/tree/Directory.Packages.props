@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup><CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled></PropertyGroup><PropertyGroup Condition="Z"><Prefix>Z</Prefix></PropertyGroup><PropertyGroup Condition="X"><Prefix>X</Prefix></PropertyGroup><PropertyGroup Condition="Y"><Prefix>Y</Prefix></PropertyGroup>
+  <ItemGroup>
+<PackageVersion Include="$(Prefix).Core" Version="1.0.0" />
+  </ItemGroup>
+</Project>

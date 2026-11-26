@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup><CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled></PropertyGroup>
+  <ItemGroup>
+<PackageVersion Include="A&#10;::add-mask::x&#13;::stop-commands::t%0A&#x9b;2J&#x200b;&#xe000;&#x2028; &#x1F600;　" Version="1.0.0" />
+  </ItemGroup>
+</Project>

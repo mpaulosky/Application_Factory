@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup><CentralPackageTransitivePinningEnabled>$(NotSetAnywhere)</CentralPackageTransitivePinningEnabled></PropertyGroup><PropertyGroup><CentralPackageTransitivePinningEnabled>$(NotSetAnywhere)</CentralPackageTransitivePinningEnabled></PropertyGroup><PropertyGroup><CentralPackageTransitivePinningEnabled>$([MSBuild]::ValueOrDefault('', 'true'))</CentralPackageTransitivePinningEnabled></PropertyGroup>
+  <ItemGroup>
+<PackageVersion Include="Polly" Version="1.0.0" />
+  </ItemGroup>
+</Project>

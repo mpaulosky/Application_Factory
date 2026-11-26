@@ -364,7 +364,7 @@ public sealed class DiscoverTestsTests : IDisposable
 	[InlineData("/a/../b", "/b")]
 	[InlineData("/..", "/")]
 	public void Resolve_reads_a_path_without_symlinks_as_pathlib_does(string path, string resolved) =>
-			Assert.Equal(resolved, DiscoverTests.Resolve(path));
+			Assert.Equal(resolved, PyPath.Resolve(path));
 
 	[Fact]
 	public void Resolve_follows_each_symlink_before_the_parts_after_it()
@@ -373,8 +373,8 @@ public sealed class DiscoverTestsTests : IDisposable
 		File.CreateSymbolicLink(Path.Join(tmp, "link"), "real/sub");
 		File.CreateSymbolicLink(Path.Join(tmp, "absolute"), Path.Join(tmp, "real"));
 
-		Assert.Equal(Path.Join(DiscoverTests.Resolve(tmp), "real", "x"), DiscoverTests.Resolve(Path.Join(tmp, "link", "..", "x")));
-		Assert.Equal(Path.Join(DiscoverTests.Resolve(tmp), "real", "sub"), DiscoverTests.Resolve(Path.Join(tmp, "absolute", "sub")));
+		Assert.Equal(Path.Join(PyPath.Resolve(tmp), "real", "x"), PyPath.Resolve(Path.Join(tmp, "link", "..", "x")));
+		Assert.Equal(Path.Join(PyPath.Resolve(tmp), "real", "sub"), PyPath.Resolve(Path.Join(tmp, "absolute", "sub")));
 	}
 
 	[Fact]
@@ -382,7 +382,7 @@ public sealed class DiscoverTestsTests : IDisposable
 	{
 		File.CreateSymbolicLink(Path.Join(tmp, "loop"), "loop");
 
-		Assert.Throws<IOException>(() => DiscoverTests.Resolve(Path.Join(tmp, "loop")));
+		Assert.Throws<IOException>(() => PyPath.Resolve(Path.Join(tmp, "loop")));
 	}
 
 	[Theory]

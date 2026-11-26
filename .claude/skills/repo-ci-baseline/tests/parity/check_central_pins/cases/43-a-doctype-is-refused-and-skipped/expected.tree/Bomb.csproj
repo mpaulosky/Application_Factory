@@ -1,0 +1,3 @@
+<?xml version="1.0"?>
+<!DOCTYPE p [<!ENTITY a "AAAA"><!ENTITY b "&a;&a;&a;&a;">]>
+<Project><ItemGroup><PackageReference Include="&b;" /></ItemGroup></Project>

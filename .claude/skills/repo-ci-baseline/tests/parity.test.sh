@@ -4,12 +4,16 @@
 # tests/parity/<suite>/, named for the script it was recorded from, and its README.md says what its cases cover and what they
 # leave out on purpose, and anything a run of it needs besides (check_gh_repo's runs with its shfmt shim first on PATH).
 # The suite's reference is that script: github/<suite>.py, else github/<suite>.cs once a port has replaced the .py (a
-# Factory-only script, whose .py goes in the PR that ports it, ADR 0017), else the Template's template/owned/.github/scripts/<suite>.py.
+# Factory-only script, whose .py goes in the PR that ports it, ADR 0017), else the Template's template/owned/.github/scripts/<suite>.py,
+# else that folder's <suite>.cs once the .py has retired (an Owned script's .py ships beside its C# for one Rollout, ADR 0017).
 #
 #   tests/parity.test.sh <suite>                    run the suite's cases against its reference: python3 <the .py>, or
 #                                                   dotnet run --no-build --file <the .cs> --, built once first and run
 #                                                   from the .cs's folder, as its .sh runs it, so dotnet picks the SDK
-#                                                   that built it (its suite's cases have no tree/, setup.sh or expected.tree/)
+#                                                   that built it (its suite's cases have no tree/, setup.sh or expected.tree/);
+#                                                   a Template .cs is built once from the Template's folder, whose
+#                                                   global.json picks the SDK, and run from the case's folder, as ci.yml
+#                                                   runs it from the Application's checkout
 #   tests/parity.test.sh <suite> <command> [arg]... run them against another implementation
 #   PARITY_RECORD=1 tests/parity.test.sh <suite>
 #                                                   record the cases from the suite's reference (no command is accepted,
@@ -56,8 +60,9 @@
 #                    origin), and the git identity and dates fixed, so its commits get the same hashes everywhere and
 #                    the gh fixtures can name them
 #   expected.tree/   the run's folder afterwards, every file byte for byte and every symlink by its target, not followed
-#                    (a .git anywhere is left out); missing: the run must leave the folder holding nothing but a .git,
-#                    so a script that writes no file is held to that
+#                    (a .git anywhere is left out, and so is a FIFO, which only a setup.sh can make and git can't store);
+#                    missing: the run must leave the folder holding nothing but a .git, so a script that writes no file
+#                    is held to that
 #
 # Neither args, env nor an expected.* file but expected.stdout may hold a carriage return (a setup error, since each is read
 # line by line); stdin, env.d/, a tree and expected.stdout, read or compared byte for byte, may, and
@@ -73,7 +78,7 @@
 # then changes to its .cs's folder, which is why its suite's cases may have none of those), with
 # stdin from /dev/null or the case's stdin, the fake gh first on PATH, no GitHub token in its environment and GH_CONFIG_DIR
 # a new empty folder (nothing an earlier case wrote is left), no repository, Anthropic key or model the caller set (REPOSITORY, GITHUB_REPOSITORY, ANTHROPIC_API_KEY,
-# ANTHROPIC_MODEL: a case's env sets them), no git repository or config the caller set (GIT_DIR and the rest unset,
+# ANTHROPIC_MODEL: a case's env sets them), not under GitHub Actions whether or not the caller is (GITHUB_ACTIONS unset: a case's env sets it), no git repository or config the caller set (GIT_DIR and the rest unset,
 # GIT_CONFIG_GLOBAL=/dev/null, GIT_CONFIG_NOSYSTEM=1), no colour or terminal width the caller set (NO_COLOR=1, TERM=dumb),
 # LC_ALL=C.UTF-8 (best-effort: macOS has no such locale, so PYTHONUTF8=1 is set too), PYTHONDONTWRITEBYTECODE=1 (so a
 # script's imports leave no __pycache__ beside it), TZ=UTC, dotnet's CLI usage data, first-run setup and logo off
@@ -115,14 +120,16 @@ if [[ -n "$record" && "$record" != 1 ]]; then
   setup_error "PARITY_RECORD must be 1 or unset, not '$record'."
 fi
 if [[ -n "$record" && $# -gt 0 ]]; then
-  setup_error "PARITY_RECORD records from the suite's reference only (github/$suite.py, github/$suite.cs or the Template's $suite.py); run it with no command."
+  setup_error "PARITY_RECORD records from the suite's reference only (github/$suite.py, github/$suite.cs, or the Template's $suite.py or $suite.cs); run it with no command."
 fi
 limit="${PARITY_TIMEOUT:-60}"
 [[ "$limit" =~ ^[1-9][0-9]*$ ]] || setup_error "PARITY_TIMEOUT must be a whole number of seconds, not '$limit'."
 command -v timeout > /dev/null || setup_error "timeout (coreutils) is not on PATH."
 
-# build_cs: a C# reference, built once below, before the first case.
+# build_cs: a C# reference, built once below, before the first case and run from its own folder; owned_cs: the Template's, built
+# once below from the Template's folder and run from the case's.
 build_cs=""
+owned_cs=""
 if [[ $# -gt 0 ]]; then
   impl=("$@")
 elif [[ -f "$skill_dir/github/$suite.py" ]]; then
@@ -132,8 +139,11 @@ elif [[ -f "$skill_dir/github/$suite.cs" ]]; then
   impl=(dotnet run --no-build --file "$build_cs" --)
 elif [[ -f "$skill_dir/template/owned/.github/scripts/$suite.py" ]]; then
   impl=(python3 "$skill_dir/template/owned/.github/scripts/$suite.py")
+elif [[ -f "$skill_dir/template/owned/.github/scripts/$suite.cs" ]]; then
+  owned_cs="$skill_dir/template/owned/.github/scripts/$suite.cs"
+  impl=(dotnet run --no-build --file "$owned_cs" --)
 else
-  setup_error "no script for suite '$suite': none of github/$suite.py, github/$suite.cs and template/owned/.github/scripts/$suite.py is a file."
+  setup_error "no script for suite '$suite': none of github/$suite.py, github/$suite.cs, template/owned/.github/scripts/$suite.py and template/owned/.github/scripts/$suite.cs is a file."
 fi
 # The command runs from a temporary folder, so a relative path in it would name nothing there.
 # Only a word that looks like a path (it holds a /, or after the first word a .) is rewritten, so `dotnet run` stays as it
@@ -188,6 +198,11 @@ if [[ -e "$overlay" ]]; then
     fi
   done
   [[ -z "$build_cs" ]] || build_cs="$copy/${build_cs#"$skill_dir"/}"
+fi
+if [[ -n "$owned_cs" ]]; then
+  (cd -- "$skill_dir/template/owned" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 \
+    MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 UseSharedCompilation=false \
+    dotnet build "$owned_cs" < /dev/null > "$tmp/build.log" 2>&1) || setup_error "dotnet build $owned_cs failed:"$'\n'"$(cat "$tmp/build.log")"
 fi
 if [[ -n "$build_cs" ]]; then
   (cd -- "$(dirname -- "$build_cs")" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 \
@@ -329,12 +344,14 @@ for case_dir in "${cases[@]}"; do
   code=0
   (cd "$run" && timeout -k 5 "$limit" env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN \
     -u FORCE_COLOR -u CLICOLOR_FORCE -u PYTHON_COLORS -u COLUMNS -u LINES \
-    -u REPOSITORY -u GITHUB_REPOSITORY -u ANTHROPIC_API_KEY -u ANTHROPIC_MODEL "${git_env[@]}" NO_COLOR=1 TERM=dumb \
+    -u REPOSITORY -u GITHUB_REPOSITORY -u ANTHROPIC_API_KEY -u ANTHROPIC_MODEL -u GITHUB_ACTIONS "${git_env[@]}" NO_COLOR=1 TERM=dumb \
     PATH="$tmp/bin:$PATH" GH_CONFIG_DIR="$tmp/ghconfig" LC_ALL=C.UTF-8 PYTHONUTF8=1 PYTHONDONTWRITEBYTECODE=1 TZ=UTC \
     DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 \
     FAKE_GH_DIR="$case_dir/gh" FAKE_GH_LOG="$tmp/calls" ${case_env[@]+"${case_env[@]}"} \
     "${impl[@]}" ${args[@]+"${args[@]}"} < "$stdin" > "$tmp/stdout" 2> "$tmp/stderr") || code=$?
 
+  # A FIFO a setup.sh made (a case of a script that must not wait on one) can't be stored in expected.tree/, so it is left out of both.
+  find "$run" -name .git -prune -o -type p -exec rm -f -- {} + || setup_error "can't drop the FIFOs from $name's run folder."
   problems=()
   if [[ $code -eq 124 || $code -eq 137 ]]; then
     problems+=("timed out after $limit second(s) (exit $code)")

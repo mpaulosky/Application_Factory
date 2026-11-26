@@ -1,0 +1,3 @@
+ℹ️  sub/global.json was skipped: it is not a regular file. A reference or property in it wasn't seen.
+❌ Pipe.props can't be checked: it is not a regular file. It may hold central pins, turn transitive pinning on or set a property a pin is built from.
+Not a pass: the files and folders above couldn't be checked, and may hold what the check looks for.

@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup><CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled></PropertyGroup>
+  <ItemGroup>
+<PackageVersion Include="$(Unset).Core" Version="1.0.0" /><PackageVersion Include="@(X)" Version="1.0.0" /><PackageVersion Include="Plain" Version="1.0.0" />
+  </ItemGroup>
+</Project>

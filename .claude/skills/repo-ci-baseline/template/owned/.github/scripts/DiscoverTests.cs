@@ -140,70 +140,6 @@ static class DiscoverTests
 				lowered.Replace('.', '-').Replace('_', '-'), prebuild, prebuild, usesPlaywright, isE2e ? "normal" : "minimal");
 	}
 
-	// Path.resolve() of the root: absolute, each symlink on the way followed in turn, as far as the path exists.
-	public static string Resolve(string path)
-	{
-		List<string> pending = [.. (Path.IsPathRooted(path) ? path : Path.Join(Directory.GetCurrentDirectory(), path)).Split('/', StringSplitOptions.RemoveEmptyEntries)];
-		var resolved = "/";
-		var hops = 0;
-		for (var i = 0; i < pending.Count; i++)
-		{
-			if (pending[i] == ".")
-				continue;
-			if (pending[i] == "..")
-			{
-				resolved = Path.GetDirectoryName(resolved) ?? "/";
-				continue;
-			}
-			var next = Path.Join(resolved, pending[i]);
-			string? target;
-			try
-			{
-				target = new FileInfo(next).LinkTarget;
-			}
-			catch (IOException)
-			{
-				target = null;
-			}
-			if (target is null)
-			{
-				resolved = next;
-				continue;
-			}
-			if (++hops > 40)
-				throw new IOException($"Symlink loop from '{next}'");
-			if (target.StartsWith('/'))
-				resolved = "/";
-			pending.InsertRange(i + 1, target.Split('/', StringSplitOptions.RemoveEmptyEntries));
-		}
-		return resolved;
-	}
-
-	// Paths in pathlib's order: by their /-separated parts, each part by code point, so a/x sorts before a-b/x.
-	static readonly Comparer<string> PathOrder = Comparer<string>.Create((a, b) =>
-	{
-		var (x, y) = (a!.Split('/'), b!.Split('/'));
-		for (var i = 0; i < Math.Min(x.Length, y.Length); i++)
-		{
-			if (CompareCodePoints(x[i], y[i]) is var order and not 0)
-				return order;
-		}
-		return x.Length.CompareTo(y.Length);
-	});
-
-	static int CompareCodePoints(string a, string b)
-	{
-		var (x, y) = (a.EnumerateRunes().GetEnumerator(), b.EnumerateRunes().GetEnumerator());
-		while (true)
-		{
-			bool more = x.MoveNext(), other = y.MoveNext();
-			if (!more || !other)
-				return more == other ? 0 : more ? 1 : -1;
-			if (x.Current != y.Current)
-				return x.Current.Value.CompareTo(y.Current.Value);
-		}
-	}
-
 	// pathlib's folder.glob("**/*.csproj"): every entry whose name ends in .csproj in folder and each folder under it, a symlink to a
 	// folder searched in as a name but never descended into, and a folder that can't be listed skipped.
 	static IEnumerable<string> Csprojs(string folder)
@@ -235,9 +171,9 @@ static class DiscoverTests
 	// (every .csproj under tests/, the matrix entries of the test projects among them), the projects in pathlib's sorted order.
 	public static (List<string> Projects, List<MatrixEntry> Entries) Discover(string root, TextWriter log)
 	{
-		root = Resolve(root);
+		root = PyPath.Resolve(root);
 		var tests = Path.Join(root, "tests");
-		List<string> projects = Directory.Exists(tests) ? [.. Csprojs(tests).Order(PathOrder)] : [];
+		List<string> projects = Directory.Exists(tests) ? [.. Csprojs(tests).Order(PyPath.Order)] : [];
 		return (projects, [.. projects.Where(csproj => IsTestProject(csproj, root, log)).Select(csproj => Entry(csproj, root))]);
 	}
 

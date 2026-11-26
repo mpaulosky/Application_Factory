@@ -1,0 +1,1 @@
+<Project><PropertyGroup><CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled></PropertyGroup><Choose><When Condition="x"><ItemGroup><PackageVersion Include="A" Version="1" /></ItemGroup></When></Choose><ItemGroup Condition="y"><PackageVersion Include="B" Version="1" /></ItemGroup></Project>

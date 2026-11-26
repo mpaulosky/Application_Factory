@@ -1,0 +1,2 @@
+❌ Broken.props can't be checked: it isn't well-formed MSBuild XML (a DOCTYPE or entity declaration, which an MSBuild file never needs). It may hold central pins, turn transitive pinning on or set a property a pin is built from.
+Not a pass: the files and folders above couldn't be checked, and may hold what the check looks for.

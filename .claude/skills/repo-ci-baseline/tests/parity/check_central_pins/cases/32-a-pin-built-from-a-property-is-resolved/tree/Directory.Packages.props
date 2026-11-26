@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup><CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled></PropertyGroup><PropertyGroup><Prefix>Acme</Prefix></PropertyGroup>
+  <ItemGroup>
+<PackageVersion Include="$(Prefix).Core" Version="1.0.0" />
+  </ItemGroup>
+</Project>

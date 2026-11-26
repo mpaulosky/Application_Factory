@@ -1,0 +1,29 @@
+<Project>
+  <PropertyGroup><CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled></PropertyGroup>
+  <ItemGroup>
+<!--Transitive pin: GHSA-7jgj-8wvc-jh57, fixed in 4.3.4-->
+<PackageVersion Include="Kept1" Version="1.0.0" />
+<!--  transitive PIN:a security fix  -->
+<PackageVersion Include="Kept2" Version="1.0.0" />
+<PackageVersion Include="AfterKept" Version="1.0.0" />
+<!-- Transitive pin: a fix -->
+<PackageReference Include="X" />
+<PackageVersion Include="SeparatedByElement" Version="1.0.0" />
+<!-- Transitive pin: a fix -->
+<!-- Testing -->
+<PackageVersion Include="LastCommentCounts" Version="1.0.0" />
+<!-- Testing -->
+<!-- Transitive pin: a fix -->
+<PackageVersion Include="Kept3" Version="1.0.0" />
+<!-- Microsoft -->
+<PackageVersion Include="Heading" Version="1.0.0" />
+<!--Transitive pin:   -->
+<PackageVersion Include="NoReason" Version="1.0.0" />
+<!--Transitive pin-->
+<PackageVersion Include="NoColon" Version="1.0.0" />
+<!--Pinned: transitive pin: x-->
+<PackageVersion Include="NotFirst" Version="1.0.0" />
+<!--Transıtive pin: dotless i-->
+<PackageVersion Include="DotlessI" Version="1.0.0" />
+  </ItemGroup>
+</Project>

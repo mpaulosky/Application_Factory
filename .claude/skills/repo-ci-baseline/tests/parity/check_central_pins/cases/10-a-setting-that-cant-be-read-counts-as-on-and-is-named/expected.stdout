@@ -1,0 +1,3 @@
+ℹ️  Directory.Packages.props sets CentralPackageTransitivePinningEnabled to $(NotSetAnywhere), which this check can't read without evaluating MSBuild, so it counts transitive pinning as on.
+ℹ️  Directory.Packages.props sets CentralPackageTransitivePinningEnabled to $([MSBuild]::ValueOrDefault('', 'true')), which this check can't read without evaluating MSBuild, so it counts transitive pinning as on.
+❌ Polly is pinned in Directory.Packages.props but no project references it
