@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 import random
@@ -913,10 +914,12 @@ def test_a_credential_in_any_structured_field_is_redacted(tmp_path):
     assert posted["files"][0]["path"] == "src/" + pcr.REDACTED
 
 
-@pytest.mark.parametrize("field", ["overview", "changes", "files", "advisory"])
-def test_a_secret_in_a_structured_field_withholds_the_answer(tmp_path, field):
-    leak = {"overview": "o " + SECRET, "changes": ["c " + SECRET], "advisory": ["a " + SECRET],
-            "files": [{"path": "a.py", "description": SECRET}]}[field]
+@pytest.mark.parametrize("field, leak", [
+    ("overview", "o " + SECRET), ("changes", ["c " + SECRET]), ("advisory", ["a " + SECRET]),
+    ("not_reviewed", "n " + SECRET), ("files", [{"path": "a.py", "description": SECRET}]),
+    ("files", [{"path": "src/" + SECRET, "description": "d"}]),
+], ids=["overview", "changes", "advisory", "not_reviewed", "files-description", "files-path"])
+def test_a_secret_in_a_structured_field_withholds_the_answer(tmp_path, field, leak):
     assert withheld(tmp_path, {**GOOD_ANSWER, field: leak}, [SECRET])
 
 
@@ -934,6 +937,10 @@ def test_a_secret_in_a_structured_field_withholds_the_answer(tmp_path, field):
     {"summary": {TOKENS[1]: [115, 107]}, "findings": []},
     [{TOKENS[1]: "x"}],
     {"overview": [115, 107], "findings": []},
+    {"summary": "s", "overview": [115, 107], "findings": []},
+    {"overview": "o", "summary": 5, "findings": []},
+    {"overview": "o", "files": ["a.py"], "findings": []},
+    {"overview": "o", "files": [{"path": 1, "description": "d"}], "findings": []},
     {"overview": "o", "not_reviewed": [115, 107], "findings": []},
     {"overview": "o", "changes": "c", "findings": []},
     {"overview": "o", "changes": [115, 107], "findings": []},
@@ -1180,7 +1187,8 @@ def test_the_post_step_runs_the_bases_script_not_the_prs(tmp_path):
 
 
 @pytest.mark.parametrize("batches, effort", [("1", "1 batch"), ("2", "2 batches"), ("4", "4 batches"), ("", "1 batch"),
-                                             ("0", "1 batch"), ("x", "1 batch"), ("-2", "1 batch")])
+                                             ("0", "1 batch"), ("x", "1 batch"), ("-2", "1 batch"),
+                                             ("10", "10 batches"), ("04", "1 batch")])
 def test_the_effort_footer_names_the_batch_count(tmp_path, batches, effort):
     repo = merge_repo(tmp_path, stub_script("base"), stub_script("pr"))
 
@@ -1226,6 +1234,24 @@ def test_a_base_script_from_before_the_structured_answer_fails_on_withheld_findi
     assert done.returncode == 1
     assert "::error::Claude's answer was withheld for quoting a secret" in done.stdout
     assert "copy ran" not in done.stdout
+
+
+@pytest.mark.parametrize("base", [None, stub_script("base", effort=False)], ids=["no-script", "old-script"])
+def test_a_malformed_answer_fails_the_post_step_on_a_base_that_cant_post_it(tmp_path, base):
+    repo = merge_repo(tmp_path, base, stub_script("pr"))
+    malformed = json.dumps({"malformed": "Claude's answer was withheld: findings is not a list"})
+
+    done = run_post_step(repo, tmp_path, findings=malformed)
+
+    assert done.returncode == 1
+    assert "::error::Claude's answer didn't fit the schema" in done.stdout
+    assert "::warning::" not in done.stdout and "copy ran" not in done.stdout
+
+
+def test_the_post_step_tells_a_malformed_answer_by_the_answer_checks_placeholder(tmp_path):
+    # The step matches the placeholder's text, so the check's json.dumps must still write it that way.
+    _, outputs, _ = check(tmp_path, {"summary": "s", "findings": "none"}, [SECRET])
+    assert outputs["findings"].startswith('{"malformed": ')
 
 
 def test_the_real_post_script_is_one_the_post_step_passes_the_effort_to():
@@ -1320,7 +1346,7 @@ def test_pieces_read_whole_hold_nothing(tmp_path):
 def test_a_listed_piece_not_read_whole_holds_the_merge(tmp_path, reads):
     folder = tmp_path / "claude-review" / "diff"
     added, out = hold(tmp_path, [*read_of(folder, "001.diff", "a"), *reads(folder)], listed="001.diff 002.diff")
-    assert [(f["path"], f["line"]) for f in added] == [("diff", 0)]
+    assert [(f["path"], f["line"], f["severity"]) for f in added] == [("diff", 0, "high")]
     assert "didn't read all of diff pieces 002.diff:" in added[0]["body"] and "merge by hand" in added[0]["body"]
     # The log names the piece's files, with workflow commands stopped around the PR's paths.
     token = re.search(r"^::stop-commands::([0-9a-f]{32})$", out, re.M)[1]
@@ -1339,14 +1365,14 @@ def test_two_results_in_one_message_dont_count_as_read_whole(tmp_path):
 def test_pieces_past_the_budget_hold_the_merge(tmp_path):
     folder = tmp_path / "claude-review" / "diff"
     added, out = hold(tmp_path, read_of(folder, "001.diff", "a"), listed="001.diff", skipped="003.diff")
-    assert "pieces 003.diff:" in added[0]["body"]
+    assert "pieces 003.diff:" in added[0]["body"] and added[0]["severity"] == "high"
     assert "README.md" in out and "src/app.py" not in out
 
 
 def test_files_nobody_read_hold_the_merge(tmp_path):
     folder = tmp_path / "claude-review" / "diff"
     added, out = hold(tmp_path, read_of(folder, "001.diff", "a"), listed="001.diff", held="2")
-    assert [(f["path"], f["line"]) for f in added] == [("diff", 0)]
+    assert [(f["path"], f["line"], f["severity"]) for f in added] == [("diff", 0, "high")]
     assert "didn't read 2 changed file(s)" in added[0]["body"] and "merge by hand" in added[0]["body"]
     token = re.search(r"^::stop-commands::([0-9a-f]{32})$", out, re.M)[1]
     listed = out[out.index(f"::stop-commands::{token}"):out.index(f"::{token}::")]
@@ -1581,6 +1607,17 @@ def test_a_finding_two_batches_both_report_is_posted_once(tmp_path):
                                                 {"path": "a.py", "line": 2, "body": "one"}]
 
 
+def test_a_finding_two_batches_grade_differently_is_posted_once_with_the_first_batchs_severity(tmp_path):
+    first = {"path": "a.py", "line": 1, "severity": "high", "body": "one"}
+    answers = [{**GOOD_ANSWER, "findings": [first]}, {**GOOD_ANSWER, "findings": [{**first, "severity": "low"}]}]
+    listed = ["001.diff", "002.diff"]
+    reads = {1: read_whole_of(tmp_path, listed[0], "a"), 2: read_whole_of(tmp_path, listed[1], "b")}
+
+    code, answer, _ = batched(tmp_path, answers, listed, reads)
+
+    assert code == 0 and answer["findings"] == [first]
+
+
 def test_a_finding_one_batch_reports_twice_is_kept_as_it_was(tmp_path):
     # One batch alone is posted as it answered, as before batches.
     same = {"path": "a.py", "line": 1, "body": "one"}
@@ -1802,6 +1839,104 @@ def test_a_long_overview_and_not_reviewed_are_cut_once_no_rows_are_left(tmp_path
 
 
 ROWS_CUT_TAIL = "its findings are whole._"
+
+
+def rows_cut_note():
+    """The workflow's ROWS_CUT_NOTE, which a batch whose rows were cut ends its overview with."""
+    literal = re.search(r'ROWS_CUT_NOTE = (\((?:\s*"[^"\n]*")+\))', WORKFLOW.read_text())[1]
+    return ast.literal_eval(literal)
+
+
+@pytest.mark.parametrize("extra", [0, 1])
+def test_a_batch_answering_a_summary_and_an_overview_gets_both_in_its_section(tmp_path, extra):
+    share = summary_share()
+    first = {"summary": "s" * 10, "overview": "o" * (share - 13 + extra), "changes": ["c"]}
+
+    answer = joined_first(tmp_path, first)
+
+    # Both count toward the share, with the blank line between them: one more character and the row goes.
+    section = batch_sections(answer["overview"], 2)[1]
+    if extra == 0:
+        assert section == "s" * 10 + "\n\n" + first["overview"] and answer["changes"] == ["c", "s"]
+    else:
+        # The overview, one line too long to fit quoted after the summary, is left out whole.
+        assert quoted_part(section) == "> " + "s" * 10 + "\n>" and ROWS_CUT in section and answer["changes"] == ["s"]
+
+
+@pytest.mark.parametrize("extra", [-1, 0, 1])
+def test_a_batch_is_kept_whole_up_to_its_share_and_loses_a_row_past_it(tmp_path, extra):
+    share = summary_share()
+    first = {"overview": "o", "changes": ["c" * (share - 1 + extra)]}
+
+    answer = joined_first(tmp_path, first)
+
+    overview = batch_sections(answer["overview"], 2)[1]
+    if extra <= 0:
+        assert overview == "o" and answer["changes"] == [first["changes"][0], "s"]
+    else:
+        assert overview == "o" + rows_cut_note() and answer["changes"] == ["s"]
+
+
+@pytest.mark.parametrize("extra", [-1, 0, 1])
+def test_a_kept_row_leaves_room_for_the_rows_note(tmp_path, extra):
+    share, note = summary_share(), rows_cut_note()
+    kept = "c" * (share - 1 - len(note) + extra)
+    first = {"overview": "o", "changes": [kept, "d" * share]}
+
+    answer = joined_first(tmp_path, first)
+
+    overview = batch_sections(answer["overview"], 2)[1]
+    assert overview == "o" + note
+    assert answer["changes"] == ([kept, "s"] if extra <= 0 else ["s"])
+    assert batch_size(answer, overview) <= share
+
+
+@pytest.mark.parametrize("extra", [-1, 0, 1])
+def test_an_overview_is_cut_only_past_what_the_rows_note_leaves(tmp_path, extra):
+    share, note = summary_share(), rows_cut_note()
+    long = "o" * (share - len(note) + extra)
+    first = {"overview": long, "changes": ["c" * share]}
+
+    answer = joined_first(tmp_path, first)
+
+    overview = batch_sections(answer["overview"], 2)[1]
+    assert answer["changes"] == ["s"] and overview.endswith(note)
+    if extra <= 0:
+        assert overview == long + note
+    else:
+        assert quoted_part(overview).startswith("> o") and "was cut" in overview
+        assert len(overview) <= share
+
+
+@pytest.mark.parametrize("extra", [-1, 0, 1])
+def test_not_reviewed_is_cut_to_a_quarter_of_the_share_before_rows_go(tmp_path, extra):
+    share = summary_share()
+    quarter = share // 4
+    not_reviewed = "n" * (quarter + extra)
+    # A batch that fits its share keeps not_reviewed whole; one past it, by not_reviewed alone, has it cut and keeps
+    # the rest.
+    first = {"overview": "o" * (share - quarter - 1), "changes": ["c"], "not_reviewed": not_reviewed}
+
+    answer = joined_first(tmp_path, first)
+
+    section = batch_sections(answer["not_reviewed"], 2)[1]
+    assert batch_sections(answer["overview"], 2)[1] == first["overview"]
+    assert answer["changes"] == ["c", "s"]
+    if extra <= 0:
+        assert section == not_reviewed
+    else:
+        assert quoted_part(section).startswith("> n") and "was cut" in section and len(section) <= quarter
+
+
+def test_a_long_not_reviewed_is_cut_and_short_rows_are_kept(tmp_path):
+    share = summary_share()
+    first = {"overview": "o", "changes": ["c" * 100], "files": [{"path": "f.py", "description": "d"}],
+             "not_reviewed": "n\n" * share}
+
+    answer = joined_first(tmp_path, first)
+
+    assert answer["changes"] == ["c" * 100, "s"] and answer["files"] == first["files"]
+    assert ROWS_CUT not in answer["overview"] and "was cut" in batch_sections(answer["not_reviewed"], 2)[1]
 
 
 def test_an_unread_piece_reaches_the_off_diff_section_with_its_marker_on_line_2(tmp_path):
@@ -2123,6 +2258,15 @@ def test_the_schema_asks_for_the_structured_fields_and_a_severity_on_each_findin
     assert files["required"] == ["path", "description"] and set(files["properties"]) == {"path", "description"}
     assert finding["required"] == ["path", "line", "severity", "body"]
     assert finding["properties"]["severity"] == {"type": "string", "enum": list(pcr.SEVERITIES)}
+    # The types, pinned here since the jsonschema test below doesn't run in CI.
+    strings = {"type": "array", "items": {"type": "string"}}
+    assert schema["properties"]["overview"] == schema["properties"]["not_reviewed"] == {"type": "string"}
+    assert schema["properties"]["changes"] == schema["properties"]["advisory"] == strings
+    assert schema["properties"]["files"]["type"] == schema["properties"]["findings"]["type"] == "array"
+    assert files["type"] == finding["type"] == "object"
+    assert files["properties"] == {"path": {"type": "string"}, "description": {"type": "string"}}
+    assert finding["properties"]["path"] == finding["properties"]["body"] == {"type": "string"}
+    assert finding["properties"]["line"] == {"type": "integer", "minimum": 0, "maximum": 1_000_000}
     # Claude may answer only in the fields that get posted.
     assert all(part["additionalProperties"] is False for part in (schema, files, finding))
 

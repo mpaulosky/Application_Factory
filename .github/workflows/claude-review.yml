@@ -1451,7 +1451,7 @@ jobs:
                       f"pieces are read in {len(batches)} batches, each by a review of its own, and the answers are "
                       "posted together as one review. Review the pieces of your batch; INDEX lists every batch's "
                       "pieces. Report a problem in a file of another batch only when your pieces or the context "
-                      "pieces show it, and keep the Changes table to your batch's files."
+                      "pieces show it, and keep your changes and files to your batch's files."
                       if batch and len(batches) > 1 else "")
               outputs[f"pieces_{number}"] = text
               outputs[f"listed_{number}"] = " ".join(pieces[index]["name"] for index in batch)
@@ -2520,7 +2520,7 @@ jobs:
               # share quoted. Markdown also ends a line at "\r\n" and at a lone "\r", so a cut text's lines end
               # in "\n" alone first: a line Markdown sees without its "> " would end the quote early.
               MAX_SUMMARY_CHARS = 10_000
-              CUT_NOTE = ("\n\n_This batch's summary was cut here to fit GitHub's limit on a review's length; "
+              CUT_NOTE = ("\n\n_This batch's text was cut here to fit GitHub's limit on a review's length; "
                           "its findings are whole._")
               ROWS_CUT_NOTE = ("\n\n_This batch's later Changes, File and Advisory rows were left out to fit GitHub's "
                                "limit on a review's length; its findings are whole._")
@@ -2540,31 +2540,34 @@ jobs:
                       batch["not_reviewed"] = fields["not_reviewed"]
                   if size(batch) <= MAX_SUMMARY_CHARS:
                       return batch
+                  # Too long: not_reviewed keeps at most a quarter of the share, then rows go, then the overview is cut.
+                  if "not_reviewed" in batch:
+                      batch["not_reviewed"] = quoted_within(batch["not_reviewed"], MAX_SUMMARY_CHARS // 4)
+                      if size(batch) <= MAX_SUMMARY_CHARS:
+                          return batch
                   rows_cut = 0
                   for key in ("files", "changes", "advisory"):
                       while batch.get(key) and size(batch) + len(ROWS_CUT_NOTE) > MAX_SUMMARY_CHARS:
                           batch[key].pop()
                           rows_cut = len(ROWS_CUT_NOTE)
                   if size(batch) + rows_cut > MAX_SUMMARY_CHARS:
-                      # No rows are left: the texts share what's left, not_reviewed at most a quarter of it.
-                      if "not_reviewed" in batch:
-                          batch["not_reviewed"] = quoted_within(batch["not_reviewed"], MAX_SUMMARY_CHARS // 4)
+                      # No rows are left: the overview gets what not_reviewed and the note leave.
                       batch["overview"] = quoted_within(
                           batch["overview"], MAX_SUMMARY_CHARS - rows_cut - len(batch.get("not_reviewed", "")))
                   if rows_cut:
                       batch["overview"] += ROWS_CUT_NOTE
                   return batch
 
-              def quoted_within(summary, share):
-                  if len(summary) <= share:
-                      return summary
-                  summary = re.sub(r"\r\n?", "\n", summary)
-                  if len(summary) <= share:
-                      return summary
+              def quoted_within(text, share):
+                  if len(text) <= share:
+                      return text
+                  text = re.sub(r"\r\n?", "\n", text)
+                  if len(text) <= share:
+                      return text
                   budget = share - len(CUT_NOTE) - len(CLOSE_COMMENT)
                   quoted, size = [], 0
-                  # Quoting only adds characters, so the summary's lines run past the budget before they end.
-                  for line in summary.split("\n"):
+                  # Quoting only adds characters, so the text's lines run past the budget before they end.
+                  for line in text.split("\n"):
                       line = f"> {line}" if line else ">"
                       if size + len(line) + bool(quoted) > budget:
                           if not quoted:
@@ -2589,11 +2592,12 @@ jobs:
                   for number in range(1, count + 1) if number not in shares or "not_reviewed" in shares[number])
               rows = {key: [row for number in sorted(shares) for row in shares[number].get(key, [])]
                       for key in ("changes", "files", "advisory")}
-              # A finding an earlier batch already reported (the same path, line and body) is posted once, the
-              # first's; one batch's own findings are kept as it answered.
+              # A finding an earlier batch already reported (the same path, line and body, whatever its severity)
+              # is posted once, the first's; one batch's own findings are kept as it answered.
               joined, seen = [], set()
               for number in sorted(fields):
-                  keys = [json.dumps(finding, sort_keys=True) for finding in fields[number]["findings"]]
+                  keys = [json.dumps([finding["path"], finding["line"], finding["body"]])
+                          for finding in fields[number]["findings"]]
                   joined += [finding for finding, key in zip(fields[number]["findings"], keys) if key not in seen]
                   seen |= set(keys)
               answer = {"overview": overview, **{key: value for key, value in rows.items() if value},
@@ -2796,17 +2800,24 @@ jobs:
           REVIEW_EFFORT: high (claude-sonnet-5-5)
         run: |
           script="${RUNNER_TEMP}/post_claude_review.py"
+          # The script fails on an answer the review job withheld; where the step posts nothing without it, fail here.
+          refuse_withheld() {
+            if [ -z "$FINDINGS" ]; then
+              echo "::error::Claude's answer was withheld for quoting a secret of the review job. Check the PR and the" \
+                "review job's log, and rotate CLAUDE_CODE_OAUTH_TOKEN."
+              exit 1
+            fi
+            if [[ $FINDINGS == '{"malformed": '* ]]; then
+              echo "::error::Claude's answer didn't fit the schema, so the review job withheld it. Its log says why."
+              exit 1
+            fi
+          }
           if ! git rev-parse --verify -q "HEAD^2" >/dev/null; then
             echo "::error::The checkout isn't the PR's merge commit, so the base's post_claude_review.py can't be found."
             exit 1
           fi
           if ! git cat-file -e "HEAD^1:.github/scripts/post_claude_review.py" 2>/dev/null; then
-            if [ -z "$FINDINGS" ]; then
-              # The script would fail on this; without it, fail here.
-              echo "::error::Claude's answer was withheld for quoting a secret of the review job. Check the PR and the" \
-                "review job's log, and rotate CLAUDE_CODE_OAUTH_TOKEN."
-              exit 1
-            fi
+            refuse_withheld
             echo "::warning::The base has no .github/scripts/post_claude_review.py yet, so Claude's review isn't posted." \
               "The PR needs Copilot's review, or a merge by hand."
             exit 0
@@ -2815,11 +2826,7 @@ jobs:
           # A base script from before the structured answer (it has no --effort) would refuse this one, so
           # the answer waits, like a base without the script, for the next Apply to bring the base the script.
           if ! grep -q -e '--effort' "$script"; then
-            if [ -z "$FINDINGS" ]; then
-              echo "::error::Claude's answer was withheld for quoting a secret of the review job. Check the PR and the" \
-                "review job's log, and rotate CLAUDE_CODE_OAUTH_TOKEN."
-              exit 1
-            fi
+            refuse_withheld
             echo "::warning::The base's .github/scripts/post_claude_review.py predates the answer this workflow asks" \
               "Claude for, so Claude's review isn't posted. Merge the newer script first; until then the PR needs" \
               "Copilot's review, or a merge by hand."
