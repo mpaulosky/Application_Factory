@@ -732,7 +732,8 @@ T3b, split from mpaulosky/Application_Factory#128 under the library-first rule a
   difference is left. A differential run of 25,000 random Markdown documents through both found no output apart, and the oracle below checks its grid each run.
 - **The tests.** `test_release_post.py`'s 132 tests are copied, one method each under their names and in their order, with the same 454 cases, into
   `tests/Scripts.Tests/Template/ReleasePost/`, with seven of the port's own after them. The pytest stays until T3c, judging the `.py`; a PR that changes the `.py`'s logic
-  meanwhile changes the library and its copy too, as the rule above says.
+  meanwhile changes the library and its copy too, as the rule above says. (Since then, the two that time the scanning are in their own class, `ReleasePostTimingTests`,
+  a collection that runs alone after the parallel tests, since the suite's other tests made their timings flaky.)
 - **The render oracle** (Still open: the tests, until now). Its renderers stay what publishes the output: cmark-gfm through the `cmarkgfm` package (GitHub, the README)
   and kramdown with kramdown-parser-gfm through Ruby, a local one with the pinned gems or else Docker (GitHub Pages, the posts), at the github-pages gem's versions. No .NET
   library renders as either: Markdig is a third CommonMark reading, and a grid passing it would say nothing about GitHub or Pages. Its runner stays pytest, in the skill's
