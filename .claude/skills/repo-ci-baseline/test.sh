@@ -148,11 +148,11 @@ checker_layout_directives() {
   LC_ALL=C grep -anF '#:' -- "$1" || true
 }
 # The files above a folder (argument 1) that a dotnet build in it would read: a global.json, the MSBuild shields and response file and a
-# NuGet.config, in it or any folder above it, walked from its physical path, as the build's cwd is. Prints each found, one a line, or the
-# folder itself when it can't be entered.
+# NuGet.config, in it or any folder above it, walked from its physical path, as the build's cwd is (a caller's CDPATH aside). Prints each
+# found, one a line, or a line saying it can't enter the folder.
 dotnet_files_above() {
   local dir name
-  dir="$(cd -P -- "$1" 2> /dev/null && pwd -P)" || {
+  dir="$(CDPATH='' cd -P -- "$1" 2> /dev/null && pwd -P)" || {
     printf "can't enter '%s'\n" "$1"
     return 0
   }
@@ -861,13 +861,14 @@ if in_shard scripts; then
   [[ -z "$built_files" ]] || fail "building the Owned entry files wrote into the Template's .github/, which a workflow's git status would list: $built_files"
   # post_claude_review.cs is written for the checker layout the post job is to build it in (ADR 0017, mpaulosky/Application_Factory#129):
   # the file alone in an empty folder, built there and run as a dll, with no global.json or shield files near it. So it is built and run
-  # that way too, against its suite. A directive past #:property PublishAot=false (checker_layout_directives), which the Template's folder
-  # could satisfy, fails first, and so does a global.json, shield or NuGet.config above the folder (a TMPDIR inside a checkout), which
-  # the build would read. The build's own files (a file-based app's obj/, under XDG_DATA_HOME's dotnet/runfile/ on Linux and named by the
+  # that way too, against its suite. The file must hold #: once, as its first line #:property PublishAot=false (checker_layout_directives:
+  # a #: in a comment or a string counts, so no directive the Template's folder could satisfy gets through), and the folder must have no
+  # global.json, shield, Directory.Build.rsp or NuGet.config above it (dotnet_files_above; a TMPDIR inside a checkout), which the build
+  # would read; either fails first. The build's own files (a file-based app's obj/, under XDG_DATA_HOME's dotnet/runfile/ on Linux and named by the
   # file's path, which is new on every run) and its temp files go under md_tmp, which the trap removes.
   for directive in '  #:package Humanizer@2.14.1' $'\t#:include lib.cs' '#:sdk Microsoft.NET.Sdk.Web' '#:property Imported=../y.targets' \
     $'#:project ../a.csproj\r' '#:property PublishAot=true' '  #:property PublishAot=false' '#:property PublishAot=false;Imported=../y.targets' \
-    '// #:include lib.cs' 'var s = "#:package X";' $'// x\r#:package X' $'// x\u2028#:package X' $'\u00a0#:include lib.cs'; do
+    '// #:include lib.cs' 'var s = "#:package X";' $'// x\r#:package X' $'// x\xe2\x80\xa8#:package X' $'\xc2\xa0#:include lib.cs'; do
     printf '#:property PublishAot=false\n%s\nreturn 0;\n' "$directive" > "$md_tmp/checker-layout-fixture.cs"
     [[ -n "$(checker_layout_directives "$md_tmp/checker-layout-fixture.cs")" ]] || fail "checker_layout_directives passes a file that carries '$directive'"
   done
@@ -890,13 +891,21 @@ if in_shard scripts; then
     [[ "$(dotnet_files_above "$md_tmp/a b/above")" == *"/a b/above/$name"* ]] || fail "dotnet_files_above misses a $name in the folder itself"
   done
   rm -rf "$md_tmp/a b"
+  # The walk is of the physical parents, as the build's cwd is, and a caller's CDPATH doesn't change it: a folder reached through a symlink
+  # finds the global.json above its real folder, not above the link.
+  mkdir -p "$md_tmp/real/above/one/two" "$md_tmp/elsewhere" && : > "$md_tmp/real/above/global.json"
+  ln -s "$md_tmp/real/above/one/two" "$md_tmp/elsewhere/link"
+  [[ "$(dotnet_files_above "$md_tmp/elsewhere/link")" == *"/real/above/global.json"* ]] || fail "dotnet_files_above walks a symlink's parents, not its real folder's"
+  [[ "$(cd "$md_tmp/elsewhere" && CDPATH=. timeout 10 bash -c "$(declare -f dotnet_files_above); dotnet_files_above link")" == *"/real/above/global.json" ]] \
+    || fail "dotnet_files_above misses the global.json above a relative folder under CDPATH=., or doesn't end"
+  rm -rf "$md_tmp/real" "$md_tmp/elsewhere"
   [[ "$(dotnet_files_above "$md_tmp/no-such-folder")" == "can't enter "* ]] || fail "dotnet_files_above passes a folder it can't enter"
   checker_layout="$md_tmp/post-claude-review-checker"
   mkdir -p "$checker_layout" "$md_tmp/post-claude-review-checker-tmp" "$md_tmp/post-claude-review-checker-data" && cp -- "$owned/.github/scripts/post_claude_review.cs" "$checker_layout/"
   layout_directives="$(checker_layout_directives "$checker_layout/post_claude_review.cs")"
   layout_above="$(dotnet_files_above "$checker_layout")"
   if [[ -n "$layout_directives" ]]; then
-    fail "post_claude_review.cs must carry no directive but #:property PublishAot=false (the checker layout): $layout_directives"
+    fail "post_claude_review.cs must hold #: only in its first line, #:property PublishAot=false (the checker layout; a #: in a comment or a string counts): $layout_directives"
   elif [[ -n "$layout_above" ]]; then
     fail "the checker layout's folder ($checker_layout) has files a dotnet build there reads above it, so the build wouldn't be of the file alone; set TMPDIR outside any checkout: $layout_above"
   elif (cd "$checker_layout" && TMPDIR="$md_tmp/post-claude-review-checker-tmp" XDG_DATA_HOME="$md_tmp/post-claude-review-checker-data" DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 \
