@@ -35,7 +35,7 @@ name: Claude Review
 # Claude never holds a write token. The review job checks the PR out with a
 # read-only token, gives Claude the diff against the base and read-only tools,
 # and takes its findings as structured JSON. The post job turns that JSON
-# into one review on the head commit (post_claude_review.py), with inline
+# into one review on the head commit (post_claude_review.cs), with inline
 # threads like Copilot's, and a body that starts with <!-- claude-review -->:
 # PR Auto-Merge accepts that review of the head in place of Copilot's when
 # Copilot can't review that commit: its note is on it, or Copilot was asked, has
@@ -58,7 +58,7 @@ name: Claude Review
 # merging before a review, not against someone who can push workflow changes.
 # A push without that permission (an app's, or a coding agent's) can't
 # change the code that checks or posts the answer: the check is inline here,
-# and the post job runs the base's post_claude_review.py, not the PR's. It can
+# and the post job runs the base's post_claude_review.cs, not the PR's. It can
 # still steer what Claude answers, by editing the conventions the prompt has
 # Claude follow (AGENTS.md, CLAUDE.md, docs/) or by instructions in the diff,
 # and the base's script posts that answer under the marker. A prompt-injected
@@ -546,7 +546,7 @@ jobs:
       # Whether Claude answered, apart from findings, which arrive empty when
       # the answer quotes a secret (withheld by the check, or by GitHub's
       # masking). This flag can't hold one, so it still says the post job
-      # should run, and post_claude_review.py fails on the empty findings.
+      # should run, and the post job fails on the empty findings.
       # Any batch's answer counts: the answer check holds the merge on the
       # pieces of a batch that didn't answer.
       reviewed: >-
@@ -2761,7 +2761,9 @@ jobs:
     # secret still reach the script, which fails on them.
     if: needs.review.outputs.enabled == 'true' && needs.review.outputs.reviewed == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Time for Setup .NET to install the base's SDK and a cold build of the
+    # base's post_claude_review.cs, as well as the post.
+    timeout-minutes: 10
     # A stale head's post has a group of its own, as its review does.
     concurrency:
       group: claude-review-post-${{ github.event.pull_request.number }}${{ needs.review.outputs.stale == 'true' && format('-{0}', github.event.pull_request.head.sha) || '' }}
@@ -2784,12 +2786,41 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
 
+      # The SDK the base's global.json pins, for the base's post_claude_review.cs,
+      # never the PR's pin. A base with no .cs yet, whose .py posts (one Rollout,
+      # mpaulosky/Application_Factory#129), needs no SDK.
+      - name: Take the base's SDK pin
+        id: sdk
+        run: |
+          if git rev-parse --verify -q "HEAD^2" >/dev/null &&
+            git cat-file -e "HEAD^1:.github/scripts/post_claude_review.cs" 2>/dev/null &&
+            git cat-file -e "HEAD^1:global.json" 2>/dev/null; then
+            mkdir -p "$RUNNER_TEMP/base-sdk"
+            git show "HEAD^1:global.json" > "$RUNNER_TEMP/base-sdk/global.json"
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup .NET
+        if: steps.sdk.outputs.needed == 'true'
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: ${{ runner.temp }}/base-sdk/global.json
+
       # A review posted with GITHUB_TOKEN starts no workflows, so PR Auto-Merge
       # follows this workflow's completion instead (its workflow_run trigger).
-      # A base without the script (a PR that brings Claude Review to a repo),
-      # or with one from before --effort, warns and posts nothing, like a
-      # review that didn't run, unless the review job withheld the answer
-      # (a quoted secret, or one that doesn't fit the schema): that fails.
+      # The base's post_claude_review.cs is built alone, with the base's
+      # global.json, in a folder of its own, so no SDK command reads the PR's
+      # tree, and run as a dll (ADR 0017's checker layout). A base with no .cs
+      # yet runs its post_claude_review.py, until the .py retires. A base with
+      # neither (a PR that brings Claude Review to a repo), or with a .py from
+      # before --effort, warns and posts nothing, like a review that didn't
+      # run, unless the review job withheld the answer (a quoted secret, or one
+      # that doesn't fit the schema): that fails, before any build. The build
+      # gets neither the token nor the answer: only the dll that posts needs
+      # them. A failed SDK install or build holds the merge. After an install
+      # that failed on a download, a rerun of the PR's current head's failed
+      # job posts the review, since the review job's outputs stay; a base .cs
+      # that doesn't build fails the rerun too (the same merge commit and base).
       - name: Post the review on the head commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -2816,12 +2847,35 @@ jobs:
             fi
           }
           if ! git rev-parse --verify -q "HEAD^2" >/dev/null; then
-            echo "::error::The checkout isn't the PR's merge commit, so the base's post_claude_review.py can't be found."
+            echo "::error::The checkout isn't the PR's merge commit, so the base's post_claude_review script can't be found."
             exit 1
+          fi
+          batches="${BATCHES:-1}"
+          [[ $batches =~ ^[1-9][0-9]*$ ]] || batches=1
+          unit="batches"
+          [[ $batches == 1 ]] && unit="batch"
+          if git cat-file -e "HEAD^1:.github/scripts/post_claude_review.cs" 2>/dev/null; then
+            if ! git cat-file -e "HEAD^1:global.json" 2>/dev/null; then
+              echo "::error::The base has .github/scripts/post_claude_review.cs but no global.json to pin its SDK, so it can't be built."
+              exit 1
+            fi
+            refuse_withheld
+            build="$(mktemp -d)"
+            git show "HEAD^1:.github/scripts/post_claude_review.cs" > "$build/post_claude_review.cs"
+            git show "HEAD^1:global.json" > "$build/global.json"
+            if ! (cd "$build" && unset GH_TOKEN FINDINGS REDACTED && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 \
+              MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 \
+              dotnet build post_claude_review.cs -o "$build/out" -p:UseSharedCompilation=false < /dev/null > "$build/build.log" 2>&1); then
+              cat "$build/build.log"
+              echo "::error::The base's .github/scripts/post_claude_review.cs didn't build, so Claude's review isn't posted."
+              exit 1
+            fi
+            exec dotnet "$build/out/post_claude_review.dll" --repo "$REPOSITORY" --pr "$PR_NUMBER" --head "$HEAD_SHA" \
+              --effort "${REVIEW_EFFORT}, ${batches} ${unit}"
           fi
           if ! git cat-file -e "HEAD^1:.github/scripts/post_claude_review.py" 2>/dev/null; then
             refuse_withheld
-            echo "::warning::The base has no .github/scripts/post_claude_review.py yet, so Claude's review isn't posted." \
+            echo "::warning::The base has no .github/scripts/post_claude_review.cs or .py yet, so Claude's review isn't posted." \
               "The PR needs Copilot's review, or a merge by hand."
             exit 0
           fi
@@ -2835,9 +2889,5 @@ jobs:
               "Copilot's review, or a merge by hand."
             exit 0
           fi
-          batches="${BATCHES:-1}"
-          [[ $batches =~ ^[1-9][0-9]*$ ]] || batches=1
-          unit="batches"
-          [[ $batches == 1 ]] && unit="batch"
           python3 -I "$script" --repo "$REPOSITORY" --pr "$PR_NUMBER" --head "$HEAD_SHA" \
             --effort "${REVIEW_EFFORT}, ${batches} ${unit}"

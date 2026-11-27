@@ -859,9 +859,9 @@ if in_shard scripts; then
   done
   built_files="$(find "$owned/.github" -newer "$build_marker" -print)"
   [[ -z "$built_files" ]] || fail "building the Owned entry files wrote into the Template's .github/, which a workflow's git status would list: $built_files"
-  # post_claude_review.cs is written for the checker layout the post job is to build it in (ADR 0017, mpaulosky/Application_Factory#129):
-  # the file alone in an empty folder, built there and run as a dll, with no global.json or shield files near it. So it is built and run
-  # that way too, against its suite. The file must hold #: once, as its first line #:property PublishAot=false (checker_layout_directives:
+  # post_claude_review.cs is written for the checker layout the post job builds it in (ADR 0017, mpaulosky/Application_Factory#129):
+  # the file alone in an empty folder (the post job adds only the base's global.json), built there and run as a dll, with no shield files
+  # near it. So it is built and run that way too, against its suite. The file must hold #: once, as its first line #:property PublishAot=false (checker_layout_directives:
   # a #: in a comment or a string counts, so no directive the Template's folder could satisfy gets through), and the folder must have no
   # global.json, shield, Directory.Build.rsp or NuGet.config above it (dotnet_files_above; a TMPDIR inside a checkout), which the build
   # would read; either fails first. The build's own files (a file-based app's obj/, under XDG_DATA_HOME's dotnet/runfile/ on Linux and named by the

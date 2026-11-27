@@ -74,6 +74,7 @@ copies=(
   .github/workflows/pr-automerge.yml
   .github/workflows/pr-review-submitted.yml
   .github/scripts/post_claude_review.py
+  .github/scripts/post_claude_review.cs
   .github/ISSUE_TEMPLATE/bug_report.md
   .github/ISSUE_TEMPLATE/feature_request.md
   .github/ISSUE_TEMPLATE/chore_request.md

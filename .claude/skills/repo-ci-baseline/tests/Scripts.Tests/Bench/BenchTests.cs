@@ -29,10 +29,17 @@ public partial class BenchTests : IDisposable
 	static string Git(string folder, params string[] args) => Run(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
 			"-c", "user.name=t", "-c", "user.email=t@t", "-C", folder, .. args]).Stdout.Trim();
 
-	// One run of argv, which must exit 0 unless allowed to fail: (exit code, stdout).
+	// One run of argv, which must exit 0 unless allowed to fail: (exit code, stdout). Its stdin is empty: bash reads ~/.bashrc even for -c when
+	// its stdin is a socket (as a remote shell daemon's), which the test host's can be, so a step would run the maintainer's own startup files.
 	static (int Code, string Stdout) Run(IReadOnlyList<string> argv, string? cwd = null, Dictionary<string, string>? env = null, bool mayFail = false)
 	{
-		var start = new ProcessStartInfo(argv[0]) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+		var start = new ProcessStartInfo(argv[0])
+		{
+			RedirectStandardInput = true,
+			RedirectStandardOutput = true,
+			RedirectStandardError = true,
+			UseShellExecute = false,
+		};
 		if (cwd is not null)
 			start.WorkingDirectory = cwd;
 		if (env is not null)
@@ -44,6 +51,7 @@ public partial class BenchTests : IDisposable
 		foreach (var arg in argv.Skip(1))
 			start.ArgumentList.Add(arg);
 		using var run = Process.Start(start)!;
+		run.StandardInput.Close();
 		var err = run.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
 		var output = run.StandardOutput.ReadToEnd();
 		run.WaitForExit();
@@ -311,23 +319,34 @@ public partial class BenchTests : IDisposable
 
 	// -- The post step takes the script from the merge commit's first parent (mpaulosky/Application_Factory#134) --
 
-	(int Code, string Stdout) RunPostStep(string? baseScript, string findings = """{"summary": "s", "findings": []}""", bool merge = true)
+	// A repo whose HEAD is a merge commit (a plain commit when merge is false) whose base has baseScript as its post_claude_review.py
+	// (none when null), baseCs as its post_claude_review.cs (none when null) and the Template's global.json (basePin instead, when given;
+	// none when baseGlobalJson is false). The PR, whatever the base has, changes the .py to one that must never run and brings a .cs of its
+	// own, a global.json pinning an SDK that doesn't exist and a Directory.Build.props that fails any build: a step that ran the PR's script,
+	// took its .cs (as the PR that brings the .cs to a .py base does), or built in its tree or with its pin, would print or fail.
+	string PostRepo(string? baseScript, bool merge = true, string? baseCs = null, bool baseGlobalJson = true, string? basePin = null)
 	{
-		var run = Py.Text(J.Req(Steps("post").First(step => Py.Eq(Py.Get(step, "name"), "Post the review on the head commit")), "run"));
-		var (repo, runnerTemp) = (Path.Combine(temp, "repo"), Path.Combine(temp, "temp"));
+		var repo = Path.Combine(temp, "repo");
 		Directory.CreateDirectory(repo);
-		Directory.CreateDirectory(runnerTemp);
 		Git(repo, "init", "-q", "-b", "main");
 		var scripts = Path.Combine(repo, ".github", "scripts");
 		Directory.CreateDirectory(scripts);
 		File.WriteAllText(Path.Combine(repo, "README.md"), "base\n");
 		if (baseScript is not null)
 			File.WriteAllText(Path.Combine(scripts, "post_claude_review.py"), baseScript);
+		if (baseCs is not null)
+			File.WriteAllText(Path.Combine(scripts, "post_claude_review.cs"), baseCs);
+		if (baseGlobalJson)
+			File.WriteAllText(Path.Combine(repo, "global.json"), basePin ?? File.ReadAllText(Skill.Path("template", "owned", "global.json")));
 		Git(repo, "add", "-A");
 		Git(repo, "commit", "-q", "-m", "base");
 		Git(repo, "checkout", "-q", "-b", "pr");
-		// The PR's own copy, which the step must never run.
+		// The PR's own copies, which the step must never run or build with.
 		File.WriteAllText(Path.Combine(scripts, "post_claude_review.py"), "import sys\nprint('the PR script')\nsys.exit(3)\n");
+		File.WriteAllText(Path.Combine(scripts, "post_claude_review.cs"), CsScript("the PR's C#", exit: 3));
+		File.WriteAllText(Path.Combine(repo, "global.json"), """{"sdk": {"version": "0.0.1", "rollForward": "disable"}}""");
+		File.WriteAllText(Path.Combine(repo, "Directory.Build.props"),
+			"""<Project><Target Name="PrTree" BeforeTargets="Build"><Error Text="the build read the PR's tree" /></Target></Project>""");
 		Git(repo, "add", "-A");
 		Git(repo, "commit", "-q", "-m", "pr");
 		if (merge)
@@ -335,23 +354,54 @@ public partial class BenchTests : IDisposable
 			Git(repo, "checkout", "-q", "main");
 			Git(repo, "merge", "-q", "--no-ff", "-m", "merge", "pr");
 		}
+		return repo;
+	}
+
+	// The post job's step named name, run in repo as the runner would, with the post step's environment and extra on top.
+	(int Code, string Stdout) RunStep(string name, string repo, string findings = """{"summary": "s", "findings": []}""",
+		Dictionary<string, string>? extra = null)
+	{
+		var run = Py.Text(J.Req(Steps("post").First(step => Py.Eq(Py.Get(step, "name"), name)), "run"));
+		var runnerTemp = Path.Combine(temp, "temp");
+		Directory.CreateDirectory(runnerTemp);
+		// The step's mktemp -d build folder lands here, so Dispose removes it (the step ends in exec, and a runner is thrown away).
+		var tmp = Path.Combine(temp, "tmp");
+		Directory.CreateDirectory(tmp);
+		// dotnet stops when XDG_DATA_HOME names a folder that isn't there.
+		var data = Path.Combine(temp, "data");
+		Directory.CreateDirectory(data);
 		Dictionary<string, string> env = new()
 		{
 			["PATH"] = Environment.GetEnvironmentVariable("PATH")!,
+			// For dotnet's own folders (its NuGet cache, its first-run marker), as on a runner.
+			["HOME"] = Environment.GetEnvironmentVariable("HOME")!,
 			["RUNNER_TEMP"] = runnerTemp,
+			["TMPDIR"] = tmp,
+			// And a file-based app's build folder (dotnet/runfile/, named by the file's path, new on every run), which on Linux goes under
+			// XDG_DATA_HOME, not TMPDIR: under the host's ~/.local/share, each build would leave one there.
+			["XDG_DATA_HOME"] = data,
+			// The step's git calls read no git config of the host's.
+			["GIT_CONFIG_GLOBAL"] = "/dev/null",
+			["GIT_CONFIG_NOSYSTEM"] = "1",
 			["REPOSITORY"] = "o/r",
 			["PR_NUMBER"] = "7",
 			["HEAD_SHA"] = "abc",
 			["FINDINGS"] = findings,
 			["REVIEW_EFFORT"] = "high (claude-sonnet-5-5)",
 		};
+		foreach (var (key, value) in extra ?? [])
+			env[key] = value;
 		return Run(["bash", "-e", "-c", run], repo, env, mayFail: true);
 	}
+
+	(int Code, string Stdout) RunPostStep(string? baseScript, string findings = """{"summary": "s", "findings": []}""", bool merge = true) =>
+		RunStep("Post the review on the head commit", PostRepo(baseScript, merge), findings);
 
 	[Fact]
 	public void The_post_step_runs_the_bases_script_not_the_prs()
 	{
 		// A script that takes --effort: the step passes one an older script would refuse (mpaulosky/Application_Factory#202).
+		// The PR brings a .cs, as the PR that brings the .cs to a .py base does: the base's .py still runs, not the PR's C#.
 		var (code, stdout) = RunPostStep("# Takes --effort.\nimport sys\nprint('the base script', *sys.argv[1:])\n");
 
 		Assert.Equal(0, code);
@@ -364,7 +414,7 @@ public partial class BenchTests : IDisposable
 		var (code, stdout) = RunPostStep(null);
 
 		Assert.Equal(0, code);
-		Assert.StartsWith("::warning::The base has no .github/scripts/post_claude_review.py yet", stdout, StringComparison.Ordinal);
+		Assert.StartsWith("::warning::The base has no .github/scripts/post_claude_review.cs or .py yet", stdout, StringComparison.Ordinal);
 		Assert.DoesNotContain("the PR script", stdout, StringComparison.Ordinal);
 	}
 

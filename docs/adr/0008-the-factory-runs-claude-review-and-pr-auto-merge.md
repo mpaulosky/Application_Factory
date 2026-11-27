@@ -4,7 +4,8 @@ status: accepted
 # The Factory runs Claude Review and PR Auto-Merge
 
 ADR 0006 gave the Factory the git hooks and a gate and left the review layer for a later decision. The Factory now carries `claude-review.yml`, `pr-automerge.yml`, `pr-review-submitted.yml` and
-`.github/scripts/post_claude_review.py` as copies of the Template's Owned files, the way `dotfiles` carried them. A Factory PR gets a Claude review where Copilot can't review it, and merges
+`.github/scripts/post_claude_review.py` (and its C# port, `post_claude_review.cs`, since the Update below) as copies of the Template's Owned files,
+the way `dotfiles` carried them. A Factory PR gets a Claude review where Copilot can't review it, and merges
 itself once its required check and its review threads are clean, instead of waiting for a hand merge. `scripts/gate.sh` fails when a copy differs from the Template's file, as it does for the hooks.
 
 The Template's PR Auto-Merge starts on completion of the workflows it names, one of which is `repo-ci-baseline Template`. The Factory's test workflow, `template-tests.yml`, now has that name
@@ -25,4 +26,6 @@ The Template's PR Auto-Merge starts on completion of the workflows it names, one
   Update: `repos.txt` now gives the Factory the `factory` scope, which runs every check of a Baseline repo (rulesets included) without making it a rollout or release target, so
   `github-settings.sh --fix` can set the ruleset and the rest of the Factory's settings.
 - A change to one of these files starts in `template/owned/` and is copied over; the gate says so when a copy has drifted.
+  Update (mpaulosky/Application_Factory#129): the post job runs the base's `post_claude_review.cs` (ADR 0017), so the Factory carries a copy of it too, beside
+  the `.py` that the job runs while a base has no `.cs`.
 - Not carried: Sandcastle, `scripts/watch-pr.sh`, `scripts/work-issue.sh` and `scripts/cleanup.sh`. (The local review, `/pre-push-review` and `scripts/review.sh`, is carried since ADR 0010.)

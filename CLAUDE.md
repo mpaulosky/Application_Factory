@@ -42,7 +42,7 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   draft pull request for each, with a comment naming the other open pull requests from this repository's branches that change the same files and the order to merge them (written
   when its run ends, so an older pull request's comment doesn't learn of a newer one); its header lists the labels it uses.
 - `.github/hooks/` (`pre-commit`, `pre-push`, `post-checkout`), `scripts/check-branch-name.sh`, `.github/workflows/{claude-review,pr-automerge,pr-review-submitted}.yml` and
-  `.github/scripts/post_claude_review.py`, and the issue and PR process (ADR 0009): `.github/ISSUE_TEMPLATE/*`, `.github/pull_request_template.md`, `.github/workflows/pr-title.yml` and
+  `.github/scripts/post_claude_review.{cs,py}`, and the issue and PR process (ADR 0009): `.github/ISSUE_TEMPLATE/*`, `.github/pull_request_template.md`, `.github/workflows/pr-title.yml` and
   `scripts/check-pr-title.sh`, and `.github/workflows/lint-{markdown,yaml,actions}.yml`, and the local review (ADR 0010): `scripts/review.sh`, five `.sandcastle/lib/` modules with three tests,
   `.claude/skills/pre-push-review/`, `.claude/agents/pre-push-reviewer.md` and `.security/README.md`: copies of the Template's Owned files. `.github/dependabot.yml`, `.yamllint.yml` and
   `.markdownlint-cli2.jsonc` are the Factory's own (ADR 0009). `.editorconfig`, which holds the shell style shfmt reads (ADR 0015), is a copy too, and so is

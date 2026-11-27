@@ -65,7 +65,7 @@ for checker in check-issue-refs check-git-status; do
     exit 1
   }
 done
-copies=(.github/hooks/pre-commit .github/hooks/pre-push .github/hooks/post-checkout scripts/check-branch-name.sh .github/workflows/claude-review.yml .github/workflows/pr-automerge.yml .github/workflows/pr-review-submitted.yml .github/scripts/post_claude_review.py .github/ISSUE_TEMPLATE/bug_report.md .github/ISSUE_TEMPLATE/feature_request.md .github/ISSUE_TEMPLATE/chore_request.md .github/ISSUE_TEMPLATE/config.yml .github/pull_request_template.md .github/workflows/pr-title.yml scripts/check-pr-title.sh .github/workflows/lint-markdown.yml .github/workflows/lint-yaml.yml .github/workflows/lint-actions.yml scripts/review.sh scripts/lint-edited-file.sh .sandcastle/lib/review-ledger.mts .sandcastle/lib/security-record.mts .sandcastle/lib/errors.mts .sandcastle/lib/host-limit.mts .sandcastle/lib/plain-text.mts .sandcastle/lib/review-ledger.test.mts .sandcastle/lib/security-record.test.mts .sandcastle/lib/plain-text.test.mts .claude/skills/pre-push-review/SKILL.md .claude/skills/pre-push-review/lenses.md .claude/skills/pre-push-review/review-bar.md .claude/agents/pre-push-reviewer.md .security/README.md .editorconfig .claude/rules/script-edits.md global.json)
+copies=(.github/hooks/pre-commit .github/hooks/pre-push .github/hooks/post-checkout scripts/check-branch-name.sh .github/workflows/claude-review.yml .github/workflows/pr-automerge.yml .github/workflows/pr-review-submitted.yml .github/scripts/post_claude_review.py .github/scripts/post_claude_review.cs .github/ISSUE_TEMPLATE/bug_report.md .github/ISSUE_TEMPLATE/feature_request.md .github/ISSUE_TEMPLATE/chore_request.md .github/ISSUE_TEMPLATE/config.yml .github/pull_request_template.md .github/workflows/pr-title.yml scripts/check-pr-title.sh .github/workflows/lint-markdown.yml .github/workflows/lint-yaml.yml .github/workflows/lint-actions.yml scripts/review.sh scripts/lint-edited-file.sh .sandcastle/lib/review-ledger.mts .sandcastle/lib/security-record.mts .sandcastle/lib/errors.mts .sandcastle/lib/host-limit.mts .sandcastle/lib/plain-text.mts .sandcastle/lib/review-ledger.test.mts .sandcastle/lib/security-record.test.mts .sandcastle/lib/plain-text.test.mts .claude/skills/pre-push-review/SKILL.md .claude/skills/pre-push-review/lenses.md .claude/skills/pre-push-review/review-bar.md .claude/agents/pre-push-reviewer.md .security/README.md .editorconfig .claude/rules/script-edits.md global.json)
 
 # A repo shaped like the Factory: gate.sh, the Template's Owned originals, matching copies, and a stub test.sh that records
 # that it ran and exits with $STUB_EXIT.
@@ -79,6 +79,9 @@ new_repo() {
     mkdir -p "$repo/$skill/template/owned/$(dirname "$f")" "$repo/$(dirname "$f")"
     cp -p "$here/$f" "$repo/$skill/template/owned/$f"
     cp -p "$here/$f" "$repo/$f"
+    # A C# copy (post_claude_review.cs) is ignored, both it and its original, so the C# step, which lists only tracked and untracked files, doesn't build
+    # it with a real dotnet in every run here, while the copy check, which compares the files, still reads them. The C# step has its own repos below.
+    [[ "$f" != *.cs ]] || printf '%s\n' "/$f" "/$skill/template/owned/$f" >> "$repo/.git/info/exclude"
   done
   cp -p "$here/.yamllint.yml" "$here/.markdownlint-cli2.jsonc" "$repo/"
   cp -p "$here/$skill/template/owned/.markdownlint-cli2.jsonc" "$repo/$skill/template/owned/"
@@ -111,6 +114,19 @@ exit "${STUB_SANDCASTLE_EXIT:-0}"
 STUB
   chmod +x "$repo/$skill/tests/sandcastle-check.test.sh"
   echo "$repo"
+}
+
+# add_worktree <repo> <path> [<commit>]: a linked worktree of the repo, detached, with the ignored C# copies new_repo wrote copied in, since a worktree
+# checks out only tracked files.
+add_worktree() {
+  local repo="$1" path="$2" f
+  git -C "$repo" worktree add -q --detach "$path" ${3:+"$3"}
+  for f in "${copies[@]}"; do
+    [[ "$f" == *.cs ]] || continue
+    mkdir -p "$path/$(dirname "$f")" "$path/$skill/template/owned/$(dirname "$f")"
+    cp -p "$repo/$f" "$path/$f"
+    cp -p "$repo/$skill/template/owned/$f" "$path/$skill/template/owned/$f"
+  done
 }
 
 # stub_review <repo>: replaces scripts/review.sh, in the repo and in the Template's originals so the copy check still passes, with a stub that
@@ -567,7 +583,7 @@ gate_key() { printf '%s.%s' "$(git -C "$1" rev-parse 'HEAD^{tree}')" "$(cd "$1" 
 
 # test.sh's pass is remembered for a clean tree: the same tree is not tested twice; a new commit, an uncommitted or untracked file, GATE_NO_CACHE=1 and a failure all run it.
 repo9="$(new_repo cache)"
-printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo9/.git/info/exclude"
+printf 'out\nreview-args\n%s/ran\n' "$skill" >> "$repo9/.git/info/exclude"
 commit_all "$repo9" base
 run "$repo9"
 check "test.sh runs on a clean tree it has not passed on" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
@@ -588,14 +604,14 @@ check "a new commit's tree runs test.sh, and a failure is the gate's status" "$(
 run "$repo9"
 check "a failure was not remembered: the next run runs test.sh again" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
 repo10="$(new_repo cache-nocommit)"
-printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo10/.git/info/exclude"
+printf 'out\nreview-args\n%s/ran\n' "$skill" >> "$repo10/.git/info/exclude"
 run "$repo10"
 run "$repo10"
 check "a repo with no commit has no tree to remember, so test.sh runs every time" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
 
 # The pass is remembered per .NET SDK too (ADR 0017): the release dotnet --version answers, given by a stub, and the version global.json names.
 repoK="$(new_repo cache-sdk)"
-printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoK/.git/info/exclude"
+printf 'out\nreview-args\n%s/ran\n' "$skill" >> "$repoK/.git/info/exclude"
 commit_all "$repoK" base
 mkdir -p "$work/sdkstub"
 # shellcheck disable=SC2016 # the stub's own code, written as it is
@@ -887,6 +903,13 @@ check "the drift message points at --sync" "$([[ $status == 1 ]] && grep -q 'gat
 GATE_ARGS=--sync run "$repo"
 run "$repo"
 check "the gate passes after --sync" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
+# A C# copy, which new_repo git-ignores, is still compared: a drifted one fails --quick, naming it, and --sync restores it.
+repo="$(new_repo drift-cs)"
+echo "// local edit" >> "$repo/.github/scripts/post_claude_review.cs"
+GATE_ARGS=--quick run "$repo"
+check "a drifted C# copy fails --quick, naming it" "$([[ $status == 1 ]] && grep -q '   .github/scripts/post_claude_review.cs' "$repo/out" && echo 0 || echo 1)"
+GATE_ARGS=--sync run "$repo"
+check "--sync restores a drifted C# copy" "$([[ $status == 0 ]] && grep -q 'synced .github/scripts/post_claude_review.cs' "$repo/out" && cmp -s "$repo/.github/scripts/post_claude_review.cs" "$here/.github/scripts/post_claude_review.cs" && echo 0 || echo 1)"
 # A copy whose Template original lacks the execute bit is made non-executable too.
 repo="$(new_repo sync-execbit)"
 chmod -x "$repo/$skill/template/owned/.github/hooks/post-checkout"
@@ -1657,7 +1680,7 @@ done
 
 # Every run that runs test.sh takes the trust from the remembered pass first (a new token in its stamp), so a failure (a forced run's, say) leaves nothing for the next ordinary run to trust.
 repo16="$(new_repo cache-forced-failure)"
-printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo16/.git/info/exclude"
+printf 'out\nreview-args\n%s/ran\n' "$skill" >> "$repo16/.git/info/exclude"
 commit_all "$repo16" base
 run "$repo16"
 GATE_NO_CACHE=1 STUB_EXIT=3 run "$repo16"
@@ -1674,7 +1697,7 @@ check "so the ordinary run after it is skipped" "$([[ $ran == no ]] && echo 0 ||
 # A pass is never stored for a tree that test.sh left changed.
 # moved.txt, the file the stub adds, stays visible to git (it is not in the exclude file): that is what makes the tree changed.
 repo17="$(new_repo cache-changed)"
-printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo17/.git/info/exclude"
+printf 'out\nreview-args\n%s/ran\n' "$skill" >> "$repo17/.git/info/exclude"
 commit_all "$repo17" base
 STUB_TOUCH="$repo17/moved.txt" run "$repo17"
 check "a test.sh that leaves the tree changed passes the gate, saying its pass is not remembered" "$([[ $status == 0 && $ran == yes ]] && grep -q 'the tree changed while test.sh ran' "$repo17/out" && echo 0 || echo 1)"
@@ -1683,7 +1706,7 @@ run "$repo17"
 check "so the next run on the clean tree tests again" "$([[ $ran == yes ]] && echo 0 || echo 1)"
 # A remembered pass that can't be removed (a read-only cache folder) is still not trusted after a run that disproves it: the run's token in the stamp takes the trust away.
 repo18="$(new_repo cache-unclearable)"
-printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo18/.git/info/exclude"
+printf 'out\nreview-args\n%s/ran\n' "$skill" >> "$repo18/.git/info/exclude"
 commit_all "$repo18" base
 run "$repo18"
 if [[ "$(id -u)" != 0 ]]; then
@@ -1696,10 +1719,10 @@ if [[ "$(id -u)" != 0 ]]; then
   check "a remembered pass that can't be removed is not trusted after a forced run that failed: test.sh runs" "$([[ $ran == yes ]] && ! grep -q "test.sh already passed" "$repo18/out" && echo 0 || echo 1)"
   # The same in a linked worktree of a clone whose path holds glob characters (there the cache folder's path is absolute): files are named literally, not read as patterns.
   repo18b="$(new_repo 'cache-[x]-unclearable')"
-  printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo18b/.git/info/exclude"
+  printf 'out\nreview-args\n%s/ran\n' "$skill" >> "$repo18b/.git/info/exclude"
   commit_all "$repo18b" base
   wt18b="$work/cache-[x]-worktree"
-  git -C "$repo18b" worktree add -q --detach "$wt18b"
+  add_worktree "$repo18b" "$wt18b"
   run "$wt18b"
   run "$wt18b"
   check "a pass is remembered and trusted in a worktree of a clone whose path holds [ and ]" "$([[ $ran == no ]] && grep -q "test.sh already passed" "$wt18b/out" && echo 0 || echo 1)"
@@ -1735,7 +1758,7 @@ check "a git that fails listing every file fails the shfmt step, saying so, and 
 GATE_ARGS=--quick run "$repo12"
 check "and the same repo passes with a git that works" "$([[ $status == 0 ]] && echo 0 || echo 1)"
 repo13="$(new_repo git-fails-status)"
-printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo13/.git/info/exclude"
+printf 'out\nreview-args\n%s/ran\n' "$skill" >> "$repo13/.git/info/exclude"
 commit_all "$repo13" base
 wrapper_for gitstatus status
 PATH="$work/gitstatus:$PATH" run "$repo13"
@@ -1744,15 +1767,15 @@ run "$repo13"
 check "so the next run, with a working git, runs test.sh again" "$([[ $ran == yes ]] && echo 0 || echo 1)"
 # the cache is shared by the worktrees of the clone, and a cache folder that can't be written does not fail a passing test.sh
 repo14="$(new_repo cache-worktree)"
-printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo14/.git/info/exclude"
+printf 'out\nreview-args\n%s/ran\n' "$skill" >> "$repo14/.git/info/exclude"
 commit_all "$repo14" base
 run "$repo14"
-git -C "$repo14" worktree add -q --detach "$work/cache-worktree-2" HEAD
+add_worktree "$repo14" "$work/cache-worktree-2" HEAD
 printf 'out\nreview-args\n%s/ran\n' "$skill" >> "$repo14/.git/info/exclude"
 run "$work/cache-worktree-2"
 check "a linked worktree of the clone shares the remembered pass" "$([[ $status == 0 && $ran == no ]] && grep -q 'already passed on this tree' "$work/cache-worktree-2/out" && echo 0 || echo 1)"
 repo15="$(new_repo cache-readonly)"
-printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repo15/.git/info/exclude"
+printf 'out\nreview-args\n%s/ran\n' "$skill" >> "$repo15/.git/info/exclude"
 commit_all "$repo15" base
 : > "$repo15/.git/gate-cache"
 run "$repo15"
@@ -1779,7 +1802,7 @@ headers_template="Local review (scripts/review.sh check)|▶ test.sh"
 headers_sandcastle="▶ Sandcastle check"
 repoP="$(new_repo parts)"
 stub_review "$repoP"
-printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoP/.git/info/exclude"
+printf 'out\nreview-args\n%s/ran\n' "$skill" >> "$repoP/.git/info/exclude"
 mkdir -p "$repoP/$skill/references" "$repoP/$skill/template/owned"
 echo "# sandcastle" > "$repoP/$skill/references/sandcastle.md"
 commit_all "$repoP" files
@@ -1915,7 +1938,7 @@ fi
 # A pass is trusted only while its token is still in its own stamp. A later run that overlaps it writes its own token there as it starts, so the pass stops being trusted
 # at once, even if that run is then killed before it fails, and even for a gate that reads the pass before anything removes it.
 repoT="$(new_repo cache-token)"
-printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoT/.git/info/exclude"
+printf 'out\nreview-args\n%s/ran\n' "$skill" >> "$repoT/.git/info/exclude"
 commit_all "$repoT" base
 treeT="$(gate_key "$repoT")"
 run "$repoT"
@@ -1974,7 +1997,7 @@ fi
 # The cache lock: the hit check and a run's stamp writes hold it, so no check reads a run's own stamp written and the stamps it overlaps not yet. lock_held <repo>: the
 # messages a run gives when it can't take the lock (each such run waits about 2 seconds for it first).
 repoL="$(new_repo cache-lock)"
-printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoL/.git/info/exclude"
+printf 'out\nreview-args\n%s/ran\n' "$skill" >> "$repoL/.git/info/exclude"
 commit_all "$repoL" base
 treeL="$(gate_key "$repoL")"
 cacheL="$repoL/.git/gate-cache"
@@ -2230,7 +2253,7 @@ check "run_cached takes the lock before the hit check, which needs it, and relea
 if [[ "$(id -u)" != 0 ]]; then
   # A start stamp that can be neither written nor removed fails the gate before test.sh: an earlier run could otherwise keep its token and a pass this run disproves.
   repoW="$(new_repo cache-stamp-stuck)"
-  printf 'out\nreview-args\n%s/ran\n' "$skill" > "$repoW/.git/info/exclude"
+  printf 'out\nreview-args\n%s/ran\n' "$skill" >> "$repoW/.git/info/exclude"
   commit_all "$repoW" base
   mkdir -p "$repoW/.git/gate-cache"
   echo earlier > "$repoW/.git/gate-cache/started.test-sh-$(gate_key "$repoW")"

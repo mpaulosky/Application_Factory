@@ -2,7 +2,9 @@
 """Post Claude Review's findings as one PR review on the head commit.
 
 Called by .github/workflows/claude-review.yml's post job, once Claude has
-reviewed the PR:
+reviewed the PR, while the base has no post_claude_review.cs, the C# port
+beside it, which the job runs once the base has it
+(mpaulosky/Application_Factory#129):
 
     FINDINGS='{"summary": ..., "findings": [...]}' \\
         python3 .github/scripts/post_claude_review.py --repo owner/name --pr 42 --head <sha>
