@@ -1625,8 +1625,8 @@ check "unrelated histories don't call review.sh" "$([[ ! -e $repo/review-args ]]
 # The review's stand-alone tests need tsx: without it and without pnpm the gate says how to get it, before anything else.
 repo="$(new_repo no-pnpm)"
 mkdir -p "$repo/scripts/tests"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/scripts/tests/gate.test.sh"
-chmod +x "$repo/scripts/tests/gate.test.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' | tee "$repo/scripts/tests/gate.test.sh" > "$repo/scripts/tests/timings.test.sh"
+chmod +x "$repo/scripts/tests/gate.test.sh" "$repo/scripts/tests/timings.test.sh"
 bare="$work/bare-bin"
 mkdir -p "$bare"
 for tool in git env bash dirname mkdir chmod; do ln -sf "$(command -v "$tool")" "$bare/$tool"; done
@@ -1638,8 +1638,8 @@ check "a missing pnpm says to run corepack enable pnpm" "$(grep -q 'corepack ena
 # A pnpm that installs nothing leaves no tsx: the gate says so instead of dying on a missing binary; one that installs it gets past this step.
 repo="$(new_repo pnpm-no-tsx)"
 mkdir -p "$repo/scripts/tests"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/scripts/tests/gate.test.sh"
-chmod +x "$repo/scripts/tests/gate.test.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' | tee "$repo/scripts/tests/gate.test.sh" > "$repo/scripts/tests/timings.test.sh"
+chmod +x "$repo/scripts/tests/gate.test.sh" "$repo/scripts/tests/timings.test.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$bare/pnpm"
 chmod +x "$bare/pnpm"
 status=0
@@ -1648,8 +1648,8 @@ check "a pnpm that installs no tsx fails the gate" "$([[ $status == 1 ]] && echo
 check "a pnpm that installs no tsx says so" "$(grep -q 'pnpm install did not install node_modules/.bin/tsx' "$repo/out" && echo 0 || echo 1)"
 repo="$(new_repo pnpm-with-tsx)"
 mkdir -p "$repo/scripts/tests"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/scripts/tests/gate.test.sh"
-chmod +x "$repo/scripts/tests/gate.test.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' | tee "$repo/scripts/tests/gate.test.sh" > "$repo/scripts/tests/timings.test.sh"
+chmod +x "$repo/scripts/tests/gate.test.sh" "$repo/scripts/tests/timings.test.sh"
 printf '#!/usr/bin/env bash\nmkdir -p node_modules/.bin && printf "#!/usr/bin/env bash\\nexit 0\\n" > node_modules/.bin/tsx && chmod +x node_modules/.bin/tsx\n' > "$bare/pnpm"
 status=0
 (cd "$repo" && env -u GATE_SKIP_SELF_TEST PATH="$bare" "$(command -v bash)" scripts/gate.sh > "$repo/out" 2>&1) || status=$?
@@ -1857,15 +1857,17 @@ check "a failing test.sh fails the template part" "$([[ $status == 1 && $ran == 
 repoS="$(new_repo parts-self)"
 mkdir -p "$repoS/scripts/tests" "$repoS/node_modules/.bin"
 printf '#!/usr/bin/env bash\ntouch "%s/.git/ran-self-test"\n' "$repoS" > "$repoS/scripts/tests/gate.test.sh"
+printf '#!/usr/bin/env bash\ntouch "%s/.git/ran-timings-test"\n' "$repoS" > "$repoS/scripts/tests/timings.test.sh"
 printf '#!/usr/bin/env bash\necho "tsx $*" >> "%s/.git/tsx-args"\n' "$repoS" > "$repoS/node_modules/.bin/tsx"
-chmod +x "$repoS/scripts/tests/gate.test.sh" "$repoS/node_modules/.bin/tsx"
+chmod +x "$repoS/scripts/tests/gate.test.sh" "$repoS/scripts/tests/timings.test.sh" "$repoS/node_modules/.bin/tsx"
 status=0
 (cd "$repoS" && env -u GATE_SKIP_SELF_TEST GATE_PART=self bash scripts/gate.sh > "$repoS/out" 2>&1) || status=$?
 check "GATE_PART=self runs the gate's own test, and not the review's tests or any other part" "$([[ $status == 0 && -e $repoS/.git/ran-self-test && ! -e $repoS/.git/tsx-args ]] && ! grep -q "Copies of Template files" "$repoS/out" && [[ ! -e $repoS/$skill/ran && ! -e $repoS/.git/ran-sandcastle ]] && echo 0 || echo 1)"
-rm -f "$repoS/.git/ran-self-test"
+check "and the step timings' test with it" "$([[ -e $repoS/.git/ran-timings-test ]] && echo 0 || echo 1)"
+rm -f "$repoS/.git/ran-self-test" "$repoS/.git/ran-timings-test"
 status=0
 (cd "$repoS" && env -u GATE_SKIP_SELF_TEST GATE_PART=review bash scripts/gate.sh > "$repoS/out" 2>&1) || status=$?
-check "GATE_PART=review runs the review's tests, and not the gate's own test or any other part" "$([[ $status == 0 && ! -e $repoS/.git/ran-self-test ]] && grep -q "review-ledger.test.mts" "$repoS/.git/tsx-args" && ! grep -q "Copies of Template files" "$repoS/out" && [[ ! -e $repoS/$skill/ran && ! -e $repoS/.git/ran-sandcastle ]] && echo 0 || echo 1)"
+check "GATE_PART=review runs the review's tests, and not the gate's own test or any other part" "$([[ $status == 0 && ! -e $repoS/.git/ran-self-test && ! -e $repoS/.git/ran-timings-test ]] && grep -q "review-ledger.test.mts" "$repoS/.git/tsx-args" && ! grep -q "Copies of Template files" "$repoS/out" && [[ ! -e $repoS/$skill/ran && ! -e $repoS/.git/ran-sandcastle ]] && echo 0 || echo 1)"
 rm -f "$repoS/.git/tsx-args"
 status=0
 (cd "$repoS" && env -u GATE_SKIP_SELF_TEST GATE_SKIP_REVIEW=1 bash scripts/gate.sh --quick > "$repoS/out" 2>&1) || status=$?
@@ -2651,6 +2653,38 @@ tcommit "$repo" base
 git -C "$repo" update-ref refs/remotes/origin/main "$(git -C "$repo" -c user.name=t -c user.email=t@example.com commit-tree -m other "$(git -C "$repo" hash-object -t tree -w /dev/null)")"
 run "$repo"
 check "with an origin/main that shares no history the size step is skipped" "$([[ $status == 0 && ! -e $repo/.git/size-args ]] && grep -q 'to measure the branch from' "$repo/out" && echo 0 || echo 1)"
+
+# The step timings (mpaulosky/Application_Factory#220): a gate with scripts/lib/timings.sh logs each of its steps, ends a run with its slowest ones, logs a
+# cached step as skipped and a failing one as failed, keeps its exit status when the log can't be written, and the Factory's .gitignore leaves the
+# default log out, so it never makes the tree dirty for the cache. A gate without the file, every other repo here, logs nothing.
+check "a gate without scripts/lib/timings.sh writes no docs/timings/" "$([[ ! -e "$work/match/docs" && ! -e "$repo9/docs" ]] && echo 0 || echo 1)"
+check "the Factory's .gitignore leaves the default step timings log out" \
+  "$(git -C "$here" check-ignore -q --no-index docs/timings/gate-timings.tsv && git -C "$here" check-ignore -q --no-index docs/timings/report-2026-01-01.md && echo 0 || echo 1)"
+repoT="$(new_repo timings)"
+mkdir -p "$repoT/scripts/lib"
+cp -p "$here/scripts/lib/timings.sh" "$repoT/scripts/lib/"
+printf 'out\nreview-args\n%s/ran\n' "$skill" >> "$repoT/.git/info/exclude"
+commit_all "$repoT" base
+tlog="$work/timings.tsv"
+GATE_TIMINGS_LOG="$tlog" run "$repoT"
+check "a gate with the timings library passes as before" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
+check "and logs each of its steps as gate.sh, passed" \
+  "$(for name in "Branch size" "Copies of Template files" "markdownlint (whole repo, as Lint Markdown)" "test.sh"; do
+    awk -F '\t' -v n="$name" '$5 == "gate.sh" && $6 == n && $8 == "passed"' "$tlog" | grep -q . || exit 1
+  done && echo 0 || echo 1)"
+check "and ends by printing the run's slowest steps" "$(grep -q '^Slowest steps of this run' "$repoT/out" && echo 0 || echo 1)"
+GATE_TIMINGS_LOG="$tlog" run "$repoT"
+check "a test.sh a cached pass covered is logged as skipped" \
+  "$([[ $status == 0 && $ran == no && "$(awk -F '\t' '$5 == "gate.sh" && $6 == "test.sh" { s = $8 } END { print s }' "$tlog")" == skipped ]] && echo 0 || echo 1)"
+GATE_NO_CACHE=1 STUB_EXIT=3 GATE_TIMINGS_LOG="$tlog" run "$repoT"
+check "a failing test.sh fails the gate with its status, and is logged as failed" \
+  "$([[ $status == 3 && "$(tail -n 1 "$tlog" | cut -f6,8)" == $'test.sh\tfailed' ]] && echo 0 || echo 1)"
+: > "$work/timings-a-file"
+GATE_NO_CACHE=1 GATE_TIMINGS_LOG="$work/timings-a-file/log.tsv" run "$repoT"
+check "a log that can't be written leaves the gate passing" "$([[ $status == 0 && $ran == yes ]] && ! grep -q 'timings-a-file' "$repoT/out" && echo 0 || echo 1)"
+GATE_TIMINGS=off GATE_NO_CACHE=1 GATE_TIMINGS_LOG="$work/timings-off.tsv" run "$repoT"
+check "GATE_TIMINGS=off logs nothing and prints no slowest steps" \
+  "$([[ $status == 0 && ! -e "$work/timings-off.tsv" ]] && ! grep -q '^Slowest steps' "$repoT/out" && echo 0 || echo 1)"
 
 echo
 echo "gate.test.sh: $pass passed, $failed failed"

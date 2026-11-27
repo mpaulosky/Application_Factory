@@ -23,6 +23,8 @@
     ".claude/skills/repo-ci-baseline/tests/parity/*/cases/**",
     // A form, not a document (ADR 0009): its sections are ## headings with no title, and a disable comment
     // would land in every PR description and squash commit. The Template's config ignores it too.
-    ".github/pull_request_template.md"
+    ".github/pull_request_template.md",
+    // The gate-timings skill's reports: ignored by git, this checkout's own, never part of a push.
+    "docs/timings/**"
   ]
 }

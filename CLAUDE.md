@@ -25,7 +25,7 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   it, `tests/`, `github/` and `bench/` each hold three empty shield files (`Directory.Build.props`, `Directory.Build.targets`, `Directory.Packages.props`), which are not
   Owned; the Template's `.github/scripts/` holds three more, which are. The test project also holds its own `NuGet.config`
   (nuget.org alone) and `packages.lock.json`, which `test.sh` restores against in locked mode (ADR 0017's Update on hardening the C# step).
-- `.claude/skills/`: also the shared skills (`build-repair`, `dotnet-*`, `remove-squad`, `review-changes`), and `starting-points/`: the optional app-stack files
+- `.claude/skills/`: also the shared skills (`build-repair`, `dotnet-*`, `remove-squad`, `review-changes`), the Factory's own `gate-timings` (below), and `starting-points/`: the optional app-stack files
   (`.aspire/`, `.github/instructions/`, the `beast` agent, the `code-review` skill) that `docs/Instructions.md` Part C says to copy into an Application. ADR 0007.
 - `.claude/rules/sandcastle.md`: the rules for writing the Template's Sandcastle code (loaded when you edit `template/**/.sandcastle/**`). The tests about the Template itself
   (`owned-paths`, `template`, `seed-config` and `template-prompts`) are in the skill's `tests/sandcastle/`; `tests/sandcastle-check.test.sh` copies them into a repo the Template was
@@ -60,6 +60,12 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   `GATE_PART=<part>` runs one part (CI's jobs; the pre-push hook drops it), and `TEST_SH_SHARD` one shard of `test.sh` in the `template` part only.
   [ADR 0006](docs/adr/0006-the-factory-carries-the-git-hooks-and-a-gate.md), [ADR
   0012](docs/adr/0012-the-template-tests-workflow-runs-the-gate-in-parallel-parts.md), [ADR 0013](docs/adr/0013-ci-runs-test-sh-in-shards-and-the-review-tests-as-their-own-part.md).
+- Step timings (mpaulosky/Application_Factory#220): `scripts/gate.sh` and `test.sh` source `scripts/lib/timings.sh` and log each step's wall time and status to
+  `docs/timings/gate-timings.tsv` in the primary checkout (every worktree's runs in one log; `.gitignore` leaves `docs/timings/` out; `GATE_TIMINGS=off` logs
+  nothing, `GATE_TIMINGS_LOG` names another file), and the gate ends a run with its five slowest steps. `scripts/gate-timings.sh` summarizes the log by
+  running the C# file-based app `scripts/gate-timings.cs`, which includes `scripts/GateTimings.cs` (ADR 0017's Update for mpaulosky/Application_Factory#220; `scripts/` holds the three empty
+  shield files too), and the `gate-timings` skill (`.claude/skills/gate-timings/`) writes a report from it to `docs/timings/report-YYYY-MM-DD.md`.
+  `scripts/tests/timings.test.sh` tests the library and the wrapper, in the gate's `self` part, and `tests/Scripts.Tests/GateTimings/` the summary's rules.
 - `~/.claude/skills/repo-ci-baseline` is a symlink to the skill here, so editing it changes what `apply.sh` copies everywhere.
 
 The Factory carries the git hooks and a gate of its own (ADR 0006), Claude Review with PR Auto-Merge (ADR 0008), the issue and PR process (ADR 0009), the local review
@@ -74,6 +80,7 @@ scripts/gate.sh --sync                                        # copy the Templat
 scripts/gate.sh --quick                                       # while iterating: the gate up to and including shellcheck of the shell files the branch changed, shfmt of every shell file, ruff of every Python file and the C# check, without the local review check, test.sh and the Sandcastle check (about a minute, a few seconds more on its first run in a worktree, which builds the two C# checkers); never for a push
 scripts/gate.sh                                               # the pre-push gate (needs pnpm on the first run, test.sh's tools, shfmt and the .NET SDK among them, and ruff 0.17: uv tool install ruff@0.17.6); GATE_NO_CACHE=1 runs test.sh and the Sandcastle check again on a tree that already passed them
 GATE_PART=sandcastle scripts/gate.sh                          # one part alone (self, review, static, template, sandcastle), as a CI job runs it; the Sandcastle check needs pnpm and the network
+scripts/gate-timings.sh [--runs N]                            # the step timings log as a table, slowest median first, over the last N runs (20); /gate-timings writes a report from it
 .claude/skills/repo-ci-baseline/test.sh                       # all the Template's tests (TEST_SH_SHARD=hooks|scripts|checks runs one shard); needs actionlint, zizmor, yamllint, shellcheck, shfmt (v3.14 or a later v3), markdownlint-cli2, node, git, jq, and the .NET SDK global.json names for the scripts shard
 .claude/skills/repo-ci-baseline/tests/sandcastle-check.test.sh # Sandcastle's type-check and tests on a throwaway Application; needs pnpm and the network
 .claude/skills/repo-ci-baseline/template/owned/.claude/skills/hardening-review/scripts/mutate.py .claude/skills/repo-ci-baseline/tests/gh_repo/mutations.json  # ~5 min, from the repo root, needs uvx: edits check_gh_repo.py one mutation at a time and restores it; commit the checker change first (a dirty target is refused)

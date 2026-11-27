@@ -813,3 +813,18 @@ never the PR's (the skill's ADR 0004, which has the same Update), and the file t
   `post_claude_review.py`, `check_gh_repo.py` and `test_post_claude_review.py` arrive. The
   re-Apply PR's review is posted by the base's `.py`; check that the next PR's review is posted, the first by C#. The post job gains Setup .NET and a build.
   The Factory's copies (`claude-review.yml`, `pr-automerge.yml`, and `post_claude_review.cs`, a new copy) arrive with `scripts/gate.sh --sync`.
+
+## Update (mpaulosky/Application_Factory#220): a new Factory script's logic is C#, and a library a bash script sources stays bash
+
+The step timings add the first script this ADR didn't port: one that is new. Its two parts take the two sides of this ADR's line.
+
+- **The summary is C#.** `scripts/gate-timings.cs`, with its logic and contract in `scripts/GateTimings.cs` (library first, as the Update for
+  mpaulosky/Application_Factory#157 has it), reads the log and writes its table: medians, the halves' change, the counts of skipped steps and malformed
+  lines. That is the logic the ported scripts held, and it was first an awk pipeline. `scripts/gate-timings.sh` runs it from `scripts/`, beside three empty
+  shield files, as `status.sh` runs `status.cs`, and passes the caller's folder in `GATE_TIMINGS_CALLER_DIR`, so a relative `--log` and the default log
+  are the caller's. `tests/Scripts.Tests/GateTimings/` tests `GateTimings.cs`, which the test project compiles from the Factory's `scripts/` (so
+  `test.sh`'s copies of the project carry it); `scripts/tests/timings.test.sh` runs the wrapper end to end.
+- **The library stays bash.** `scripts/lib/timings.sh` is sourced by `scripts/gate.sh` and `test.sh` and marks each step from inside them: a C# app can't, and
+  a process per step boundary would add to the time it measures. It is "the bash itself" this ADR leaves as it is.
+
+A new Factory script whose logic outgrows a few lines of shell is C#, then, and shell that has to run inside a bash script stays shell.

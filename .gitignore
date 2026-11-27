@@ -13,3 +13,5 @@ node_modules/
 .claude/skills/repo-ci-baseline/tests/Scripts.Tests/obj/
 # What an IDE build of the C# scripts' test project writes; test.sh builds it outside the tree.
 .claude/skills/repo-ci-baseline/tests/Scripts.Tests/TestResults/
+# The step timings log scripts/gate.sh and test.sh write, and the gate-timings skill's reports (mpaulosky/Application_Factory#220): this checkout's own.
+/docs/timings/

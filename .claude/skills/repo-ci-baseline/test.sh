@@ -41,8 +41,26 @@ export PYTHONDONTWRITEBYTECODE=1
 # Both folders are made absolute, so a relative TMPDIR still names them from the folders the steps cd into. Each mktemp is its own assignment, so a failed
 # one stops the run under set -e, and each is made absolute by prefixing $PWD rather than by cd, which a caller's CDPATH would make print the folder too.
 # The trap comes first, over empty names, so a second mktemp that fails still removes the first folder.
+# Each step's wall time goes to the Factory's step timings log (its scripts/lib/timings.sh, mpaulosky/Application_Factory#220): step starts one, the end
+# of the run or the EXIT trap ends the last, and a step in which a check failed is logged as failed. Started by scripts/gate.sh, the steps join the gate's
+# run. With no such file (the skill run from elsewhere) nothing is timed. The library is found from the physical folder, so a run through the
+# ~/.claude/skills symlink finds the Factory's. Timing never changes a check's result or output.
+timings_lib=""
+if factory_dir="$(CDPATH='' cd -P -- "$skill_dir/../../.." 2> /dev/null && pwd -P)"; then timings_lib="$factory_dir/scripts/lib/timings.sh"; fi
+if [[ -n "$timings_lib" && -f "$timings_lib" ]]; then
+  # The library is shellchecked as a file of its own, and a copy of the skill outside the Factory has none, so shellcheck isn't asked to follow it.
+  # shellcheck source=../../../scripts/lib/timings.sh disable=SC1091
+  source "$timings_lib"
+else
+  timings_start() { :; }
+  timings_step() { :; }
+  timings_mark() { :; }
+  timings_end() { :; }
+  timings_finish() { :; }
+fi
+test_rc=0
 GIT_TEMPLATE_DIR="" md_tmp=""
-trap 'command rm -rf ${GIT_TEMPLATE_DIR:+"$GIT_TEMPLATE_DIR"} ${md_tmp:+"$md_tmp"}' EXIT
+trap 'test_rc=$?; timings_finish "$test_rc"; command rm -rf ${GIT_TEMPLATE_DIR:+"$GIT_TEMPLATE_DIR"} ${md_tmp:+"$md_tmp"}' EXIT
 GIT_TEMPLATE_DIR="$(mktemp -d)"
 [[ "$GIT_TEMPLATE_DIR" == /* ]] || GIT_TEMPLATE_DIR="$PWD/$GIT_TEMPLATE_DIR"
 export GIT_TEMPLATE_DIR
@@ -50,11 +68,16 @@ md_tmp="$(mktemp -d)"
 [[ "$md_tmp" == /* ]] || md_tmp="$PWD/$md_tmp"
 
 failures=0
+# The failures when the open step started: more by its end, and it is logged as failed.
+step_failures=0
 # Each header carries the seconds since test.sh started (bash's SECONDS, reset at the top), so a log shows which step ran long
 # (a step's time is the next header's minus its own) even when the run is killed at a limit (mpaulosky/dotfiles#417).
 step() {
   echo
   echo "── $1 [+${SECONDS}s]"
+  ((failures == step_failures)) || timings_mark failed
+  step_failures=$failures
+  timings_step "$1"
 }
 fail() {
   echo "FAIL: $1" >&2
@@ -190,13 +213,14 @@ scripts_tests_run() {
 }
 # Copies the skill into folder argument 1, as <argument 1>/.claude/skills/repo-ci-baseline with the Factory's CLAUDE.md at <argument 1>, for a check on a
 # copy of the C# scripts' test project, and prints the copy's project folder: the project compiles the scripts in the skill's github/ and its tests read
-# the skill's files, and the Factory's checkout three folders above the skill (AutoRollout.Factory: its CLAUDE.md, and ADR 0016 in its docs/adr/), so
+# the skill's files, and the Factory's checkout three folders above the skill (AutoRollout.Factory: its CLAUDE.md, and ADR 0016 in its docs/adr/; the
+# project compiles the Factory's scripts/GateTimings.cs, mpaulosky/Application_Factory#220), so
 # a copy builds and passes only in that layout.
 # What a build wrote into the project's folder (bin/, obj/, TestResults/) is left out.
 scripts_tests_copy() {
   local copy="$1/.claude/skills/repo-ci-baseline"
-  mkdir -p "$copy" "$1/docs/adr" && cp -R "$skill_dir/." "$copy" && cp "$skill_dir/../../../CLAUDE.md" "$1/" \
-    && cp "$skill_dir"/../../../docs/adr/0016-*.md "$1/docs/adr/" || return 1
+  mkdir -p "$copy" "$1/docs/adr" "$1/scripts" && cp -R "$skill_dir/." "$copy" && cp "$skill_dir/../../../CLAUDE.md" "$1/" \
+    && cp "$skill_dir"/../../../docs/adr/0016-*.md "$1/docs/adr/" && cp "$skill_dir/../../../scripts/GateTimings.cs" "$1/scripts/" || return 1
   rm -rf "$copy/tests/Scripts.Tests/bin" "$copy/tests/Scripts.Tests/obj" "$copy/tests/Scripts.Tests/TestResults"
   printf '%s\n' "$copy/tests/Scripts.Tests"
 }
@@ -221,6 +245,8 @@ if [[ -n "$shard" ]] && ((known == 0)); then
   echo "test.sh: TEST_SH_SHARD must be one of ${shards[*]}, not '$shard'." >&2
   exit 2
 fi
+timings_start "test.sh${shard:+ ($shard shard)}"
+timings_step "Setup (the tools it needs)"
 in_shard() { [[ -z "$shard" || "$shard" == "$1" ]]; }
 
 for tool in actionlint zizmor yamllint shellcheck shfmt markdownlint-cli2 git; do need "$tool"; done
@@ -2232,6 +2258,8 @@ PY
   "$skill_dir/tests/reapply.test.sh" || fail "reapply.test.sh"
 fi # the checks shard
 
+((failures == step_failures)) || timings_mark failed
+timings_end
 echo
 if [[ $failures -gt 0 ]]; then
   echo "test.sh${shard:+ ($shard shard)}: $failures check(s) failed [+${SECONDS}s]"
