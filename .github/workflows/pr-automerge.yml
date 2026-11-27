@@ -1868,7 +1868,7 @@ jobs:
 
             // The findings outside the diff in a Claude review's body, each
             // as its first line ("- ..."): the bullets after the header that
-            // post_claude_review.py writes. Empty for a review without the
+            // post_claude_review.cs writes. Empty for a review without the
             // off-diff marker.
             function offDiffFindings(review) {
               const lines = (review?.body ?? "").split("\n");

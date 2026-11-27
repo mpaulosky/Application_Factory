@@ -29,10 +29,17 @@ public partial class BenchTests : IDisposable
 	static string Git(string folder, params string[] args) => Run(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
 			"-c", "user.name=t", "-c", "user.email=t@t", "-C", folder, .. args]).Stdout.Trim();
 
-	// One run of argv, which must exit 0 unless allowed to fail: (exit code, stdout).
+	// One run of argv, which must exit 0 unless allowed to fail: (exit code, stdout). Its stdin is empty: bash reads ~/.bashrc even for -c when
+	// its stdin is a socket (as a remote shell daemon's), which the test host's can be, so a step would run the maintainer's own startup files.
 	static (int Code, string Stdout) Run(IReadOnlyList<string> argv, string? cwd = null, Dictionary<string, string>? env = null, bool mayFail = false)
 	{
-		var start = new ProcessStartInfo(argv[0]) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+		var start = new ProcessStartInfo(argv[0])
+		{
+			RedirectStandardInput = true,
+			RedirectStandardOutput = true,
+			RedirectStandardError = true,
+			UseShellExecute = false,
+		};
 		if (cwd is not null)
 			start.WorkingDirectory = cwd;
 		if (env is not null)
@@ -44,6 +51,7 @@ public partial class BenchTests : IDisposable
 		foreach (var arg in argv.Skip(1))
 			start.ArgumentList.Add(arg);
 		using var run = Process.Start(start)!;
+		run.StandardInput.Close();
 		var err = run.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
 		var output = run.StandardOutput.ReadToEnd();
 		run.WaitForExit();
@@ -311,23 +319,39 @@ public partial class BenchTests : IDisposable
 
 	// -- The post step takes the script from the merge commit's first parent (mpaulosky/Application_Factory#134) --
 
-	(int Code, string Stdout) RunPostStep(string? baseScript, string findings = """{"summary": "s", "findings": []}""", bool merge = true)
+	// A repo whose HEAD merges a PR commit into a base commit holding baseScript as its post_claude_review.py (null: none) and baseCs as
+	// its post_claude_review.cs, with the Template's global.json unless baseGlobalJson is false. The PR changes the .py to one that must
+	// never run, and, when the base has a .cs, the .cs too, with a global.json pinning an SDK that doesn't exist and a Directory.Build.props
+	// that fails any build: a step that built in the PR's tree, or with its pin, would fail.
+	// basePin, when given, is the base's global.json instead of the Template's.
+	string PostRepo(string? baseScript, bool merge = true, string? baseCs = null, bool baseGlobalJson = true, string? basePin = null)
 	{
-		var run = Py.Text(J.Req(Steps("post").First(step => Py.Eq(Py.Get(step, "name"), "Post the review on the head commit")), "run"));
-		var (repo, runnerTemp) = (Path.Combine(temp, "repo"), Path.Combine(temp, "temp"));
+		var repo = Path.Combine(temp, "repo");
 		Directory.CreateDirectory(repo);
-		Directory.CreateDirectory(runnerTemp);
 		Git(repo, "init", "-q", "-b", "main");
 		var scripts = Path.Combine(repo, ".github", "scripts");
 		Directory.CreateDirectory(scripts);
 		File.WriteAllText(Path.Combine(repo, "README.md"), "base\n");
 		if (baseScript is not null)
 			File.WriteAllText(Path.Combine(scripts, "post_claude_review.py"), baseScript);
+		if (baseCs is not null)
+		{
+			File.WriteAllText(Path.Combine(scripts, "post_claude_review.cs"), baseCs);
+			if (baseGlobalJson)
+				File.WriteAllText(Path.Combine(repo, "global.json"), basePin ?? File.ReadAllText(Skill.Path("template", "owned", "global.json")));
+		}
 		Git(repo, "add", "-A");
 		Git(repo, "commit", "-q", "-m", "base");
 		Git(repo, "checkout", "-q", "-b", "pr");
 		// The PR's own copy, which the step must never run.
 		File.WriteAllText(Path.Combine(scripts, "post_claude_review.py"), "import sys\nprint('the PR script')\nsys.exit(3)\n");
+		if (baseCs is not null)
+		{
+			File.WriteAllText(Path.Combine(scripts, "post_claude_review.cs"), CsScript("the PR's C#", exit: 3));
+			File.WriteAllText(Path.Combine(repo, "global.json"), """{"sdk": {"version": "0.0.1", "rollForward": "disable"}}""");
+			File.WriteAllText(Path.Combine(repo, "Directory.Build.props"),
+				"""<Project><Target Name="PrTree" BeforeTargets="Build"><Error Text="the build read the PR's tree" /></Target></Project>""");
+		}
 		Git(repo, "add", "-A");
 		Git(repo, "commit", "-q", "-m", "pr");
 		if (merge)
@@ -335,9 +359,21 @@ public partial class BenchTests : IDisposable
 			Git(repo, "checkout", "-q", "main");
 			Git(repo, "merge", "-q", "--no-ff", "-m", "merge", "pr");
 		}
+		return repo;
+	}
+
+	// The post job's step named name, run in repo as the runner would, with the post step's environment and extra on top.
+	(int Code, string Stdout) RunStep(string name, string repo, string findings = """{"summary": "s", "findings": []}""",
+		Dictionary<string, string>? extra = null)
+	{
+		var run = Py.Text(J.Req(Steps("post").First(step => Py.Eq(Py.Get(step, "name"), name)), "run"));
+		var runnerTemp = Path.Combine(temp, "temp");
+		Directory.CreateDirectory(runnerTemp);
 		Dictionary<string, string> env = new()
 		{
 			["PATH"] = Environment.GetEnvironmentVariable("PATH")!,
+			// For dotnet's own folders (its NuGet cache, its first-run marker), as on a runner.
+			["HOME"] = Environment.GetEnvironmentVariable("HOME")!,
 			["RUNNER_TEMP"] = runnerTemp,
 			["REPOSITORY"] = "o/r",
 			["PR_NUMBER"] = "7",
@@ -345,8 +381,13 @@ public partial class BenchTests : IDisposable
 			["FINDINGS"] = findings,
 			["REVIEW_EFFORT"] = "high (claude-sonnet-5-5)",
 		};
+		foreach (var (key, value) in extra ?? [])
+			env[key] = value;
 		return Run(["bash", "-e", "-c", run], repo, env, mayFail: true);
 	}
+
+	(int Code, string Stdout) RunPostStep(string? baseScript, string findings = """{"summary": "s", "findings": []}""", bool merge = true) =>
+		RunStep("Post the review on the head commit", PostRepo(baseScript, merge), findings);
 
 	[Fact]
 	public void The_post_step_runs_the_bases_script_not_the_prs()
@@ -364,7 +405,7 @@ public partial class BenchTests : IDisposable
 		var (code, stdout) = RunPostStep(null);
 
 		Assert.Equal(0, code);
-		Assert.StartsWith("::warning::The base has no .github/scripts/post_claude_review.py yet", stdout, StringComparison.Ordinal);
+		Assert.StartsWith("::warning::The base has no .github/scripts/post_claude_review.cs or .py yet", stdout, StringComparison.Ordinal);
 		Assert.DoesNotContain("the PR script", stdout, StringComparison.Ordinal);
 	}
 

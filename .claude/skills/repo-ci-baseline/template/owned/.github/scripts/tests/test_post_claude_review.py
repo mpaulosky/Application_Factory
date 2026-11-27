@@ -1173,7 +1173,9 @@ def run_post_step(repo, tmp_path, findings="{}", batches=None):
            "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "FINDINGS": findings, "REDACTED": "0",
            "REPOSITORY": "octo/demo", "PR_NUMBER": "7", "HEAD_SHA": HEAD, "REVIEW_EFFORT": "high (claude-sonnet-5-5)",
            **({"BATCHES": batches} if batches is not None else {})}
-    return subprocess.run(["bash", "-e", "-c", post_step_script()], cwd=repo, env=env, capture_output=True, text=True)
+    # stdin empty: bash reads ~/.bashrc even for -c when its stdin is a socket, which pytest's can be.
+    return subprocess.run(["bash", "-e", "-c", post_step_script()], cwd=repo, env=env, stdin=subprocess.DEVNULL,
+                          capture_output=True, text=True)
 
 
 def test_the_post_step_runs_the_bases_script_not_the_prs(tmp_path):
@@ -1264,7 +1266,7 @@ def test_a_base_without_the_script_warns_and_posts_nothing(tmp_path):
     done = run_post_step(repo, tmp_path)
 
     assert done.returncode == 0
-    assert "::warning::The base has no .github/scripts/post_claude_review.py" in done.stdout
+    assert "::warning::The base has no .github/scripts/post_claude_review.cs or .py yet" in done.stdout
     assert "copy ran" not in done.stdout
 
 

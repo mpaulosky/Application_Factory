@@ -25,4 +25,6 @@ The Template's PR Auto-Merge starts on completion of the workflows it names, one
   Update: `repos.txt` now gives the Factory the `factory` scope, which runs every check of a Baseline repo (rulesets included) without making it a rollout or release target, so
   `github-settings.sh --fix` can set the ruleset and the rest of the Factory's settings.
 - A change to one of these files starts in `template/owned/` and is copied over; the gate says so when a copy has drifted.
+  Update (mpaulosky/Application_Factory#129): the post job runs the base's `post_claude_review.cs` (ADR 0017), so the Factory carries a copy of it too, beside
+  the `.py` that the job runs while a base has no `.cs`.
 - Not carried: Sandcastle, `scripts/watch-pr.sh`, `scripts/work-issue.sh` and `scripts/cleanup.sh`. (The local review, `/pre-push-review` and `scripts/review.sh`, is carried since ADR 0010.)

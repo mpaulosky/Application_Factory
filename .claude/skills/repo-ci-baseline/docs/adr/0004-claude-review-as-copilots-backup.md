@@ -615,3 +615,24 @@ issues with a severity badge each and a folded What changed (mpaulosky/Applicati
   therefore reaches the Fleet first and this one in a later re-Apply round, the two-step rule above.
 
 Copilot's New and Still open tags are left out: the review knows only which threads were resolved, not which of its findings are new.
+
+## Update (mpaulosky/Application_Factory#129): the post job runs the base's C#
+
+The post script is C# (`post_claude_review.cs`, ADR 0017 in the Application Factory). The post job still runs the base's copy, taken from the merge commit's
+first parent, now in the layout ADR 0017 gives its two checkers:
+
+- **The SDK is the base's.** A step before Setup .NET writes the base's `global.json` to `$RUNNER_TEMP/base-sdk/`, only when the base has the `.cs`, and
+  Setup .NET installs the SDK it pins. The PR's `global.json` is never read.
+- **The build reads nothing of the PR's.** The post step copies the base's `.cs` and `global.json` into a `mktemp -d` folder, builds the file there with that
+  folder as the cwd, and runs the dll. The PR's `global.json`, `Directory.Build.*` and its own `.cs` don't reach the build, and the checkout is left as it was.
+- **A broken base fails the job.** A base with the `.cs` and no `global.json`, or a `.cs` that doesn't build, fails the post job with an error, and the
+  build's output is in the log: the base is the Template's, so a failure there is a bug to see, not a review to skip.
+- **The bootstrap.** The PR that brings the `.cs` (each Application's re-Apply PR in this Rollout, and this Factory PR) has a base with only the `.py`, so
+  the post job runs the base's `.py` with `python3 -I`, as before, and that PR's review is posted. The PR after it is the first that C# posts. A base with
+  neither still warns and posts nothing, and the `--effort` check above applies to the `.py` only: every `.cs` takes it.
+- **For one Rollout.** The `.py` and the job's fallback to it retire together in the next Rollout (T5), by when every Application's base has the `.cs` this
+  Rollout brings. An Application that skips this Rollout gets a re-Apply PR whose base has only the `.py`, which that later workflow no longer runs: it warns
+  and posts nothing, like a base without the script, and the PR needs Copilot's review or a merge by hand.
+- **The tests.** `Bench/BenchPostStepTests.cs` in the Factory's `Scripts.Tests` runs the steps against a real build: the base's C# runs, not its `.py` or the PR's,
+  with the base's pin; the PR's pin and a `Directory.Build.props` that fails every build don't reach it; and the two failures above. The pytest file's
+  post-step tests keep the `.py` path.

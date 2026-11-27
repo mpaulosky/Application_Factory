@@ -110,7 +110,8 @@ Each of these is decided in its increment, and recorded as an Update below:
   now, Update for mpaulosky/Application_Factory#123),
   `tests/mutations/check-spec.py` and `tests/render_oracle/` (which stays a pytest suite over cmark-gfm and kramdown, and judges the C# too: Update for
   mpaulosky/Application_Factory#164; the C# alone since the Update for mpaulosky/Application_Factory#128).
-- The checkers' cut-over: how the workflow steps build them in a temp folder with the base's `global.json`, where the `OWNED` list lives once `check_owned_files` can't import
+- The checkers' cut-over: how the workflow steps build them in a temp folder with the base's `global.json` (the post job's steps, Update for
+  mpaulosky/Application_Factory#129, are one way), where the `OWNED` list lives once `check_owned_files` can't import
   `check_gh_repo`, which checker judges the PR that replaces the checker, and for how many Applies both names are honoured.
 - `check_central_pins`. CI runs the PR's own copy, from the PR's checkout, in the job that then builds the PR. So it runs nothing that job doesn't already run, and needs no
   checker layout. But as C# it needs the SDK set up before it, where today it runs first, on the runner's `python3`, so a bad pin fails fast. (Decided in the Update for
@@ -780,3 +781,32 @@ T3c. `release.yml`'s plan and docs jobs and `backfill-blog-posts.yml` run `relea
 - **Rollout.** Re-Apply each Application: the two workflows, the seven C# files and `check_gh_repo.py` with its longer `OWNED` arrive, and Apply removes an unchanged
   copy of each retired pytest file. Before the Rollout, a `regenerate` backfill dispatch in one Application should give an empty diff. After it, the next release's
   queue and blog post are the first written by C#.
+
+## Update (mpaulosky/Application_Factory#129): post_claude_review is C#, built from the base in the checker layout
+
+T4a. `claude-review.yml`'s post job runs `post_claude_review.cs`. The job holds a token that can post a review under the marker, so it runs the base's copy,
+never the PR's (the skill's ADR 0004, which has the same Update), and the file takes the layout this ADR gave only to the two untrusted-tree checkers.
+
+- **The file is a checker in its layout.** `post_claude_review.cs` is one file that includes nothing and uses the BCL only, with its own copies of `Gh.cs`'s
+  classes in the namespace `Baseline.PostReview` (a Factory test holds them equal to `Gh.cs`'s). `test.sh` builds it alone in an empty folder, refuses an
+  `#:include`, `#:package` or `#:project` in it, and runs its parity suite against the built dll.
+- **How the job builds it** (Still open: the checkers' cut-over, for this file). A step writes the base's `global.json` to `$RUNNER_TEMP/base-sdk/` when the
+  base has the `.cs`, and Setup .NET installs the SDK it pins. The post step copies the base's `.cs` and `global.json` into a `mktemp -d` folder, runs
+  `dotnet build` there with that folder as the cwd, and runs `dotnet <dll>`, so no SDK command reads the PR's tree. A base `.cs` without a `global.json`, or
+  one that doesn't build, fails the job. The two checkers' own cut-over can take the same steps; where their `OWNED` list lives is still open.
+- **The PR that replaces the script is posted by the one it replaces.** While a base has no `.cs`, the job runs the base's `post_claude_review.py` with
+  `python3 -I`, as before. So each Application's re-Apply PR in this Rollout, and this Factory PR, is posted by the `.py`, and the PR after it is the first
+  that C# posts. The `.py` ships beside the `.cs` for this one Rollout; T5 retires it and the job's fallback together.
+- **The tests.** The pytest file's tests of the script are `PostClaudeReviewTests` in `tests/Scripts.Tests/Template/PostClaudeReview/`, one method each, with
+  the port's own in `PostClaudeReviewTests.Port.cs`. The `post_claude_review` parity suite (78 cases) passes against the `.py`, against `dotnet run` of the
+  `.cs` and against the dll built alone. The post job's steps are tested against a real build in `Bench/BenchPostStepTests.cs`. The pytest file stays while
+  the `.py` ships: its post-step tests keep the `.py` path, and the heredoc tests move with the heredocs (mpaulosky/Application_Factory#165,
+  mpaulosky/Application_Factory#166).
+- **A test's bash reads no startup file.** bash reads `~/.bashrc` even for `bash -c` when its stdin is a socket, as a remote shell daemon's is, and a test
+  host's stdin can be one. The tests that run a workflow step give it an empty stdin, so a maintainer's own `~/.bashrc` can't fail the step.
+- **The release scripts' `.py` files**, which the Update for mpaulosky/Application_Factory#128 left for T4 to add to `retired.txt`, retire in a pull request of
+  their own after this one: with them, this one would pass the size line (about 2,400 lines of them).
+- **Rollout.** Re-Apply each Application: `claude-review.yml`, `pr-automerge.yml` (a comment), `post_claude_review.cs`, and the comments and a test of
+  `post_claude_review.py`, `check_gh_repo.py` and `test_post_claude_review.py` arrive. The
+  re-Apply PR's review is posted by the base's `.py`; check that the next PR's review is posted, the first by C#. The post job gains Setup .NET and a build.
+  The Factory's copies (`claude-review.yml`, `pr-automerge.yml`, and `post_claude_review.cs`, a new copy) arrive with `scripts/gate.sh --sync`.

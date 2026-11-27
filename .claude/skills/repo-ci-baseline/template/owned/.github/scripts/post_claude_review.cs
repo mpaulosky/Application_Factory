@@ -1,12 +1,13 @@
 #:property PublishAot=false
 // Post Claude Review's findings as one PR review on the head commit. The C# port of post_claude_review.py (ADR 0017 in the Application
-// Factory), which ships beside it until the post job runs this file.
+// Factory), which ships beside it for the post job to run while a base has no .cs yet.
 //
-// To be called by .github/workflows/claude-review.yml's post job, once Claude has reviewed the PR, when the job is cut over from the .py
-// (mpaulosky/Application_Factory#129, with the Updates of ADR 0017 and the skill's ADR 0004 that give the layout below to this file
-// too). The job holds a token that can post a review under the marker, so it will run the base's copy of this file, never the PR's, in the
-// layout ADR 0017 gives the two checkers: the file alone, taken from the base with git show into a mktemp -d folder, built there with that
-// folder as the cwd, and run as a dll, which reads no global.json and runs no MSBuild (the Factory's test.sh builds and runs it so):
+// Called by .github/workflows/claude-review.yml's post job, once Claude has reviewed the PR (mpaulosky/Application_Factory#129, with the
+// Updates of ADR 0017 and the skill's ADR 0004 that give the layout below to this file). The job holds a token that can post a review
+// under the marker, so it runs the base's copy of this file, never the PR's, in the layout ADR 0017 gives the two checkers: the file
+// alone, taken from the base with git show into a mktemp -d folder with the base's global.json, built there with that folder as the cwd,
+// so no SDK command reads the PR's tree, and run as a dll, which reads no global.json and runs no MSBuild (the Factory's test.sh builds
+// and runs it so too):
 //
 //     ( cd "$tmp" && dotnet build post_claude_review.cs -o "$tmp/out" )
 //     FINDINGS='{"summary": ..., "findings": [...]}' dotnet "$tmp/out/post_claude_review.dll" --repo owner/name --pr 42 --head <sha>

@@ -1,7 +1,8 @@
 # Auto-merge after review
 
 Template files (Owned): `.github/workflows/pr-automerge.yml` and its tests in `.github/scripts/tests/pr-automerge.test.mjs`, `.github/workflows/pr-review-submitted.yml`,
-and Claude Review: `.github/workflows/claude-review.yml` with `.github/scripts/post_claude_review.py` and its tests in `.github/scripts/tests/test_post_claude_review.py`,
+and Claude Review: `.github/workflows/claude-review.yml` with `.github/scripts/post_claude_review.cs` (its tests are the Factory's `PostClaudeReviewTests` and its
+parity suite) and, for one Rollout, `.github/scripts/post_claude_review.py` with its tests in `.github/scripts/tests/test_post_claude_review.py`,
 with `dependabot-auto-merge.yml` and `release.yml` as the two deliberate exceptions.
 History: IssueTracker #140 and #201 (re-check on a submitted review); Blazor-Server #94 (the hand-back label hold) and #119 (the Copilot review cap, now the review loop of mpaulosky/dotfiles#375).
 IssueManager #235 moved the decision into `.github/scripts/automerge-decision.mjs` with `node --test` tests, and TicketManager carries the same shape.
@@ -276,7 +277,10 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
   whose author is the `OWNER` (a `MEMBER` or `COLLABORATOR` may have read access only). The step reads the description from the API as it runs.
   The prompt tells Claude that a note never covers a security weakness, which is an instruction, not an enforced rule.
   The markers must sit on lines of their own outside a code fence. A PR opened with the owner's token, Sandcastle's included, counts as the owner's.
-  A second job runs `post_claude_review.py`, which posts one `COMMENT` review pinned to the head,
+  A second job runs the base's `post_claude_review.cs`, never the PR's: it takes the file and the base's `global.json` into a `mktemp -d` folder, sets up
+  the SDK that `global.json` pins, builds the file there and runs the dll (ADR 0017's checker layout), so no SDK command reads the PR's tree. A base with no
+  `.cs` yet runs its `post_claude_review.py` with `python3 -I`, until the `.py` retires; a `.cs` without a `global.json`, or one that doesn't build, fails the job.
+  The script posts one `COMMENT` review pinned to the head,
   each finding an inline thread, and a finding outside the diff in the body (GitHub rejects a whole review over one such comment).
   The body reads like Copilot's review: the markers, a headline (`🟡 Changes recommended` with findings, `🟢 No changes recommended` without), the title of
   the most severe finding, a list of the open issues (a shields.io severity badge, High, Medium or Low, and a link to each thread, High first) and a folded
