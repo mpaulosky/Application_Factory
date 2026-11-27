@@ -156,4 +156,124 @@ public sealed partial class PostClaudeReviewTests
 		// 1,000 deep, the most JsonDocument is let read; Python's own limit depends on its version (the README's Not covered).
 		Assert.Equal(JsonValueKind.Array, PyJson.Parse(new string('[', 1000) + new string(']', 1000)).ValueKind);
 	}
+
+	// A gh that exits without reading its input: the write of a body larger than a pipe holds breaks, and the call fails as gh's exit
+	// does (a CalledProcessError, as the .py's subprocess.run raised), not with the write's IOException, which the linking step would
+	// name OSError.
+	[Fact]
+	public void A_gh_that_reads_no_input_fails_as_its_exit()
+	{
+		using var folder = new FailingGh("exit 1\n");
+		var gh = new GitHub("octo/demo", () => folder.Gh);
+		var body = new string('x', 300_000);
+		Assert.Throws<CalledProcessError>(() => gh.CreateReview(7, new Review(Head, body, [])));
+		Assert.Throws<CalledProcessError>(() => gh.UpdateReview(7, "99", body));
+	}
+
+	// str() of what json.loads gave, under python3, for every kind of value: the posted review's id goes into a URL through it.
+	public static TheoryData<string> JsonValues =>
+	[
+		"\"abc\"", "null", "true", "false", "99", "-99", "99.0", "-0.0", "0.0", "1e16", "1e15", "1.5e-7", "0.0001", "0.00001", "123.456",
+		"1234567890123456.5", "-1234567890123456.5", "-123.456", "-0.0001", "0.5", "0.00012345", "-0.00012345", "123456789012345678.0", "1e22", "-2.5e-300", "5e-324", "1.7976931348623157e308", "1e400", "-1e400",
+		"[1, \"a\", null, true, 2.5]", "[]", "{}", "{\"b\": 1, \"a\": [2.5], \"b\": 3}", "[\"it's\", \"a \\\"quote\\\"\", \"\\n\"]",
+		"{\"k\": {\"n\": [{}]}}",
+	];
+
+	[Theory]
+	[MemberData(nameof(JsonValues))]
+	public async Task Str_is_python_s_str_of_the_value(string json)
+	{
+		var start = new System.Diagnostics.ProcessStartInfo("python3")
+		{
+			RedirectStandardOutput = true,
+			RedirectStandardError = true,
+			UseShellExecute = false,
+		};
+		foreach (var arg in new[] { "-I", "-c", "import json, sys; sys.stdout.write(str(json.loads(sys.argv[1])))", json })
+			start.ArgumentList.Add(arg);
+		using var run = System.Diagnostics.Process.Start(start)!;
+		var err = run.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+		var expected = await run.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+		await run.WaitForExitAsync(TestContext.Current.CancellationToken);
+		Assert.True(run.ExitCode == 0, $"python3 exited {run.ExitCode}: {await err}");
+		Assert.Equal(expected, PyJson.Str(PyJson.Parse(json)));
+	}
+
+	// thread_links() keyed a dict by (path, body): a posted comment with a URL whose path or body is a list or dict can't be a key, so
+	// the .py raised TypeError and the step warned; one without a URL was never keyed.
+	public static TheoryData<string, string?> UnhashableComments => new()
+	{
+		{ "{\"html_url\": \"https://x/1\", \"path\": [1], \"body\": \"b\"}", "unhashable type: 'list'" },
+		{ "{\"html_url\": \"https://x/1\", \"path\": \"src/app.py\", \"body\": {\"a\": 1}}", "unhashable type: 'dict'" },
+		{ "{\"html_url\": \"https://x/1\", \"path\": {}, \"body\": []}", "unhashable type: 'dict'" },
+		{ "{\"html_url\": \"http://x/1\", \"path\": [1], \"body\": \"b\"}", null },
+		{ "{\"path\": [1], \"body\": \"b\"}", null },
+		{ "{\"html_url\": \"https://x/1\", \"path\": 5, \"body\": null}", null },
+	};
+
+	[Theory]
+	[MemberData(nameof(UnhashableComments))]
+	public void A_posted_comment_that_cant_be_a_key_fails_as_thread_links_did(string comment, string? message)
+	{
+		List<Comment> comments = [new("src/app.py", 2, "b")];
+		if (message is null)
+		{
+			Assert.Single(PostClaudeReview.ThreadLinks(comments, [Json(comment)]));
+			return;
+		}
+		var error = Assert.Throws<PyError>(() => PostClaudeReview.ThreadLinks(comments, [Json(comment)]));
+		Assert.Equal(("TypeError", message), (error.Name, error.Message));
+	}
+
+	// An answer that isn't JSON fails with where it failed, in the port's words (a line and a byte in it, where Python's gives a column
+	// in characters), and no character of the answer.
+	[Fact]
+	public void A_not_json_answer_names_where_and_quotes_none_of_it()
+	{
+		var error = Assert.Throws<MalformedFindings>(() => PostClaudeReview.ParseFindings("{\"summary\": \"ok\"}\nZqx"));
+		Assert.Equal("not JSON (invalid JSON: line 2 byte 1)", error.Message);
+		// é is two bytes, so Z is the eighth byte of its line.
+		Assert.Equal("invalid JSON: line 1 byte 8", Assert.Throws<PyError>(() => PyJson.Parse("[\"é\", Z]")).Message);
+		Assert.Equal("JSONDecodeError", Assert.Throws<PyError>(() => PyJson.Parse("Zqx")).Name);
+		Assert.DoesNotContain("Z", Assert.Throws<PyError>(() => PyJson.Parse("Zqx")).Message);
+	}
+
+	// Python writes a negative int with '-' whatever the locale; .NET's BigInteger takes the current culture's sign, so the port gives
+	// every number it writes the invariant culture's.
+	[Fact]
+	public void A_negative_number_is_written_with_python_s_minus_in_any_culture()
+	{
+		var culture = (System.Globalization.CultureInfo)System.Globalization.CultureInfo.InvariantCulture.Clone();
+		culture.NumberFormat.NegativeSign = "\u2212";
+		var before = System.Globalization.CultureInfo.CurrentCulture;
+		System.Globalization.CultureInfo.CurrentCulture = culture;
+		try
+		{
+			var result = Run(FindingsJson(("src/app.py", -3, "On."), ("docs/b.md", -4, "Off.")), redacted: "-2");
+			var body = result.Gh.Posted[0].Review.GetProperty("body").GetString()!;
+			var thread = result.Gh.Posted[0].Review.GetProperty("comments")[0].GetProperty("body").GetString()!;
+			Assert.Contains("Claude cited line -3,", thread);
+			Assert.Contains("`docs/b.md:-4`", body);
+			Assert.Contains("-2 credential-shaped string(s) were redacted", body);
+			Assert.Contains("::warning::Redacted -2 credential-shaped", result.Out);
+			Assert.DoesNotContain("\u2212", body + thread + result.Out);
+
+			// A PR number reaches the gh URLs and the line that says what was posted.
+			var posted = RunWith(["--repo", "octo/demo", "--pr", "-7", "--head", Head], FindingsJson());
+			Assert.Contains("on PR #-7:", posted.Out);
+			using var folder = new FailingGh("cat > /dev/null\nprintf '%s\\n' \"$@\" >> \"$0.args\"\necho '[]'\n");
+			var gh = new GitHub("octo/demo", () => folder.Gh);
+			gh.PullFiles(-7);
+			gh.CreateReview(-7, new Review(Head, "b", []));
+			gh.ReviewComments(-7, "99");
+			gh.UpdateReview(-7, "99", "b");
+			var urls = File.ReadAllLines(folder.Gh + ".args").Where(arg => arg.StartsWith("repos/", StringComparison.Ordinal)).ToList();
+			Assert.Equal(4, urls.Count);
+			Assert.All(urls, url => Assert.StartsWith("repos/octo/demo/pulls/-7/", url));
+		}
+		finally
+		{
+			System.Globalization.CultureInfo.CurrentCulture = before;
+		}
+	}
 }

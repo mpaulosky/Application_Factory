@@ -410,15 +410,19 @@ public sealed partial class PostClaudeReviewTests
 		{ "one\rstill one\n"u8.ToArray(), 1 },
 	};
 
-	// The pytest stubs subprocess.run; here the count is GitHub.CountLines, which LineCount gives gh's bytes to, and the path's quoting
-	// is PostClaudeReview.Quote, which LineCount puts in the URL. Parity cases 04 and 05 run LineCount itself, on gh's answer and on its failure.
+	// The pytest stubs subprocess.run; here gh is a script that answers the file's bytes and records its arguments, so LineCount
+	// itself runs: the raw contents URL with the path quoted, and the count of bytes, not text.
 	[Theory]
 	[MemberData(nameof(FileTexts))]
 	public void A_files_length_counts_newlines_only(byte[] text, int lines)
 	{
+		using var folder = new FailingGh("printf '%s\\n' \"$@\" > \"$0.args\"\ncat \"$0.data\"\n");
+		File.WriteAllBytes(folder.Gh + ".data", text);
 		// Bytes, as gh returns them: a file that isn't UTF-8 (the Latin-1 case) still counts, and a lone \r isn't a newline.
+		Assert.Equal(lines, new GitHub("octo/demo", () => folder.Gh).LineCount("docs/a b.md", Head));
+		Assert.Equal(["api", "-H", "Accept: application/vnd.github.raw", "repos/octo/demo/contents/docs/a%20b.md?ref=abc123"],
+				File.ReadAllLines(folder.Gh + ".args"));
 		Assert.Equal(lines, GitHub.CountLines(text));
-		Assert.Equal("docs/a%20b.md", PostClaudeReview.Quote("docs/a b.md"));
 	}
 
 	// The pytest's two errors from subprocess.run, a gh that fails and no gh at all, and the two other ways starting or reading gh fails
@@ -810,8 +814,24 @@ public sealed partial class PostClaudeReviewTests
 		Assert.Empty(result.Gh.Posted);
 	}
 
-	[Fact]
-	public void Posting_needs_repo_pr_and_head() => Assert.Equal(2, RunWith(["--repo", "octo/demo"], FindingsJson()).Code);
+	// Each of the three missing alone, so each operand of the check decides a row: no --repo, an empty one, a PR of 0, no --head.
+	public static TheoryData<string[]> MissingPostingOptions => new()
+	{
+		new[] { "--pr", "7", "--head", Head },
+		new[] { "--repo", "", "--pr", "7", "--head", Head },
+		new[] { "--repo", "octo/demo", "--pr", "0", "--head", Head },
+		new[] { "--repo", "octo/demo", "--pr", "7" },
+	};
+
+	[Theory]
+	[MemberData(nameof(MissingPostingOptions))]
+	public void Posting_needs_repo_pr_and_head(string[] args)
+	{
+		var result = RunWith(args, FindingsJson());
+		Assert.Equal(2, result.Code);
+		Assert.Contains("--repo, --pr and --head are required to post", result.Err);
+		Assert.Empty(result.Gh.Posted);
+	}
 
 	public static TheoryData<string> LongSuggestionBodies => new(
 			"```suggestion\n" + new string('a', 200_000),

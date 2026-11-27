@@ -94,9 +94,10 @@ Order across repos: `github/repos.txt`'s, the one list of the repos (retiring on
 1. Edit `template/` (and the part's reference) in a Factory worktree.
 2. Run `test.sh`: the hook suites, the auto-merge script tests, the Owned `.github/scripts` tests (release scripts, Claude Review, the gh check
    and the Owned files check), the hardening review script tests, the renderer oracle, the GitHub scripts' pytest
-   (rollout), the parity suites (status, land, settings, check_gh_repo, the release scripts and rollout) and their runners' tests,
+   (rollout), the parity suites (status, land, settings, check_gh_repo, the release scripts, draft_release and post_claude_review as `.py` and `.cs`,
+   detect_changes, discover_tests, load_test_env, check_central_pins and rollout) and their runners' tests,
    the Claude Review benchmark's `--rescore` parity suite, the C# scripts' xUnit tests (`tests/Scripts.Tests`: the landing decision, status, land, settings,
-   what they share, the two checkers in `tests/` and the benchmark), actionlint, zizmor,
+   what they share, the two checkers in `tests/`, the benchmark and the Template's scripts in `Template/`, post_claude_review's in its own namespace), actionlint, zizmor,
    yamllint, shellcheck, markdownlint, the no-placeholders-in-Owned check, the check that the Owned scripts' `gh` commands are told their repository,
    the Sandcastle copy and Seed checks, and the `apply.sh` and `reapply.sh` tests. It needs those tools, the .NET SDK the Factory's `global.json` names
    (for the C# scripts and their tests), and shfmt v3.14 or a later v3 for the gh check's tests and its parity suite (ADR 0011); the Factory's CI runs the same script.
