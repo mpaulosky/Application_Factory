@@ -40,7 +40,7 @@ Then what a port is likely to get wrong:
 - 60 to 62: an effort of 200 characters is kept, one of 201 is cut and a blank one is none; titles of 200 and 201 characters, one cut after a space,
   one of `**` markers alone and an empty body. 63: a path's characters quoted in the contents URL. 64 to 68: `--pr -3` sent as it is, an option with
   no value, an empty `REDACTED` (0), findings with a byte-order mark (not JSON) and unset findings (withheld).
-- 71 and 77: a `REDACTED` count past 32 bits and one past 64, each counted as it is. 72 to 75 and 78: Python's limit of 4,300 digits on an integer,
+- 71 and 77: a `REDACTED` count past a 32-bit int (2^31) and one past 64 bits, each counted as it is. 72 to 75 and 78: Python's limit of 4,300 digits on an integer,
   which `json.loads` keeps anywhere in the answer (72 reads one of 4,300 digits in a field the script never reads, 73 exits 1 on one of 4,301) and in
   gh's answer (78, a file listing's page) and `int()` keeps in a hunk header (74 and 75, the same bound). 76: an answer nested 71 deep, past .NET's
   default depth of 64.

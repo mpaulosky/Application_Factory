@@ -107,6 +107,15 @@ public sealed partial class PostClaudeReviewTests
 		Assert.Contains(message, error.Message);
 	}
 
+	// A patch of the longest integer Parse lets through is truthy (a double reads it as inf), so it fails as an int's would.
+	[Fact]
+	public void A_patch_of_4300_digits_is_a_truthy_int()
+	{
+		var error = Assert.Throws<PyError>(() => PostClaudeReview.DiffLines([Json($"{{\"filename\": \"a\", \"patch\": {new string('1', 4300)}}}")]));
+		Assert.Equal("AttributeError", error.Name);
+		Assert.Contains("'int' object has no attribute 'split'", error.Message);
+	}
+
 	public static TheoryData<string> FalsyPatches => ["0", "-0", "0.0", "0e5", "0E5", "1e-400", "1E-400", "-0.0", "[]", "{}", "false", "null", "\"\""];
 
 	[Theory]
