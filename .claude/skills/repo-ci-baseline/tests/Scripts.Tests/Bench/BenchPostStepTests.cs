@@ -17,8 +17,25 @@ public partial class BenchTests
 
 		Assert.Equal(4, code);
 		Assert.Equal("the base's C# --repo o/r --pr 7 --head abc --effort high (claude-sonnet-5-5), 1 batch", stdout.Trim());
-		// The build wrote nothing into the checkout.
+		// The build wrote nothing into the checkout, and its runfile folder is under the test's own folder, which Dispose removes.
 		Assert.Equal("", Git(repo, "status", "--porcelain", "--ignored"));
+		Assert.NotEmpty(Directory.EnumerateFileSystemEntries(Path.Combine(temp, "data", "dotnet", "runfile")));
+	}
+
+	// The batch count the C# is given in --effort, as the pytest's table checks it for the .py: a count that isn't a positive number
+	// without a leading zero is 1.
+	[Theory]
+	[InlineData("2", "2 batches")]
+	[InlineData("", "1 batch")]
+	[InlineData("04", "1 batch")]
+	public void A_base_cs_is_given_the_batch_count_in_its_effort(string batches, string effort)
+	{
+		var repo = PostRepo("# Takes --effort.\nprint('the base script')\n", baseCs: CsScript("the base's C#"));
+
+		var (code, stdout) = RunStep("Post the review on the head commit", repo, extra: new() { ["BATCHES"] = batches });
+
+		Assert.Equal(0, code);
+		Assert.Equal($"the base's C# --repo o/r --pr 7 --head abc --effort high (claude-sonnet-5-5), {effort}", stdout.Trim());
 	}
 
 	[Fact]

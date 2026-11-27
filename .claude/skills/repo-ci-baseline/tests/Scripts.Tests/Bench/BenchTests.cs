@@ -367,6 +367,9 @@ public partial class BenchTests : IDisposable
 		// The step's mktemp -d build folder lands here, so Dispose removes it (the step ends in exec, and a runner is thrown away).
 		var tmp = Path.Combine(temp, "tmp");
 		Directory.CreateDirectory(tmp);
+		// dotnet stops when XDG_DATA_HOME names a folder that isn't there.
+		var data = Path.Combine(temp, "data");
+		Directory.CreateDirectory(data);
 		Dictionary<string, string> env = new()
 		{
 			["PATH"] = Environment.GetEnvironmentVariable("PATH")!,
@@ -374,6 +377,9 @@ public partial class BenchTests : IDisposable
 			["HOME"] = Environment.GetEnvironmentVariable("HOME")!,
 			["RUNNER_TEMP"] = runnerTemp,
 			["TMPDIR"] = tmp,
+			// And a file-based app's build folder (dotnet/runfile/, named by the file's path, new on every run), which on Linux goes under
+			// XDG_DATA_HOME, not TMPDIR: under the host's ~/.local/share, each build would leave one there.
+			["XDG_DATA_HOME"] = data,
 			// The step's git calls read no git config of the host's.
 			["GIT_CONFIG_GLOBAL"] = "/dev/null",
 			["GIT_CONFIG_NOSYSTEM"] = "1",

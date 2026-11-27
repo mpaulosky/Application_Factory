@@ -788,8 +788,9 @@ T4a. `claude-review.yml`'s post job runs `post_claude_review.cs`. The job holds 
 never the PR's (the skill's ADR 0004, which has the same Update), and the file takes the layout this ADR gave only to the two untrusted-tree checkers.
 
 - **The file is a checker in its layout.** `post_claude_review.cs` is one file that includes nothing and uses the BCL only, with its own copies of `Gh.cs`'s
-  classes in the namespace `Baseline.PostReview` (a Factory test holds them equal to `Gh.cs`'s). `test.sh` builds it alone in an empty folder, refuses an
-  `#:include`, `#:package` or `#:project` in it, and runs its parity suite against the built dll.
+  classes in the namespace `Baseline.PostReview` (a Factory test holds them equal to `Gh.cs`'s). `test.sh` builds it alone in an empty folder, refuses it
+  unless `#:` appears in it once, as its first line `#:property PublishAot=false` (so no `#:include`, `#:package`, `#:project`, `#:sdk` or other
+  `#:property`, nor a `#:` in a comment or a string), and runs its parity suite against the built dll.
 - **How the job builds it** (Still open: the checkers' cut-over, for this file). A step writes the base's `global.json` to `$RUNNER_TEMP/base-sdk/` when the
   base has the `.cs`, and Setup .NET installs the SDK it pins. The post step copies the base's `.cs` and `global.json` into a `mktemp -d` folder, runs
   `dotnet build` there with that folder as the cwd, and runs `dotnet <dll>`, so no SDK command reads the PR's tree. A base `.cs` without a `global.json`, or
