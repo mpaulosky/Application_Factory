@@ -108,10 +108,12 @@ namespace Baseline.PostReview
 
 	sealed class MalformedFindings(string message) : Exception(message);
 
-	// What Python's json module gives a script: an object's keys in order, the last of a repeated key winning, an integer of any size, and
-	// iteration as Python iterates a value (a list's items, a dict's keys, a str's characters).
+	// What Python's json module gives a script: an object's keys in order, the last of a repeated key winning, an integer of up to the
+	// 4,300 digits int() reads, and iteration as Python iterates a value (a list's items, a dict's keys, a str's characters).
 	static class PyJson
 	{
+		// .NET reads 64 levels by default, far fewer than Python's json; 1,000 is Python's default recursion limit, and how deep json reads
+		// past it depends on Python's version (the parity suite's README leaves it out).
 		static readonly JsonDocumentOptions Options = new() { MaxDepth = 1000 };
 
 		public static JsonElement Parse(string text)
@@ -145,7 +147,7 @@ namespace Baseline.PostReview
 					break;
 				case JsonValueKind.Number:
 					var raw = value.GetRawText();
-					if (raw.IndexOfAny(['.', 'e', 'E']) < 0 && raw.TrimStart('-').Length > 4300)
+					if (IsIntegerText(raw) && raw.TrimStart('-').Length > 4300)
 						throw new PyError("ValueError", "Exceeds the limit (4300 digits) for integer string conversion");
 					break;
 			}
@@ -172,6 +174,9 @@ namespace Baseline.PostReview
 		public static string? String(JsonElement value, string key) =>
 				TryGet(value, key, out var found) && found.ValueKind == JsonValueKind.String ? found.GetString() : null;
 
+		// A JSON number json.loads reads as an int: one with no fraction and no exponent (e or E).
+		static bool IsIntegerText(string raw) => raw.IndexOfAny(['.', 'e', 'E']) < 0;
+
 		// An integer as json.loads reads one: a number with no fraction and no exponent, of any size up to the 4,300 digits Parse lets
 		// through; null for anything else (a float, a bool).
 		public static BigInteger? Integer(JsonElement value)
@@ -179,7 +184,7 @@ namespace Baseline.PostReview
 			if (value.ValueKind != JsonValueKind.Number)
 				return null;
 			var raw = value.GetRawText();
-			if (raw.IndexOfAny(['.', 'e', 'E']) >= 0)
+			if (!IsIntegerText(raw))
 				return null;
 			return BigInteger.Parse(raw, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
 		}
@@ -580,10 +585,9 @@ namespace Baseline.PostReview
 			JsonValueKind.String => value.GetString()!.Length > 0,
 			JsonValueKind.Array => value.GetArrayLength() > 0,
 			JsonValueKind.Object => value.EnumerateObject().Any(),
-			// By its value, as Python's bool() reads the int or float json.loads made: 0e5 and 1e-400 are 0.0, and 1e400 is inf.
-			JsonValueKind.Number => PyJson.Integer(value) is { } integer
-					? !integer.IsZero
-					: double.Parse(value.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture) != 0,
+			// By its value, as Python's bool() reads the int or float json.loads made: 0e5 and 1e-400 are 0.0, and 1e400 is inf. A double
+			// gives an int's answer too: a non-zero one is never 0.0 (a long one is inf), and -0 is -0.0, which is 0.
+			JsonValueKind.Number => double.Parse(value.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture) != 0,
 			_ => true,
 		};
 

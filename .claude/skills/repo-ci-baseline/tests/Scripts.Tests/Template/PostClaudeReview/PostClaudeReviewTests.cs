@@ -10,6 +10,8 @@ namespace Baseline.PostReview.Tests;
 // (ADR 0017's rule), with the same cases and assertions. In the script's own namespace, so Arguments, Py and Script are its copies of
 // Gh.cs's. The tests of claude-review.yml's heredocs and post step stay in the pytest file, and so do the two that build a body from the
 // workflow's batch join (the longest joined summary, and one past GitHub's limit): parity case 33 posts a body past that limit.
+// A_files_length_is_unknown_when_gh_fails adds two cases to the pytest's two (a gh that can't be started, an IOException), and
+// PostClaudeReviewTests.Port.cs holds the port's own tests beside these, of what Python did for the .py.
 public sealed partial class PostClaudeReviewTests
 {
 	const string Head = "abc123";

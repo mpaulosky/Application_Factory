@@ -8,16 +8,18 @@ namespace Baseline.PostReview.Tests;
 // what its capture_output did.
 public sealed partial class PostClaudeReviewTests
 {
-	// A folder with a gh that writes a workflow command to stderr and exits 1, as a failing gh might echo the request in its error.
+	// A folder with a gh that writes a workflow command to stderr and exits 1, as a failing gh might echo the request in its error, or that
+	// runs the script given.
 	sealed class FailingGh : IDisposable
 	{
 		public string Path { get; } = Directory.CreateTempSubdirectory("post-claude-review-gh-").FullName;
 
 		public string Gh => System.IO.Path.Combine(Path, "gh");
 
-		public FailingGh()
+		// script, when given, is the gh's body instead.
+		public FailingGh(string? script = null)
 		{
-			File.WriteAllText(Gh, "#!/bin/sh\necho '::warning::from gh' >&2\necho '::error::from gh' >&2\nexit 1\n");
+			File.WriteAllText(Gh, "#!/bin/sh\n" + (script ?? "echo '::warning::from gh' >&2\necho '::error::from gh' >&2\nexit 1\n"));
 			// The scripts run on Linux runners; the guard is for the analyzer.
 			if (!OperatingSystem.IsWindows())
 				File.SetUnixFileMode(Gh, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
@@ -40,6 +42,18 @@ public sealed partial class PostClaudeReviewTests
 		Assert.Equal(1, code);
 		Assert.Contains("CalledProcessError: Command 'gh api --paginate --slurp", stderr.ToString());
 		Assert.DoesNotContain("from gh", stdout.ToString() + stderr.ToString());
+	}
+
+	// gh's stderr is read to its end and dropped: a gh that writes more than a pipe holds (64 KB on Linux) to it still finishes, and its
+	// stdout comes through.
+	[Fact]
+	public async Task A_gh_that_writes_much_to_stderr_still_finishes()
+	{
+		using var folder = new FailingGh("head -c 300000 /dev/zero | tr '\\0' x >&2\necho '[[{\"filename\": \"a.py\"}]]'\n");
+		var call = Task.Run(() => new GitHub("octo/demo", () => folder.Gh).PullFiles(7), TestContext.Current.CancellationToken);
+		// A TimeoutException when gh's stderr filled its pipe, so the call never returned.
+		var files = await call.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+		Assert.Equal("a.py", Assert.Single(files).GetProperty("filename").GetString());
 	}
 
 	// The linking step's warning names the error as the .py's type(error).__name__ did for gh missing and for any other OSError.
@@ -80,6 +94,7 @@ public sealed partial class PostClaudeReviewTests
 		{ "{\"filename\": \"a\", \"patch\": {\"a\": 1}}", "AttributeError", "'dict' object has no attribute 'split'" },
 		{ "{\"filename\": \"a\", \"patch\": true}", "AttributeError", "'bool' object has no attribute 'split'" },
 		{ "{\"filename\": \"a\", \"patch\": 1e400}", "AttributeError", "'float' object has no attribute 'split'" },
+		{ "{\"filename\": \"a\", \"patch\": 1E5}", "AttributeError", "'float' object has no attribute 'split'" },
 		{ "{\"filename\": \"a\", \"patch\": -0.5}", "AttributeError", "'float' object has no attribute 'split'" },
 	};
 
@@ -92,7 +107,7 @@ public sealed partial class PostClaudeReviewTests
 		Assert.Contains(message, error.Message);
 	}
 
-	public static TheoryData<string> FalsyPatches => ["0", "-0", "0.0", "0e5", "1e-400", "-0.0", "[]", "{}", "false", "null", "\"\""];
+	public static TheoryData<string> FalsyPatches => ["0", "-0", "0.0", "0e5", "0E5", "1e-400", "1E-400", "-0.0", "[]", "{}", "false", "null", "\"\""];
 
 	[Theory]
 	[MemberData(nameof(FalsyPatches))]
@@ -126,7 +141,7 @@ public sealed partial class PostClaudeReviewTests
 	{
 		var digits = new string('1', 4300);
 		Assert.Equal(JsonValueKind.Object, PyJson.Parse($"{{\"a\": [-{digits}]}}").ValueKind);
-		Assert.Equal(JsonValueKind.Object, PyJson.Parse($"{{\"a\": 1.{digits}1, \"b\": {digits}e1}}").ValueKind);
+		Assert.Equal(JsonValueKind.Object, PyJson.Parse($"{{\"a\": 1.{digits}1, \"b\": {digits}1e1, \"c\": -{digits}1E-1}}").ValueKind);
 		Assert.Equal("ValueError", Assert.Throws<PyError>(() => PyJson.Parse($"{{\"a\": [{digits}1]}}")).Name);
 		Assert.Equal("ValueError", Assert.Throws<PyError>(() => PyJson.Parse($"[{{\"a\": -{digits}1}}]")).Name);
 		// 1,000 deep, the most JsonDocument is let read; Python's own limit depends on its version (the README's Not covered).
