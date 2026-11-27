@@ -13,6 +13,11 @@
     <IsTestProject>true</IsTestProject>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1900;NU1905</WarningsNotAsErrors>
+    <!-- post_claude_review.cs is one file, its own copies of Gh.cs's classes in it (the checker layout, ADR 0017): BASELINE_TESTS leaves out
+         its top-level statement, so the project compiles the rest beside Gh.cs's and the tests call it; FileBasedProgram lets the compiler read
+         its #:property line, which a project's build would otherwise refuse (CS9298). -->
+    <DefineConstants>$(DefineConstants);BASELINE_TESTS</DefineConstants>
+    <Features>$(Features);FileBasedProgram</Features>
     <!-- The NuGet.config beside it restores from nuget.org alone, and packages.lock.json pins every package, direct and transitive, by hash:
          test.sh restores in locked mode, so a version moved here without the lock file fails with NU1004 (dotnet restore rewrites it, as
          Dependabot's NuGet updater does after a bump). -->

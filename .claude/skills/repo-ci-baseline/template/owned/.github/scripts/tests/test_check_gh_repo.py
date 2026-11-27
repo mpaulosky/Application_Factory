@@ -499,14 +499,16 @@ SHIELDS = (".github/scripts/Directory.Build.props", ".github/scripts/Directory.B
 CSHARP = (".github/scripts/Gh.cs", ".github/scripts/discover_tests.cs", ".github/scripts/DiscoverTests.cs", ".github/scripts/load_test_env.cs",
           ".github/scripts/LoadTestEnv.cs", ".github/scripts/draft_release.cs", ".github/scripts/DraftRelease.cs",
           ".github/scripts/release_post.cs", ".github/scripts/ReleasePost.cs", ".github/scripts/HtmlEntities.cs", ".github/scripts/release_queue.cs",
-          ".github/scripts/ReleaseQueue.cs", ".github/scripts/backfill_blog_posts.cs", ".github/scripts/BackfillBlogPosts.cs")
+          ".github/scripts/ReleaseQueue.cs", ".github/scripts/backfill_blog_posts.cs", ".github/scripts/BackfillBlogPosts.cs",
+          ".github/scripts/post_claude_review.cs")
 
 
 def test_owned_names_files_and_folders_under_scripts_the_skills_readme_the_review_skills_global_json_the_shields_and_the_csharp_only():
     # Arrange, Act, Assert: global.json is the one root file, the SDK pin (mpaulosky/Application_Factory#103), and the C# scripts'
     # three shields (mpaulosky/Application_Factory#125), the C# of discover_tests and load_test_env with the Gh.cs they include
     # (mpaulosky/Application_Factory#162), the C# of draft_release (mpaulosky/Application_Factory#163) and the C# of release_post,
-    # release_queue and backfill_blog_posts (mpaulosky/Application_Factory#128) the only files in .github/scripts/.
+    # release_queue and backfill_blog_posts (mpaulosky/Application_Factory#128) and the C# of post_claude_review
+    # (mpaulosky/Application_Factory#129) the only files in .github/scripts/.
     assert check_gh_repo.OWNED
     assert "global.json" in check_gh_repo.OWNED
     assert all(entry in check_gh_repo.OWNED for entry in (*SHIELDS, *CSHARP))

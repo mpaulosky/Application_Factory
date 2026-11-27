@@ -6,7 +6,7 @@
 #
 # Runs the Template's own tests (hook suites, auto-merge script tests,
 # the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle, the parity suites
-# (status, land, settings, check_gh_repo, the release scripts and draft_release as .py and .cs, post_claude_review, detect_changes, discover_tests, load_test_env, check_central_pins and rollout), the Claude Review benchmark's --rescore parity suite and
+# (status, land, settings, check_gh_repo, the release scripts, draft_release and post_claude_review as .py and .cs, detect_changes, discover_tests, load_test_env, check_central_pins and rollout), the Claude Review benchmark's --rescore parity suite and
 # the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land, settings, rollout and its AutoRollout libraries,
 # what they share, the two checkers in tests/ and the benchmark), lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
@@ -757,7 +757,7 @@ if in_shard scripts; then
   fi
   (cd "$skill_dir/tests/render_oracle" && "${oracle_cmd[@]}" -q -p no:cacheprovider .) || fail "renderer oracle"
 
-  step "Parity suites (status.cs, land.cs, settings.cs, check_gh_repo.py, the release scripts and draft_release as .py and .cs, post_claude_review.py, detect_changes.cs, discover_tests.cs, load_test_env.cs, check_central_pins.cs, and rollout.sh through their command lines, against a fake gh) and their runners' tests"
+  step "Parity suites (status.cs, land.cs, settings.cs, check_gh_repo.py, the release scripts, draft_release and post_claude_review as .py and .cs, detect_changes.cs, discover_tests.cs, load_test_env.cs, check_central_pins.cs, and rollout.sh through their command lines, against a fake gh) and their runners' tests"
   # The fake gh runs jq for a REST call's --jq, which the release scripts' suites make, and for a REST call's --input body, which the
   # settings suite's make. The status, land and settings suites' reference is the C# (github/status.cs, github/land.cs, github/settings.cs),
   # which the runner builds once before its cases (ADR 0017); the settings suite runs against github-settings.sh below too.
@@ -827,7 +827,7 @@ if in_shard scripts; then
     [[ -f "$owned/.github/scripts/$suite.cs" && -f "$owned/.github/scripts/$suite.py" ]] \
       || fail "library_first names $suite, but the Template ships no $suite.cs beside a $suite.py: take it off the list at the cut-over"
   done
-  ((owned_entries >= 8)) || fail "found $owned_entries Owned C# script(s) in template/owned/.github/scripts/, expected detect_changes.cs, discover_tests.cs, load_test_env.cs, check_central_pins.cs, draft_release.cs, release_post.cs, release_queue.cs and backfill_blog_posts.cs at least"
+  ((owned_entries >= 9)) || fail "found $owned_entries Owned C# script(s) in template/owned/.github/scripts/, expected detect_changes.cs, discover_tests.cs, load_test_env.cs, check_central_pins.cs, draft_release.cs, release_post.cs, release_queue.cs, backfill_blog_posts.cs and post_claude_review.cs at least"
   # status.sh and land.sh run their C# from its own folder, so a global.json in the caller's folder that pins an SDK nobody has installed
   # changes nothing: the status suite passes against status.sh with one above every case's folder (the runner's TMPDIR), and land.sh
   # answers --help from such a folder. dotnet itself fails there, which shows the global.json is read.

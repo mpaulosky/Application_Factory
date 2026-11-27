@@ -2,7 +2,7 @@
 
 The Template's `.github/scripts/post_claude_review.py` through its command line: `tests/parity.test.sh post_claude_review [command...]`. The runner's header
 says what a case holds. The cases were recorded from the `.py`, the reference its C# port (`post_claude_review.cs`, mpaulosky/Application_Factory#129)
-is held to, and `test.sh` runs them against the `.py` (and the `.cs` too, once it ships beside it). Each case gives Claude Review's answer in `FINDINGS`
+is held to, and `test.sh` runs them against both while the `.py` ships beside the `.cs`. Each case gives Claude Review's answer in `FINDINGS`
 (and the review job's count in `REDACTED` where it has one), and the fake gh answers the five calls the script makes: the PR's files, a file's contents
 for its length, the review's post, its comments read back and the edit that links them. Each call's argv is pinned in `expected.calls`, the posted
 review's JSON among it.
