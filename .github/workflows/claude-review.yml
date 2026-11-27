@@ -546,7 +546,7 @@ jobs:
       # Whether Claude answered, apart from findings, which arrive empty when
       # the answer quotes a secret (withheld by the check, or by GitHub's
       # masking). This flag can't hold one, so it still says the post job
-      # should run, and post_claude_review.py fails on the empty findings.
+      # should run, and the post job fails on the empty findings.
       # Any batch's answer counts: the answer check holds the merge on the
       # pieces of a batch that didn't answer.
       reviewed: >-
@@ -2761,7 +2761,9 @@ jobs:
     # secret still reach the script, which fails on them.
     if: needs.review.outputs.enabled == 'true' && needs.review.outputs.reviewed == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Time for Setup .NET to install the base's SDK and a cold build of the
+    # base's post_claude_review.cs, as well as the post.
+    timeout-minutes: 10
     # A stale head's post has a group of its own, as its review does.
     concurrency:
       group: claude-review-post-${{ github.event.pull_request.number }}${{ needs.review.outputs.stale == 'true' && format('-{0}', github.event.pull_request.head.sha) || '' }}
@@ -2813,7 +2815,10 @@ jobs:
       # neither (a PR that brings Claude Review to a repo), or with a .py from
       # before --effort, warns and posts nothing, like a review that didn't
       # run, unless the review job withheld the answer (a quoted secret, or one
-      # that doesn't fit the schema): that fails.
+      # that doesn't fit the schema): that fails, before any build. The build
+      # gets neither the token nor the answer: only the dll that posts needs
+      # them. A failed SDK install or build holds the merge; a rerun of this
+      # job posts the review once it passes, since the review job's outputs stay.
       - name: Post the review on the head commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -2852,10 +2857,11 @@ jobs:
               echo "::error::The base has .github/scripts/post_claude_review.cs but no global.json to pin its SDK, so it can't be built."
               exit 1
             fi
+            refuse_withheld
             build="$(mktemp -d)"
             git show "HEAD^1:.github/scripts/post_claude_review.cs" > "$build/post_claude_review.cs"
             git show "HEAD^1:global.json" > "$build/global.json"
-            if ! (cd "$build" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 \
+            if ! (cd "$build" && unset GH_TOKEN FINDINGS REDACTED && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 \
               MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 \
               dotnet build post_claude_review.cs -o "$build/out" -p:UseSharedCompilation=false < /dev/null > "$build/build.log" 2>&1); then
               cat "$build/build.log"

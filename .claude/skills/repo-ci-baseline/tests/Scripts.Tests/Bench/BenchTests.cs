@@ -319,11 +319,11 @@ public partial class BenchTests : IDisposable
 
 	// -- The post step takes the script from the merge commit's first parent (mpaulosky/Application_Factory#134) --
 
-	// A repo whose HEAD merges a PR commit into a base commit holding baseScript as its post_claude_review.py (null: none) and baseCs as
-	// its post_claude_review.cs, with the Template's global.json unless baseGlobalJson is false. The PR changes the .py to one that must
-	// never run, and, when the base has a .cs, the .cs too, with a global.json pinning an SDK that doesn't exist and a Directory.Build.props
-	// that fails any build: a step that built in the PR's tree, or with its pin, would fail.
-	// basePin, when given, is the base's global.json instead of the Template's.
+	// A repo whose HEAD is a merge commit (a plain commit when merge is false) whose base has baseScript as its post_claude_review.py
+	// (none when null), baseCs as its post_claude_review.cs (none when null) and the Template's global.json (basePin instead, when given;
+	// none when baseGlobalJson is false). The PR, whatever the base has, changes the .py to one that must never run and brings a .cs of its
+	// own, a global.json pinning an SDK that doesn't exist and a Directory.Build.props that fails any build: a step that ran the PR's script,
+	// took its .cs (as the PR that brings the .cs to a .py base does), or built in its tree or with its pin, would print or fail.
 	string PostRepo(string? baseScript, bool merge = true, string? baseCs = null, bool baseGlobalJson = true, string? basePin = null)
 	{
 		var repo = Path.Combine(temp, "repo");
@@ -335,23 +335,18 @@ public partial class BenchTests : IDisposable
 		if (baseScript is not null)
 			File.WriteAllText(Path.Combine(scripts, "post_claude_review.py"), baseScript);
 		if (baseCs is not null)
-		{
 			File.WriteAllText(Path.Combine(scripts, "post_claude_review.cs"), baseCs);
-			if (baseGlobalJson)
-				File.WriteAllText(Path.Combine(repo, "global.json"), basePin ?? File.ReadAllText(Skill.Path("template", "owned", "global.json")));
-		}
+		if (baseGlobalJson)
+			File.WriteAllText(Path.Combine(repo, "global.json"), basePin ?? File.ReadAllText(Skill.Path("template", "owned", "global.json")));
 		Git(repo, "add", "-A");
 		Git(repo, "commit", "-q", "-m", "base");
 		Git(repo, "checkout", "-q", "-b", "pr");
-		// The PR's own copy, which the step must never run.
+		// The PR's own copies, which the step must never run or build with.
 		File.WriteAllText(Path.Combine(scripts, "post_claude_review.py"), "import sys\nprint('the PR script')\nsys.exit(3)\n");
-		if (baseCs is not null)
-		{
-			File.WriteAllText(Path.Combine(scripts, "post_claude_review.cs"), CsScript("the PR's C#", exit: 3));
-			File.WriteAllText(Path.Combine(repo, "global.json"), """{"sdk": {"version": "0.0.1", "rollForward": "disable"}}""");
-			File.WriteAllText(Path.Combine(repo, "Directory.Build.props"),
-				"""<Project><Target Name="PrTree" BeforeTargets="Build"><Error Text="the build read the PR's tree" /></Target></Project>""");
-		}
+		File.WriteAllText(Path.Combine(scripts, "post_claude_review.cs"), CsScript("the PR's C#", exit: 3));
+		File.WriteAllText(Path.Combine(repo, "global.json"), """{"sdk": {"version": "0.0.1", "rollForward": "disable"}}""");
+		File.WriteAllText(Path.Combine(repo, "Directory.Build.props"),
+			"""<Project><Target Name="PrTree" BeforeTargets="Build"><Error Text="the build read the PR's tree" /></Target></Project>""");
 		Git(repo, "add", "-A");
 		Git(repo, "commit", "-q", "-m", "pr");
 		if (merge)
@@ -369,12 +364,19 @@ public partial class BenchTests : IDisposable
 		var run = Py.Text(J.Req(Steps("post").First(step => Py.Eq(Py.Get(step, "name"), name)), "run"));
 		var runnerTemp = Path.Combine(temp, "temp");
 		Directory.CreateDirectory(runnerTemp);
+		// The step's mktemp -d build folder lands here, so Dispose removes it (the step ends in exec, and a runner is thrown away).
+		var tmp = Path.Combine(temp, "tmp");
+		Directory.CreateDirectory(tmp);
 		Dictionary<string, string> env = new()
 		{
 			["PATH"] = Environment.GetEnvironmentVariable("PATH")!,
 			// For dotnet's own folders (its NuGet cache, its first-run marker), as on a runner.
 			["HOME"] = Environment.GetEnvironmentVariable("HOME")!,
 			["RUNNER_TEMP"] = runnerTemp,
+			["TMPDIR"] = tmp,
+			// The step's git calls read no git config of the host's.
+			["GIT_CONFIG_GLOBAL"] = "/dev/null",
+			["GIT_CONFIG_NOSYSTEM"] = "1",
 			["REPOSITORY"] = "o/r",
 			["PR_NUMBER"] = "7",
 			["HEAD_SHA"] = "abc",
@@ -393,6 +395,7 @@ public partial class BenchTests : IDisposable
 	public void The_post_step_runs_the_bases_script_not_the_prs()
 	{
 		// A script that takes --effort: the step passes one an older script would refuse (mpaulosky/Application_Factory#202).
+		// The PR brings a .cs, as the PR that brings the .cs to a .py base does: the base's .py still runs, not the PR's C#.
 		var (code, stdout) = RunPostStep("# Takes --effort.\nimport sys\nprint('the base script', *sys.argv[1:])\n");
 
 		Assert.Equal(0, code);

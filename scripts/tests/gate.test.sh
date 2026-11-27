@@ -903,6 +903,13 @@ check "the drift message points at --sync" "$([[ $status == 1 ]] && grep -q 'gat
 GATE_ARGS=--sync run "$repo"
 run "$repo"
 check "the gate passes after --sync" "$([[ $status == 0 && $ran == yes ]] && echo 0 || echo 1)"
+# A C# copy, which new_repo git-ignores, is still compared: a drifted one fails --quick, naming it, and --sync restores it.
+repo="$(new_repo drift-cs)"
+echo "// local edit" >> "$repo/.github/scripts/post_claude_review.cs"
+GATE_ARGS=--quick run "$repo"
+check "a drifted C# copy fails --quick, naming it" "$([[ $status == 1 ]] && grep -q '   .github/scripts/post_claude_review.cs' "$repo/out" && echo 0 || echo 1)"
+GATE_ARGS=--sync run "$repo"
+check "--sync restores a drifted C# copy" "$([[ $status == 0 ]] && grep -q 'synced .github/scripts/post_claude_review.cs' "$repo/out" && cmp -s "$repo/.github/scripts/post_claude_review.cs" "$here/.github/scripts/post_claude_review.cs" && echo 0 || echo 1)"
 # A copy whose Template original lacks the execute bit is made non-executable too.
 repo="$(new_repo sync-execbit)"
 chmod -x "$repo/$skill/template/owned/.github/hooks/post-checkout"

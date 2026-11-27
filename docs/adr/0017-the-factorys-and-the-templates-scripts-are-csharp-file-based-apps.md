@@ -793,7 +793,9 @@ never the PR's (the skill's ADR 0004, which has the same Update), and the file t
 - **How the job builds it** (Still open: the checkers' cut-over, for this file). A step writes the base's `global.json` to `$RUNNER_TEMP/base-sdk/` when the
   base has the `.cs`, and Setup .NET installs the SDK it pins. The post step copies the base's `.cs` and `global.json` into a `mktemp -d` folder, runs
   `dotnet build` there with that folder as the cwd, and runs `dotnet <dll>`, so no SDK command reads the PR's tree. A base `.cs` without a `global.json`, or
-  one that doesn't build, fails the job. The two checkers' own cut-over can take the same steps; where their `OWNED` list lives is still open.
+  one that doesn't build, fails the job. The build runs without the job's token and the answer (`GH_TOKEN`, `FINDINGS`, `REDACTED` unset): only the dll
+  that posts gets them. The job's timeout went from 5 to 10 minutes for the SDK install and a cold build. The two checkers' own cut-over can take the
+  same steps; where their `OWNED` list lives is still open.
 - **The PR that replaces the script is posted by the one it replaces.** While a base has no `.cs`, the job runs the base's `post_claude_review.py` with
   `python3 -I`, as before. So each Application's re-Apply PR in this Rollout, and this Factory PR, is posted by the `.py`, and the PR after it is the first
   that C# posts. The `.py` ships beside the `.cs` for this one Rollout; T5 retires it and the job's fallback together.
