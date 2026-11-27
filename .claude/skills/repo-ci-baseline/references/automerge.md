@@ -254,7 +254,8 @@ A PR handed back with `sandcastle:needs-human` never merges while it carries the
   review of its head: Copilot's, or Claude's on a rerun.
   When another batch answered, its answers are posted and the unanswered batch's pieces hold the merge. The deliberate failures are a review the post step had to redact a
   credential from, an answer the review job withheld, and a broken base: a `post_claude_review.cs` without a `global.json`, or one that doesn't build. A failed install
-  of the base's SDK fails the post job too; a rerun of the failed job posts the review, since the review job's outputs stay.
+  of the base's SDK fails the post job too; after one that failed on a download, a rerun of the PR's current head's failed job posts the review, since the
+  review job's outputs stay. A rerun can't mend a broken base: it has the same merge commit and base.
   Claude (`anthropics/claude-code-action`; model, effort and prompt in [ADR 0004](../docs/adr/0004-claude-review-as-copilots-backup.md#model-effort-and-prompt-117))
   never holds a write token: its job has read-only permissions,
   gets the diff against the base in pieces, with context pieces of whole files around the change and the pinned actions' gatekeeping source

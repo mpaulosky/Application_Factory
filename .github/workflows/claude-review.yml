@@ -2817,8 +2817,10 @@ jobs:
       # run, unless the review job withheld the answer (a quoted secret, or one
       # that doesn't fit the schema): that fails, before any build. The build
       # gets neither the token nor the answer: only the dll that posts needs
-      # them. A failed SDK install or build holds the merge; a rerun of this
-      # job posts the review once it passes, since the review job's outputs stay.
+      # them. A failed SDK install or build holds the merge. After an install
+      # that failed on a download, a rerun of the PR's current head's failed
+      # job posts the review, since the review job's outputs stay; a base .cs
+      # that doesn't build fails the rerun too (the same merge commit and base).
       - name: Post the review on the head commit
         env:
           GH_TOKEN: ${{ github.token }}

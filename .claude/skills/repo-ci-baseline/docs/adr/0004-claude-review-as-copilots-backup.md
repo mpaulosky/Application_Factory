@@ -627,8 +627,9 @@ first parent, now in the layout ADR 0017 gives its two checkers:
   folder as the cwd, and runs the dll. The PR's `global.json`, `Directory.Build.*` and its own `.cs` don't reach the build, and the checkout is left as it was.
 - **A broken base fails the job.** A base with the `.cs` and no `global.json`, or a `.cs` that doesn't build, fails the post job with an error, and the
   build's output is in the log: the base is the Template's, so a failure there is a bug to see, not a review to skip. A withheld or malformed answer fails
-  before the build, as on the `.py` path. A failed install of the SDK (a download that fails) fails the job too, with no retry; a rerun of the failed job
-  posts the review, since the review job's outputs stay. The job's timeout is 10 minutes, for the install and a cold build.
+  before the build, as on the `.py` path. A failed install of the SDK (a download that fails) fails the job too, with no retry; a rerun of the PR's current
+  head's failed job posts the review, since the review job's outputs stay. A rerun of a broken base fails again: it has the same merge
+  commit and base. The job's timeout is 10 minutes, for the install and a cold build.
 - **The build gets no token.** `GH_TOKEN`, `FINDINGS` and `REDACTED` are unset for `dotnet build`; only the dll that posts gets them.
 - **The bootstrap.** The PR that brings the `.cs` (each Application's re-Apply PR in this Rollout, and this Factory PR) has a base with only the `.py`, so
   the post job runs the base's `.py` with `python3 -I`, as before, and that PR's review is posted. The PR after it is the first that C# posts. A base with

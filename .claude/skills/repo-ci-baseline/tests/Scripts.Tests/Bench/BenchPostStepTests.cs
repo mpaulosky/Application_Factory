@@ -58,8 +58,9 @@ public partial class BenchTests
 		Assert.DoesNotContain("the base's C#", stdout, StringComparison.Ordinal);
 	}
 
-	// The step before Setup .NET hands it the base's pin, never the PR's, and only when the base has a .cs and a global.json to build it
-	// with: not for a base with only the .py (the PR that brings the .cs), whose global.json the post step doesn't need.
+	// The step before Setup .NET hands it the base's pin, never the PR's, and only when HEAD is a merge commit and the base has a .cs and a
+	// global.json to build it with: not for a plain commit, nor for a base with only the .py (the PR that brings the .cs), whose global.json
+	// the post step doesn't need.
 	[Theory]
 	[InlineData(true, true, true, true)]
 	[InlineData(false, true, true, false)]
@@ -138,6 +139,9 @@ public partial class BenchTests
 		Assert.DoesNotContain(env, line => line.StartsWith("GH_TOKEN=", StringComparison.Ordinal));
 		Assert.DoesNotContain(env, line => line.StartsWith("FINDINGS=", StringComparison.Ordinal));
 		Assert.DoesNotContain(env, line => line.StartsWith("REDACTED=", StringComparison.Ordinal));
+		// Nor under another name.
+		Assert.DoesNotContain(env, line => line.Contains("the-token", StringComparison.Ordinal));
+		Assert.DoesNotContain(env, line => line.Contains("\"findings\"", StringComparison.Ordinal));
 	}
 
 	[Fact]
@@ -151,5 +155,7 @@ public partial class BenchTests
 		Assert.Equal("steps.sdk.outputs.needed == 'true'", Py.Text(J.Req(setup, "if")));
 		Assert.Equal("${{ runner.temp }}/base-sdk/global.json", Py.Text(J.Req(J.Req(setup, "with"), "global-json-file")));
 		Assert.Equal("sdk", Py.Text(J.Req(steps[1], "id")));
+		// Time for the SDK install and a cold build as well as the post.
+		Assert.True(J.Int(J.Req(Jobs["post"], "timeout-minutes"))!.Value >= 10);
 	}
 }
