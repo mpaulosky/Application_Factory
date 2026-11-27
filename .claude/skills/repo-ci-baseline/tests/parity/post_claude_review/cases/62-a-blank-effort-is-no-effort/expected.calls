@@ -1,0 +1,2 @@
+rest.repos_octo_demo_pulls_7_files?per_page=100 gh api --paginate --slurp "repos/octo/demo/pulls/7/files?per_page=100"
+rest.POST.repos_octo_demo_pulls_7_reviews gh api --method POST repos/octo/demo/pulls/7/reviews --input - <<< "{\"body\":\"<!-- claude-review -->\\n### 🟢 No changes recommended\\n\\n<details><summary><b>What changed in this PR</b></summary>\\n\\nLooked at the diff.\\n\\n</details>\\n\\n<sub>Claude Review</sub>\",\"comments\":[],\"commit_id\":\"abc123\",\"event\":\"COMMENT\"}"

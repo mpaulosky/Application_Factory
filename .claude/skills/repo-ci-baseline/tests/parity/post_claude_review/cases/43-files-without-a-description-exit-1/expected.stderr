@@ -1,0 +1,1 @@
+^post_claude_review\.(py|cs): Claude Review's findings are malformed: files is not a list of \{path, description\} strings$

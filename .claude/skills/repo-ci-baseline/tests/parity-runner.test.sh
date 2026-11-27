@@ -65,7 +65,7 @@ for repo in "$@"; do
     ceiling) if git rev-parse --show-toplevel > /dev/null 2>&1; then echo "$repo in a repo"; else echo "$repo ok"; fi ;;
     emptydir) mkdir -p left/inner && echo "$repo ok" ;;
     litter) [[ -z "$(ls -A .)" && -z "$(ls -A "$GH_CONFIG_DIR")" ]] && echo "$repo ok" && : > left-here && : > "$GH_CONFIG_DIR/left-here" ;;
-    env) echo "$repo ${CASE_VAR-unset} ${REPOSITORY-unset} ${GITHUB_REPOSITORY-unset} ${ANTHROPIC_API_KEY-unset} ${ANTHROPIC_MODEL-unset} ${GITHUB_ACTIONS-unset}" ;;
+    env) echo "$repo ${CASE_VAR-unset} ${REPOSITORY-unset} ${GITHUB_REPOSITORY-unset} ${ANTHROPIC_API_KEY-unset} ${ANTHROPIC_MODEL-unset} ${GITHUB_ACTIONS-unset}${FINDINGS+ FINDINGS}${REDACTED+ REDACTED}" ;;
     write | write-other)
       [[ ! -e in.txt ]] || cp in.txt copied.txt
       [[ $mode == write ]] && echo "$repo" > out.txt || echo "elsewhere" > out.txt
@@ -441,8 +441,8 @@ suite 1 "LF output against a CR in expected.stdout fails" -- ./stub.sh && says "
 new_case c1
 printf '%s\n' "CASE_VAR=a value=with=signs" "" > "$cases/c1/env"
 echo "o/app a value=with=signs unset unset unset unset unset" > "$cases/c1/expected.stdout"
-suite 0 "the case's env is set, and a caller's repository, Anthropic key and model and GitHub Actions are not passed on" STUB_MODE=env \
-  REPOSITORY=caller/repo GITHUB_REPOSITORY=caller/repo ANTHROPIC_API_KEY=secret ANTHROPIC_MODEL=model GITHUB_ACTIONS=true -- ./stub.sh || true
+suite 0 "the case's env is set, and a caller's repository, Anthropic key and model, GitHub Actions and Claude Review's findings are not passed on" STUB_MODE=env \
+  REPOSITORY=caller/repo GITHUB_REPOSITORY=caller/repo ANTHROPIC_API_KEY=secret ANTHROPIC_MODEL=model GITHUB_ACTIONS=true FINDINGS='{}' REDACTED=1 -- ./stub.sh || true
 # A case's env sets GITHUB_ACTIONS, so the suite holds a script's output under GitHub Actions too.
 new_case c1
 echo "GITHUB_ACTIONS=true" > "$cases/c1/env"
@@ -650,7 +650,7 @@ fake 97 '' "an unknown variable" api graphql -f query="$repo_q" -F owner=o -F na
 [[ "$(cat "$gh_log")" == "UNMATCHED gh api graphql "*"number=7" ]] || fail "fake gh: an unknown variable was answered: $(cat "$gh_log")"
 fake 97 '' "a flag with no value" api graphql -f
 fake 97 '' "a command other than api" pr list && logged "a command other than api" "UNMATCHED gh pr list"
-fake 97 '' "a REST call with more arguments" api repos/o/app --method POST
+fake 97 '' "a REST call with more arguments" api repos/o/app --hostname example.com
 
 # A REST call of any method (-X), with headers (-H) and a body on stdin (--input -): keyed by its method unless GET, logged with its whole
 # argv, and its body as canonical JSON, so two serializations of one body log the same line.
@@ -674,7 +674,7 @@ fake 97 '' "a body that isn't JSON" api -X PATCH repos/o/app --input - <<< 'not 
 logged "a body that isn't JSON" "UNMATCHED rest.PATCH.repos_o_app (its --input body is not one JSON value)"
 fake 97 '' "a body of two values" api -X PATCH repos/o/app --input - <<< '{} {}'
 fake 97 '' "a body from a file" api -X PATCH repos/o/app --input body.json
-fake 97 '' "-X twice" api -X PATCH -X PUT repos/o/app
+fake 97 '' "-X twice" api -X PATCH -X PATCH repos/o/app --input - <<< '{}'
 fake 97 '' "a lower-case method" api -X patch repos/o/app
 fake 97 '' "-H with no value" api repos/o/app -H
 fake 97 '' "an empty -H" api repos/o/app -H ''
@@ -690,6 +690,38 @@ logged "--input with no jq" "UNMATCHED rest.PATCH.repos_o_app (jq, which a call 
 fake 97 '' "two paths" api repos/o/app repos/o/lib
 fake 97 '' "no path" api -X GET
 fake 97 '' "a method with no fixture" api -X DELETE repos/o/app && logged "a method with no fixture" "UNMATCHED rest.DELETE.repos_o_app"
+# --method is -X's long form, keyed and logged the same way but for the argv it was given.
+fake 0 '{"id":1}' "--method" api --method PATCH repos/o/app --input - <<< '{"a": 1}'
+logged "--method" 'rest.PATCH.repos_o_app gh api --method PATCH repos/o/app --input - <<< "{\"a\":1}"'
+fake 97 '' "--method and -X" api --method PATCH -X PATCH repos/o/app --input - <<< '{}'
+fake 97 '' "--method with no value" api repos/o/app --method
+# --slurp, with --paginate and without --jq as gh takes it: the fixture is the list of pages it prints, and the argv is logged.
+printf '%s\n' '[[{"filename":"a"}],[{"filename":"b"}]]' > "$gh_dir/rest.repos_o_app_pulls_1_files?per_page=100.json"
+files="repos/o/app/pulls/1/files?per_page=100"
+fake 0 '[[{"filename":"a"}],[{"filename":"b"}]]' "--paginate --slurp" api --paginate --slurp "$files"
+logged "--paginate --slurp" "rest.repos_o_app_pulls_1_files?per_page=100 gh api --paginate --slurp \"$files\""
+fake 97 '' "--slurp without --paginate" api --slurp "$files"
+fake 97 '' "--slurp with --jq" api --paginate --slurp "$files" --jq .
+fake 97 '' "--slurp twice" api --paginate --slurp --slurp "$files"
+fake 0 - "--slurp before --paginate, with -H" api --slurp -H "$accept" --paginate "$files"
+logged "--slurp before --paginate, with -H" "rest.repos_o_app_pulls_1_files?per_page=100 gh api --slurp -H \"$accept\" --paginate \"$files\""
+# A --slurp fixture is the list of pages: one page alone, or anything but a list of lists, is refused.
+for page in '[{"filename":"a"}]' '{"filename":"a"}' '{"a":[1]}' '[[1], 2]' '[[]] [[]]'; do
+  printf '%s\n' "$page" > "$gh_dir/rest.repos_o_app_pulls_2_files.json"
+  fake 97 '' "a --slurp fixture of $page" api --paginate --slurp repos/o/app/pulls/2/files
+  logged "a --slurp fixture of $page" "UNMATCHED rest.repos_o_app_pulls_2_files (its --slurp fixture rest.repos_o_app_pulls_2_files.json is not a list of pages)"
+done
+# One that isn't JSON at all is an answer cut short, printed as it is.
+printf '%s\n' '[[{"filen' > "$gh_dir/rest.repos_o_app_pulls_2_files.json"
+fake 0 '[[{"filen' "a --slurp fixture cut short" api --paginate --slurp repos/o/app/pulls/2/files
+for blank in '' ' '; do
+  printf '%s\n' "$blank" > "$gh_dir/rest.repos_o_app_pulls_2_files.json"
+  fake 0 "$blank" "a blank --slurp fixture ('$blank')" api --paginate --slurp repos/o/app/pulls/2/files
+done
+# With no jq on PATH, a --slurp call is refused, not answered unchecked.
+PATH="$work/nojq" fake 97 '' "--slurp with no jq" api --paginate --slurp "$files"
+logged "--slurp with no jq" "UNMATCHED rest.repos_o_app_pulls_1_files?per_page=100 (jq, which a call with --slurp needs, is not on PATH)"
+rm "$gh_dir/rest.repos_o_app_pulls_2_files.json"
 
 # A REST call with --paginate and --jq: real jq over the fixture, each result printed as gh prints it, and the whole argv logged.
 printf '%s\n' '[{"n":1,"draft":false,"t":"a\u2028b"},{"n":2,"draft":true,"t":"c"}]' > "$gh_dir/rest.repos_o_app_releases?per_page=100.json"

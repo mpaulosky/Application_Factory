@@ -8,8 +8,8 @@
 # What an implementation must send, so the fake can tell its calls apart:
 #
 #   gh api graphql -f query=<query> [-f|-F <variable>=<value>]...   variables: owner, name, id, cursor
-#   gh api <path> [--paginate] [--jq <expression>]                  a REST GET
-#   gh api -X <METHOD> <path> [-H <header>]... [--input -]          a REST call of any method, its body (--input -) on stdin
+#   gh api <path> [--paginate [--slurp]] [--jq <expression>]        a REST GET; --slurp only with --paginate and never with --jq
+#   gh api -X|--method <METHOD> <path> [-H <header>]... [--input -] a REST call of any method, its body (--input -) on stdin
 #   gh pr ready|update-branch <n> -R <owner/repo>
 #   gh pr comment <n> -R <owner/repo> --body <text>
 #   gh pr edit <n> -R <owner/repo> --add-reviewer|--add-label <value>
@@ -24,8 +24,9 @@
 #   events.<id>[.<cursor>]        a query holding timelineItems( (a PR's label and review-request events)
 #   comments.<id>[.<cursor>]      a query holding comments(last: (a PR's comments, paged backwards)
 #   threads.<id>                  a query holding reviewThreads( and comments(first: (a PR's threads with their comments)
-#   rest.<path>                   gh api <path>, with or without --paginate and --jq (the path's query string is in it), or -X GET
-#   rest.<METHOD>.<path>          gh api -X <METHOD> <path>, for any METHOD but GET (rest.PATCH.repos_o_app)
+#   rest.<path>                   gh api <path>, with or without --paginate, --slurp and --jq (the path's query string is in it),
+#                                 or -X GET (--method GET)
+#   rest.<METHOD>.<path>          gh api -X|--method <METHOD> <path>, for any METHOD but GET (rest.PATCH.repos_o_app)
 #   pr.<sub>.<owner>.<name>.<n>   gh pr <sub> (a view's key ends .<fields> too: pr.view.<owner>.<name>.<n>.<fields>)
 #   pr.list.<owner>.<name>        gh pr list, which takes no PR number
 #   auth.status                   gh auth status (rollout.sh --auto's preflight asks it)
@@ -40,9 +41,10 @@
 # argv, which a port must send unchanged. For a REST call, the .json holds the API's response, and with --jq the fake runs
 # real jq over it and prints each result as gh does (a string raw, null as an empty line, anything else as compact JSON
 # with sorted keys and Go's escapes; see the jq call for the one exception), so the calls that read one path through different
-# expressions share its fixture; --paginate is taken as given, the fixture being every page at once.
+# expressions share its fixture; --paginate is taken as given, the fixture being every page at once (with --slurp, the list
+# of pages it prints: [page, ...], which the fake checks a fixture that holds JSON is, with jq).
 #
-# Each call is logged as its key; a `gh pr` call, and a REST call with --paginate, --jq, -X or -H, as its key, a space and its whole
+# Each call is logged as its key; a `gh pr` call, and a REST call with --paginate, --jq, -X, --method or -H, as its key, a space and its whole
 # argv, each argument as it is or, when it
 # holds anything but letters, digits and _ . / : @ , + = # -, in double quotes with \ " and line breaks, tabs and carriage
 # returns written \\ \" \n \t \r, so a line holds one call and the body a comment carries is compared too. A REST call with
@@ -154,10 +156,10 @@ else
 
   if [[ "${1:-}" != graphql ]]; then
     # The path is the one argument that isn't an option, before, between or after them, as gh takes it.
-    path="" paginate="" jq="" has_jq="" method="" headers="" input=""
+    path="" paginate="" slurp="" jq="" has_jq="" method="" headers="" input=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
-        -X)
+        -X | --method)
           [[ $# -ge 2 && -z "$method" && "$2" =~ ^[A-Z]+$ ]] || unmatched "gh $all"
           method="$2"
           shift 2
@@ -177,6 +179,11 @@ else
           paginate=1
           shift
           ;;
+        --slurp)
+          [[ -z "$slurp" ]] || unmatched "gh $all"
+          slurp=1
+          shift
+          ;;
         --jq)
           [[ $# -ge 2 && -z "$has_jq" && -n "$2" ]] || unmatched "gh $all"
           jq="$2" has_jq=1
@@ -190,6 +197,8 @@ else
       esac
     done
     [[ -n "$path" ]] || unmatched "gh $all"
+    # gh refuses --slurp without --paginate, and with --jq.
+    [[ -z "$slurp" || (-n "$paginate" && -z "$has_jq") ]] || unmatched "gh $all"
     if [[ -z "$method" || "$method" == GET ]]; then
       key="rest.$(part "$path")"
     else
@@ -275,6 +284,16 @@ for fixture in "$key.$n.json" "$key.$n.fail" "$key.json" "$key.fail"; do
     printf '%s\n' "$entry" >> "$FAKE_GH_LOG"
     cat -- "$answer"
     exit 0
+  fi
+  if [[ "$fixture" == *.json && -n "${slurp:-}" ]]; then
+    # --slurp prints the list of pages, so a fixture that is JSON must be one: a page alone would pass for the pages it
+    # holds. One that isn't JSON at all, or holds no value (empty or blank), stands for an answer cut short, which a
+    # script must survive.
+    command -v jq > /dev/null || unmatched "$key (jq, which a call with --slurp needs, is not on PATH)"
+    if jq -e -s 'length > 0' < "$file" > /dev/null 2>&1; then
+      jq -e -s 'length == 1 and (.[0] | type == "array" and all(.[]; type == "array"))' < "$file" > /dev/null \
+        || unmatched "$key (its --slurp fixture $fixture is not a list of pages)"
+    fi
   fi
   printf '%s\n' "$entry" >> "$FAKE_GH_LOG"
   if [[ "$fixture" == *.json ]]; then

@@ -6,7 +6,7 @@
 #
 # Runs the Template's own tests (hook suites, auto-merge script tests,
 # the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle, the parity suites
-# (status, land, settings, check_gh_repo, the release scripts and draft_release as .py and .cs, detect_changes, discover_tests, load_test_env, check_central_pins and rollout), the Claude Review benchmark's --rescore parity suite and
+# (status, land, settings, check_gh_repo, the release scripts and draft_release as .py and .cs, post_claude_review, detect_changes, discover_tests, load_test_env, check_central_pins and rollout), the Claude Review benchmark's --rescore parity suite and
 # the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land, settings, rollout and its AutoRollout libraries,
 # what they share, the two checkers in tests/ and the benchmark), lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
@@ -757,7 +757,7 @@ if in_shard scripts; then
   fi
   (cd "$skill_dir/tests/render_oracle" && "${oracle_cmd[@]}" -q -p no:cacheprovider .) || fail "renderer oracle"
 
-  step "Parity suites (status.cs, land.cs, settings.cs, check_gh_repo.py, the release scripts and draft_release as .py and .cs, detect_changes.cs, discover_tests.cs, load_test_env.cs, check_central_pins.cs, and rollout.sh through their command lines, against a fake gh) and their runners' tests"
+  step "Parity suites (status.cs, land.cs, settings.cs, check_gh_repo.py, the release scripts and draft_release as .py and .cs, post_claude_review.py, detect_changes.cs, discover_tests.cs, load_test_env.cs, check_central_pins.cs, and rollout.sh through their command lines, against a fake gh) and their runners' tests"
   # The fake gh runs jq for a REST call's --jq, which the release scripts' suites make, and for a REST call's --input body, which the
   # settings suite's make. The status, land and settings suites' reference is the C# (github/status.cs, github/land.cs, github/settings.cs),
   # which the runner builds once before its cases (ADR 0017); the settings suite runs against github-settings.sh below too.

@@ -1,0 +1,1 @@
+rest.repos_octo_demo_pulls_7_files?per_page=100 gh api --paginate --slurp "repos/octo/demo/pulls/7/files?per_page=100"

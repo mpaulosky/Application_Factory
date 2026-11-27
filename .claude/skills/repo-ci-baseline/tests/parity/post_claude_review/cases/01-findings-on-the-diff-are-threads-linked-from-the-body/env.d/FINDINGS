@@ -1,0 +1,1 @@
+{"summary": "Looked at the diff.", "findings": [{"path": "src/app.py", "line": 2, "body": "**Off by one**\n\nThe loop stops early."}, {"path": "src/app.py", "line": 22, "body": "Unused."}]}

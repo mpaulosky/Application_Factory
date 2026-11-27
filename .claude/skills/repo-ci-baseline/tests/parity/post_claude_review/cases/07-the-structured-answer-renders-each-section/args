@@ -1,0 +1,8 @@
+--repo
+octo/demo
+--pr
+7
+--head
+abc123
+--effort
+high (claude-sonnet-5-5), 2 batches

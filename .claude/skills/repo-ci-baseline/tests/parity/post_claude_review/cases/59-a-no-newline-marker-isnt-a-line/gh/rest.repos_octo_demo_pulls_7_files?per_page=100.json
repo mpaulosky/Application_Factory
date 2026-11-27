@@ -1,0 +1,1 @@
+[[{"filename": "a.txt", "patch": "@@ -1 +1 @@\n-a\n\\ No newline at end of file\n+b\n\\ No newline at end of file\n@@ -9 +9,2 @@\n c\n+d"}, {"filename": "b.bin", "patch": null}, {"filename": "c.txt", "patch": "@@ bogus @@\n+x\n@@ -2 +2,2 @@\n+y\n+++ z"}]]

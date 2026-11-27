@@ -1,0 +1,2 @@
+Posted Claude's review of abc123 on PR #7: 3 inline, 1 in the body.
+::warning::1 finding(s) outside the diff are in the review body; its off-diff marker holds the merge until the next push gets a fresh review.
