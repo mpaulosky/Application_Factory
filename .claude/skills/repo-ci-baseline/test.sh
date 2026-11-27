@@ -129,21 +129,38 @@ sdk_major_of() {
 }
 # Whether a file (argument 1) is the empty shield (ADR 0017), <Project />.
 is_empty_shield() { [[ "$(cat "$1" 2> /dev/null)" == "<Project />" ]]; }
-# The directives a file for the checker layout (argument 1) carries past the one it may, #:property PublishAot=false: every other #: line,
-# indented or not and with a CRLF's CR dropped. dotnet build honours an indented directive, and #:include, #:package, #:project, #:sdk and
-# another #:property can each reach past the file (ADR 0017, mpaulosky/Application_Factory#129). Prints nothing for a file that carries none.
+# What a file for the checker layout (argument 1) carries past the one directive it may, as lines to print: nothing when its first line is
+# #:property PublishAot=false (a CRLF's CR allowed) and #: appears nowhere else in its bytes. Every directive starts with #:, so this holds
+# whatever Roslyn takes as a line break or an indent (a lone CR, U+2028, a BOM, a no-break space) and whatever a grep would read as binary
+# (a NUL); a #: in a comment or a string is refused too, which fails closed. dotnet build honours an indented directive, and #:include,
+# #:package, #:project, #:sdk and another #:property can each reach past the file (ADR 0017, mpaulosky/Application_Factory#129). A file
+# that can't be read prints that it can't.
 checker_layout_directives() {
-  tr -d '\r' < "$1" | grep -E '^[[:space:]]*#:' | grep -vxE '#:property PublishAot=false[[:space:]]*' || true
+  local count first
+  if [[ ! -f "$1" || ! -r "$1" ]]; then
+    printf "can't read '%s'\n" "$1"
+    return 0
+  fi
+  count="$({ LC_ALL=C grep -aoF '#:' -- "$1" || true; } | wc -l | tr -d ' ')"
+  first="$(LC_ALL=C head -n 1 -- "$1" | LC_ALL=C tr -d '\r')"
+  [[ "$count" == 1 && "$first" == '#:property PublishAot=false' ]] && return 0
+  printf '%s #: in all; the first line is: %s\n' "$count" "$first"
+  LC_ALL=C grep -anF '#:' -- "$1" || true
 }
-# The files above a folder (argument 1) that a dotnet build in it would read: a global.json, the MSBuild shields and a NuGet.config, in it or
-# any folder above it. Prints each found, one a line.
+# The files above a folder (argument 1) that a dotnet build in it would read: a global.json, the MSBuild shields and response file and a
+# NuGet.config, in it or any folder above it, walked from its physical path, as the build's cwd is. Prints each found, one a line, or the
+# folder itself when it can't be entered.
 dotnet_files_above() {
-  local dir="$1" name
+  local dir name
+  dir="$(cd -P -- "$1" 2> /dev/null && pwd -P)" || {
+    printf "can't enter '%s'\n" "$1"
+    return 0
+  }
   while :; do
-    for name in global.json Directory.Build.props Directory.Build.targets Directory.Packages.props NuGet.config nuget.config NuGet.Config; do
+    for name in global.json Directory.Build.props Directory.Build.targets Directory.Build.rsp Directory.Packages.props NuGet.config nuget.config NuGet.Config; do
       [[ ! -e "$dir/$name" ]] || printf '%s\n' "$dir/$name"
     done
-    [[ "$dir" != / && -n "$dir" ]] || break
+    [[ "$dir" != / ]] || break
     dir="$(dirname -- "$dir")"
   done
 }
@@ -814,8 +831,8 @@ if in_shard scripts; then
   library_first=()
   owned_entries=0
   # A workflow builds an entry file in the Application's checkout and then reads git status (release.yml's docs job and
-  # backfill-blog-posts.yml commit what it lists), so a build must write nothing under .github/: a file-based app's output is under
-  # the temporary folder. Anything newer than this marker after the builds, a folder a build made a file in among them, fails.
+  # backfill-blog-posts.yml commit what it lists), so a build must write nothing under .github/: a file-based app's output is in its
+  # runfile folder (under XDG_DATA_HOME on Linux, the temp folder on Windows), named by the file's path. Anything newer than this marker after the builds, a folder a build made a file in among them, fails.
   build_marker="$md_tmp/owned-cs-build.marker"
   touch "$build_marker"
   sleep 1
@@ -849,15 +866,31 @@ if in_shard scripts; then
   # the build would read. The build's own files (a file-based app's obj/, under XDG_DATA_HOME's dotnet/runfile/ on Linux and named by the
   # file's path, which is new on every run) and its temp files go under md_tmp, which the trap removes.
   for directive in '  #:package Humanizer@2.14.1' $'\t#:include lib.cs' '#:sdk Microsoft.NET.Sdk.Web' '#:property Imported=../y.targets' \
-    $'#:project ../a.csproj\r' '#:property PublishAot=true' '  #:property PublishAot=false'; do
+    $'#:project ../a.csproj\r' '#:property PublishAot=true' '  #:property PublishAot=false' '#:property PublishAot=false;Imported=../y.targets' \
+    '// #:include lib.cs' 'var s = "#:package X";' $'// x\r#:package X' $'// x\u2028#:package X' $'\u00a0#:include lib.cs'; do
     printf '#:property PublishAot=false\n%s\nreturn 0;\n' "$directive" > "$md_tmp/checker-layout-fixture.cs"
     [[ -n "$(checker_layout_directives "$md_tmp/checker-layout-fixture.cs")" ]] || fail "checker_layout_directives passes a file that carries '$directive'"
   done
-  printf '#:property PublishAot=false\r\n// #:include lib.cs\nvar s = "#:package X";\n' > "$md_tmp/checker-layout-fixture.cs"
+  # A NUL can't sit in a shell string, so that fixture is written with printf's own escape.
+  printf '#:property PublishAot=false\n// \0\n#:package X\n' > "$md_tmp/checker-layout-fixture.cs"
+  [[ -n "$(checker_layout_directives "$md_tmp/checker-layout-fixture.cs")" ]] || fail "checker_layout_directives passes a file with a NUL before a #:package"
+  for first in $'\xef\xbb\xbf#:package X\n#:property PublishAot=false' '#:property PublishAot=false #:include a.cs' ' #:property PublishAot=false'; do
+    printf '%s\nreturn 0;\n' "$first" > "$md_tmp/checker-layout-fixture.cs"
+    [[ -n "$(checker_layout_directives "$md_tmp/checker-layout-fixture.cs")" ]] || fail "checker_layout_directives passes a file whose first line is '$first'"
+  done
+  [[ "$(checker_layout_directives "$md_tmp/no-such-file.cs")" == "can't read "* ]] || fail "checker_layout_directives passes a file it can't read"
+  printf '#:property PublishAot=false\r\nreturn 0;\r\n' > "$md_tmp/checker-layout-fixture.cs"
   [[ -z "$(checker_layout_directives "$md_tmp/checker-layout-fixture.cs")" ]] \
-    || fail "checker_layout_directives refuses a file that carries only #:property PublishAot=false (CRLF), with #: in a comment and a string"
-  mkdir -p "$md_tmp/above/below" && : > "$md_tmp/above/Directory.Build.props"
-  [[ "$(dotnet_files_above "$md_tmp/above/below")" == *"$md_tmp/above/Directory.Build.props"* ]] || fail "dotnet_files_above misses a Directory.Build.props above the folder"
+    || fail "checker_layout_directives refuses a CRLF file that carries only #:property PublishAot=false"
+  for name in global.json Directory.Build.props Directory.Build.targets Directory.Build.rsp Directory.Packages.props NuGet.config; do
+    rm -rf "$md_tmp/a b" && mkdir -p "$md_tmp/a b/above/one/two" && : > "$md_tmp/a b/above/$name"
+    [[ "$(dotnet_files_above "$md_tmp/a b/above/one/two")" == *"/a b/above/$name"* ]] || fail "dotnet_files_above misses a $name two folders above"
+    [[ "$(cd "$md_tmp/a b/above/one" && timeout 10 bash -c "$(declare -f dotnet_files_above); dotnet_files_above two")" == *"/a b/above/$name"* ]] \
+      || fail "dotnet_files_above misses a $name above a relative folder, or doesn't end"
+    [[ "$(dotnet_files_above "$md_tmp/a b/above")" == *"/a b/above/$name"* ]] || fail "dotnet_files_above misses a $name in the folder itself"
+  done
+  rm -rf "$md_tmp/a b"
+  [[ "$(dotnet_files_above "$md_tmp/no-such-folder")" == "can't enter "* ]] || fail "dotnet_files_above passes a folder it can't enter"
   checker_layout="$md_tmp/post-claude-review-checker"
   mkdir -p "$checker_layout" "$md_tmp/post-claude-review-checker-tmp" "$md_tmp/post-claude-review-checker-data" && cp -- "$owned/.github/scripts/post_claude_review.cs" "$checker_layout/"
   layout_directives="$(checker_layout_directives "$checker_layout/post_claude_review.cs")"
@@ -887,7 +920,7 @@ if in_shard scripts; then
   mkdir -p "$other_sdk"
   printf '{"sdk": {"version": "8.0.1", "rollForward": "disable"}}\n' > "$other_sdk/global.json"
   ! (cd "$other_sdk" && dotnet --version) > /dev/null 2>&1 || fail "dotnet ran in a folder whose global.json pins SDK 8.0.1, so the wrappers' check below proves nothing"
-  # The build output of a file-based app is under the temp folder, so with this TMPDIR status.sh builds status.cs again inside the
+  # A file-based app's build output is cached by the file's path, and this TMPDIR gives the runner's copy a new one, so status.sh builds status.cs again inside the
   # first case: it gets 300 seconds, not the runner's 60.
   TMPDIR="$other_sdk" PARITY_TIMEOUT=300 bash "$skill_dir/tests/parity.test.sh" status "$skill_dir/status.sh" > "$md_tmp/status-sh.log" 2>&1 \
     || fail "status.sh fails the status suite from under a global.json that pins another SDK: $(tail -5 "$md_tmp/status-sh.log")"

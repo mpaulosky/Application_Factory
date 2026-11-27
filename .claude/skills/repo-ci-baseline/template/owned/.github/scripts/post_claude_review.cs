@@ -101,8 +101,9 @@ namespace Baseline.PostReview
 	}
 
 	// An error Python raised, by its name (KeyError, TypeError, ValueError, AttributeError, JSONDecodeError, UnicodeDecodeError). The linking
-	// step catches one raised there and warns with the name; one raised anywhere else (DiffLines, HunkStart, REDACTED, a page of gh's that
-	// isn't JSON or UTF-8) ends the step at exit 1 through Script.Run, as the .py's traceback did.
+	// step catches one raised there (a page of the review's comments that isn't JSON or UTF-8 among them) and warns with the name; one raised
+	// anywhere else (DiffLines, HunkStart, REDACTED, a page of the PR's files or the posted review's answer that isn't JSON or UTF-8) ends
+	// the step at exit 1 through Script.Run, as the .py's traceback did.
 	sealed class PyError(string name, string message) : Exception(message)
 	{
 		public string Name { get; } = name;
@@ -129,12 +130,11 @@ namespace Baseline.PostReview
 			}
 			catch (JsonException error)
 			{
-				// Where it failed, as Python's message gives it, and no more: .NET's message quotes a character of the text, which is the
-				// answer's (or GitHub's), and Python's never did.
-				var where = error.LineNumber is { } line && error.BytePositionInLine is { } column
-						? string.Create(CultureInfo.InvariantCulture, $"line {line + 1} byte {column + 1}")
-						: "position unknown";
-				throw new PyError("JSONDecodeError", $"invalid JSON: {where}");
+				// Where it failed, in its own words (the line, and the byte in it, as System.Text.Json counts them; Python's message gives a
+				// line and a column in characters), and no more: .NET's message quotes a character of the text, which is the answer's (or
+				// GitHub's), and Python's never did. A position the reader didn't give is 0.
+				throw new PyError("JSONDecodeError", string.Create(CultureInfo.InvariantCulture,
+						$"invalid JSON: line {(error.LineNumber ?? -1) + 1} byte {(error.BytePositionInLine ?? -1) + 1}"));
 			}
 		}
 

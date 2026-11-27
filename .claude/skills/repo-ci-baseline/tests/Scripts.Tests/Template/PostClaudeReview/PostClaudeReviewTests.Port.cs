@@ -174,7 +174,7 @@ public sealed partial class PostClaudeReviewTests
 	public static TheoryData<string> JsonValues =>
 	[
 		"\"abc\"", "null", "true", "false", "99", "-99", "99.0", "-0.0", "0.0", "1e16", "1e15", "1.5e-7", "0.0001", "0.00001", "123.456",
-		"1234567890123456.5", "123456789012345678.0", "1e22", "-2.5e-300", "5e-324", "1.7976931348623157e308", "1e400", "-1e400",
+		"1234567890123456.5", "-1234567890123456.5", "-123.456", "-0.0001", "0.5", "0.00012345", "-0.00012345", "123456789012345678.0", "1e22", "-2.5e-300", "5e-324", "1.7976931348623157e308", "1e400", "-1e400",
 		"[1, \"a\", null, true, 2.5]", "[]", "{}", "{\"b\": 1, \"a\": [2.5], \"b\": 3}", "[\"it's\", \"a \\\"quote\\\"\", \"\\n\"]",
 		"{\"k\": {\"n\": [{}]}}",
 	];
@@ -225,12 +225,15 @@ public sealed partial class PostClaudeReviewTests
 		Assert.Equal(("TypeError", message), (error.Name, error.Message));
 	}
 
-	// An answer that isn't JSON fails with where it failed, as Python's JSONDecodeError gives it, and no character of the answer.
+	// An answer that isn't JSON fails with where it failed, in the port's words (a line and a byte in it, where Python's gives a column
+	// in characters), and no character of the answer.
 	[Fact]
 	public void A_not_json_answer_names_where_and_quotes_none_of_it()
 	{
 		var error = Assert.Throws<MalformedFindings>(() => PostClaudeReview.ParseFindings("{\"summary\": \"ok\"}\nZqx"));
 		Assert.Equal("not JSON (invalid JSON: line 2 byte 1)", error.Message);
+		// é is two bytes, so Z is the eighth byte of its line.
+		Assert.Equal("invalid JSON: line 1 byte 8", Assert.Throws<PyError>(() => PyJson.Parse("[\"é\", Z]")).Message);
 		Assert.Equal("JSONDecodeError", Assert.Throws<PyError>(() => PyJson.Parse("Zqx")).Name);
 		Assert.DoesNotContain("Z", Assert.Throws<PyError>(() => PyJson.Parse("Zqx")).Message);
 	}
@@ -254,6 +257,19 @@ public sealed partial class PostClaudeReviewTests
 			Assert.Contains("-2 credential-shaped string(s) were redacted", body);
 			Assert.Contains("::warning::Redacted -2 credential-shaped", result.Out);
 			Assert.DoesNotContain("\u2212", body + thread + result.Out);
+
+			// A PR number reaches the gh URLs and the line that says what was posted.
+			var posted = RunWith(["--repo", "octo/demo", "--pr", "-7", "--head", Head], FindingsJson());
+			Assert.Contains("on PR #-7:", posted.Out);
+			using var folder = new FailingGh("cat > /dev/null\nprintf '%s\\n' \"$@\" >> \"$0.args\"\necho '[]'\n");
+			var gh = new GitHub("octo/demo", () => folder.Gh);
+			gh.PullFiles(-7);
+			gh.CreateReview(-7, new Review(Head, "b", []));
+			gh.ReviewComments(-7, "99");
+			gh.UpdateReview(-7, "99", "b");
+			var urls = File.ReadAllLines(folder.Gh + ".args").Where(arg => arg.StartsWith("repos/", StringComparison.Ordinal)).ToList();
+			Assert.Equal(4, urls.Count);
+			Assert.All(urls, url => Assert.StartsWith("repos/octo/demo/pulls/-7/", url));
 		}
 		finally
 		{
