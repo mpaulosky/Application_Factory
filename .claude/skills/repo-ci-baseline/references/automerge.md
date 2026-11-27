@@ -2,7 +2,9 @@
 
 Template files (Owned): `.github/workflows/pr-automerge.yml` and its tests in `.github/scripts/tests/pr-automerge.test.mjs`, `.github/workflows/pr-review-submitted.yml`,
 and Claude Review: `.github/workflows/claude-review.yml` with `.github/scripts/post_claude_review.py` and its tests in `.github/scripts/tests/test_post_claude_review.py`,
-with `dependabot-auto-merge.yml` and `release.yml` as the two deliberate exceptions.
+with `dependabot-auto-merge.yml` and `release.yml` as the two deliberate exceptions. `.github/scripts/post_claude_review.cs`, its C# port
+(mpaulosky/Application_Factory#129), ships beside the `.py` until the post job is cut over to it; in the Factory, `tests/parity/post_claude_review/` and
+`tests/Scripts.Tests/Template/PostClaudeReview/` hold the two together.
 History: IssueTracker #140 and #201 (re-check on a submitted review); Blazor-Server #94 (the hand-back label hold) and #119 (the Copilot review cap, now the review loop of mpaulosky/dotfiles#375).
 IssueManager #235 moved the decision into `.github/scripts/automerge-decision.mjs` with `node --test` tests, and TicketManager carries the same shape.
 The Template keeps the script inline in the workflow and tests it there:

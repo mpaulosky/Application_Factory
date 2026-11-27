@@ -100,7 +100,9 @@ namespace Baseline.PostReview
 		public static string Quote(string text) => JsonSerializer.Serialize(text);
 	}
 
-	// One of the errors Python raised that the linking step catches, by the name the warning gives (KeyError, TypeError, JSONDecodeError).
+	// An error Python raised, by its name (KeyError, TypeError, ValueError, AttributeError, JSONDecodeError, UnicodeDecodeError). The linking
+	// step catches one raised there and warns with the name; one raised anywhere else (DiffLines, HunkStart, REDACTED, a page of gh's that
+	// isn't JSON or UTF-8) ends the step at exit 1 through Script.Run, as the .py's traceback did.
 	sealed class PyError(string name, string message) : Exception(message)
 	{
 		public string Name { get; } = name;
@@ -127,7 +129,12 @@ namespace Baseline.PostReview
 			}
 			catch (JsonException error)
 			{
-				throw new PyError("JSONDecodeError", error.Message);
+				// Where it failed, as Python's message gives it, and no more: .NET's message quotes a character of the text, which is the
+				// answer's (or GitHub's), and Python's never did.
+				var where = error.LineNumber is { } line && error.BytePositionInLine is { } column
+						? string.Create(CultureInfo.InvariantCulture, $"line {line + 1} byte {column + 1}")
+						: "position unknown";
+				throw new PyError("JSONDecodeError", $"invalid JSON: {where}");
 			}
 		}
 
@@ -251,13 +258,36 @@ namespace Baseline.PostReview
 			_ => Integer(value) is { } integer ? integer.ToString(CultureInfo.InvariantCulture) : FloatRepr(value.GetDouble()),
 		};
 
+		// repr(float): the shortest digits that read back as the number (the digits "R" gives), written fixed when the decimal exponent is
+		// from -4 to 15 and in e-notation, with a sign and two digits at least, otherwise; "R" itself switches to E-notation at 15.
 		static string FloatRepr(double number)
 		{
 			if (double.IsInfinity(number))
 				return number > 0 ? "inf" : "-inf";
-			if (number == Math.Floor(number) && Math.Abs(number) < 1e16)
-				return number.ToString("0", CultureInfo.InvariantCulture) + ".0";
-			return number.ToString("R", CultureInfo.InvariantCulture).Replace("E", "e", StringComparison.Ordinal);
+			if (number == 0)
+				return double.IsNegative(number) ? "-0.0" : "0.0";
+			var sign = number < 0 ? "-" : "";
+			var shortest = Math.Abs(number).ToString("R", CultureInfo.InvariantCulture);
+			// "R" is d.dddE+xx or a fixed form with or without a point: its digits, and the exponent of the first nonzero one.
+			var e = shortest.IndexOf('E', StringComparison.Ordinal);
+			var mantissa = e < 0 ? shortest : shortest[..e];
+			var exponent = e < 0 ? 0 : int.Parse(shortest[(e + 1)..], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+			var point = mantissa.IndexOf('.', StringComparison.Ordinal);
+			var digits = point < 0 ? mantissa : mantissa[..point] + mantissa[(point + 1)..];
+			exponent += (point < 0 ? mantissa.Length : point) - 1;
+			exponent -= digits.Length - digits.TrimStart('0').Length;
+			digits = digits.Trim('0');
+			if (exponent is >= -4 and < 16)
+			{
+				if (exponent < 0)
+					return $"{sign}0.{new string('0', -exponent - 1)}{digits}";
+				var whole = digits.Length > exponent + 1 ? digits[..(exponent + 1)] : digits.PadRight(exponent + 1, '0');
+				var fraction = digits.Length > exponent + 1 ? digits[(exponent + 1)..] : "0";
+				return $"{sign}{whole}.{fraction}";
+			}
+			var rest = digits.Length > 1 ? "." + digits[1..] : "";
+			var power = Math.Abs(exponent).ToString("00", CultureInfo.InvariantCulture);
+			return $"{sign}{digits[0]}{rest}e{(exponent < 0 ? '-' : '+')}{power}";
 		}
 	}
 
@@ -291,20 +321,20 @@ namespace Baseline.PostReview
 		}
 
 		public virtual List<JsonElement> PullFiles(BigInteger number) =>
-				Pages(Text(Gh(["api", "--paginate", "--slurp", $"repos/{Repository}/pulls/{number}/files?per_page=100"])));
+				Pages(Text(Gh(["api", "--paginate", "--slurp", string.Create(CultureInfo.InvariantCulture, $"repos/{Repository}/pulls/{number}/files?per_page=100")])));
 
 		// Posts the review and returns it as GitHub answered (its id among it).
 		public virtual JsonElement CreateReview(BigInteger number, Review review)
 		{
-			var output = Text(Gh(["api", "--method", "POST", $"repos/{Repository}/pulls/{number}/reviews", "--input", "-"], review.ToJson()));
+			var output = Text(Gh(["api", "--method", "POST", string.Create(CultureInfo.InvariantCulture, $"repos/{Repository}/pulls/{number}/reviews"), "--input", "-"], review.ToJson()));
 			return PyJson.Parse(output.Length > 0 ? output : "{}");
 		}
 
 		public virtual List<JsonElement> ReviewComments(BigInteger number, string reviewId) =>
-				Pages(Text(Gh(["api", "--paginate", "--slurp", $"repos/{Repository}/pulls/{number}/reviews/{reviewId}/comments?per_page=100"])));
+				Pages(Text(Gh(["api", "--paginate", "--slurp", string.Create(CultureInfo.InvariantCulture, $"repos/{Repository}/pulls/{number}/reviews/{reviewId}/comments?per_page=100")])));
 
 		public virtual void UpdateReview(BigInteger number, string reviewId, string body) =>
-				Gh(["api", "--method", "PUT", $"repos/{Repository}/pulls/{number}/reviews/{reviewId}", "--input", "-"], $"{{\"body\": {Review.Quote(body)}}}");
+				Gh(["api", "--method", "PUT", string.Create(CultureInfo.InvariantCulture, $"repos/{Repository}/pulls/{number}/reviews/{reviewId}"), "--input", "-"], $"{{\"body\": {Review.Quote(body)}}}");
 
 		// [item for page in pages for item in page], as the Python read a --slurp answer.
 		static List<JsonElement> Pages(string text) => PyJson.Iterate(PyJson.Parse(text)).SelectMany(PyJson.Iterate).ToList();
@@ -790,7 +820,7 @@ namespace Baseline.PostReview
 				{
 					// Not a line of the file: Claude got the number wrong.
 					var nearest = lines.OrderBy(n => BigInteger.Abs(n - line)).ThenBy(n => n).First();
-					var note = $"_Claude cited line {line}, which isn't a line of this file, so this is on the nearest line in the diff._";
+					var note = string.Create(CultureInfo.InvariantCulture, $"_Claude cited line {line}, which isn't a line of this file, so this is on the nearest line in the diff._");
 					// A suggestion would replace the nearest line, not the one Claude meant.
 					threads.Add((finding, new Comment(path, nearest, $"{note}\n\n{DefuseSuggestions(body)}")));
 				}
@@ -798,7 +828,7 @@ namespace Baseline.PostReview
 				{
 					// In the review body a suggestion can't be applied, and a body of several paragraphs stays under its bullet when indented.
 					var indented = DefuseSuggestions(body).Replace("\n", "\n  ", StringComparison.Ordinal);
-					offDiff.Add($"- `{path}:{line}`: {indented}");
+					offDiff.Add(string.Create(CultureInfo.InvariantCulture, $"- `{path}:{line}`: {indented}"));
 				}
 			}
 			return (threads, offDiff);
@@ -902,7 +932,15 @@ namespace Baseline.PostReview
 			Dictionary<(string, string), Queue<string>> byKey = [];
 			for (var i = 0; i < posted.Count; i++)
 			{
-				// A path or body that isn't a string never equals a comment's.
+				if (urls[i] is null)
+					continue;
+				// The .py keyed a dict by (path, body), which a list or a dict in it can't be (a TypeError, so the step warns); a path or body
+				// that is another kind of value never equals a comment's.
+				foreach (var key in new[] { "path", "body" })
+				{
+					if (PyJson.TryGet(posted[i], key, out var part) && part.ValueKind is JsonValueKind.Array or JsonValueKind.Object)
+						throw new PyError("TypeError", $"unhashable type: '{PyJson.TypeName(part)}'");
+				}
 				if (urls[i] is { } url && PyJson.String(posted[i], "path") is { } path && PyJson.String(posted[i], "body") is { } body)
 				{
 					if (!byKey.TryGetValue((path, body), out var queue))
@@ -987,7 +1025,7 @@ namespace Baseline.PostReview
 			BigInteger redacted = redactedHere;
 			if (env("REDACTED") is { Length: > 0 } counted)
 				redacted += Py.Int(counted) ?? throw new PyError("ValueError", $"invalid literal for int() with base 10: {Py.Repr(counted)}");
-			List<string> notes = redacted != 0 ? [$"{redacted} credential-shaped string(s) were redacted from this review."] : [];
+			List<string> notes = redacted != 0 ? [string.Create(CultureInfo.InvariantCulture, $"{redacted} credential-shaped string(s) were redacted from this review.")] : [];
 
 			var gh = (github ?? (name => new GitHub(name)))(repo);
 			var (review, linked) = BuildReview(report, parsed, DiffLines(gh.PullFiles(pr)), head, path => gh.LineCount(path, head), effort, notes);
@@ -1023,11 +1061,11 @@ namespace Baseline.PostReview
 				}
 			}
 			var inBody = parsed.Count - review.Comments.Count;
-			stdout.Write($"Posted Claude's review of {head} on PR #{pr}: {review.Comments.Count} inline, {inBody} in the body.\n");
+			stdout.Write(string.Create(CultureInfo.InvariantCulture, $"Posted Claude's review of {head} on PR #{pr}: {review.Comments.Count} inline, {inBody} in the body.\n"));
 			if (inBody > 0)
 				stdout.Write($"::warning::{inBody} finding(s) outside the diff are in the review body; its off-diff marker holds the merge until the next push gets a fresh review.\n");
 			if (redacted != 0)
-				stdout.Write($"::warning::Redacted {redacted} credential-shaped string(s) from Claude's review. They aren't this job's secrets (an answer quoting those is "
+				stdout.Write(string.Create(CultureInfo.InvariantCulture, $"::warning::Redacted {redacted} credential-shaped string(s) from Claude's review. They aren't this job's secrets (an answer quoting those is ")
 						+ "withheld), so they are most likely sample or placeholder tokens from the PR.\n");
 			return 0;
 		}

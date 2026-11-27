@@ -8,7 +8,8 @@
 # the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle, the parity suites
 # (status, land, settings, check_gh_repo, the release scripts, draft_release and post_claude_review as .py and .cs, detect_changes, discover_tests, load_test_env, check_central_pins and rollout), the Claude Review benchmark's --rescore parity suite and
 # the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land, settings, rollout and its AutoRollout libraries,
-# what they share, the two checkers in tests/ and the benchmark), lints its workflows, YAML, shell
+# what they share, the two checkers in tests/, the benchmark and the Template's scripts in Template/, post_claude_review's in its own
+# namespace), lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
 # Owned files carry no {{PLACEHOLDER}} and that the Owned scripts, and this repo's own
 # scripts and skills, tell every gh command its repository, checks the Seed Sandcastle files, and smoke-tests apply.sh and
@@ -128,6 +129,24 @@ sdk_major_of() {
 }
 # Whether a file (argument 1) is the empty shield (ADR 0017), <Project />.
 is_empty_shield() { [[ "$(cat "$1" 2> /dev/null)" == "<Project />" ]]; }
+# The directives a file for the checker layout (argument 1) carries past the one it may, #:property PublishAot=false: every other #: line,
+# indented or not and with a CRLF's CR dropped. dotnet build honours an indented directive, and #:include, #:package, #:project, #:sdk and
+# another #:property can each reach past the file (ADR 0017, mpaulosky/Application_Factory#129). Prints nothing for a file that carries none.
+checker_layout_directives() {
+  tr -d '\r' < "$1" | grep -E '^[[:space:]]*#:' | grep -vxE '#:property PublishAot=false[[:space:]]*' || true
+}
+# The files above a folder (argument 1) that a dotnet build in it would read: a global.json, the MSBuild shields and a NuGet.config, in it or
+# any folder above it. Prints each found, one a line.
+dotnet_files_above() {
+  local dir="$1" name
+  while :; do
+    for name in global.json Directory.Build.props Directory.Build.targets Directory.Packages.props NuGet.config nuget.config NuGet.Config; do
+      [[ ! -e "$dir/$name" ]] || printf '%s\n' "$dir/$name"
+    done
+    [[ "$dir" != / && -n "$dir" ]] || break
+    dir="$(dirname -- "$dir")"
+  done
+}
 # Whether a dotnet test run of the C# scripts' test project (argument 2) passes, given its exit (argument 1): 0 passes; 8, "no test ran", passes only
 # while the project holds no .cs source of its own, so a suite that loses its tests fails. What a build writes under the project (bin/, obj/, TestResults/:
 # an IDE's build leaves generated .cs files in obj/) isn't a source. A find that fails passes nothing.
@@ -825,13 +844,31 @@ if in_shard scripts; then
   [[ -z "$built_files" ]] || fail "building the Owned entry files wrote into the Template's .github/, which a workflow's git status would list: $built_files"
   # post_claude_review.cs is written for the checker layout the post job is to build it in (ADR 0017, mpaulosky/Application_Factory#129):
   # the file alone in an empty folder, built there and run as a dll, with no global.json or shield files near it. So it is built and run
-  # that way too, against its suite; an #:include, #:package or #:project line, which the Template's folder could satisfy, fails first.
+  # that way too, against its suite. A directive past #:property PublishAot=false (checker_layout_directives), which the Template's folder
+  # could satisfy, fails first, and so does a global.json, shield or NuGet.config above the folder (a TMPDIR inside a checkout), which
+  # the build would read. The build's own files (a file-based app's obj/, under XDG_DATA_HOME's dotnet/runfile/ on Linux and named by the
+  # file's path, which is new on every run) and its temp files go under md_tmp, which the trap removes.
+  for directive in '  #:package Humanizer@2.14.1' $'\t#:include lib.cs' '#:sdk Microsoft.NET.Sdk.Web' '#:property Imported=../y.targets' \
+    $'#:project ../a.csproj\r' '#:property PublishAot=true' '  #:property PublishAot=false'; do
+    printf '#:property PublishAot=false\n%s\nreturn 0;\n' "$directive" > "$md_tmp/checker-layout-fixture.cs"
+    [[ -n "$(checker_layout_directives "$md_tmp/checker-layout-fixture.cs")" ]] || fail "checker_layout_directives passes a file that carries '$directive'"
+  done
+  printf '#:property PublishAot=false\r\n// #:include lib.cs\nvar s = "#:package X";\n' > "$md_tmp/checker-layout-fixture.cs"
+  [[ -z "$(checker_layout_directives "$md_tmp/checker-layout-fixture.cs")" ]] \
+    || fail "checker_layout_directives refuses a file that carries only #:property PublishAot=false (CRLF), with #: in a comment and a string"
+  mkdir -p "$md_tmp/above/below" && : > "$md_tmp/above/Directory.Build.props"
+  [[ "$(dotnet_files_above "$md_tmp/above/below")" == *"$md_tmp/above/Directory.Build.props"* ]] || fail "dotnet_files_above misses a Directory.Build.props above the folder"
   checker_layout="$md_tmp/post-claude-review-checker"
-  mkdir -p "$checker_layout" && cp -- "$owned/.github/scripts/post_claude_review.cs" "$checker_layout/"
-  if grep -qE '^#:(include|package|project)' "$checker_layout/post_claude_review.cs"; then
-    fail "post_claude_review.cs must include nothing and take no package or project (the checker layout): $(grep -E '^#:(include|package|project)' "$checker_layout/post_claude_review.cs")"
-  elif (cd "$checker_layout" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 MSBUILDDISABLENODEREUSE=1 \
-    DOTNET_CLI_USE_MSBUILD_SERVER=0 UseSharedCompilation=false dotnet build post_claude_review.cs -o "$checker_layout/out" < /dev/null \
+  mkdir -p "$checker_layout" "$md_tmp/post-claude-review-checker-tmp" "$md_tmp/post-claude-review-checker-data" && cp -- "$owned/.github/scripts/post_claude_review.cs" "$checker_layout/"
+  layout_directives="$(checker_layout_directives "$checker_layout/post_claude_review.cs")"
+  layout_above="$(dotnet_files_above "$checker_layout")"
+  if [[ -n "$layout_directives" ]]; then
+    fail "post_claude_review.cs must carry no directive but #:property PublishAot=false (the checker layout): $layout_directives"
+  elif [[ -n "$layout_above" ]]; then
+    fail "the checker layout's folder ($checker_layout) has files a dotnet build there reads above it, so the build wouldn't be of the file alone; set TMPDIR outside any checkout: $layout_above"
+  elif (cd "$checker_layout" && TMPDIR="$md_tmp/post-claude-review-checker-tmp" XDG_DATA_HOME="$md_tmp/post-claude-review-checker-data" DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 \
+    DOTNET_NOLOGO=1 MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 UseSharedCompilation=false \
+    dotnet build post_claude_review.cs -o "$checker_layout/out" < /dev/null \
     > "$md_tmp/post-claude-review-checker.log" 2>&1); then
     bash "$skill_dir/tests/parity.test.sh" post_claude_review dotnet "$checker_layout/out/post_claude_review.dll" \
       || fail "parity.test.sh post_claude_review against post_claude_review.cs built alone in an empty folder"
