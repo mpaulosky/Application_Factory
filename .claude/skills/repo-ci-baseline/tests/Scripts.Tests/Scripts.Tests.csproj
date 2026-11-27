@@ -13,6 +13,11 @@
     <IsTestProject>true</IsTestProject>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1900;NU1905</WarningsNotAsErrors>
+    <!-- post_claude_review.cs is one file, its own copies of Gh.cs's classes in it (the checker layout, ADR 0017): BASELINE_TESTS leaves out
+         its top-level statement, so the project compiles the rest beside Gh.cs's and the tests call it; FileBasedProgram lets the compiler read
+         its #:property line, which a project's build would otherwise refuse (CS9298). -->
+    <DefineConstants>$(DefineConstants);BASELINE_TESTS</DefineConstants>
+    <Features>$(Features);FileBasedProgram</Features>
     <!-- The NuGet.config beside it restores from nuget.org alone, and packages.lock.json pins every package, direct and transitive, by hash:
          test.sh restores in locked mode, so a version moved here without the lock file fails with NU1004 (dotnet restore rewrites it, as
          Dependabot's NuGet updater does after a bump). -->
@@ -26,6 +31,7 @@
   </ItemGroup>
   <!-- The skill's github/ scripts, the two checkers in tests/, the bench in bench/ and the Template's scripts (ADR 0017): every file an entry file pulls in with #:include is compiled here, so the tests call its
        classes. The entry files are left out: each holds top-level statements, which a project with an entry point of its own can't. The
+       one exception is post_claude_review.cs, which includes nothing (the checker layout) and is compiled itself, below. The
        skill's folder is the assembly's SkillDir metadata, so a test finds the files it reads (repos.txt, the Template's workflows) beside
        whichever copy of the project it was built from. -->
   <ItemGroup>
@@ -33,7 +39,9 @@
     <Compile Include="../*.cs" Exclude="../check-issue-refs.cs;../check-git-status.cs" Link="tests/%(Filename)%(Extension)" />
     <Compile Include="../../bench/*.cs" Exclude="../../bench/claude-review-bench.cs" Link="bench/%(Filename)%(Extension)" />
     <!-- The Template's Owned scripts in .github/scripts/ (ADR 0017's Update for mpaulosky/Application_Factory#125): in the namespace Baseline, so
-         their Gh.cs doesn't clash with github/'s, and tested from Template/ in that namespace. Its entry files are left out, as above. -->
+         their Gh.cs doesn't clash with github/'s, and tested from Template/ in that namespace. Its entry files are left out, as above, but for
+         post_claude_review.cs: BASELINE_TESTS leaves out its top-level statement, and its own copies of Gh.cs's classes are in the namespace
+         Baseline.PostReview, where Template/PostClaudeReview/ tests them. -->
     <Compile Include="../../template/owned/.github/scripts/*.cs" Exclude="../../template/owned/.github/scripts/check_central_pins.cs;../../template/owned/.github/scripts/detect_changes.cs;../../template/owned/.github/scripts/draft_release.cs;../../template/owned/.github/scripts/discover_tests.cs;../../template/owned/.github/scripts/load_test_env.cs;../../template/owned/.github/scripts/release_post.cs;../../template/owned/.github/scripts/release_queue.cs;../../template/owned/.github/scripts/backfill_blog_posts.cs" Link="template/%(Filename)%(Extension)" />
     <AssemblyMetadata Include="SkillDir" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))" />
   </ItemGroup>

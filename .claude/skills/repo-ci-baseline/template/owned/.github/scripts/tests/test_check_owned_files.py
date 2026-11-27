@@ -482,7 +482,8 @@ def test_the_templates_owned_list_reports_a_changed_shield(tmp_path, shield, cha
                                     ".github/scripts/load_test_env.cs", ".github/scripts/LoadTestEnv.cs", ".github/scripts/draft_release.cs",
                                     ".github/scripts/DraftRelease.cs", ".github/scripts/release_post.cs", ".github/scripts/ReleasePost.cs",
                                     ".github/scripts/HtmlEntities.cs", ".github/scripts/release_queue.cs", ".github/scripts/ReleaseQueue.cs",
-                                    ".github/scripts/backfill_blog_posts.cs", ".github/scripts/BackfillBlogPosts.cs"])
+                                    ".github/scripts/backfill_blog_posts.cs", ".github/scripts/BackfillBlogPosts.cs",
+                                    ".github/scripts/post_claude_review.cs"])
 def test_the_templates_owned_list_reports_a_changed_csharp_script(tmp_path, script):
     # Arrange: the Template's own checker as the base's, and one of the C# scripts ci.yml runs edited. load_test_env.cs runs with the
     # TEST_ENV secret, so it, the script that finds what the test jobs run and the Gh.cs both include are Owned
