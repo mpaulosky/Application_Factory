@@ -2,9 +2,11 @@
 // Post Claude Review's findings as one PR review on the head commit. The C# port of post_claude_review.py (ADR 0017 in the Application
 // Factory), which ships beside it until the post job runs this file.
 //
-// Called by .github/workflows/claude-review.yml's post job, once Claude has reviewed the PR. The job holds a token that can post a review
-// under the marker, so it runs the base's copy of this file, never the PR's, in the checker layout: the file alone, taken from the base with
-// git show into a mktemp -d folder, built there with that folder as the cwd, and run as a dll, which reads no global.json and runs no MSBuild:
+// To be called by .github/workflows/claude-review.yml's post job, once Claude has reviewed the PR, when the job is cut over from the .py
+// (mpaulosky/Application_Factory#129, with the Updates of ADR 0017 and the skill's ADR 0004 that give the layout below to this file
+// too). The job holds a token that can post a review under the marker, so it will run the base's copy of this file, never the PR's, in the
+// layout ADR 0017 gives the two checkers: the file alone, taken from the base with git show into a mktemp -d folder, built there with that
+// folder as the cwd, and run as a dll, which reads no global.json and runs no MSBuild (the Factory's test.sh builds and runs it so):
 //
 //     ( cd "$tmp" && dotnet build post_claude_review.cs -o "$tmp/out" )
 //     FINDINGS='{"summary": ..., "findings": [...]}' dotnet "$tmp/out/post_claude_review.dll" --repo owner/name --pr 42 --head <sha>
@@ -117,11 +119,35 @@ namespace Baseline.PostReview
 			try
 			{
 				using var document = JsonDocument.Parse(text, Options);
-				return document.RootElement.Clone();
+				var root = document.RootElement.Clone();
+				RefuseLongIntegers(root);
+				return root;
 			}
 			catch (JsonException error)
 			{
 				throw new PyError("JSONDecodeError", error.Message);
+			}
+		}
+
+		// json.loads reads every integer with int(), which refuses one of more than 4,300 digits (a ValueError, not a JSONDecodeError)
+		// wherever it sits in the document; a float of any length is read.
+		static void RefuseLongIntegers(JsonElement value)
+		{
+			switch (value.ValueKind)
+			{
+				case JsonValueKind.Array:
+					foreach (var item in value.EnumerateArray())
+						RefuseLongIntegers(item);
+					break;
+				case JsonValueKind.Object:
+					foreach (var property in value.EnumerateObject())
+						RefuseLongIntegers(property.Value);
+					break;
+				case JsonValueKind.Number:
+					var raw = value.GetRawText();
+					if (raw.IndexOfAny(['.', 'e', 'E']) < 0 && raw.TrimStart('-').Length > 4300)
+						throw new PyError("ValueError", "Exceeds the limit (4300 digits) for integer string conversion");
+					break;
 			}
 		}
 
@@ -146,7 +172,8 @@ namespace Baseline.PostReview
 		public static string? String(JsonElement value, string key) =>
 				TryGet(value, key, out var found) && found.ValueKind == JsonValueKind.String ? found.GetString() : null;
 
-		// An integer as json.loads reads one: a number with no fraction and no exponent, of any size; null for anything else (a float, a bool).
+		// An integer as json.loads reads one: a number with no fraction and no exponent, of any size up to the 4,300 digits Parse lets
+		// through; null for anything else (a float, a bool).
 		public static BigInteger? Integer(JsonElement value)
 		{
 			if (value.ValueKind != JsonValueKind.Number)
@@ -154,8 +181,6 @@ namespace Baseline.PostReview
 			var raw = value.GetRawText();
 			if (raw.IndexOfAny(['.', 'e', 'E']) >= 0)
 				return null;
-			if (raw.TrimStart('-').Length > 4300)
-				throw new PyError("ValueError", "Exceeds the limit (4300 digits) for integer string conversion");
 			return BigInteger.Parse(raw, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
 		}
 
@@ -232,7 +257,8 @@ namespace Baseline.PostReview
 	}
 
 	// The calls this script makes, through the gh CLI. Each method is virtual, so a test answers them without gh.
-	class GitHub(string repository)
+	// locateGh finds the gh to run: Script.Which's search of PATH, unless a test gives another.
+	class GitHub(string repository, Func<string>? locateGh = null)
 	{
 		public string Repository { get; } = repository;
 
@@ -291,10 +317,12 @@ namespace Baseline.PostReview
 			}
 		}
 
-		// Runs gh with argv, input on its stdin, and returns its stdout; a failure is a CalledProcessError.
-		static byte[] Gh(IReadOnlyList<string> argv, string input = "")
+		// Runs gh with argv, input on its stdin, and returns its stdout; a failure is a CalledProcessError without what gh said, as the .py's
+		// capture_output kept it out of the log: GitHub's error text can echo the request, which holds the answer's text, and the runner
+		// would read a line of it that starts with :: as a workflow command.
+		byte[] Gh(IReadOnlyList<string> argv, string input = "")
 		{
-			var start = new ProcessStartInfo(Script.Which("gh", Environment.GetEnvironmentVariable("PATH")))
+			var start = new ProcessStartInfo(locateGh?.Invoke() ?? Script.Which("gh", Environment.GetEnvironmentVariable("PATH")))
 			{
 				RedirectStandardInput = true,
 				RedirectStandardOutput = true,
@@ -304,8 +332,9 @@ namespace Baseline.PostReview
 			foreach (var arg in argv)
 				start.ArgumentList.Add(arg);
 			using var run = Process.Start(start)!;
-			using MemoryStream output = new(), err = new();
-			var reads = Task.WhenAll(run.StandardOutput.BaseStream.CopyToAsync(output), run.StandardError.BaseStream.CopyToAsync(err));
+			using MemoryStream output = new();
+			// gh's stderr is read to its end, so gh never blocks on a full pipe, and dropped.
+			var reads = Task.WhenAll(run.StandardOutput.BaseStream.CopyToAsync(output), run.StandardError.BaseStream.CopyToAsync(Stream.Null));
 			try
 			{
 				run.StandardInput.BaseStream.Write(new UTF8Encoding(false).GetBytes(input));
@@ -316,9 +345,10 @@ namespace Baseline.PostReview
 				// gh exited without reading its input; its exit code says why.
 			}
 			run.WaitForExit();
-			reads.Wait();
+			// GetResult throws a failed read's IOException itself, which the linking step catches as the .py caught OSError; Wait would wrap it.
+			reads.GetAwaiter().GetResult();
 			if (run.ExitCode != 0)
-				throw new CalledProcessError(["gh", .. argv], run.ExitCode, SurrogateEscape.Decode(err.ToArray()));
+				throw new CalledProcessError(["gh", .. argv], run.ExitCode, "");
 			return output.ToArray();
 		}
 	}
@@ -550,7 +580,10 @@ namespace Baseline.PostReview
 			JsonValueKind.String => value.GetString()!.Length > 0,
 			JsonValueKind.Array => value.GetArrayLength() > 0,
 			JsonValueKind.Object => value.EnumerateObject().Any(),
-			JsonValueKind.Number => value.GetRawText().Any(c => c is >= '1' and <= '9'),
+			// By its value, as Python's bool() reads the int or float json.loads made: 0e5 and 1e-400 are 0.0, and 1e400 is inf.
+			JsonValueKind.Number => PyJson.Integer(value) is { } integer
+					? !integer.IsZero
+					: double.Parse(value.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture) != 0,
 			_ => true,
 		};
 
@@ -944,10 +977,12 @@ namespace Baseline.PostReview
 				return 1;
 			}
 
-			(report, parsed, var redacted) = Redact(report, parsed);
+			(report, parsed, var redactedHere) = Redact(report, parsed);
 			// The review job's check redacts first; this counts what it did too.
+			// A BigInteger, as Python's int is of any size.
+			BigInteger redacted = redactedHere;
 			if (env("REDACTED") is { Length: > 0 } counted)
-				redacted += (int)(Py.Int(counted) ?? throw new PyError("ValueError", $"invalid literal for int() with base 10: {Py.Repr(counted)}"));
+				redacted += Py.Int(counted) ?? throw new PyError("ValueError", $"invalid literal for int() with base 10: {Py.Repr(counted)}");
 			List<string> notes = redacted != 0 ? [$"{redacted} credential-shaped string(s) were redacted from this review."] : [];
 
 			var gh = (github ?? (name => new GitHub(name)))(repo);

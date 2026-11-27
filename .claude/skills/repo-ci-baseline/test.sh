@@ -823,6 +823,21 @@ if in_shard scripts; then
   done
   built_files="$(find "$owned/.github" -newer "$build_marker" -print)"
   [[ -z "$built_files" ]] || fail "building the Owned entry files wrote into the Template's .github/, which a workflow's git status would list: $built_files"
+  # post_claude_review.cs is written for the checker layout the post job is to build it in (ADR 0017, mpaulosky/Application_Factory#129):
+  # the file alone in an empty folder, built there and run as a dll, with no global.json or shield files near it. So it is built and run
+  # that way too, against its suite; an #:include, #:package or #:project line, which the Template's folder could satisfy, fails first.
+  checker_layout="$md_tmp/post-claude-review-checker"
+  mkdir -p "$checker_layout" && cp -- "$owned/.github/scripts/post_claude_review.cs" "$checker_layout/"
+  if grep -qE '^#:(include|package|project)' "$checker_layout/post_claude_review.cs"; then
+    fail "post_claude_review.cs must include nothing and take no package or project (the checker layout): $(grep -E '^#:(include|package|project)' "$checker_layout/post_claude_review.cs")"
+  elif (cd "$checker_layout" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 MSBUILDDISABLENODEREUSE=1 \
+    DOTNET_CLI_USE_MSBUILD_SERVER=0 UseSharedCompilation=false dotnet build post_claude_review.cs -o "$checker_layout/out" < /dev/null \
+    > "$md_tmp/post-claude-review-checker.log" 2>&1); then
+    bash "$skill_dir/tests/parity.test.sh" post_claude_review dotnet "$checker_layout/out/post_claude_review.dll" \
+      || fail "parity.test.sh post_claude_review against post_claude_review.cs built alone in an empty folder"
+  else
+    fail "post_claude_review.cs doesn't build alone in an empty folder: $(tail -5 "$md_tmp/post-claude-review-checker.log")"
+  fi
   for suite in "${library_first[@]}"; do
     [[ -f "$owned/.github/scripts/$suite.cs" && -f "$owned/.github/scripts/$suite.py" ]] \
       || fail "library_first names $suite, but the Template ships no $suite.cs beside a $suite.py: take it off the list at the cut-over"

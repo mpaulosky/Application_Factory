@@ -39,7 +39,7 @@ public sealed partial class PostClaudeReviewTests
 
 	[Theory]
 	[MemberData(nameof(TokensAndPrefixed))]
-	public void Test_a_credential_is_redacted_everywhere_and_warns(string token)
+	public void A_credential_is_redacted_everywhere_and_warns(string token)
 	{
 		var findings = FindingsJsonWith($"Found {token} in the environment.", ("src/app.py", 2, $"The token is {token}."), ($"docs/{token}.md", 1, "Path."));
 
@@ -56,7 +56,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_a_credential_in_the_structured_fields_is_redacted_too()
+	public void A_credential_in_the_structured_fields_is_redacted_too()
 	{
 		var token = Tokens[1];
 		var findings = new JsonObject
@@ -77,7 +77,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_the_review_jobs_redactions_are_counted()
+	public void The_review_jobs_redactions_are_counted()
 	{
 		var result = Run(FindingsJson(("src/app.py", 2, "Was [redacted].")), redacted: "2");
 
@@ -89,11 +89,11 @@ public sealed partial class PostClaudeReviewTests
 	[InlineData("ghs_installation_token_value_for_the_runner_job")]
 	[InlineData("github_pat_example_placeholder_value_goes_here_xx")]
 	[InlineData("ghp_short")]
-	public void Test_names_shaped_loosely_like_tokens_arent_redacted(string text) =>
+	public void Names_shaped_loosely_like_tokens_arent_redacted(string text) =>
 			Assert.Equal(text, BodyOf(Run(FindingsJson(("src/app.py", 2, text))).Gh.Comments()[0]));
 
 	[Fact]
-	public void Test_ordinary_text_isnt_redacted()
+	public void Ordinary_text_isnt_redacted()
 	{
 		const string text = "The ghp_ prefix, sk-ant- keys and a JWT header like eyJ are named here, not quoted.";
 
@@ -169,7 +169,7 @@ public sealed partial class PostClaudeReviewTests
 
 	[Theory]
 	[MemberData(nameof(CredentialShaped))]
-	public void Test_no_credential_shaped_text_survives_redaction(string text)
+	public void No_credential_shaped_text_survives_redaction(string text)
 	{
 		var input = $"see {text} end";
 		foreach (var (redacted, count) in new[] { PostClaudeReview.RedactCredentials(input), InPython("workflow", "redact_credentials", input)[0] })
@@ -185,7 +185,7 @@ public sealed partial class PostClaudeReviewTests
 
 	[Theory]
 	[MemberData(nameof(JwtsOnTokens))]
-	public void Test_a_jwt_run_straight_onto_a_token_is_redacted_as_the_original_pattern_did(string text)
+	public void A_jwt_run_straight_onto_a_token_is_redacted_as_the_original_pattern_did(string text)
 	{
 		// The token's alternative takes the JWT's first segment too, as it always has, so the rest (two segments) is no longer a JWT; the
 		// redaction must still act and never match a JWT.
@@ -199,11 +199,11 @@ public sealed partial class PostClaudeReviewTests
 	public static TheoryData<string> JwtsOnTokens => new("ghp_" + new string('A', 36) + AJwt(), "sk-ant-" + new string('a', 30) + "-" + AJwt());
 
 	[Fact]
-	public void Test_a_long_jwts_signature_is_replaced_with_its_payload() =>
+	public void A_long_jwts_signature_is_replaced_with_its_payload() =>
 			Assert.Equal("t=[redacted]", PostClaudeReview.RedactCredentials("t=" + AJwt(second: 400, third: 50)).Text);
 
 	[Fact]
-	public void Test_ordinary_text_with_short_words_is_left_alone()
+	public void Ordinary_text_with_short_words_is_left_alone()
 	{
 		var text = "Fix snake_case_names, dotted.names.here and a 64-char hash " + new string('0', 64) + " in src/app.py:12.";
 
@@ -212,7 +212,7 @@ public sealed partial class PostClaudeReviewTests
 
 	// The pytest's seed-299 texts, here from .NET's own Random with that seed: the port gives what the workflow and the .py give.
 	[Fact]
-	public void Test_the_script_and_the_workflow_redact_alike()
+	public void The_script_and_the_workflow_redact_alike()
 	{
 		var random = new Random(299);
 		string[] pieces = [AJwt(), AJwt(second: 200), Glued, "ghs_9_" + AJwt(), "sk-ant-" + new string('q', 25), "x-", "eyJ", ".", " ", "/", new string('a', 130), "ok", LongName];
@@ -225,7 +225,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_the_redaction_leaves_nothing_the_original_pattern_matches()
+	public void The_redaction_leaves_nothing_the_original_pattern_matches()
 	{
 		var random = new Random(299);
 		string[] pieces = [AJwt(), AJwt(first: 8, second: 8, third: 8), AJwt(second: 200), Glued, "ghp_" + new string('Z', 40), "ghs_9_" + AJwt(),
@@ -254,7 +254,7 @@ public sealed partial class PostClaudeReviewTests
 
 	[Theory]
 	[MemberData(nameof(LongRedactionInput))]
-	public void Test_redacting_takes_linear_time_on_long_input(string text)
+	public void Redacting_takes_linear_time_on_long_input(string text)
 	{
 		var clock = Stopwatch.StartNew();
 		PostClaudeReview.RedactCredentials(text);
@@ -274,7 +274,7 @@ public sealed partial class PostClaudeReviewTests
 
 	[Theory]
 	[MemberData(nameof(LongPlainTokens))]
-	public void Test_a_long_token_that_starts_no_credential_is_left_alone_with_no_warning(string text)
+	public void A_long_token_that_starts_no_credential_is_left_alone_with_no_warning(string text)
 	{
 		var sentence = $"The finding is in {text}, which is not a secret.";
 
@@ -283,7 +283,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_a_long_file_name_quoted_in_a_finding_body_and_the_summary_is_left_alone()
+	public void A_long_file_name_quoted_in_a_finding_body_and_the_summary_is_left_alone()
 	{
 		var (report, findings, count) = PostClaudeReview.Redact(new Report(Summary: $"| {LongName} | added |"), [new Finding("a.py", 3, $"See `{LongName}`.", null)]);
 
@@ -306,7 +306,7 @@ public sealed partial class PostClaudeReviewTests
 
 	[Theory]
 	[MemberData(nameof(LongCredentialStarts))]
-	public void Test_a_long_token_that_starts_a_credential_is_still_replaced_whole(string text)
+	public void A_long_token_that_starts_a_credential_is_still_replaced_whole(string text)
 	{
 		var input = $"see {text} end";
 
@@ -315,7 +315,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_a_long_run_in_a_chain_with_no_start_is_left_alone_wherever_it_sits()
+	public void A_long_run_in_a_chain_with_no_start_is_left_alone_wherever_it_sits()
 	{
 		var text = "see " + new string('x', 200) + ".Service and Company." + new string('y', 200) + " end";
 
@@ -328,7 +328,7 @@ public sealed partial class PostClaudeReviewTests
 	[Theory]
 	[InlineData("workflow")]
 	[InlineData("script")]
-	public void Test_the_workflow_carries_the_scripts_long_run_rule(string source)
+	public void The_workflow_carries_the_scripts_long_run_rule(string source)
 	{
 		var constants = Python(source, "constants");
 
@@ -347,7 +347,7 @@ public sealed partial class PostClaudeReviewTests
 
 	[Theory]
 	[MemberData(nameof(TextCredentials))]
-	public void Test_every_text_credential_matches_starts_with_a_credential_start(string sample)
+	public void Every_text_credential_matches_starts_with_a_credential_start(string sample)
 	{
 		// Credential can only match inside a token that CredentialStart finds, or the long-run rule would skip a run Credential scans slowly.
 		var match = PostClaudeReview.Credential.Match(sample);
@@ -357,7 +357,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_a_long_file_name_in_a_finding_path_is_left_alone()
+	public void A_long_file_name_in_a_finding_path_is_left_alone()
 	{
 		var (_, findings, count) = PostClaudeReview.Redact(new Report(Summary: "s"), [new Finding(LongName, 3, "b", null)]);
 
@@ -366,7 +366,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_a_long_name_that_holds_a_credential_start_without_being_one_is_left_alone_in_a_finding_path()
+	public void A_long_name_that_holds_a_credential_start_without_being_one_is_left_alone_in_a_finding_path()
 	{
 		var path = "tests/Get_eyJ_" + new string('A', 130) + "_Returns_401.cs";
 		var (_, findings, count) = PostClaudeReview.Redact(new Report(Summary: "s"), [new Finding(path, 3, "b", null)]);
@@ -378,7 +378,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_a_credential_in_a_finding_path_is_still_redacted()
+	public void A_credential_in_a_finding_path_is_still_redacted()
 	{
 		var (_, findings, count) = PostClaudeReview.Redact(new Report(Summary: "s"), [new Finding("src/" + AJwt() + ".cs", 3, "b", null)]);
 
@@ -387,7 +387,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_a_path_past_the_limit_gets_the_full_rule()
+	public void A_path_past_the_limit_gets_the_full_rule()
 	{
 		var clock = Stopwatch.StartNew();
 		var (_, findings, _) = PostClaudeReview.Redact(new Report(Summary: "s"), [new Finding("x/" + Repeat("eyJ", 70_000), 3, "b", null)]);
@@ -397,7 +397,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_the_workflow_redacts_paths_like_the_script()
+	public void The_workflow_redacts_paths_like_the_script()
 	{
 		string[] paths = [LongName, "src/" + AJwt(), "x/" + Repeat("eyJ", 1000)];
 

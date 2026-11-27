@@ -60,9 +60,11 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	// GitHub for Run(): the reviews posted, as GitHub got them, and their comments read back with a URL each, unless fail names a call
-	// ("post", "read" or "update"). Answer, when set, is what the post returns.
+	// ("post", "read" or "update"), or ReadError, which reading the comments then throws. Answer, when set, is what the post returns.
 	sealed class FakeGitHub(List<JsonElement>? files = null, Dictionary<string, int>? lengths = null, string? fail = null) : GitHub("octo/demo")
 	{
+		public Exception? ReadError { get; init; }
+
 		readonly List<JsonElement> files = files ?? [Json(new JsonObject { ["filename"] = "src/app.py", ["patch"] = Patch })];
 
 		// src/app.py runs to line 30: lines 5-20 and 23-30 are real but outside the diff.
@@ -94,6 +96,8 @@ public sealed partial class PostClaudeReviewTests
 			Assert.Equal((new BigInteger(7), "99"), (number, reviewId));
 			if (fail == "read")
 				throw new CalledProcessError(["gh", "api"], 1, "");
+			if (ReadError is not null)
+				throw ReadError;
 			var comments = Posted[^1].Review.GetProperty("comments").EnumerateArray().ToList();
 			return comments.Select((comment, index) =>
 			{
@@ -148,7 +152,7 @@ public sealed partial class PostClaudeReviewTests
 	// diff_lines()
 
 	[Fact]
-	public void Test_diff_lines_are_the_new_side_lines_a_comment_can_sit_on()
+	public void Diff_lines_are_the_new_side_lines_a_comment_can_sit_on()
 	{
 		var lines = PostClaudeReview.DiffLines([Json(new JsonObject { ["filename"] = "src/app.py", ["patch"] = Patch })]);
 
@@ -157,7 +161,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_line_breaks_other_than_newline_inside_a_line_dont_shift_the_count()
+	public void Line_breaks_other_than_newline_inside_a_line_dont_shift_the_count()
 	{
 		var patch = string.Join("\n", "@@ -1,2 +1,3 @@", " page one\fpage two", "+added\u0085text\u2028more", " context");
 
@@ -167,7 +171,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_a_file_without_a_patch_has_no_commentable_lines()
+	public void A_file_without_a_patch_has_no_commentable_lines()
 	{
 		var lines = PostClaudeReview.DiffLines([Json(new JsonObject { ["filename"] = "logo.png" })]);
 
@@ -177,7 +181,7 @@ public sealed partial class PostClaudeReviewTests
 	// main()
 
 	[Fact]
-	public void Test_findings_become_one_review_on_the_head_commit()
+	public void Findings_become_one_review_on_the_head_commit()
 	{
 		var gh = Run(FindingsJson(("src/app.py", 2, "Off by one."), ("src/app.py", 22, "Unused."))).Gh;
 
@@ -192,14 +196,14 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_the_marker_is_always_first()
+	public void The_marker_is_always_first()
 	{
 		foreach (var findings in new[] { FindingsJson(), FindingsJson(("src/app.py", 2, "x")), FindingsJson(("other.py", 1, "y")) })
 			Assert.StartsWith(PostClaudeReview.Marker + "\n", Run(findings).Gh.Body());
 	}
 
 	[Fact]
-	public void Test_a_finding_off_the_diff_moves_to_the_body()
+	public void A_finding_off_the_diff_moves_to_the_body()
 	{
 		var gh = Run(FindingsJson(("src/app.py", 2, "On the diff."), ("src/app.py", 10, "Off the diff."), ("README.md", 1, "Not changed."))).Gh;
 
@@ -211,7 +215,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_a_finding_off_the_diff_passes_the_step_with_a_warning()
+	public void A_finding_off_the_diff_passes_the_step_with_a_warning()
 	{
 		// The marker, not the check, holds the merge: a failed check would leave the PR UNSTABLE, which PR Auto-Merge never merges.
 		var result = Run(FindingsJson(("src/app.py", 2, "On."), ("README.md", 1, "Off.")));
@@ -225,7 +229,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_a_line_past_the_end_of_a_changed_file_goes_on_its_nearest_diff_line()
+	public void A_line_past_the_end_of_a_changed_file_goes_on_its_nearest_diff_line()
 	{
 		// A wrong line number on changed code, not a finding about unchanged code: a thread to resolve, not a hold on the merge.
 		var result = Run(FindingsJson(("src/app.py", 598, "Wrong number."), ("src/app.py", 0, "Zero.")));
@@ -241,7 +245,7 @@ public sealed partial class PostClaudeReviewTests
 	const string Suggested = "**Wrong default**\n\nIt is 0.\n\n```suggestion\nvalue = 1\n```";
 
 	[Fact]
-	public void Test_a_suggestion_on_the_cited_line_is_kept()
+	public void A_suggestion_on_the_cited_line_is_kept()
 	{
 		var gh = Run(FindingsJson(("src/app.py", 22, Suggested))).Gh;
 
@@ -249,7 +253,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_a_suggestion_on_the_nearest_line_is_turned_into_plain_text()
+	public void A_suggestion_on_the_nearest_line_is_turned_into_plain_text()
 	{
 		// The suggestion would replace the nearest diff line, not the line Claude meant.
 		var body = BodyOf(Run(FindingsJson(("src/app.py", 598, Suggested))).Gh.Comments()[0]);
@@ -266,7 +270,7 @@ public sealed partial class PostClaudeReviewTests
 	[InlineData("   ```suggestion\nx\n```", "   ```text\nx\n```")]
 	[InlineData("a `suggestion` word and ```suggestions``` inline", "a `suggestion` word and ```suggestions``` inline")]
 	[InlineData("```python\nsuggestion = 1\n```", "```python\nsuggestion = 1\n```")]
-	public void Test_defuse_suggestions_changes_only_suggestion_fences(string body, string expected) =>
+	public void Defuse_suggestions_changes_only_suggestion_fences(string body, string expected) =>
 			Assert.Equal(expected, PostClaudeReview.DefuseSuggestions(body));
 
 	[Theory]
@@ -280,11 +284,11 @@ public sealed partial class PostClaudeReviewTests
 	[InlineData("```suggestion\r\nx\r\n```")]
 	[InlineData("```\vsuggestion\nx\n```")]
 	[InlineData("```\fsuggestion\nx\n```")]
-	public void Test_defuse_suggestions_catches_every_form_a_fence_can_take(string body) =>
+	public void Defuse_suggestions_catches_every_form_a_fence_can_take(string body) =>
 			Assert.DoesNotMatch(PostClaudeReview.SuggestionFence, PostClaudeReview.DefuseSuggestions(body));
 
 	[Fact]
-	public void Test_a_suggestion_fence_after_a_quote_marker_is_defused_to_text() =>
+	public void A_suggestion_fence_after_a_quote_marker_is_defused_to_text() =>
 			Assert.Equal("> ```text\nx", PostClaudeReview.DefuseSuggestions("> ```suggestion\nx"));
 
 	const string Good = "**T**\n\nWhy.\n\n```suggestion\n    value = 1\n```";
@@ -300,7 +304,7 @@ public sealed partial class PostClaudeReviewTests
 
 	[Theory]
 	[MemberData(nameof(KeptBodies))]
-	public void Test_vet_suggestions_keeps_no_suggestion_or_one_good_line(string body) =>
+	public void Vet_suggestions_keeps_no_suggestion_or_one_good_line(string body) =>
 			Assert.Equal(body, PostClaudeReview.VetSuggestions(body));
 
 	[Theory]
@@ -329,7 +333,7 @@ public sealed partial class PostClaudeReviewTests
 	[InlineData("```suggestion\nx\n````")] // a closing fence longer than the opener
 	[InlineData("```suggestion\nx\n  ```")] // a closing fence indented
 	[InlineData("```\vsuggestion\nx\ny\n```")]
-	public void Test_vet_suggestions_defuses_anything_but_one_good_line(string body)
+	public void Vet_suggestions_defuses_anything_but_one_good_line(string body)
 	{
 		var vetted = PostClaudeReview.VetSuggestions(body);
 
@@ -338,7 +342,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_an_on_diff_comment_goes_through_vet_suggestions()
+	public void An_on_diff_comment_goes_through_vet_suggestions()
 	{
 		var body = BodyOf(Run(FindingsJson(("src/app.py", 22, "**T**\n\n```suggestion\na\nb\n```"))).Gh.Comments()[0]);
 
@@ -347,7 +351,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_a_finding_off_the_diff_keeps_a_table_and_a_list_under_its_bullet()
+	public void A_finding_off_the_diff_keeps_a_table_and_a_list_under_its_bullet()
 	{
 		var lines = Run(FindingsJson(("src/app.py", 10, "**T**\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n- one\n- two"))).Gh.Body().Split('\n');
 
@@ -356,7 +360,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_a_finding_off_the_diff_keeps_its_paragraphs_under_its_bullet_and_loses_its_suggestion()
+	public void A_finding_off_the_diff_keeps_its_paragraphs_under_its_bullet_and_loses_its_suggestion()
 	{
 		var body = Run(FindingsJson(("src/app.py", 10, "**Title**\n\nWhat goes wrong.\n\n```suggestion\nx = 1\n```"))).Gh.Body();
 
@@ -366,7 +370,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_a_real_line_outside_the_hunks_still_holds_the_merge()
+	public void A_real_line_outside_the_hunks_still_holds_the_merge()
 	{
 		var gh = Run(FindingsJson(("src/app.py", 10, "Unchanged code."))).Gh;
 
@@ -375,7 +379,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_an_unreadable_file_length_keeps_the_hold()
+	public void An_unreadable_file_length_keeps_the_hold()
 	{
 		// Unknown length: it may be a real line, so it's treated as one.
 		var gh = Run(FindingsJson(("src/app.py", 598, "Maybe real.")), new FakeGitHub(lengths: [])).Gh;
@@ -385,7 +389,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_a_file_the_diff_doesnt_touch_still_holds_the_merge()
+	public void A_file_the_diff_doesnt_touch_still_holds_the_merge()
 	{
 		var gh = Run(FindingsJson(("README.md", 999, "Not changed."))).Gh;
 
@@ -408,19 +412,38 @@ public sealed partial class PostClaudeReviewTests
 	// is PostClaudeReview.Quote, which LineCount puts in the URL. Parity cases 04 and 05 run LineCount itself, on gh's answer and on its failure.
 	[Theory]
 	[MemberData(nameof(FileTexts))]
-	public void Test_a_files_length_counts_newlines_only(byte[] text, int lines)
+	public void A_files_length_counts_newlines_only(byte[] text, int lines)
 	{
 		// Bytes, as gh returns them: a file that isn't UTF-8 (the Latin-1 case) still counts, and a lone \r isn't a newline.
 		Assert.Equal(lines, GitHub.CountLines(text));
 		Assert.Equal("docs/a%20b.md", PostClaudeReview.Quote("docs/a b.md"));
 	}
 
+	// The pytest's two errors from subprocess.run, a gh that fails and no gh at all, and the two other ways starting or reading gh fails
+	// here: a gh that can't be started (Win32Exception) and an IOException, each from the gh GitHub is given.
+	public static TheoryData<string> GhFailures => ["fails", "not on PATH", "can't start", "an IOException"];
+
+	[Theory]
+	[MemberData(nameof(GhFailures))]
+	public void A_files_length_is_unknown_when_gh_fails(string failure)
+	{
+		using var folder = new FailingGh();
+		Func<string> locate = failure switch
+		{
+			"fails" => () => folder.Gh,
+			"not on PATH" => () => throw new FileNotFoundException("gh"),
+			"can't start" => () => Path.Combine(folder.Path, "missing-gh"),
+			_ => () => throw new IOException("gh"),
+		};
+		Assert.Null(new GitHub("octo/demo", locate).LineCount("docs/a.md", Head));
+	}
+
 	[Fact]
-	public void Test_a_failed_post_fails_the_step() =>
+	public void A_failed_post_fails_the_step() =>
 			Assert.Throws<CalledProcessError>(() => Run(FindingsJson(("README.md", 1, "Off.")), new FakeGitHub(fail: "post")));
 
 	[Fact]
-	public void Test_findings_on_the_diff_only_pass()
+	public void Findings_on_the_diff_only_pass()
 	{
 		var gh = Run(FindingsJson(("src/app.py", 2, "On."))).Gh;
 
@@ -429,7 +452,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_no_findings_says_so()
+	public void No_findings_says_so()
 	{
 		var gh = Run(FindingsJson()).Gh;
 
@@ -465,7 +488,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_a_string_summary_renders_the_new_layout_with_the_summary_folded_as_it_is()
+	public void A_string_summary_renders_the_new_layout_with_the_summary_folded_as_it_is()
 	{
 		const string summary = "**Overview**\n\nAdds a cache.\n\n**Advisory (not blocking)**\n\n- A doc nit.";
 		var body = Run(FindingsJsonWith(summary, ("src/app.py", 2, "**Off by one**\n\nThe loop stops early."))).Gh.Body();
@@ -481,7 +504,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_the_structured_input_renders_each_section()
+	public void The_structured_input_renders_each_section()
 	{
 		var findings = Structured(new JsonObject
 		{
@@ -516,7 +539,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_a_section_left_out_of_the_input_is_left_out_of_the_body()
+	public void A_section_left_out_of_the_input_is_left_out_of_the_body()
 	{
 		var body = Run(Structured(new JsonObject { ["overview"] = "Only an overview." }, ("src/app.py", 2, "**T**", null))).Gh.Body();
 
@@ -529,7 +552,7 @@ public sealed partial class PostClaudeReviewTests
 	[InlineData(null)]
 	[InlineData("")]
 	[InlineData("  ")]
-	public void Test_without_an_effort_the_footer_says_only_claude_review(string? effort)
+	public void Without_an_effort_the_footer_says_only_claude_review(string? effort)
 	{
 		var gh = Run(FindingsJson(), extra: effort is null ? [] : ["--effort", effort]).Gh;
 
@@ -537,7 +560,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_the_effort_is_kept_on_one_line_and_cant_open_a_tag()
+	public void The_effort_is_kept_on_one_line_and_cant_open_a_tag()
 	{
 		var gh = Run(FindingsJson(), extra: ["--effort", "high\n- <b>x</b>"]).Gh;
 
@@ -549,7 +572,7 @@ public sealed partial class PostClaudeReviewTests
 	[InlineData("low", "high", "high", "one")]
 	[InlineData(null, null, null, "zero")]
 	[InlineData("medium", "medium", "low", "zero")]
-	public void Test_the_top_finding_is_the_most_severe_first_on_a_tie(string? first, string? second, string? third, string top)
+	public void The_top_finding_is_the_most_severe_first_on_a_tie(string? first, string? second, string? third, string top)
 	{
 		string?[] severities = [first, second, third];
 		var findings = Structured(null, [.. new[] { "zero", "one", "two" }.Select((name, i) => ("src/app.py", 2, $"**{name}**\n\nBody.", severities[i]))]);
@@ -558,7 +581,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_open_issues_sort_high_medium_low_then_unrated_keeping_claudes_order_within_each()
+	public void Open_issues_sort_high_medium_low_then_unrated_keeping_claudes_order_within_each()
 	{
 		(string Name, string? Severity)[] order = [("a", null), ("b", "low"), ("c", "high"), ("d", "medium"), ("e", "high"), ("f", null), ("g", "low")];
 		var body = Run(Structured(null, [.. order.Select(o => ("src/app.py", 2, $"**{o.Name}**", o.Severity))])).Gh.Body();
@@ -569,7 +592,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_a_finding_without_a_severity_has_no_badge()
+	public void A_finding_without_a_severity_has_no_badge()
 	{
 		var body = Run(Structured(null, ("src/app.py", 2, "**Plain**", null))).Gh.Body();
 
@@ -582,11 +605,11 @@ public sealed partial class PostClaudeReviewTests
 	[InlineData("No bold title here.\n\nSecond paragraph.", "No bold title here.")]
 	[InlineData("\n  Leading blank line, **not bold at the start**", "Leading blank line, **not bold at the start**")]
 	[InlineData("**  Spaced   title  **", "Spaced title")]
-	public void Test_a_findings_title_is_its_bold_first_line_or_else_its_first_line(string body, string title) =>
+	public void A_findings_title_is_its_bold_first_line_or_else_its_first_line(string body, string title) =>
 			Assert.Equal(title, PostClaudeReview.TitleOf(body));
 
 	[Fact]
-	public void Test_a_long_title_is_cut_with_an_ellipsis()
+	public void A_long_title_is_cut_with_an_ellipsis()
 	{
 		var title = PostClaudeReview.TitleOf("**" + string.Concat(Enumerable.Repeat("word ", 100)) + "**");
 
@@ -595,7 +618,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_the_markers_and_the_off_diff_section_are_as_before_and_last_with_bullets()
+	public void The_markers_and_the_off_diff_section_are_as_before_and_last_with_bullets()
 	{
 		var findings = Structured(new JsonObject
 		{
@@ -618,7 +641,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_the_thread_links_are_added_by_editing_the_posted_review()
+	public void The_thread_links_are_added_by_editing_the_posted_review()
 	{
 		var gh = Run(Structured(null, ("src/app.py", 2, "**Low one**", "low"), ("src/app.py", 22, "**High [one]**", "high"), ("README.md", 1, "Off.", null))).Gh;
 
@@ -635,12 +658,12 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_no_edit_when_no_thread_was_opened() => Assert.Empty(Run(FindingsJson(("README.md", 1, "Off."))).Gh.Updates);
+	public void No_edit_when_no_thread_was_opened() => Assert.Empty(Run(FindingsJson(("README.md", 1, "Off."))).Gh.Updates);
 
 	[Theory]
 	[InlineData("read")]
 	[InlineData("update")]
-	public void Test_a_failed_link_read_or_update_warns_and_keeps_the_first_body(string fail)
+	public void A_failed_link_read_or_update_warns_and_keeps_the_first_body(string fail)
 	{
 		var result = Run(FindingsJson(("src/app.py", 2, "**Title**")), new FakeGitHub(fail: fail));
 
@@ -651,7 +674,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_a_post_that_returns_no_id_warns_and_keeps_the_first_body()
+	public void A_post_that_returns_no_id_warns_and_keeps_the_first_body()
 	{
 		var result = Run(FindingsJson(("src/app.py", 2, "**Title**")), new FakeGitHub { Answer = () => Json("{}") });
 
@@ -660,7 +683,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_thread_links_match_by_path_and_body_and_fall_back_to_order()
+	public void Thread_links_match_by_path_and_body_and_fall_back_to_order()
 	{
 		List<Comment> comments = [new("a", 1, "x"), new("a", 1, "y")];
 		static List<JsonElement> Posted(string json) => Json(json).EnumerateArray().ToList();
@@ -677,7 +700,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_open_issues_past_the_limit_are_left_out_with_a_note()
+	public void Open_issues_past_the_limit_are_left_out_with_a_note()
 	{
 		var findings = new JsonArray();
 		for (var i = 0; i < 400; i++)
@@ -696,7 +719,7 @@ public sealed partial class PostClaudeReviewTests
 
 	[Theory]
 	[MemberData(nameof(LongExtras))]
-	public void Test_long_advisory_or_not_reviewed_is_left_out_to_fit_and_keeps_the_off_diff(string extras)
+	public void Long_advisory_or_not_reviewed_is_left_out_to_fit_and_keeps_the_off_diff(string extras)
 	{
 		var answer = JsonNode.Parse(extras)!.AsObject();
 		answer["overview"] = "Short.";
@@ -712,7 +735,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_short_advisory_and_not_reviewed_are_kept()
+	public void Short_advisory_and_not_reviewed_are_kept()
 	{
 		var body = Run("""{"overview": "Short.", "advisory": ["Rename it."], "not_reviewed": "The lock file.", "findings": []}""").Gh.Body();
 
@@ -722,7 +745,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_a_long_effort_is_capped_in_the_footer()
+	public void A_long_effort_is_capped_in_the_footer()
 	{
 		var body = Run(FindingsJson(), extra: ["--effort", new string('e', 70_000)]).Gh.Body();
 
@@ -731,7 +754,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_a_files_entry_keeps_only_path_and_description()
+	public void A_files_entry_keeps_only_path_and_description()
 	{
 		const string answer = """{"overview": "o", "files": [{"path": "src/a.py", "description": "d", "additions": 1}], "findings": []}""";
 
@@ -761,7 +784,7 @@ public sealed partial class PostClaudeReviewTests
 	[InlineData("""{"summary": "s", "not_reviewed": ["n"], "findings": []}""")]
 	[InlineData("""{"overview": 3, "findings": []}""")]
 	[InlineData("""{"summary": 3, "overview": "o", "findings": []}""")]
-	public void Test_malformed_findings_fail_with_a_clear_message_and_post_nothing(string findings)
+	public void Malformed_findings_fail_with_a_clear_message_and_post_nothing(string findings)
 	{
 		var result = Run(findings);
 
@@ -773,7 +796,7 @@ public sealed partial class PostClaudeReviewTests
 	[Theory]
 	[InlineData("")]
 	[InlineData("  \n")]
-	public void Test_empty_findings_say_a_secret_was_withheld_and_post_nothing(string findings)
+	public void Empty_findings_say_a_secret_was_withheld_and_post_nothing(string findings)
 	{
 		// The post job runs only once Claude has answered, so empty findings mean the answer quoted a secret and was withheld.
 		var result = Run(findings);
@@ -786,7 +809,7 @@ public sealed partial class PostClaudeReviewTests
 	}
 
 	[Fact]
-	public void Test_posting_needs_repo_pr_and_head() => Assert.Equal(2, RunWith(["--repo", "octo/demo"], FindingsJson()).Code);
+	public void Posting_needs_repo_pr_and_head() => Assert.Equal(2, RunWith(["--repo", "octo/demo"], FindingsJson()).Code);
 
 	public static TheoryData<string> LongSuggestionBodies => new(
 			"```suggestion\n" + new string('a', 200_000),
@@ -798,7 +821,7 @@ public sealed partial class PostClaudeReviewTests
 
 	[Theory]
 	[MemberData(nameof(LongSuggestionBodies))]
-	public void Test_suggestion_handling_takes_linear_time_on_long_input(string body)
+	public void Suggestion_handling_takes_linear_time_on_long_input(string body)
 	{
 		var clock = System.Diagnostics.Stopwatch.StartNew();
 		PostClaudeReview.VetSuggestions(body);
