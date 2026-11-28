@@ -5,15 +5,17 @@
 # status.sh does, it first builds the app with --help, which reads nothing, under a lock on scripts/ (flock(1)), so two runs at once don't build it
 # together (one builds, the other waits and finds it built); without flock, start one run first. No dotnet on PATH exits 127 with a message.
 #
-#   scripts/gate-timings.sh [--runs N] [--log FILE]   N defaults to 20; FILE to GATE_TIMINGS_LOG, else the primary checkout's docs/timings/gate-timings.tsv
+#   scripts/gate-timings.sh [--runs N] [--log FILE] [--help]   N defaults to 20; FILE to GATE_TIMINGS_LOG (an absolute path), else the
+#                                                            docs/timings/gate-timings.tsv of the checkout this script is in (its primary checkout's)
 set -euo pipefail
 here="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 command -v dotnet > /dev/null || {
   echo "gate-timings.sh: dotnet isn't on PATH; scripts/gate-timings.cs runs on the .NET SDK the Factory's global.json names (ADR 0017)" >&2
   exit 127
 }
-# It runs from scripts/, so the caller's folder goes with it: a relative --log is read from there, and the default log is that checkout's.
-export GATE_TIMINGS_CALLER_DIR="$PWD"
+# It runs from scripts/, so the caller's folder goes with it, for a relative --log. The default log is this checkout's, where scripts/lib/timings.sh
+# beside it writes, wherever it is called from.
+export GATE_TIMINGS_CALLER_DIR="$PWD" GATE_TIMINGS_HOME="$here"
 cd -- "$here"
 export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 \
   UseSharedCompilation=false

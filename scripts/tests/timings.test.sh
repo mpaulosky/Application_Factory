@@ -148,7 +148,14 @@ check "nor a log made a symlink after the run started" "$(ok test ! -s "$work/ta
 rm -f "$log"
 mkfifo "$work/fifo"
 status=0
-(cd "$repo" && GATE_TIMINGS_LOG="$work/fifo" timeout 20 bash -c "source '$lib'; timings_start gate.sh; timings_step one; timings_end; echo done") > "$work/out" 2>&1 || status=$?
+# Bounded by a watchdog in plain bash, not timeout(1), which macOS lacks: a run still blocked on the FIFO after 20 s is killed and fails the check.
+(cd "$repo" && GATE_TIMINGS_LOG="$work/fifo" exec bash -c "source '$lib'; timings_start gate.sh; timings_step one; timings_end; echo done") > "$work/out" 2>&1 &
+fifo_pid=$!
+(sleep 20 && kill -KILL "$fifo_pid" 2> /dev/null) > /dev/null 2>&1 &
+dog_pid=$!
+wait "$fifo_pid" || status=$?
+kill "$dog_pid" 2> /dev/null || true
+wait "$dog_pid" 2> /dev/null || true
 check "a log that isn't a regular file (a FIFO no one reads) is skipped, not waited on" "$(ok test "$status" == 0 -a "$(cat "$work/out")" == "done")"
 
 tgit -C "$repo" worktree add -q --detach "$work/linked"
@@ -249,11 +256,29 @@ status=0
 out="$(cd "$work" && "$summary" --log fixture.tsv)" || status=$?
 check "the summary prints the table, reading a relative --log from the caller's folder" \
   "$([[ $status == 0 ]] && grep -qxF '| gate.sh | lint | 2 | 15.0 | 20.0 | 20.0 | +100% |' <<< "$out" && echo 0 || echo 1)"
+# A copy of the summary in the throwaway checkout's linked worktree, so its build is a fresh one and its default log is that checkout's.
+copy="$work/linked/scripts"
+cp "$here/scripts/gate-timings.sh" "$here/scripts/gate-timings.cs" "$here/scripts/GateTimings.cs" \
+  "$here/scripts/Directory.Build.props" "$here/scripts/Directory.Build.targets" "$here/scripts/Directory.Packages.props" "$copy/"
+cp "$here/global.json" "$work/linked/"
+# Six runs at once on that fresh build: the flock prime builds it once, so every run passes (without the lock they trip over each other's build).
+if [[ "$(uname -s)" == Linux ]] && command -v flock > /dev/null; then
+  pids=()
+  for n in 1 2 3 4 5 6; do
+    (cd "$work" && bash "$copy/gate-timings.sh" --help > "$work/at-once.$n" 2>&1) &
+    pids+=("$!")
+  done
+  at_once=0
+  for n in 1 2 3 4 5 6; do
+    wait "${pids[$((n - 1))]}" && grep -qxF 'Usage: scripts/gate-timings.sh [--runs N] [--log FILE] [--help]' "$work/at-once.$n" || at_once=1
+  done
+  check "six runs of the summary at once on a fresh build all pass, with the usage" "$at_once"
+fi
 mkdir -p "$repo/docs/timings"
 cp "$work/fixture.tsv" "$repo/docs/timings/gate-timings.tsv"
 status=0
-out="$(cd "$work/linked" && "$summary")" || status=$?
-check "its default log is the caller's primary checkout's, from a linked worktree" \
+out="$(cd "$work" && bash "$copy/gate-timings.sh")" || status=$?
+check "its default log is the primary checkout's of the checkout it is in, from a linked worktree, wherever it is called from" \
   "$([[ $status == 0 ]] && grep -qF "from $repo/docs/timings/gate-timings.tsv:" <<< "$out" && echo 0 || echo 1)"
 status=0
 "$summary" --runs 0 > /dev/null 2>&1 || status=$?

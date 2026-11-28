@@ -3,18 +3,25 @@
 //
 //     run  started  branch  commit  script  step  seconds  status
 //
-// and writes a Markdown table of its last N runs (the runs in the order they first appear), one row per script and step, slowest median first: the run
+// and writes a Markdown table of its last N runs (the runs in the order they started, the order they first appear on a tie: two gates in two worktrees
+// append to one log at once), one row per script and step, slowest median first: the run
 // count, the median, the slowest and the latest seconds, and the change from the median of the older half of those runs to the newer half's. A run that
 // logged a step twice counts its last. A skipped step (a cached pass covered it, or there was nothing for it to check) is counted apart, not timed; a line
-// that isn't eight tab-separated fields with a plain decimal for its seconds is left out and counted. Above the table: the runs' first and last start, a
-// full gate run's median total, and the commits where the halves meet, so a report needs nothing from the raw log. Every name it prints is cleaned
-// (control, line-separator and bidi characters as spaces) and Markdown-escaped, since a line can come from any branch's run or any file.
+// that isn't eight tab-separated fields with a plain decimal for its seconds (at most 9 digits before the point and 3 after) is left out and counted.
+// Above the table: the runs' first and last start, the median total of the full gate runs among them (a run that logged the self part's step, test.sh and
+// the Sandcastle check, none of its gate.sh steps failed; a --quick run, one part alone, a run that failed, was killed or is still going isn't one), and
+// the commits where the halves meet, so a report needs nothing from the raw log. Every name it prints is cleaned (every control, format, separator,
+// private-use and unassigned character, and a lone surrogate, as a space: the bidi controls, zero-width characters and tag characters among them) and
+// Markdown-escaped, since a line can come from any branch's run or any file.
 //
 // The log is --log FILE, else GATE_TIMINGS_LOG (an absolute path; a relative one is refused, as the writer refuses it), else
-// docs/timings/gate-timings.tsv beside the .git folder the caller's checkout shares with its worktrees (the primary checkout's). A relative --log is the
-// caller's, GATE_TIMINGS_CALLER_DIR, which scripts/gate-timings.sh sets since it runs this from scripts/. git is started by its full path from PATH's
-// absolute folders, never from the current or the app's folder.
-// --help prints the usage and reads nothing (scripts/gate-timings.sh builds the app with it). Exit 0 with the table or the usage, 1 when there is no log or no step line in it (or an unexpected error, said on stderr), 2 for a bad argument.
+// docs/timings/gate-timings.tsv beside the .git folder that the checkout scripts/gate-timings.sh is in shares with its worktrees (the primary checkout's),
+// as scripts/lib/timings.sh writes it: the wrapper names its folder in GATE_TIMINGS_HOME (the caller's folder without it). A relative --log is the
+// caller's, GATE_TIMINGS_CALLER_DIR, which the wrapper sets since it runs this from scripts/. git is started by its full path from PATH's absolute
+// folders, never from the current or the app's folder.
+// Exit 0 with the table or the usage; 1, saying why on stderr, when there is no log yet or no step line in it (the only cases a gate run mends), when
+// the log can't be read, git isn't on PATH or the folder isn't a checkout, or on an unexpected error ("gate-timings failed: ..."); 2 for a bad argument.
+// --help prints the usage and reads nothing (scripts/gate-timings.sh builds the app with it).
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
@@ -22,7 +29,7 @@ using System.Text;
 static class GateTimings
 {
 	public const int DefaultRuns = 20;
-	const string Usage = "Usage: scripts/gate-timings.sh [--runs N] [--log FILE]";
+	const string Usage = "Usage: scripts/gate-timings.sh [--runs N] [--log FILE] [--help]";
 
 	// One script and step over the runs read: one time per run, with the run's place (1 for the oldest run read).
 	public sealed record Step(string Script, string Name, IReadOnlyList<(int Place, double Seconds)> Times)
@@ -32,8 +39,14 @@ static class GateTimings
 		public double Latest => Times.MaxBy(time => time.Place).Seconds;
 	}
 
-	// One run read: its first line's start and commit, and the sum of its gate.sh lines' seconds (null when it logged none).
+	// One run read: its first line's start and commit, and the sum of its gate.sh lines' seconds when it was a full gate run (null otherwise).
 	public sealed record RunInfo(string Started, string Commit, double? GateSeconds);
+
+	// The gate.sh steps only a full gate run logs all of: the self part's first, the template part's test.sh, and the Sandcastle check, its last.
+	static readonly string[] FullGateSteps = ["scripts/tests/gate.test.sh", "test.sh", "Sandcastle check"];
+
+	// What git said of a folder: the shared git folder (null outside a checkout), and whether a git was found to ask at all.
+	public sealed record GitAnswer(string? CommonDir, bool GitFound);
 
 	public sealed record Summary(IReadOnlyList<RunInfo> RunList, IReadOnlyList<Step> Steps, int Skipped, int Malformed)
 	{
@@ -47,8 +60,18 @@ static class GateTimings
 		var utf8 = new UTF8Encoding(false);
 		using var stdout = new StreamWriter(Console.OpenStandardOutput(), utf8) { NewLine = "\n" };
 		using var stderr = new StreamWriter(Console.OpenStandardError(), utf8) { NewLine = "\n", AutoFlush = true };
-		return Guarded(() => Run(args, stdout, stderr, GitCommonDir, Environment.GetEnvironmentVariable), stderr);
+		return RunFlushed(args, stdout, stderr, GitCommonDir, Environment.GetEnvironmentVariable);
 	}
+
+	// Run, with stdout flushed inside the guard, so a write that fails at the end (a full disk) is a message and exit 1 too, and the writer's dispose
+	// has nothing left to write.
+	public static int RunFlushed(string[] args, TextWriter stdout, TextWriter stderr, Func<string, string?, GitAnswer> gitCommonDir, Func<string, string?> environment) =>
+		Guarded(() =>
+		{
+			var code = Run(args, stdout, stderr, gitCommonDir, environment);
+			stdout.Flush();
+			return code;
+		}, stderr);
 
 	public static int Guarded(Func<int> run, TextWriter stderr)
 	{
@@ -63,7 +86,7 @@ static class GateTimings
 		}
 	}
 
-	public static int Run(string[] args, TextWriter stdout, TextWriter stderr, Func<string, string?, string?> gitCommonDir, Func<string, string?> environment)
+	public static int Run(string[] args, TextWriter stdout, TextWriter stderr, Func<string, string?, GitAnswer> gitCommonDir, Func<string, string?> environment)
 	{
 		var caller = environment("GATE_TIMINGS_CALLER_DIR");
 		if (string.IsNullOrEmpty(caller))
@@ -108,10 +131,18 @@ static class GateTimings
 		}
 		if (log is null)
 		{
-			var common = gitCommonDir(caller, environment("PATH"));
+			var home = environment("GATE_TIMINGS_HOME");
+			var folder = string.IsNullOrEmpty(home) ? caller : home;
+			var answer = gitCommonDir(folder, environment("PATH"));
+			if (!answer.GitFound)
+			{
+				stderr.WriteLine("git isn't in any of PATH's absolute folders, so the default log can't be found: pass --log FILE.");
+				return 1;
+			}
+			var common = answer.CommonDir;
 			if (common is null)
 			{
-				stderr.WriteLine("Not in a git checkout, so there is no docs/timings/gate-timings.tsv to read: pass --log FILE.");
+				stderr.WriteLine($"{Clean(folder)} isn't in a git checkout, so there is no docs/timings/gate-timings.tsv to read: pass --log FILE.");
 				return 1;
 			}
 			common = Path.TrimEndingDirectorySeparator(common);
@@ -128,9 +159,15 @@ static class GateTimings
 		{
 			lines = File.ReadAllLines(log, new UTF8Encoding(false));
 		}
-		catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+		catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
 		{
 			stderr.WriteLine($"No step timings log at {Clean(log)} yet: a run of scripts/gate.sh writes it.");
+			return 1;
+		}
+		catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+		{
+			var what = Directory.Exists(log) ? "it is a folder" : Clean(error.Message);
+			stderr.WriteLine($"Can't read the step timings log at {Clean(log)}: {what}.");
 			return 1;
 		}
 		var summary = Summarize(lines, runs);
@@ -157,22 +194,36 @@ static class GateTimings
 			}
 			rows.Add(fields);
 		}
-		var order = rows.Select(fields => fields[0]).Distinct().ToList();
+		// Each run's first start (ISO 8601 UTC, so ordinal order is time order), then its first line's place, for a tie.
+		var order = rows.Select((fields, index) => (Run: fields[0], Started: fields[1], Index: index))
+			.GroupBy(row => row.Run)
+			.Select(group => (Run: group.Key, Started: group.Select(row => row.Started).Min(StringComparer.Ordinal)!, First: group.First().Index))
+			.OrderBy(run => run.Started, StringComparer.Ordinal).ThenBy(run => run.First)
+			.Select(run => run.Run).ToList();
 		var chosen = order.Skip(Math.Max(0, order.Count - runs)).Select((run, index) => (run, index)).ToDictionary(pair => pair.run, pair => pair.index + 1);
 		var skipped = 0;
 		// Per script and step, per run place, the last time logged.
 		var steps = new Dictionary<(string Script, string Name), SortedDictionary<int, double>>();
 		var keys = new List<(string Script, string Name)>();
 		var info = new Dictionary<int, RunInfo>();
+		var gateSeconds = new Dictionary<int, double>();
+		var gateSteps = new Dictionary<int, HashSet<string>>();
+		var gateFailed = new HashSet<int>();
 		foreach (var fields in rows)
 		{
 			if (!chosen.TryGetValue(fields[0], out var place))
 				continue;
 			var seconds = double.Parse(fields[6], NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture);
-			var run = info.TryGetValue(place, out var known) ? known : new RunInfo(fields[1], fields[3], null);
+			info.TryAdd(place, new RunInfo(fields[1], fields[3], null));
 			if (fields[4] == "gate.sh")
-				run = run with { GateSeconds = (run.GateSeconds ?? 0) + seconds };
-			info[place] = run;
+			{
+				gateSeconds[place] = gateSeconds.GetValueOrDefault(place) + seconds;
+				if (!gateSteps.TryGetValue(place, out var seen))
+					gateSteps[place] = seen = [];
+				seen.Add(fields[5]);
+				if (fields[7] == "failed")
+					gateFailed.Add(place);
+			}
 			if (fields[7] == "skipped")
 			{
 				skipped++;
@@ -188,7 +239,10 @@ static class GateTimings
 		}
 		var list = keys.Select(key => new Step(key.Script, key.Name, steps[key].Select(time => (time.Key, time.Value)).ToList()))
 			.OrderByDescending(step => step.Median).ToList();
-		var runList = Enumerable.Range(1, chosen.Count).Select(place => info[place]).ToList();
+		var runList = Enumerable.Range(1, chosen.Count).Select(place =>
+			gateSteps.TryGetValue(place, out var seen) && FullGateSteps.All(seen.Contains) && !gateFailed.Contains(place)
+				? info[place] with { GateSeconds = gateSeconds[place] }
+				: info[place]).ToList();
 		return new Summary(runList, list, skipped, malformed);
 	}
 
@@ -219,7 +273,11 @@ static class GateTimings
 		if (totals.Count > 0)
 		{
 			text.Append(CultureInfo.InvariantCulture,
-				$"A gate run's median total: {Seconds(Median(totals))} s, over the {totals.Count} run(s) that logged gate.sh steps (its test.sh step holds test.sh's rows).\n");
+				$"A full gate run's median total: {Seconds(Median(totals))} s, over the {totals.Count} full gate run(s) of these {summary.Runs} (its test.sh step holds test.sh's rows).\n");
+		}
+		else
+		{
+			text.Append("No full gate run among these (one that logged the self part, test.sh and the Sandcastle check, none of its steps failed), so no total.\n");
 		}
 		if (summary.Runs >= 2)
 		{
@@ -248,12 +306,12 @@ static class GateTimings
 		return sorted.Count % 2 == 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 	}
 
-	// The git folder all of the checkout's worktrees share, for a folder in it, absolute, or null outside a checkout or without git on PATH.
-	public static string? GitCommonDir(string folder, string? path)
+	// The git folder all of the checkout's worktrees share, for a folder in it, absolute (null outside a checkout), and whether git was on PATH at all.
+	public static GitAnswer GitCommonDir(string folder, string? path)
 	{
 		var git = Which("git", path);
 		if (git is null)
-			return null;
+			return new GitAnswer(null, false);
 		try
 		{
 			using var process = Process.Start(new ProcessStartInfo(git, ["rev-parse", "--path-format=absolute", "--git-common-dir"])
@@ -265,17 +323,17 @@ static class GateTimings
 				UseShellExecute = false,
 			});
 			if (process is null)
-				return null;
+				return new GitAnswer(null, true);
 			process.StandardInput.Close();
 			var errors = process.StandardError.ReadToEndAsync();
 			var output = process.StandardOutput.ReadToEnd().Trim();
 			process.WaitForExit();
 			_ = errors.GetAwaiter().GetResult();
-			return process.ExitCode == 0 && output.Length > 0 ? output : null;
+			return new GitAnswer(process.ExitCode == 0 && output.Length > 0 ? output : null, true);
 		}
 		catch (Exception error) when (error is System.ComponentModel.Win32Exception or IOException)
 		{
-			return null;
+			return new GitAnswer(null, true);
 		}
 	}
 
@@ -294,20 +352,38 @@ static class GateTimings
 		return null;
 	}
 
-	static bool IsSeconds(string text) =>
-		text.Length > 0 && text.All(c => char.IsAsciiDigit(c) || c == '.') && char.IsAsciiDigit(text[0]) && char.IsAsciiDigit(text[^1])
-		&& text.Count(c => c == '.') <= 1;
+	// A plain decimal: 1 to 9 digits, then optionally a point and 1 to 3 more (the writer prints a tenth). A longer one is malformed, not Infinity.
+	public static bool IsSeconds(string text)
+	{
+		var point = text.IndexOf('.');
+		var whole = point < 0 ? text : text[..point];
+		var part = point < 0 ? "0" : text[(point + 1)..];
+		return whole.Length is >= 1 and <= 9 && part.Length is >= 1 and <= 3 && whole.All(char.IsAsciiDigit) && part.All(char.IsAsciiDigit);
+	}
 
 	static string Seconds(double value) => value.ToString("0.0", CultureInfo.InvariantCulture);
 
-	// Text from the log or the command line, for a terminal: every control character (C0, DEL, C1), line or paragraph separator and bidi control as a space.
+	// Text from the log or the command line, for a terminal and an agent: every rune that is a control (C0, DEL, C1), a format character (the bidi
+	// controls, zero-width characters, the byte-order mark, the soft hyphen, the tag characters), a line or paragraph separator, private-use or unassigned,
+	// and a lone surrogate, as one space each. What is left is text a person sees as it is.
 	public static string Clean(string text)
 	{
 		var clean = new StringBuilder(text.Length);
-		foreach (var c in text)
+		for (var i = 0; i < text.Length;)
 		{
-			var hidden = char.IsControl(c) || (int)c is 0x2028 or 0x2029 or 0x061C or 0x200E or 0x200F or (>= 0x202A and <= 0x202E) or (>= 0x2066 and <= 0x2069);
-			clean.Append(hidden ? ' ' : c);
+			if (Rune.DecodeFromUtf16(text.AsSpan(i), out var rune, out var used) != System.Buffers.OperationStatus.Done)
+			{
+				clean.Append(' ');
+				i += Math.Max(used, 1);
+				continue;
+			}
+			i += used;
+			var hidden = Rune.GetUnicodeCategory(rune) is UnicodeCategory.Control or UnicodeCategory.Format or UnicodeCategory.LineSeparator
+				or UnicodeCategory.ParagraphSeparator or UnicodeCategory.PrivateUse or UnicodeCategory.OtherNotAssigned or UnicodeCategory.Surrogate;
+			if (hidden)
+				clean.Append(' ');
+			else
+				clean.Append(rune.ToString());
 		}
 		return clean.ToString();
 	}
