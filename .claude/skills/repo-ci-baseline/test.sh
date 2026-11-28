@@ -8,7 +8,7 @@
 # the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle, the parity suites
 # (status, land, settings, check_gh_repo, the release scripts, draft_release and post_claude_review as .py and .cs, detect_changes, discover_tests, load_test_env, check_central_pins and rollout), the Claude Review benchmark's --rescore parity suite and
 # the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land, settings, rollout and its AutoRollout libraries,
-# what they share, the two checkers in tests/, the benchmark and the Template's scripts in Template/, post_claude_review's in its own
+# the Factory's step timings summary (its scripts/GateTimings.cs), what they share, the two checkers in tests/, the benchmark and the Template's scripts in Template/, post_claude_review's in its own
 # namespace), lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
 # Owned files carry no {{PLACEHOLDER}} and that the Owned scripts, and this repo's own
@@ -36,13 +36,31 @@ seed="$skill_dir/template/seed"
 
 # A local pytest run must not leave caches in the Template for Apply to copy.
 export PYTHONDONTWRITEBYTECODE=1
+# Each step's wall time goes to the Factory's step timings log (its scripts/lib/timings.sh, mpaulosky/Application_Factory#220): step starts one, the end
+# of the run or the EXIT trap ends the last, and a step in which a check failed is logged as failed. Started by scripts/gate.sh, the steps join the gate's
+# run. With no such file (the skill run from elsewhere) nothing is timed. The library is found from the physical folder, so a run through the
+# ~/.claude/skills symlink finds the Factory's. Timing never changes a check's result or output.
+timings_lib=""
+if factory_dir="$(CDPATH='' cd -P -- "$skill_dir/../../.." 2> /dev/null && pwd -P)"; then timings_lib="$factory_dir/scripts/lib/timings.sh"; fi
+if [[ -n "$timings_lib" && -f "$timings_lib" ]]; then
+  # The library is shellchecked as a file of its own, and a copy of the skill outside the Factory has none, so shellcheck isn't asked to follow it.
+  # shellcheck source=../../../scripts/lib/timings.sh disable=SC1091
+  source "$timings_lib"
+else
+  timings_start() { :; }
+  timings_step() { :; }
+  timings_mark() { :; }
+  timings_end() { :; }
+  timings_finish() { :; }
+fi
+test_rc=0
 # The tests build throwaway repos. A global init.templateDir would install this
 # machine's own hooks into each of them and block their commits.
 # Both folders are made absolute, so a relative TMPDIR still names them from the folders the steps cd into. Each mktemp is its own assignment, so a failed
 # one stops the run under set -e, and each is made absolute by prefixing $PWD rather than by cd, which a caller's CDPATH would make print the folder too.
 # The trap comes first, over empty names, so a second mktemp that fails still removes the first folder.
 GIT_TEMPLATE_DIR="" md_tmp=""
-trap 'command rm -rf ${GIT_TEMPLATE_DIR:+"$GIT_TEMPLATE_DIR"} ${md_tmp:+"$md_tmp"}' EXIT
+trap 'test_rc=$?; timings_finish "$test_rc"; command rm -rf ${GIT_TEMPLATE_DIR:+"$GIT_TEMPLATE_DIR"} ${md_tmp:+"$md_tmp"}' EXIT
 GIT_TEMPLATE_DIR="$(mktemp -d)"
 [[ "$GIT_TEMPLATE_DIR" == /* ]] || GIT_TEMPLATE_DIR="$PWD/$GIT_TEMPLATE_DIR"
 export GIT_TEMPLATE_DIR
@@ -50,11 +68,16 @@ md_tmp="$(mktemp -d)"
 [[ "$md_tmp" == /* ]] || md_tmp="$PWD/$md_tmp"
 
 failures=0
+# The failures when the open step started: more by its end, and it is logged as failed.
+step_failures=0
 # Each header carries the seconds since test.sh started (bash's SECONDS, reset at the top), so a log shows which step ran long
 # (a step's time is the next header's minus its own) even when the run is killed at a limit (mpaulosky/dotfiles#417).
 step() {
   echo
   echo "── $1 [+${SECONDS}s]"
+  ((failures == step_failures)) || timings_mark failed
+  step_failures=$failures
+  timings_step "$1"
 }
 fail() {
   echo "FAIL: $1" >&2
@@ -188,15 +211,17 @@ scripts_tests_run() {
   (cd "$1" && TMPDIR="$tmp" DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 \
     dotnet test --project Scripts.Tests.csproj -p:RestoreLockedMode=true -p:UseSharedCompilation=false --artifacts-path "$out" --results-directory "$out/results")
 }
-# Copies the skill into folder argument 1, as <argument 1>/.claude/skills/repo-ci-baseline with the Factory's CLAUDE.md at <argument 1>, for a check on a
+# Copies the skill into folder argument 1, as <argument 1>/.claude/skills/repo-ci-baseline with the Factory's CLAUDE.md, ADR 0016 and scripts/GateTimings.cs
+# under <argument 1>, for a check on a
 # copy of the C# scripts' test project, and prints the copy's project folder: the project compiles the scripts in the skill's github/ and its tests read
-# the skill's files, and the Factory's checkout three folders above the skill (AutoRollout.Factory: its CLAUDE.md, and ADR 0016 in its docs/adr/), so
+# the skill's files, and the Factory's checkout three folders above the skill (AutoRollout.Factory: its CLAUDE.md, and ADR 0016 in its docs/adr/; the
+# project compiles the Factory's scripts/GateTimings.cs, mpaulosky/Application_Factory#220), so
 # a copy builds and passes only in that layout.
 # What a build wrote into the project's folder (bin/, obj/, TestResults/) is left out.
 scripts_tests_copy() {
   local copy="$1/.claude/skills/repo-ci-baseline"
-  mkdir -p "$copy" "$1/docs/adr" && cp -R "$skill_dir/." "$copy" && cp "$skill_dir/../../../CLAUDE.md" "$1/" \
-    && cp "$skill_dir"/../../../docs/adr/0016-*.md "$1/docs/adr/" || return 1
+  mkdir -p "$copy" "$1/docs/adr" "$1/scripts" && cp -R "$skill_dir/." "$copy" && cp "$skill_dir/../../../CLAUDE.md" "$1/" \
+    && cp "$skill_dir"/../../../docs/adr/0016-*.md "$1/docs/adr/" && cp "$skill_dir/../../../scripts/GateTimings.cs" "$1/scripts/" || return 1
   rm -rf "$copy/tests/Scripts.Tests/bin" "$copy/tests/Scripts.Tests/obj" "$copy/tests/Scripts.Tests/TestResults"
   printf '%s\n' "$copy/tests/Scripts.Tests"
 }
@@ -221,6 +246,8 @@ if [[ -n "$shard" ]] && ((known == 0)); then
   echo "test.sh: TEST_SH_SHARD must be one of ${shards[*]}, not '$shard'." >&2
   exit 2
 fi
+timings_start "test.sh${shard:+ ($shard shard)}"
+timings_step "Setup (the tools it needs)"
 in_shard() { [[ -z "$shard" || "$shard" == "$1" ]]; }
 
 for tool in actionlint zizmor yamllint shellcheck shfmt markdownlint-cli2 git; do need "$tool"; done
@@ -1213,6 +1240,12 @@ HALF
       is_empty_shield "$skill_dir/$shielded/$shield" || fail "$shielded/$shield must be the empty shield, <Project />"
     done
   done
+  # And the Factory's own scripts/, beside scripts/gate-timings.cs (mpaulosky/Application_Factory#220), when the skill is the Factory's.
+  if [[ -n "${factory_dir:-}" && -f "$factory_dir/scripts/gate-timings.cs" ]]; then
+    for shield in Directory.Build.props Directory.Build.targets Directory.Packages.props; do
+      is_empty_shield "$factory_dir/scripts/$shield" || fail "the Factory's scripts/$shield must be the empty shield, <Project />"
+    done
+  fi
   printf '<Project />\n' > "$md_tmp/shield.props"
   is_empty_shield "$md_tmp/shield.props" || fail "the shield check refuses <Project />"
   for wrong in '<Project></Project>' '<Project><Import Project="../x.props" /></Project>' ''; do
@@ -2232,6 +2265,8 @@ PY
   "$skill_dir/tests/reapply.test.sh" || fail "reapply.test.sh"
 fi # the checks shard
 
+((failures == step_failures)) || timings_mark failed
+timings_end
 echo
 if [[ $failures -gt 0 ]]; then
   echo "test.sh${shard:+ ($shard shard)}: $failures check(s) failed [+${SECONDS}s]"

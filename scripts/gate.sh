@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # The Application Factory's pre-push gate, run by .github/hooks/pre-push (a copy of the Template's) and safe to run by hand.
-# The Factory isn't a .NET repo, so its gate is what its CI runs: first this script's own test and the review's three stand-alone tests (they install
+# The Factory isn't a .NET repo, so its gate is what its CI runs: first this script's own test and the step timings' (scripts/tests/timings.test.sh), and the review's three stand-alone tests (they install
 # the packages with pnpm), then the branch's size (a warning past the review's line of 30 files or 3,000 lines, scripts/review.sh size; it never fails the gate), then that its copies of Template files haven't drifted from the Template (ADR 0006), then that no Owned file has a bare #N (tests/check-issue-refs.sh),
 # then that no Owned script reads git status --porcelain without --untracked-files (tests/check-git-status.sh; both are C# file-based apps, ADR 0017), then the Markdown and YAML lint, then shellcheck of the shell files the branch changes, then that every shell file is formatted as shfmt formats it, then ruff over every Python file, then dotnet format whitespace of every C# file and a build of every C# script with warnings as errors (ADR 0017), then that the branch passed the local review (scripts/review.sh check, ADR 0010; GATE_SKIP_REVIEW=1 skips it),
 # then the repo-ci-baseline skill's test.sh (skipped when it already passed on the same clean tree and .NET SDK; GATE_NO_CACHE=1 runs it). This script is the Factory's own, not a copy of the Template's scripts/gate.sh.
+# Every step's wall time is logged to the step timings log (scripts/lib/timings.sh, below), and a run ends with its five slowest steps.
 
-# GATE_PART=self|review|static|template|sandcastle runs one part of this gate, which is how CI runs a part per job (ADR 0012, ADR 0013): self is this script's own test, review the
+# GATE_PART=self|review|static|template|sandcastle runs one part of this gate, which is how CI runs a part per job (ADR 0012, ADR 0013): self is this script's own test and the step timings' (scripts/tests/timings.test.sh), review the
 # review's stand-alone tests, static the size warning, the copies, the issue references, the git status guards, the lint, shellcheck, shfmt, ruff and the C# check, template the review check and test.sh, sandcastle the Template's Sandcastle check.
 # With no GATE_PART every part runs, in that order, except that sandcastle runs only when the branch changed a file it reads (a part run by name always runs). The pre-push hook drops GATE_PART.
 # TEST_SH_SHARD=hooks|scripts|checks, with GATE_PART=template, runs one shard of test.sh (ADR 0013); any other run of the gate ignores it and runs the whole of test.sh.
@@ -14,7 +15,7 @@ set -euo pipefail
 # dotnet sends no CLI usage data and skips its first-run setup, as in the Template's ci.yml, and prints no logo (DOTNET_NOLOGO, the Factory's own addition).
 export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1
 
-# scripts/gate.sh --quick: the checks that finish in about a minute (its test, the review tests, the size warning, the copies' drift, the bare-#N check, the git status guard check, lint, shellcheck of the shell files the branch changes, shfmt of every shell file, ruff of every Python file, the C# check), then stop before the local
+# scripts/gate.sh --quick: the checks that finish in about a minute (its test and the step timings' test, the review tests, the size warning, the copies' drift, the bare-#N check, the git status guard check, lint, shellcheck of the shell files the branch changes, shfmt of every shell file, ruff of every Python file, the C# check), then stop before the local
 # review check, test.sh and the Sandcastle check. It is for iterating, never for pushing: the pre-push hook and CI call this script with no argument.
 # scripts/gate.sh --sync: copies every Template file the Factory carries over its copy (cp -p keeps the execute bit), prints the ones that changed,
 # and stops. A copy edited by hand is overwritten, so edit the Template's file. Run it after editing the Template's file; the drift check below is what finds a copy you forgot.
@@ -119,18 +120,43 @@ if ((sync)); then
   exit 0
 fi
 
+# Each step's wall time goes to the step timings log (scripts/lib/timings.sh, mpaulosky/Application_Factory#220): header starts a step, the EXIT trap ends the
+# last one (as failed when the gate fails) and prints the run's five slowest steps, and test.sh, started by the gate, logs its own steps under the gate's run.
+# A gate with no scripts/lib/timings.sh, as in gate.test.sh's throwaway repos, times nothing. Timing never changes a step's result or output.
+if [[ -f "$ROOT/scripts/lib/timings.sh" ]]; then
+  # The library is shellchecked as a file of its own; a copy of this script without it (scripts/tests/gate.test.sh's repos) uses the stubs below.
+  # shellcheck source=SCRIPTDIR/lib/timings.sh disable=SC1091
+  source "$ROOT/scripts/lib/timings.sh"
+else
+  timings_start() { :; }
+  timings_step() { :; }
+  timings_mark() { :; }
+  timings_finish() { :; }
+  timings_slowest() { :; }
+fi
+timings_start gate.sh
+gate_rc=0
+trap 'gate_rc=$?; timings_finish "$gate_rc"; timings_slowest 5' EXIT
+# header <name>: prints the step's header and starts its timing.
+header() {
+  echo -e "\n${CYAN}▶ $1${RESET}"
+  timings_step "$1"
+}
+
 run_self() {
   # The test runs this script against throwaway repos, with GATE_SKIP_SELF_TEST=1 so those runs don't test themselves again.
   if [[ "${GATE_SKIP_SELF_TEST:-}" != "1" ]]; then
-    echo -e "\n${CYAN}▶ scripts/tests/gate.test.sh${RESET}"
+    header "scripts/tests/gate.test.sh"
     "$ROOT/scripts/tests/gate.test.sh"
+    header "scripts/tests/timings.test.sh"
+    "$ROOT/scripts/tests/timings.test.sh"
   fi
 }
 
 run_review() {
   if [[ "${GATE_SKIP_SELF_TEST:-}" != "1" ]]; then
     # The three copied tests that stand alone (ADR 0010); the Template's Sandcastle check runs the rest.
-    echo -e "\n${CYAN}▶ Local review tests${RESET}"
+    header "Local review tests"
     if [[ ! -x node_modules/.bin/tsx ]]; then
       if ! command -v pnpm > /dev/null 2>&1; then
         echo "❌ node_modules/.bin/tsx not found, and pnpm isn't installed: run corepack enable pnpm, then pnpm install." >&2
@@ -151,7 +177,7 @@ run_static() {
   # The warning /pre-push-review's first round gives for a branch past 30 files or 3,000 lines (a file and its Template mirror count once), given here too so a branch
   # is caught while it grows and not once its review starts. scripts/review.sh size holds the line, so it is written down once. It only advises: a mechanical change, a
   # mass rename say, can be past the line and still easy to review, so neither the warning nor a size that can't be measured fails the gate.
-  echo -e "\n${CYAN}▶ Branch size${RESET}"
+  header "Branch size"
   local size size_base
   if ! git rev-parse -q --verify refs/remotes/origin/main > /dev/null || ! size_base="$(git merge-base HEAD refs/remotes/origin/main 2> /dev/null)"; then
     echo "skipped: no origin/main, or no merge base with it, to measure the branch from (run git fetch origin main)."
@@ -163,7 +189,7 @@ run_static() {
     echo "under the line (30 files, 3,000 lines)."
   fi
 
-  echo -e "\n${CYAN}▶ Copies of Template files${RESET}"
+  header "Copies of Template files"
   drifted=()
   for file in "${copies[@]}"; do
     # Content and execute bit, as Apply compares them.
@@ -181,7 +207,7 @@ run_static() {
   # test.sh's issue-reference rule (a bare #N in an Owned file), run here too so --quick catches it and not only the template part (test.sh).
   # Both checkers are C# file-based apps (ADR 0017) that their wrappers run with dotnet run from the checker's own folder, which builds one on its
   # first run in a worktree (about a second; this part runs each once). A wrapper with no dotnet on PATH exits 2, saying so.
-  echo -e "\n${CYAN}▶ Issue references in Owned files${RESET}"
+  header "Issue references in Owned files"
   # Exit 1 is a bare #N (the checker printed it); anything else (2: a folder, file or directory it could not check, a crash, or no dotnet) is the check itself failing, and fails the gate too.
   refs_rc=0
   bash "$skill/tests/check-issue-refs.sh" "$owned" || refs_rc=$?
@@ -194,7 +220,7 @@ run_static() {
   fi
 
   # test.sh's git status rule (a guard reading git status --porcelain names --untracked-files), run here too so --quick catches it. Same exit codes as the issue-reference check.
-  echo -e "\n${CYAN}▶ git status guards in Owned scripts${RESET}"
+  header "git status guards in Owned scripts"
   status_rc=0
   bash "$skill/tests/check-git-status.sh" "$owned" || status_rc=$?
   if ((status_rc == 1)); then
@@ -207,12 +233,12 @@ run_static() {
 
   # What the Lint Markdown and Lint YAML workflows run over the whole repo, so a failure shows here and not first on GitHub (ADR 0009).
   # The pre-commit hook lints staged Markdown only; test.sh lints the Template's files only.
-  echo -e "\n${CYAN}▶ markdownlint (whole repo, as Lint Markdown)${RESET}"
+  header "markdownlint (whole repo, as Lint Markdown)"
   markdownlint-cli2 '**/*.md' || {
     echo -e "${RED}❌ markdownlint${RESET}" >&2
     exit 1
   }
-  echo -e "\n${CYAN}▶ yamllint (whole repo, as Lint YAML)${RESET}"
+  header "yamllint (whole repo, as Lint YAML)"
   yamllint -c .yamllint.yml . || {
     echo -e "${RED}❌ yamllint${RESET}" >&2
     exit 1
@@ -256,10 +282,11 @@ run_static() {
     fi
     wait "$cs_pid" 2> /dev/null || true
   }
-  trap 'cs_stop; command rm -rf -- ${changed_list:+"$changed_list"} ${all_list:+"$all_list"} ${cs_out:+"$cs_out"}' EXIT
+  # It replaces the timings trap above, so it ends the timings too.
+  trap 'gate_rc=$?; cs_stop; command rm -rf -- ${changed_list:+"$changed_list"} ${all_list:+"$all_list"} ${cs_out:+"$cs_out"}; timings_finish "$gate_rc"; timings_slowest 5' EXIT
   # Lint with ShellCheck the shell files this branch changes (added, copied, modified, renamed or type-changed, committed or not, against its merge base with origin/main; every tracked and untracked
   # shell file when there is no origin/main or no merge base), so --quick finds what test.sh's shellcheck step would fail in the template part.
-  echo -e "\n${CYAN}▶ shellcheck (changed shell files)${RESET}"
+  header "shellcheck (changed shell files)"
   if ! command -v shellcheck > /dev/null 2>&1; then
     echo -e "${RED}❌ shellcheck not found: the gate needs it (test.sh runs it too).${RESET}" >&2
     exit 1
@@ -293,7 +320,7 @@ run_static() {
   # style flags, so it reads that file and the style is written down once. All of them, not only the changed ones: the step takes well under a second.
   # shfmt must be v3.14 or a later v3, the releases test.sh accepts (the same regex): this refuses v2, v4 and a v3 before v3.14. It doesn't make every accepted release format
   # alike: a later v3 that formats differently fails files CI's pinned one passes, and then the files are reformatted or the pin moves.
-  echo -e "\n${CYAN}▶ shfmt (every shell file)${RESET}"
+  header "shfmt (every shell file)"
   if ! command -v shfmt > /dev/null 2>&1; then
     echo -e "${RED}❌ shfmt not found: the gate needs v3.14 or a later v3 (test.sh needs it too).${RESET}" >&2
     exit 1
@@ -333,7 +360,7 @@ run_static() {
   RUFF_VERSION="0.17.6"
   RUFF_RELEASE='^ruff 0\.17\.[0-9]+$'
   RUFF_ARGS=(check --isolated --no-cache --select "F,B" --target-version py312)
-  echo -e "\n${CYAN}▶ ruff (every Python file)${RESET}"
+  header "ruff (every Python file)"
   if ! command -v ruff > /dev/null 2>&1; then
     echo -e "${RED}❌ ruff not found: the gate needs ruff 0.17 (uv tool install ruff@${RUFF_VERSION}).${RESET}" >&2
     exit 1
@@ -386,7 +413,7 @@ run_static() {
   # global.json read is the nearest to it (ADR 0017, How a script runs); --no-incremental, so a build cached without these properties can't hide a warning; into a
   # folder of this run's own, removed after it or by the EXIT trap however the gate ends, so two gates in one worktree don't build into the same output; and with no
   # build server left running. With no .cs file the step checks nothing and needs no SDK.
-  echo -e "\n${CYAN}▶ C# (dotnet format whitespace of every C# file, a build of every script)${RESET}"
+  header "C# (dotnet format whitespace of every C# file, a build of every script)"
   cs_all=()
   while IFS= read -r -d '' f; do
     [[ -f "$f" && "$f" == *.cs ]] || continue
@@ -589,6 +616,7 @@ run_cached() {
       && [[ -n "$held" && "$held" == "$(cat -- "$dir/started.$name-$key" 2> /dev/null)" ]]; then
       cache_unlock
       echo "$label already passed on this tree (${cache##*-}): skipped. GATE_NO_CACHE=1 runs it again."
+      timings_mark skipped
       return 0
     fi
     # The run's own stamp first, then the ones it overlaps. A whole run lists the shard stamps only after writing its own: a shard run that stamps after the list
@@ -639,14 +667,14 @@ sandcastle_changed() {
 }
 
 run_sandcastle() {
-  echo -e "\n${CYAN}▶ Sandcastle check${RESET}"
+  header "Sandcastle check"
   run_cached sandcastle "Sandcastle check" "$ROOT/$skill/tests/sandcastle-check.test.sh"
 }
 
 run_template() {
   # This branch's diff must have passed the local review (/pre-push-review), as an Application's gate checks it (ADR 0010).
   # GATE_SKIP_REVIEW=1 is for gate runs started by hand and for CI, which has no .git/review/ ledger; the pre-push hook removes it.
-  echo -e "\n${CYAN}▶ Local review (scripts/review.sh check)${RESET}"
+  header "Local review (scripts/review.sh check)"
   if [[ "${GATE_SKIP_REVIEW:-}" == "1" ]]; then
     echo "Local review check skipped (GATE_SKIP_REVIEW=1)."
   elif ! git rev-parse --verify --quiet refs/remotes/origin/main > /dev/null; then
@@ -660,7 +688,7 @@ run_template() {
   fi
 
   local shard="${TEST_SH_SHARD:-}"
-  echo -e "\n${CYAN}▶ test.sh${shard:+ ($shard shard)}${RESET}"
+  header "test.sh${shard:+ ($shard shard)}"
   run_cached "test-sh${shard:+.$shard}" "test.sh${shard:+ ($shard shard)}" "$ROOT/$skill/test.sh"
 }
 
@@ -682,7 +710,9 @@ case "$part" in
     if sandcastle_changed; then
       run_sandcastle
     else
-      echo -e "\n${CYAN}▶ Sandcastle check${RESET}\nskipped: the branch changed nothing Sandcastle's check reads (GATE_PART=sandcastle runs it)."
+      header "Sandcastle check"
+      echo "skipped: the branch changed nothing Sandcastle's check reads (GATE_PART=sandcastle runs it)."
+      timings_mark skipped
     fi
     ;;
 esac

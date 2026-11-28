@@ -43,6 +43,9 @@
          post_claude_review.cs: BASELINE_TESTS leaves out its top-level statement, and its own copies of Gh.cs's classes are in the namespace
          Baseline.PostReview, where Template/PostClaudeReview/ tests them. -->
     <Compile Include="../../template/owned/.github/scripts/*.cs" Exclude="../../template/owned/.github/scripts/check_central_pins.cs;../../template/owned/.github/scripts/detect_changes.cs;../../template/owned/.github/scripts/draft_release.cs;../../template/owned/.github/scripts/discover_tests.cs;../../template/owned/.github/scripts/load_test_env.cs;../../template/owned/.github/scripts/release_post.cs;../../template/owned/.github/scripts/release_queue.cs;../../template/owned/.github/scripts/backfill_blog_posts.cs" Link="template/%(Filename)%(Extension)" />
+    <!-- The Factory's own step timings summary (mpaulosky/Application_Factory#220), in the Factory's scripts/ three folders above the skill: its entry
+         file left out, as above. A copy of the project builds in the Factory's layout only, as its tests read the Factory's files too (test.sh's scripts_tests_copy). -->
+    <Compile Include="../../../../../scripts/GateTimings.cs" Link="factory/%(Filename)%(Extension)" />
     <AssemblyMetadata Include="SkillDir" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))" />
   </ItemGroup>
 </Project>

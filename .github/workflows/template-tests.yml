@@ -42,7 +42,7 @@ jobs:
       - name: Install the tools
         uses: ./.github/actions/template-tools
 
-      # scripts/gate.sh's own test.
+      # scripts/gate.sh's own test and the step timings' (scripts/tests/timings.test.sh).
       - name: Run the gate part
         env:
           GATE_PART: self
