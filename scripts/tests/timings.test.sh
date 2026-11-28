@@ -313,7 +313,9 @@ if [[ "$(uname -s)" == Linux ]] && command -v flock > /dev/null; then
     if [[ "$(ps -o comm= -p "$sleep_pid" 2> /dev/null)" == sleep ]]; then kill "$sleep_pid" 2> /dev/null || true; fi
   done < "$work/sleeps"
   # The check kills the stand-in itself with SIGKILL and waits for it: exit 137 means the cleanup left it alone, 143 (its SIGTERM) that it didn't.
-  # kill -0 alone could pass on a process the cleanup had signalled but bash hadn't reaped yet.
+  # kill -0 alone could pass on a process the cleanup had signalled but bash hadn't reaped yet. The second between them lets a stand-in the cleanup
+  # signalled die of it: a SIGKILL sent while its SIGTERM is still pending is taken first and would give 137.
+  sleep 1
   kill -KILL "$other_pid" 2> /dev/null || true
   other_status=0
   { wait "$other_pid"; } 2> /dev/null || other_status=$?
