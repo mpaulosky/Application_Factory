@@ -4,6 +4,4 @@
 // and its contract; scripts/gate-timings.sh runs this.
 //
 //     dotnet run --file scripts/gate-timings.cs -- [--runs N] [--log FILE]
-using Factory;
-
-return GateTimings.Run(args, Console.Out, Console.Error, GateTimings.GitCommonDir, Environment.GetEnvironmentVariable);
+return GateTimings.Entry(args);
