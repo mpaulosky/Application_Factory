@@ -22,7 +22,9 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # Physical, as git prints it (macOS's temp folder is behind a symlink).
 work="$(cd "$(mktemp -d)" && pwd -P)"
-trap 'chmod -R u+w "$work" 2> /dev/null || true; rm -rf "$work"' EXIT
+# other_pid: the lock check's stand-in process, which never exits on its own, killed here if the test stops before its check does.
+other_pid=
+trap 'if [[ -n "$other_pid" ]]; then kill -KILL "$other_pid" 2> /dev/null || true; fi; chmod -R u+w "$work" 2> /dev/null || true; rm -rf "$work"' EXIT
 unset GATE_TIMINGS GATE_TIMINGS_LOG GATE_TIMINGS_RUN
 
 pass=0
@@ -310,9 +312,13 @@ if [[ "$(uname -s)" == Linux ]] && command -v flock > /dev/null; then
   while IFS= read -r sleep_pid; do
     if [[ "$(ps -o comm= -p "$sleep_pid" 2> /dev/null)" == sleep ]]; then kill "$sleep_pid" 2> /dev/null || true; fi
   done < "$work/sleeps"
-  other_alive=$(ok kill -0 "$other_pid")
-  kill "$other_pid" 2> /dev/null || true
-  check "the lock check's cleanup kills only its sleeps, not another process with a recorded pid" "$other_alive"
+  # The check kills the stand-in itself with SIGKILL and waits for it: exit 137 means the cleanup left it alone, 143 (its SIGTERM) that it didn't.
+  # kill -0 alone could pass on a process the cleanup had signalled but bash hadn't reaped yet.
+  kill -KILL "$other_pid" 2> /dev/null || true
+  other_status=0
+  { wait "$other_pid"; } 2> /dev/null || other_status=$?
+  other_pid=
+  check "the lock check's cleanup kills only its sleeps, not another process with a recorded pid (exit ${other_status})" "$(ok test "$other_status" -eq 137)"
   check "the lock check's two runs pass and run the fake dotnet four times (${fake_runs} passed, ${sleeps} started)" \
     "$(ok test "$fake_runs" -eq 2 -a "$sleeps" -eq 4)"
   check "a helper the build leaves running doesn't hold the lock: a second run doesn't wait for it (${held}s for two)" "$(ok test "$held" -lt 15)"
