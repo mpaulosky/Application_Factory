@@ -22,7 +22,7 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   `check-issue-refs.cs` and `check-git-status.cs`, which include `IssueRefs.cs`, `GitStatusGuards.cs` and `Checker.cs`, each judged by its parity suite (`<checker>.test.sh`).
   `tests/Scripts.Tests/` is the xUnit v3 project for the C# scripts (ADR 0017), the Template's own in `.github/scripts/` among them (in `Template/`, namespace `Baseline`,
   but `Baseline.PostReview` for `post_claude_review.cs`, which carries its own copies of `Gh.cs`'s classes);
-  it, `tests/`, `github/` and `bench/` each hold three empty shield files (`Directory.Build.props`, `Directory.Build.targets`, `Directory.Packages.props`), which are not
+  it, `tests/`, `github/`, `bench/` and the Factory's own `scripts/` each hold three empty shield files (`Directory.Build.props`, `Directory.Build.targets`, `Directory.Packages.props`), which are not
   Owned; the Template's `.github/scripts/` holds three more, which are. The test project also holds its own `NuGet.config`
   (nuget.org alone) and `packages.lock.json`, which `test.sh` restores against in locked mode (ADR 0017's Update on hardening the C# step).
 - `.claude/skills/`: also the shared skills (`build-repair`, `dotnet-*`, `remove-squad`, `review-changes`), the Factory's own `gate-timings` (below), and `starting-points/`: the optional app-stack files
@@ -52,7 +52,7 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   `pnpm-lock.yaml` and the `.gitignore` lines for `node_modules/` and `.security/`.
 - `.claude/settings.json` and `scripts/lint-edited-file.sh` (a copy of the Template's Owned file): the edit-time lint (ADR 0011). The settings file holds one `PostToolUse` hook
   that lints each Markdown, YAML, shell or Python file Claude writes; the Template carries the script but not the settings file.
-- `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too; its header lists the steps (its test and the review's three tests,
+- `scripts/gate.sh`: the Factory's own pre-push gate, run by CI too; its header lists the steps (its test, the step timings' test and the review's three tests,
   a warning for a branch past the review's size line, the copies' drift check, the bare-`#N` check, the Git-status check, lint, shellcheck of the changed shell files,
   shfmt of every shell file, ruff of every Python file, `dotnet format whitespace` of every C# file and a build
   of every C# script with warnings as errors but CA2266 and NU1900 (ADR 0017), the local review check, then `test.sh`, which it skips for a tree and .NET SDK that already passed it, then

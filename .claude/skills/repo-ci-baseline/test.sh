@@ -8,7 +8,7 @@
 # the Owned .github/scripts pytest with the gh check's own tests), the hardening-review scripts' tests, the renderer oracle, the parity suites
 # (status, land, settings, check_gh_repo, the release scripts, draft_release and post_claude_review as .py and .cs, detect_changes, discover_tests, load_test_env, check_central_pins and rollout), the Claude Review benchmark's --rescore parity suite and
 # the C# scripts' xUnit tests (tests/Scripts.Tests: the landing decision, status, land, settings, rollout and its AutoRollout libraries,
-# what they share, the two checkers in tests/, the benchmark and the Template's scripts in Template/, post_claude_review's in its own
+# the Factory's step timings summary (its scripts/GateTimings.cs), what they share, the two checkers in tests/, the benchmark and the Template's scripts in Template/, post_claude_review's in its own
 # namespace), lints its workflows, YAML, shell
 # and Markdown with the Template's configs, checks that
 # Owned files carry no {{PLACEHOLDER}} and that the Owned scripts, and this repo's own
@@ -36,11 +36,6 @@ seed="$skill_dir/template/seed"
 
 # A local pytest run must not leave caches in the Template for Apply to copy.
 export PYTHONDONTWRITEBYTECODE=1
-# The tests build throwaway repos. A global init.templateDir would install this
-# machine's own hooks into each of them and block their commits.
-# Both folders are made absolute, so a relative TMPDIR still names them from the folders the steps cd into. Each mktemp is its own assignment, so a failed
-# one stops the run under set -e, and each is made absolute by prefixing $PWD rather than by cd, which a caller's CDPATH would make print the folder too.
-# The trap comes first, over empty names, so a second mktemp that fails still removes the first folder.
 # Each step's wall time goes to the Factory's step timings log (its scripts/lib/timings.sh, mpaulosky/Application_Factory#220): step starts one, the end
 # of the run or the EXIT trap ends the last, and a step in which a check failed is logged as failed. Started by scripts/gate.sh, the steps join the gate's
 # run. With no such file (the skill run from elsewhere) nothing is timed. The library is found from the physical folder, so a run through the
@@ -59,6 +54,11 @@ else
   timings_finish() { :; }
 fi
 test_rc=0
+# The tests build throwaway repos. A global init.templateDir would install this
+# machine's own hooks into each of them and block their commits.
+# Both folders are made absolute, so a relative TMPDIR still names them from the folders the steps cd into. Each mktemp is its own assignment, so a failed
+# one stops the run under set -e, and each is made absolute by prefixing $PWD rather than by cd, which a caller's CDPATH would make print the folder too.
+# The trap comes first, over empty names, so a second mktemp that fails still removes the first folder.
 GIT_TEMPLATE_DIR="" md_tmp=""
 trap 'test_rc=$?; timings_finish "$test_rc"; command rm -rf ${GIT_TEMPLATE_DIR:+"$GIT_TEMPLATE_DIR"} ${md_tmp:+"$md_tmp"}' EXIT
 GIT_TEMPLATE_DIR="$(mktemp -d)"
@@ -211,7 +211,8 @@ scripts_tests_run() {
   (cd "$1" && TMPDIR="$tmp" DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 \
     dotnet test --project Scripts.Tests.csproj -p:RestoreLockedMode=true -p:UseSharedCompilation=false --artifacts-path "$out" --results-directory "$out/results")
 }
-# Copies the skill into folder argument 1, as <argument 1>/.claude/skills/repo-ci-baseline with the Factory's CLAUDE.md at <argument 1>, for a check on a
+# Copies the skill into folder argument 1, as <argument 1>/.claude/skills/repo-ci-baseline with the Factory's CLAUDE.md, ADR 0016 and scripts/GateTimings.cs
+# under <argument 1>, for a check on a
 # copy of the C# scripts' test project, and prints the copy's project folder: the project compiles the scripts in the skill's github/ and its tests read
 # the skill's files, and the Factory's checkout three folders above the skill (AutoRollout.Factory: its CLAUDE.md, and ADR 0016 in its docs/adr/; the
 # project compiles the Factory's scripts/GateTimings.cs, mpaulosky/Application_Factory#220), so
@@ -1239,6 +1240,12 @@ HALF
       is_empty_shield "$skill_dir/$shielded/$shield" || fail "$shielded/$shield must be the empty shield, <Project />"
     done
   done
+  # And the Factory's own scripts/, beside scripts/gate-timings.cs (mpaulosky/Application_Factory#220), when the skill is the Factory's.
+  if [[ -n "${factory_dir:-}" && -f "$factory_dir/scripts/gate-timings.cs" ]]; then
+    for shield in Directory.Build.props Directory.Build.targets Directory.Packages.props; do
+      is_empty_shield "$factory_dir/scripts/$shield" || fail "the Factory's scripts/$shield must be the empty shield, <Project />"
+    done
+  fi
   printf '<Project />\n' > "$md_tmp/shield.props"
   is_empty_shield "$md_tmp/shield.props" || fail "the shield check refuses <Project />"
   for wrong in '<Project></Project>' '<Project><Import Project="../x.props" /></Project>' ''; do
