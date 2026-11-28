@@ -9,8 +9,8 @@
 # - ends a run with its slowest steps, skipped ones left out, names cleaned, however long the run.
 # test.sh's own run logs its steps, directly and through a symlink to the skill, and its step and end hooks log a step in which a check failed as failed.
 # scripts/gate-timings.sh runs its C# summary from any folder, with the caller's paths and exit status, reads the default log of the checkout it is in
-# from a linked worktree wherever it is called from, builds once when six runs start at once on a fresh build (Linux, which needs flock), and stops
-# without dotnet; the three steps GateTimings.cs counts a full gate run by are still steps scripts/gate.sh logs by those names.
+# from a linked worktree wherever it is called from, builds once when six runs start at once on a fresh build and keeps its lock out of a helper the
+# build leaves running (Linux, which needs flock), and stops without dotnet; the three steps GateTimings.cs counts a full gate run by are still steps scripts/gate.sh logs by those names.
 # scripts/tests/gate.test.sh checks the gate's own use of the library; tests/Scripts.Tests/GateTimings the summary's rules.
 #
 #   scripts/tests/timings.test.sh
@@ -293,11 +293,28 @@ if [[ "$(uname -s)" == Linux ]] && command -v flock > /dev/null; then
   chmod +x "$fake/dotnet"
   : > "$work/sleeps"
   started=$SECONDS
+  fake_runs=0
   for n in 1 2; do
-    (cd "$work" && PATH="$fake:$PATH" FAKE_DOTNET_SLEEPS="$work/sleeps" timeout -s KILL 60 bash "$copy/gate-timings.sh" --help > /dev/null 2>&1) || true
+    if (cd "$work" && PATH="$fake:$PATH" FAKE_DOTNET_SLEEPS="$work/sleeps" timeout -s KILL 60 bash "$copy/gate-timings.sh" --help > /dev/null 2>&1); then
+      fake_runs=$((fake_runs + 1))
+    fi
   done
   held=$((SECONDS - started))
-  while IFS= read -r sleep_pid; do kill "$sleep_pid" 2> /dev/null || true; done < "$work/sleeps"
+  # Each run starts the fake twice, for the prime and the run, so a wrapper that didn't reach it (no timeout, a PATH it didn't take) leaves fewer.
+  sleeps=$(wc -l < "$work/sleeps")
+  # A sleep that already exited may have left its pid to another process: kill one only while it is still the sleep. A recorded pid that is
+  # another process's stands in for one reused.
+  (exec tail -f /dev/null) > /dev/null 2>&1 < /dev/null &
+  other_pid=$!
+  echo "$other_pid" >> "$work/sleeps"
+  while IFS= read -r sleep_pid; do
+    if [[ "$(ps -o comm= -p "$sleep_pid" 2> /dev/null)" == sleep ]]; then kill "$sleep_pid" 2> /dev/null || true; fi
+  done < "$work/sleeps"
+  other_alive=$(ok kill -0 "$other_pid")
+  kill "$other_pid" 2> /dev/null || true
+  check "the lock check's cleanup kills only its sleeps, not another process with a recorded pid" "$other_alive"
+  check "the lock check's two runs pass and run the fake dotnet four times (${fake_runs} passed, ${sleeps} started)" \
+    "$(ok test "$fake_runs" -eq 2 -a "$sleeps" -eq 4)"
   check "a helper the build leaves running doesn't hold the lock: a second run doesn't wait for it (${held}s for two)" "$(ok test "$held" -lt 15)"
 fi
 mkdir -p "$repo/docs/timings"

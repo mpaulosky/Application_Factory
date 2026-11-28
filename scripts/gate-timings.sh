@@ -4,7 +4,8 @@
 # global.json names; this runs it from scripts/, beside its empty shield files, so no Directory.Build file above the checkout reaches its build. As
 # status.sh does, it first builds the app with --help, which reads nothing, under a lock on scripts/ (flock(1)), so two runs at once don't build it
 # together (one builds, the other waits and finds it built); without flock, start one run first. flock -o keeps the lock's descriptor out of the
-# build, so a helper the build leaves running (a compiler server) doesn't hold the lock until it exits. No dotnet on PATH exits 127 with a message.
+# build, so a helper the build leaves running (a compiler server) doesn't hold the lock until it exits. A flock without -o (BusyBox's) fails here
+# and the runs aren't serialized, as without flock; util-linux's, which Linux and the CI runners carry, has it. No dotnet on PATH exits 127 with a message.
 #
 #   scripts/gate-timings.sh [--runs N] [--log FILE] [--help]   N defaults to 20; FILE to GATE_TIMINGS_LOG (an absolute path), else the
 #                                                            docs/timings/gate-timings.tsv of the checkout this script is in (its primary checkout's)
