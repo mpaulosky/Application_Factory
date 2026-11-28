@@ -60,7 +60,7 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   `GATE_PART=<part>` runs one part (CI's jobs; the pre-push hook drops it), and `TEST_SH_SHARD` one shard of `test.sh` in the `template` part only.
   [ADR 0006](docs/adr/0006-the-factory-carries-the-git-hooks-and-a-gate.md), [ADR
   0012](docs/adr/0012-the-template-tests-workflow-runs-the-gate-in-parallel-parts.md), [ADR 0013](docs/adr/0013-ci-runs-test-sh-in-shards-and-the-review-tests-as-their-own-part.md).
-- Step timings (mpaulosky/Application_Factory#220): `scripts/gate.sh` and `test.sh` source `scripts/lib/timings.sh` and log each step's wall time and status to
+- Step timings (mpaulosky/Application_Factory#220, ADR 0006's Update for it): `scripts/gate.sh` and `test.sh` source `scripts/lib/timings.sh` and log each step's wall time and status to
   `docs/timings/gate-timings.tsv` in the primary checkout (every worktree's runs in one log; `.gitignore` leaves `docs/timings/` out; `GATE_TIMINGS=off` logs
   nothing, `GATE_TIMINGS_LOG` names another file by an absolute path), and the gate ends a run with its five slowest steps. `scripts/gate-timings.sh` summarizes the log by
   running the C# file-based app `scripts/gate-timings.cs`, which includes `scripts/GateTimings.cs` (ADR 0017's Update for mpaulosky/Application_Factory#220; `scripts/` holds the three empty

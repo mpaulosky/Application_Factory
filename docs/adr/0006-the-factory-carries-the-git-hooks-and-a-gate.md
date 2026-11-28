@@ -52,3 +52,14 @@ What this ADR decides is unchanged. The bare-`#N` check and the `git status --po
 with no other C#, and no longer needs `python3` for this step (ruff still does). The gate doesn't look for `dotnet` itself: each wrapper exits 2 without it, saying so, which
 the gate reads as a check that failed without checking. Each runs once in the part and builds on that run, about a second in a fresh worktree, so the part needs no build step
 of its own. `scripts/tests/gate.test.sh` builds both once and gives each throwaway repo wrappers that run the built dlls, so its gate runs hold no C# of their own.
+
+## Update (mpaulosky/Application_Factory#220): the gate times its steps
+
+What this ADR decides is unchanged; the gate gains a record of its own cost, so slow steps can be found and planned for. `scripts/gate.sh` and the skill's `test.sh`
+source `scripts/lib/timings.sh`, which logs each step's wall time and status (passed, failed, or skipped for a cached pass or nothing to check) to
+`docs/timings/gate-timings.tsv` in the primary checkout, one log for every worktree's runs, which `.gitignore` leaves out. Timing never changes a step's result or
+output: a log it can't write is skipped, and `GATE_TIMINGS=off` logs nothing. The gate ends each run with its five slowest steps.
+
+`scripts/gate-timings.sh` summarizes the log as a Markdown table (its C# and why it is C# are ADR 0017's Update for mpaulosky/Application_Factory#220), and the
+Factory's own `gate-timings` skill writes a dated report from it to `docs/timings/`, for planning what to speed up. None of it is part of the Template, and the Template's
+`scripts/gate.sh` times nothing. The gate's `self` part runs `scripts/tests/timings.test.sh` after its own test.

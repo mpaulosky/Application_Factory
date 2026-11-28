@@ -18,4 +18,5 @@ export const NOT_OWNED_BASELINE_PATHS: readonly string[] = [
   ".yamllint.yml",
   "scripts/gate.sh",
   "scripts/tests/gate.test.sh",
+  "scripts/tests/timings.test.sh",
 ];
