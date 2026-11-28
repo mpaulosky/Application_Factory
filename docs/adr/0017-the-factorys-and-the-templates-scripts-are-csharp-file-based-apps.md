@@ -820,8 +820,10 @@ The step timings add the first script this ADR didn't port: one that is new. Its
 
 - **The summary is C#.** `scripts/gate-timings.cs`, with its logic and contract in `scripts/GateTimings.cs` (library first, as the Update for
   mpaulosky/Application_Factory#157 has it), reads the log and writes its table: medians, the halves' change, the counts of skipped steps and malformed
-  lines, under lines giving the runs' dates, the median total of the full gate runs among them and the commits where the halves meet. Every name it
-  prints is cleaned of control, format and separator characters and Markdown-escaped, since any branch's run writes the log. That is the logic the ported
+  lines, under lines giving the runs' dates, the median total of the full gate runs among them (runs of every part that passed, with the self part
+  and `test.sh` run, not a cached pass of them) and the commits where the halves meet. Every name it prints is cleaned of control and format
+  characters, line and paragraph separators and the other characters that show as nothing, cut to 120 characters in a cell, and Markdown-escaped,
+  since any branch's run writes the log. That is the logic the ported
   scripts held, and it was first an awk pipeline. `GateTimings` is a class in the global namespace, as the skill's `github/` code is. `scripts/gate-timings.sh`
   runs it from `scripts/`, beside three empty shield files, as `status.sh` runs `status.cs`: it first builds it with `--help`, which reads nothing, under
   `flock`, and it passes the caller's folder in `GATE_TIMINGS_CALLER_DIR`, for a relative `--log`, and its own in `GATE_TIMINGS_HOME`, so the default log

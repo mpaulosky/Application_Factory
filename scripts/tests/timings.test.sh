@@ -8,7 +8,9 @@
 # - logs to its own checkout's primary docs/timings/, from a linked worktree and from a caller in another repository;
 # - ends a run with its slowest steps, skipped ones left out, names cleaned, however long the run.
 # test.sh's own run logs its steps, directly and through a symlink to the skill, and its step and end hooks log a step in which a check failed as failed.
-# scripts/gate-timings.sh runs its C# summary from any folder, with the caller's paths and exit status, and stops without dotnet.
+# scripts/gate-timings.sh runs its C# summary from any folder, with the caller's paths and exit status, reads the default log of the checkout it is in
+# from a linked worktree wherever it is called from, builds once when six runs start at once on a fresh build (Linux, which needs flock), and stops
+# without dotnet; the three steps GateTimings.cs counts a full gate run by are still steps scripts/gate.sh logs by those names.
 # scripts/tests/gate.test.sh checks the gate's own use of the library; tests/Scripts.Tests/GateTimings the summary's rules.
 #
 #   scripts/tests/timings.test.sh
@@ -262,16 +264,29 @@ cp "$here/scripts/gate-timings.sh" "$here/scripts/gate-timings.cs" "$here/script
   "$here/scripts/Directory.Build.props" "$here/scripts/Directory.Build.targets" "$here/scripts/Directory.Packages.props" "$copy/"
 cp "$here/global.json" "$work/linked/"
 # Six runs at once on that fresh build: the flock prime builds it once, so every run passes (without the lock they trip over each other's build).
+# On Linux flock is needed, as test.sh's matching checks of the other wrappers need it; elsewhere the check is left out.
+if [[ "$(uname -s)" == Linux ]]; then
+  check "flock is installed (the summary's build prime uses it on Linux)" "$(ok test -n "$(command -v flock)")"
+fi
 if [[ "$(uname -s)" == Linux ]] && command -v flock > /dev/null; then
   pids=()
   for n in 1 2 3 4 5 6; do
     (cd "$work" && bash "$copy/gate-timings.sh" --help > "$work/at-once.$n" 2>&1) &
     pids+=("$!")
   done
+  # Bounded: a stuck lock or build is killed after 300 s and fails the check, rather than hanging the gate's self part.
+  (sleep 300 && kill -KILL "${pids[@]}" 2> /dev/null) > /dev/null 2>&1 &
+  dog_pid=$!
   at_once=0
   for n in 1 2 3 4 5 6; do
-    wait "${pids[$((n - 1))]}" && grep -qxF 'Usage: scripts/gate-timings.sh [--runs N] [--log FILE] [--help]' "$work/at-once.$n" || at_once=1
+    if ! { wait "${pids[$((n - 1))]}" && grep -qxF 'Usage: scripts/gate-timings.sh [--runs N] [--log FILE] [--help]' "$work/at-once.$n"; }; then
+      at_once=1
+      echo "  run $n of six said:"
+      head -c 600 "$work/at-once.$n" | sed 's/^/  | /'
+    fi
   done
+  kill "$dog_pid" 2> /dev/null || true
+  wait "$dog_pid" 2> /dev/null || true
   check "six runs of the summary at once on a fresh build all pass, with the usage" "$at_once"
 fi
 mkdir -p "$repo/docs/timings"
@@ -285,8 +300,22 @@ status=0
 check "a bad argument's exit 2 comes through" "$(ok test "$status" == 2)"
 status=0
 "$summary" --log "$work/none.tsv" > /dev/null 2> "$work/err" || status=$?
-check "a missing log's exit 1 comes through, saying a gate run writes it" \
-  "$([[ $status == 1 ]] && grep -q 'a run of scripts/gate.sh writes it' "$work/err" && echo 0 || echo 1)"
+check "a missing log's exit 1 comes through, saying to check the path given" \
+  "$([[ $status == 1 ]] && grep -q 'check the path --log or GATE_TIMINGS_LOG gives' "$work/err" && echo 0 || echo 1)"
+
+# GateTimings.cs counts a full gate run by three of the steps scripts/gate.sh logs, by name: each must still be one (test.sh's with its shard, if any).
+full_names="$(sed -n 's/^.*FullGateSteps = \[\(.*\)\];$/\1/p' "$here/scripts/GateTimings.cs" | grep -o '"[^"]*"' | tr -d '"' || true)"
+full_ok=1
+if [[ "$(grep -c . <<< "$full_names")" == 3 ]]; then
+  full_ok=0
+  while IFS= read -r name; do
+    if ! grep -qF -e "header \"$name\"" -e "header \"$name\${shard" "$here/scripts/gate.sh"; then
+      echo "  not a step scripts/gate.sh logs: $name"
+      full_ok=1
+    fi
+  done <<< "$full_names"
+fi
+check "each of the three steps GateTimings.cs counts a full gate run by is a step scripts/gate.sh logs by that name" "$full_ok"
 bare="$work/bare-bin"
 mkdir -p "$bare"
 for tool in bash dirname; do ln -s "$(command -v "$tool")" "$bare/$tool"; done

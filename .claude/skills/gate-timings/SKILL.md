@@ -19,10 +19,12 @@ The summary cleans and escapes them; still, the table's text (a step, a branch, 
 1. Run `scripts/gate-timings.sh` from the repository (add `--runs N` for more or fewer than the last 20 runs, or `--log FILE` for another log). It prints a
    Markdown table, slowest median first: each script and step's run count, median, slowest and latest seconds, and the change from the older half of
    those runs to the newer half. Above it are the runs' first and last start, the median total of the full gate runs among them (one that ran every
-   part and passed; a `--quick` run, one part alone, or a run that failed or didn't finish isn't one) with how many there were, and the commits where the
+   part, the self part and `test.sh` itself rather than a cached pass of them, and passed; a `--quick` run, one part alone, the push that follows a
+   passing gate run and finds its pass cached, or a run that failed or didn't finish isn't one) with how many there were, and the commits where the
    halves meet; below it, the count of skipped steps and of malformed lines. When it says there is no log or no step lines yet, tell the person a full
-   `scripts/gate.sh` run writes the first, and stop. Any other failure (it can't read the log, git isn't found, `gate-timings failed: ...`, a build error)
-   is a fault in the summary: tell the person what it said, as it said it, and stop.
+   `scripts/gate.sh` run writes the first, and stop. Any other failure (a `--log` path that doesn't exist, it can't read the log, git isn't found or
+   can't say which checkout this is, `gate-timings failed: ...`, a build error) is a fault in the summary or its call: tell the person what it said, as it
+   said it, and stop.
 2. Read the table. Note that `gate.sh`'s `test.sh` step is the whole of `test.sh`, whose own steps are its rows under `test.sh`: count its time once.
    A skipped step isn't timed, so it has no row, only its share of the footer's count. A step with few runs says little; say so rather than draw a
    trend from it.

@@ -3,24 +3,28 @@
 //
 //     run  started  branch  commit  script  step  seconds  status
 //
-// and writes a Markdown table of its last N runs (the runs in the order they started, the order they first appear on a tie: two gates in two worktrees
-// append to one log at once), one row per script and step, slowest median first: the run
-// count, the median, the slowest and the latest seconds, and the change from the median of the older half of those runs to the newer half's. A run that
-// logged a step twice counts its last. A skipped step (a cached pass covered it, or there was nothing for it to check) is counted apart, not timed; a line
-// that isn't eight tab-separated fields with a plain decimal for its seconds (at most 9 digits before the point and 3 after) is left out and counted.
-// Above the table: the runs' first and last start, the median total of the full gate runs among them (a run that logged the self part's step, test.sh and
-// the Sandcastle check, none of its gate.sh steps failed; a --quick run, one part alone, a run that failed, was killed or is still going isn't one), and
-// the commits where the halves meet, so a report needs nothing from the raw log. Every name it prints is cleaned (every control, format, separator,
-// private-use and unassigned character, and a lone surrogate, as a space: the bidi controls, zero-width characters and tag characters among them) and
-// Markdown-escaped, since a line can come from any branch's run or any file.
+// and writes a Markdown table of its last N runs (the runs in the order they started, a run's start its earliest line's, then the order they first
+// appear on a tie: two gates in two worktrees append to one log at once), one row per script and step, slowest median first: the run count, the median,
+// the slowest and the latest seconds, and the change from the median of the older half of those runs to the newer half's. A run that logged a step
+// twice counts its last. A skipped step (a cached pass covered it, or there was nothing for it to check) is counted apart, not timed; a line that isn't
+// eight tab-separated fields, with a start in the writer's form (2026-01-31T12:00:00Z) and a plain decimal for its seconds (at most 9 digits before the
+// point and 3 after), is left out and counted.
+// Above the table: the runs' first and last start, the median total of the full gate runs among them, and the commits where the halves meet, so a
+// report needs nothing from the raw log. A full gate run logged the self part's step, test.sh and the Sandcastle check, ran the first two rather than
+// skipping them on a cached pass, and failed none of its gate.sh steps; a --quick run, one part alone, a cached run, and a run that failed, was killed
+// or is still going aren't. Its total is its gate.sh lines' seconds, a skipped Sandcastle check's included. Every name it prints is cleaned (each
+// control and format character, line and paragraph separator, private-use and unassigned character and lone surrogate, and the few others that show
+// as nothing, the variation selectors and the Hangul fillers among them, as a space: so the bidi controls, zero-width and tag characters too), cut to
+// 120 characters in a table cell, and Markdown-escaped, since a line can come from any branch's run or any file.
 //
 // The log is --log FILE, else GATE_TIMINGS_LOG (an absolute path; a relative one is refused, as the writer refuses it), else
 // docs/timings/gate-timings.tsv beside the .git folder that the checkout scripts/gate-timings.sh is in shares with its worktrees (the primary checkout's),
 // as scripts/lib/timings.sh writes it: the wrapper names its folder in GATE_TIMINGS_HOME (the caller's folder without it). A relative --log is the
 // caller's, GATE_TIMINGS_CALLER_DIR, which the wrapper sets since it runs this from scripts/. git is started by its full path from PATH's absolute
 // folders, never from the current or the app's folder.
-// Exit 0 with the table or the usage; 1, saying why on stderr, when there is no log yet or no step line in it (the only cases a gate run mends), when
-// the log can't be read, git isn't on PATH or the folder isn't a checkout, or on an unexpected error ("gate-timings failed: ..."); 2 for a bad argument.
+// Exit 0 with the table or the usage; 1, saying why on stderr, when the default log doesn't exist yet or a log holds no step line (the cases a gate run
+// mends), when a log --log or GATE_TIMINGS_LOG names doesn't exist, the log can't be read, git isn't on PATH, the folder isn't a checkout or git can't
+// say which it is in (giving git's own words), or on an unexpected error ("gate-timings failed: ..."); 2 for a bad argument.
 // --help prints the usage and reads nothing (scripts/gate-timings.sh builds the app with it).
 using System.Diagnostics;
 using System.Globalization;
@@ -39,14 +43,23 @@ static class GateTimings
 		public double Latest => Times.MaxBy(time => time.Place).Seconds;
 	}
 
-	// One run read: its first line's start and commit, and the sum of its gate.sh lines' seconds when it was a full gate run (null otherwise).
+	// One run read: its earliest line's start, its first line's commit, and the sum of its gate.sh lines' seconds when it was a full gate run (null otherwise).
 	public sealed record RunInfo(string Started, string Commit, double? GateSeconds);
 
 	// The gate.sh steps only a full gate run logs all of: the self part's first, the template part's test.sh, and the Sandcastle check, its last.
-	static readonly string[] FullGateSteps = ["scripts/tests/gate.test.sh", "test.sh", "Sandcastle check"];
+	// scripts/tests/timings.test.sh checks that scripts/gate.sh still logs each by that name.
+	public static readonly string[] FullGateSteps = ["scripts/tests/gate.test.sh", "test.sh", "Sandcastle check"];
 
-	// What git said of a folder: the shared git folder (null outside a checkout), and whether a git was found to ask at all.
-	public sealed record GitAnswer(string? CommonDir, bool GitFound);
+	// Of those, the ones a full gate run ran rather than skipped: a cached pass of test.sh makes a run short, not full. The Sandcastle check is skipped
+	// on a branch that changed nothing it reads, so a run that skipped it is still full.
+	static readonly string[] TimedGateSteps = ["scripts/tests/gate.test.sh", "test.sh"];
+
+	// The most characters of a name a table cell shows; a longer one is cut, ending "...".
+	public const int CellRunes = 120;
+
+	// What git said of a folder: the shared git folder (null when git gave none), whether a git was found to ask at all, and, when it gave none, git's
+	// first line on stderr or why it couldn't start.
+	public sealed record GitAnswer(string? CommonDir, bool GitFound, string? Reason = null);
 
 	public sealed record Summary(IReadOnlyList<RunInfo> RunList, IReadOnlyList<Step> Steps, int Skipped, int Malformed)
 	{
@@ -93,6 +106,7 @@ static class GateTimings
 			caller = Directory.GetCurrentDirectory();
 		var runs = DefaultRuns;
 		string? log = null;
+		var named = false; // the log is one --log or GATE_TIMINGS_LOG names, not the default
 		for (var i = 0; i < args.Length; i++)
 		{
 			switch (args[i])
@@ -107,6 +121,7 @@ static class GateTimings
 					break;
 				case "--log" when i + 1 < args.Length && args[i + 1].Length > 0:
 					log = args[++i];
+					named = true;
 					break;
 				case "--help" or "-h":
 					stdout.WriteLine(Usage);
@@ -118,15 +133,16 @@ static class GateTimings
 		}
 		if (log is null)
 		{
-			var named = environment("GATE_TIMINGS_LOG");
-			if (!string.IsNullOrEmpty(named))
+			var variable = environment("GATE_TIMINGS_LOG");
+			if (!string.IsNullOrEmpty(variable))
 			{
-				if (!Path.IsPathRooted(named))
+				if (!Path.IsPathRooted(variable))
 				{
-					stderr.WriteLine($"GATE_TIMINGS_LOG must be an absolute path, not '{Clean(named)}' (the gate's run logs nothing to a relative one).");
+					stderr.WriteLine($"GATE_TIMINGS_LOG must be an absolute path, not '{Clean(variable)}' (the gate's run logs nothing to a relative one).");
 					return 2;
 				}
-				log = named;
+				log = variable;
+				named = true;
 			}
 		}
 		if (log is null)
@@ -142,7 +158,10 @@ static class GateTimings
 			var common = answer.CommonDir;
 			if (common is null)
 			{
-				stderr.WriteLine($"{Clean(folder)} isn't in a git checkout, so there is no docs/timings/gate-timings.tsv to read: pass --log FILE.");
+				if (answer.Reason is null || answer.Reason.Contains("not a git repository", StringComparison.Ordinal))
+					stderr.WriteLine($"{Clean(folder)} isn't in a git checkout, so there is no docs/timings/gate-timings.tsv to read: pass --log FILE.");
+				else
+					stderr.WriteLine($"git can't say which checkout {Clean(folder)} is in ({Clean(answer.Reason)}), so the default log can't be found: pass --log FILE.");
 				return 1;
 			}
 			common = Path.TrimEndingDirectorySeparator(common);
@@ -161,7 +180,9 @@ static class GateTimings
 		}
 		catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
 		{
-			stderr.WriteLine($"No step timings log at {Clean(log)} yet: a run of scripts/gate.sh writes it.");
+			stderr.WriteLine(named
+				? $"No step timings log at {Clean(log)}: check the path --log or GATE_TIMINGS_LOG gives."
+				: $"No step timings log at {Clean(log)} yet: a run of scripts/gate.sh writes it.");
 			return 1;
 		}
 		catch (Exception error) when (error is IOException or UnauthorizedAccessException)
@@ -187,14 +208,14 @@ static class GateTimings
 		foreach (var line in lines)
 		{
 			var fields = line.Split('\t');
-			if (fields.Length != 8 || !IsSeconds(fields[6]))
+			if (fields.Length != 8 || !IsStarted(fields[1]) || !IsSeconds(fields[6]))
 			{
 				malformed++;
 				continue;
 			}
 			rows.Add(fields);
 		}
-		// Each run's first start (ISO 8601 UTC, so ordinal order is time order), then its first line's place, for a tie.
+		// Each run's earliest start (in the writer's form, ISO 8601 UTC, so ordinal order is time order), then its first line's place, for a tie.
 		var order = rows.Select((fields, index) => (Run: fields[0], Started: fields[1], Index: index))
 			.GroupBy(row => row.Run)
 			.Select(group => (Run: group.Key, Started: group.Select(row => row.Started).Min(StringComparer.Ordinal)!, First: group.First().Index))
@@ -209,12 +230,16 @@ static class GateTimings
 		var gateSeconds = new Dictionary<int, double>();
 		var gateSteps = new Dictionary<int, HashSet<string>>();
 		var gateFailed = new HashSet<int>();
+		var gateSkipped = new Dictionary<int, HashSet<string>>();
 		foreach (var fields in rows)
 		{
 			if (!chosen.TryGetValue(fields[0], out var place))
 				continue;
 			var seconds = double.Parse(fields[6], NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture);
-			info.TryAdd(place, new RunInfo(fields[1], fields[3], null));
+			if (!info.TryGetValue(place, out var known))
+				info[place] = new RunInfo(fields[1], fields[3], null);
+			else if (string.CompareOrdinal(fields[1], known.Started) < 0)
+				info[place] = known with { Started = fields[1] };
 			if (fields[4] == "gate.sh")
 			{
 				gateSeconds[place] = gateSeconds.GetValueOrDefault(place) + seconds;
@@ -223,6 +248,12 @@ static class GateTimings
 				seen.Add(fields[5]);
 				if (fields[7] == "failed")
 					gateFailed.Add(place);
+				if (fields[7] == "skipped")
+				{
+					if (!gateSkipped.TryGetValue(place, out var passed))
+						gateSkipped[place] = passed = [];
+					passed.Add(fields[5]);
+				}
 			}
 			if (fields[7] == "skipped")
 			{
@@ -241,6 +272,7 @@ static class GateTimings
 			.OrderByDescending(step => step.Median).ToList();
 		var runList = Enumerable.Range(1, chosen.Count).Select(place =>
 			gateSteps.TryGetValue(place, out var seen) && FullGateSteps.All(seen.Contains) && !gateFailed.Contains(place)
+				&& !(gateSkipped.TryGetValue(place, out var passed) && TimedGateSteps.Any(passed.Contains))
 				? info[place] with { GateSeconds = gateSeconds[place] }
 				: info[place]).ToList();
 		return new Summary(runList, list, skipped, malformed);
@@ -277,7 +309,7 @@ static class GateTimings
 		}
 		else
 		{
-			text.Append("No full gate run among these (one that logged the self part, test.sh and the Sandcastle check, none of its steps failed), so no total.\n");
+			text.Append("No full gate run among these (one that ran the self part and test.sh, not a cached pass of them, and logged the Sandcastle check, none of its steps failed), so no total.\n");
 		}
 		if (summary.Runs >= 2)
 		{
@@ -306,7 +338,8 @@ static class GateTimings
 		return sorted.Count % 2 == 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 	}
 
-	// The git folder all of the checkout's worktrees share, for a folder in it, absolute (null outside a checkout), and whether git was on PATH at all.
+	// The git folder all of the checkout's worktrees share, for a folder in it, absolute (null outside a checkout, or when git fails, with git's first line
+	// on stderr or why it didn't start), and whether git was on PATH at all.
 	public static GitAnswer GitCommonDir(string folder, string? path)
 	{
 		var git = Which("git", path);
@@ -323,17 +356,20 @@ static class GateTimings
 				UseShellExecute = false,
 			});
 			if (process is null)
-				return new GitAnswer(null, true);
+				return new GitAnswer(null, true, "git didn't start");
 			process.StandardInput.Close();
 			var errors = process.StandardError.ReadToEndAsync();
 			var output = process.StandardOutput.ReadToEnd().Trim();
 			process.WaitForExit();
-			_ = errors.GetAwaiter().GetResult();
-			return new GitAnswer(process.ExitCode == 0 && output.Length > 0 ? output : null, true);
+			var said = errors.GetAwaiter().GetResult();
+			if (process.ExitCode == 0 && output.Length > 0)
+				return new GitAnswer(output, true);
+			var first = said.Split('\n').Select(line => line.Trim()).FirstOrDefault(line => line.Length > 0);
+			return new GitAnswer(null, true, first ?? $"git exited {process.ExitCode}");
 		}
 		catch (Exception error) when (error is System.ComponentModel.Win32Exception or IOException)
 		{
-			return new GitAnswer(null, true);
+			return new GitAnswer(null, true, error.Message);
 		}
 	}
 
@@ -361,11 +397,25 @@ static class GateTimings
 		return whole.Length is >= 1 and <= 9 && part.Length is >= 1 and <= 3 && whole.All(char.IsAsciiDigit) && part.All(char.IsAsciiDigit);
 	}
 
+	// A start in the writer's form, date -u +%Y-%m-%dT%H:%M:%SZ: 2026-01-31T12:00:00Z. Any other text would sort among the starts as no time does.
+	public static bool IsStarted(string text)
+	{
+		const string form = "0000-00-00T00:00:00Z";
+		if (text.Length != form.Length)
+			return false;
+		for (var i = 0; i < form.Length; i++)
+		{
+			if (form[i] == '0' ? !char.IsAsciiDigit(text[i]) : text[i] != form[i])
+				return false;
+		}
+		return true;
+	}
+
 	static string Seconds(double value) => value.ToString("0.0", CultureInfo.InvariantCulture);
 
 	// Text from the log or the command line, for a terminal and an agent: every rune that is a control (C0, DEL, C1), a format character (the bidi
 	// controls, zero-width characters, the byte-order mark, the soft hyphen, the tag characters), a line or paragraph separator, private-use or unassigned,
-	// and a lone surrogate, as one space each. What is left is text a person sees as it is.
+	// a lone surrogate, and the few others that show as nothing (Blank), as one space each. What is left is text a person sees as it is.
 	public static string Clean(string text)
 	{
 		var clean = new StringBuilder(text.Length);
@@ -379,7 +429,8 @@ static class GateTimings
 			}
 			i += used;
 			var hidden = Rune.GetUnicodeCategory(rune) is UnicodeCategory.Control or UnicodeCategory.Format or UnicodeCategory.LineSeparator
-				or UnicodeCategory.ParagraphSeparator or UnicodeCategory.PrivateUse or UnicodeCategory.OtherNotAssigned or UnicodeCategory.Surrogate;
+				or UnicodeCategory.ParagraphSeparator or UnicodeCategory.PrivateUse or UnicodeCategory.OtherNotAssigned or UnicodeCategory.Surrogate
+				|| Blank(rune.Value);
 			if (hidden)
 				clean.Append(' ');
 			else
@@ -388,11 +439,21 @@ static class GateTimings
 		return clean.ToString();
 	}
 
-	// A table cell: cleaned, and each Markdown special escaped (| among them, so the row keeps its columns), so a name renders as the text it is.
+	// The runs outside those categories that still show as nothing and take no room: the combining grapheme joiner, the Hangul fillers, the Khmer
+	// inherent vowels, the Mongolian free variation selectors, the braille blank and both blocks of variation selectors.
+	static bool Blank(int value) => value is 0x034F or 0x115F or 0x1160 or 0x17B4 or 0x17B5 or (>= 0x180B and <= 0x180D) or 0x180F or 0x2800 or 0x3164
+		or (>= 0xFE00 and <= 0xFE0F) or 0xFFA0 or (>= 0xE0100 and <= 0xE01EF);
+
+	// A table cell: cleaned, cut to CellRunes characters (a longer name ends "..."), and each Markdown special escaped (| among them, so the row keeps
+	// its columns), so a name renders as the text it is.
 	public static string Cell(string text)
 	{
-		var cell = new StringBuilder(text.Length);
-		foreach (var c in Clean(text))
+		var clean = Clean(text);
+		var runes = clean.EnumerateRunes().ToList();
+		if (runes.Count > CellRunes)
+			clean = string.Concat(runes.Take(CellRunes).Select(rune => rune.ToString())) + "...";
+		var cell = new StringBuilder(clean.Length);
+		foreach (var c in clean)
 		{
 			if (c is '\\' or '`' or '*' or '_' or '[' or ']' or '<' or '>' or '|' or '#' or '!' or '~' or '&')
 				cell.Append('\\');

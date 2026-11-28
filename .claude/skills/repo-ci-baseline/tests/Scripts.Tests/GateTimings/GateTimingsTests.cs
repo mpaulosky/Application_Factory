@@ -19,7 +19,7 @@ public class GateTimingsTests
 		Line("r4", "gate.sh", "a|b", "5.0", started: "2026-01-04T00:00:00Z"),
 	];
 
-	static (int Code, string Out, string Err) Run(string[] args, string[]? log = null, IDictionary<string, string>? env = null, string? common = "/repo/.git", bool gitFound = true)
+	static (int Code, string Out, string Err) Run(string[] args, string[]? log = null, IDictionary<string, string>? env = null, string? common = "/repo/.git", bool gitFound = true, string? reason = null)
 	{
 		var dir = Directory.CreateTempSubdirectory("gate-timings-test.").FullName;
 		var variables = new Dictionary<string, string>(env ?? new Dictionary<string, string>());
@@ -30,7 +30,7 @@ public class GateTimingsTests
 		var stderr = new StringWriter();
 		try
 		{
-			var code = GateTimings.Run(args, stdout, stderr, (_, _) => new GateTimings.GitAnswer(common, gitFound), name => variables.GetValueOrDefault(name));
+			var code = GateTimings.Run(args, stdout, stderr, (_, _) => new GateTimings.GitAnswer(common, gitFound, reason), name => variables.GetValueOrDefault(name));
 			return (code, stdout.ToString(), stderr.ToString());
 		}
 		finally
@@ -80,19 +80,20 @@ public class GateTimingsTests
 	}
 
 	[Fact]
-	public void The_header_gives_the_runs_dates_a_gate_runs_median_total_and_the_commits_where_the_halves_meet()
+	public void The_header_gives_the_runs_dates_and_the_commits_where_the_halves_meet()
 	{
 		var table = Table();
 		Assert.Contains("the last 4 run(s), started 2026-01-01T00:00:00Z to 2026-01-04T00:00:00Z.\n", table);
 		Assert.Contains("The older half ends at commit bbbb2222; the newer half starts at commit cccc3333.\n", table);
 	}
 
-	// A full gate run: the self part's step, test.sh and the Sandcastle check, plus whatever else it ran.
+	// A full gate run: the self part's step, test.sh and the Sandcastle check (skipped, as on a branch that changed nothing it reads, its 7 s still in the
+	// total), plus whatever else it ran.
 	static string[] FullRun(string run, string started, params (string Step, string Seconds, string Status)[] extra) =>
 	[
 		Line(run, "gate.sh", "scripts/tests/gate.test.sh", "100.0", started: started),
 		Line(run, "gate.sh", "test.sh", "800.0", started: started),
-		Line(run, "gate.sh", "Sandcastle check", "0.0", "skipped", started: started),
+		Line(run, "gate.sh", "Sandcastle check", "7.0", "skipped", started: started),
 		.. extra.Select(step => Line(run, "gate.sh", step.Step, step.Seconds, step.Status, started: started)),
 	];
 
@@ -101,16 +102,30 @@ public class GateTimingsTests
 	{
 		string[] log =
 		[
-			.. FullRun("full1", "2026-01-01T00:00:00Z"), // 900
-			.. FullRun("full2", "2026-01-02T00:00:00Z", ("lint", "100.0", "passed")), // 1000
+			.. FullRun("full1", "2026-01-01T00:00:00Z"), // 907
+			.. FullRun("full2", "2026-01-02T00:00:00Z", ("lint", "100.0", "passed")), // 1007
 			Line("quick", "gate.sh", "scripts/tests/gate.test.sh", "60.0", started: "2026-01-03T00:00:00Z"), // --quick: no test.sh, no Sandcastle check
 			Line("part", "gate.sh", "Sandcastle check", "200.0", started: "2026-01-04T00:00:00Z"), // GATE_PART=sandcastle
 			.. FullRun("failed", "2026-01-05T00:00:00Z", ("lint", "5.0", "failed")), // every step, but one failed
 			Line("going", "gate.sh", "scripts/tests/gate.test.sh", "100.0", started: "2026-01-06T00:00:00Z"), // still running, or killed
 			Line("going", "gate.sh", "test.sh", "800.0", started: "2026-01-06T00:00:00Z"),
+			// Each lacking one of the three steps, or failing or skipping one it must run.
+			Line("notest", "gate.sh", "scripts/tests/gate.test.sh", "100.0", started: "2026-01-07T00:00:00Z"),
+			Line("notest", "gate.sh", "Sandcastle check", "7.0", "skipped", started: "2026-01-07T00:00:00Z"),
+			Line("noself", "gate.sh", "test.sh", "800.0", started: "2026-01-08T00:00:00Z"),
+			Line("noself", "gate.sh", "Sandcastle check", "7.0", "skipped", started: "2026-01-08T00:00:00Z"),
+			Line("testfailed", "gate.sh", "scripts/tests/gate.test.sh", "100.0", started: "2026-01-09T00:00:00Z"),
+			Line("testfailed", "gate.sh", "test.sh", "800.0", "failed", started: "2026-01-09T00:00:00Z"),
+			Line("testfailed", "gate.sh", "Sandcastle check", "7.0", "skipped", started: "2026-01-09T00:00:00Z"),
+			Line("cached", "gate.sh", "scripts/tests/gate.test.sh", "100.0", started: "2026-01-10T00:00:00Z"), // the push after a gate run: test.sh's pass cached
+			Line("cached", "gate.sh", "test.sh", "1.0", "skipped", started: "2026-01-10T00:00:00Z"),
+			Line("cached", "gate.sh", "Sandcastle check", "7.0", "skipped", started: "2026-01-10T00:00:00Z"),
+			Line("selfcached", "gate.sh", "scripts/tests/gate.test.sh", "1.0", "skipped", started: "2026-01-11T00:00:00Z"),
+			Line("selfcached", "gate.sh", "test.sh", "800.0", started: "2026-01-11T00:00:00Z"),
+			Line("selfcached", "gate.sh", "Sandcastle check", "7.0", "skipped", started: "2026-01-11T00:00:00Z"),
 		];
 		var table = Run(["--log", "log.tsv"], log).Out;
-		Assert.Contains("A full gate run's median total: 950.0 s, over the 2 full gate run(s) of these 6 ", table);
+		Assert.Contains("A full gate run's median total: 957.0 s, over the 2 full gate run(s) of these 11 ", table);
 	}
 
 	[Fact]
@@ -132,6 +147,38 @@ public class GateTimingsTests
 		], 20);
 		Assert.Equal(["bbbb", "aaaa"], summary.RunList.Select(run => run.Commit));
 		Assert.Equal("+200%", GateTimings.Change(summary.Steps.Single(), summary.Runs));
+	}
+
+	[Fact]
+	public void A_runs_start_is_its_earliest_line_for_the_order_and_the_header()
+	{
+		// gate.sh's test.sh line, started first, is appended after the lines test.sh logged inside it; b started between the two, so a is older.
+		var summary = GateTimings.Summarize(
+		[
+			Line("a", "test.sh", "Hook tests", "10.0", started: "2026-01-01T00:00:20Z", commit: "aaaa"),
+			Line("b", "g", "s", "10.0", started: "2026-01-01T00:00:10Z", commit: "bbbb"),
+			Line("a", "gate.sh", "test.sh", "30.0", started: "2026-01-01T00:00:00Z", commit: "aaaa"),
+		], 20);
+		Assert.Equal(["aaaa", "bbbb"], summary.RunList.Select(run => run.Commit));
+		Assert.Equal("2026-01-01T00:00:00Z", summary.RunList[0].Started);
+		Assert.Contains("started 2026-01-01T00:00:00Z to 2026-01-01T00:00:10Z.\n", GateTimings.Render(summary, "/log.tsv"));
+	}
+
+	[Theory]
+	[InlineData("2026-01-31T12:00:00Z", true)]
+	[InlineData("", false)]
+	[InlineData("~", false)]
+	[InlineData("9999", false)]
+	[InlineData("2026-1-31T12:00:00Z", false)]
+	[InlineData("2026-01-31 12:00:00Z", false)]
+	[InlineData("2026-01-31T12:00:00", false)]
+	[InlineData("2026-01-31T12:00:00Z ", false)]
+	[InlineData("2026-01-3xT12:00:00Z", false)]
+	public void A_start_must_be_in_the_writers_form(string started, bool kept)
+	{
+		var summary = GateTimings.Summarize([Line("r1", "g", "s", "1.0", started: started)], 20);
+		Assert.Equal(kept ? 0 : 1, summary.Malformed);
+		Assert.Equal(kept ? 1 : 0, summary.Runs);
 	}
 
 	[Fact]
@@ -246,11 +293,12 @@ public class GateTimingsTests
 	{
 		var name = "a" + (char)0x1B + "]0;t" + (char)0x07 + " " + (char)0x9B + "2J " + (char)0x2028 + " " + (char)0x202E + "evil" + (char)0x2066
 			+ " *b* `c` [d](e) <f> #g _h_ \\i !j ~k &l";
-		var table = Run(["--log", "log.tsv"], [Line("r1", "gate.sh", name, "1.0", started: "2026" + (char)0x1B + "[2J", commit: "c" + (char)0x202E)]).Out;
+		var table = Run(["--log", "log.tsv"],
+			[Line("r1", "gate.sh", name, "1.0", commit: "c" + (char)0x202E), Line("r2", "gate.sh", "other", "1.0", commit: "d" + (char)0x1B + "[2J")]).Out;
 		Assert.DoesNotContain(table, c => char.IsControl(c) && c != '\n');
-		var row = table.Split('\n').Single(line => line.StartsWith("| gate.sh |", StringComparison.Ordinal));
+		var row = table.Split('\n').Single(line => line.StartsWith("| gate.sh | a ", StringComparison.Ordinal));
 		Assert.Equal("| gate.sh | a \\]0;t   2J    evil  \\*b\\* \\`c\\` \\[d\\](e) \\<f\\> \\#g \\_h\\_ \\\\i \\!j \\~k \\&l | 1 | 1.0 | 1.0 | 1.0 | n/a |", row);
-		Assert.Contains("started 2026 \\[2J to 2026 \\[2J.", table);
+		Assert.Contains("The older half ends at commit c ; the newer half starts at commit d \\[2J.", table);
 	}
 
 	// Every character Clean hides, at both ends of each range, with the neighbours it keeps.
@@ -281,7 +329,24 @@ public class GateTimingsTests
 	[InlineData(0xE0041)]
 	[InlineData(0xE007F)]
 	[InlineData(0x10FFFD)] // private use, plane 16
-	public void Clean_hides_each_control_format_separator_and_private_use_character_as_one_space(int code) =>
+	[InlineData(0x0378)] // unassigned
+	[InlineData(0xFFFF)] // a noncharacter, unassigned
+	[InlineData(0x034F)] // combining grapheme joiner
+	[InlineData(0x115F)] // Hangul fillers
+	[InlineData(0x1160)]
+	[InlineData(0x3164)]
+	[InlineData(0xFFA0)]
+	[InlineData(0x17B4)] // Khmer inherent vowels
+	[InlineData(0x17B5)]
+	[InlineData(0x180B)] // Mongolian free variation selectors
+	[InlineData(0x180D)]
+	[InlineData(0x180F)]
+	[InlineData(0x2800)] // braille blank
+	[InlineData(0xFE00)] // variation selectors
+	[InlineData(0xFE0F)]
+	[InlineData(0xE0100)] // variation selectors supplement
+	[InlineData(0xE01EF)]
+	public void Clean_hides_each_character_that_shows_as_nothing_as_one_space(int code) =>
 		Assert.Equal("a b", GateTimings.Clean("a" + char.ConvertFromUtf32(code) + "b"));
 
 	[Theory]
@@ -291,6 +356,14 @@ public class GateTimingsTests
 	[InlineData(0xE9)] // e acute
 	[InlineData(0x2030)] // per mille, after the separators and bidi embeddings
 	[InlineData(0x1F600)] // an emoji, a surrogate pair kept whole
+	[InlineData(0x0377)] // the neighbours of the hidden ones above
+	[InlineData(0x034E)]
+	[InlineData(0x17B6)]
+	[InlineData(0x180A)]
+	[InlineData(0x2801)]
+	[InlineData(0x3165)]
+	[InlineData(0xFE10)]
+	[InlineData(0xFF9F)]
 	public void Clean_keeps_visible_text_as_it_is(int code)
 	{
 		var text = "a" + char.ConvertFromUtf32(code) + "b";
@@ -303,6 +376,19 @@ public class GateTimingsTests
 		Assert.Equal("a b", GateTimings.Clean("a" + (char)0xD800 + "b"));
 		Assert.Equal("a b", GateTimings.Clean("a" + (char)0xDC00 + "b"));
 		Assert.Equal("a ", GateTimings.Clean("a" + (char)0xD83D));
+	}
+
+	[Fact]
+	public void A_long_name_is_cut_to_CellRunes_characters_in_a_cell()
+	{
+		Assert.Equal(120, GateTimings.CellRunes);
+		Assert.Equal(new string('x', 119), GateTimings.Cell(new string('x', 119)));
+		Assert.Equal(new string('x', 120), GateTimings.Cell(new string('x', 120)));
+		Assert.Equal(new string('x', 120) + "...", GateTimings.Cell(new string('x', 121)));
+		Assert.Equal(new string('x', 120) + "...", GateTimings.Cell(new string('x', 10_000)));
+		var face = char.ConvertFromUtf32(0x1F600); // a surrogate pair, never split
+		Assert.Equal(string.Concat(Enumerable.Repeat(face, 120)) + "...", GateTimings.Cell(string.Concat(Enumerable.Repeat(face, 121))));
+		Assert.Equal(new string('x', 119) + "\\|...", GateTimings.Cell(new string('x', 119) + "||")); // cut before the escape
 	}
 
 	[Fact]
@@ -388,6 +474,43 @@ public class GateTimingsTests
 	}
 
 	[Fact]
+	public void When_git_refuses_the_folder_it_says_what_git_said_not_that_it_isnt_a_checkout()
+	{
+		var result = Run([], common: null, reason: "fatal: detected dubious ownership in repository at '/x'" + (char)0x1B);
+		Assert.Equal(1, result.Code);
+		Assert.Contains("git can't say which checkout", result.Err);
+		Assert.Contains("(fatal: detected dubious ownership in repository at '/x' ), so the default log can't be found: pass --log FILE.", result.Err);
+		Assert.DoesNotContain("isn't in a git checkout", result.Err);
+	}
+
+	[Fact]
+	public void When_git_says_it_isnt_a_repository_it_isnt_a_checkout()
+	{
+		var result = Run([], common: null, reason: "fatal: not a git repository (or any of the parent directories): .git");
+		Assert.Equal(1, result.Code);
+		Assert.Contains("isn't in a git checkout", result.Err);
+		Assert.DoesNotContain("git can't say", result.Err);
+	}
+
+	[Theory]
+	[InlineData(null)]
+	[InlineData("")]
+	public void Without_GATE_TIMINGS_HOME_the_default_log_is_found_from_the_callers_folder(string? home)
+	{
+		var asked = new List<string>();
+		var env = new Dictionary<string, string> { ["GATE_TIMINGS_CALLER_DIR"] = "/caller" };
+		if (home is not null)
+			env["GATE_TIMINGS_HOME"] = home;
+		var code = GateTimings.Run([], new StringWriter(), new StringWriter(), (folder, _) =>
+		{
+			asked.Add(folder);
+			return new GateTimings.GitAnswer("/caller/.git", true);
+		}, name => env.GetValueOrDefault(name));
+		Assert.Equal(1, code); // no log there
+		Assert.Equal(["/caller"], asked);
+	}
+
+	[Fact]
 	public void The_default_log_is_found_from_GATE_TIMINGS_HOME_the_wrappers_folder_not_the_callers()
 	{
 		var asked = new List<string>();
@@ -429,12 +552,17 @@ public class GateTimingsTests
 		Assert.Equal("", result.Err);
 	}
 
+	// The default log missing is The_default_log_is_beside_the_shared_git_folder's: a gate run writes it. A path someone gave may just be wrong.
 	[Fact]
-	public void A_missing_log_exits_1_saying_a_gate_run_writes_it()
+	public void A_missing_log_named_by_log_or_GATE_TIMINGS_LOG_says_to_check_the_path()
 	{
 		var result = Run(["--log", "none.tsv"]);
 		Assert.Equal(1, result.Code);
-		Assert.Contains("a run of scripts/gate.sh writes it", result.Err);
+		Assert.Contains("none.tsv: check the path --log or GATE_TIMINGS_LOG gives.", result.Err);
+		Assert.DoesNotContain("writes it", result.Err);
+		var named = Run([], env: new Dictionary<string, string> { ["GATE_TIMINGS_LOG"] = "/nowhere/none.tsv" });
+		Assert.Equal(1, named.Code);
+		Assert.Contains("No step timings log at /nowhere/none.tsv: check the path", named.Err);
 	}
 
 	[Fact]
@@ -451,6 +579,40 @@ public class GateTimingsTests
 		}
 		finally
 		{
+			Directory.Delete(dir, true);
+		}
+	}
+
+	[Fact]
+	[System.Runtime.Versioning.SupportedOSPlatform("linux")]
+	public void A_log_that_cant_be_read_exits_1_with_the_reason()
+	{
+		var dir = Directory.CreateTempSubdirectory("gate-timings-unreadable.").FullName;
+		var log = Path.Combine(dir, "log.tsv");
+		File.WriteAllLines(log, Fixture);
+		File.SetUnixFileMode(log, UnixFileMode.None);
+		try
+		{
+			var readable = true;
+			try
+			{
+				File.ReadAllBytes(log);
+			}
+			catch (UnauthorizedAccessException)
+			{
+				readable = false;
+			}
+			Assert.SkipWhen(readable, "this user (root) reads a file with no permissions");
+			var result = Run(["--log", log]);
+			Assert.Equal(1, result.Code);
+			Assert.Contains($"Can't read the step timings log at {log}: ", result.Err);
+			Assert.DoesNotContain("it is a folder", result.Err);
+			Assert.DoesNotContain("writes it", result.Err);
+			Assert.DoesNotContain("check the path", result.Err);
+		}
+		finally
+		{
+			File.SetUnixFileMode(log, UnixFileMode.UserRead | UnixFileMode.UserWrite);
 			Directory.Delete(dir, true);
 		}
 	}
@@ -516,12 +678,21 @@ public class GateTimingsTests
 		}
 	}
 
-	[System.Runtime.Versioning.SupportedOSPlatform("linux")]
-	static void FakeGit(string folder, string answer)
+	static void FakeGit(string folder, string answer) => FakeGitScript(folder, $"echo {answer}");
+
+	// Written by a child shell, not this process: a child another test class forks while this process held the file open for writing would keep it
+	// open until its exec, and starting the script then fails with "Text file busy".
+	static void FakeGitScript(string folder, string body)
 	{
-		var git = Path.Combine(folder, "git");
-		File.WriteAllText(git, $"#!/bin/sh\necho {answer}\n");
-		File.SetUnixFileMode(git, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+		using var shell = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/bin/sh", ["-c", "cat > \"$1\" && chmod 500 \"$1\"", "sh", Path.Combine(folder, "git")])
+		{
+			RedirectStandardInput = true,
+			UseShellExecute = false,
+		})!;
+		shell.StandardInput.Write($"#!/bin/sh\n{body}\n");
+		shell.StandardInput.Close();
+		shell.WaitForExit();
+		Assert.Equal(0, shell.ExitCode);
 	}
 
 	[Fact]
@@ -541,6 +712,30 @@ public class GateTimingsTests
 				GateTimings.GitCommonDir(asked, string.Join(Path.PathSeparator, Path.Combine(root, "first"), Path.Combine(root, "second"))));
 			Assert.Equal(new GateTimings.GitAnswer("/second/.git", true), GateTimings.GitCommonDir(asked, Path.Combine(root, "second")));
 			Assert.Equal(new GateTimings.GitAnswer(null, false), GateTimings.GitCommonDir(asked, ""));
+		}
+		finally
+		{
+			Directory.Delete(root, true);
+		}
+	}
+
+	[Fact]
+	[System.Runtime.Versioning.SupportedOSPlatform("linux")]
+	public void GitCommonDir_gives_gits_first_line_on_stderr_or_why_it_didnt_start_when_it_finds_no_checkout()
+	{
+		var root = Directory.CreateTempSubdirectory("gate-timings-git-fails.").FullName;
+		try
+		{
+			foreach (var folder in new[] { "refuses", "silent" })
+				Directory.CreateDirectory(Path.Combine(root, folder));
+			FakeGitScript(Path.Combine(root, "refuses"), "echo >&2\necho \"fatal: detected dubious ownership in repository at '/x'\" >&2\necho 'hint: more' >&2\nexit 128");
+			FakeGitScript(Path.Combine(root, "silent"), "exit 3");
+			Assert.Equal(new GateTimings.GitAnswer(null, true, "fatal: detected dubious ownership in repository at '/x'"), GateTimings.GitCommonDir(root, Path.Combine(root, "refuses")));
+			Assert.Equal(new GateTimings.GitAnswer(null, true, "git exited 3"), GateTimings.GitCommonDir(root, Path.Combine(root, "silent")));
+			var gone = GateTimings.GitCommonDir(Path.Combine(root, "no-such-folder"), Path.Combine(root, "silent"));
+			Assert.Null(gone.CommonDir);
+			Assert.True(gone.GitFound);
+			Assert.False(string.IsNullOrEmpty(gone.Reason));
 		}
 		finally
 		{
