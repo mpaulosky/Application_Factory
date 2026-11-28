@@ -24,6 +24,9 @@
 # and runs when the owner closes an issue or takes a `blocked` label off, but not when anyone else does.
 # It also checks the size step (issue 176): review.sh size's warning, for HEAD's diff against its merge base, is printed by a full gate, --quick and the static part,
 # and neither it nor a failed review.sh size fails the gate; with no origin/main, or one that shares no history, the step is skipped.
+# It also checks the step timings (mpaulosky/Application_Factory#220): the self part runs scripts/tests/timings.test.sh beside this test and the review part
+# doesn't; a gate with scripts/lib/timings.sh logs each step as passed, skipped or failed, under a run id of its own, and ends with its slowest steps;
+# GATE_TIMINGS=off logs nothing; a log it can't write leaves its status as it was; and the default log is gitignored.
 #
 #   scripts/tests/gate.test.sh
 set -euo pipefail
@@ -32,8 +35,9 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 work="$(mktemp -d)"
 # a case that makes a folder read-only is cleaned up even when it is interrupted
 trap 'chmod -R u+w "$work" 2>/dev/null || true; rm -rf "$work"' EXIT
-# a caller's GATE_NO_CACHE=1 must not reach the stub gate runs; the tests set it themselves where they need it
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH GATE_PART STUB_SANDCASTLE_EXIT RUN_PART TEST_SH_SHARD RUN_SHARD STUB_DURING MKDIR_LOG MKDIR_FAIL_ONCE MKDIR_RELEASE CAT_MARK RMDIR_MARK RMDIR_SIG RMDIR_TAKE RMDIR_WAIT SIZE_OUT SIZE_EXIT
+# a caller's GATE_NO_CACHE=1 must not reach the stub gate runs, nor the outer gate's step timings (GATE_TIMINGS=off, its log, its run id); the tests set
+# them themselves where they need them
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GATE_NO_CACHE STUB_TOUCH GATE_PART STUB_SANDCASTLE_EXIT RUN_PART TEST_SH_SHARD RUN_SHARD STUB_DURING MKDIR_LOG MKDIR_FAIL_ONCE MKDIR_RELEASE CAT_MARK RMDIR_MARK RMDIR_SIG RMDIR_TAKE RMDIR_WAIT SIZE_OUT SIZE_EXIT GATE_TIMINGS GATE_TIMINGS_LOG GATE_TIMINGS_RUN
 
 pass=0
 failed=0
@@ -2655,7 +2659,8 @@ run "$repo"
 check "with an origin/main that shares no history the size step is skipped" "$([[ $status == 0 && ! -e $repo/.git/size-args ]] && grep -q 'to measure the branch from' "$repo/out" && echo 0 || echo 1)"
 
 # The step timings (mpaulosky/Application_Factory#220): a gate with scripts/lib/timings.sh logs each of its steps, ends a run with its slowest ones, logs a
-# cached step as skipped and a failing one as failed, keeps its exit status when the log can't be written, and the Factory's .gitignore leaves the
+# cached step and a Sandcastle check with nothing to check as skipped and a failing one as failed (with the first EXIT trap, in a part without the C# step,
+# and with the C# step's), gives each run its own id, keeps its exit status when the log can't be written, and the Factory's .gitignore leaves the
 # default log out, so it never makes the tree dirty for the cache. A gate without the file, every other repo here, logs nothing.
 check "a gate without scripts/lib/timings.sh writes no docs/timings/" "$([[ ! -e "$work/match/docs" && ! -e "$repo9/docs" ]] && echo 0 || echo 1)"
 check "the Factory's .gitignore leaves the default step timings log out" \
@@ -2679,9 +2684,22 @@ check "a test.sh a cached pass covered is logged as skipped" \
 GATE_NO_CACHE=1 STUB_EXIT=3 GATE_TIMINGS_LOG="$tlog" run "$repoT"
 check "a failing test.sh fails the gate with its status, and is logged as failed" \
   "$([[ $status == 3 && "$(tail -n 1 "$tlog" | cut -f6,8)" == $'test.sh\tfailed' ]] && echo 0 || echo 1)"
-: > "$work/timings-a-file"
-GATE_NO_CACHE=1 GATE_TIMINGS_LOG="$work/timings-a-file/log.tsv" run "$repoT"
-check "a log that can't be written leaves the gate passing" "$([[ $status == 0 && $ran == yes ]] && ! grep -q 'timings-a-file' "$repoT/out" && echo 0 || echo 1)"
+GATE_NO_CACHE=1 STUB_EXIT=4 RUN_PART=template GATE_TIMINGS_LOG="$tlog" run "$repoT"
+check "a part without the C# step keeps the first EXIT trap: a failing test.sh is logged as failed and the run ends with its slowest steps" \
+  "$([[ $status == 4 && "$(tail -n 1 "$tlog" | cut -f5,6,8)" == $'gate.sh\ttest.sh\tfailed' ]] && grep -q '^Slowest steps of this run' "$repoT/out" && echo 0 || echo 1)"
+check "each gate run here has a run id of its own (none comes from a gate running this test)" \
+  "$([[ "$(cut -f1 "$tlog" | sort -u | wc -l)" -eq 4 ]] && echo 0 || echo 1)"
+# A folder in the log's place: its folder exists, so only the append itself could fail, and the library refuses a log that isn't a regular file, for any user.
+mkdir "$work/timings-a-folder"
+GATE_NO_CACHE=1 GATE_TIMINGS_LOG="$work/timings-a-folder" run "$repoT"
+check "a log that can't be written leaves the gate passing" \
+  "$([[ $status == 0 && $ran == yes && -z "$(ls -A "$work/timings-a-folder")" ]] && ! grep -q 'timings-a-folder' "$repoT/out" && echo 0 || echo 1)"
+# With an origin/main at HEAD the branch changes nothing the Sandcastle check reads, so a full gate skips it and logs that.
+git -C "$repoT" update-ref refs/remotes/origin/main HEAD
+GATE_NO_CACHE=1 GATE_TIMINGS_LOG="$tlog" run "$repoT"
+check "a full gate that skips the Sandcastle check logs it as skipped" \
+  "$([[ $status == 0 && $ran_sc == no && "$(awk -F '\t' '$5 == "gate.sh" && $6 == "Sandcastle check" { s = $8 } END { print s }' "$tlog")" == skipped ]] && echo 0 || echo 1)"
+git -C "$repoT" update-ref -d refs/remotes/origin/main
 GATE_TIMINGS=off GATE_NO_CACHE=1 GATE_TIMINGS_LOG="$work/timings-off.tsv" run "$repoT"
 check "GATE_TIMINGS=off logs nothing and prints no slowest steps" \
   "$([[ $status == 0 && ! -e "$work/timings-off.tsv" ]] && ! grep -q '^Slowest steps' "$repoT/out" && echo 0 || echo 1)"
