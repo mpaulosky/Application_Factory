@@ -271,12 +271,11 @@ fi
 if [[ "$(uname -s)" == Linux ]] && command -v flock > /dev/null; then
   pids=()
   for n in 1 2 3 4 5 6; do
-    (cd "$work" && bash "$copy/gate-timings.sh" --help > "$work/at-once.$n" 2>&1) &
+    # Bounded: GNU timeout kills the run's whole process group (the wrapper, flock and dotnet) after 300 s, so a stuck lock or build fails the
+    # check and leaves nothing holding the lock for the checks after it.
+    (cd "$work" && timeout -s KILL 300 bash "$copy/gate-timings.sh" --help > "$work/at-once.$n" 2>&1) &
     pids+=("$!")
   done
-  # Bounded: a stuck lock or build is killed after 300 s and fails the check, rather than hanging the gate's self part.
-  (sleep 300 && kill -KILL "${pids[@]}" 2> /dev/null) > /dev/null 2>&1 &
-  dog_pid=$!
   at_once=0
   for n in 1 2 3 4 5 6; do
     if ! { wait "${pids[$((n - 1))]}" && grep -qxF 'Usage: scripts/gate-timings.sh [--runs N] [--log FILE] [--help]' "$work/at-once.$n"; }; then
@@ -285,9 +284,21 @@ if [[ "$(uname -s)" == Linux ]] && command -v flock > /dev/null; then
       head -c 600 "$work/at-once.$n" | sed 's/^/  | /'
     fi
   done
-  kill "$dog_pid" 2> /dev/null || true
-  wait "$dog_pid" 2> /dev/null || true
   check "six runs of the summary at once on a fresh build all pass, with the usage" "$at_once"
+  # The lock stays out of what the build leaves running (flock -o): a helper that outlives the build, as a compiler server can, would otherwise hold
+  # it until it exits, and every later run would wait that long. A fake dotnet that leaves a sleep behind stands in for one.
+  fake="$work/fake-dotnet"
+  mkdir -p "$fake"
+  printf '%s\n' '#!/usr/bin/env bash' '(exec sleep 29) > /dev/null 2>&1 < /dev/null &' 'echo "$!" >> "$FAKE_DOTNET_SLEEPS"' 'echo usage' > "$fake/dotnet"
+  chmod +x "$fake/dotnet"
+  : > "$work/sleeps"
+  started=$SECONDS
+  for n in 1 2; do
+    (cd "$work" && PATH="$fake:$PATH" FAKE_DOTNET_SLEEPS="$work/sleeps" timeout -s KILL 60 bash "$copy/gate-timings.sh" --help > /dev/null 2>&1) || true
+  done
+  held=$((SECONDS - started))
+  while IFS= read -r sleep_pid; do kill "$sleep_pid" 2> /dev/null || true; done < "$work/sleeps"
+  check "a helper the build leaves running doesn't hold the lock: a second run doesn't wait for it (${held}s for two)" "$(ok test "$held" -lt 15)"
 fi
 mkdir -p "$repo/docs/timings"
 cp "$work/fixture.tsv" "$repo/docs/timings/gate-timings.tsv"

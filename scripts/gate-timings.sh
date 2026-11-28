@@ -3,7 +3,8 @@
 # gate-timings skill's report. scripts/gate-timings.cs does the work (GateTimings.cs holds the logic and its contract) on the .NET SDK the Factory's
 # global.json names; this runs it from scripts/, beside its empty shield files, so no Directory.Build file above the checkout reaches its build. As
 # status.sh does, it first builds the app with --help, which reads nothing, under a lock on scripts/ (flock(1)), so two runs at once don't build it
-# together (one builds, the other waits and finds it built); without flock, start one run first. No dotnet on PATH exits 127 with a message.
+# together (one builds, the other waits and finds it built); without flock, start one run first. flock -o keeps the lock's descriptor out of the
+# build, so a helper the build leaves running (a compiler server) doesn't hold the lock until it exits. No dotnet on PATH exits 127 with a message.
 #
 #   scripts/gate-timings.sh [--runs N] [--log FILE] [--help]   N defaults to 20; FILE to GATE_TIMINGS_LOG (an absolute path), else the
 #                                                            docs/timings/gate-timings.tsv of the checkout this script is in (its primary checkout's)
@@ -22,6 +23,6 @@ export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_
 run=(dotnet run --file "$here/gate-timings.cs")
 # A build that fails here fails again in the run below, which says why.
 if command -v flock > /dev/null; then
-  flock -- "$here" "${run[@]}" -- --help > /dev/null 2>&1 || true
+  flock -o -- "$here" "${run[@]}" -- --help > /dev/null 2>&1 || true
 fi
 exec "${run[@]}" -- "$@"

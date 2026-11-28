@@ -174,6 +174,17 @@ public class GateTimingsTests
 	[InlineData("2026-01-31T12:00:00", false)]
 	[InlineData("2026-01-31T12:00:00Z ", false)]
 	[InlineData("2026-01-3xT12:00:00Z", false)]
+	[InlineData("2026-01-31T1x:00:00Z", false)] // a non-digit in each part of the time
+	[InlineData("2026-01-31T12:0x:00Z", false)]
+	[InlineData("2026-01-31T12:00:0xZ", false)]
+	[InlineData("2026-01-31T12-00:00Z", false)] // a wrong separator at each place
+	[InlineData("2026-01-31T12:00.00Z", false)]
+	[InlineData("2026/01-31T12:00:00Z", false)]
+	[InlineData("2026-01/31T12:00:00Z", false)]
+	[InlineData("2026-01-31T12:00:00Y", false)]
+	[InlineData("x026-01-31T12:00:00Z", false)] // the first and last digit
+	[InlineData("2026-01-31T12:00:0\u0663Z", false)] // an Arabic-Indic three, a digit to char.IsDigit
+	[InlineData("2026-01-31T23:59:59Z", true)]
 	public void A_start_must_be_in_the_writers_form(string started, bool kept)
 	{
 		var summary = GateTimings.Summarize([Line("r1", "g", "s", "1.0", started: started)], 20);
