@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# Tests the step timings (mpaulosky/Application_Factory#220): scripts/lib/timings.sh writes one line per step, with its run, start, branch, commit, script, step,
-# seconds and status (passed, failed when the run failed or it was marked so, skipped when marked so), cleans a name's control characters, joins the run
-# GATE_TIMINGS_RUN names, writes nothing under GATE_TIMINGS=off, writes to the primary checkout's docs/timings/ from a linked worktree, and leaves a run's
-# result and output alone when its log can't be written; test.sh's step and end hooks log a step in which a check failed as failed and the others as passed;
-# and scripts/gate-timings.sh runs its C# summary from any folder, with the caller's paths and exit status. scripts/tests/gate.test.sh checks the gate's
-# own use of the library.
+# Tests the step timings (mpaulosky/Application_Factory#220). scripts/lib/timings.sh, from a copy in a throwaway checkout as a real checkout holds it:
+# - writes one line per step: its run, start, branch, commit, script, step, seconds and status (passed; failed when the run failed or it was marked so;
+#   skipped when marked so), with names cleaned to printable ASCII, and whole seconds without EPOCHREALTIME;
+# - joins the run GATE_TIMINGS_RUN names (cleaned too) and exports its own;
+# - writes nothing under GATE_TIMINGS=off (that value only), for a relative GATE_TIMINGS_LOG, through a symlink, or when the checkout's git folder isn't
+#   a .git folder, and leaves a run's result and output alone when its log can't be written;
+# - logs to its own checkout's primary docs/timings/, from a linked worktree and from a caller in another repository;
+# - ends a run with its slowest steps, skipped ones left out, names cleaned, however long the run.
+# test.sh's own run logs its steps, directly and through a symlink to the skill, and its step and end hooks log a step in which a check failed as failed.
+# scripts/gate-timings.sh runs its C# summary from any folder, with the caller's paths and exit status, and stops without dotnet.
+# scripts/tests/gate.test.sh checks the gate's own use of the library; tests/Scripts.Tests/GateTimings the summary's rules.
 #
 #   scripts/tests/timings.test.sh
 #
@@ -13,8 +18,8 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-lib="$here/scripts/lib/timings.sh"
-work="$(mktemp -d)"
+# Physical, as git prints it (macOS's temp folder is behind a symlink).
+work="$(cd "$(mktemp -d)" && pwd -P)"
 trap 'chmod -R u+w "$work" 2> /dev/null || true; rm -rf "$work"' EXIT
 unset GATE_TIMINGS GATE_TIMINGS_LOG GATE_TIMINGS_RUN
 
@@ -32,13 +37,20 @@ check() { # check <description> <condition: 0 for ok>
 ok() { if "$@"; then echo 0; else echo 1; fi; }
 
 tgit() { git -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"; }
+# new_checkout <folder>: a git checkout holding a committed copy of the library, as the Factory does.
+new_checkout() {
+  mkdir -p "$1/scripts/lib"
+  tgit -C "$1" init -q -b main
+  cp "$here/scripts/lib/timings.sh" "$1/scripts/lib/"
+  tgit -C "$1" add -A
+  tgit -C "$1" commit -q -m base
+}
 repo="$work/repo"
-mkdir -p "$repo"
-tgit -C "$repo" init -q -b main
-tgit -C "$repo" commit -q --allow-empty -m base
+new_checkout "$repo"
+lib="$repo/scripts/lib/timings.sh"
 head="$(git -C "$repo" rev-parse --short=8 HEAD)"
 
-# timed <body>: runs the body in a bash in the repo with the library sourced, and its exit status in $status.
+# timed <body>: runs the body in a bash in the repo with the repo's library sourced, and its exit status in $status.
 timed() {
   status=0
   (cd "$repo" && bash -c "set -euo pipefail; source '$lib'; $1") > "$work/out" 2> "$work/err" || status=$?
@@ -51,7 +63,8 @@ IFS=$'\t' read -r -a first <<< "${lines[0]}"
 check "a step's line has eight tab-separated fields" "$(ok test "${#first[@]}" -eq 8)"
 check "its run, branch, commit and script are the run's" "$(ok test "${first[0]}" != "" -a "${first[2]}" == main -a "${first[3]}" == "$head" -a "${first[4]}" == gate.sh)"
 check "its start is an ISO 8601 UTC time" "$(ok grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' <<< "${first[1]}")"
-check "its seconds are the step's wall time, to a tenth" "$(ok grep -qE '^0\.[2-9]$' <<< "${first[6]}")"
+check "its seconds are the step's wall time, to a tenth (at least the 0.2 s it slept)" \
+  "$([[ "${first[6]}" =~ ^[0-9]+\.[0-9]$ ]] && awk -v s="${first[6]}" 'BEGIN { exit !(s >= 0.2 && s < 30) }' && echo 0 || echo 1)"
 check "steps are logged in order, each as passed unless marked" "$(ok test "$(cut -f6,8 "$log" | tr '\t\n' ':,')" == "one:passed,two:skipped,three:passed,")"
 check "every step of a run has the same run" "$(ok test "$(cut -f1 "$log" | sort -u | wc -l)" -eq 1)"
 check "timing prints nothing" "$(ok test ! -s "$work/out" -a ! -s "$work/err")"
@@ -68,47 +81,118 @@ GATE_TIMINGS_LOG="$log" timed 'timings_start gate.sh; trap '\''timings_finish $?
 check "a run that passes logs its open step as passed" "$(ok test "$(cut -f6,8 "$log")" == $'last\tpassed')"
 
 rm -f "$log"
-GATE_TIMINGS_LOG="$log" timed "timings_start \$'test\\tsh'; timings_step \$'a\\tb\\nc\\e[0m'; timings_end"
+GATE_TIMINGS_LOG="$log" timed "timings_start \$'test\\tsh'; timings_step \$'a\\tb\\nc\\e[0m \\xc2\\x9b2J \\xe2\\x80\\xae caf\\xc3\\xa9'; timings_end"
 check "a name's tab, line break and escape become spaces, so the line keeps its eight fields" \
   "$(ok test "$(wc -l < "$log")" -eq 1 -a "$(awk -F '\t' '{ print NF }' "$log")" == 8 -a "$(cut -f5 "$log")" == "test sh")"
+check "and so does every byte that isn't printable ASCII (a C1 control, a bidi override, an accent)" \
+  "$(cut -f6 "$log" | LC_ALL=C grep -q '[^ -~]' && echo 1 || echo 0)"
 
 rm -f "$log"
 GATE_TIMINGS_LOG="$log" GATE_TIMINGS_RUN=the-gates-run timed 'timings_start test.sh; timings_step one; timings_end'
 check "a run started by another joins the run GATE_TIMINGS_RUN names" "$(ok test "$(cut -f1 "$log")" == the-gates-run)"
+rm -f "$log"
+GATE_TIMINGS_LOG="$log" GATE_TIMINGS_RUN=$'a\tb\nc' timed 'timings_start test.sh; timings_step one; timings_end'
+check "an inherited run id is cleaned like a name" "$(ok test "$(wc -l < "$log")" -eq 1 -a "$(cut -f1 "$log")" == "a b c")"
 GATE_TIMINGS_LOG="$log" timed 'timings_start gate.sh; echo "run=$GATE_TIMINGS_RUN"; bash -c '\''echo "child=$GATE_TIMINGS_RUN"'\'''
-check "a run's id is exported, so the scripts it starts join it" \
-  "$(ok test "$(sed -n 's/^run=//p' "$work/out")" == "$(sed -n 's/^child=//p' "$work/out")" -a -n "$(sed -n 's/^run=//p' "$work/out")")"
+run_id="$(sed -n 's/^run=//p' "$work/out")"
+check "a run's id is exported, so the scripts it starts join it" "$(ok test -n "$run_id" -a "$run_id" == "$(sed -n 's/^child=//p' "$work/out")")"
 
 rm -f "$log"
 GATE_TIMINGS=off GATE_TIMINGS_LOG="$log" timed 'timings_start gate.sh; timings_step one; timings_mark skipped; timings_end; timings_finish 1; timings_slowest 5'
 check "GATE_TIMINGS=off writes no log and prints nothing" "$(ok test ! -e "$log" -a ! -s "$work/out" -a ! -s "$work/err" -a "$status" == 0)"
+GATE_TIMINGS=0 GATE_TIMINGS_LOG="$log" timed 'timings_start gate.sh; timings_step one; timings_end'
+check "off is the only value that turns it off: GATE_TIMINGS=0 still logs" "$(ok test -s "$log")"
+rm -f "$log"
+(cd "$work" && GATE_TIMINGS_LOG=relative.tsv bash -c "source '$lib'; cd '$repo'; timings_start gate.sh; timings_step one; timings_end")
+check "a relative GATE_TIMINGS_LOG logs nothing, in the caller's folder or the run's" "$(ok test ! -e "$work/relative.tsv" -a ! -e "$repo/relative.tsv")"
 
-: > "$work/a-file"
-GATE_TIMINGS_LOG="$work/a-file/log.tsv" timed 'timings_start gate.sh; trap '\''timings_finish $?; timings_slowest 5'\'' EXIT; timings_step one; timings_step two; echo done'
+rm -f "$log"
+GATE_TIMINGS_LOG="$log" timed 'unset EPOCHREALTIME; timings_start gate.sh; timings_step one; timings_end'
+check "without EPOCHREALTIME a step is timed in whole seconds, the line still whole" \
+  "$(ok test "$(awk -F '\t' '{ print NF }' "$log")" == 8 -a "$(cut -f7 "$log" | grep -cE '^[0-9]+\.0$')" == 1)"
+
+# A log that can't be written: a folder where the file goes, which no user can append to, root included.
+mkdir -p "$work/log-is-a-folder"
+GATE_TIMINGS_LOG="$work/log-is-a-folder" timed 'timings_start gate.sh; trap '\''timings_finish $?; timings_slowest 5'\'' EXIT; timings_step one; timings_step two; echo done'
 check "a log that can't be written leaves the run passing, with its own output only" \
   "$(ok test "$status" == 0 -a "$(cat "$work/out")" == "done" -a ! -s "$work/err")"
-mkdir -p "$work/ro"
-: > "$work/ro/log.tsv"
-chmod a-w "$work/ro/log.tsv"
-GATE_TIMINGS_LOG="$work/ro/log.tsv" timed 'timings_start gate.sh; trap '\''timings_finish $?'\'' EXIT; timings_step one; exit 4'
-check "a read-only log leaves a failing run's status as it was, and says nothing" "$(ok test "$status" == 4 -a ! -s "$work/err" -a ! -s "$work/ro/log.tsv")"
-chmod u+w "$work/ro/log.tsv"
+GATE_TIMINGS_LOG="$work/log-is-a-folder" timed 'timings_start gate.sh; trap '\''timings_finish $?'\'' EXIT; timings_step one; exit 4'
+check "and leaves a failing run's status as it was, saying nothing" "$(ok test "$status" == 4 -a ! -s "$work/err" -a -z "$(ls -A "$work/log-is-a-folder")")"
+# The append itself failing (the log made a folder after the run started) is skipped too.
+rm -f "$log"
+GATE_TIMINGS_LOG="$log" timed 'timings_start gate.sh; trap '\''timings_finish $?'\'' EXIT; timings_step one; mkdir "$GATE_TIMINGS_LOG"; timings_step two; exit 5'
+check "an append that fails mid-run leaves the run's status as it was, saying nothing" "$(ok test "$status" == 5 -a ! -s "$work/err")"
+rm -rf "$log"
+
+# Symlinks are never written through: at the log, its folder, or the default log's docs/ and docs/timings/.
+: > "$work/target"
+ln -s "$work/target" "$work/link.tsv"
+GATE_TIMINGS_LOG="$work/link.tsv" timed 'timings_start gate.sh; timings_step one; timings_end'
+check "a log that is a symlink is not written through" "$(ok test ! -s "$work/target")"
+mkdir -p "$work/target-folder"
+ln -s "$work/target-folder" "$work/folder-link"
+GATE_TIMINGS_LOG="$work/folder-link/log.tsv" timed 'timings_start gate.sh; timings_step one; timings_end'
+check "nor one whose folder is a symlink" "$(ok test -z "$(ls -A "$work/target-folder")")"
+ln -s "$work/target-folder" "$repo/docs"
+timed 'timings_start gate.sh; timings_step one; timings_end'
+check "nor the default log when docs/ is a symlink" "$(ok test -z "$(ls -A "$work/target-folder")" -a "$status" == 0)"
+rm "$repo/docs"
+mkdir -p "$repo/docs"
+ln -s "$work/target-folder" "$repo/docs/timings"
+timed 'timings_start gate.sh; timings_step one; timings_end'
+check "nor when docs/timings/ is" "$(ok test -z "$(ls -A "$work/target-folder")")"
+rm -rf "$repo/docs"
+rm -f "$log"
+GATE_TIMINGS_LOG="$log" timed 'timings_start gate.sh; timings_step one; ln -s "'"$work"'/target" "$GATE_TIMINGS_LOG"; timings_step two; timings_end'
+check "nor a log made a symlink after the run started" "$(ok test ! -s "$work/target")"
+rm -f "$log"
+mkfifo "$work/fifo"
+status=0
+(cd "$repo" && GATE_TIMINGS_LOG="$work/fifo" timeout 20 bash -c "source '$lib'; timings_start gate.sh; timings_step one; timings_end; echo done") > "$work/out" 2>&1 || status=$?
+check "a log that isn't a regular file (a FIFO no one reads) is skipped, not waited on" "$(ok test "$status" == 0 -a "$(cat "$work/out")" == "done")"
 
 tgit -C "$repo" worktree add -q --detach "$work/linked"
-(cd "$work/linked" && bash -c "source '$lib'; timings_start gate.sh; timings_step one; timings_end")
+(cd "$work/linked" && bash -c "source '$work/linked/scripts/lib/timings.sh'; timings_start gate.sh; timings_step one; timings_end")
 check "a linked worktree logs to the primary checkout's docs/timings/" \
   "$(ok test -s "$repo/docs/timings/gate-timings.tsv" -a ! -e "$work/linked/docs/timings")"
 check "under its own branch name: a detached HEAD is detached" "$(ok test "$(cut -f3 "$repo/docs/timings/gate-timings.tsv")" == detached)"
+rm -rf "$repo/docs"
+
+other="$work/other"
+mkdir -p "$other"
+tgit -C "$other" init -q -b elsewhere
+(cd "$other" && bash -c "source '$lib'; timings_start test.sh; timings_step one; timings_end")
+check "a caller in another repository logs to the library's checkout, under its branch, never into the caller's" \
+  "$(ok test ! -e "$other/docs" -a "$(cut -f3 "$repo/docs/timings/gate-timings.tsv" 2> /dev/null)" == main)"
+rm -rf "$repo/docs"
+
+tgit init -q -b main --separate-git-dir "$work/separate.git" "$work/separate"
+mkdir -p "$work/separate/scripts/lib"
+cp "$lib" "$work/separate/scripts/lib/"
+(cd "$work/separate" && bash -c "source '$work/separate/scripts/lib/timings.sh'; timings_start gate.sh; timings_step one; timings_end")
+check "a checkout whose git folder isn't a .git folder logs nothing, outside it or in it" "$(ok test ! -e "$work/docs" -a ! -e "$work/separate/docs")"
 
 rm -f "$log"
-GATE_TIMINGS_LOG="$log" timed 'timings_start gate.sh; trap '\''timings_finish $?; timings_slowest 2'\'' EXIT; timings_step fast; timings_step slow; sleep 0.3; timings_step skip; timings_mark skipped'
-check "the end of a run prints its slowest steps, slowest first, without skipped ones" \
+GATE_TIMINGS_LOG="$log" timed 'timings_start gate.sh; trap '\''timings_finish $?; timings_slowest 2'\'' EXIT; timings_step fast; timings_step slow; sleep 0.2; timings_step skip; sleep 0.4; timings_mark skipped'
+check "the end of a run prints its slowest steps, slowest first" \
   "$(ok test "$(grep -cE '^ +[0-9.]+s  gate.sh: ' "$work/out")" == 2 -a "$(grep -E '^ +[0-9.]+s  gate.sh: ' "$work/out" | head -n 1 | sed 's/.*: //')" == slow)"
+check "leaving a skipped step out, the slowest of them all" "$(grep -q 'gate.sh: skip$' "$work/out" && echo 1 || echo 0)"
 check "and names the log" "$(ok grep -qF "$log" "$work/out")"
+{
+  for i in $(seq 1 6000); do printf 'big\t2026-01-01T00:00:00Z\tb\tc\tgate.sh\tstep %d\t%d.0\tpassed\n' "$i" "$i"; done
+  printf 'big\t2026-01-01T00:00:00Z\tb\tc\tgate.sh\tplanted \033]0;title\a\xc2\x9b\t9999.0\tpassed\n'
+} > "$log"
+slowest_ok=0
+for _ in 1 2 3; do
+  GATE_TIMINGS_LOG="$log" GATE_TIMINGS_RUN=big timed 'timings_start gate.sh; timings_slowest 5'
+  [[ "$(grep -cE '^ +[0-9.]+s  gate.sh: ' "$work/out")" == 5 ]] || slowest_ok=1
+done
+check "a run of thousands of lines still prints its five slowest (no pipe closed early)" "$slowest_ok"
+check "with the names cleaned to printable ASCII" "$(LC_ALL=C grep -q '[^ -~]' "$work/out" && echo 1 || echo 0)"
 
 # test.sh's hooks: its step function, from test.sh itself, and its end of run, with the library.
 testsh="$here/.claude/skills/repo-ci-baseline/test.sh"
-{
+hooks() { # hooks <steps...>: a script of test.sh's step() and end of run, around the steps given
   echo "set -euo pipefail"
   echo "source '$lib'"
   echo "failures=0"
@@ -116,52 +200,74 @@ testsh="$here/.claude/skills/repo-ci-baseline/test.sh"
   echo 'fail() { failures=$((failures + 1)); }'
   sed -n '/^step() {$/,/^}$/p' "$testsh"
   echo 'timings_start test.sh'
-  echo 'step "clean"'
-  echo 'step "broken"; fail'
-  echo 'step "last"'
+  printf '%s\n' "$@"
   sed -n '/^((failures == step_failures)) || timings_mark failed$/,/^timings_end$/p' "$testsh"
-} > "$work/testsh-hooks.sh"
+}
+check "test.sh holds the step function and the end of run these hooks take" \
+  "$([[ "$(hooks | grep -c 'timings_')" -ge 4 ]] && hooks | grep -q '^timings_end$' && echo 0 || echo 1)"
+hooks 'step "clean"' 'step "broken"; fail' 'step "last"' > "$work/testsh-hooks.sh"
 rm -f "$log"
 (cd "$repo" && GATE_TIMINGS_LOG="$log" bash "$work/testsh-hooks.sh" > /dev/null)
 check "test.sh logs a step in which a check failed as failed, and the others as passed" \
   "$(ok test "$(cut -f6,8 "$log" | tr '\t\n' ':,')" == "clean:passed,broken:failed,last:passed,")"
-{
-  echo "set -euo pipefail"
-  echo "source '$lib'"
-  echo "failures=0"
-  echo "step_failures=0"
-  echo 'fail() { failures=$((failures + 1)); }'
-  sed -n '/^step() {$/,/^}$/p' "$testsh"
-  echo 'timings_start test.sh'
-  echo 'step "only"; fail'
-  sed -n '/^((failures == step_failures)) || timings_mark failed$/,/^timings_end$/p' "$testsh"
-} > "$work/testsh-last.sh"
+hooks 'step "only"; fail' > "$work/testsh-last.sh"
 rm -f "$log"
 (cd "$repo" && GATE_TIMINGS_LOG="$log" bash "$work/testsh-last.sh" > /dev/null)
 check "and the last step too, when a check in it failed" "$(ok test "$(cut -f6,8 "$log")" == $'only\tfailed')"
-check "test.sh starts its timing as test.sh, with its shard" "$(ok grep -qF 'timings_start "test.sh${shard:+ ($shard shard)}"' "$testsh")"
+
+# test.sh itself, stopped by a missing tool right after it starts timing: a PATH of every command but actionlint.
+nolint="$work/no-actionlint-bin"
+mkdir -p "$nolint"
+IFS=: read -ra path_dirs <<< "$PATH"
+for d in "${path_dirs[@]}"; do
+  [[ -d "$d" ]] || continue
+  for f in "$d"/*; do
+    name="${f##*/}"
+    [[ "$name" != actionlint && -x "$f" && ! -e "$nolint/$name" ]] && ln -s "$f" "$nolint/$name"
+  done
+done
+ln -s "$here/.claude/skills/repo-ci-baseline" "$work/skill-link"
+for how in direct symlink; do
+  rm -f "$log"
+  testsh_at="$testsh"
+  [[ "$how" == direct ]] || testsh_at="$work/skill-link/test.sh"
+  status=0
+  (cd "$work" && PATH="$nolint" GATE_TIMINGS_LOG="$log" GATE_TIMINGS_RUN="testsh-$how" bash "$testsh_at" > /dev/null 2>&1) || status=$?
+  check "test.sh run $how logs its start-up step as failed when a tool is missing, under the run it was given" \
+    "$([[ $status != 0 ]] && [[ "$(cut -f1,5,6,8 "$log" 2> /dev/null)" == "testsh-$how"$'\ttest.sh\tSetup (the tools it needs)\tfailed' ]] && echo 0 || echo 1)"
+done
+TEST_SH_SHARD=hooks PATH="$nolint" GATE_TIMINGS_LOG="$log" bash "$testsh" > /dev/null 2>&1 || true
+check "and names its shard" "$(ok grep -qF $'\ttest.sh (hooks shard)\t' "$log")"
 
 # The summary, end to end: scripts/gate-timings.sh runs scripts/gate-timings.cs (its rules are tests/Scripts.Tests/GateTimings's, on GateTimings.cs).
 summary="$here/scripts/gate-timings.sh"
 printf '%s\n' \
   $'r1\t2026-01-01T00:00:00Z\tb\tc\tgate.sh\tlint\t10.0\tpassed' \
-  $'r2\t2026-01-01T00:00:00Z\tb\tc\tgate.sh\tlint\t20.0\tpassed' \
-  $'r2\t2026-01-01T00:00:00Z\tb\tc\tgate.sh\ttest.sh\t1.0\tskipped' > "$work/fixture.tsv"
+  $'r2\t2026-01-02T00:00:00Z\tb\td\tgate.sh\tlint\t20.0\tpassed' \
+  $'r2\t2026-01-02T00:00:00Z\tb\td\tgate.sh\ttest.sh\t1.0\tskipped' > "$work/fixture.tsv"
 status=0
 out="$(cd "$work" && "$summary" --log fixture.tsv)" || status=$?
 check "the summary prints the table, reading a relative --log from the caller's folder" \
-  "$(ok test "$status" == 0 && grep -qxF '| gate.sh | lint | 2 | 15.0 | 20.0 | 20.0 | +100% |' <<< "$out")"
+  "$([[ $status == 0 ]] && grep -qxF '| gate.sh | lint | 2 | 15.0 | 20.0 | 20.0 | +100% |' <<< "$out" && echo 0 || echo 1)"
+mkdir -p "$repo/docs/timings"
 cp "$work/fixture.tsv" "$repo/docs/timings/gate-timings.tsv"
 status=0
 out="$(cd "$work/linked" && "$summary")" || status=$?
 check "its default log is the caller's primary checkout's, from a linked worktree" \
-  "$(ok test "$status" == 0 && grep -qF "from $repo/docs/timings/gate-timings.tsv:" <<< "$out")"
+  "$([[ $status == 0 ]] && grep -qF "from $repo/docs/timings/gate-timings.tsv:" <<< "$out" && echo 0 || echo 1)"
 status=0
 "$summary" --runs 0 > /dev/null 2>&1 || status=$?
 check "a bad argument's exit 2 comes through" "$(ok test "$status" == 2)"
 status=0
 "$summary" --log "$work/none.tsv" > /dev/null 2> "$work/err" || status=$?
-check "a missing log's exit 1 comes through, saying a gate run writes it" "$(ok test "$status" == 1 && grep -q 'a run of scripts/gate.sh writes it' "$work/err")"
+check "a missing log's exit 1 comes through, saying a gate run writes it" \
+  "$([[ $status == 1 ]] && grep -q 'a run of scripts/gate.sh writes it' "$work/err" && echo 0 || echo 1)"
+bare="$work/bare-bin"
+mkdir -p "$bare"
+for tool in bash dirname; do ln -s "$(command -v "$tool")" "$bare/$tool"; done
+status=0
+PATH="$bare" "$bare/bash" "$summary" > /dev/null 2> "$work/err" || status=$?
+check "without dotnet the wrapper exits 127, saying so" "$([[ $status == 127 ]] && grep -q "dotnet isn't on PATH" "$work/err" && echo 0 || echo 1)"
 
 echo
 echo "timings.test.sh: $pass passed, $failed failed"
