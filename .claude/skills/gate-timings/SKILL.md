@@ -18,9 +18,11 @@ The summary cleans and escapes them; still, the table's text (a step, a branch, 
 
 1. Run `scripts/gate-timings.sh` from the repository (add `--runs N` for more or fewer than the last 20 runs, or `--log FILE` for another log). It prints a
    Markdown table, slowest median first: each script and step's run count, median, slowest and latest seconds, and the change from the older half of
-   those runs to the newer half. Above it are the runs' first and last start, a full gate run's median total, and the commits where the halves meet; below
-   it, the count of skipped steps and of malformed lines. It exits 1, saying why, when there is no log or no step lines yet: then tell the person a full
-   `scripts/gate.sh` run writes the first, and stop.
+   those runs to the newer half. Above it are the runs' first and last start, the median total of the full gate runs among them (one that ran every
+   part and passed; a `--quick` run, one part alone, or a run that failed or didn't finish isn't one) with how many there were, and the commits where the
+   halves meet; below it, the count of skipped steps and of malformed lines. When it says there is no log or no step lines yet, tell the person a full
+   `scripts/gate.sh` run writes the first, and stop. Any other failure (it can't read the log, git isn't found, `gate-timings failed: ...`, a build error)
+   is a fault in the summary: tell the person what it said, as it said it, and stop.
 2. Read the table. Note that `gate.sh`'s `test.sh` step is the whole of `test.sh`, whose own steps are its rows under `test.sh`: count its time once.
    A skipped step isn't timed, so it has no row, only its share of the footer's count. A step with few runs says little; say so rather than draw a
    trend from it.
@@ -29,8 +31,8 @@ The summary cleans and escapes them; still, the table's text (a step, a branch, 
    small processes, a build, network, a serial loop over cases that don't depend on each other, a fixture larger than it needs.
 4. Write the report with the Write tool to `docs/timings/report-YYYY-MM-DD.md` in the primary checkout (today's date; the folder `.gitignore` leaves
    out), with these sections:
-   - **Summary**: the runs read and their dates, the total time of a full gate run (its median), both from the lines above the table, and the three
-     findings that matter most.
+   - **Summary**: the runs read and their dates, the median total of a full gate run and how many full runs it is over (or that there were none),
+     both from the lines above the table, and the three findings that matter most.
    - **Slowest steps**: the table from step 1.
    - **Getting slower**: the steps whose change is +20% or more, with the commits where the halves meet, from the line above the table.
    - **What to work on**: for each step worth the work, slowest first, what its time goes to, one or two concrete changes (a parallel run of its cases,

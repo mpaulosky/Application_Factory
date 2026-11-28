@@ -820,10 +820,14 @@ The step timings add the first script this ADR didn't port: one that is new. Its
 
 - **The summary is C#.** `scripts/gate-timings.cs`, with its logic and contract in `scripts/GateTimings.cs` (library first, as the Update for
   mpaulosky/Application_Factory#157 has it), reads the log and writes its table: medians, the halves' change, the counts of skipped steps and malformed
-  lines. That is the logic the ported scripts held, and it was first an awk pipeline. `scripts/gate-timings.sh` runs it from `scripts/`, beside three empty
-  shield files, as `status.sh` runs `status.cs`, and passes the caller's folder in `GATE_TIMINGS_CALLER_DIR`, so a relative `--log` and the default log
-  are the caller's. `tests/Scripts.Tests/GateTimings/` tests `GateTimings.cs`, which the test project compiles from the Factory's `scripts/` (so
-  `test.sh`'s copies of the project carry it); `scripts/tests/timings.test.sh` runs the wrapper end to end.
+  lines, under lines giving the runs' dates, the median total of the full gate runs among them and the commits where the halves meet. Every name it
+  prints is cleaned of control, format and separator characters and Markdown-escaped, since any branch's run writes the log. That is the logic the ported
+  scripts held, and it was first an awk pipeline. `GateTimings` is a class in the global namespace, as the skill's `github/` code is. `scripts/gate-timings.sh`
+  runs it from `scripts/`, beside three empty shield files, as `status.sh` runs `status.cs`: it first builds it with `--help`, which reads nothing, under
+  `flock`, and it passes the caller's folder in `GATE_TIMINGS_CALLER_DIR`, for a relative `--log`, and its own in `GATE_TIMINGS_HOME`, so the default log
+  is its checkout's, where the library beside it writes. A relative `GATE_TIMINGS_LOG` is refused (exit 2), as the library logs nothing to one.
+  `tests/Scripts.Tests/GateTimings/` tests `GateTimings.cs`, which the test project compiles from the Factory's `scripts/` (so `test.sh`'s copies of the
+  project carry it); `scripts/tests/timings.test.sh` runs the wrapper end to end.
 - **The library stays bash.** `scripts/lib/timings.sh` is sourced by `scripts/gate.sh` and `test.sh` and marks each step from inside them: a C# app can't, and
   a process per step boundary would add to the time it measures. It is "the bash itself" this ADR leaves as it is.
 

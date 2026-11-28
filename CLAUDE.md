@@ -62,7 +62,7 @@ Decisions are in [`docs/adr/`](docs/adr/); the Factory's ownership of the Templa
   0012](docs/adr/0012-the-template-tests-workflow-runs-the-gate-in-parallel-parts.md), [ADR 0013](docs/adr/0013-ci-runs-test-sh-in-shards-and-the-review-tests-as-their-own-part.md).
 - Step timings (mpaulosky/Application_Factory#220): `scripts/gate.sh` and `test.sh` source `scripts/lib/timings.sh` and log each step's wall time and status to
   `docs/timings/gate-timings.tsv` in the primary checkout (every worktree's runs in one log; `.gitignore` leaves `docs/timings/` out; `GATE_TIMINGS=off` logs
-  nothing, `GATE_TIMINGS_LOG` names another file), and the gate ends a run with its five slowest steps. `scripts/gate-timings.sh` summarizes the log by
+  nothing, `GATE_TIMINGS_LOG` names another file by an absolute path), and the gate ends a run with its five slowest steps. `scripts/gate-timings.sh` summarizes the log by
   running the C# file-based app `scripts/gate-timings.cs`, which includes `scripts/GateTimings.cs` (ADR 0017's Update for mpaulosky/Application_Factory#220; `scripts/` holds the three empty
   shield files too), and the `gate-timings` skill (`.claude/skills/gate-timings/`) writes a report from it to `docs/timings/report-YYYY-MM-DD.md`.
   `scripts/tests/timings.test.sh` tests the library and the wrapper, in the gate's `self` part, and `tests/Scripts.Tests/GateTimings/` the summary's rules.
